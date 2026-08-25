@@ -1,9 +1,11 @@
 name: CI
 
+# TEMPORARILY DISABLED. The automatic triggers below are commented out, so CI
+# does not run on push or pull request. Uncomment the two blocks to restore it.
 on:
-  push:
-    branches: [main, dev]
-  pull_request:
+  # push:
+  #   branches: [main, dev]
+  # pull_request:
   workflow_dispatch:
 
 env:

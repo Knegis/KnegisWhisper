@@ -27,6 +27,16 @@ maintained in place rather than appended to, because its purpose is to be curren
 
 Maintained in place. If something here becomes false, edit it rather than adding a note.
 
+### CI is paused — nothing is checking any of this
+
+`.github/workflows/ci.yml` still contains every job, but its `push` and `pull_request` triggers
+are commented out, so **no commit pushed to this repo is being checked right now**. Only manual
+`workflow_dispatch` runs happen. Every claim in this file that reads "CI is green" is, until the
+triggers come back, a claim about the last run before the pause.
+
+Re-enabling is uncommenting two blocks at the top of that file. Do that before trusting a green
+badge or before the next merge to `main`.
+
 ### Committed but not usable end to end
 
 | Thing | State | What is missing |
@@ -96,6 +106,38 @@ Unchanged from the Phases 1–4 entry, restated here so they are not buried:
   Needed before meetings work.
 - **`nircmd`** is still unpinned and unhashed. Leaning towards dropping it: it is only the
   third-tier Windows paste fallback and `SendInput` now works.
+
+---
+
+## 2026-08-25 (CI paused) — GitHub Actions triggers commented out
+
+Requested as a temporary pause. No reason was recorded, and nothing was found wrong with the
+workflow itself — the jobs are untouched and still valid — so this is a pause, not a verdict on
+CI's value. Treat it as short-lived.
+
+### Judgement calls
+
+- **Commented out the triggers rather than the file.** The ask was to "comment out the code", and
+  the literal reading — comment out all 142 lines — produces a YAML file that parses to nothing,
+  which GitHub surfaces as *Invalid workflow file* in the Actions tab. That trades silent
+  green for a permanent red, which is worse than either. Commenting out only `push` and
+  `pull_request` leaves a valid workflow that simply never fires on its own.
+- **Kept `workflow_dispatch`.** It costs nothing while the workflow is dormant and means the
+  full suite can still be run by hand from the Actions tab during the pause, which is the
+  difference between "paused" and "gone".
+- **Did not use `gh workflow disable`.** It is the cleaner mechanism — it takes effect across
+  every branch at once and leaves no diff — but it also leaves no trace in the tree. A pause that
+  is invisible in the repository is a pause a future session will not know about. The comment in
+  the file, and this entry, are the point.
+
+### Carry-forward consequence
+
+The pause partly invalidates a claim in the carry-forward above. "macOS and Linux CI ran for the
+first time on the Phases 1–4 push. If either is red, it is a first-run failure, not a regression."
+was written expecting the next push to resolve it. With triggers off, it stays unresolved.
+
+`main` also keeps its own copy of the workflow, so pushes to `main` still trigger CI until this
+change is merged there. Only `dev` is actually paused.
 
 ---
 
