@@ -13,10 +13,16 @@
 //! `docs/PORTING_MATRIX.md` for the divergences from the upstream router.
 
 pub mod executor;
+pub mod local;
+pub mod models;
 pub mod route;
 pub mod url;
 
 pub use executor::{Executor, Transcript, TranscriptionError};
+pub use local::{
+    build_args, interpret, Inference, LocalTranscriber, ServerOptions, VadSettings, WhisperServer,
+    HEALTH_PATH, INFERENCE_PATH,
+};
 pub use route::{
     resolve, Auth, AuthScheme, CortiConfig, ProviderClientKind, RouteError, RouteRequest,
     RouteSettings, Transport,

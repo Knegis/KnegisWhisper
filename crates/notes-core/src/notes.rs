@@ -94,53 +94,110 @@ pub async fn get(pool: &SqlitePool, id: i64) -> Result<Option<Note>, StorageErro
 /// whole table.
 pub async fn list(
     pool: &SqlitePool,
+    note_type: Option<&str>,
     folder_id: Option<i64>,
     limit: i64,
 ) -> Result<Vec<Note>, StorageError> {
     let limit = limit.clamp(1, 500);
 
-    let rows = match folder_id {
-        Some(folder) => {
-            let sql = format!(
-                "SELECT {COLUMNS} FROM notes WHERE folder_id = ? ORDER BY updated_at DESC LIMIT ?"
-            );
-            sqlx::query_as::<_, Note>(&sql)
-                .bind(folder)
-                .bind(limit)
-                .fetch_all(pool)
-                .await?
-        }
-        None => {
-            let sql = format!("SELECT {COLUMNS} FROM notes ORDER BY updated_at DESC LIMIT ?");
-            sqlx::query_as::<_, Note>(&sql)
-                .bind(limit)
-                .fetch_all(pool)
-                .await?
-        }
-    };
+    // Ordered by `updated_at`, because a list of notes is most useful with the
+    // one you were last working on at the top. That is also why there is no
+    // cursor here, unlike `history::list`: a stable cursor over a timestamp
+    // needs an (updated_at, id) tuple comparison, and a cursor that is only
+    // *nearly* stable silently skips or repeats rows. Callers that need paging
+    // get an honest `has_more` and no cursor rather than a broken one.
+    //
+    // The WHERE clause is assembled from fixed fragments and every value is
+    // bound, so nothing a caller sends reaches the SQL text.
+    let mut sql = format!("SELECT {COLUMNS} FROM notes");
+    let mut clauses: Vec<&str> = Vec::new();
+    if note_type.is_some() {
+        clauses.push("note_type = ?");
+    }
+    if folder_id.is_some() {
+        clauses.push("folder_id = ?");
+    }
+    if !clauses.is_empty() {
+        sql.push_str(" WHERE ");
+        sql.push_str(&clauses.join(" AND "));
+    }
+    sql.push_str(" ORDER BY updated_at DESC LIMIT ?");
 
-    Ok(rows)
+    let mut query = sqlx::query_as::<_, Note>(&sql);
+    if let Some(note_type) = note_type {
+        query = query.bind(note_type.to_owned());
+    }
+    if let Some(folder_id) = folder_id {
+        query = query.bind(folder_id);
+    }
+
+    Ok(query.bind(limit).fetch_all(pool).await?)
 }
 
-/// Update a note's title and content.
+/// The fields a caller wants to change. `None` means leave it alone.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct NoteUpdate {
+    pub title: Option<String>,
+    pub content: Option<String>,
+    pub folder_id: Option<i64>,
+}
+
+impl NoteUpdate {
+    /// Whether this would change anything.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.title.is_none() && self.content.is_none() && self.folder_id.is_none()
+    }
+}
+
+/// Apply a partial update, returning whether the note existed.
+///
+/// Partial rather than whole-record, because a caller that only wants to move a
+/// note to a folder should not have to send the content back — and a caller that
+/// sends a stale copy of the content would silently discard whatever changed in
+/// between.
 ///
 /// `updated_at` is set here rather than by a trigger so the FTS triggers and
 /// this write stay in one statement.
-pub async fn update(
-    pool: &SqlitePool,
-    id: i64,
-    title: &str,
-    content: &str,
-) -> Result<bool, StorageError> {
-    let result = sqlx::query(
-        "UPDATE notes SET title = ?, content = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-    )
-    .bind(title)
-    .bind(content)
-    .bind(id)
-    .execute(pool)
-    .await?;
+///
+/// The SET clause is built from fixed fragments chosen by which fields are
+/// present; every value is bound. Nothing the caller sends reaches the SQL text.
+pub async fn update(pool: &SqlitePool, id: i64, change: &NoteUpdate) -> Result<bool, StorageError> {
+    if change.is_empty() {
+        // Nothing asked for, so nothing done -- but the caller still wants to
+        // know whether the note is there.
+        let exists = sqlx::query("SELECT 1 FROM notes WHERE id = ?")
+            .bind(id)
+            .fetch_optional(pool)
+            .await?;
+        return Ok(exists.is_some());
+    }
 
+    let mut sets: Vec<&str> = Vec::new();
+    if change.title.is_some() {
+        sets.push("title = ?");
+    }
+    if change.content.is_some() {
+        sets.push("content = ?");
+    }
+    if change.folder_id.is_some() {
+        sets.push("folder_id = ?");
+    }
+    sets.push("updated_at = CURRENT_TIMESTAMP");
+
+    let sql = format!("UPDATE notes SET {} WHERE id = ?", sets.join(", "));
+    let mut query = sqlx::query(&sql);
+    if let Some(title) = &change.title {
+        query = query.bind(title.clone());
+    }
+    if let Some(content) = &change.content {
+        query = query.bind(content.clone());
+    }
+    if let Some(folder_id) = change.folder_id {
+        query = query.bind(folder_id);
+    }
+
+    let result = query.bind(id).execute(pool).await?;
     Ok(result.rows_affected() > 0)
 }
 
@@ -292,11 +349,17 @@ mod tests {
         assert_eq!(note.title, "Kickoff");
         assert_eq!(note.note_type, "personal");
 
-        assert!(
-            update(p, id, "Kickoff (revised)", "we agreed on the office plan")
-                .await
-                .unwrap()
-        );
+        assert!(update(
+            p,
+            id,
+            &NoteUpdate {
+                title: Some("Kickoff (revised)".to_owned()),
+                content: Some("we agreed on the office plan".to_owned()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap());
         assert_eq!(
             get(p, id).await.unwrap().unwrap().title,
             "Kickoff (revised)"
@@ -348,11 +411,11 @@ mod tests {
         }
         add(p, "loose note", "").await;
 
-        assert_eq!(list(p, None, 100).await.unwrap().len(), 4);
-        assert_eq!(list(p, Some(folder), 100).await.unwrap().len(), 3);
-        assert_eq!(list(p, None, i64::MAX).await.unwrap().len(), 4);
+        assert_eq!(list(p, None, None, 100).await.unwrap().len(), 4);
+        assert_eq!(list(p, None, Some(folder), 100).await.unwrap().len(), 3);
+        assert_eq!(list(p, None, None, i64::MAX).await.unwrap().len(), 4);
         assert_eq!(
-            list(p, None, 0).await.unwrap().len(),
+            list(p, None, None, 0).await.unwrap().len(),
             1,
             "a zero limit is clamped to one"
         );
@@ -516,7 +579,17 @@ mod tests {
         let id = add(p, "Plan", "the warehouse option").await;
         assert_eq!(search(p, "warehouse", 10).await.unwrap().len(), 1);
 
-        update(p, id, "Plan", "the office option").await.unwrap();
+        update(
+            p,
+            id,
+            &NoteUpdate {
+                title: Some("Plan".to_owned()),
+                content: Some("the office option".to_owned()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
 
         assert!(
             search(p, "warehouse", 10).await.unwrap().is_empty(),

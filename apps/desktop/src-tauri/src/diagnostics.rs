@@ -13,7 +13,11 @@ use crate::overlay::{self, OverlayStatus};
 
 /// Whether the OS credential store is usable.
 #[derive(Debug, Clone, Serialize)]
-#[serde(tag = "state", rename_all = "kebab-case")]
+#[serde(
+    tag = "state",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
 pub enum CredentialStoreStatus {
     Available { backend: &'static str },
     Unavailable { reason: String },

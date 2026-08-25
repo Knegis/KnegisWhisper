@@ -23,6 +23,8 @@ reqwest.workspace = true
 kw-network-policy.workspace = true
 kw-provider-registry.workspace = true
 kw-security.workspace = true
+kw-sidecar.workspace = true
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "fs", "process"] }

@@ -54,7 +54,7 @@ Five long-lived local servers, all loopback with a port drawn from a fixed range
 
 | Sidecar | Ports | Pin | Note |
 | --- | --- | --- | --- |
-| `whisper-server` | 8178–8199 | tag `0.0.8` | **Re-source from `ggml-org/whisper.cpp`** (Group D). Vulkan cold start needs a 120 s timeout — shader compile. |
+| `whisper-server` | 8178–8199 | `ggml-org/whisper.cpp` tag `b4938` | **Done.** Digest-pinned in `config/sidecars.json`, measured rather than copied from a release note. Windows and Linux come from upstream; macOS publishes only an xcframework and is recorded as not-published. Vulkan cold start still needs a long timeout — shader compile. |
 | `llama-server` | 8221–8240 | `b9763` | 5-minute idle auto-stop. |
 | sherpa-onnx Parakeet WS | 6006–6029 | `1.13.4` | Separate offline and online binaries. |
 | Qdrant | 6333–6350 | latest | Phase 8. |

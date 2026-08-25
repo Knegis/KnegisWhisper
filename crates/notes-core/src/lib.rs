@@ -13,5 +13,5 @@
 pub mod notes;
 pub mod transcript;
 
-pub use notes::{escape_query, search, Folder, NewNote, Note, SearchHit};
+pub use notes::{escape_query, search, Folder, NewNote, Note, NoteUpdate, SearchHit};
 pub use transcript::{export, Format, NoteMeta, Segment, SpeakerLabels};

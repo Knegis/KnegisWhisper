@@ -30,7 +30,7 @@ export type Evidence = {
  * `docs/PLATFORM_SUPPORT.md` for why.
  */
 export type CaptureExclusion =
-  | { state: "active"; verified_by: Evidence }
+  | { state: "active"; verifiedBy: Evidence }
   | { state: "unsupported"; reason: string }
   | { state: "failed"; error: string }
   | { state: "unknown"; reason: string };
@@ -42,7 +42,7 @@ export function isCaptureExclusionConfirmed(c: CaptureExclusion): boolean {
 
 /** Mirrors `overlay::NonActivating`. */
 export type NonActivating =
-  | { state: "active"; verified_by: string }
+  | { state: "active"; verifiedBy: string }
   | { state: "unsupported"; reason: string }
   | { state: "failed"; error: string };
 
@@ -222,8 +222,16 @@ export type Transcription = {
   routeKind: string | null;
 };
 
-export async function getHistory(limit?: number): Promise<Transcription[]> {
-  return invoke<Transcription[]>("history", { limit: limit ?? null });
+export async function getHistory(
+  limit?: number,
+  after?: number,
+): Promise<Transcription[]> {
+  // `after` is a cursor, not an offset: entries are ordered by id descending,
+  // so paging by id stays stable while new dictations arrive.
+  return invoke<Transcription[]>("history", {
+    limit: limit ?? null,
+    after: after ?? null,
+  });
 }
 
 export async function clearHistory(): Promise<number> {
@@ -265,4 +273,190 @@ export type ImportReport = {
 
 export async function importOpenWhispr(path: string): Promise<ImportReport> {
   return invoke<ImportReport>("import_openwhispr", { request: { path } });
+}
+
+/* ---------------------------------------------------------------- dictation */
+
+/**
+ * Mirrors `kw_app_core::dictation::SessionState`.
+ *
+ * `recording` is the one that matters: whenever the session is in it, the
+ * overlay is visible. The local user is never silently recorded.
+ */
+export type SessionState = "idle" | "recording" | "transcribing" | "inserting";
+
+/**
+ * Why the speech gate decided what it did. Mirrors `kw_audio_core::GateReason`,
+ * kebab-cased.
+ *
+ * `unavailable` means nothing could be measured, and the gate fails *open* in
+ * that case — discarding a dictation someone spoke is worse than transcribing
+ * silence.
+ */
+export type GateReason =
+  | "unavailable"
+  | "silence"
+  | "insufficient-speech"
+  | "speech-detected";
+
+/** How a dictation ended. Mirrors `kw_app_core::dictation::Outcome`. */
+export type DictationOutcome =
+  | {
+      outcome: "inserted";
+      text: string;
+      clipboardRestored: boolean;
+      historyId: number | null;
+    }
+  | { outcome: "nothing-to-transcribe"; reason: GateReason }
+  | { outcome: "cancelled" }
+  | { outcome: "failed"; message: string; historyId: number | null };
+
+/** A microphone. Mirrors `kw_audio_core::InputDevice`. */
+export type InputDevice = {
+  name: string;
+  isDefault: boolean;
+};
+
+export async function getDictationState(): Promise<SessionState> {
+  return invoke<SessionState>("dictation_state");
+}
+
+/** Start recording, or finish and transcribe. One call, because one hotkey. */
+export async function toggleDictation(): Promise<DictationOutcome> {
+  return invoke<DictationOutcome>("dictation_toggle");
+}
+
+export async function cancelDictation(): Promise<DictationOutcome> {
+  return invoke<DictationOutcome>("dictation_cancel");
+}
+
+export async function getInputDevices(): Promise<InputDevice[]> {
+  return invoke<InputDevice[]>("input_devices");
+}
+
+export async function setInputDevice(device: string | null): Promise<void> {
+  return invoke<void>("dictation_set_device", { device });
+}
+
+/**
+ * Whether this platform can put text at the cursor at all.
+ *
+ * Asked up front so the UI can say so, rather than the user discovering it at
+ * the end of their first dictation. False on Linux today.
+ */
+export async function isInsertionSupported(): Promise<boolean> {
+  return invoke<boolean>("insertion_supported");
+}
+
+export async function onDictationState(
+  handler: (state: SessionState) => void,
+): Promise<UnlistenFn> {
+  return listen<SessionState>("dictation-state", (event) => handler(event.payload));
+}
+
+export async function onDictationOutcome(
+  handler: (outcome: DictationOutcome) => void,
+): Promise<UnlistenFn> {
+  return listen<DictationOutcome>("dictation-outcome", (event) => handler(event.payload));
+}
+
+/* -------------------------------------------------------- local transcription */
+
+/** Whether a local server binary is published for this platform. */
+export type LocalAvailability =
+  | { state: "installable" }
+  | { state: "not-published"; reason: string; tracking: string }
+  | { state: "unknown" };
+
+/**
+ * One model on offer. Mirrors `local_model::ModelStatus`.
+ *
+ * `verifiedBy` is `"digest"` when a measured SHA-256 is known for this model and
+ * `"size"` when only a declared size is. Shown rather than implied: they are
+ * different guarantees, and a model checked by size alone has not been proven to
+ * be the file the publisher built.
+ */
+export type ModelStatus = {
+  id: string;
+  name: string;
+  sizeMb: number | null;
+  recommended: boolean;
+  installed: boolean;
+  verifiedBy: "digest" | "size" | "nothing";
+};
+
+/** Mirrors `local_model::LocalStatus`. */
+export type LocalStatus = {
+  availability: LocalAvailability;
+  serverInstalled: boolean;
+  models: ModelStatus[];
+  port: number | null;
+  installDir: string;
+  /**
+   * True when the per-user location had to be abandoned because the native
+   * binaries cannot cope with a path containing a space or a non-ASCII
+   * character. Worth showing: it means models are shared machine-wide.
+   */
+  installDirFellBack: boolean;
+};
+
+/** Progress of an install. Mirrors `local_model::InstallProgress`. */
+export type InstallProgress =
+  | { stage: "server"; written: number; total: number | null }
+  | { stage: "model"; id: string; written: number; total: number | null }
+  | { stage: "verifying" }
+  | { stage: "extracting" }
+  | { stage: "done"; verifiedBy: "digest" | "size" | "nothing" };
+
+export async function getLocalStatus(): Promise<LocalStatus> {
+  return invoke<LocalStatus>("local_model_status");
+}
+
+/** Download and verify the server and one model. Returns how it was verified. */
+export async function installLocalModel(modelId: string): Promise<string> {
+  return invoke<string>("local_model_install", { modelId });
+}
+
+export async function startLocalServer(modelId: string): Promise<number> {
+  return invoke<number>("local_server_start", { modelId });
+}
+
+export async function stopLocalServer(): Promise<void> {
+  return invoke<void>("local_server_stop");
+}
+
+export async function onInstallProgress(
+  handler: (progress: InstallProgress) => void,
+): Promise<UnlistenFn> {
+  return listen<InstallProgress>("local-model-progress", (event) => handler(event.payload));
+}
+
+/* ---------------------------------------------------------------- local api */
+
+/**
+ * Mirrors `local_api::LocalApiStatus`.
+ *
+ * `discoveryPermissions` is the permissions the file actually has, read back
+ * rather than assumed — on Windows it says administrators can read it, because
+ * there is no `chmod` and claiming owner-only would be false.
+ */
+export type LocalApiStatus = {
+  enabled: boolean;
+  running: boolean;
+  port: number | null;
+  discoveryPath: string | null;
+  discoveryPermissions: string | null;
+  discoveryPermissionsAsExpected: boolean | null;
+};
+
+export async function getLocalApiStatus(): Promise<LocalApiStatus> {
+  return invoke<LocalApiStatus>("local_api_status");
+}
+
+export async function startLocalApi(): Promise<number> {
+  return invoke<number>("local_api_start");
+}
+
+export async function stopLocalApi(): Promise<void> {
+  return invoke<void>("local_api_stop");
 }

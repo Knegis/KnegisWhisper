@@ -40,7 +40,11 @@ pub const LOCAL_PROVIDERS: [&str; 2] = ["local", "lan"];
 
 /// Where a reasoning request goes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(tag = "kind", rename_all = "kebab-case")]
+#[serde(
+    tag = "kind",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
 pub enum ChatRoute {
     /// An endpoint the user typed. Wins over everything, including a stale
     /// enterprise provider id left in settings — it is a declared intent.

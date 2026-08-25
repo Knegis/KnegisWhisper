@@ -1,0 +1,37 @@
+[package]
+name = "kw-cli"
+description = "The knegiswhisper command-line client."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[lib]
+name = "kw_cli"
+path = "src/lib.rs"
+
+[[bin]]
+name = "knegiswhisper"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+kw-local-api.workspace = true
+kw-security.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+kw-storage.workspace = true
+kw-notes-core.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "net"] }

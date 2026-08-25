@@ -72,7 +72,11 @@ impl ProbeKind {
 
 /// Why a probe did not run.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(tag = "reason", rename_all = "kebab-case")]
+#[serde(
+    tag = "reason",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
 pub enum SkipReason {
     /// No credential is stored for this provider, so there is nothing to test.
     NoCredential,
@@ -85,7 +89,11 @@ pub enum SkipReason {
 /// Deliberately three states with no "warning". A probe either demonstrated the
 /// provider works, demonstrated it does not, or did not run.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(tag = "outcome", rename_all = "kebab-case")]
+#[serde(
+    tag = "outcome",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
 pub enum ProbeOutcome {
     Pass { detail: String },
     Fail { detail: String },

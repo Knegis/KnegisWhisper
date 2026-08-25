@@ -58,7 +58,11 @@ impl SessionState {
 
 /// How a dictation ended, as reported to the UI.
 #[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(tag = "outcome", rename_all = "kebab-case")]
+#[serde(
+    tag = "outcome",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
 pub enum Outcome {
     /// Text was produced and inserted.
     Inserted {

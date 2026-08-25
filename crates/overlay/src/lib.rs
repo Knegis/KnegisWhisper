@@ -16,7 +16,11 @@ use serde::Serialize;
 
 /// How we know a capture-exclusion claim is true.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(tag = "kind", rename_all = "kebab-case")]
+#[serde(
+    tag = "kind",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
 pub enum Evidence {
     /// The platform exposes a getter and it returned the expected value. This is
     /// the only evidence that justifies [`CaptureExclusion::Active`].
@@ -33,7 +37,11 @@ pub enum Evidence {
 /// Four states rather than a boolean, because "we called the API and it did not
 /// complain" is genuinely different from "we know this works".
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(tag = "state", rename_all = "kebab-case")]
+#[serde(
+    tag = "state",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
 pub enum CaptureExclusion {
     /// Applied and positively verified.
     Active { verified_by: Evidence },
@@ -172,7 +180,17 @@ mod tests {
         })
         .unwrap();
         assert_eq!(json["state"], "active");
-        assert_eq!(json["verified_by"]["kind"], "read-back");
+        // camelCase, like every other field this application sends. It was
+        // `verified_by` until `rename_all_fields` was added: `rename_all` on an
+        // enum renames the *variants*, not the fields inside them, so a tagged
+        // union quietly sent snake_case while every struct sent camelCase. One
+        // API with two conventions is how the next person writing a frontend
+        // type gets it wrong.
+        assert_eq!(json["verifiedBy"]["kind"], "read-back");
+        assert!(
+            json.get("verified_by").is_none(),
+            "the old key must be gone, not merely joined by a new one"
+        );
     }
 
     #[test]

@@ -22,7 +22,11 @@ pub const HOTKEY_EVENT: &str = "hotkey";
 
 /// What happened when we tried to register one accelerator.
 #[derive(Debug, Clone, Serialize)]
-#[serde(tag = "state", rename_all = "kebab-case")]
+#[serde(
+    tag = "state",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
 pub enum Registration {
     Registered {
         accelerator: String,
@@ -166,6 +170,15 @@ fn register_one(app: &AppHandle, action: HotkeyAction, accelerator: &str) -> Reg
 
             if let Err(err) = app_for_handler.emit(HOTKEY_EVENT, payload) {
                 tracing::warn!(error = %err, "could not deliver the hotkey event");
+            }
+
+            // Dictation is handled here rather than in the frontend. The
+            // dashboard can be hidden, closed to the tray, or still starting up,
+            // and a hotkey that only works while a window is listening is not a
+            // global hotkey. Everything else is still forwarded for the UI to
+            // act on.
+            if action == HotkeyAction::Dictation {
+                crate::dictation::on_hotkey(&app_for_handler);
             }
         });
 

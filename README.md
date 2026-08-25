@@ -16,10 +16,12 @@ when you configure them with your own credentials, and requests go straight to t
 > | --- | --- |
 > | 0 — Upstream audit and parity contracts | Complete |
 > | 1 — Tauri foundation | Complete. Boots to a dashboard, lives in the tray, registers hotkeys, creates a capture-excluded overlay. |
-> | 2 — Dictation | Cores complete and tested: capture, speech gating, route resolution, batch execution, the session state machine. **Not yet wired end to end** — the whisper.cpp sidecar is not downloaded or managed, so local transcription returns an honest "not implemented". |
+> | 2 — Dictation | Wired end to end. The hotkey records, routes, transcribes, optionally cleans up, pastes at the cursor, and writes history; the overlay is visible for the whole recording. The local model installs and runs from the settings screen. **Not yet exercised by a person** — the automated proof is `crates/transcription-core/tests/local_dictation.rs`, and the by-hand check in `docs/PHASES_0_6_COMPLETION_PLAN.md` has not been done. |
 > | 3 — Reasoning | Routing, request shaping, and chat dispatch complete. Cleanup works against any OpenAI-compatible provider. Bedrock, Azure, and Vertex refuse honestly. |
 > | 4 — Meetings and notes | Notes, folders, search, and transcript export complete. The meeting *contract* and capability model are complete; the five WebSocket clients are not written. |
-> | 5–9 | Not started. |
+> | 5 — Calendars | Not started. |
+> | 6 — Local API and CLI | Complete. Off by default, started from the settings screen, which reports the discovery file's real permissions. The `knegiswhisper` CLI is tested against it as a compiled binary, exit codes included. |
+> | 7–9 | Not started. |
 >
 > Every capability claim in the settings screen is read back from the operating system rather
 > than assumed, so what the application says it can do is what it can do. Where something is
@@ -44,6 +46,7 @@ when you configure them with your own credentials, and requests go straight to t
 | --- | --- |
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | Crate layout, key interfaces, storage design |
 | [ENGINEERING_LOG.md](docs/ENGINEERING_LOG.md) | Judgement calls, deviations, and what is not usable yet |
+| [PHASES_0_6_COMPLETION_PLAN.md](docs/PHASES_0_6_COMPLETION_PLAN.md) | What is left in phases 0-6, and what is blocked on what |
 | [INTEGRATION_PARITY.md](docs/INTEGRATION_PARITY.md) | How integration parity is enforced |
 | [NETWORK_BOUNDARY.md](docs/NETWORK_BOUNDARY.md) | Every reason this app makes a network request |
 | [PLATFORM_SUPPORT.md](docs/PLATFORM_SUPPORT.md) | What works where, and what is unverified |

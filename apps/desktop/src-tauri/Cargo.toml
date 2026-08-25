@@ -14,6 +14,21 @@ repository.workspace = true
 name = "knegiswhisper_lib"
 crate-type = ["lib", "cdylib", "staticlib"]
 
+# Named `-desktop` because `tools/knegiswhisper` produces the CLI, and two
+# workspace binaries sharing one name silently overwrite each other in
+# target/debug. That is not a tidiness point: it happened. The CLI's end-to-end
+# tests resolve `CARGO_BIN_EXE_knegiswhisper`, and once the desktop app had been
+# linked more recently they launched the GUI application fifteen times with
+# command-line arguments it ignored — leaving a stray window on screen and a
+# locked executable that broke the next build.
+#
+# The installed product is still called KnegisWhisper: `productName` in
+# tauri.conf.json decides that, and `mainBinaryName` points the bundler here.
+# Only the development artifact moves.
+[[bin]]
+name = "knegiswhisper-desktop"
+path = "src/main.rs"
+
 [lints]
 workspace = true
 
@@ -25,16 +40,27 @@ tauri = { workspace = true, features = ["tray-icon", "image-png"] }
 tauri-plugin-global-shortcut.workspace = true
 tauri-plugin-autostart.workspace = true
 tokio.workspace = true
+async-trait.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
+kw-app-core.workspace = true
+kw-audio-core.workspace = true
+kw-local-api.workspace = true
 kw-network-policy.workspace = true
+kw-notes-core.workspace = true
+kw-reasoning-core.workspace = true
+kw-sidecar.workspace = true
+kw-transcription-core.workspace = true
 kw-overlay.workspace = true
 kw-platform.workspace = true
 kw-provider-probe.workspace = true
 kw-provider-registry.workspace = true
 kw-security.workspace = true
 kw-storage.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

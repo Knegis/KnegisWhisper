@@ -4,6 +4,7 @@ members = [
     "apps/desktop/src-tauri",
     "crates/app-core",
     "crates/audio-core",
+    "crates/local-api",
     "crates/meeting-core",
     "crates/network-policy",
     "crates/notes-core",
@@ -13,7 +14,9 @@ members = [
     "crates/provider-registry",
     "crates/reasoning-core",
     "crates/security",
+    "crates/sidecar",
     "crates/transcription-core",
+    "tools/knegiswhisper",
     "crates/storage",
 ]
 
@@ -21,8 +24,6 @@ members = [
 # The brief asks for vertical slices over broad unfinished scaffolding, so an
 # empty crate is not created just to reserve its name.
 #
-#   crates/local-api          phase 6
-#   tools/knegiswhisper       phase 6
 #   tools/knegiswhisper-mcp   phase 7
 #
 # See docs/ARCHITECTURE.md for the full intended layout.
@@ -40,6 +41,7 @@ repository = "https://github.com/axelalbertkarlsson/KnegisWhisper"
 [workspace.dependencies]
 kw-app-core = { path = "crates/app-core" }
 kw-audio-core = { path = "crates/audio-core" }
+kw-local-api = { path = "crates/local-api" }
 kw-meeting-core = { path = "crates/meeting-core" }
 kw-network-policy = { path = "crates/network-policy" }
 kw-notes-core = { path = "crates/notes-core" }
@@ -49,11 +51,13 @@ kw-provider-probe = { path = "crates/provider-probe" }
 kw-provider-registry = { path = "crates/provider-registry" }
 kw-reasoning-core = { path = "crates/reasoning-core" }
 kw-security = { path = "crates/security" }
+kw-sidecar = { path = "crates/sidecar" }
 kw-storage = { path = "crates/storage" }
 kw-transcription-core = { path = "crates/transcription-core" }
+kw-cli = { path = "tools/knegiswhisper" }
 
 # Async
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "process"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "process", "net"] }
 async-trait = "0.1"
 futures = "0.3"
 
@@ -73,12 +77,15 @@ sqlx = { version = "0.8", default-features = false, features = [
 ] }
 
 # Credentials
+subtle = "2"
+getrandom = "0.2"
 keyring = { version = "3", features = [
     "apple-native", "windows-native", "sync-secret-service", "crypto-rust",
 ] }
 
 # HTTP — only crates/network-policy may depend on this. Enforced by review and
 # by the fact that nothing else declares it.
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "multipart", "rustls-tls"] }
 url = "2"
 
@@ -90,6 +97,19 @@ ringbuf = "0.4"
 # Platform
 arboard = { version = "3", default-features = false }
 windows = "0.58"
+
+# Sidecars
+sha2 = "0.10"
+sysinfo = { version = "0.32", default-features = false, features = ["system"] }
+# Pure-Rust decompression on purpose: cmake, ninja, and clang are not installed
+# on the development machine, so a dependency that shells out to a C toolchain
+# would make the workspace unbuildable here.
+zip = { version = "2", default-features = false, features = ["deflate"] }
+tar = "0.4"
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+
+# CLI
+clap = { version = "4", features = ["derive"] }
 
 # Utilities
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }

@@ -14,17 +14,29 @@ maintained in place rather than appended to, because its purpose is to be curren
 
 ## Carry-forward — what the next session needs to know
 
+> **The plan for closing all of this is [PHASES_0_6_COMPLETION_PLAN.md](PHASES_0_6_COMPLETION_PLAN.md)**,
+> which tracks what is left per phase and what each blocked item needs. This section stays as the
+> short version.
+>
+> **The single most useful next piece of work** is the Tauri layer for what is
+> already built. Local dictation and the local API both work end to end in tests
+> and neither is reachable from the running application, because no command
+> installs a model, starts whisper-server, or brings the API up. That is one
+> well-scoped chunk — commands, state, and the settings screen — and it converts
+> two phases from "tested" to "usable" without any new subsystem.
+
 Maintained in place. If something here becomes false, edit it rather than adding a note.
 
 ### Committed but not usable end to end
 
 | Thing | State | What is missing |
 | --- | --- | --- |
-| Local transcription (Phase 2) | Returns `LocalNotImplemented` | The whisper.cpp sidecar is not downloaded, digest-verified, or lifecycle-managed. Everything either side of it — capture, gating, routing, insertion, history — is written and tested. This is the single largest gap between "committed" and "works". |
+| Local transcription (Phase 2) | Works, in tests | The whole path is real: pinned sidecar install, digest-checked model download, loopback server, transcript. What is missing is the *interface* — a Tauri command to install a model and a hotkey that runs the dictation session with the local transcriber attached. It works before it is reachable. |
 | Meeting transcription (Phase 4) | Contract only | The five WebSocket clients. `is_allowed` returns true only for a provider with a client, so nothing claims otherwise. Each needs real credentials against a live service to verify. |
 | Enterprise reasoning (Bedrock, Azure, Vertex) | `ShapeNotImplemented` | The three request shapes. They refuse honestly rather than falling back. |
 | `storage::import::from_openwhispr` | Works, no UI | Deliberately absent from `config/integration-manifest.json` — adding it before it is reachable would be exactly the unconfigurable-backend the parity gate exists to catch. Add both together. |
-| Phases 5–9 | Not started | System audio, calendars, local API + CLI, MCP, diarization + Qdrant, packaging. |
+| Local API and CLI (Phase 6) | Works, in tests | Same gap as dictation: nothing in the application starts the server. The API, the discovery file, and the compiled CLI are complete and tested against each other. |
+| Phases 5, 7–9 | Not started | Calendars, MCP, diarization + Qdrant, packaging. System audio and the meeting clients remain from Phase 4. |
 
 ### Claims that are unverified rather than verified
 
@@ -45,6 +57,15 @@ These are the places where CI going green means "it compiles", not "it works". E
 
 ### The general lessons, stated once
 
+- **A pin is only a pin if it was measured.** Every digest in `config/sidecars.json` came from
+  downloading the asset and hashing it, not from a release note. The catalogue is compiled in with
+  `include_str!` for the same reason — a digest in a file the user can edit is not a pin.
+- **Test the contract against the real thing once, and everything else against fixtures.** The
+  ignored tests (`real_install`, `local_dictation`) exist because a fixture cannot tell you whether
+  the pinned digest matches what the host serves, whether the redirect chain is followable, or
+  whether the arguments are ones this build accepts. Those are exactly what breaks when an upstream
+  release is re-tagged.
+
 - **A denylist that matches nothing passes trivially.** "The tree is clean" and "the patterns
   work" are different claims and only the second one matters. This is why
   `tools/domain-scanner/scan.test.mjs` asserts the shipped patterns still catch real vendor
@@ -62,9 +83,14 @@ These are the places where CI going green means "it compiles", not "it works". E
 
 Unchanged from the Phases 1–4 entry, restated here so they are not buried:
 
-- **whisper.cpp source** — proceeded with upstream `ggml-org/whisper.cpp` at a pinned tag rather
-  than the vendor org, keeping upstream's reason for pinning (a bump must not change
-  transcription output between releases). One line of config to reverse.
+- ~~**whisper.cpp source**~~ — **settled.** `ggml-org/whisper.cpp` at tag `b4938`, pinned in
+  `config/sidecars.json`. The worry that upstream might not publish usable binaries turned out to
+  apply only to macOS: the `b*` tags carry `whisper-bin-x64.zip` for Windows and
+  `whisper-bin-ubuntu-{x64,arm64}.tar.gz` for Linux, all containing a real `whisper-server`, and
+  those three are now installed and verified from upstream with no vendor dependency at all. The
+  tagged `v*` releases carry source only, which is what made this look impossible at first.
+  macOS gets an xcframework — a library for embedding in an Xcode project, not a server — so it
+  is recorded as `NotPublished` with a reason and needs a macOS CI job of our own.
 - **AEC helper and the five Windows native helpers** still come from `OpenWhispr/openwhispr`
   release assets. The C/Swift source is in-repo and MIT, so this is a CI build-and-publish job.
   Needed before meetings work.

@@ -1,0 +1,53 @@
+{
+  "$comment": "Sidecar binaries this application will download and run. Compiled into the binary by crates/sidecar/src/catalog.rs with include_str!, deliberately: a digest pinned in a file the user can edit is not a pin. Every digest below was computed from the actual downloaded asset, not copied from a release note. Re-pinning is a source change, a diff, and a release. To add or move a pin, run tools/sidecar-pin rather than editing by hand.",
+  "schemaVersion": 1,
+  "sidecars": [
+    {
+      "name": "whisper",
+      "description": "Local speech-to-text. Runs entirely on this machine; no audio leaves the device.",
+      "source": {
+        "repo": "ggml-org/whisper.cpp",
+        "release": "b4938",
+        "pinnedBecause": "Tracking the newest release would let an upstream change alter transcription output between our releases with no diff to review. Upstream OpenWhispr hit this and pinned for the same reason (their #1348). Held at a tested build until a bump is deliberately reviewed."
+      },
+      "portRange": { "first": 8178, "last": 8199 },
+      "commandFragments": ["whisper-server"],
+      "targets": {
+        "windows-x86_64": {
+          "availability": "published",
+          "url": "https://github.com/ggml-org/whisper.cpp/releases/download/b4938/whisper-bin-x64.zip",
+          "archive": "zip",
+          "sha256": "c2a4b60edb11f7e11a9191ffb50929535527d4d91c9903dbe3e554583bbbc63d",
+          "sizeBytes": 8361840,
+          "executableInArchive": "Release/whisper-server.exe"
+        },
+        "linux-x86_64": {
+          "availability": "published",
+          "url": "https://github.com/ggml-org/whisper.cpp/releases/download/b4938/whisper-bin-ubuntu-x64.tar.gz",
+          "archive": "tar-gz",
+          "sha256": "f4cfc1f969a13805908fb72043ce7cc896eb42e0b8afbe841dc8e7298923b061",
+          "sizeBytes": 9503425,
+          "executableInArchive": "whisper-bin-ubuntu-x64/whisper-server"
+        },
+        "linux-aarch64": {
+          "availability": "published",
+          "url": "https://github.com/ggml-org/whisper.cpp/releases/download/b4938/whisper-bin-ubuntu-arm64.tar.gz",
+          "archive": "tar-gz",
+          "sha256": "94a33318650c57cc3d9a91439e0e3f0b94ba96bacd34203a06db395cf9204e40",
+          "sizeBytes": 4572294,
+          "executableInArchive": "whisper-bin-ubuntu-arm64/whisper-server"
+        },
+        "macos-x86_64": {
+          "availability": "not-published",
+          "reason": "Upstream publishes only whisper-<tag>-xcframework.zip for Apple platforms, which is a library for embedding in an Xcode project rather than a whisper-server executable. There is nothing here to download and run.",
+          "tracking": "docs/ENGINEERING_LOG.md -- carry-forward. Needs a macOS CI job building whisper.cpp from source and publishing under this project's own releases, the same treatment docs/PORTING_MATRIX.md already records for the AEC and Windows helpers."
+        },
+        "macos-aarch64": {
+          "availability": "not-published",
+          "reason": "Upstream publishes only whisper-<tag>-xcframework.zip for Apple platforms, which is a library for embedding in an Xcode project rather than a whisper-server executable. There is nothing here to download and run.",
+          "tracking": "docs/ENGINEERING_LOG.md -- carry-forward. Needs a macOS CI job building whisper.cpp from source and publishing under this project's own releases, the same treatment docs/PORTING_MATRIX.md already records for the AEC and Windows helpers."
+        }
+      }
+    }
+  ]
+}

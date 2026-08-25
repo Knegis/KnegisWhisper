@@ -32,7 +32,19 @@ pub enum RequestPurpose {
     UserConfiguredTranscriptionProvider,
     /// Google Calendar or Microsoft Graph, under the user's own OAuth grant.
     UserConfiguredCalendarProvider,
-    /// Fetching a model the user chose to install.
+    /// Fetching a local model the user chose to install, or the runtime that
+    /// executes it.
+    ///
+    /// Both halves are one action from the user's point of view -- they asked
+    /// for local transcription, and it needs a `whisper-server` binary and a
+    /// GGML model file. Splitting them into two purposes would say the boundary
+    /// is about file types rather than about reasons, and the brief fixes the
+    /// number of purposes at seven.
+    ///
+    /// The extra danger of the executable half is answered by a stronger
+    /// requirement rather than a different purpose: `kw_sidecar` cannot
+    /// represent an executable without a pinned SHA-256, so a binary reaches
+    /// this purpose only when the bytes were decided at review time.
     UserTriggeredModelDownload,
     /// Importing media from a URL the user supplied.
     UserTriggeredMediaImport,
@@ -116,6 +128,36 @@ pub enum PolicyError {
 
     #[error("failed to build the http client: {0}")]
     Client(#[from] reqwest::Error),
+
+    #[error(
+        "{url} redirected more than {limit} times. A redirect chain that long is a          misconfiguration or a loop, not a download."
+    )]
+    TooManyRedirects { url: String, limit: u8 },
+
+    #[error("{url} returned {status} with no Location header to follow")]
+    RedirectWithoutLocation { url: String, status: u16 },
+
+    #[error(
+        "{url} redirected to {to}, which this purpose does not permit: {reason}.          Following it would turn an allowed host into a disallowed one."
+    )]
+    RedirectNotPermitted {
+        url: String,
+        to: String,
+        reason: String,
+    },
+
+    #[error("{url} returned {status}")]
+    HttpStatus { url: String, status: u16 },
+
+    #[error("{path:?} is not a usable loopback path: {reason}")]
+    NotALoopbackPath { path: String, reason: &'static str },
+
+    #[error("could not write {path}: {source}")]
+    Write {
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
 }
 
 /// Vendor hosts that must never be contacted, parsed once from
@@ -297,6 +339,208 @@ impl NetworkPolicy {
     ) -> Result<reqwest::RequestBuilder, PolicyError> {
         self.request(purpose, reqwest::Method::POST, url)
     }
+
+    /// Talk to a sidecar this application started, on loopback.
+    ///
+    /// Deliberately *not* one of the seven purposes, because this is not egress:
+    /// nothing leaves the machine. `whisper-server` and `llama-server` are
+    /// processes we spawned, bound to `127.0.0.1` by `crate::port`, and a
+    /// request to one is closer to an IPC call than to a network request.
+    ///
+    /// What keeps that claim honest is the signature. It takes a port and a
+    /// path, never a URL, and builds the address itself -- so there is no way to
+    /// aim this at another host, and no way for a later change to quietly widen
+    /// it. The path is parsed rather than trusted, so a path carrying an
+    /// authority or control characters is refused instead of producing a request
+    /// somewhere unintended.
+    pub fn loopback(
+        &self,
+        method: reqwest::Method,
+        port: u16,
+        path: &str,
+    ) -> Result<reqwest::RequestBuilder, PolicyError> {
+        if !path.starts_with('/') {
+            return Err(PolicyError::NotALoopbackPath {
+                path: path.to_owned(),
+                reason: "a loopback path has to start with /",
+            });
+        }
+        if path.contains("://") {
+            return Err(PolicyError::NotALoopbackPath {
+                path: path.to_owned(),
+                reason: "a loopback path cannot carry a scheme",
+            });
+        }
+
+        let base = format!("http://{}:{port}", std::net::Ipv4Addr::LOCALHOST);
+        let url = Url::parse(&base)
+            .and_then(|base| base.join(path))
+            .map_err(PolicyError::InvalidUrl)?;
+
+        // The host is written by us, so this can only fail if `join` replaced
+        // the authority -- which is exactly the case worth refusing rather than
+        // sending.
+        if url.host_str() != Some("127.0.0.1") || url.port() != Some(port) {
+            return Err(PolicyError::NotALoopbackPath {
+                path: path.to_owned(),
+                reason: "that path would change the host or port",
+            });
+        }
+
+        Ok(self.client.request(method, url))
+    }
+
+    /// Stream a URL to a file, following redirects one validated hop at a time.
+    ///
+    /// The client is built with `Policy::none()` because a silently followed
+    /// redirect is how an allowed host becomes a disallowed one. But a download
+    /// genuinely needs redirects: a GitHub release asset answers with a 302 to
+    /// a storage host, so refusing to follow would mean refusing to download.
+    ///
+    /// The answer is to follow *visibly*. Every hop is validated against the
+    /// same purpose before it is requested, the chain is bounded, and the hops
+    /// are returned so the caller can report where the bytes actually came
+    /// from. A redirect to a blocked vendor host, to plaintext, or to a scheme
+    /// this purpose does not allow is an error naming both ends.
+    ///
+    /// The body is written as it arrives rather than buffered: these files run
+    /// to gigabytes.
+    pub async fn download_to_file(
+        &self,
+        purpose: RequestPurpose,
+        url: &str,
+        destination: &std::path::Path,
+        // `+ Send` because this callback is held across awaits: without it the
+        // returned future is not `Send` and cannot be spawned or used in a
+        // Tauri command.
+        progress: &mut (dyn FnMut(u64, Option<u64>) + Send),
+    ) -> Result<Download, PolicyError> {
+        use tokio::io::AsyncWriteExt as _;
+
+        const MAX_HOPS: u8 = 5;
+
+        let mut current = url.to_owned();
+        let mut hops: Vec<RedirectHop> = Vec::new();
+
+        let response = loop {
+            let response = self
+                .request(purpose, reqwest::Method::GET, &current)?
+                .send()
+                .await?;
+
+            let status = response.status();
+            if !status.is_redirection() {
+                if !status.is_success() {
+                    return Err(PolicyError::HttpStatus {
+                        url: current,
+                        status: status.as_u16(),
+                    });
+                }
+                break response;
+            }
+
+            if hops.len() as u8 >= MAX_HOPS {
+                return Err(PolicyError::TooManyRedirects {
+                    url: url.to_owned(),
+                    limit: MAX_HOPS,
+                });
+            }
+
+            let location = response
+                .headers()
+                .get(reqwest::header::LOCATION)
+                .and_then(|value| value.to_str().ok())
+                .ok_or_else(|| PolicyError::RedirectWithoutLocation {
+                    url: current.clone(),
+                    status: status.as_u16(),
+                })?;
+
+            let next = next_hop(&current, location, purpose)?;
+
+            tracing::debug!(from = %current, to = %next, "following a validated redirect");
+            hops.push(RedirectHop {
+                from: current.clone(),
+                to: next.clone(),
+            });
+            current = next;
+        };
+
+        let total = response.content_length();
+        let mut file = tokio::fs::File::create(destination)
+            .await
+            .map_err(|source| PolicyError::Write {
+                path: destination.display().to_string(),
+                source,
+            })?;
+
+        let mut written: u64 = 0;
+        let mut stream = response;
+        while let Some(chunk) = stream.chunk().await? {
+            file.write_all(&chunk)
+                .await
+                .map_err(|source| PolicyError::Write {
+                    path: destination.display().to_string(),
+                    source,
+                })?;
+            written += chunk.len() as u64;
+            progress(written, total);
+        }
+
+        file.flush().await.map_err(|source| PolicyError::Write {
+            path: destination.display().to_string(),
+            source,
+        })?;
+
+        Ok(Download {
+            bytes: written,
+            final_url: current,
+            hops,
+        })
+    }
+}
+
+/// Resolve a `Location` header against the URL that produced it, and check the
+/// result is somewhere this purpose may go.
+///
+/// Extracted from the download loop so the decision can be tested directly.
+/// The loop around it is plumbing; this is the part that has to be right.
+fn next_hop(current: &str, location: &str, purpose: RequestPurpose) -> Result<String, PolicyError> {
+    // Resolved against the current URL, so a relative Location works.
+    let next = Url::parse(current)
+        .and_then(|base| base.join(location))
+        .map_err(PolicyError::InvalidUrl)?
+        .to_string();
+
+    // The point of following redirects by hand: the new target is checked, and
+    // a refusal names both ends rather than reporting a bare scheme error from
+    // a URL the caller never typed.
+    if let Err(reason) = validate(&next, purpose) {
+        return Err(PolicyError::RedirectNotPermitted {
+            url: current.to_owned(),
+            to: next,
+            reason: reason.to_string(),
+        });
+    }
+
+    Ok(next)
+}
+
+/// One redirect that was followed, after being validated.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RedirectHop {
+    pub from: String,
+    pub to: String,
+}
+
+/// What a completed download did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Download {
+    pub bytes: u64,
+    /// Where the bytes actually came from, after redirects.
+    pub final_url: String,
+    /// Every hop taken, so a report can show the chain rather than implying
+    /// the bytes came from the URL that was asked for.
+    pub hops: Vec<RedirectHop>,
 }
 
 #[cfg(test)]
@@ -311,6 +555,154 @@ mod tests {
 
     const AI: RequestPurpose = RequestPurpose::UserConfiguredAiProvider;
     const SELF_HOSTED: RequestPurpose = RequestPurpose::ExplicitlyConfiguredSelfHostedEndpoint;
+    const DOWNLOAD: RequestPurpose = RequestPurpose::UserTriggeredModelDownload;
+
+    // ---------------------------------------------------------------- loopback
+
+    /// The URL a loopback request would actually be sent to.
+    fn loopback_url(port: u16, path: &str) -> Result<String, PolicyError> {
+        let policy = NetworkPolicy::new()?;
+        let request = policy.loopback(reqwest::Method::GET, port, path)?;
+        Ok(request
+            .build()
+            .map_err(PolicyError::Client)?
+            .url()
+            .to_string())
+    }
+
+    #[test]
+    fn a_sidecar_health_check_addresses_loopback() {
+        assert_eq!(loopback_url(8178, "/").unwrap(), "http://127.0.0.1:8178/");
+        assert_eq!(
+            loopback_url(8178, "/inference").unwrap(),
+            "http://127.0.0.1:8178/inference"
+        );
+    }
+
+    #[test]
+    fn a_path_that_tries_to_change_the_host_is_refused() {
+        // The reason this takes a port and a path rather than a URL: there has
+        // to be no way to aim it off-machine.
+        for path in [
+            "//evil.example.com/x",
+            "/x/../../..//evil.example.com",
+            "https://evil.example.com/x",
+        ] {
+            match loopback_url(8178, path) {
+                Err(_) => {}
+                Ok(url) => assert!(
+                    url.starts_with("http://127.0.0.1:8178/"),
+                    "{path:?} produced {url}"
+                ),
+            }
+        }
+    }
+
+    #[test]
+    fn a_path_without_a_leading_slash_is_refused() {
+        let err = loopback_url(8178, "inference").unwrap_err();
+        assert!(matches!(err, PolicyError::NotALoopbackPath { .. }));
+    }
+
+    #[test]
+    fn a_path_carrying_a_scheme_is_refused() {
+        let err = loopback_url(8178, "/redirect?to=http://evil.example.com").unwrap_err();
+        assert!(matches!(err, PolicyError::NotALoopbackPath { .. }));
+    }
+
+    #[test]
+    fn loopback_is_not_one_of_the_seven_purposes() {
+        // It is not egress, so it must not appear in the enumerated boundary.
+        // A test rather than a comment, because the count is a stated constraint.
+        assert_eq!(ALL_PURPOSES.len(), 7);
+    }
+
+    // ------------------------------------------------------- redirect following
+
+    const RELEASE: &str =
+        "https://github.com/ggml-org/whisper.cpp/releases/download/b4938/whisper-bin-x64.zip";
+
+    #[test]
+    fn a_release_asset_redirect_to_storage_is_followed() {
+        // The real shape: GitHub answers a release download with a 302 to a
+        // storage host. Refusing to follow would mean refusing to download.
+        let storage = "https://objects.githubusercontent.com/github-production-release-asset/1/2";
+        assert_eq!(next_hop(RELEASE, storage, DOWNLOAD).unwrap(), storage);
+    }
+
+    #[test]
+    fn a_relative_location_is_resolved_against_the_current_url() {
+        let next = next_hop(RELEASE, "/other/path.zip", DOWNLOAD).unwrap();
+        assert_eq!(next, "https://github.com/other/path.zip");
+    }
+
+    #[test]
+    fn a_redirect_to_plaintext_is_refused_and_names_both_ends() {
+        // The downgrade attack this manual following exists to catch.
+        let err = next_hop(RELEASE, "http://example.com/x.zip", DOWNLOAD).unwrap_err();
+        let message = err.to_string();
+        assert!(matches!(err, PolicyError::RedirectNotPermitted { .. }));
+        assert!(message.contains("github.com"), "the origin: {message}");
+        assert!(
+            message.contains("http://example.com"),
+            "the target: {message}"
+        );
+        assert!(message.contains("allowed host into a disallowed one"));
+    }
+
+    #[test]
+    fn a_redirect_to_a_blocked_vendor_host_is_refused() {
+        // domain-scanner:allow-next-line a negative test must name the host it asserts is blocked
+        let err = next_hop(RELEASE, "https://api.openwhispr.com/x.zip", DOWNLOAD).unwrap_err();
+        assert!(matches!(err, PolicyError::RedirectNotPermitted { .. }));
+    }
+
+    #[test]
+    fn a_redirect_to_a_non_http_scheme_is_refused() {
+        for target in ["file:///etc/passwd", "ftp://example.com/x.zip"] {
+            assert!(
+                next_hop(RELEASE, target, DOWNLOAD).is_err(),
+                "{target} must not be followed"
+            );
+        }
+    }
+
+    #[test]
+    fn a_redirect_is_validated_against_the_purpose_it_started_with() {
+        // A self-hosted endpoint may redirect within the private range; a model
+        // download may not, because plaintext is not its to allow.
+        let from = "http://192.168.1.10:8080/v1/audio/transcriptions";
+        assert!(next_hop(from, "http://192.168.1.11:8080/v1", SELF_HOSTED).is_ok());
+        assert!(next_hop(from, "http://192.168.1.11:8080/v1", DOWNLOAD).is_err());
+    }
+
+    #[tokio::test]
+    async fn a_download_target_is_validated_before_any_socket_is_opened() {
+        // Nothing is listening on this port. If the purpose check happened after
+        // the connection attempt, the error would be a connection failure.
+        let policy = NetworkPolicy::new().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let mut seen = |_written: u64, _total: Option<u64>| {};
+
+        let err = policy
+            .download_to_file(
+                DOWNLOAD,
+                "http://127.0.0.1:9/whisper.zip",
+                &dir.path().join("out.zip"),
+                &mut seen,
+            )
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(err, PolicyError::SchemeNotPermitted { .. }),
+            "expected a policy refusal, got {err}"
+        );
+        assert!(
+            !dir.path().join("out.zip").exists(),
+            "a refused download must not leave a file behind"
+        );
+    }
 
     #[test]
     fn allows_a_normal_provider_over_https() {
