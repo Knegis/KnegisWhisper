@@ -37,8 +37,8 @@ export type WhisperModelId = (typeof WHISPER_MODEL_IDS)[number];
 export const SHERPA_MODEL_IDS = ["nemotron-3.5-asr-streaming-0.6b", "nemotron-speech-streaming-en-0.6b", "parakeet-tdt-0.6b-v3", "parakeet-unified-en-0.6b"] as const;
 export type SherpaModelId = (typeof SHERPA_MODEL_IDS)[number];
 
-/** OS credential-store slots. A provider offering both transcription and reasoning shares one slot. */
-export const CREDENTIAL_SLOTS = ["anthropic", "berget", "corti", "gemini", "groq", "mistral", "openai", "tinfoil", "xai"] as const;
+/** OS credential-store slots, in upstream secretKeys order. All fifteen: ten providers and five per-feature custom endpoints. */
+export const CREDENTIAL_SLOTS = ["openai", "anthropic", "gemini", "groq", "berget", "xai", "mistral", "openrouter", "tinfoil", "corti", "note-formatting-custom", "translation-custom", "dictation-agent-custom", "dictation-agent-vision-custom", "chat-agent-custom"] as const;
 export type CredentialSlot = (typeof CREDENTIAL_SLOTS)[number];
 
 export type AuthScheme =
@@ -47,6 +47,30 @@ export type AuthScheme =
   | "oauth2-client-credentials"
   | "attested"
   | "none";
+
+/** What a credential slot is for. Mirrors `provider_registry::CredentialKind`. */
+export type CredentialKind = "provider" | "custom-endpoint";
+
+/**
+ * One slot in the OS credential store. Mirrors
+ * `provider_registry::CredentialSlot`.
+ *
+ * `kind` is the distinction a screen has to make. A `provider` key is enough on
+ * its own to try that service; a `custom-endpoint` key configures nothing
+ * without the base URL that lives with the feature it belongs to, so a screen
+ * storing one must say so rather than implying the key finished the job.
+ */
+export interface CredentialSlotSpec {
+  readonly slot: CredentialSlot;
+  readonly name: string;
+  readonly kind: CredentialKind;
+  /** Upstream's environment-variable name, for the OpenWhispr importer. */
+  readonly env: string;
+  /** `transcription`, `reasoning`, or neither. Derived, never restated. */
+  readonly usedFor: readonly string[];
+  /** Which feature a custom endpoint belongs to. */
+  readonly feature?: string;
+}
 
 export interface TranscriptionModel {
   readonly id: string;
@@ -153,6 +177,7 @@ export interface SherpaModel {
 }
 
 export interface ProviderRegistry {
+  readonly credentials: readonly CredentialSlotSpec[];
   readonly transcription: readonly TranscriptionProvider[];
   readonly reasoning: readonly ReasoningProvider[];
   readonly enterprise: readonly EnterpriseProvider[];
@@ -165,6 +190,141 @@ export interface ProviderRegistry {
 
 /** The registry. Generated from config/provider-registry.json. */
 export const PROVIDER_REGISTRY = {
+  "credentials": [
+    {
+      "slot": "openai",
+      "name": "OpenAI",
+      "kind": "provider",
+      "env": "OPENAI_API_KEY",
+      "usedFor": [
+        "transcription",
+        "reasoning"
+      ]
+    },
+    {
+      "slot": "anthropic",
+      "name": "Anthropic",
+      "kind": "provider",
+      "env": "ANTHROPIC_API_KEY",
+      "usedFor": [
+        "reasoning"
+      ]
+    },
+    {
+      "slot": "gemini",
+      "name": "Google Gemini",
+      "kind": "provider",
+      "env": "GEMINI_API_KEY",
+      "usedFor": [
+        "reasoning"
+      ]
+    },
+    {
+      "slot": "groq",
+      "name": "Groq",
+      "kind": "provider",
+      "env": "GROQ_API_KEY",
+      "usedFor": [
+        "transcription",
+        "reasoning"
+      ]
+    },
+    {
+      "slot": "berget",
+      "name": "Berget AI",
+      "kind": "provider",
+      "env": "BERGET_API_KEY",
+      "usedFor": [
+        "transcription",
+        "reasoning"
+      ]
+    },
+    {
+      "slot": "xai",
+      "name": "xAI",
+      "kind": "provider",
+      "env": "XAI_API_KEY",
+      "usedFor": [
+        "transcription"
+      ]
+    },
+    {
+      "slot": "mistral",
+      "name": "Mistral",
+      "kind": "provider",
+      "env": "MISTRAL_API_KEY",
+      "usedFor": [
+        "transcription"
+      ]
+    },
+    {
+      "slot": "openrouter",
+      "name": "OpenRouter",
+      "kind": "provider",
+      "env": "OPENROUTER_API_KEY",
+      "usedFor": []
+    },
+    {
+      "slot": "tinfoil",
+      "name": "Tinfoil",
+      "kind": "provider",
+      "env": "TINFOIL_API_KEY",
+      "usedFor": [
+        "transcription",
+        "reasoning"
+      ]
+    },
+    {
+      "slot": "corti",
+      "name": "Corti",
+      "kind": "provider",
+      "env": "CORTI_API_KEY",
+      "usedFor": [
+        "transcription",
+        "reasoning"
+      ]
+    },
+    {
+      "slot": "note-formatting-custom",
+      "name": "Note formatting",
+      "kind": "custom-endpoint",
+      "env": "NOTE_FORMATTING_CUSTOM_API_KEY",
+      "usedFor": [],
+      "feature": "note-formatting"
+    },
+    {
+      "slot": "translation-custom",
+      "name": "Translation",
+      "kind": "custom-endpoint",
+      "env": "TRANSLATION_CUSTOM_API_KEY",
+      "usedFor": [],
+      "feature": "translation"
+    },
+    {
+      "slot": "dictation-agent-custom",
+      "name": "Dictation agent",
+      "kind": "custom-endpoint",
+      "env": "DICTATION_AGENT_CUSTOM_API_KEY",
+      "usedFor": [],
+      "feature": "dictation-agent"
+    },
+    {
+      "slot": "dictation-agent-vision-custom",
+      "name": "Dictation agent (vision)",
+      "kind": "custom-endpoint",
+      "env": "DICTATION_AGENT_VISION_CUSTOM_API_KEY",
+      "usedFor": [],
+      "feature": "dictation-agent-vision"
+    },
+    {
+      "slot": "chat-agent-custom",
+      "name": "Chat agent",
+      "kind": "custom-endpoint",
+      "env": "CHAT_AGENT_CUSTOM_API_KEY",
+      "usedFor": [],
+      "feature": "chat-agent"
+    }
+  ],
   "transcription": [
     {
       "id": "openai",
@@ -1397,6 +1557,16 @@ export function findTranscriptionProvider(
 
 export function findReasoningProvider(id: string): ReasoningProvider | undefined {
   return PROVIDER_REGISTRY.reasoning.find((p) => p.id === id);
+}
+
+/**
+ * Look up a credential slot, or `undefined`.
+ *
+ * Callers must handle `undefined`. A screen that invented a slot name would be
+ * writing a secret to a key nothing reads, which looks exactly like success.
+ */
+export function findCredentialSlot(slot: string): CredentialSlotSpec | undefined {
+  return PROVIDER_REGISTRY.credentials.find((c) => c.slot === slot);
 }
 
 /** Every provider/model pair that supports realtime streaming transcription. */

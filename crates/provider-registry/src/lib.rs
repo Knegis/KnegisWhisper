@@ -16,7 +16,7 @@ use std::collections::BTreeSet;
 use std::sync::OnceLock;
 
 use kw_security::KeyRef;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// The registry data, embedded at compile time.
 const REGISTRY_JSON: &str = include_str!("../../../config/provider-registry.json");
@@ -183,9 +183,54 @@ pub struct LocalAsr {
     pub sherpa: Vec<SherpaModel>,
 }
 
+/// What a credential slot is for.
+///
+/// The distinction a UI has to make. A `Provider` key is enough on its own to
+/// try that service; a `CustomEndpoint` key configures nothing without the base
+/// URL that lives with the feature it belongs to, so a screen that stores one
+/// must say so rather than implying the key was all that was needed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CredentialKind {
+    /// A named service, e.g. OpenAI.
+    Provider,
+    /// A user-supplied OpenAI-compatible endpoint for one feature.
+    CustomEndpoint,
+}
+
+/// One slot in the OS credential store.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CredentialSlot {
+    /// The slot name, which is also the credential-store key.
+    pub slot: String,
+    /// A label for the settings screen.
+    pub name: String,
+    pub kind: CredentialKind,
+    /// Upstream's environment-variable name.
+    ///
+    /// Recorded so the OpenWhispr importer can recognise a key stored under the
+    /// old name. This application does not read the environment for secrets.
+    pub env: String,
+    /// Which parts of the application use this key: `transcription`,
+    /// `reasoning`, or neither. Derived by the generator from the provider lists
+    /// rather than restated, so it cannot fall out of step with them.
+    pub used_for: Vec<String>,
+    /// For a custom endpoint, which feature it belongs to.
+    #[serde(default)]
+    pub feature: Option<String>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Registry {
+    /// Every credential slot, including the six that belong to no provider.
+    ///
+    /// Derived from upstream's `secretKeys` rather than from the provider lists
+    /// below: `openrouter` has no pinned models and the five custom endpoints
+    /// have no provider entry at all, so deriving the set from providers gave
+    /// nine slots where the integration manifest had always listed fifteen.
+    pub credentials: Vec<CredentialSlot>,
     pub transcription: Vec<TranscriptionProvider>,
     pub reasoning: Vec<ReasoningProvider>,
     pub enterprise: Vec<EnterpriseProvider>,
@@ -248,15 +293,24 @@ impl Registry {
         })
     }
 
-    /// Every credential slot the registry references, for settings UI and for
-    /// asserting parity against the upstream secret-key manifest.
+    /// Every credential slot the application can store a key for.
+    ///
+    /// All fifteen, not just the nine a provider names. It used to be the nine,
+    /// derived from the provider lists — which meant `openrouter` and the five
+    /// custom endpoints were declared in the integration manifest and invisible
+    /// here, so a settings screen would have had to write those six ids out by
+    /// hand.
     #[must_use]
     pub fn credential_slots(&self) -> BTreeSet<&str> {
-        self.transcription
+        self.credentials.iter().map(|c| c.slot.as_str()).collect()
+    }
+
+    /// Look up one slot, failing closed on an unknown name.
+    pub fn credential_slot(&self, slot: &str) -> Result<&CredentialSlot, RegistryError> {
+        self.credentials
             .iter()
-            .map(|p| p.credential_slot.as_str())
-            .chain(self.reasoning.iter().map(|p| p.credential_slot.as_str()))
-            .collect()
+            .find(|c| c.slot == slot)
+            .ok_or_else(|| RegistryError::UnknownProvider(slot.to_owned()))
     }
 
     /// Transcription models that support realtime streaming.
@@ -453,6 +507,80 @@ mod tests {
             );
         }
         assert!(r.credential_slots().contains("berget"));
+    }
+
+    /// The mismatch this section exists to close.
+    ///
+    /// `config/integration-manifest.json` declares fifteen `credential:*`
+    /// entries. The registry used to derive its slots from the provider lists
+    /// and produce nine, so six slots existed in one source of truth and not
+    /// the other — and any screen offering all fifteen would have had to name
+    /// those six itself. This asserts the two agree.
+    #[test]
+    fn every_slot_upstream_had_is_declared_here() {
+        let r = reg();
+        let slots = r.credential_slots();
+        assert_eq!(
+            slots.len(),
+            15,
+            "expected the fifteen slots in the integration manifest, got {slots:?}"
+        );
+
+        // The six that belong to no provider, and would therefore be invisible
+        // if the set were derived from the provider lists.
+        for orphan in [
+            "openrouter",
+            "note-formatting-custom",
+            "translation-custom",
+            "dictation-agent-custom",
+            "dictation-agent-vision-custom",
+            "chat-agent-custom",
+        ] {
+            assert!(slots.contains(orphan), "{orphan} is missing");
+        }
+
+        // And every slot must be a usable credential-store key.
+        for c in &r.credentials {
+            assert!(
+                KeyRef::new(&c.slot).is_some(),
+                "slot {:?} cannot be a credential-store key",
+                c.slot
+            );
+        }
+    }
+
+    /// A custom endpoint's key configures nothing on its own.
+    ///
+    /// The kind is what lets a screen say so. Without it the five custom slots
+    /// look like five more providers, and storing a key for one would appear to
+    /// have finished a job that has not started.
+    #[test]
+    fn a_custom_endpoint_is_distinguishable_from_a_provider() {
+        let r = reg();
+
+        let openai = r.credential_slot("openai").unwrap();
+        assert_eq!(openai.kind, CredentialKind::Provider);
+        assert!(openai.feature.is_none());
+        assert_eq!(openai.used_for, ["transcription", "reasoning"]);
+
+        let custom = r.credential_slot("chat-agent-custom").unwrap();
+        assert_eq!(custom.kind, CredentialKind::CustomEndpoint);
+        assert_eq!(custom.feature.as_deref(), Some("chat-agent"));
+        assert!(
+            custom.used_for.is_empty(),
+            "a custom endpoint belongs to no provider list"
+        );
+
+        // OpenRouter is the awkward case: a real provider with no pinned models,
+        // so it needs a key and appears in no provider list.
+        let openrouter = r.credential_slot("openrouter").unwrap();
+        assert_eq!(openrouter.kind, CredentialKind::Provider);
+        assert!(openrouter.used_for.is_empty());
+    }
+
+    #[test]
+    fn an_unknown_slot_fails_closed() {
+        assert!(reg().credential_slot("not-a-slot").is_err());
     }
 
     #[test]

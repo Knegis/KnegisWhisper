@@ -38,14 +38,12 @@ const localLlmIds = registry.localLlm.map((p) => p.id);
 const whisperIds = registry.localAsr.whisper.map((m) => m.id);
 const sherpaIds = registry.localAsr.sherpa.map((m) => m.id);
 
-// Credential slots, deduplicated across transcription and reasoning. A provider
-// offering both (openai, groq, berget, corti, tinfoil) shares one slot.
-const credentialSlots = [
-  ...new Set([
-    ...registry.transcription.map((p) => p.credentialSlot),
-    ...registry.reasoning.map((p) => p.credentialSlot),
-  ]),
-].sort();
+// Credential slots come from the registry's own list, not from the provider
+// lists. Deriving them from providers gave nine; there are fifteen, because
+// `openrouter` has no pinned models and the five custom endpoints have no
+// provider entry. In registry order, which is upstream's secretKeys order, so
+// the screen renders provider slots before custom ones without sorting for it.
+const credentialSlots = registry.credentials.map((c) => c.slot);
 
 const header = `/**
  * GENERATED FILE — DO NOT EDIT.
@@ -69,6 +67,30 @@ export type AuthScheme =
   | "oauth2-client-credentials"
   | "attested"
   | "none";
+
+/** What a credential slot is for. Mirrors \`provider_registry::CredentialKind\`. */
+export type CredentialKind = "provider" | "custom-endpoint";
+
+/**
+ * One slot in the OS credential store. Mirrors
+ * \`provider_registry::CredentialSlot\`.
+ *
+ * \`kind\` is the distinction a screen has to make. A \`provider\` key is enough on
+ * its own to try that service; a \`custom-endpoint\` key configures nothing
+ * without the base URL that lives with the feature it belongs to, so a screen
+ * storing one must say so rather than implying the key finished the job.
+ */
+export interface CredentialSlotSpec {
+  readonly slot: CredentialSlot;
+  readonly name: string;
+  readonly kind: CredentialKind;
+  /** Upstream's environment-variable name, for the OpenWhispr importer. */
+  readonly env: string;
+  /** \`transcription\`, \`reasoning\`, or neither. Derived, never restated. */
+  readonly usedFor: readonly string[];
+  /** Which feature a custom endpoint belongs to. */
+  readonly feature?: string;
+}
 
 export interface TranscriptionModel {
   readonly id: string;
@@ -175,6 +197,7 @@ export interface SherpaModel {
 }
 
 export interface ProviderRegistry {
+  readonly credentials: readonly CredentialSlotSpec[];
   readonly transcription: readonly TranscriptionProvider[];
   readonly reasoning: readonly ReasoningProvider[];
   readonly enterprise: readonly EnterpriseProvider[];
@@ -187,6 +210,7 @@ export interface ProviderRegistry {
 `;
 
 const data = {
+  credentials: registry.credentials,
   transcription: registry.transcription,
   reasoning: registry.reasoning,
   enterprise: registry.enterprise,
@@ -210,6 +234,16 @@ export function findTranscriptionProvider(
 
 export function findReasoningProvider(id: string): ReasoningProvider | undefined {
   return PROVIDER_REGISTRY.reasoning.find((p) => p.id === id);
+}
+
+/**
+ * Look up a credential slot, or \`undefined\`.
+ *
+ * Callers must handle \`undefined\`. A screen that invented a slot name would be
+ * writing a secret to a key nothing reads, which looks exactly like success.
+ */
+export function findCredentialSlot(slot: string): CredentialSlotSpec | undefined {
+  return PROVIDER_REGISTRY.credentials.find((c) => c.slot === slot);
 }
 
 /** Every provider/model pair that supports realtime streaming transcription. */
@@ -262,7 +296,7 @@ const rendered = [
     "CredentialSlot",
     "CREDENTIAL_SLOTS",
     credentialSlots,
-    "OS credential-store slots. A provider offering both transcription and reasoning shares one slot.",
+    "OS credential-store slots, in upstream secretKeys order. All fifteen: ten providers and five per-feature custom endpoints.",
   ),
   types.trim(),
   `/** The registry. Generated from config/provider-registry.json. */\nexport const PROVIDER_REGISTRY = ${JSON.stringify(

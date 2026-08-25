@@ -5,9 +5,145 @@
     "baselineCommit": "c4000db9802d696341f1d239c1d81dc6d1ee233e",
     "normalisations": [
       "every transcription provider declares an explicit maxUploadBytes",
-      "openwhisprCloudModels dropped as removed-vendor-service"
+      "openwhisprCloudModels dropped as removed-vendor-service",
+      "credential slots come from secretKeys, not from the provider lists, so all fifteen are declared"
     ]
   },
+  "credentials": [
+    {
+      "slot": "openai",
+      "name": "OpenAI",
+      "kind": "provider",
+      "env": "OPENAI_API_KEY",
+      "usedFor": [
+        "transcription",
+        "reasoning"
+      ]
+    },
+    {
+      "slot": "anthropic",
+      "name": "Anthropic",
+      "kind": "provider",
+      "env": "ANTHROPIC_API_KEY",
+      "usedFor": [
+        "reasoning"
+      ]
+    },
+    {
+      "slot": "gemini",
+      "name": "Google Gemini",
+      "kind": "provider",
+      "env": "GEMINI_API_KEY",
+      "usedFor": [
+        "reasoning"
+      ]
+    },
+    {
+      "slot": "groq",
+      "name": "Groq",
+      "kind": "provider",
+      "env": "GROQ_API_KEY",
+      "usedFor": [
+        "transcription",
+        "reasoning"
+      ]
+    },
+    {
+      "slot": "berget",
+      "name": "Berget AI",
+      "kind": "provider",
+      "env": "BERGET_API_KEY",
+      "usedFor": [
+        "transcription",
+        "reasoning"
+      ]
+    },
+    {
+      "slot": "xai",
+      "name": "xAI",
+      "kind": "provider",
+      "env": "XAI_API_KEY",
+      "usedFor": [
+        "transcription"
+      ]
+    },
+    {
+      "slot": "mistral",
+      "name": "Mistral",
+      "kind": "provider",
+      "env": "MISTRAL_API_KEY",
+      "usedFor": [
+        "transcription"
+      ]
+    },
+    {
+      "slot": "openrouter",
+      "name": "OpenRouter",
+      "kind": "provider",
+      "env": "OPENROUTER_API_KEY",
+      "usedFor": []
+    },
+    {
+      "slot": "tinfoil",
+      "name": "Tinfoil",
+      "kind": "provider",
+      "env": "TINFOIL_API_KEY",
+      "usedFor": [
+        "transcription",
+        "reasoning"
+      ]
+    },
+    {
+      "slot": "corti",
+      "name": "Corti",
+      "kind": "provider",
+      "env": "CORTI_API_KEY",
+      "usedFor": [
+        "transcription",
+        "reasoning"
+      ]
+    },
+    {
+      "slot": "note-formatting-custom",
+      "name": "Note formatting",
+      "kind": "custom-endpoint",
+      "env": "NOTE_FORMATTING_CUSTOM_API_KEY",
+      "usedFor": [],
+      "feature": "note-formatting"
+    },
+    {
+      "slot": "translation-custom",
+      "name": "Translation",
+      "kind": "custom-endpoint",
+      "env": "TRANSLATION_CUSTOM_API_KEY",
+      "usedFor": [],
+      "feature": "translation"
+    },
+    {
+      "slot": "dictation-agent-custom",
+      "name": "Dictation agent",
+      "kind": "custom-endpoint",
+      "env": "DICTATION_AGENT_CUSTOM_API_KEY",
+      "usedFor": [],
+      "feature": "dictation-agent"
+    },
+    {
+      "slot": "dictation-agent-vision-custom",
+      "name": "Dictation agent (vision)",
+      "kind": "custom-endpoint",
+      "env": "DICTATION_AGENT_VISION_CUSTOM_API_KEY",
+      "usedFor": [],
+      "feature": "dictation-agent-vision"
+    },
+    {
+      "slot": "chat-agent-custom",
+      "name": "Chat agent",
+      "kind": "custom-endpoint",
+      "env": "CHAT_AGENT_CUSTOM_API_KEY",
+      "usedFor": [],
+      "feature": "chat-agent"
+    }
+  ],
   "transcription": [
     {
       "id": "openai",
