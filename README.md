@@ -43,6 +43,7 @@ when you configure them with your own credentials, and requests go straight to t
 | Document | What it covers |
 | --- | --- |
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | Crate layout, key interfaces, storage design |
+| [ENGINEERING_LOG.md](docs/ENGINEERING_LOG.md) | Judgement calls, deviations, and what is not usable yet |
 | [INTEGRATION_PARITY.md](docs/INTEGRATION_PARITY.md) | How integration parity is enforced |
 | [NETWORK_BOUNDARY.md](docs/NETWORK_BOUNDARY.md) | Every reason this app makes a network request |
 | [PLATFORM_SUPPORT.md](docs/PLATFORM_SUPPORT.md) | What works where, and what is unverified |

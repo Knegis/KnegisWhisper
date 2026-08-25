@@ -33,10 +33,10 @@ apps/desktop/src-tauri/target/
 *.key
 secure-keys/
 
-# Local engineering log — judgement calls, deviations from the plan, and open
-# decisions. Deliberately not committed: it is a working record of *why* choices
-# were made in the moment, not project documentation. The durable version of
-# anything in here belongs in docs/ or a commit message.
+# Local scratch notes. The engineering log itself is committed at
+# docs/ENGINEERING_LOG.md — findings that were invisible by inspection are worth
+# nothing if the only copy is on one machine. What stays ignored is in-the-moment
+# scribbling that has not earned a place there yet.
 *.local.md
 
 # Editors / OS
