@@ -128,6 +128,34 @@ pub fn register_all(app: &AppHandle, bindings: &[Binding]) -> Vec<RegistrationRe
 
     for report in &reports {
         if !report.is_live() {
+            // Every reason, not just the fact. A count told me all five actions
+            // had failed and nothing about why, which is useless: "the platform
+            // refused it because another application owns it" and "this is two
+            // modifiers and no key" need completely different fixes, and only one
+            // of them is the user's to make.
+            for result in &report.results {
+                match result {
+                    Registration::Registered { .. } => {}
+                    Registration::Rejected {
+                        accelerator,
+                        reason,
+                    } => tracing::warn!(
+                        action = %report.action,
+                        %accelerator,
+                        %reason,
+                        "the platform refused this accelerator"
+                    ),
+                    Registration::NotRegistrable {
+                        accelerator,
+                        reason,
+                    } => tracing::warn!(
+                        action = %report.action,
+                        %accelerator,
+                        %reason,
+                        "this accelerator cannot be registered at all"
+                    ),
+                }
+            }
             tracing::warn!(
                 action = %report.action,
                 "no working hotkey for this action"
