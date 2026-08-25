@@ -1,0 +1,42 @@
+# Rust
+/target
+**/target/
+*.pdb
+
+# Node
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# Tauri
+apps/desktop/src-tauri/gen/
+apps/desktop/src-tauri/target/
+
+# Downloaded sidecars and models — never committed, always fetched with a pinned
+# version and a verified digest. See docs/ARCHITECTURE.md.
+/sidecars/**/bin/
+/sidecars/**/*.exe
+/sidecars/**/*.dll
+/sidecars/**/*.dylib
+/sidecars/**/*.so
+/sidecars/**/*.gguf
+/sidecars/**/*.bin
+/sidecars/**/*.onnx
+
+# Secrets — the app stores credentials in the OS credential store, never in a
+# file. Anything matching these is a mistake, not a config.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secure-keys/
+
+# Editors / OS
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
