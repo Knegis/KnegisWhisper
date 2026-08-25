@@ -77,9 +77,14 @@ pub enum TranscriptionError {
     )]
     ClientNotImplemented { provider: String },
 
-    #[error(
-        "local transcription is not available: {reason}. Install a local model in settings,          or choose a provider."
-    )]
+    // The remedy is deliberately not baked in here. This layer knows the server
+    // is not answering; it does not know whether a model is installed, which
+    // model was chosen, or whether a provider is configured -- and it used to
+    // tell the user to "install a local model in settings" while a perfectly
+    // good model sat installed, which sent a real bench check looking in the
+    // wrong place five times. An error states what it observed; whoever has the
+    // facts supplies the advice.
+    #[error("local transcription is not available: {reason}")]
     LocalNotAvailable { reason: String },
 
     #[error("the local model produced nothing usable from that recording")]

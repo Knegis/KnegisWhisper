@@ -145,6 +145,12 @@ pub fn run() -> anyhow::Result<()> {
             tauri::async_runtime::block_on(local.reap_stale());
 
             let shared = local.shared();
+
+            // The route survives a restart; the server process does not. Bring
+            // back whichever model the user was last dictating with, in the
+            // background so the window does not wait for a model to load.
+            local_model::resume_last_used(&local, &db);
+
             app.manage(std::sync::Arc::clone(&local));
 
             let session = std::sync::Arc::new(dictation::DictationRuntime::build(

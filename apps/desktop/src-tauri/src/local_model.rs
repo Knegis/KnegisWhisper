@@ -29,6 +29,15 @@ use tauri::{AppHandle, Emitter as _, State};
 /// The sidecar this module manages.
 const SIDECAR: &str = "whisper";
 
+/// The model the user last ran the local server with.
+///
+/// Persisted because the route survives a restart and the running server does
+/// not. Without this the application knew dictation should go to a local model
+/// and had no idea which one, so the first dictation after every launch failed —
+/// six recorded failures in one bench check, each of them the user speaking a
+/// sentence that went nowhere.
+pub const LOCAL_MODEL_KEY: &str = "transcription.localModel";
+
 /// The event install progress is reported on.
 pub const PROGRESS_EVENT: &str = "local-model-progress";
 
@@ -346,91 +355,176 @@ pub async fn local_model_install(
 /// Start the local server with an installed model.
 #[tauri::command]
 pub async fn local_server_start(
+    state: State<'_, crate::state::AppState>,
     local: State<'_, Arc<LocalTranscription>>,
     model_id: String,
 ) -> Result<u16, String> {
-    // Already running: answer with the port rather than starting a second one.
-    if let Some(port) = local.port.read().ok().and_then(|p| *p) {
-        return Ok(port);
+    let port = local.start_model(&model_id).await?;
+
+    // Remembered only after it actually came up, so a model that fails to start
+    // is not the one resumed at the next launch.
+    if let Err(err) = kw_storage::settings::set(state.db().pool(), LOCAL_MODEL_KEY, &model_id).await
+    {
+        // Not fatal: the server is running. The next launch just will not know
+        // to bring it back, which is the state we were in before this existed.
+        tracing::warn!(error = %err, "could not remember the local model");
     }
 
-    let (spec, asset) = local
-        .catalog
-        .resolve(SIDECAR)
+    Ok(port)
+}
+
+/// Bring back the local server the user was last dictating with.
+///
+/// Called once at startup. The route survives a restart and the process does
+/// not, so without this the application knows dictation should go to a local
+/// model and has nothing to send it to — which is exactly how a bench check
+/// produced six failed dictations, two of them after a relaunch.
+///
+/// Spawned rather than awaited: loading a model takes a second or two and the
+/// window should not wait for it. Failure is logged and left alone; dictation
+/// then reports the honest reason.
+pub fn resume_last_used(local: &Arc<LocalTranscription>, db: &kw_storage::Db) {
+    let local = Arc::clone(local);
+    let db = db.clone();
+
+    tauri::async_runtime::spawn(async move {
+        match model_to_resume(&db).await {
+            Resume::NotRouted => {}
+            Resume::NoneRemembered => tracing::info!(
+                "dictation is routed to a local model but none is remembered; choose one \
+                 under Local transcription"
+            ),
+            Resume::Model(model_id) => match local.start_model(&model_id).await {
+                Ok(port) => {
+                    tracing::info!(port, model = %model_id, "resumed the local model server");
+                }
+                Err(err) => {
+                    tracing::warn!(model = %model_id, error = %err, "could not resume the local model server");
+                }
+            },
+        }
+    });
+}
+
+/// What startup should do about the local server.
+///
+/// Three outcomes rather than an `Option`, because "the user does not dictate
+/// locally" and "the user does, and we have forgotten which model" call for
+/// different log lines — and the second one is a state worth saying out loud,
+/// since it is the one that used to end in a failed dictation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Resume {
+    Model(String),
+    NotRouted,
+    NoneRemembered,
+}
+
+async fn model_to_resume(db: &kw_storage::Db) -> Resume {
+    let route: kw_transcription_core::RouteSettings =
+        kw_storage::settings::get(db.pool(), crate::dictation::ROUTE_SETTINGS_KEY)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+
+    if !route.use_local_whisper {
+        return Resume::NotRouted;
+    }
+
+    match kw_storage::settings::get::<String>(db.pool(), LOCAL_MODEL_KEY).await {
+        Ok(Some(model_id)) if !model_id.trim().is_empty() => Resume::Model(model_id),
+        _ => Resume::NoneRemembered,
+    }
+}
+
+impl LocalTranscription {
+    /// Start the server for one model, or return the port if it is already up.
+    pub async fn start_model(&self, model_id: &str) -> Result<u16, String> {
+        let local = self;
+        // Already running: answer with the port rather than starting a second one.
+        if let Some(port) = local.port.read().ok().and_then(|p| *p) {
+            return Ok(port);
+        }
+
+        let (spec, asset) = local
+            .catalog
+            .resolve(SIDECAR)
+            .map_err(|err| err.to_string())?;
+
+        let sidecars = paths::sidecar_dir();
+        let installation = kw_sidecar::locate(
+            SIDECAR,
+            asset,
+            &kw_sidecar::SearchPath {
+                bundled: None,
+                downloaded: sidecars.path.clone(),
+            },
+            &kw_sidecar::RealFs,
+        );
+        let executable = installation
+            .executable()
+            .ok_or_else(|| installation.explain("the local model server"))?
+            .to_path_buf();
+
+        let registry = kw_provider_registry::registry().map_err(|err| err.to_string())?;
+        let model = registry
+            .local_asr
+            .whisper
+            .iter()
+            .find(|m| m.id == model_id)
+            .ok_or_else(|| format!("{model_id:?} is not a model this build knows about"))?;
+
+        let model_path = models::model_path(&paths::model_cache_dir().path, model);
+        if !local::model_is_present(&model_path.display().to_string()) {
+            // Checked here rather than left to the server, whose failure for a
+            // missing model is an exit during startup with the reason buried in
+            // captured output.
+            return Err(format!(
+                "{} is not installed. Install it before starting the server.",
+                model.name
+            ));
+        }
+
+        let chosen = port::allocate(
+            spec.port_range().ok_or_else(|| {
+                format!("{} is a stdio child and does not serve a port", spec.name)
+            })?,
+            &port::BindProbe,
+        )
         .map_err(|err| err.to_string())?;
 
-    let sidecars = paths::sidecar_dir();
-    let installation = kw_sidecar::locate(
-        SIDECAR,
-        asset,
-        &kw_sidecar::SearchPath {
-            bundled: None,
-            downloaded: sidecars.path.clone(),
-        },
-        &kw_sidecar::RealFs,
-    );
-    let executable = installation
-        .executable()
-        .ok_or_else(|| installation.explain("the local model server"))?
-        .to_path_buf();
+        let options = ServerOptions {
+            model_path: model_path.display().to_string(),
+            port: chosen,
+            language: None,
+            threads: None,
+            gpu_device: None,
+            vad: None,
+        };
 
-    let registry = kw_provider_registry::registry().map_err(|err| err.to_string())?;
-    let model = registry
-        .local_asr
-        .whisper
-        .iter()
-        .find(|m| m.id == model_id)
-        .ok_or_else(|| format!("{model_id:?} is not a model this build knows about"))?;
+        let launch = Launch {
+            executable,
+            args: local::build_args(&options),
+            port: chosen,
+        };
 
-    let model_path = models::model_path(&paths::model_cache_dir().path, model);
-    if !local::model_is_present(&model_path.display().to_string()) {
-        // Checked here rather than left to the server, whose failure for a
-        // missing model is an exit during startup with the reason buried in
-        // captured output.
-        return Err(format!(
-            "{} is not installed. Install it before starting the server.",
-            model.name
-        ));
+        let health = HttpHealth::new(local.policy.clone(), local::HEALTH_PATH);
+        let running = process::start(spec, &launch, &local.pids, &health, StartTimings::default())
+            .await
+            .map_err(|err| err.to_string())?;
+
+        // Published only once it has answered, so a dictation never routes to a
+        // server that is still loading its model.
+        if let Ok(mut port) = local.port.write() {
+            *port = Some(chosen);
+        }
+        if let Ok(mut held) = local.model.write() {
+            *held = Some(model_id.to_owned());
+        }
+        *local.running.lock().await = Some(running);
+
+        Ok(chosen)
     }
-
-    let chosen = port::allocate(
-        spec.port_range()
-            .ok_or_else(|| format!("{} is a stdio child and does not serve a port", spec.name))?,
-        &port::BindProbe,
-    )
-    .map_err(|err| err.to_string())?;
-
-    let options = ServerOptions {
-        model_path: model_path.display().to_string(),
-        port: chosen,
-        language: None,
-        threads: None,
-        gpu_device: None,
-        vad: None,
-    };
-
-    let launch = Launch {
-        executable,
-        args: local::build_args(&options),
-        port: chosen,
-    };
-
-    let health = HttpHealth::new(local.policy.clone(), local::HEALTH_PATH);
-    let running = process::start(spec, &launch, &local.pids, &health, StartTimings::default())
-        .await
-        .map_err(|err| err.to_string())?;
-
-    // Published only once it has answered, so a dictation never routes to a
-    // server that is still loading its model.
-    if let Ok(mut port) = local.port.write() {
-        *port = Some(chosen);
-    }
-    if let Ok(mut held) = local.model.write() {
-        *held = Some(model_id);
-    }
-    *local.running.lock().await = Some(running);
-
-    Ok(chosen)
 }
 
 /// Stop the local server.
@@ -452,6 +546,71 @@ mod tests {
 
     fn local() -> LocalTranscription {
         LocalTranscription::new(kw_network_policy::NetworkPolicy::new().unwrap()).unwrap()
+    }
+
+    async fn db() -> kw_storage::Db {
+        kw_storage::Db::open_in_memory().await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn nothing_is_resumed_when_dictation_does_not_use_a_local_model() {
+        // The default. Starting a model server for someone who dictates to a
+        // cloud provider would spend a second of startup and 75 MB of memory on
+        // a feature they are not using.
+        assert_eq!(model_to_resume(&db().await).await, Resume::NotRouted);
+    }
+
+    #[tokio::test]
+    async fn a_local_route_with_no_remembered_model_is_its_own_outcome() {
+        // The state the bench check hit: route says local, nothing says which
+        // model, and the first dictation after launch failed with a message
+        // telling the user to install a model they already had.
+        let db = db().await;
+        let route = kw_transcription_core::RouteSettings {
+            use_local_whisper: true,
+            ..Default::default()
+        };
+        kw_storage::settings::set(db.pool(), crate::dictation::ROUTE_SETTINGS_KEY, &route)
+            .await
+            .unwrap();
+
+        assert_eq!(model_to_resume(&db).await, Resume::NoneRemembered);
+    }
+
+    #[tokio::test]
+    async fn the_remembered_model_is_resumed() {
+        let db = db().await;
+        let route = kw_transcription_core::RouteSettings {
+            use_local_whisper: true,
+            ..Default::default()
+        };
+        kw_storage::settings::set(db.pool(), crate::dictation::ROUTE_SETTINGS_KEY, &route)
+            .await
+            .unwrap();
+        kw_storage::settings::set(db.pool(), LOCAL_MODEL_KEY, &"tiny")
+            .await
+            .unwrap();
+
+        assert_eq!(model_to_resume(&db).await, Resume::Model("tiny".to_owned()));
+    }
+
+    #[tokio::test]
+    async fn a_blank_remembered_model_is_not_a_model() {
+        // An empty string round-trips through settings as a value, and asking a
+        // server to load "" fails in a way that reads like a bug in the sidecar.
+        let db = db().await;
+        let route = kw_transcription_core::RouteSettings {
+            use_local_whisper: true,
+            ..Default::default()
+        };
+        kw_storage::settings::set(db.pool(), crate::dictation::ROUTE_SETTINGS_KEY, &route)
+            .await
+            .unwrap();
+        kw_storage::settings::set(db.pool(), LOCAL_MODEL_KEY, &"   ")
+            .await
+            .unwrap();
+
+        assert_eq!(model_to_resume(&db).await, Resume::NoneRemembered);
     }
 
     #[test]

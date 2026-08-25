@@ -445,10 +445,22 @@ function Dashboard() {
         <Row label="Window" value={diagnostics.overlay.created ? "created" : "not created"} />
         <Row label="Capture exclusion" value={capture.text} detail={capture.detail} />
         <Row label="Focus" value={focus.text} detail={focus.detail} />
+        {/*
+          A live reading, not a setting — and it used to read like one. "Recording
+          indicator: hidden" alongside "the overlay is visible whenever the
+          microphone is live" says two opposite things, and the alarming one is
+          the wrong one: nothing is recording, which is why nothing is showing.
+        */}
         <Row
           label="Recording indicator"
-          value={diagnostics.overlay.recordingIndicatorVisible ? "always shown" : "hidden"}
-          detail="the overlay is visible whenever the microphone is live"
+          value={
+            diagnostics.overlay.recordingIndicatorVisible ? "showing now" : "not showing"
+          }
+          detail={
+            diagnostics.overlay.recordingIndicatorVisible
+              ? "the microphone is live"
+              : "nothing is recording; it appears whenever the microphone is live"
+          }
         />
         {!captureConfirmed ? (
           <p className="caveat">
