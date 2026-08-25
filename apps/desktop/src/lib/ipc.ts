@@ -29,8 +29,11 @@ import type {
   Binding,
   CaptureExclusion,
   Conflict,
+  CredentialKind,
+  CredentialSlotStatus,
   CredentialStoreStatus,
   Diagnostics,
+  Dispatch,
   Evidence,
   ExportedTranscript,
   Folder,
@@ -78,8 +81,11 @@ export type {
   Binding,
   CaptureExclusion,
   Conflict,
+  CredentialKind,
+  CredentialSlotStatus,
   CredentialStoreStatus,
   Diagnostics,
+  Dispatch,
   Evidence,
   ExportedTranscript,
   Folder,
@@ -165,6 +171,17 @@ export async function onHotkey(
 
 export async function getProviders(): Promise<ProviderSummary[]> {
   return invoke<ProviderSummary[]>("providers");
+}
+
+/**
+ * Every credential slot, in registry order, with whether each is filled.
+ *
+ * One call rather than one `isProviderCredentialPresent` per slot: there are
+ * fifteen and the screen re-reads after every save. The list comes from
+ * `config/provider-registry.json` through Rust, so no screen writes a slot name.
+ */
+export async function getCredentialSlots(): Promise<CredentialSlotStatus[]> {
+  return invoke<CredentialSlotStatus[]>("credential_slots");
 }
 
 /**
@@ -458,4 +475,18 @@ export async function getDictationRoute(): Promise<RouteReport> {
 /** Point dictation at the local model, or back at the configured provider. */
 export async function useLocalModel(useLocal: boolean): Promise<void> {
   return invoke<void>("dictation_use_local", { useLocal });
+}
+
+/**
+ * Point dictation at a cloud provider and model.
+ *
+ * Both together, never one at a time: a provider change that left the previous
+ * provider's model behind resolves to a model the new provider does not offer.
+ * Rust refuses an unknown pair rather than storing it.
+ */
+export async function setCloudProvider(
+  provider: string,
+  model: string,
+): Promise<void> {
+  return invoke<void>("dictation_set_cloud_provider", { provider, model });
 }

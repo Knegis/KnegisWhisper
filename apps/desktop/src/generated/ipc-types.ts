@@ -159,13 +159,63 @@ live: boolean, };
 
 /* -------------------------------------------------------------- providers */
 /**
+ * What would happen if dictation were pointed at this provider right now.
+ *
+ * Three states rather than a boolean, because "we have not written the client"
+ * and "you have not filled in the settings this provider needs" are different
+ * problems with different fixes, and neither is "it works".
+ *
+ * Derived by asking `route::resolve` rather than by listing provider ids here.
+ * A hand-written list of which providers dispatch would be a second copy of the
+ * match in `crates/transcription-core/src/route.rs`, and the two would part
+ * company the first time a client was written.
+ */
+export type Dispatch = { "state": "ready" } | { "state": "needs-client", reason: string, } | { "state": "unresolvable", reason: string, };
+
+/**
  * A provider and whether it has a credential stored — *not* whether it works.
  *
  * The distinction is the point. `configured` means a key is present;
  * `connected` requires a passing connection test, which only
- * [`probe_providers`] can establish.
+ * [`probe_providers`] can establish; and `dispatch` is a third thing again —
+ * whether this build can even send the request.
  */
-export type ProviderSummary = { id: string, name: string, credentialSlot: string, configured: boolean, modelCount: number, };
+export type ProviderSummary = { id: string, name: string, credentialSlot: string, configured: boolean, modelCount: number,
+/**
+ * The models on offer, so a picker never writes a model id by hand.
+ */
+models: Array<string>, dispatch: Dispatch, };
+
+/**
+ * What a credential slot is for.
+ *
+ * The distinction a UI has to make. A `Provider` key is enough on its own to
+ * try that service; a `CustomEndpoint` key configures nothing without the base
+ * URL that lives with the feature it belongs to, so a screen that stores one
+ * must say so rather than implying the key was all that was needed.
+ */
+export type CredentialKind = "provider" | "custom-endpoint";
+
+/**
+ * One credential slot and whether a secret is stored in it.
+ *
+ * `stored` is deliberately the only thing said about the value. There is no
+ * command that reads a credential back, so a screen cannot display one and a
+ * compromised renderer cannot exfiltrate one.
+ */
+export type CredentialSlotStatus = { slot: string, name: string, kind: CredentialKind,
+/**
+ * Which parts of the application use this key, from the registry.
+ */
+usedFor: Array<string>,
+/**
+ * Which feature a custom endpoint belongs to; `None` for a provider.
+ */
+feature: string | null,
+/**
+ * A secret is present. This is NOT the same as the provider working.
+ */
+stored: boolean, };
 
 /**
  * Which probe ran.

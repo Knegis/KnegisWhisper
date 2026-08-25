@@ -65,11 +65,16 @@ artefact, so the check stays in the cheap contracts job that gates the rest of C
 **`reachable`** is a property of an entry, and it is a claim: a user can configure *this*
 integration through that surface. It may only be true where the surface is built.
 
-`Settings > Transcription` is the case that forced the split. The section exists, lists every
-provider, says whether a key is stored, and runs a real connection test — but **nothing anywhere
-in the application can store an API key**. `setProviderCredential` is exported from
-`apps/desktop/src/lib/ipc.ts` and never called. So the surface is built and not one provider is
-reachable through it, and collapsing the two fields would have to lie about one or the other.
+`Settings > Transcription` is the case that forced the split. The section existed, listed every
+provider, said whether a key was stored, and ran a real connection test — while **nothing anywhere
+in the application could store an API key**. `setProviderCredential` was exported from
+`apps/desktop/src/lib/ipc.ts` and never called. So the surface was built and not one provider was
+reachable through it, and collapsing the two fields would have had to lie about one or the other.
+
+`Settings > Providers` closed that, and the same screen immediately produced the next instance of
+the split: a key can now be stored for all fifteen slots, and four of the seven transcription
+providers are still unreachable because their route resolves to `Transport::ProviderClient` and
+the executor refuses it. Built, configurable, and honestly unusable — three separate facts.
 
 ## The backlog
 
@@ -78,11 +83,10 @@ frontend backlog, sized in integrations rather than in adjectives:
 
 | Surface | Entries | Surface built |
 | --- | --- | --- |
-| `Settings > Providers` | 15 | no — there is no key entry anywhere |
-| `Settings > Transcription` | 7 | yes, but it cannot store a key |
 | `Settings > Intelligence` | 7 | no |
 | `Settings > Intelligence > Local` | 6 | no |
 | `Settings > Meetings` | 6 | no |
+| `Settings > Transcription` | 4 | yes — these four need a provider client that does not exist |
 | `Settings > Transcription > Local` | 4 | yes — whisper only; Parakeet and Nemotron have no sidecar |
 | `Settings > Intelligence > Enterprise` | 3 | no |
 | `Integrations > Calendar` | 3 | no |
@@ -90,8 +94,11 @@ frontend backlog, sized in integrations rather than in adjectives:
 | `Integrations > CLI` | 1 | no |
 | `Integrations > MCP` | 1 | no |
 
-Eight integrations are reachable today: the six whisper models, the local REST API, and
-transcript export.
+**26 integrations are reachable today**, up from 8: the fifteen credential slots, three
+transcription providers, the six whisper models, the local REST API, and transcript export.
+
+The jump came from one screen and no new subsystem. Every one of those fifteen slots had working
+Rust behind it and nowhere to type a key.
 
 ## Status vocabulary
 

@@ -149,6 +149,10 @@ export. The gate prints the other 56 grouped by surface on every successful run,
 backlog is sized in integrations rather than adjectives. `verify-parity.test.mjs` asserts each new
 rule actually fires, for the reason the domain scanner has self-tests.
 
+> Since superseded. `Settings > Providers` was written in chunk A and 26 integrations are
+> reachable now; see [BUILD_PLAN.md](BUILD_PLAN.md). The paragraph above is left as the record of
+> what the gate found when it was first able to tell a screen from a string.
+
 ### Chunk 1d — sidecar transport *(done)*
 
 `SidecarSpec::port_range` was required and validated non-zero, so a one-shot or streaming child

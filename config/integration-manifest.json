@@ -31,7 +31,8 @@
       ],
       "backend": "crates/transcription-core",
       "ui": "Settings > Transcription",
-      "reachable": false
+      "reachable": true,
+      "note": "Reachable: a key is stored on Settings > Providers and the provider and model are chosen on Settings > Transcription, both from the registry. HttpBatch, so the executor has a transport for it."
     },
     "transcription:groq": {
       "status": "rewired-to-direct-byok",
@@ -47,7 +48,8 @@
       ],
       "backend": "crates/transcription-core",
       "ui": "Settings > Transcription",
-      "reachable": false
+      "reachable": true,
+      "note": "Reachable: a key is stored on Settings > Providers and the provider and model are chosen on Settings > Transcription, both from the registry. HttpBatch, so the executor has a transport for it."
     },
     "transcription:berget": {
       "status": "rewired-to-direct-byok",
@@ -64,7 +66,8 @@
       ],
       "backend": "crates/transcription-core",
       "ui": "Settings > Transcription",
-      "reachable": false
+      "reachable": true,
+      "note": "Reachable: a key is stored on Settings > Providers and the provider and model are chosen on Settings > Transcription, both from the registry. HttpBatch, so the executor has a transport for it."
     },
     "transcription:xai": {
       "status": "rewired-to-direct-byok",
@@ -79,7 +82,8 @@
       ],
       "backend": "crates/transcription-core",
       "ui": "Settings > Transcription",
-      "reachable": false
+      "reachable": false,
+      "note": "A key can be stored and the surface is built, but the route resolves to Transport::ProviderClient and the executor refuses with ClientNotImplemented. Unreachable until that client exists -- offering it as selectable would be configuring something that cannot run."
     },
     "transcription:mistral": {
       "status": "rewired-to-direct-byok",
@@ -94,7 +98,8 @@
       ],
       "backend": "crates/transcription-core",
       "ui": "Settings > Transcription",
-      "reachable": false
+      "reachable": false,
+      "note": "A key can be stored and the surface is built, but the route resolves to Transport::ProviderClient and the executor refuses with ClientNotImplemented. Unreachable until that client exists -- offering it as selectable would be configuring something that cannot run."
     },
     "transcription:corti": {
       "status": "rewired-to-direct-byok",
@@ -109,7 +114,8 @@
       ],
       "backend": "crates/transcription-core",
       "ui": "Settings > Transcription",
-      "reachable": false
+      "reachable": false,
+      "note": "A key can be stored and the surface is built, but the route resolves to Transport::ProviderClient and the executor refuses with ClientNotImplemented. Unreachable until that client exists -- offering it as selectable would be configuring something that cannot run."
     },
     "transcription:tinfoil": {
       "status": "rewired-to-direct-byok",
@@ -124,7 +130,8 @@
       ],
       "backend": "crates/transcription-core",
       "ui": "Settings > Transcription",
-      "reachable": false
+      "reachable": false,
+      "note": "A key can be stored and the surface is built, but the route resolves to Transport::ProviderClient and the executor refuses with ClientNotImplemented. Unreachable until that client exists -- offering it as selectable would be configuring something that cannot run."
     },
     "reasoning:openai": {
       "status": "rewired-to-direct-byok",
@@ -646,8 +653,8 @@
       ],
       "backend": "crates/security",
       "ui": "Settings > Providers",
-      "reachable": false,
-      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10."
+      "reachable": true,
+      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10. Reachable: Settings > Providers stores every slot the registry declares. A custom-endpoint slot stores its key here and still needs the base URL that lives with the feature using it, which the screen says rather than implying otherwise."
     },
     "credential:anthropic": {
       "status": "ported-with-new-rust-implementation",
@@ -660,8 +667,8 @@
       ],
       "backend": "crates/security",
       "ui": "Settings > Providers",
-      "reachable": false,
-      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10."
+      "reachable": true,
+      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10. Reachable: Settings > Providers stores every slot the registry declares. A custom-endpoint slot stores its key here and still needs the base URL that lives with the feature using it, which the screen says rather than implying otherwise."
     },
     "credential:gemini": {
       "status": "ported-with-new-rust-implementation",
@@ -674,8 +681,8 @@
       ],
       "backend": "crates/security",
       "ui": "Settings > Providers",
-      "reachable": false,
-      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10."
+      "reachable": true,
+      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10. Reachable: Settings > Providers stores every slot the registry declares. A custom-endpoint slot stores its key here and still needs the base URL that lives with the feature using it, which the screen says rather than implying otherwise."
     },
     "credential:groq": {
       "status": "ported-with-new-rust-implementation",
@@ -688,8 +695,8 @@
       ],
       "backend": "crates/security",
       "ui": "Settings > Providers",
-      "reachable": false,
-      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10."
+      "reachable": true,
+      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10. Reachable: Settings > Providers stores every slot the registry declares. A custom-endpoint slot stores its key here and still needs the base URL that lives with the feature using it, which the screen says rather than implying otherwise."
     },
     "credential:berget": {
       "status": "ported-with-new-rust-implementation",
@@ -702,8 +709,8 @@
       ],
       "backend": "crates/security",
       "ui": "Settings > Providers",
-      "reachable": false,
-      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10."
+      "reachable": true,
+      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10. Reachable: Settings > Providers stores every slot the registry declares. A custom-endpoint slot stores its key here and still needs the base URL that lives with the feature using it, which the screen says rather than implying otherwise."
     },
     "credential:xai": {
       "status": "ported-with-new-rust-implementation",
@@ -716,8 +723,8 @@
       ],
       "backend": "crates/security",
       "ui": "Settings > Providers",
-      "reachable": false,
-      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10."
+      "reachable": true,
+      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10. Reachable: Settings > Providers stores every slot the registry declares. A custom-endpoint slot stores its key here and still needs the base URL that lives with the feature using it, which the screen says rather than implying otherwise."
     },
     "credential:mistral": {
       "status": "ported-with-new-rust-implementation",
@@ -730,8 +737,8 @@
       ],
       "backend": "crates/security",
       "ui": "Settings > Providers",
-      "reachable": false,
-      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10."
+      "reachable": true,
+      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10. Reachable: Settings > Providers stores every slot the registry declares. A custom-endpoint slot stores its key here and still needs the base URL that lives with the feature using it, which the screen says rather than implying otherwise."
     },
     "credential:openrouter": {
       "status": "ported-with-new-rust-implementation",
@@ -744,8 +751,8 @@
       ],
       "backend": "crates/security",
       "ui": "Settings > Providers",
-      "reachable": false,
-      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10."
+      "reachable": true,
+      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10. Reachable: Settings > Providers stores every slot the registry declares. A custom-endpoint slot stores its key here and still needs the base URL that lives with the feature using it, which the screen says rather than implying otherwise."
     },
     "credential:tinfoil": {
       "status": "ported-with-new-rust-implementation",
@@ -758,8 +765,8 @@
       ],
       "backend": "crates/security",
       "ui": "Settings > Providers",
-      "reachable": false,
-      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10."
+      "reachable": true,
+      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10. Reachable: Settings > Providers stores every slot the registry declares. A custom-endpoint slot stores its key here and still needs the base URL that lives with the feature using it, which the screen says rather than implying otherwise."
     },
     "credential:corti": {
       "status": "ported-with-new-rust-implementation",
@@ -772,8 +779,8 @@
       ],
       "backend": "crates/security",
       "ui": "Settings > Providers",
-      "reachable": false,
-      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10."
+      "reachable": true,
+      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10. Reachable: Settings > Providers stores every slot the registry declares. A custom-endpoint slot stores its key here and still needs the base URL that lives with the feature using it, which the screen says rather than implying otherwise."
     },
     "credential:note-formatting-custom": {
       "status": "ported-with-new-rust-implementation",
@@ -786,8 +793,8 @@
       ],
       "backend": "crates/security",
       "ui": "Settings > Providers",
-      "reachable": false,
-      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10."
+      "reachable": true,
+      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10. Reachable: Settings > Providers stores every slot the registry declares. A custom-endpoint slot stores its key here and still needs the base URL that lives with the feature using it, which the screen says rather than implying otherwise."
     },
     "credential:translation-custom": {
       "status": "ported-with-new-rust-implementation",
@@ -800,8 +807,8 @@
       ],
       "backend": "crates/security",
       "ui": "Settings > Providers",
-      "reachable": false,
-      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10."
+      "reachable": true,
+      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10. Reachable: Settings > Providers stores every slot the registry declares. A custom-endpoint slot stores its key here and still needs the base URL that lives with the feature using it, which the screen says rather than implying otherwise."
     },
     "credential:dictation-agent-custom": {
       "status": "ported-with-new-rust-implementation",
@@ -814,8 +821,8 @@
       ],
       "backend": "crates/security",
       "ui": "Settings > Providers",
-      "reachable": false,
-      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10."
+      "reachable": true,
+      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10. Reachable: Settings > Providers stores every slot the registry declares. A custom-endpoint slot stores its key here and still needs the base URL that lives with the feature using it, which the screen says rather than implying otherwise."
     },
     "credential:dictation-agent-vision-custom": {
       "status": "ported-with-new-rust-implementation",
@@ -828,8 +835,8 @@
       ],
       "backend": "crates/security",
       "ui": "Settings > Providers",
-      "reachable": false,
-      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10."
+      "reachable": true,
+      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10. Reachable: Settings > Providers stores every slot the registry declares. A custom-endpoint slot stores its key here and still needs the base URL that lives with the feature using it, which the screen says rather than implying otherwise."
     },
     "credential:chat-agent-custom": {
       "status": "ported-with-new-rust-implementation",
@@ -842,8 +849,8 @@
       ],
       "backend": "crates/security",
       "ui": "Settings > Providers",
-      "reachable": false,
-      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10."
+      "reachable": true,
+      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10. Reachable: Settings > Providers stores every slot the registry declares. A custom-endpoint slot stores its key here and still needs the base URL that lives with the feature using it, which the screen says rather than implying otherwise."
     },
     "diarization-model:3dspeaker-campplus-en": {
       "status": "temporarily-deferred",

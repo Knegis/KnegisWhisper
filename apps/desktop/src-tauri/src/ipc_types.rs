@@ -123,7 +123,10 @@ fn render() -> String {
             crate::commands::HotkeyChange,
         ],
         "providers" => [
+            crate::commands::Dispatch,
             crate::commands::ProviderSummary,
+            kw_provider_registry::CredentialKind,
+            crate::commands::CredentialSlotStatus,
             kw_provider_probe::ProbeKind,
             kw_provider_probe::SkipReason,
             kw_provider_probe::ProbeOutcome,

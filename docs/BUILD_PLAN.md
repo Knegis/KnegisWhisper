@@ -20,13 +20,15 @@ What the same period established is that **the remaining work is mostly reachabi
 capability**. The parity gate now resolves each manifest entry through `config/ui-surfaces.json`
 and prints what cannot be configured:
 
-- **8 of 99 integrations are reachable.** 56 are implemented-or-declared and unreachable; the
-  other 35 are removed vendor services and internal platform capabilities with no surface by
-  design.
-- **9 of 13 UI surfaces do not exist.** The 4 that do all live in one 1037-line `App.tsx`.
-- `provider_credential_set` exists in Rust (`commands.rs:262`) and `setProviderCredential` is
-  exported from `ipc.ts:177`. **Nothing calls it.** There is nowhere in the application to enter
-  an API key, so every cloud provider in the registry is unreachable regardless of backend state.
+- **26 of 99 integrations are reachable**, up from 8 when this plan was written. 38 are
+  implemented-or-declared and unreachable; the other 35 are removed vendor services and internal
+  platform capabilities with no surface by design.
+- **8 of 13 UI surfaces do not exist.** The 5 that do are one component each; `App.tsx` is the
+  shell.
+- The keystone is closed: `Settings > Providers` stores a key for every one of the fifteen slots
+  the registry declares. Before chunk A, `provider_credential_set` existed in Rust and
+  `setProviderCredential` was exported from `ipc.ts` and **nothing called either**, so every cloud
+  provider was unreachable regardless of backend state.
 
 So this plan front-loads the screens, then closes genuine backend gaps behind them, then does the
 platform work that no amount of UI can substitute for.
@@ -49,6 +51,7 @@ platform work that no amount of UI can substitute for.
 | --- | --- | --- |
 | 0 — Audit and contracts | Complete | — |
 | 1 — Tauri foundation | Complete | 2 of 6 window roles exist; Linux/macOS hotkey fallbacks unwritten |
+| — Chunk A (shell, types, Providers) | **Done, unchecked by hand** | Storing a key and passing a connection test has not been done by a person on this machine |
 | 2 — Dictation | **Verified on Windows** | 4 of 7 transcription providers need their own client (`Transport::ProviderClient` → `ClientNotImplemented`); sherpa local ASR absent |
 | 3 — Reasoning | Complete except enterprise | `chat.rs:191` returns `ShapeNotImplemented` for Bedrock, Azure, Vertex; no llama-server sidecar for `ChatRoute::Local`, which already points at `127.0.0.1:8221` |
 | 4 — Meetings and notes | Notes reachable; meetings contract only | No system audio anywhere; 5 WebSocket clients; 5 process detectors; AEC helper |
@@ -64,7 +67,7 @@ Why the order below is what it is. Each chunk's integrations-made-reachable:
 
 | Chunk | New backend | Integrations unlocked |
 | --- | --- | --- |
-| A — shell + Providers | none | **15** credential slots → unblocks 22 more downstream |
+| A — shell + Providers *(done)* | 2 commands | **18**: 15 credential slots + 3 transcription providers |
 | B — Intelligence | 3 enterprise shapes, llama sidecar | 7 reasoning + 3 enterprise + 6 local LLM = **16** |
 | C — transcription clients | 4 clients | **7** transcription (3 immediately from A, 4 from C) |
 | D — system audio + natives | large | 0 directly; unblocks E entirely |
@@ -76,11 +79,21 @@ Why the order below is what it is. Each chunk's integrations-made-reachable:
 
 ---
 
-## Chunk A — the shell, generated types, and the credential screen
+## Chunk A — the shell, generated types, and the credential screen *(done)*
 
-The keystone. No new backend code.
+The keystone. Two new commands rather than the none this plan predicted — `credential_slots` and
+`dictation_set_cloud_provider`, both of which only read and write things that already existed. What
+forced them was the same discovery twice: a screen cannot render fifteen slots from a registry that
+knows nine, and a stored key does not make a provider reachable if nothing can select it.
 
-### A1. Type generation spike, first and gated
+### A1. Type generation spike, first and gated *(done — `ts-rs` 12.0.1)*
+
+`ts-rs` expresses `rename_all_fields` on an internally tagged enum; `specta` and the custom
+emitter were not needed. One writer renders the whole file rather than `#[ts(export)]` per type,
+because the types live in eight crates whose test binaries run concurrently. The check is a
+`cargo test`, not a fourth CI step. Reasoning and the two defects it exposed:
+[ENGINEERING_LOG.md](ENGINEERING_LOG.md).
+
 
 Before anything depends on it, prove the generator can express what this codebase actually uses:
 **13 files carry `rename_all_fields = "camelCase"`** on internally-tagged enums
@@ -102,7 +115,7 @@ that already exist. Hand-written `invoke()` wrappers stay — the defect was nev
 *Reuse:* the `--check` pattern in `generate-ts-types.mjs`, and the CI step shape in
 `.github/workflows/ci.yml` (contracts job).
 
-### A2. The shell
+### A2. The shell *(done)*
 
 `App.tsx` becomes shell and navigation only. One component per surface, at exactly the paths in
 `config/ui-surfaces.json` — the parity gate reads that file and requires each `built` surface to
@@ -123,7 +136,7 @@ Keep the existing `refresh()` + `guard()` shape — it already re-reads after ev
 is why the hotkey row updates correctly. Lift it into a hook rather than reimplementing per view.
 `styles.css` (261 lines) gains a two-column layout; no CSS framework.
 
-### A3. Settings > Providers
+### A3. Settings > Providers *(done)*
 
 The screen that unblocks everything else. Renders from
 `apps/desktop/src/generated/providers.ts` (already generated, 1413 lines) — never a hand-written

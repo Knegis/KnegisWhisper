@@ -218,11 +218,38 @@ pub async fn history_clear(state: State<'_, AppState>) -> CmdResult<u64> {
 
 /* ------------------------------------------------------------------ providers */
 
+/// What would happen if dictation were pointed at this provider right now.
+///
+/// Three states rather than a boolean, because "we have not written the client"
+/// and "you have not filled in the settings this provider needs" are different
+/// problems with different fixes, and neither is "it works".
+///
+/// Derived by asking `route::resolve` rather than by listing provider ids here.
+/// A hand-written list of which providers dispatch would be a second copy of the
+/// match in `crates/transcription-core/src/route.rs`, and the two would part
+/// company the first time a client was written.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(
+    tag = "state",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
+pub enum Dispatch {
+    /// A transport exists. Dictation would make a real request.
+    Ready,
+    /// The provider needs its own client, which is not written yet. The route
+    /// refuses rather than substituting a generic POST or another provider.
+    NeedsClient { reason: String },
+    /// The route cannot be resolved at all with what is configured.
+    Unresolvable { reason: String },
+}
+
 /// A provider and whether it has a credential stored — *not* whether it works.
 ///
 /// The distinction is the point. `configured` means a key is present;
 /// `connected` requires a passing connection test, which only
-/// [`probe_providers`] can establish.
+/// [`probe_providers`] can establish; and `dispatch` is a third thing again —
+/// whether this build can even send the request.
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderSummary {
@@ -231,6 +258,37 @@ pub struct ProviderSummary {
     pub credential_slot: String,
     pub configured: bool,
     pub model_count: usize,
+    /// The models on offer, so a picker never writes a model id by hand.
+    pub models: Vec<String>,
+    pub dispatch: Dispatch,
+}
+
+/// Ask the real router what it would do with this provider.
+fn dispatch_for(registry: &kw_provider_registry::Registry, provider_id: &str) -> Dispatch {
+    let settings = kw_transcription_core::RouteSettings {
+        transcription_mode: Some("providers".to_owned()),
+        cloud_transcription_provider: Some(provider_id.to_owned()),
+        ..Default::default()
+    };
+
+    match kw_transcription_core::route::resolve(
+        registry,
+        &settings,
+        &kw_transcription_core::RouteRequest::default(),
+    ) {
+        Ok(kw_transcription_core::Transport::ProviderClient { provider, .. }) => {
+            Dispatch::NeedsClient {
+                reason: format!(
+                    "{} needs its own client, which is not written yet",
+                    format!("{provider:?}").to_lowercase()
+                ),
+            }
+        }
+        Ok(_) => Dispatch::Ready,
+        Err(err) => Dispatch::Unresolvable {
+            reason: err.to_string(),
+        },
+    }
 }
 
 /// List transcription providers and whether each has a credential.
@@ -250,7 +308,52 @@ pub fn providers(state: State<'_, AppState>) -> CmdResult<Vec<ProviderSummary>> 
                 credential_slot: p.credential_slot.clone(),
                 configured,
                 model_count: p.models.len(),
+                models: p.models.iter().map(|m| m.id.clone()).collect(),
+                dispatch: dispatch_for(registry, &p.id),
             }
+        })
+        .collect())
+}
+
+/// One credential slot and whether a secret is stored in it.
+///
+/// `stored` is deliberately the only thing said about the value. There is no
+/// command that reads a credential back, so a screen cannot display one and a
+/// compromised renderer cannot exfiltrate one.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct CredentialSlotStatus {
+    pub slot: String,
+    pub name: String,
+    pub kind: kw_provider_registry::CredentialKind,
+    /// Which parts of the application use this key, from the registry.
+    pub used_for: Vec<String>,
+    /// Which feature a custom endpoint belongs to; `None` for a provider.
+    pub feature: Option<String>,
+    /// A secret is present. This is NOT the same as the provider working.
+    pub stored: bool,
+}
+
+/// Every credential slot, in registry order, with whether each is filled.
+///
+/// One call rather than one `provider_credential_present` per slot: there are
+/// fifteen, the screen re-reads after every save, and the list itself has to
+/// come from the registry anyway so that no screen writes provider ids by hand.
+#[tauri::command]
+pub fn credential_slots(state: State<'_, AppState>) -> CmdResult<Vec<CredentialSlotStatus>> {
+    let registry = kw_provider_registry::registry().map_err(|e| fail("provider registry", e))?;
+
+    Ok(registry
+        .credentials
+        .iter()
+        .map(|c| CredentialSlotStatus {
+            slot: c.slot.clone(),
+            name: c.name.clone(),
+            kind: c.kind,
+            used_for: c.used_for.clone(),
+            feature: c.feature.clone(),
+            stored: kw_security::KeyRef::new(&c.slot)
+                .is_some_and(|key| state.credentials().contains(&key)),
         })
         .collect())
 }
@@ -831,6 +934,68 @@ mod tests {
     async fn an_unknown_hotkey_action_id_is_rejected() {
         // The fail-closed rule at the command boundary.
         assert_eq!(HotkeyAction::from_id("not-an-action"), None);
+    }
+
+    /// Four of the seven transcription providers cannot be dispatched.
+    ///
+    /// Derived by asking the real router rather than by listing ids, so this
+    /// test also fails if a provider silently starts resolving to something —
+    /// which is what a fallback to OpenAI would look like from here.
+    #[test]
+    fn a_provider_without_a_client_says_so_rather_than_reading_as_available() {
+        let registry = kw_provider_registry::registry().expect("registry");
+
+        for id in ["openai", "groq", "berget"] {
+            assert!(
+                matches!(dispatch_for(registry, id), Dispatch::Ready),
+                "{id} has an HttpBatch transport and should be usable"
+            );
+        }
+
+        for id in ["xai", "mistral", "corti", "tinfoil"] {
+            match dispatch_for(registry, id) {
+                Dispatch::NeedsClient { reason } => {
+                    assert!(reason.contains(id), "{id}: {reason}");
+                }
+                other => panic!("{id} should need a client, got {other:?}"),
+            }
+        }
+    }
+
+    /// An id the registry does not know is refused, never defaulted.
+    ///
+    /// Upstream's terminal fallback returned OpenAI for anything unrecognised,
+    /// which meant a typo sent the user's audio to a provider they never chose.
+    /// The refusal here does mention OpenAI — to say what it is *not* doing —
+    /// so what this asserts is the state, and that the message says nothing was
+    /// sent rather than leaving that to be assumed.
+    #[test]
+    fn an_unknown_provider_is_unresolvable_rather_than_openai() {
+        let registry = kw_provider_registry::registry().expect("registry");
+        match dispatch_for(registry, "not-a-provider") {
+            Dispatch::Unresolvable { reason } => {
+                assert!(
+                    reason.contains("Nothing was sent"),
+                    "a refusal has to say the audio stayed here: {reason}"
+                );
+            }
+            other => panic!("expected a refusal, got {other:?}"),
+        }
+    }
+
+    /// The dispatch state crosses the boundary as a discriminant a UI can
+    /// switch on, with its fields in the same camelCase as everything else.
+    #[test]
+    fn dispatch_crosses_the_boundary_tagged() {
+        let json = serde_json::to_value(Dispatch::NeedsClient {
+            reason: "no client".to_owned(),
+        })
+        .expect("serialize");
+        assert_eq!(json["state"], "needs-client");
+        assert_eq!(json["reason"], "no client");
+
+        let ready = serde_json::to_value(Dispatch::Ready).expect("serialize");
+        assert_eq!(ready["state"], "ready");
     }
 
     #[test]

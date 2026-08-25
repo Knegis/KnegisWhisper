@@ -19,11 +19,13 @@ maintained in place rather than appended to, because its purpose is to be curren
 > phases 0–6 detail and the by-hand check that found five real defects. This section stays as the
 > short version.
 >
-> **The single most useful next piece of work** is `Settings > Providers`. There is nowhere in the
-> application to enter an API key: `provider_credential_set` exists in Rust and
-> `setProviderCredential` is exported from `ipc.ts`, and nothing calls either. One screen over
-> backend that already works makes 15 credential slots reachable and unblocks 22 more behind them.
-> No new backend code.
+> **The single most useful next piece of work** is chunk B, `Settings > Intelligence`. Cleanup and
+> chat dispatch work in `crates/reasoning-core` with no screen to configure a route or a model, and
+> `DictationRuntime::build` is still handed `None` for cleanup. Chunk A closed the same gap for
+> transcription and took reachable integrations from 8 to 26; the reasoning side is the next 16.
+>
+> **Chunk A has not been checked by hand.** Storing a key and watching a connection test pass has
+> not been done by a person on this machine. Green tests are not that.
 
 Maintained in place. If something here becomes false, edit it rather than adding a note.
 
@@ -126,6 +128,84 @@ Unchanged from the Phases 1–4 entry, restated here so they are not buried:
   porting matrix. Upstream pins both by commit and verifies neither.
 - ~~**`nircmd`**~~ — **dropped**, as leaned towards: third-tier Windows paste fallback only, and
   `SendInput` works.
+
+---
+
+## 2026-08-25 (chunk A2/A3) — the shell, and somewhere to type a key
+
+### What this closed
+
+`Settings > Providers` did not exist, and it was the single thing holding back the most work:
+`provider_credential_set` had been in Rust since phase 1 and `setProviderCredential` had been
+exported from `ipc.ts` for as long, and **nothing called either**. Reachable integrations went
+from 8 to 26 — fifteen credential slots and three transcription providers — with two new commands
+and no new subsystem.
+
+`App.tsx` went from 1037 lines holding every screen to a shell: a sidebar, a view switch, and an
+error boundary. Six views, one file each, at the paths `config/ui-surfaces.json` already named.
+
+### Judgement calls
+
+#### Two commands, where the plan said none
+
+[BUILD_PLAN.md](BUILD_PLAN.md) predicted chunk A would need no backend. It needed two, and both
+came from the same discovery in two places — *a screen cannot be honest about a thing the backend
+will not tell it*.
+
+- **`credential_slots`.** Fifteen `provider_credential_present` calls on every read and after
+  every save, or one call. One call, and the ordering and the labels come from the registry rather
+  than from the screen.
+- **`dictation_set_cloud_provider`.** Storing a key does not make a provider reachable if nothing
+  can select it. `cloud_transcription_provider` and `cloud_transcription_model` are written
+  together, never separately: changing the provider while leaving the previous provider's model
+  behind resolves to a model the new provider does not offer, and `resolve_model` refuses —
+  correctly, for a reason the user never chose.
+
+#### `Dispatch` is derived from the router, not from a list
+
+Four of the seven transcription providers resolve to `Transport::ProviderClient`, which the
+executor refuses. The screen has to say so, and the obvious way was
+`["tinfoil", "mistral", "xai", "corti"]` in TypeScript. That is a second copy of the match in
+`route.rs:430`, and the two would part company the first time a client was written.
+
+Instead `commands::dispatch_for` builds a `RouteSettings` naming the provider and asks
+`route::resolve` what it would do. Three answers: `ready`, `needs-client`, `unresolvable`. A test
+asserts the three-and-four split, so a provider that silently starts resolving is a test failure —
+which is what a fallback to OpenAI would look like from here.
+
+#### A stored key is reported three separate ways
+
+`configured`, `dispatch`, and `connected` are three different facts and the screen never collapses
+them. A key is stored; a transport exists; a real request succeeded. Only the third is "connected",
+and only `probe_providers` can establish it.
+
+The custom-endpoint slots get a fourth answer again: the key is stored and it configures nothing,
+because the base URL lives with the feature that uses it and that screen is chunk B. The page says
+that rather than looking finished — five slots that look like five more providers would be exactly
+the false completeness this project keeps finding upstream.
+
+#### The view switch is a `switch`
+
+No router. The URL fragment is already load-bearing — `#overlay` selects the overlay window out of
+the same bundle — and there is nothing to link to from outside a settings window. What a router
+would have bought is history, and the one piece of history worth having, "reopen where I was", is
+actively wrong when where you were is the screen that just failed.
+
+#### An error boundary, because a blank window is the alternative
+
+A thrown render in a Tauri webview is a blank window with no tab to reload and no console in a
+bundled build. The boundary shows the message and offers a way to a screen that was working.
+
+### A self-test that stopped testing anything
+
+`verify-parity.test.mjs` had a case that stripped `data-surface="notes.export"` from `App.tsx` and
+asserted the gate noticed. Splitting `App.tsx` moved that marker to `views/Notes.tsx`, so the
+mutation stopped mutating anything and the test went green while proving nothing — **the exact
+failure the file's own header warns about**, one level down. It now reads the file and the marker
+out of the surface registry, so it cannot go stale the same way twice.
+
+Worth stating plainly: the gate itself was correct throughout. It was its own self-test that
+rotted, and only the fact that self-tests are run at all caught it.
 
 ---
 

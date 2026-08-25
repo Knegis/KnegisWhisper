@@ -28,10 +28,89 @@ body {
   color: var(--text);
 }
 
+/*
+ * Two columns: a fixed sidebar and a scrolling content pane.
+ *
+ * The sidebar scrolls with the page rather than being sticky, because the list
+ * is short and a sticky element in a small window steals height from the thing
+ * being read. `min-width: 0` on the content column is what stops a long path or
+ * a wide <pre> from pushing the sidebar off screen -- a grid item's default
+ * `min-width: auto` refuses to shrink below its content.
+ */
 .shell {
-  max-width: 44rem;
+  display: grid;
+  grid-template-columns: 12rem minmax(0, 1fr);
+  gap: 2rem;
+  max-width: 60rem;
   margin: 0 auto;
   padding: 2rem 1.5rem 3rem;
+  align-items: start;
+}
+
+/* One column below the width where two would leave neither usable. */
+@media (max-width: 44rem) {
+  .shell {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 1rem;
+  }
+}
+
+.sidebar {
+  position: sticky;
+  top: 2rem;
+}
+
+.sidebar ul {
+  list-style: none;
+  margin: 1.5rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+
+/*
+ * Nav items are buttons, not links: there is nothing to navigate to. Styled flat
+ * so they read as a list rather than six controls competing with the ones inside
+ * the view.
+ */
+.sidebar button {
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: 1px solid transparent;
+  color: var(--muted);
+  padding: 0.4rem 0.6rem;
+  border-radius: 6px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.sidebar button:hover {
+  color: var(--text);
+  background: var(--surface);
+}
+
+.sidebar button.nav-current {
+  color: var(--text);
+  background: var(--surface);
+  border-color: var(--border);
+}
+
+/* Visible focus, because the whole nav is keyboard-reachable. */
+.sidebar button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.content {
+  min-width: 0;
+}
+
+/* The first section in a view sits level with the sidebar heading. */
+.view > section:first-of-type,
+.view > *:first-child > section:first-of-type {
+  margin-top: 0;
 }
 
 h1 {

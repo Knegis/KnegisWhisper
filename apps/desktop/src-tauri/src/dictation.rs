@@ -705,6 +705,42 @@ pub async fn dictation_use_local(
         .map_err(|err| err.to_string())
 }
 
+/// Point dictation at a cloud provider and model.
+///
+/// Both together, never one at a time. A provider change that left the previous
+/// provider's model behind would resolve to a model the new provider does not
+/// offer, and `resolve_model` would refuse — correctly, but for a reason the
+/// user never chose. The frontend picks the model from the registry's list for
+/// that provider, so an id is never typed.
+///
+/// Switching here also switches the mode off local, because choosing a cloud
+/// provider while dictation is routed to a local model would change a setting
+/// that has no effect.
+#[tauri::command]
+pub async fn dictation_set_cloud_provider(
+    runtime: tauri::State<'_, Arc<DictationRuntime>>,
+    provider: String,
+    model: String,
+) -> Result<(), String> {
+    let registry = kw_provider_registry::registry().map_err(|err| err.to_string())?;
+
+    // Fail closed on an unknown id rather than storing it and discovering the
+    // problem at the end of someone's next dictation.
+    let resolved = registry
+        .resolve_transcription_model(&provider, &model)
+        .map_err(|err| err.to_string())?;
+
+    let mut settings = runtime.route_settings().await;
+    settings.cloud_transcription_provider = Some(provider);
+    settings.cloud_transcription_model = Some(resolved);
+    settings.use_local_whisper = false;
+    settings.transcription_mode = Some("providers".to_owned());
+
+    kw_storage::settings::set(runtime.db.pool(), ROUTE_SETTINGS_KEY, &settings)
+        .await
+        .map_err(|err| err.to_string())
+}
+
 /* ---------------------------------------------------------------- commands */
 
 /// What the session is doing, for the settings screen.

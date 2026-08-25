@@ -17,6 +17,7 @@ use std::sync::OnceLock;
 
 use kw_security::KeyRef;
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 /// The registry data, embedded at compile time.
 const REGISTRY_JSON: &str = include_str!("../../../config/provider-registry.json");
@@ -189,7 +190,7 @@ pub struct LocalAsr {
 /// try that service; a `CustomEndpoint` key configures nothing without the base
 /// URL that lives with the feature it belongs to, so a screen that stores one
 /// must say so rather than implying the key was all that was needed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, TS)]
 #[serde(rename_all = "kebab-case")]
 pub enum CredentialKind {
     /// A named service, e.g. OpenAI.

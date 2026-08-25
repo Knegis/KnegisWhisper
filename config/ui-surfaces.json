@@ -5,18 +5,18 @@
     "Settings > Providers": {
       "surfaceId": "settings.providers",
       "component": "apps/desktop/src/views/SettingsProviders.tsx",
-      "built": false,
-      "note": "There is no way to enter an API key anywhere in the application. `setProviderCredential` exists in apps/desktop/src/lib/ipc.ts and nothing calls it. Until this is built, every credential slot is unreachable and so is every provider that needs one."
+      "built": true,
+      "note": "Stores a key for every one of the fifteen credential slots the registry declares, and runs the real connection test. Write-only: no command returns a credential value, so the field replaces or removes and never displays. A stored key is reported as stored, never as connected."
     },
     "Settings > Transcription": {
       "surfaceId": "settings.transcription",
-      "component": "apps/desktop/src/App.tsx",
+      "component": "apps/desktop/src/views/SettingsTranscription.tsx",
       "built": true,
-      "note": "Built, but nothing here is reachable yet. The section lists each provider, says whether a key is stored, and runs a real connection test -- but it cannot store the key, so a user cannot get a provider working from it. That is why `built` and `reachable` are separate fields."
+      "note": "Chooses the cloud provider and model for dictation, from the registry. Only the three providers whose transport exists can be selected; the other four report that they need a client nobody has written, rather than being silently unavailable. Keys are stored on Settings > Providers."
     },
     "Settings > Transcription > Local": {
       "surfaceId": "settings.transcription.local",
-      "component": "apps/desktop/src/App.tsx",
+      "component": "apps/desktop/src/views/SettingsTranscription.tsx",
       "built": true,
       "note": "Offers whisper models only. Parakeet and Nemotron need the sherpa-onnx sidecar, which does not exist, so those four entries stay unreachable while the surface itself is built."
     },
@@ -52,7 +52,7 @@
     },
     "Integrations > API": {
       "surfaceId": "integrations.api",
-      "component": "apps/desktop/src/App.tsx",
+      "component": "apps/desktop/src/views/IntegrationsApi.tsx",
       "built": true
     },
     "Integrations > CLI": {
@@ -69,7 +69,7 @@
     },
     "Notes > Export": {
       "surfaceId": "notes.export",
-      "component": "apps/desktop/src/App.tsx",
+      "component": "apps/desktop/src/views/Notes.tsx",
       "built": true
     },
     "Notes > Upload": {
