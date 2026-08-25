@@ -19,8 +19,9 @@ use std::path::{Path, PathBuf};
 use std::process::Output;
 
 use kw_local_api::{discovery, serve, ApiState, Served};
-use kw_notes_core::{history, notes};
+use kw_notes_core::notes;
 use kw_security::LocalApiToken;
+use kw_storage::transcriptions;
 use kw_storage::Db;
 use tokio::net::TcpListener;
 
@@ -328,15 +329,16 @@ async fn history_is_paged_and_a_recording_can_be_deleted_on_its_own() {
     let db = Db::open_in_memory().await.unwrap();
     let mut last = 0;
     for text in ["one", "two", "three"] {
-        last = history::record(
+        last = transcriptions::record(
             db.pool(),
-            &history::NewTranscription {
+            &transcriptions::NewTranscription {
                 text: text.to_owned(),
                 has_audio: true,
                 audio_duration_ms: Some(1000),
                 provider: Some("local".to_owned()),
                 ..Default::default()
             },
+            transcriptions::Status::Completed,
         )
         .await
         .unwrap();

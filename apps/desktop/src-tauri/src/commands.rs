@@ -150,8 +150,9 @@ pub async fn hotkey_set(
 pub async fn history(
     state: State<'_, AppState>,
     limit: Option<i64>,
+    after: Option<i64>,
 ) -> CmdResult<Vec<transcriptions::Transcription>> {
-    transcriptions::recent(state.db().pool(), limit.unwrap_or(50))
+    transcriptions::recent(state.db().pool(), limit.unwrap_or(50), after)
         .await
         .map_err(|e| fail("could not read history", e))
 }
@@ -401,7 +402,9 @@ mod tests {
         .await
         .unwrap();
 
-        let rows = transcriptions::recent(s.db().pool(), 10).await.unwrap();
+        let rows = transcriptions::recent(s.db().pool(), 10, None)
+            .await
+            .unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].text, "hello");
     }

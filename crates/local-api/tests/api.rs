@@ -15,8 +15,9 @@
 )]
 
 use kw_local_api::{serve, ApiState, ServeError, Served};
-use kw_notes_core::{history, notes};
+use kw_notes_core::notes;
 use kw_security::LocalApiToken;
+use kw_storage::transcriptions;
 use kw_storage::Db;
 use tokio::net::TcpListener;
 
@@ -377,12 +378,13 @@ async fn a_non_numeric_id_is_a_404_not_a_crash() {
 async fn transcriptions_page_by_cursor() {
     let db = Db::open_in_memory().await.unwrap();
     for text in ["one", "two", "three", "four"] {
-        history::record(
+        transcriptions::record(
             db.pool(),
-            &history::NewTranscription {
+            &transcriptions::NewTranscription {
                 text: text.to_owned(),
                 ..Default::default()
             },
+            transcriptions::Status::Completed,
         )
         .await
         .unwrap();
@@ -423,14 +425,15 @@ async fn deleting_a_recording_is_idempotent() {
     // The user asked for the recording to be gone. Answering 404 the second time
     // would suggest it is still there.
     let db = Db::open_in_memory().await.unwrap();
-    let id = history::record(
+    let id = transcriptions::record(
         db.pool(),
-        &history::NewTranscription {
+        &transcriptions::NewTranscription {
             text: "spoken".to_owned(),
             has_audio: true,
             audio_duration_ms: Some(3000),
             ..Default::default()
         },
+        transcriptions::Status::Completed,
     )
     .await
     .unwrap();

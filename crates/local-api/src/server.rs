@@ -20,8 +20,9 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, patch, post};
 use axum::{Json, Router};
-use kw_notes_core::{history, notes};
+use kw_notes_core::notes;
 use kw_security::LocalApiToken;
+use kw_storage::{dictionary, transcriptions};
 use sqlx::SqlitePool;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
@@ -342,10 +343,10 @@ async fn list_folders(
 
 async fn list_dictionary(
     State(state): State<ApiState>,
-) -> Result<Json<Page<history::DictionaryWord>>, ApiError> {
-    let rows = history::dictionary(&state.pool)
+) -> Result<Json<Page<dictionary::DictionaryWord>>, ApiError> {
+    let rows = dictionary::all(&state.pool)
         .await
-        .map_err(|err| storage_failed("history::dictionary", &err))?;
+        .map_err(|err| storage_failed("dictionary::all", &err))?;
     Ok(Json(Page {
         data: rows,
         has_more: false,
@@ -356,24 +357,24 @@ async fn list_dictionary(
 async fn update_dictionary(
     State(state): State<ApiState>,
     Json(update): Json<DictionaryUpdate>,
-) -> Result<Json<Item<history::DictionaryChange>>, ApiError> {
+) -> Result<Json<Item<dictionary::DictionaryChange>>, ApiError> {
     let request = update.validate()?;
-    let change = history::update_dictionary(&state.pool, &request.add, &request.remove)
+    let change = dictionary::update(&state.pool, &request.add, &request.remove)
         .await
-        .map_err(|err| storage_failed("history::update_dictionary", &err))?;
+        .map_err(|err| storage_failed("dictionary::update", &err))?;
     Ok(Json(Item { data: change }))
 }
 
 async fn list_transcriptions(
     State(state): State<ApiState>,
     Query(params): Query<ListParams>,
-) -> Result<Json<Page<history::Transcription>>, ApiError> {
+) -> Result<Json<Page<transcriptions::Transcription>>, ApiError> {
     let request = params.validate()?;
 
     let probe = request.limit.saturating_add(1);
-    let mut rows = history::list(&state.pool, probe, request.after)
+    let mut rows = transcriptions::recent(&state.pool, i64::from(probe), request.after)
         .await
-        .map_err(|err| storage_failed("history::list", &err))?;
+        .map_err(|err| storage_failed("transcriptions::recent", &err))?;
 
     let has_more = rows.len() > request.limit as usize;
     rows.truncate(request.limit as usize);
@@ -393,11 +394,11 @@ async fn list_transcriptions(
 async fn get_transcription(
     State(state): State<ApiState>,
     Path(id): Path<String>,
-) -> Result<Json<Item<history::Transcription>>, ApiError> {
+) -> Result<Json<Item<transcriptions::Transcription>>, ApiError> {
     let id = crate::wire::parse_id(&id)?;
-    let row = history::get(&state.pool, id)
+    let row = transcriptions::get(&state.pool, id)
         .await
-        .map_err(|err| storage_failed("history::get", &err))?
+        .map_err(|err| storage_failed("transcriptions::get", &err))?
         .ok_or_else(|| ApiError::not_found("transcription"))?;
     Ok(Json(Item { data: row }))
 }
@@ -407,9 +408,9 @@ async fn delete_transcription(
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     let id = crate::wire::parse_id(&id)?;
-    let removed = history::delete(&state.pool, id)
+    let removed = transcriptions::delete(&state.pool, id)
         .await
-        .map_err(|err| storage_failed("history::delete", &err))?;
+        .map_err(|err| storage_failed("transcriptions::delete", &err))?;
 
     if removed {
         Ok(StatusCode::NO_CONTENT)
@@ -423,14 +424,13 @@ async fn delete_audio(
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     let id = crate::wire::parse_id(&id)?;
-    match history::forget_audio(&state.pool, id)
+    match transcriptions::forget_audio(&state.pool, id)
         .await
-        .map_err(|err| storage_failed("history::forget_audio", &err))?
+        .map_err(|err| storage_failed("transcriptions::forget_audio", &err))?
     {
         // Idempotent: the caller asked for the recording to be gone, and it is.
-        history::AudioForgotten::Cleared | history::AudioForgotten::NoAudioToForget => {
-            Ok(StatusCode::NO_CONTENT)
-        }
-        history::AudioForgotten::NoSuchRow => Err(ApiError::not_found("transcription")),
+        transcriptions::AudioForgotten::Cleared
+        | transcriptions::AudioForgotten::NoAudioToForget => Ok(StatusCode::NO_CONTENT),
+        transcriptions::AudioForgotten::NoSuchRow => Err(ApiError::not_found("transcription")),
     }
 }

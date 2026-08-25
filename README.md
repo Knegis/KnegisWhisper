@@ -46,6 +46,7 @@ when you configure them with your own credentials, and requests go straight to t
 | --- | --- |
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | Crate layout, key interfaces, storage design |
 | [ENGINEERING_LOG.md](docs/ENGINEERING_LOG.md) | Judgement calls, deviations, and what is not usable yet |
+| [PHASES_0_6_COMPLETION_PLAN.md](docs/PHASES_0_6_COMPLETION_PLAN.md) | What is left in phases 0-6, and what is blocked on what |
 | [INTEGRATION_PARITY.md](docs/INTEGRATION_PARITY.md) | How integration parity is enforced |
 | [NETWORK_BOUNDARY.md](docs/NETWORK_BOUNDARY.md) | Every reason this app makes a network request |
 | [PLATFORM_SUPPORT.md](docs/PLATFORM_SUPPORT.md) | What works where, and what is unverified |

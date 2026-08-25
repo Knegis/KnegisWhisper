@@ -10,13 +10,8 @@
 //! search text is escaped into FTS5 query syntax rather than passed through.
 //! Users type prose; FTS5 reads expressions.
 
-pub mod history;
 pub mod notes;
 pub mod transcript;
 
-pub use history::{
-    delete, dictionary, forget_audio, get, list, record, update_dictionary, AudioForgotten,
-    DictionaryChange, DictionaryWord, NewTranscription, Transcription,
-};
 pub use notes::{escape_query, search, Folder, NewNote, Note, NoteUpdate, SearchHit};
 pub use transcript::{export, Format, NoteMeta, Segment, SpeakerLabels};

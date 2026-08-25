@@ -23,6 +23,7 @@
 //! would mean either a `DATABASE_URL` in CI or a generated artifact to keep
 //! fresh. The schema is asserted by tests instead.
 
+pub mod dictionary;
 pub mod import;
 pub mod paths;
 pub mod settings;

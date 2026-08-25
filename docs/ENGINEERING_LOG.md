@@ -14,6 +14,10 @@ maintained in place rather than appended to, because its purpose is to be curren
 
 ## Carry-forward — what the next session needs to know
 
+> **The plan for closing all of this is [PHASES_0_6_COMPLETION_PLAN.md](PHASES_0_6_COMPLETION_PLAN.md)**,
+> which tracks what is left per phase and what each blocked item needs. This section stays as the
+> short version.
+>
 > **The single most useful next piece of work** is the Tauri layer for what is
 > already built. Local dictation and the local API both work end to end in tests
 > and neither is reachable from the running application, because no command

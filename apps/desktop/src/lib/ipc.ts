@@ -222,8 +222,16 @@ export type Transcription = {
   routeKind: string | null;
 };
 
-export async function getHistory(limit?: number): Promise<Transcription[]> {
-  return invoke<Transcription[]>("history", { limit: limit ?? null });
+export async function getHistory(
+  limit?: number,
+  after?: number,
+): Promise<Transcription[]> {
+  // `after` is a cursor, not an offset: entries are ordered by id descending,
+  // so paging by id stays stable while new dictations arrive.
+  return invoke<Transcription[]>("history", {
+    limit: limit ?? null,
+    after: after ?? null,
+  });
 }
 
 export async function clearHistory(): Promise<number> {
