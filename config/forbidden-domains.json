@@ -79,8 +79,19 @@
     { "path": "**/test/fixtures/**", "reason": "Fixtures that assert the scanner works." },
     { "path": "**/*.test.rs", "reason": "Negative tests must embed forbidden strings." },
     { "path": "**/*.test.ts", "reason": "Negative tests must embed forbidden strings." },
-    { "path": "**/*.test.mjs", "reason": "Negative tests must embed forbidden strings." }
+    { "path": "**/*.test.mjs", "reason": "Negative tests must embed forbidden strings." },
+    {
+      "path": "crates/*/tests/**",
+      "reason": "Rust integration tests. Negative tests must name the hosts they assert are blocked; keeping them here rather than inline means crates/network-policy/src/lib.rs stays fully scanned."
+    },
+    {
+      "path": "tools/domain-scanner/**",
+      "reason": "The scanner and its tests necessarily contain the patterns they detect, for the same reason this config does."
+    }
   ],
+
+  "$suppressionComment": "For the few source lines that legitimately need a forbidden string, prefer an inline `domain-scanner:allow <reason>` or `domain-scanner:allow-next-line <reason>` comment over allowlisting the whole file. A reason is required. Allowlisting a file blinds the scanner everywhere in it, which is worst in the files that handle egress.",
+
 
   "runtimeBlockedHosts": [
     "openwhispr.com",

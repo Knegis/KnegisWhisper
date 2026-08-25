@@ -1,0 +1,133 @@
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Repository contracts. Cheap, no toolchain, and the most likely thing to
+  # catch a real regression -- so it runs first and gates the rest.
+  contracts:
+    name: Contracts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Integration parity
+        run: node tools/integration-audit/verify-parity.mjs
+
+      - name: Forbidden domains
+        run: node tools/domain-scanner/scan.mjs
+
+      - name: Domain scanner self-tests
+        run: node --test tools/domain-scanner/scan.test.mjs
+
+      # The baseline is generated from an OpenWhispr checkout that CI does not
+      # have, so --check cannot run here. Assert instead that it is valid JSON
+      # and still pinned to the commit the manifest claims.
+      - name: Baseline integrity
+        run: |
+          node -e '
+            const fs = require("node:fs");
+            const b = JSON.parse(fs.readFileSync("config/upstream-integration-baseline.json", "utf8"));
+            const m = JSON.parse(fs.readFileSync("config/integration-manifest.json", "utf8"));
+            if (b.provenance.commit !== m.baseline.commit) {
+              throw new Error("manifest baseline pin does not match the baseline file");
+            }
+            console.log("baseline pinned to " + b.provenance.commit.slice(0, 12));
+          '
+
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - run: npm ci
+        working-directory: apps/desktop
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+        working-directory: apps/desktop
+
+      - name: Build
+        run: npx vite build
+        working-directory: apps/desktop
+
+      # A vendor host can survive compilation and end up only in a bundle, so
+      # scan the built output too. This is why builtAssetPaths exists.
+      - name: Forbidden domains in built assets
+        run: node tools/domain-scanner/scan.mjs
+
+  rust:
+    name: Rust (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.os }}
+
+      # Tauri needs the system webview and its build dependencies on Linux.
+      - name: Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libglib2.0-dev \
+            libgtk-3-dev \
+            patchelf
+
+      # The frontend must exist before generate_context! embeds it.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+      - run: npm ci
+        working-directory: apps/desktop
+      - run: npx vite build
+        working-directory: apps/desktop
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace
+
+      - name: Build
+        run: cargo build --workspace

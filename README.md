@@ -42,8 +42,21 @@ when you configure them with your own credentials, and requests go straight to t
 Requires Rust 1.90+, Node 22+, and a platform C toolchain.
 
 ```sh
-# Verify the integration parity contract
-node tools/integration-audit/verify-parity.mjs
+# Repository contracts — the same checks CI gates on
+node tools/integration-audit/verify-parity.mjs   # integration parity
+node tools/domain-scanner/scan.mjs               # forbidden vendor domains
+node --test tools/domain-scanner/scan.test.mjs   # scanner self-tests
+
+# Rust
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+
+# Frontend
+cd apps/desktop && npm ci && npx tsc --noEmit && npx vite build
+
+# Run the app
+cd apps/desktop && npx tauri dev
 
 # Regenerate the upstream baseline (needs an OpenWhispr checkout)
 node tools/integration-audit/generate-baseline.mjs --upstream <path>

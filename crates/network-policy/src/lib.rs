@@ -130,6 +130,7 @@ fn blocked_hosts() -> &'static BTreeSet<String> {
                 .into_iter()
                 .map(|h| h.to_ascii_lowercase())
                 .collect(),
+            // domain-scanner:allow-next-line the parse-failure fallback must name the hosts it blocks
             Err(_) => ["openwhispr.com", "pluely.com"]
                 .into_iter()
                 .map(str::to_owned)
@@ -286,36 +287,10 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn blocks_vendor_hosts_for_every_purpose() {
-        for url in [
-            "https://api.openwhispr.com/api/v1/notes",
-            "https://auth.openwhispr.com/session",
-            "https://mcp.openwhispr.com/mcp",
-            "https://pluely.com/api/update",
-            "https://app.posthog.com/capture",
-        ] {
-            assert!(
-                matches!(
-                    validate(url, AI),
-                    Err(PolicyError::BlockedVendorHost { .. })
-                ),
-                "expected {url} to be blocked"
-            );
-        }
-    }
-
-    #[test]
-    fn blocks_subdomains_of_vendor_hosts_but_not_lookalikes() {
-        assert!(matches!(
-            validate("https://anything.openwhispr.com/x", AI),
-            Err(PolicyError::BlockedVendorHost { .. })
-        ));
-        // A suffix match must not catch a different registrable domain that
-        // merely ends with the same letters.
-        assert!(validate("https://notopenwhispr.com/x", AI).is_ok());
-        assert!(validate("https://openwhispr.com.example.org/x", AI).is_ok());
-    }
+    // Tests that name blocked vendor hosts live in tests/blocklist.rs, so this
+    // file stays fully covered by the forbidden-domain scanner. Suppressing the
+    // scanner across the crate that owns egress would blind it exactly where it
+    // matters most.
 
     #[test]
     fn rejects_non_http_schemes() {
@@ -343,6 +318,7 @@ mod tests {
             "blocklist looks like the parse-failure fallback: {:?}",
             blocked_hosts()
         );
+        // domain-scanner:allow-next-line asserting a host is in the runtime blocklist
         assert!(blocked_hosts().contains("mcp.openwhispr.com"));
     }
 
