@@ -82,6 +82,20 @@
     { "path": "**/*.test.mjs", "reason": "Negative tests must embed forbidden strings." }
   ],
 
+  "runtimeBlockedHosts": [
+    "openwhispr.com",
+    "auth.openwhispr.com",
+    "api.openwhispr.com",
+    "mcp.openwhispr.com",
+    "docs.openwhispr.com",
+    "pluely.com",
+    "app.posthog.com",
+    "us.i.posthog.com",
+    "eu.i.posthog.com"
+  ],
+
+  "$runtimeBlockedHostsComment": "Compiled into crates/network-policy via include_str! and enforced per request as defense in depth behind the CI scanner. Host suffixes only -- the identifier patterns above are source-scanner concerns and have no runtime meaning.",
+
   "allowedEgressPurposes": [
     "user-configured-ai-provider",
     "user-configured-transcription-provider",
