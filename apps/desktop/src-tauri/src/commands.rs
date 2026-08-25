@@ -127,6 +127,7 @@ pub async fn load_bindings(state: &AppState) -> CmdResult<Vec<Binding>> {
 /// silently.
 #[tauri::command]
 pub async fn hotkey_set(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     action: String,
     accelerators: String,
@@ -139,6 +140,20 @@ pub async fn hotkey_set(
     settings::set(state.db().pool(), &action.settings_key(), &canonical)
         .await
         .map_err(|e| fail("could not save the hotkey", e))?;
+
+    // Applied now, not at the next launch. Saving a shortcut and then requiring
+    // a restart before it does anything makes it impossible to tell "I typed the
+    // accelerator wrongly" from "the platform refused it" — and the whole point
+    // of returning the classification is to let the user find that out
+    // immediately.
+    //
+    // Every action is re-registered rather than just this one, because
+    // `unregister_all` is the only way to drop the previous binding for this
+    // action and it drops the others with it.
+    let bindings = load_bindings(&state).await?;
+    let reports = crate::shortcuts::register_all(&app, &bindings);
+    let live = reports.iter().filter(|r| r.is_live()).count();
+    tracing::info!(live, total = reports.len(), "hotkeys re-registered");
 
     Ok(Binding::from_stored(action, &canonical))
 }

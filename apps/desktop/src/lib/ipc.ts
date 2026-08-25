@@ -460,3 +460,29 @@ export async function startLocalApi(): Promise<number> {
 export async function stopLocalApi(): Promise<void> {
   return invoke<void>("local_api_stop");
 }
+
+/* ------------------------------------------------------------------- route */
+
+/**
+ * Where a dictation would go right now. Mirrors `dictation::RouteReport`.
+ *
+ * The *resolved* route, not the stored setting: a mode of "local" with no server
+ * running resolves differently from what the setting says, and showing the
+ * setting would be showing an intention rather than a fact.
+ */
+export type RouteReport = {
+  destination: string;
+  /** Whether audio leaves this machine on this route. */
+  leavesDevice: boolean;
+  /** Set when the route cannot be resolved at all. */
+  problem: string | null;
+};
+
+export async function getDictationRoute(): Promise<RouteReport> {
+  return invoke<RouteReport>("dictation_route");
+}
+
+/** Point dictation at the local model, or back at the configured provider. */
+export async function useLocalModel(useLocal: boolean): Promise<void> {
+  return invoke<void>("dictation_use_local", { useLocal });
+}

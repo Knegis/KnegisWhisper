@@ -171,6 +171,8 @@ pub fn run() -> anyhow::Result<()> {
             commands::probe_providers,
             commands::import_openwhispr,
             dictation::dictation_state,
+            dictation::dictation_route,
+            dictation::dictation_use_local,
             dictation::dictation_toggle,
             dictation::dictation_cancel,
             dictation::dictation_set_device,

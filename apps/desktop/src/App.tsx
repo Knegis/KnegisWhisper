@@ -8,6 +8,7 @@ import {
   getHotkeys,
   getInputDevices,
   getLocalApiStatus,
+  getDictationRoute,
   getLocalStatus,
   getProviders,
   installLocalModel,
@@ -24,7 +25,9 @@ import {
   startLocalServer,
   stopLocalApi,
   stopLocalServer,
+  setHotkey,
   toggleDictation,
+  useLocalModel,
   type Accelerator,
   type CaptureExclusion,
   type Diagnostics,
@@ -37,6 +40,7 @@ import {
   type NonActivating,
   type ProbeReport,
   type ProviderSummary,
+  type RouteReport,
   type SessionState,
   type Transcription,
 } from "./lib/ipc";
@@ -191,12 +195,15 @@ function Dashboard() {
   const [local, setLocal] = useState<LocalStatus | null>(null);
   const [installing, setInstalling] = useState<string | null>(null);
   const [api, setApi] = useState<LocalApiStatus | null>(null);
+  const [route, setRoute] = useState<RouteReport | null>(null);
+  const [draftKeys, setDraftKeys] = useState<Record<string, string>>({});
 
   const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
   const refresh = useCallback(async () => {
     try {
-      const [d, h, p, rows, state, mics, insert, localStatus, apiStatus] = await Promise.all([
+      const [d, h, p, rows, state, mics, insert, localStatus, apiStatus, routeReport] =
+        await Promise.all([
         getDiagnostics(),
         getHotkeys(),
         getProviders(),
@@ -206,6 +213,7 @@ function Dashboard() {
         isInsertionSupported(),
         getLocalStatus(),
         getLocalApiStatus(),
+        getDictationRoute(),
       ]);
       setDiagnostics(d);
       setHotkeys(h);
@@ -216,6 +224,7 @@ function Dashboard() {
       setCanInsert(insert);
       setLocal(localStatus);
       setApi(apiStatus);
+      setRoute(routeReport);
     } catch (e) {
       setError(message(e));
     }
@@ -377,6 +386,30 @@ function Dashboard() {
                       );
                     })
                   )}
+                  <input
+                    aria-label={`accelerator for ${b.action}`}
+                    placeholder="Control+Shift+D"
+                    value={draftKeys[b.action] ?? ""}
+                    onChange={(e) => {
+                      setDraftKeys((prev) => ({ ...prev, [b.action]: e.target.value }));
+                    }}
+                  />
+                  <button
+                    type="button"
+                    disabled={!draftKeys[b.action]?.trim()}
+                    onClick={() => {
+                      const next = draftKeys[b.action]?.trim();
+                      if (!next) return;
+                      void guard(async () => {
+                        // A single comma-separated string, matching `hotkey_set`: one action can
+                        // have several accelerators.
+                        await setHotkey(b.action, next);
+                        setDraftKeys((prev) => ({ ...prev, [b.action]: "" }));
+                      });
+                    }}
+                  >
+                    Set
+                  </button>
                 </span>
               </div>
             ))}
@@ -389,6 +422,12 @@ function Dashboard() {
               </p>
             ) : null}
             {lastHotkey ? <Row label="Last fired" value={lastHotkey} /> : null}
+            <p className="caveat">
+              A shortcut takes effect as soon as you set it. The dictation default,
+              <code>Control+Super</code>, is two modifiers and no key — no cross-platform shortcut
+              API can register that, so it has to be changed before the hotkey will do anything.
+              Try <code>Control+Shift+D</code>.
+            </p>
           </>
         ) : (
           <p className="muted">Loading…</p>
@@ -465,6 +504,19 @@ function Dashboard() {
             canInsert === false
               ? "dictations are transcribed and kept in history, but cannot be typed at the cursor"
               : undefined
+          }
+        />
+        <Row
+          label="Route"
+          value={route === null ? "checking…" : route.problem ? "Not usable" : route.destination}
+          detail={
+            route?.problem
+              ? route.problem
+              : route?.leavesDevice === false
+                ? "audio stays on this machine"
+                : route?.leavesDevice === true
+                  ? "audio leaves this machine"
+                  : undefined
           }
         />
         {lastOutcome ? <Row label="Last result" value={lastOutcome} /> : null}
@@ -548,10 +600,16 @@ function Dashboard() {
                     <button
                       type="button"
                       onClick={() => {
-                        void guard(() => startLocalServer(m.id));
+                        void guard(async () => {
+                          await startLocalServer(m.id);
+                          // Two steps under one label, and the label says both:
+                          // a server that is up is not the same as a route
+                          // pointing at it.
+                          await useLocalModel(true);
+                        });
                       }}
                     >
-                      Use
+                      Use for dictation
                     </button>
                   ) : (
                     <button
@@ -571,10 +629,13 @@ function Dashboard() {
               <button
                 type="button"
                 onClick={() => {
-                  void guard(stopLocalServer);
+                  void guard(async () => {
+                    await useLocalModel(false);
+                    await stopLocalServer();
+                  });
                 }}
               >
-                Stop the server
+                Stop and use a provider instead
               </button>
             ) : null}
           </>

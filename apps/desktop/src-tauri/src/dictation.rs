@@ -621,6 +621,89 @@ impl DictationRuntime {
     }
 }
 
+/// Where a dictation would go right now.
+///
+/// The *resolved* route rather than the stored setting, because the two are not
+/// the same thing: a mode of "local" with no server running, or a provider with
+/// no credential, resolves differently from what the setting says. Showing the
+/// setting would be showing an intention.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RouteReport {
+    /// A short phrase for the UI: `local model`, `openai`, and so on.
+    pub destination: String,
+    /// Whether audio leaves this machine on this route.
+    pub leaves_device: bool,
+    /// Present when the route cannot be resolved at all.
+    pub problem: Option<String>,
+}
+
+/// Describe the resolved transcription route.
+#[tauri::command]
+pub async fn dictation_route(
+    runtime: tauri::State<'_, Arc<DictationRuntime>>,
+) -> Result<RouteReport, String> {
+    let registry = kw_provider_registry::registry().map_err(|err| err.to_string())?;
+    let settings = runtime.route_settings().await;
+
+    match kw_transcription_core::route::resolve(
+        registry,
+        &settings,
+        &kw_transcription_core::RouteRequest::default(),
+    ) {
+        Ok(Transport::Local) => Ok(RouteReport {
+            destination: "local model".to_owned(),
+            leaves_device: false,
+            problem: None,
+        }),
+        Ok(Transport::ProviderClient { provider, .. }) => Ok(RouteReport {
+            destination: format!("{provider:?}").to_lowercase(),
+            leaves_device: true,
+            problem: None,
+        }),
+        Ok(Transport::HttpBatch {
+            provider, endpoint, ..
+        }) => Ok(RouteReport {
+            // The endpoint matters: a self-hosted route on the user's own
+            // network leaves this machine but not their control, and lumping it
+            // in with a cloud provider would be misleading either way.
+            leaves_device: !kw_network_policy::is_private_host(
+                url::Url::parse(&endpoint)
+                    .ok()
+                    .and_then(|u| u.host_str().map(str::to_owned))
+                    .unwrap_or_default()
+                    .as_str(),
+            ),
+            destination: provider,
+            problem: None,
+        }),
+        Err(err) => Ok(RouteReport {
+            destination: "nowhere".to_owned(),
+            leaves_device: false,
+            problem: Some(err.to_string()),
+        }),
+    }
+}
+
+/// Send dictations to the local model, or stop doing so.
+///
+/// Explicit rather than implied by the server running: a server that is up is
+/// not the same as a route that points at it, and a button that starts one while
+/// silently rewriting the other would be doing two things under one label.
+#[tauri::command]
+pub async fn dictation_use_local(
+    runtime: tauri::State<'_, Arc<DictationRuntime>>,
+    use_local: bool,
+) -> Result<(), String> {
+    let mut settings = runtime.route_settings().await;
+    settings.use_local_whisper = use_local;
+    settings.transcription_mode = Some(if use_local { "local" } else { "providers" }.to_owned());
+
+    kw_storage::settings::set(runtime.db.pool(), ROUTE_SETTINGS_KEY, &settings)
+        .await
+        .map_err(|err| err.to_string())
+}
+
 /* ---------------------------------------------------------------- commands */
 
 /// What the session is doing, for the settings screen.
