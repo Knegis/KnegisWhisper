@@ -4,7 +4,9 @@ members = [
     "apps/desktop/src-tauri",
     "crates/app-core",
     "crates/audio-core",
+    "crates/meeting-core",
     "crates/network-policy",
+    "crates/notes-core",
     "crates/overlay",
     "crates/platform",
     "crates/provider-probe",
@@ -19,8 +21,6 @@ members = [
 # The brief asks for vertical slices over broad unfinished scaffolding, so an
 # empty crate is not created just to reserve its name.
 #
-#   crates/meeting-core       phase 4
-#   crates/notes-core         phase 4
 #   crates/local-api          phase 6
 #   tools/knegiswhisper       phase 6
 #   tools/knegiswhisper-mcp   phase 7
@@ -40,7 +40,9 @@ repository = "https://github.com/axelalbertkarlsson/KnegisWhisper"
 [workspace.dependencies]
 kw-app-core = { path = "crates/app-core" }
 kw-audio-core = { path = "crates/audio-core" }
+kw-meeting-core = { path = "crates/meeting-core" }
 kw-network-policy = { path = "crates/network-policy" }
+kw-notes-core = { path = "crates/notes-core" }
 kw-overlay = { path = "crates/overlay" }
 kw-platform = { path = "crates/platform" }
 kw-provider-probe = { path = "crates/provider-probe" }

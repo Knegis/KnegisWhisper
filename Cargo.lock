@@ -2507,6 +2507,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "kw-meeting-core"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "kw-security",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "kw-network-policy"
 version = "0.1.0"
 dependencies = [
@@ -2517,6 +2530,20 @@ dependencies = [
  "tokio",
  "tracing",
  "url",
+]
+
+[[package]]
+name = "kw-notes-core"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "kw-storage",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
