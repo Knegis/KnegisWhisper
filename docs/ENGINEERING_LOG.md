@@ -107,11 +107,25 @@ Unchanged from the Phases 1–4 entry, restated here so they are not buried:
   tagged `v*` releases carry source only, which is what made this look impossible at first.
   macOS gets an xcframework — a library for embedding in an Xcode project, not a server — so it
   is recorded as `NotPublished` with a reason and needs a macOS CI job of our own.
-- **AEC helper and the five Windows native helpers** still come from `OpenWhispr/openwhispr`
-  release assets. The C/Swift source is in-repo and MIT, so this is a CI build-and-publish job.
-  Needed before meetings work.
-- **`nircmd`** is still unpinned and unhashed. Leaning towards dropping it: it is only the
-  third-tier Windows paste fallback and `SendInput` now works.
+- ~~**AEC helper and the five Windows native helpers**~~ — **settled**, see
+  [PORTING_MATRIX.md](PORTING_MATRIX.md). Two corrections came out of looking properly. First,
+  this tree never fetched any of them; the claim that they "still come from OpenWhispr release
+  assets" described *upstream's* arrangement, not ours. Second, they do not block meetings —
+  system audio does, and echo cancellation only matters on speakers.
+
+  The five Windows helpers are reimplemented in Rust rather than rebuilt and published. One
+  already was: `windows-fast-paste.c` is `platform::window::send_ctrl_v`. Only the AEC helper
+  stays a binary we build, because it wraps WebRTC's audio processing module.
+
+  Worth recording for whoever writes that build: **the two third-party inputs cannot be pinned the
+  same way.** Abseil's GitHub archive is byte-stable and takes an ordinary sha256. The webrtc-apm
+  tarball is generated per request by googlesource — two downloads seconds apart differed in
+  length and digest — so it needs a content digest over the extracted tree, which *is* stable
+  across downloads. Pinning that URL by archive hash would fail on every build, and a pin that
+  always fails gets deleted by the first person it inconveniences. Both measured values are in the
+  porting matrix. Upstream pins both by commit and verifies neither.
+- ~~**`nircmd`**~~ — **dropped**, as leaned towards: third-tier Windows paste fallback only, and
+  `SendInput` works.
 
 ---
 
