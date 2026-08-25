@@ -184,3 +184,40 @@ KnegisWhisper is MIT; Pluely is GPL-3.0. Treat any verbatim Pluely code in a pul
 defect. `UPSTREAM_AUDIT.md` records its techniques as a specification to implement against, and
 the crates it selects (`cpal`, `wasapi`, `cidre`, `libpulse-binding`, `hound`, `ringbuf`,
 `tauri-nspanel`) are independently available.
+
+## Deliberate behavioural divergences
+
+Each of these is a place where following upstream faithfully would have carried a defect across.
+Every one has a test.
+
+| # | Upstream | Here | Why |
+| --- | --- | --- | --- |
+| 1 | `transcriptionRoute.ts:290-307` terminal fallback returns `provider:"openai"`, `keyRef:"openai"` for any unrecognised id | `RouteError::UnknownProvider` | A typo in a provider id sent the user's audio to a provider they never chose, using a credential configured for something else. Note the distinction kept: *absent* configuration still defaults to OpenAI, because the user chose nothing; an *unrecognised* id fails closed. |
+| 2 | `constants.ts:59` `buildApiUrl` falls back to `https://api.openai.com/v1` | `UrlError` | Same class of bug, second instance: an empty or unparseable configured base URL silently became OpenAI. |
+| 3 | `chatRouting.js` classifies anything outside `CLOUD_CHAT_PROVIDERS` as `local` | `ChatRouteError::UnknownProvider`, with the cloud set **derived from the registry** | A "local" route goes to llama.cpp on loopback, so a cloud provider missing from the hardcoded set produced a connection failure that blamed the local model. This is the bug Berget hit. Deriving the set fixes the class, not the instance. |
+| 4 | `resolveByokModel` accepts an empty custom model id via `allowCustomModelId: true` | Falls back to a concrete default | An empty model id produces a request with no model. |
+| 5 | `proxied` transport | `Transport::ProviderClient` | Nothing is proxied through a vendor; it means the provider needs its own client. Given the brief forbids hidden remote fallbacks, a transport that *reads* as a proxy was worth renaming. |
+| 6 | 25 MiB constant with Berget special-cased to `null` inside routing code | `maxUploadBytes` per provider in the registry | Same behaviour, no special case, and one place to change it. |
+| 7 | `google_calendar_tokens.refresh_token` as a plaintext SQLite column | `token_ref` naming an OS credential-store slot | A security defect that would have been ported faithfully by accident. `assert_no_credential_columns` fails if any credential-shaped column reappears. |
+| 8 | ~70 `ALTER TABLE` blocks replayed on every boot; `pragma user_version` used only as a data-seed sentinel | One flattened `0001_initial.sql` and `sqlx::migrate!` | The on-disk schema version was unknowable from the database. |
+| 9 | No meeting capability object | `MeetingProviderCapabilities` | Calling code could not ask whether a provider honours keyterms. Two providers accept them and ignore them, and one caps at 100 and truncates silently. |
+| 10 | Errors returned inside the route union | `Result` | Upstream has no choice in JavaScript; in Rust a `Result` makes ignoring the error impossible. |
+
+### Preserved exactly, because each prevents a credential going somewhere it should not
+
+- The `custom` branch fails closed when its URL still equals the default OpenAI base — Custom
+  selected but never configured. Passing it through ships the custom credential and the audio to
+  OpenAI.
+- xAI drops a language outside its 25-language set, so inverse text normalisation via
+  `format=true` stays valid.
+- Tinfoil hosts are refused as plain custom endpoints, because Tinfoil needs its attested client.
+- The FTS5 external-content table and its three triggers.
+- The ASCII-safe cache path fallback: the native whisper and sherpa binaries fail on paths
+  containing spaces or non-ASCII characters, which a Windows account named `Ann Marie` is enough
+  to trigger.
+- The clipboard-restore rule: restore the user's clipboard only if it still holds what we pasted.
+- Silero VAD off by default for dictation. On a pause-heavy dictation, VAD can strip the speech
+  and leave whisper decoding near-silence seeded with the dictionary prompt — returning the
+  dictionary words as the transcript.
+- The speech gate fails **open** when it cannot measure. Discarding a dictation the user spoke is
+  worse than transcribing silence.

@@ -10,8 +10,21 @@ search, and a lightweight privacy overlay.
 **No account. No subscription. No telemetry. No hosted backend.** Cloud providers are used only
 when you configure them with your own credentials, and requests go straight to the provider.
 
-> **Status: early development.** Phase 0 (upstream audit and parity contracts) is complete.
-> Phase 1 (Tauri foundation) is in progress. Nothing is installable yet.
+> **Status: early development. Not installable yet, and not usable end to end.**
+>
+> | Phase | State |
+> | --- | --- |
+> | 0 — Upstream audit and parity contracts | Complete |
+> | 1 — Tauri foundation | Complete. Boots to a dashboard, lives in the tray, registers hotkeys, creates a capture-excluded overlay. |
+> | 2 — Dictation | Cores complete and tested: capture, speech gating, route resolution, batch execution, the session state machine. **Not yet wired end to end** — the whisper.cpp sidecar is not downloaded or managed, so local transcription returns an honest "not implemented". |
+> | 3 — Reasoning | Routing, request shaping, and chat dispatch complete. Cleanup works against any OpenAI-compatible provider. Bedrock, Azure, and Vertex refuse honestly. |
+> | 4 — Meetings and notes | Notes, folders, search, and transcript export complete. The meeting *contract* and capability model are complete; the five WebSocket clients are not written. |
+> | 5–9 | Not started. |
+>
+> Every capability claim in the settings screen is read back from the operating system rather
+> than assumed, so what the application says it can do is what it can do. Where something is
+> unimplemented it says so, rather than failing quietly. See
+> [PLATFORM_SUPPORT.md](docs/PLATFORM_SUPPORT.md).
 
 ## What it will do
 

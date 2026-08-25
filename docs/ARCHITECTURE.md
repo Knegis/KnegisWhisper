@@ -179,6 +179,14 @@ enum CaptureExclusion {
 No code path may report `Active` by assumption. That is the specific defect found in Pluely,
 and `PLATFORM_SUPPORT.md` is where the result surfaces.
 
+## Meeting providers, and what is not built
+
+`meeting-core` holds the contract — the trait, the capability model, and the allowlist derived
+from it — and none of the five WebSocket clients. That is a deliberate stopping point: each client
+needs real credentials against a live service to verify, and one that compiles without ever
+having connected is worth very little. `is_allowed` returns true only for a provider with a
+client, so the gap is visible in the type rather than described in a document.
+
 ## Storage
 
 SQLite via `sqlx`, owned entirely by the `storage` crate.

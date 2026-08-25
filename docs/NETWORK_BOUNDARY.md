@@ -88,6 +88,31 @@ Ported from `urlAudioDownloader.js` and non-negotiable: HTTPS only; DNS resoluti
 rejection of private and link-local addresses; a 500 MB download cap; at most 3 redirects; a
 6-hour duration cap; and a 30-second stall timeout.
 
+## Plaintext HTTP
+
+HTTPS always, with one exemption: `explicitly-configured-self-hosted-endpoint` may use plain
+HTTP **to a private address**. Loopback, the RFC 1918 ranges, link-local, `.local`, `.internal`,
+`.home.arpa`, and single-label hostnames all count as private; everything else does not, and no
+other purpose gets the exemption at all. A test asserts both halves of that.
+
+The exemption covers the whole private range rather than only loopback because a model server on
+another machine on the user's own network is an ordinary setup, and refusing it would mean the
+only way to use one is to put a certificate on it. That is a real trade — audio and any
+configured credential cross the local network in the clear — and it belongs to the user, for an
+endpoint they typed in themselves.
+
+**The purpose is a property of the destination, not the feature.** A self-hosted whisper server
+is reached with `explicitly-configured-self-hosted-endpoint`, not
+`user-configured-transcription-provider`, even though the request is a transcription. Getting
+that backwards is not cosmetic: it was a real bug, caught by a test, in which a local whisper or
+llama.cpp server could never be reached because the policy layer refused the scheme before
+sending, and the error blamed the scheme rather than the configuration.
+
+`is_private_host` lives in `crates/network-policy` and route resolution delegates to it, so the
+security layer and the routing layer cannot disagree about what counts as private. They did
+disagree once — route resolution accepted the private range while the policy layer accepted only
+loopback — which meant an endpoint the settings screen accepted was refused at send time.
+
 ## Self-hosted and no-auth endpoints
 
 Users may configure endpoints requiring bearer tokens, Azure `api-key` headers, or no
