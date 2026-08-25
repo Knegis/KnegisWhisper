@@ -13,6 +13,7 @@ members = [
     "crates/provider-registry",
     "crates/reasoning-core",
     "crates/security",
+    "crates/sidecar",
     "crates/transcription-core",
     "crates/storage",
 ]
@@ -49,6 +50,7 @@ kw-provider-probe = { path = "crates/provider-probe" }
 kw-provider-registry = { path = "crates/provider-registry" }
 kw-reasoning-core = { path = "crates/reasoning-core" }
 kw-security = { path = "crates/security" }
+kw-sidecar = { path = "crates/sidecar" }
 kw-storage = { path = "crates/storage" }
 kw-transcription-core = { path = "crates/transcription-core" }
 
@@ -90,6 +92,10 @@ ringbuf = "0.4"
 # Platform
 arboard = { version = "3", default-features = false }
 windows = "0.58"
+
+# Sidecars
+sha2 = "0.10"
+sysinfo = { version = "0.32", default-features = false, features = ["system"] }
 
 # Utilities
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
