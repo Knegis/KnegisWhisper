@@ -137,14 +137,16 @@ impl Target {
 }
 
 /// How a downloaded asset is packed.
+///
+/// Only the two forms the pinned assets actually use. A variant for `tar.bz2`
+/// (which sherpa-onnx uses) is deliberately absent rather than present and
+/// unimplemented: an enum arm that fails at runtime is a promise the type made
+/// and the code did not keep. It gets added by the commit that can extract one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ArchiveKind {
     Zip,
     TarGz,
-    TarBz2,
-    /// The asset is the executable itself, with no container.
-    Bare,
 }
 
 /// Whether a sidecar can be installed on a given target at all.

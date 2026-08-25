@@ -19,6 +19,11 @@ tracing.workspace = true
 tokio.workspace = true
 sha2.workspace = true
 sysinfo.workspace = true
+zip.workspace = true
+tar.workspace = true
+flate2.workspace = true
+kw-network-policy.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "fs"] }

@@ -33,15 +33,16 @@
 //! | [`manifest`] | What a sidecar is; digest and target types |
 //! | [`catalog`] | Loading and validating `config/sidecars.json` |
 //! | [`integrity`] | Proving a downloaded file is the pinned one |
+//! | [`install`] | Download, verify, unpack -- strictly in that order |
 //! | [`resolve`] | Finding an installed sidecar, or saying why not |
 //! | [`port`] | Choosing a free loopback port from a declared range |
 //! | [`pid`] | Remembering what we started, so a crash can be cleaned up |
 //! | [`reap`] | Stopping what a previous run left behind, safely |
 //!
-//! Downloading, extracting, and process lifecycle build on these and land in
-//! the commits that follow.
+//! Process lifecycle builds on these and lands in the commit that follows.
 
 pub mod catalog;
+pub mod install;
 pub mod integrity;
 pub mod manifest;
 pub mod pid;
@@ -50,6 +51,7 @@ pub mod reap;
 pub mod resolve;
 
 pub use catalog::{Catalog, SCHEMA_VERSION};
+pub use install::{extract, install, InstallError, Installed, Progress};
 pub use integrity::IntegrityError;
 pub use manifest::{
     ArchiveKind, Asset, Availability, DigestError, PortRange, Sha256Digest, SidecarSpec, Source,

@@ -96,6 +96,12 @@ windows = "0.58"
 # Sidecars
 sha2 = "0.10"
 sysinfo = { version = "0.32", default-features = false, features = ["system"] }
+# Pure-Rust decompression on purpose: cmake, ninja, and clang are not installed
+# on the development machine, so a dependency that shells out to a C toolchain
+# would make the workspace unbuildable here.
+zip = { version = "2", default-features = false, features = ["deflate"] }
+tar = "0.4"
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 
 # Utilities
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
