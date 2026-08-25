@@ -20,7 +20,7 @@
 //! provider ids only.
 
 use kw_network_policy::{NetworkPolicy, RequestPurpose};
-use kw_security::{CredentialStore, Secret};
+use kw_security::{CredentialStore, KeyRef, Secret};
 use serde::Serialize;
 
 use crate::local::{Inference, LocalTranscriber};
@@ -71,11 +71,16 @@ pub enum TranscriptionError {
     #[error("the request to {provider} failed: {detail}")]
     Transport { provider: String, detail: String },
 
-    #[error(
-        "{provider} needs its own client, which is not implemented yet. Choose a provider \
-         that uses the standard API, or use a local model."
-    )]
-    ClientNotImplemented { provider: String },
+    /// A provider this build will not send to, with the reason.
+    ///
+    /// The advice used to be baked in here -- "choose a provider that uses the
+    /// standard API" -- and it was written when the answer was the same for all
+    /// four of these providers. It is not: three have clients now, and the
+    /// fourth is refused *deliberately* rather than pending, so a message
+    /// calling it unimplemented would send someone looking for a feature nobody
+    /// intends to add in that form. The layer that knows why supplies the reason.
+    #[error("{provider}: {reason}")]
+    ClientNotImplemented { provider: String, reason: String },
 
     // The remedy is deliberately not baked in here. This layer knows the server
     // is not answering; it does not know whether a model is installed, which
@@ -168,14 +173,28 @@ impl<'a> Executor<'a> {
         match transport {
             Transport::Local => self.transcribe_locally(wav).await,
 
-            Transport::ProviderClient { provider, .. } => {
-                // Honest refusal rather than a silent substitution. Falling back
-                // to a generic POST here would send audio to an endpoint that
-                // does not exist for these providers, and falling back to
-                // *another provider* is exactly what the brief forbids.
-                Err(TranscriptionError::ClientNotImplemented {
-                    provider: format!("{provider:?}").to_lowercase(),
-                })
+            Transport::ProviderClient {
+                provider,
+                model,
+                language,
+                max_upload_bytes,
+                corti,
+            } => {
+                // Three of the four have a client now. The fourth is Tinfoil and
+                // it is refused on purpose -- see
+                // `clients::why_tinfoil_is_refused`. Falling back to a generic
+                // POST for any of them would send audio to an endpoint that does
+                // not exist for it, and falling back to *another provider* is
+                // exactly what the brief forbids.
+                let shaped = crate::clients::shape(
+                    *provider,
+                    model.as_deref(),
+                    language.as_deref(),
+                    corti.as_ref(),
+                )?;
+
+                self.check_size(shaped.provider, *max_upload_bytes, wav.len())?;
+                self.post_client(&shaped, model.as_deref(), wav).await
             }
 
             Transport::HttpBatch {
@@ -281,6 +300,149 @@ impl<'a> Executor<'a> {
         }
 
         Ok(Some(secret))
+    }
+
+    /// Send a request one of the provider clients shaped.
+    ///
+    /// Separate from `post_multipart` because the differences are real: the
+    /// fields are per-provider rather than the OpenAI three, there may be extra
+    /// headers, and Corti needs a token fetched first. Sharing one function
+    /// would mean a parameter for each of those, which is how a shared function
+    /// becomes two functions with a flag.
+    async fn post_client(
+        &self,
+        shaped: &crate::clients::ShapedRequest,
+        model: Option<&str>,
+        wav: Vec<u8>,
+    ) -> Result<Transcript, TranscriptionError> {
+        // Byte count only. Never the audio, never the transcript.
+        tracing::info!(
+            provider = shaped.provider,
+            bytes = wav.len(),
+            "sending audio for transcription"
+        );
+
+        let slot =
+            KeyRef::new(shaped.provider).ok_or_else(|| TranscriptionError::MissingCredential {
+                slot: shaped.provider.to_owned(),
+            })?;
+        let stored = self
+            .credentials
+            .get(&slot)
+            .ok()
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| TranscriptionError::MissingCredential {
+                slot: shaped.provider.to_owned(),
+            })?;
+
+        // Corti's stored secret is a client secret, not a bearer token, so it is
+        // exchanged first. The other two send it directly.
+        let bearer = if shaped.provider == "corti" {
+            self.corti_token(shaped, &stored).await?
+        } else {
+            stored
+        };
+
+        let part = reqwest::multipart::Part::bytes(wav)
+            .file_name("audio.wav")
+            .mime_str("audio/wav")
+            .map_err(|e| TranscriptionError::Transport {
+                provider: shaped.provider.to_owned(),
+                detail: e.to_string(),
+            })?;
+
+        let mut form = reqwest::multipart::Form::new().part("file", part);
+        for (name, value) in &shaped.fields {
+            form = form.text(name.clone(), value.clone());
+        }
+
+        let mut request = self.policy.post(shaped.purpose, &shaped.endpoint)?;
+        for (name, value) in &shaped.headers {
+            request = request.header(name, value);
+        }
+        request = request.bearer_auth(bearer.expose());
+
+        let response =
+            request
+                .multipart(form)
+                .send()
+                .await
+                .map_err(|e| TranscriptionError::Transport {
+                    provider: shaped.provider.to_owned(),
+                    detail: e.to_string(),
+                })?;
+
+        let status = response.status().as_u16();
+        let body = response
+            .text()
+            .await
+            .map_err(|e| TranscriptionError::Transport {
+                provider: shaped.provider.to_owned(),
+                detail: e.to_string(),
+            })?;
+
+        crate::clients::interpret(shaped.provider, model, status, &body)
+    }
+
+    /// Exchange Corti client credentials for an access token.
+    ///
+    /// A request of its own, under the same purpose: it is one action the user
+    /// configured. The client id is the tenant header the shaped request already
+    /// carries, which is why this takes the whole request rather than two strings.
+    async fn corti_token(
+        &self,
+        shaped: &crate::clients::ShapedRequest,
+        client_secret: &Secret,
+    ) -> Result<Secret, TranscriptionError> {
+        let client_id = shaped
+            .headers
+            .iter()
+            .find(|(name, _)| name == "Tenant-Name")
+            .map(|(_, value)| value.as_str())
+            .ok_or_else(|| TranscriptionError::ClientNotImplemented {
+                provider: "corti".to_owned(),
+                reason: "the shaped request carries no tenant, so there is nothing to \
+                         authenticate as"
+                    .to_owned(),
+            })?;
+
+        // The environment is in the endpoint host, which the client built.
+        let environment = shaped
+            .endpoint
+            .strip_prefix("https://api.")
+            .and_then(|rest| rest.split('.').next())
+            .unwrap_or("eu");
+
+        let form = crate::clients::corti_token_request(client_id, client_secret);
+
+        let response = self
+            .policy
+            .post(
+                shaped.purpose,
+                &crate::clients::corti_token_endpoint(environment),
+            )?
+            .header(
+                reqwest::header::CONTENT_TYPE,
+                "application/x-www-form-urlencoded",
+            )
+            .body(form.expose().to_owned())
+            .send()
+            .await
+            .map_err(|e| TranscriptionError::Transport {
+                provider: "corti (token exchange)".to_owned(),
+                detail: e.to_string(),
+            })?;
+
+        let status = response.status().as_u16();
+        let body = response
+            .text()
+            .await
+            .map_err(|e| TranscriptionError::Transport {
+                provider: "corti (token exchange)".to_owned(),
+                detail: e.to_string(),
+            })?;
+
+        crate::clients::interpret_token(status, &body)
     }
 
     async fn post_multipart(
@@ -678,8 +840,12 @@ mod tests {
             .await
             .unwrap_err()
         {
-            TranscriptionError::ClientNotImplemented { provider } => {
+            TranscriptionError::ClientNotImplemented { provider, reason } => {
                 assert_eq!(provider, "tinfoil");
+                // The refusal carries its reason now. Tinfoil is not pending; it
+                // is refused because an unattested request would present as
+                // Tinfoil while providing none of what the name means.
+                assert!(reason.contains("attestation"), "{reason}");
             }
             other => panic!("expected an honest refusal, got {other:?}"),
         }

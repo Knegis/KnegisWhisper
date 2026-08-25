@@ -769,6 +769,9 @@ pub async fn dictation_set_cloud_provider(
     runtime: tauri::State<'_, Arc<DictationRuntime>>,
     provider: String,
     model: String,
+    // Corti only, and ignored for every other provider.
+    corti_environment: Option<String>,
+    corti_tenant: Option<String>,
 ) -> Result<(), String> {
     let registry = kw_provider_registry::registry().map_err(|err| err.to_string())?;
 
@@ -779,10 +782,30 @@ pub async fn dictation_set_cloud_provider(
         .map_err(|err| err.to_string())?;
 
     let mut settings = runtime.route_settings().await;
-    settings.cloud_transcription_provider = Some(provider);
+    settings.cloud_transcription_provider = Some(provider.clone());
     settings.cloud_transcription_model = Some(resolved);
     settings.use_local_whisper = false;
     settings.transcription_mode = Some("providers".to_owned());
+
+    // Corti alone needs two more values, and neither has a safe default: the
+    // environment is in the hostname and the tenant scopes the account, so a
+    // guess reaches a real endpoint under somebody else's tenancy. Refused here
+    // rather than stored and discovered at the end of a dictation.
+    if provider == "corti" {
+        let environment = corti_environment
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .ok_or("Corti needs an environment, for example \"eu\".")?;
+        let tenant = corti_tenant
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .ok_or("Corti needs a tenant name; it scopes the request to your account.")?;
+
+        settings.corti_environment = Some(environment.to_owned());
+        settings.corti_tenant = Some(tenant.to_owned());
+    }
 
     kw_storage::settings::set(runtime.db.pool(), ROUTE_SETTINGS_KEY, &settings)
         .await

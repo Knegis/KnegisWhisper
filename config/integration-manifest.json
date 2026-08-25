@@ -82,8 +82,8 @@
       ],
       "backend": "crates/transcription-core",
       "ui": "Settings > Transcription",
-      "reachable": false,
-      "note": "A key can be stored and the surface is built, but the route resolves to Transport::ProviderClient and the executor refuses with ClientNotImplemented. Unreachable until that client exists -- offering it as selectable would be configuring something that cannot run."
+      "reachable": true,
+      "note": "Reachable: crates/transcription-core/src/clients.rs shapes its request and reads its response, tested against recorded fixtures. No live call -- that needs a key this project does not have; see docs/PLATFORM_SUPPORT.md."
     },
     "transcription:mistral": {
       "status": "rewired-to-direct-byok",
@@ -98,8 +98,8 @@
       ],
       "backend": "crates/transcription-core",
       "ui": "Settings > Transcription",
-      "reachable": false,
-      "note": "A key can be stored and the surface is built, but the route resolves to Transport::ProviderClient and the executor refuses with ClientNotImplemented. Unreachable until that client exists -- offering it as selectable would be configuring something that cannot run."
+      "reachable": true,
+      "note": "Reachable: crates/transcription-core/src/clients.rs shapes its request and reads its response, tested against recorded fixtures. No live call -- that needs a key this project does not have; see docs/PLATFORM_SUPPORT.md."
     },
     "transcription:corti": {
       "status": "rewired-to-direct-byok",
@@ -114,8 +114,8 @@
       ],
       "backend": "crates/transcription-core",
       "ui": "Settings > Transcription",
-      "reachable": false,
-      "note": "A key can be stored and the surface is built, but the route resolves to Transport::ProviderClient and the executor refuses with ClientNotImplemented. Unreachable until that client exists -- offering it as selectable would be configuring something that cannot run."
+      "reachable": true,
+      "note": "Reachable: crates/transcription-core/src/clients.rs shapes its request and reads its response, tested against recorded fixtures. No live call -- that needs a key this project does not have; see docs/PLATFORM_SUPPORT.md. Corti also takes an environment and a tenant on Settings > Transcription, because neither has a safe default: the environment is in the hostname and the tenant scopes the account."
     },
     "transcription:tinfoil": {
       "status": "rewired-to-direct-byok",
@@ -131,7 +131,7 @@
       "backend": "crates/transcription-core",
       "ui": "Settings > Transcription",
       "reachable": false,
-      "note": "A key can be stored and the surface is built, but the route resolves to Transport::ProviderClient and the executor refuses with ClientNotImplemented. Unreachable until that client exists -- offering it as selectable would be configuring something that cannot run."
+      "note": "Deliberately unreachable, not unfinished. Tinfoil's proposition is an attested enclave: the client verifies an attestation document against a hardware root of trust before sending anything. A plain HTTPS POST to the same host would transcribe correctly and provide none of that, while appearing in the UI as Tinfoil -- a confidentiality claim the request did not earn. route.rs already refuses a Tinfoil host configured as a custom endpoint for this reason; implementing the client as an unattested POST would defeat that from the inside."
     },
     "reasoning:openai": {
       "status": "rewired-to-direct-byok",

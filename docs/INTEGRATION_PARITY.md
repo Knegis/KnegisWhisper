@@ -84,14 +84,14 @@ frontend backlog, sized in integrations rather than in adjectives:
 | Surface | Entries | Surface built |
 | --- | --- | --- |
 | `Settings > Meetings` | 6 | no |
-| `Settings > Transcription` | 4 | yes — these four need a provider client that does not exist |
-| `Settings > Transcription > Local` | 4 | yes — whisper only; Parakeet and Nemotron have no sidecar |
+| `Settings > Transcription > Local` | 4 | yes — whisper only; sherpa is blocked, see BUILD_PLAN.md B4 |
+| `Settings > Transcription` | 1 | yes — Tinfoil, declined pending enclave attestation |
 | `Integrations > Calendar` | 3 | no |
 | `Notes > Upload` | 3 | no |
 | `Integrations > CLI` | 1 | no |
 | `Integrations > MCP` | 1 | no |
 
-**42 integrations are reachable today**, up from 8: the fifteen credential slots, three
+**45 integrations are reachable today**, up from 8: the fifteen credential slots, six
 transcription providers, seven reasoning providers, three enterprise connectors, six local LLM
 families, the six whisper models, the local REST API, and transcript export.
 

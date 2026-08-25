@@ -237,8 +237,12 @@ pub async fn history_clear(state: State<'_, AppState>) -> CmdResult<u64> {
 pub enum Dispatch {
     /// A transport exists. Dictation would make a real request.
     Ready,
-    /// The provider needs its own client, which is not written yet. The route
-    /// refuses rather than substituting a generic POST or another provider.
+    /// A provider this build will not send to, with the reason.
+    ///
+    /// Not always "unwritten": Tinfoil is refused *deliberately*, because an
+    /// unattested request would present as Tinfoil while providing none of the
+    /// confidentiality the name means. The reason comes from the client rather
+    /// than being composed here, so it says which case this is.
     NeedsClient { reason: String },
     /// The route cannot be resolved at all with what is configured.
     Unresolvable { reason: String },
@@ -276,12 +280,27 @@ fn dispatch_for(registry: &kw_provider_registry::Registry, provider_id: &str) ->
         &settings,
         &kw_transcription_core::RouteRequest::default(),
     ) {
-        Ok(kw_transcription_core::Transport::ProviderClient { provider, .. }) => {
-            Dispatch::NeedsClient {
-                reason: format!(
-                    "{} needs its own client, which is not written yet",
-                    format!("{provider:?}").to_lowercase()
-                ),
+        Ok(kw_transcription_core::Transport::ProviderClient {
+            provider,
+            model,
+            language,
+            corti,
+            ..
+        }) => {
+            // Asked, not listed. Three of the four have clients now, and a
+            // hand-written set of which would have been a second copy of the
+            // match in `clients::shape` — parting company the first time one
+            // was added, which is exactly what just happened.
+            match kw_transcription_core::clients::shape(
+                provider,
+                model.as_deref(),
+                language.as_deref(),
+                corti.as_ref(),
+            ) {
+                Ok(_) => Dispatch::Ready,
+                Err(err) => Dispatch::NeedsClient {
+                    reason: err.to_string(),
+                },
             }
         }
         Ok(_) => Dispatch::Ready,
@@ -952,13 +971,33 @@ mod tests {
             );
         }
 
-        for id in ["xai", "mistral", "corti", "tinfoil"] {
-            match dispatch_for(registry, id) {
-                Dispatch::NeedsClient { reason } => {
-                    assert!(reason.contains(id), "{id}: {reason}");
-                }
-                other => panic!("{id} should need a client, got {other:?}"),
+        // Three of the four have clients now, so they dispatch — even though
+        // they still need a key, which `configured` says separately.
+        for id in ["xai", "mistral"] {
+            assert!(
+                matches!(dispatch_for(registry, id), Dispatch::Ready),
+                "{id} has a client and should dispatch"
+            );
+        }
+
+        // Corti has a client, and an unconfigured Corti does not resolve at all:
+        // the route refuses to guess an environment or a tenant. `Unresolvable`
+        // rather than `NeedsClient`, because the gap is configuration.
+        match dispatch_for(registry, "corti") {
+            Dispatch::Unresolvable { reason } => {
+                assert!(reason.contains("environment"), "{reason}");
+                assert!(reason.contains("Nothing was sent"), "{reason}");
             }
+            other => panic!("unconfigured corti should not be ready, got {other:?}"),
+        }
+
+        // Tinfoil is refused on purpose, and the reason says so rather than
+        // reading as an unfinished feature.
+        match dispatch_for(registry, "tinfoil") {
+            Dispatch::NeedsClient { reason } => {
+                assert!(reason.contains("attestation"), "{reason}");
+            }
+            other => panic!("tinfoil should be refused, got {other:?}"),
         }
     }
 

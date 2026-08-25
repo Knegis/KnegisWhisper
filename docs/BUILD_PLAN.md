@@ -20,7 +20,7 @@ What the same period established is that **the remaining work is mostly reachabi
 capability**. The parity gate now resolves each manifest entry through `config/ui-surfaces.json`
 and prints what cannot be configured:
 
-- **42 of 99 integrations are reachable**, up from 8 when this plan was written. 22 are
+- **45 of 99 integrations are reachable**, up from 8 when this plan was written. 19 are
   implemented-or-declared and unreachable; the other 35 are removed vendor services and internal
   platform capabilities with no surface by design.
 - **5 of 13 UI surfaces do not exist.** The 8 that do are one component each; `App.tsx` is the
@@ -52,7 +52,7 @@ platform work that no amount of UI can substitute for.
 | 0 — Audit and contracts | Complete | — |
 | 1 — Tauri foundation | Complete | 2 of 6 window roles exist; Linux/macOS hotkey fallbacks unwritten |
 | — Chunk A (shell, types, Providers) | **Done, unchecked by hand** | Storing a key and passing a connection test has not been done by a person on this machine |
-| 2 — Dictation | **Verified on Windows** | 4 of 7 transcription providers need their own client (`Transport::ProviderClient` → `ClientNotImplemented`); sherpa local ASR absent |
+| 2 — Dictation | **Verified on Windows** | 6 of 7 transcription providers reachable; Tinfoil declined pending enclave attestation. sherpa local ASR blocked — see B4 |
 | 3 — Reasoning | Complete, enterprise unverified | All three enterprise shapes written and tested against vectors and fixtures; no live call. No llama-server sidecar for `ChatRoute::Local`, which already points at `127.0.0.1:8221` |
 | 4 — Meetings and notes | Notes reachable; meetings contract only | No system audio anywhere; 5 WebSocket clients; 5 process detectors; AEC helper |
 | 5 — Calendars | Not started | No crate, no OAuth flow |
@@ -69,7 +69,7 @@ Why the order below is what it is. Each chunk's integrations-made-reachable:
 | --- | --- | --- |
 | A — shell + Providers *(done)* | 2 commands | **18**: 15 credential slots + 3 transcription providers |
 | B — Intelligence *(done but B4)* | 3 enterprise shapes, llama sidecar | 7 reasoning + 3 enterprise + 6 local LLM = **16**, all reachable |
-| C — transcription clients | 4 clients | **7** transcription (3 immediately from A, 4 from C) |
+| C — transcription clients *(done)* | 3 clients; the fourth declined | **6** of 7 transcription; Tinfoil needs enclave attestation |
 | D — system audio + natives | large | 0 directly; unblocks E entirely |
 | E — meetings | 5 clients + 5 detectors | **6** streams + 5 detectors |
 | F — calendars | new crate | **3** |
@@ -266,17 +266,33 @@ commit that uses it.
 
 ## Chunk C — the four transcription clients
 
-`crates/transcription-core/src/executor.rs:176` refuses `Transport::ProviderClient` honestly.
-Four clients, each genuinely different (`route.rs:100`):
+*(three of four done; the fourth is refused on purpose)*
 
-| Provider | Why it needs its own client |
-| --- | --- |
-| **Tinfoil** | Attested enclave; resolves its own model. Tinfoil hosts are already refused as plain custom endpoints — keep that. |
-| **Mistral** | Provider SDK shape. |
-| **xAI** | Takes no model parameter; already drops languages outside its 25-language set so `format=true` ITN stays valid. |
-| **Corti** | OAuth2 client-credentials, tenant- and environment-scoped; `CortiConfig` has no safe global default. |
+`crates/transcription-core/src/clients.rs` shapes the requests; `executor.rs` sends them.
 
-Test each against recorded wire fixtures. Live calls need keys and stay unverified.
+| Provider | State | The difference that matters |
+| --- | --- | --- |
+| **Mistral** | done | Its own model id, required — no default worth inventing, since a guess is a 422 that reads as a broken integration. |
+| **xAI** | done | **Takes no model parameter.** The route resolves `grok-stt` for its own bookkeeping and it is deliberately not forwarded. `format=true` travels only alongside a language, because the route has already dropped anything outside xAI's 25. |
+| **Corti** | done | OAuth2 client-credentials exchanged first, environment in the hostname, tenant as a header, and a response shaped as a list of utterances rather than a `text` field. |
+| **Tinfoil** | **refused, deliberately** | See below. |
+
+**Tinfoil is not unfinished; it is declined.** Its whole proposition is an attested enclave: the
+client verifies an attestation document against a hardware root of trust before sending anything.
+A plain HTTPS POST to the same host would transcribe correctly and provide none of that, while
+appearing in the UI as "Tinfoil" — a confidentiality claim the request did not earn. `route.rs`
+already refuses a Tinfoil host configured as a plain custom endpoint for exactly this reason, and
+implementing the client as an unattested POST would defeat that refusal from the inside. The error
+now carries that reason rather than "not implemented yet".
+
+**A real defect surfaced on the way.** `route.rs` defaulted Corti's environment to `us` and its
+tenant to `base`. Those are not placeholders — they compose a live endpoint under a tenancy nobody
+chose, so an unconfigured Corti would have sent the user's audio and their credential there. It
+refuses now, naming which of the two is missing, and `Settings > Transcription` grew the two
+fields. The tests that swept every registry provider had been passing *on those defaults*, which
+is how they survived.
+
+Live calls stay unverified: each needs a key this project does not have.
 
 ---
 
@@ -438,7 +454,8 @@ location, reusing what `IntegrationsApi` already renders.
 | sherpa-onnx local ASR | bz2 extraction, a `Transport::Stdio` executor path, and the binary on a machine to learn its per-model flags | Everything else local: whisper transcription and llama generation both work |
 | macOS `whisper-server` | A macOS CI job under this project's releases; upstream ships only an xcframework | Windows and Linux install today, digest-pinned |
 | 5 meeting clients, live | Keys for AssemblyAI, Deepgram, OpenAI Realtime, Corti, Tinfoil | Wire shapes vs fixtures; `meeting-stream:local`; detection; system audio |
-| 4 transcription clients, live | Keys for Tinfoil, Mistral, xAI, Corti | The clients and their fixtures |
+| 3 transcription clients, live | Keys for Mistral, xAI, Corti | The clients and their fixtures, both written |
+| Tinfoil | Enclave attestation verification — certificate-chain and measurement checks against a hardware root | Nothing. It is declined rather than pending, because an unattested request would claim Tinfoil's confidentiality without providing it |
 | Enterprise reasoning, live | AWS / Azure / GCP org credentials | SigV4 and body shaping vs published vectors |
 | Calendars, real round trip | Google + Microsoft OAuth client IDs as PKCE public clients | Flow, storage, UI, stub server |
 | AEC helper | cmake + MSVC/clang and a `contents: write` run | Meetings themselves — echo cancellation only matters on speakers |

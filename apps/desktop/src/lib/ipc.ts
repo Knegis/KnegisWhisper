@@ -595,6 +595,15 @@ export async function useLocalModel(useLocal: boolean): Promise<void> {
 export async function setCloudProvider(
   provider: string,
   model: string,
+  corti?: { environment: string; tenant: string },
 ): Promise<void> {
-  return invoke<void>("dictation_set_cloud_provider", { provider, model });
+  return invoke<void>("dictation_set_cloud_provider", {
+    provider,
+    model,
+    // Corti only. Rust refuses a Corti route with either missing rather than
+    // guessing: the environment is in the hostname and the tenant scopes the
+    // account, so a guess reaches a real endpoint under someone else's tenancy.
+    cortiEnvironment: corti?.environment ?? null,
+    cortiTenant: corti?.tenant ?? null,
+  });
 }

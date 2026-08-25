@@ -46,9 +46,13 @@ function dispatchLabel(d: Dispatch): string {
     case "ready":
       return "can be used";
     case "needs-client":
+      // Not always "unwritten". Tinfoil is refused on purpose, and the reason
+      // that arrives says which case it is.
       return d.reason;
     case "unresolvable":
-      return `cannot be routed: ${d.reason}`;
+      // Usually a missing setting rather than a missing feature — Corti with no
+      // environment or tenant is the case this exists for.
+      return d.reason;
   }
 }
 
@@ -72,6 +76,15 @@ export function SettingsTranscription({
   const [selected, setSelected] = useState<Record<string, string>>({});
   /** Per-provider outcome of the last press, so the control is never silent. */
   const [chosen, setChosen] = useState<Record<string, string>>({});
+  /**
+   * Corti's two scoping values.
+   *
+   * Only one provider needs them, so they are two fields rather than a generic
+   * per-provider settings map — a map would be a shape inviting a second
+   * provider's options into it, and no other provider has any.
+   */
+  const [cortiEnvironment, setCortiEnvironment] = useState<string | null>(null);
+  const [cortiTenant, setCortiTenant] = useState<string | null>(null);
 
   const choose = (p: ProviderSummary) => {
     const model = selected[p.id] ?? p.models[0];
@@ -82,8 +95,34 @@ export function SettingsTranscription({
       }));
       return;
     }
+
+    // Corti needs two more values, and Rust refuses the route without them.
+    // Checked here so the message names the empty box rather than arriving as a
+    // rejected command.
+    if (p.id === "corti") {
+      const environment = (cortiEnvironment ?? "").trim();
+      const tenant = (cortiTenant ?? "").trim();
+      if (!environment || !tenant) {
+        setChosen((prev) => ({
+          ...prev,
+          [p.id]:
+            "Corti needs both an environment and a tenant. Neither has a safe default.",
+        }));
+        return;
+      }
+    }
+
     void guard(async () => {
-      await setCloudProvider(p.id, model);
+      await setCloudProvider(
+        p.id,
+        model,
+        p.id === "corti"
+          ? {
+              environment: (cortiEnvironment ?? "").trim(),
+              tenant: (cortiTenant ?? "").trim(),
+            }
+          : undefined,
+      );
       setChosen((prev) => ({
         ...prev,
         [p.id]: p.configured
@@ -158,7 +197,7 @@ export function SettingsTranscription({
                 {dispatchLabel(p.dispatch)} · {p.modelCount} model
                 {p.modelCount === 1 ? "" : "s"} · slot <code>{p.credentialSlot}</code>
               </em>
-              {p.dispatch.state === "ready" ? (
+              {p.dispatch.state !== "needs-client" ? (
                 <span className="controls">
                   <select
                     aria-label={`model for ${p.name}`}
@@ -181,6 +220,22 @@ export function SettingsTranscription({
                   >
                     Use for dictation
                   </button>
+                </span>
+              ) : null}
+              {p.id === "corti" ? (
+                <span className="controls">
+                  <input
+                    aria-label="Corti environment"
+                    placeholder="environment, e.g. eu"
+                    value={cortiEnvironment ?? ""}
+                    onChange={(e) => setCortiEnvironment(e.target.value)}
+                  />
+                  <input
+                    aria-label="Corti tenant"
+                    placeholder="tenant name"
+                    value={cortiTenant ?? ""}
+                    onChange={(e) => setCortiTenant(e.target.value)}
+                  />
                 </span>
               ) : null}
               {chosen[p.id] ? <em className="row-detail">{chosen[p.id]}</em> : null}

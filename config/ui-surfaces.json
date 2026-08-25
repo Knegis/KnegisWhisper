@@ -12,7 +12,7 @@
       "surfaceId": "settings.transcription",
       "component": "apps/desktop/src/views/SettingsTranscription.tsx",
       "built": true,
-      "note": "Chooses the cloud provider and model for dictation, from the registry. Only the three providers whose transport exists can be selected; the other four report that they need a client nobody has written, rather than being silently unavailable. Keys are stored on Settings > Providers."
+      "note": "Chooses the cloud provider and model for dictation, from the registry. Six of the seven providers can be selected: three over HttpBatch and three through their own client in crates/transcription-core/src/clients.rs. Corti also takes an environment and a tenant here, because the router refuses to guess either. Tinfoil is listed with the reason it is refused -- an unattested request would present as Tinfoil while providing none of what the name means. Keys are stored on Settings > Providers."
     },
     "Settings > Transcription > Local": {
       "surfaceId": "settings.transcription.local",
