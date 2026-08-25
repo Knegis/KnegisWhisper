@@ -1,0 +1,71 @@
+KnegisWhisper
+Copyright (c) 2026 Axel Karlsson
+Licensed under the MIT License. See LICENSE.
+
+================================================================================
+Upstream attribution
+================================================================================
+
+KnegisWhisper is an independent application. It is not affiliated with,
+endorsed by, or supported by either project below, and it depends on neither
+project's hosted services, accounts, licensing, updaters, or telemetry.
+
+
+OpenWhispr — source of ported code
+--------------------------------------------------------------------------------
+    https://github.com/OpenWhispr/openwhispr
+    Copyright (c) OpenWhispr contributors
+    MIT License
+
+Portions of KnegisWhisper are derived from OpenWhispr, which is MIT-licensed and
+therefore compatible with this project's license. Copyright and license notices
+in derived files are retained in those files.
+
+Ported material is recorded per-integration in config/integration-manifest.json
+and described in docs/PORTING_MATRIX.md. The baseline commit is recorded in
+config/upstream-integration-baseline.json.
+
+
+Pluely — design reference only, NO CODE COPIED
+--------------------------------------------------------------------------------
+    https://github.com/iamsrikanthnani/pluely
+    Copyright (c) Srikanth Nani
+    GNU General Public License v3.0
+
+Pluely is licensed under the GPL-3.0. KnegisWhisper is MIT-licensed, so no
+Pluely source code is copied into this repository — copying it would make this
+application a copyleft derivative.
+
+Pluely was audited as a behavioural specification for Tauri window management,
+non-activating overlay behaviour, and per-platform system-audio capture. Those
+findings are documented in docs/UPSTREAM_AUDIT.md. The techniques described
+there are implemented independently, and the third-party crates involved
+(cpal, wasapi, cidre, libpulse-binding, hound, ringbuf, tauri-nspanel) are
+obtained directly from their own authors under their own licenses.
+
+Verbatim Pluely code in this repository would be a defect. Please report it.
+
+
+================================================================================
+Bundled third-party components
+================================================================================
+
+The application downloads the following at build or run time rather than
+vendoring them. Each is pinned by version and verified by digest; each retains
+its own license.
+
+    whisper.cpp                 MIT           ggml-org/whisper.cpp
+    llama.cpp                   MIT           ggml-org/llama.cpp
+    sherpa-onnx                 Apache-2.0    k2-fsa/sherpa-onnx
+    ONNX Runtime                MIT           microsoft/onnxruntime
+    FFmpeg                      LGPL-2.1+     ffmpeg.org
+    yt-dlp                      Unlicense     yt-dlp/yt-dlp
+    Qdrant                      Apache-2.0    qdrant/qdrant
+    WebRTC (audio processing)   BSD-3-Clause  webrtc.googlesource.com
+
+Model weights are downloaded at the user's request and are covered by their own
+licenses, which the user accepts at download time. The registry records each
+model's source repository.
+
+Rust and npm dependency licenses are enumerated by `cargo about` and
+`npm license` output in CI.
