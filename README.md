@@ -16,7 +16,7 @@ when you configure them with your own credentials, and requests go straight to t
 > | --- | --- |
 > | 0 — Upstream audit and parity contracts | Complete |
 > | 1 — Tauri foundation | Complete. Boots to a dashboard, lives in the tray, registers hotkeys, creates a capture-excluded overlay. |
-> | 2 — Dictation | Cores complete and tested: capture, speech gating, route resolution, batch execution, the session state machine. **Not yet wired end to end** — the whisper.cpp sidecar is not downloaded or managed, so local transcription returns an honest "not implemented". |
+> | 2 — Dictation | The local path works: the pinned whisper-server installs, the model downloads and its digest is checked, the server starts on loopback, and speech comes back as text. Proven by `crates/transcription-core/tests/local_dictation.rs` against the real binary. **Not yet reachable from the interface** — no Tauri command installs a model and no hotkey runs the session, so it works in tests before it works for a user. |
 > | 3 — Reasoning | Routing, request shaping, and chat dispatch complete. Cleanup works against any OpenAI-compatible provider. Bedrock, Azure, and Vertex refuse honestly. |
 > | 4 — Meetings and notes | Notes, folders, search, and transcript export complete. The meeting *contract* and capability model are complete; the five WebSocket clients are not written. |
 > | 5–9 | Not started. |

@@ -88,6 +88,47 @@ Ported from `urlAudioDownloader.js` and non-negotiable: HTTPS only; DNS resoluti
 rejection of private and link-local addresses; a 500 MB download cap; at most 3 redirects; a
 6-hour duration cap; and a 30-second stall timeout.
 
+## Loopback is not egress
+
+Talking to a sidecar this application started — `whisper-server`, and later `llama-server` — is
+not one of the seven purposes, because nothing leaves the machine. `NetworkPolicy::loopback`
+takes a **port and a path, never a URL**, and builds the address itself. There is no parameter
+that could aim it at another host and no way for a later change to widen it quietly, which is
+what makes "not egress" a property of the signature rather than a claim in a comment. The path is
+parsed rather than trusted, so one carrying a scheme or an authority is refused.
+
+The sidecars themselves are bound to `127.0.0.1` by `kw_sidecar::port`, which also takes no
+address, and `whisper-server` is passed `--host 127.0.0.1` explicitly. These servers have no
+authentication of any kind; a bind to `0.0.0.0` would be an open transcription endpoint on the
+network.
+
+## Redirects are followed, one validated hop at a time
+
+The client is built with `redirect::Policy::none()`, because a silently followed redirect is how
+an allowed host becomes a disallowed one. But downloads genuinely need redirects: a GitHub
+release asset answers with a 302 to a storage host, so refusing to follow means refusing to
+download.
+
+So they are followed *visibly*. Every hop is validated against the same purpose before it is
+requested, the chain is bounded at five, and the hops taken are returned so a report can say
+where the bytes actually came from rather than implying they came from the URL that was asked
+for. A redirect to plaintext, to a blocked vendor host, or to a scheme the purpose does not allow
+is an error naming both ends.
+
+## What `user-triggered-model-download` covers
+
+Both the model and the runtime that executes it. Installing local transcription is one action
+from the user's point of view, and it needs a `whisper-server` binary as well as a GGML model
+file; splitting them would say the boundary is about file types rather than about reasons, and
+the seven-purpose count is a stated constraint.
+
+The executable half is more dangerous, and that is answered by a stronger requirement rather than
+a separate purpose: `kw_sidecar::Asset` cannot be constructed without a pinned SHA-256, so a
+binary only ever reaches this purpose when its exact bytes were decided at review time. Models
+are held to a weaker check — size, with a tolerance, unless a digest happens to be known — and
+which check applied is reported to the caller rather than implied, because wrong weights produce
+bad transcripts while wrong code produces a compromised machine.
+
 ## Plaintext HTTP
 
 HTTPS always, with one exemption: `explicitly-configured-self-hosted-endpoint` may use plain
