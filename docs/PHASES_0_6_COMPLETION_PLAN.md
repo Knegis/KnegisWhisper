@@ -163,10 +163,81 @@ Chunk 1 adds: each adapter tested against the `app-core` state machine; the over
 the whole of a recording; the local API not starting unless the setting says so; the discovery
 file removed on stop.
 
-**And by hand on Windows, which is the only thing that actually proves it.** Airplane mode on.
-Hotkey in Notepad and in VS Code, speak, text lands at the cursor. Clipboard identical before and
-after. The dashboard never takes focus. A history row appears; disabling history stops it. Then
-`knegiswhisper health` and `knegiswhisper history list` against the running application.
+### The by-hand check on Windows
+
+The only thing that actually proves dictation works. Nothing below needs a developer — it is all
+buttons and one command — but it does need a person at the machine.
+
+**Before you start.** Only one copy of the application may run at a time. A second instance finds
+every shortcut already claimed by the first and registers none of them; the startup log now names
+each refusal, so if the Shortcuts section looks dead, check there first.
+
+```powershell
+# From the repository root. Stops anything left over, then launches.
+taskkill /F /IM knegiswhisper-desktop.exe 2>$null
+$env:KNEGISWHISPER_LOG = "info"
+cargo run -q -p knegiswhisper --bin knegiswhisper-desktop
+```
+
+The window is the dashboard. Leave the terminal visible — the log is the fastest diagnosis.
+
+1. **Check what the machine can do.** The Privacy overlay section should say capture exclusion is
+   active with `GetWindowDisplayAffinity` evidence, and that the overlay will not take focus. Both
+   are read back from the real window rather than assumed. Text insertion, under Dictation, should
+   say *Supported*.
+
+2. **Give dictation a working shortcut.** It has none: the inherited default `Control+Super` is two
+   modifiers and no key, and no cross-platform API can register that. In the Shortcuts section type
+   `Control+Shift+D` next to `dictation` and press **Set**. It applies immediately — the log says
+   `hotkeys re-registered live=5 total=5`.
+
+3. **Install a local model.** Under Local transcription, press **Install** on `tiny`. About 86 MB:
+   the pinned `whisper-server` and the model. `tiny` rather than the recommended `base` because it
+   is the one with a measured checksum — the row says `will be checksum verified`, where `base` says
+   `size checked only`, and for this check the stronger guarantee is worth more than the accuracy.
+
+4. **Point dictation at it.** Press **Use for dictation** on the installed model. The Route row
+   should change to `local model — audio stays on this machine`.
+
+5. **Turn on airplane mode.** Everything from here must work with no network at all. If it does
+   not, that is the finding.
+
+6. **Try it from the button first.** Press **Start dictation**, say a sentence, press **Stop and
+   transcribe**. This isolates the pipeline from the shortcut: if this works and the hotkey does
+   not, the problem is registration, not transcription. Watch for the overlay appearing while
+   recording and going away afterwards.
+
+7. **Now the hotkey, into Notepad.** Open Notepad, click into it, press `Control+Shift+D`, say
+   *"the quick brown fox jumps over the lazy dog"*, press it again. The text should appear at the
+   cursor. Repeat in VS Code — a different application with different focus handling.
+
+8. **Check the clipboard survived.** Copy something distinctive first (`KEEP ME`), dictate, then
+   paste. You should get `KEEP ME` back: dictation borrows the clipboard and puts it back only if
+   what is there is still what it pasted.
+
+9. **Check the dashboard never stole focus.** At no point during 7 should the caret have left
+   Notepad. If text appeared in the dashboard instead, non-activation failed despite reporting
+   otherwise.
+
+10. **Check history, then that it can be switched off.** The History section should show what you
+    dictated. A failed attempt should show its reason rather than `(empty)`.
+
+11. **Then the CLI.** Start the local API from its section — it is off by default — and:
+
+```powershell
+.\target\debug\knegiswhisper.exe health
+.\target\debug\knegiswhisper.exe history list
+.\target\debug\knegiswhisper.exe notes list
+```
+
+`health` should name the version; `history list` should show the dictation from step 7. Note the
+binary is `knegiswhisper.exe` and the application is `knegiswhisper-desktop.exe` — they used to
+collide, which is its own entry above.
+
+**What I would not be surprised to see fail:** the paste keystroke landing before the target
+application has read the clipboard (the delay is upstream's measured 500 ms, but it is a race
+either way), and the overlay's position being wrong or unhelpful, since nobody has looked at it.
+Both are worth reporting precisely rather than working around.
 
 The parity gate will want `developer:local-rest-api` and `developer:cli` marked reachable once
 they have a UI — deliberately not before, because a backend integration that cannot be configured
