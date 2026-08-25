@@ -2569,6 +2569,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "kw-reasoning-core"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "kw-network-policy",
+ "kw-provider-registry",
+ "kw-security",
+ "kw-transcription-core",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "kw-security"
 version = "0.1.0"
 dependencies = [

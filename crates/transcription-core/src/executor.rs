@@ -261,10 +261,7 @@ impl<'a> Executor<'a> {
             form = form.text("language", language.to_owned());
         }
 
-        let mut request = self.policy.post(
-            RequestPurpose::UserConfiguredTranscriptionProvider,
-            endpoint,
-        )?;
+        let mut request = self.policy.post(purpose_for(provider), endpoint)?;
 
         // The only two lines in this crate that touch a credential.
         if let Some(secret) = credential {
@@ -295,6 +292,24 @@ impl<'a> Executor<'a> {
             })?;
 
         interpret_response(provider, model, status, &body)
+    }
+}
+
+/// The egress purpose for a provider.
+///
+/// A self-hosted server is not "a transcription provider the user configured" in
+/// the boundary's terms -- it is an endpoint they pointed us at -- and only that
+/// purpose may use plaintext HTTP to a private address. Getting this wrong is not
+/// cosmetic: it makes a local whisper server unreachable, because the policy
+/// layer refuses the scheme before the request is sent.
+#[must_use]
+pub fn purpose_for(provider: &str) -> RequestPurpose {
+    match provider {
+        "self-hosted" => RequestPurpose::ExplicitlyConfiguredSelfHostedEndpoint,
+        // A custom endpoint may also be a machine on the user's own network, and
+        // route resolution has already refused a plaintext public host.
+        "custom" => RequestPurpose::ExplicitlyConfiguredSelfHostedEndpoint,
+        _ => RequestPurpose::UserConfiguredTranscriptionProvider,
     }
 }
 
@@ -641,6 +656,55 @@ mod tests {
         {
             TranscriptionError::Policy(_) => {}
             other => panic!("expected the policy to refuse it, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_self_hosted_provider_gets_the_purpose_that_permits_plaintext() {
+        // The bug this guards: with the transcription purpose, the policy layer
+        // refuses http:// before sending, so a local whisper server is
+        // unreachable and the error blames the scheme rather than the config.
+        assert_eq!(
+            purpose_for("self-hosted"),
+            RequestPurpose::ExplicitlyConfiguredSelfHostedEndpoint
+        );
+        assert_eq!(
+            purpose_for("custom"),
+            RequestPurpose::ExplicitlyConfiguredSelfHostedEndpoint
+        );
+        for cloud in ["openai", "groq", "berget"] {
+            assert_eq!(
+                purpose_for(cloud),
+                RequestPurpose::UserConfiguredTranscriptionProvider,
+                "{cloud}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_local_whisper_server_is_not_refused_by_the_policy_layer() {
+        let policy = NetworkPolicy::new().unwrap();
+        let creds = MemoryCredentialStore::new();
+        let executor = Executor::new(&policy, &creds);
+
+        // Port 9 discards, so this fails to connect -- which is exactly the
+        // proof wanted: it got past the policy check and tried to send.
+        let transport = Transport::HttpBatch {
+            provider: "self-hosted".to_owned(),
+            endpoint: "http://127.0.0.1:9/v1/audio/transcriptions".to_owned(),
+            model: "whisper-large-v3".to_owned(),
+            auth: Auth::none(),
+            max_upload_bytes: None,
+            language: None,
+        };
+
+        match executor
+            .transcribe(&transport, vec![0_u8; 64])
+            .await
+            .unwrap_err()
+        {
+            TranscriptionError::Transport { .. } => {}
+            other => panic!("expected a connection failure, not a policy refusal: {other:?}"),
         }
     }
 

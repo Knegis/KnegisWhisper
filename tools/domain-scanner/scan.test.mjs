@@ -11,7 +11,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 
@@ -233,6 +233,58 @@ test("globToRegExp handles the patterns the config actually uses", () => {
 
   // A dot in the glob is literal, not "any character".
   assert.ok(!globToRegExp("*.rs").test("axrs"));
+});
+
+test("the shipped patterns match their vendors and not ordinary English", () => {
+  // Every pattern here has been, or could be, written loosely enough to match
+  // a word rather than a vendor. `amplitude` is the live example: it is
+  // ordinary audio terminology (peak amplitude, signal amplitude), the bare
+  // `\bamplitude\b` pattern matched crates/audio-core's own DSP code, and the
+  // Phase 0 audit found the same false positive upstream where every apparent
+  // hit was `peakAmplitude`.
+  //
+  // Tightening a pattern is the right fix for that, but it is also exactly how
+  // a pattern quietly stops matching the thing it exists to block -- the first
+  // attempt here double-escaped the dot and stopped matching
+  // api.amplitude.com. So the shipped patterns are asserted against real
+  // vendor strings, not only against the clean tree.
+  const shipped = JSON.parse(
+    readFileSync(new URL("../../config/forbidden-domains.json", import.meta.url), "utf8")
+  );
+  const patterns = shipped.forbidden.map((f) => new RegExp(f.pattern, "i"));
+  const matchesSomething = (text) => patterns.some((p) => p.test(text));
+
+  // Real vendor strings that must still be caught.
+  for (const vendor of [
+    "https://api.amplitude.com/2/httpapi",
+    "@amplitude/analytics-browser",
+    "https://app.posthog.com/capture",
+    "tauri-plugin-posthog",
+    "https://o0.ingest.sentry.io/api",
+    "https://api.mixpanel.com/track",
+    "https://http-intake.logs.datadoghq.com",
+    "https://auth.openwhispr.com",
+    "https://api.openwhispr.com/api/v1",
+    "https://pluely.com/api/update",
+    "OpenWhispr/whisper.cpp",
+  ]) {
+    assert.ok(matchesSomething(vendor), `no pattern catches ${JSON.stringify(vendor)}`);
+  }
+
+  // Ordinary technical English that must not be caught.
+  for (const innocent of [
+    "let peak_amplitude = 0.0;",
+    "fn tone(amplitude: f32, len: usize)",
+    "the signal amplitude rises",
+    "audio segmentation and segment boundaries",
+    "this is a mixed panel layout",
+    "a sentry pattern guards the loop",
+  ]) {
+    assert.ok(
+      !matchesSomething(innocent),
+      `a pattern falsely matches ${JSON.stringify(innocent)}`
+    );
+  }
 });
 
 test("the repository itself is clean", () => {

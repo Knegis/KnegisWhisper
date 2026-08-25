@@ -89,39 +89,15 @@ pub fn normalize_base_url(value: &str) -> Option<String> {
 
 /// Whether a host is on a private network.
 ///
-/// Plaintext HTTP is acceptable to such a host — that is how a self-hosted
-/// whisper server on the same LAN is reached — and unacceptable to anything else.
+/// Delegates to `kw_network_policy`, deliberately. This predicate decides
+/// whether plaintext HTTP is acceptable, so it is a security rule -- and route
+/// resolution and the network boundary must not be able to disagree about it.
+/// They previously did: this layer accepted the whole private range while the
+/// policy layer accepted only loopback, so a self-hosted endpoint the settings
+/// screen accepted was refused at send time.
 #[must_use]
 pub fn is_private_host(host: &str) -> bool {
-    let host = host
-        .trim_start_matches('[')
-        .trim_end_matches(']')
-        .to_lowercase();
-
-    if host == "localhost" || host == "::1" || host.ends_with(".localhost") {
-        return true;
-    }
-    if host.ends_with(".local") || host.ends_with(".internal") || host.ends_with(".home.arpa") {
-        return true;
-    }
-
-    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
-        return match ip {
-            std::net::IpAddr::V4(v4) => {
-                v4.is_loopback() || v4.is_private() || v4.is_link_local() || v4.is_unspecified()
-            }
-            std::net::IpAddr::V6(v6) => {
-                // fc00::/7 is unique-local; fe80::/10 is link-local.
-                v6.is_loopback()
-                    || v6.is_unspecified()
-                    || (v6.segments().first().is_some_and(|s| s & 0xfe00 == 0xfc00))
-                    || (v6.segments().first().is_some_and(|s| s & 0xffc0 == 0xfe80))
-            }
-        };
-    }
-
-    // A single-label hostname (no dot) can only be resolved on a local network.
-    !host.contains('.')
+    kw_network_policy::is_private_host(host)
 }
 
 /// Whether `url` may carry audio and a credential.

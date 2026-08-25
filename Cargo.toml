@@ -9,6 +9,7 @@ members = [
     "crates/platform",
     "crates/provider-probe",
     "crates/provider-registry",
+    "crates/reasoning-core",
     "crates/security",
     "crates/transcription-core",
     "crates/storage",
@@ -18,7 +19,6 @@ members = [
 # The brief asks for vertical slices over broad unfinished scaffolding, so an
 # empty crate is not created just to reserve its name.
 #
-#   crates/reasoning-core     phase 3
 #   crates/meeting-core       phase 4
 #   crates/notes-core         phase 4
 #   crates/local-api          phase 6
@@ -45,6 +45,7 @@ kw-overlay = { path = "crates/overlay" }
 kw-platform = { path = "crates/platform" }
 kw-provider-probe = { path = "crates/provider-probe" }
 kw-provider-registry = { path = "crates/provider-registry" }
+kw-reasoning-core = { path = "crates/reasoning-core" }
 kw-security = { path = "crates/security" }
 kw-storage = { path = "crates/storage" }
 kw-transcription-core = { path = "crates/transcription-core" }
