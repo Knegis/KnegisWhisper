@@ -9,7 +9,8 @@ this prose — are the contract:
 | File | Role |
 | --- | --- |
 | `config/upstream-integration-baseline.json` | Generated, frozen record of the upstream surface at `c4000db9`. Never hand-edited. |
-| `config/integration-manifest.json` | Hand-maintained declaration of intent: one entry per integration, each with a status. |
+| `config/integration-manifest.json` | Hand-maintained declaration of intent: one entry per integration, each with a status and, where a user configures it, a `reachable` claim. |
+| `config/ui-surfaces.json` | Hand-maintained. Every UI surface an entry may name, the component that renders it, and whether that component exists. |
 
 ## The gate
 
@@ -17,8 +18,8 @@ this prose — are the contract:
 node tools/integration-audit/verify-parity.mjs
 ```
 
-Reads only the two committed JSON files, never the upstream checkout, so it runs anywhere with
-no dependencies. It fails the build when:
+Reads only committed JSON and source files, never the upstream checkout, so it runs anywhere
+with no dependencies. It fails the build when:
 
 | Rule | Fails when |
 | --- | --- |
@@ -31,10 +32,66 @@ no dependencies. It fails the build when:
 | `frontend-without-backend` | An entry claims a working implementation but names no backend crate. |
 | `backend-without-ui` | A user-configurable integration names no UI surface. |
 | `incomplete-documentation` | A `kind: "documentation"` entry names no target path. |
+| `unknown-ui-surface` | An entry names a `ui` value absent from `config/ui-surfaces.json`. |
+| `missing-reachability` | A user-configurable entry does not declare `reachable`. Absent is a violation, not a default. |
+| `unreachable-surface` | An entry claims `reachable: true` through a surface that is not built. |
+| `incomplete-surface` | A declared surface lacks `surfaceId`, `component`, or `built`. |
+| `phantom-surface` | A surface is marked `built` but its component does not exist, or does not render its `data-surface` marker. |
 | `baseline-drift` | The manifest's pinned baseline commit no longer matches the baseline file. |
 
 Each rule has a negative test: the gate has been verified to actually fail for every class
-above, because a gate that only ever passes proves nothing.
+above, because a gate that only ever passes proves nothing. For the UI-surface rules that
+verification is itself committed and runs in CI:
+
+```sh
+node --test tools/integration-audit/verify-parity.test.mjs
+```
+
+## `built`, `reachable`, and why they are two fields
+
+`backend-without-ui` — rule 5, "a backend integration exists but cannot be configured in the
+UI" — only ever checked that the `ui` field was a **non-empty string**. Sixty-four entries named
+screens like `Settings > Meetings` and `Notes > Upload` that nobody had written, and the gate
+reported green throughout. A gate that cannot tell a screen from a string is the same defect it
+exists to catch, one level up.
+
+Two fields now answer two different questions.
+
+**`built`** is a property of a surface, and it is mechanical. `config/ui-surfaces.json` names the
+component, and the gate requires that file to exist and to render
+`data-surface="<surfaceId>"` on its root element. A source-text marker rather than a build
+artefact, so the check stays in the cheap contracts job that gates the rest of CI.
+
+**`reachable`** is a property of an entry, and it is a claim: a user can configure *this*
+integration through that surface. It may only be true where the surface is built.
+
+`Settings > Transcription` is the case that forced the split. The section exists, lists every
+provider, says whether a key is stored, and runs a real connection test — but **nothing anywhere
+in the application can store an API key**. `setProviderCredential` is exported from
+`apps/desktop/src/lib/ipc.ts` and never called. So the surface is built and not one provider is
+reachable through it, and collapsing the two fields would have to lie about one or the other.
+
+## The backlog
+
+On success the gate prints what is declared unreachable, grouped by surface. That list is the
+frontend backlog, sized in integrations rather than in adjectives:
+
+| Surface | Entries | Surface built |
+| --- | --- | --- |
+| `Settings > Providers` | 15 | no — there is no key entry anywhere |
+| `Settings > Transcription` | 7 | yes, but it cannot store a key |
+| `Settings > Intelligence` | 7 | no |
+| `Settings > Intelligence > Local` | 6 | no |
+| `Settings > Meetings` | 6 | no |
+| `Settings > Transcription > Local` | 4 | yes — whisper only; Parakeet and Nemotron have no sidecar |
+| `Settings > Intelligence > Enterprise` | 3 | no |
+| `Integrations > Calendar` | 3 | no |
+| `Notes > Upload` | 3 | no |
+| `Integrations > CLI` | 1 | no |
+| `Integrations > MCP` | 1 | no |
+
+Eight integrations are reachable today: the six whisper models, the local REST API, and
+transcript export.
 
 ## Status vocabulary
 
@@ -102,8 +159,10 @@ success the brief forbids.
 1. `node tools/integration-audit/generate-baseline.mjs --upstream <path>`
 2. Review the diff. If a count assertion fired, upstream changed shape — understand it before
    editing the `EXPECT` table.
-3. Update `config/integration-manifest.json` for any new or changed integration.
-4. `node tools/integration-audit/verify-parity.mjs` must pass.
+3. Update `config/integration-manifest.json` for any new or changed integration, including a
+   `reachable` claim for anything a user configures.
+4. Add any new UI surface to `config/ui-surfaces.json`.
+5. `node tools/integration-audit/verify-parity.mjs` must pass.
 
 The baseline generator emits deterministic output, so a no-op regeneration produces an empty
 `git diff`.

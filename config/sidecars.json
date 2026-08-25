@@ -10,7 +10,10 @@
         "release": "b4938",
         "pinnedBecause": "Tracking the newest release would let an upstream change alter transcription output between our releases with no diff to review. Upstream OpenWhispr hit this and pinned for the same reason (their #1348). Held at a tested build until a bump is deliberately reviewed."
       },
-      "portRange": { "first": 8178, "last": 8199 },
+      "transport": {
+        "kind": "loopback",
+        "portRange": { "first": 8178, "last": 8199 }
+      },
       "commandFragments": ["whisper-server"],
       "targets": {
         "windows-x86_64": {

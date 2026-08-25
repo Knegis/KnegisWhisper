@@ -160,9 +160,59 @@ backend / licensing / updater; PostHog; machine-uid; and the dead `telemetryEnab
 `DialogContent`, `DialogDescription`, `DialogHeader`, `DialogTitle`.
 
 **Build-time vendor coupling** (see `UPSTREAM_AUDIT.md`): re-source whisper.cpp from
-`ggml-org/whisper.cpp`; rebuild the AEC helper and five Windows helpers under this project's own
-releases (the C/Swift source is in-repo and MIT, so this is a CI job); pin and checksum `nircmd`
-or drop it, since it is only the third-tier Windows paste fallback.
+`ggml-org/whisper.cpp` — **done**, digest-pinned in `config/sidecars.json`; pin and checksum
+`nircmd` or drop it — **dropped**, it was only the third-tier Windows paste fallback and
+`SendInput` works. The five Windows helpers are settled below, and the AEC helper is the one
+remaining binary this project intends to build for itself.
+
+### The five Windows helpers are reimplemented, not inherited
+
+Upstream fetches each of these from its own GitHub releases with `fetchLatestRelease` and a tag
+*prefix* — unpinned, unhashed, whatever the newest matching tag happens to be — and then executes
+it. **This tree has never fetched any of them**: `config/sidecars.json` holds one entry, whisper,
+from `ggml-org`. So what follows closes an intent, not a live dependency. Earlier drafts of this
+document and the engineering log said these "still come from OpenWhispr release assets", which
+described upstream's arrangement rather than ours.
+
+The decision is to write Rust rather than publish six binaries. That is what `ARCHITECTURE.md`
+already claims — "Rust owns … audio capture, system audio, clipboard and text insertion, process
+detection" — and one of the six turned out to be done already.
+
+| Upstream helper | LOC | Replacement | Status |
+| --- | --- | --- | --- |
+| `windows-fast-paste.c` | 342 | `platform::window::send_ctrl_v`, native `SendInput` | **done** |
+| `windows-system-audio-helper.c` | 634 | Rust `wasapi` loopback behind the system-audio trait | chunk 3 |
+| `windows-key-listener.c` | 372 | Rust `SetWindowsHookExW` / `WH_KEYBOARD_LL`. This is the gap `platform/src/hotkey.rs:149` names, and what modifier-only, right-side-modifier, Globe/`Fn`, mouse-button and push-to-talk hotkeys all need | with chunk 3 |
+| `windows-text-monitor.c` | 251 | Rust UIAutomation focused-element read | with chunk 3 |
+| `windows-mic-listener.c` | 1425 | Rust `IAudioSessionManager2` | with chunk 3 |
+
+Upstream runs **one key-listener process per watched key**. An in-process hook replaces all of
+them, so this is fewer moving parts rather than a like-for-like port.
+
+### The AEC helper is the exception, and it is a build pipeline
+
+`meeting-aec-helper` wraps WebRTC's audio processing module, which has no Rust equivalent that
+is not itself a binding to the same C++. It stays a `Transport::Stdio` sidecar — a child driven
+over stdin and stdout, which is the shape `crates/sidecar` gained a type for.
+
+Its cost is not the six files of helper source. `native/meeting-aec-helper/CMakeLists.txt`
+requires a generated source manifest, and upstream's `scripts/lib/meeting-aec-build.js` (446
+lines) produces it by downloading the whole webrtc-apm module plus Abseil and running a Python
+generator over GN labels, with per-architecture AVX2 handling, across five targets.
+
+Two facts were measured before designing the pin, and they decide its shape:
+
+| Input | Pinned by | Why |
+| --- | --- | --- |
+| `abseil-cpp` @ `9ac7062b`, GitHub archive | `sha256:fd5062972ac6c5575bc8fb6fb1cd6e7c563730be96be4c17b8dcca74a9c5892d`, 2 268 399 bytes | Byte-stable: two downloads produced identical archives. |
+| `webrtc-apm` @ `08f235eb`, googlesource `+archive` | **content digest** `b2db82b1a06a28d965eeddc3928a43c5067cad820866907be29faf4e26f5c37b` over 735 files | **Not** byte-stable. Two downloads seconds apart differed in both length and hash — googlesource generates the tarball per request. The extracted tree is identical, so the pin is a sorted `path + file digest` roll-up rather than an archive hash. |
+
+An archive digest on that second URL would fail on every build, which is worse than no pin: it
+would be removed by whoever hit it first. Upstream pins both by commit only and verifies neither.
+
+**Echo cancellation is a quality feature, not a gate.** Without it, a meeting recorded on
+speakers picks up the far-end voice through the microphone and transcribes it twice; on headphones
+there is nothing to cancel. What blocks meetings is system audio, which is Rust work in chunk 3.
 
 **Identity:** appId `com.gizmolabs.openwhispr`, protocol `openwhispr://`, signing identity
 `Gizmo Labs Inc. (T832773L2J)`, Azure Trusted Signing endpoint, and Pluely's

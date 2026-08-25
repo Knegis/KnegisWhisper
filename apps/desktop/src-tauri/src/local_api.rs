@@ -26,6 +26,12 @@ pub const ENABLED_KEY: &str = "localApi.enabled";
 /// Whether the API listens unless told otherwise. It does not.
 pub const ENABLED_BY_DEFAULT: bool = false;
 
+/// How many times to re-allocate when something takes the port between the
+/// probe and the bind. Small on purpose: more than a couple of consecutive
+/// losses means the range is genuinely contended, and "every port is in use" is
+/// the honest report rather than a longer spin.
+const BIND_ATTEMPTS: u32 = 5;
+
 /// The running server, if there is one.
 pub struct LocalApiRuntime {
     db: Db,
@@ -104,12 +110,32 @@ impl LocalApiRuntime {
         // by scanning.
         let (first, last) = kw_local_api::PORT_RANGE;
         let range = kw_sidecar::PortRange { first, last };
-        let port = kw_sidecar::port::allocate(range, &kw_sidecar::BindProbe)
-            .map_err(|err| err.to_string())?;
 
-        let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port))
-            .await
-            .map_err(|err| format!("could not listen on 127.0.0.1:{port}: {err}"))?;
+        // Allocating a port and then binding it is inherently racy: the probe
+        // binds and drops, and anything on the machine may take the port in
+        // between — a second copy of the application, or another test in this
+        // same process. `port.rs` documents the mitigation as "the caller
+        // allocates again"; this is the caller doing it. Without the retry the
+        // race surfaced as a raw `os error 10048` from Start, and it was the
+        // test suite that noticed, failing a different test each run.
+        let mut attempt = 0;
+        let (port, listener) = loop {
+            attempt += 1;
+            let port = kw_sidecar::port::allocate(range, &kw_sidecar::BindProbe)
+                .map_err(|err| err.to_string())?;
+
+            match tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port)).await {
+                Ok(listener) => break (port, listener),
+                Err(err) if attempt < BIND_ATTEMPTS => {
+                    tracing::debug!(port, attempt, error = %err, "lost the race for a port, retrying");
+                }
+                Err(err) => {
+                    return Err(format!(
+                        "could not listen on 127.0.0.1:{port} after {attempt} attempts: {err}"
+                    ))
+                }
+            }
+        };
 
         let served = serve(
             listener,

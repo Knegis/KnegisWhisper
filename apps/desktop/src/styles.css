@@ -125,6 +125,67 @@ section {
   font-size: 0.75rem;
 }
 
+/* -------------------------------------------------------------------- notes */
+/*
+ * A vertical list whose rows carry their own controls, unlike `.purposes`,
+ * which is a wrapping row of pills and cannot hold a button per entry.
+ */
+
+.list {
+  margin: 0.75rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.list li {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  padding: 0.4rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.list li:last-child {
+  border-bottom: none;
+}
+
+/*
+ * `button` carries a top margin for the standalone buttons that end a section.
+ * Inline in a list row or beside a select, that margin drops the control below
+ * its own baseline.
+ */
+.list li button,
+.controls button {
+  margin-top: 0;
+}
+
+/* Several controls on one settings row lay out across, not down. */
+.controls {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.4rem;
+}
+
+/*
+ * The export preview is the file's exact bytes, so it must not be reflowed:
+ * SRT and VTT are line-oriented formats and a wrapped preview would not be a
+ * preview of what gets written.
+ */
+.preview {
+  margin: 0.75rem 0 0;
+  padding: 0.6rem 0.75rem;
+  max-height: 18rem;
+  overflow: auto;
+  background: rgb(124 156 255 / 6%);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 0.75rem;
+  white-space: pre;
+  tab-size: 2;
+}
+
 /* ------------------------------------------------------------------ overlay */
 /*
  * The overlay window is transparent, so the panel paints its own background.

@@ -40,6 +40,47 @@ fn init_tracing() {
     let _ = fmt().with_env_filter(filter).with_target(false).try_init();
 }
 
+/// Say so in the terminal when nothing is serving the frontend.
+///
+/// A development build loads the window from the Vite dev server rather than
+/// from bundled files, so `cargo run` on its own produces an application whose
+/// window says only "can't reach this page" — the webview's own error, which
+/// names neither the cause nor the fix. The Rust side starts perfectly and logs
+/// as if all were well, which is the worst combination: two honest components
+/// and no diagnosis. This is that diagnosis.
+///
+/// Loopback only, and only in a debug build. The URL comes from
+/// `tauri.conf.json` via the runtime config rather than being repeated here, so
+/// changing the dev port cannot make this message wrong.
+#[cfg(debug_assertions)]
+fn warn_if_nothing_serves_the_frontend(app: &tauri::App) {
+    use std::net::{TcpStream, ToSocketAddrs as _};
+    use std::time::Duration;
+
+    // Absent in a bundled build, where the frontend is on disk.
+    let Some(url) = app.config().build.dev_url.as_ref() else {
+        return;
+    };
+
+    let host = url.host_str().unwrap_or("127.0.0.1");
+    let port = url.port_or_known_default().unwrap_or(80);
+
+    let reachable = format!("{host}:{port}")
+        .to_socket_addrs()
+        .into_iter()
+        .flatten()
+        .any(|addr| TcpStream::connect_timeout(&addr, Duration::from_millis(300)).is_ok());
+
+    if !reachable {
+        tracing::warn!(
+            dev_url = %url,
+            "nothing is serving the frontend, so the window will show \"can't reach this page\". \
+             `cargo run` starts only the Rust half of the application. Run `npm run tauri:dev` \
+             from apps/desktop instead, or leave `npm run dev` running there in another terminal."
+        );
+    }
+}
+
 /// Build and run the application.
 ///
 /// Returns rather than panicking so the binary can report a startup failure as a
@@ -56,6 +97,10 @@ pub fn run() -> anyhow::Result<()> {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        // Registered so `commands::note_export_to_file` can open a save dialog
+        // from Rust. The renderer has no dialog permission and never sees a
+        // path — see the command's doc comment.
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             // No arguments: launching at login should behave exactly like
@@ -63,6 +108,11 @@ pub fn run() -> anyhow::Result<()> {
             None,
         ))
         .setup(|app| {
+            // First, because it explains a symptom the user is already looking
+            // at by the time the rest of this finishes.
+            #[cfg(debug_assertions)]
+            warn_if_nothing_serves_the_frontend(app);
+
             let handle = app.handle().clone();
 
             // Opening the database is the one thing that must succeed before the
@@ -95,6 +145,12 @@ pub fn run() -> anyhow::Result<()> {
             tauri::async_runtime::block_on(local.reap_stale());
 
             let shared = local.shared();
+
+            // The route survives a restart; the server process does not. Bring
+            // back whichever model the user was last dictating with, in the
+            // background so the window does not wait for a model to load.
+            local_model::resume_last_used(&local, &db);
+
             app.manage(std::sync::Arc::clone(&local));
 
             let session = std::sync::Arc::new(dictation::DictationRuntime::build(
@@ -170,6 +226,17 @@ pub fn run() -> anyhow::Result<()> {
             commands::provider_credential_present,
             commands::probe_providers,
             commands::import_openwhispr,
+            commands::notes_list,
+            commands::notes_search,
+            commands::notes_get,
+            commands::notes_create,
+            commands::notes_update,
+            commands::notes_delete,
+            commands::folders_list,
+            commands::folder_create,
+            commands::folder_delete,
+            commands::note_export,
+            commands::note_export_to_file,
             dictation::dictation_state,
             dictation::dictation_route,
             dictation::dictation_use_local,

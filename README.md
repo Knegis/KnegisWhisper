@@ -18,7 +18,7 @@ when you configure them with your own credentials, and requests go straight to t
 > | 1 — Tauri foundation | Complete. Boots to a dashboard, lives in the tray, registers hotkeys, creates a capture-excluded overlay. |
 > | 2 — Dictation | Wired end to end. The hotkey records, routes, transcribes, optionally cleans up, pastes at the cursor, and writes history; the overlay is visible for the whole recording. The local model installs and runs from the settings screen. **Not yet exercised by a person** — the automated proof is `crates/transcription-core/tests/local_dictation.rs`, and the by-hand check in `docs/PHASES_0_6_COMPLETION_PLAN.md` has not been done. |
 > | 3 — Reasoning | Routing, request shaping, and chat dispatch complete. Cleanup works against any OpenAI-compatible provider. Bedrock, Azure, and Vertex refuse honestly. |
-> | 4 — Meetings and notes | Notes, folders, search, and transcript export complete. The meeting *contract* and capability model are complete; the five WebSocket clients are not written. |
+> | 4 — Meetings and notes | Notes, folders, search, and transcript export are reachable from the dashboard — list, search, folder filter, and export to txt/md/json/srt/vtt through an OS save dialog. The meeting *contract* and capability model are complete; the five WebSocket clients are not written, and there is no system audio. |
 > | 5 — Calendars | Not started. |
 > | 6 — Local API and CLI | Complete. Off by default, started from the settings screen, which reports the discovery file's real permissions. The `knegiswhisper` CLI is tested against it as a compiled binary, exit codes included. |
 > | 7–9 | Not started. |
@@ -51,6 +51,7 @@ when you configure them with your own credentials, and requests go straight to t
 | [NETWORK_BOUNDARY.md](docs/NETWORK_BOUNDARY.md) | Every reason this app makes a network request |
 | [PLATFORM_SUPPORT.md](docs/PLATFORM_SUPPORT.md) | What works where, and what is unverified |
 | [PORTING_MATRIX.md](docs/PORTING_MATRIX.md) | How each upstream piece is handled |
+| [`config/ui-surfaces.json`](config/ui-surfaces.json) | Every UI surface an integration may claim, and whether it exists |
 | [SECURITY.md](docs/SECURITY.md) | Threat model, credential handling, reporting |
 | [UPSTREAM_AUDIT.md](docs/UPSTREAM_AUDIT.md) | Phase 0 audit of both upstream projects |
 

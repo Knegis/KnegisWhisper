@@ -122,6 +122,11 @@ tauri = { version = "2", features = [] }
 tauri-build = { version = "2", features = [] }
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-autostart = "2"
+# Used from Rust only, never from the renderer. The save dialog is opened by the
+# command that writes the file, so the chosen path never crosses the IPC boundary
+# and the frontend needs no dialog permission -- see docs/SECURITY.md on path
+# traversal through export.
+tauri-plugin-dialog = "2"
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

@@ -30,7 +30,8 @@
         "src/helpers/transcriptionRoute.ts"
       ],
       "backend": "crates/transcription-core",
-      "ui": "Settings > Transcription"
+      "ui": "Settings > Transcription",
+      "reachable": false
     },
     "transcription:groq": {
       "status": "rewired-to-direct-byok",
@@ -45,7 +46,8 @@
         "src/helpers/transcriptionRoute.ts"
       ],
       "backend": "crates/transcription-core",
-      "ui": "Settings > Transcription"
+      "ui": "Settings > Transcription",
+      "reachable": false
     },
     "transcription:berget": {
       "status": "rewired-to-direct-byok",
@@ -61,7 +63,8 @@
         "src/helpers/transcriptionRoute.ts"
       ],
       "backend": "crates/transcription-core",
-      "ui": "Settings > Transcription"
+      "ui": "Settings > Transcription",
+      "reachable": false
     },
     "transcription:xai": {
       "status": "rewired-to-direct-byok",
@@ -75,7 +78,8 @@
         "src/helpers/transcriptionRoute.ts"
       ],
       "backend": "crates/transcription-core",
-      "ui": "Settings > Transcription"
+      "ui": "Settings > Transcription",
+      "reachable": false
     },
     "transcription:mistral": {
       "status": "rewired-to-direct-byok",
@@ -89,7 +93,8 @@
         "src/helpers/transcriptionRoute.ts"
       ],
       "backend": "crates/transcription-core",
-      "ui": "Settings > Transcription"
+      "ui": "Settings > Transcription",
+      "reachable": false
     },
     "transcription:corti": {
       "status": "rewired-to-direct-byok",
@@ -103,7 +108,8 @@
         "src/helpers/transcriptionRoute.ts"
       ],
       "backend": "crates/transcription-core",
-      "ui": "Settings > Transcription"
+      "ui": "Settings > Transcription",
+      "reachable": false
     },
     "transcription:tinfoil": {
       "status": "rewired-to-direct-byok",
@@ -117,7 +123,8 @@
         "src/helpers/transcriptionRoute.ts"
       ],
       "backend": "crates/transcription-core",
-      "ui": "Settings > Transcription"
+      "ui": "Settings > Transcription",
+      "reachable": false
     },
     "reasoning:openai": {
       "status": "rewired-to-direct-byok",
@@ -140,7 +147,8 @@
         "src/services/ai/inferenceProviders/index.ts"
       ],
       "backend": "crates/reasoning-core",
-      "ui": "Settings > Intelligence"
+      "ui": "Settings > Intelligence",
+      "reachable": false
     },
     "reasoning:anthropic": {
       "status": "rewired-to-direct-byok",
@@ -163,7 +171,8 @@
         "src/services/ai/inferenceProviders/index.ts"
       ],
       "backend": "crates/reasoning-core",
-      "ui": "Settings > Intelligence"
+      "ui": "Settings > Intelligence",
+      "reachable": false
     },
     "reasoning:gemini": {
       "status": "rewired-to-direct-byok",
@@ -184,7 +193,8 @@
         "src/services/ai/inferenceProviders/index.ts"
       ],
       "backend": "crates/reasoning-core",
-      "ui": "Settings > Intelligence"
+      "ui": "Settings > Intelligence",
+      "reachable": false
     },
     "reasoning:groq": {
       "status": "rewired-to-direct-byok",
@@ -201,7 +211,8 @@
         "src/services/ai/inferenceProviders/index.ts"
       ],
       "backend": "crates/reasoning-core",
-      "ui": "Settings > Intelligence"
+      "ui": "Settings > Intelligence",
+      "reachable": false
     },
     "reasoning:tinfoil": {
       "status": "rewired-to-direct-byok",
@@ -217,7 +228,8 @@
         "src/services/ai/inferenceProviders/index.ts"
       ],
       "backend": "crates/reasoning-core",
-      "ui": "Settings > Intelligence"
+      "ui": "Settings > Intelligence",
+      "reachable": false
     },
     "reasoning:berget": {
       "status": "rewired-to-direct-byok",
@@ -231,7 +243,8 @@
         "src/services/ai/inferenceProviders/index.ts"
       ],
       "backend": "crates/reasoning-core",
-      "ui": "Settings > Intelligence"
+      "ui": "Settings > Intelligence",
+      "reachable": false
     },
     "reasoning:corti": {
       "status": "rewired-to-direct-byok",
@@ -248,7 +261,8 @@
         "src/services/ai/inferenceProviders/index.ts"
       ],
       "backend": "crates/reasoning-core",
-      "ui": "Settings > Intelligence"
+      "ui": "Settings > Intelligence",
+      "reachable": false
     },
     "enterprise:bedrock": {
       "status": "rewired-to-direct-byok",
@@ -269,6 +283,7 @@
       ],
       "backend": "crates/reasoning-core",
       "ui": "Settings > Intelligence > Enterprise",
+      "reachable": false,
       "note": "Org credentials supplied by the user or organization. No OpenWhispr org account, policy server, or SSO."
     },
     "enterprise:azure": {
@@ -282,6 +297,7 @@
       ],
       "backend": "crates/reasoning-core",
       "ui": "Settings > Intelligence > Enterprise",
+      "reachable": false,
       "note": "Deployment-name driven; upstream ships an empty models array."
     },
     "enterprise:vertex": {
@@ -298,6 +314,7 @@
       ],
       "backend": "crates/reasoning-core",
       "ui": "Settings > Intelligence > Enterprise",
+      "reachable": false,
       "note": "Org credentials supplied by the user or organization. No OpenWhispr org account, policy server, or SSO."
     },
     "local-llm:qwen": {
@@ -324,7 +341,8 @@
         "src/helpers/llamaVulkanManager.js"
       ],
       "backend": "crates/reasoning-core",
-      "ui": "Settings > Intelligence > Local"
+      "ui": "Settings > Intelligence > Local",
+      "reachable": false
     },
     "local-llm:mistral": {
       "status": "ported-with-new-rust-implementation",
@@ -341,7 +359,8 @@
         "src/helpers/llamaVulkanManager.js"
       ],
       "backend": "crates/reasoning-core",
-      "ui": "Settings > Intelligence > Local"
+      "ui": "Settings > Intelligence > Local",
+      "reachable": false
     },
     "local-llm:llama": {
       "status": "ported-with-new-rust-implementation",
@@ -358,7 +377,8 @@
         "src/helpers/llamaVulkanManager.js"
       ],
       "backend": "crates/reasoning-core",
-      "ui": "Settings > Intelligence > Local"
+      "ui": "Settings > Intelligence > Local",
+      "reachable": false
     },
     "local-llm:openai-oss": {
       "status": "ported-with-new-rust-implementation",
@@ -373,7 +393,8 @@
         "src/helpers/llamaVulkanManager.js"
       ],
       "backend": "crates/reasoning-core",
-      "ui": "Settings > Intelligence > Local"
+      "ui": "Settings > Intelligence > Local",
+      "reachable": false
     },
     "local-llm:gemma": {
       "status": "ported-with-new-rust-implementation",
@@ -398,7 +419,8 @@
         "src/helpers/llamaVulkanManager.js"
       ],
       "backend": "crates/reasoning-core",
-      "ui": "Settings > Intelligence > Local"
+      "ui": "Settings > Intelligence > Local",
+      "reachable": false
     },
     "local-llm:liquidai": {
       "status": "ported-with-new-rust-implementation",
@@ -417,7 +439,8 @@
         "src/helpers/llamaVulkanManager.js"
       ],
       "backend": "crates/reasoning-core",
-      "ui": "Settings > Intelligence > Local"
+      "ui": "Settings > Intelligence > Local",
+      "reachable": false
     },
     "local-asr:whisper-base": {
       "status": "ported-with-new-rust-implementation",
@@ -428,7 +451,8 @@
         "src/helpers/whisperServer.js"
       ],
       "backend": "crates/transcription-core",
-      "ui": "Settings > Transcription > Local"
+      "ui": "Settings > Transcription > Local",
+      "reachable": true
     },
     "local-asr:whisper-large": {
       "status": "ported-with-new-rust-implementation",
@@ -439,7 +463,8 @@
         "src/helpers/whisperServer.js"
       ],
       "backend": "crates/transcription-core",
-      "ui": "Settings > Transcription > Local"
+      "ui": "Settings > Transcription > Local",
+      "reachable": true
     },
     "local-asr:whisper-medium": {
       "status": "ported-with-new-rust-implementation",
@@ -450,7 +475,8 @@
         "src/helpers/whisperServer.js"
       ],
       "backend": "crates/transcription-core",
-      "ui": "Settings > Transcription > Local"
+      "ui": "Settings > Transcription > Local",
+      "reachable": true
     },
     "local-asr:whisper-small": {
       "status": "ported-with-new-rust-implementation",
@@ -461,7 +487,8 @@
         "src/helpers/whisperServer.js"
       ],
       "backend": "crates/transcription-core",
-      "ui": "Settings > Transcription > Local"
+      "ui": "Settings > Transcription > Local",
+      "reachable": true
     },
     "local-asr:whisper-tiny": {
       "status": "ported-with-new-rust-implementation",
@@ -472,7 +499,8 @@
         "src/helpers/whisperServer.js"
       ],
       "backend": "crates/transcription-core",
-      "ui": "Settings > Transcription > Local"
+      "ui": "Settings > Transcription > Local",
+      "reachable": true
     },
     "local-asr:whisper-turbo": {
       "status": "ported-with-new-rust-implementation",
@@ -483,7 +511,8 @@
         "src/helpers/whisperServer.js"
       ],
       "backend": "crates/transcription-core",
-      "ui": "Settings > Transcription > Local"
+      "ui": "Settings > Transcription > Local",
+      "reachable": true
     },
     "local-asr:nemotron-3.5-asr-streaming-0.6b": {
       "status": "ported-with-new-rust-implementation",
@@ -496,6 +525,7 @@
       ],
       "backend": "crates/transcription-core",
       "ui": "Settings > Transcription > Local",
+      "reachable": false,
       "runtime": "online"
     },
     "local-asr:nemotron-speech-streaming-en-0.6b": {
@@ -509,6 +539,7 @@
       ],
       "backend": "crates/transcription-core",
       "ui": "Settings > Transcription > Local",
+      "reachable": false,
       "runtime": "online"
     },
     "local-asr:parakeet-tdt-0.6b-v3": {
@@ -522,6 +553,7 @@
       ],
       "backend": "crates/transcription-core",
       "ui": "Settings > Transcription > Local",
+      "reachable": false,
       "runtime": null
     },
     "local-asr:parakeet-unified-en-0.6b": {
@@ -535,6 +567,7 @@
       ],
       "backend": "crates/transcription-core",
       "ui": "Settings > Transcription > Local",
+      "reachable": false,
       "runtime": null
     },
     "meeting-stream:assemblyai-realtime": {
@@ -545,7 +578,8 @@
         "src/helpers/realtimeTokenProviders.js"
       ],
       "backend": "crates/meeting-core",
-      "ui": "Settings > Meetings"
+      "ui": "Settings > Meetings",
+      "reachable": false
     },
     "meeting-stream:corti-realtime": {
       "status": "ported",
@@ -555,7 +589,8 @@
         "src/helpers/realtimeTokenProviders.js"
       ],
       "backend": "crates/meeting-core",
-      "ui": "Settings > Meetings"
+      "ui": "Settings > Meetings",
+      "reachable": false
     },
     "meeting-stream:deepgram-realtime": {
       "status": "rewired-to-direct-byok",
@@ -565,7 +600,8 @@
         "src/helpers/realtimeTokenProviders.js"
       ],
       "backend": "crates/meeting-core",
-      "ui": "Settings > Meetings"
+      "ui": "Settings > Meetings",
+      "reachable": false
     },
     "meeting-stream:openai-realtime": {
       "status": "rewired-to-direct-byok",
@@ -575,7 +611,8 @@
         "src/helpers/realtimeTokenProviders.js"
       ],
       "backend": "crates/meeting-core",
-      "ui": "Settings > Meetings"
+      "ui": "Settings > Meetings",
+      "reachable": false
     },
     "meeting-stream:tinfoil-realtime": {
       "status": "ported",
@@ -585,7 +622,8 @@
         "src/helpers/realtimeTokenProviders.js"
       ],
       "backend": "crates/meeting-core",
-      "ui": "Settings > Meetings"
+      "ui": "Settings > Meetings",
+      "reachable": false
     },
     "meeting-stream:local": {
       "status": "ported-with-new-rust-implementation",
@@ -594,7 +632,8 @@
         "src/helpers/parakeetWsServer.js"
       ],
       "backend": "crates/meeting-core",
-      "ui": "Settings > Meetings"
+      "ui": "Settings > Meetings",
+      "reachable": false
     },
     "credential:openai": {
       "status": "ported-with-new-rust-implementation",
@@ -607,6 +646,7 @@
       ],
       "backend": "crates/security",
       "ui": "Settings > Providers",
+      "reachable": false,
       "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10."
     },
     "credential:anthropic": {
@@ -620,6 +660,7 @@
       ],
       "backend": "crates/security",
       "ui": "Settings > Providers",
+      "reachable": false,
       "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10."
     },
     "credential:gemini": {
@@ -633,6 +674,7 @@
       ],
       "backend": "crates/security",
       "ui": "Settings > Providers",
+      "reachable": false,
       "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10."
     },
     "credential:groq": {
@@ -646,6 +688,7 @@
       ],
       "backend": "crates/security",
       "ui": "Settings > Providers",
+      "reachable": false,
       "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10."
     },
     "credential:berget": {
@@ -659,6 +702,7 @@
       ],
       "backend": "crates/security",
       "ui": "Settings > Providers",
+      "reachable": false,
       "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10."
     },
     "credential:xai": {
@@ -672,6 +716,7 @@
       ],
       "backend": "crates/security",
       "ui": "Settings > Providers",
+      "reachable": false,
       "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10."
     },
     "credential:mistral": {
@@ -685,6 +730,7 @@
       ],
       "backend": "crates/security",
       "ui": "Settings > Providers",
+      "reachable": false,
       "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10."
     },
     "credential:openrouter": {
@@ -698,6 +744,7 @@
       ],
       "backend": "crates/security",
       "ui": "Settings > Providers",
+      "reachable": false,
       "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10."
     },
     "credential:tinfoil": {
@@ -711,6 +758,7 @@
       ],
       "backend": "crates/security",
       "ui": "Settings > Providers",
+      "reachable": false,
       "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10."
     },
     "credential:corti": {
@@ -724,6 +772,7 @@
       ],
       "backend": "crates/security",
       "ui": "Settings > Providers",
+      "reachable": false,
       "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10."
     },
     "credential:note-formatting-custom": {
@@ -737,6 +786,7 @@
       ],
       "backend": "crates/security",
       "ui": "Settings > Providers",
+      "reachable": false,
       "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10."
     },
     "credential:translation-custom": {
@@ -750,6 +800,7 @@
       ],
       "backend": "crates/security",
       "ui": "Settings > Providers",
+      "reachable": false,
       "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10."
     },
     "credential:dictation-agent-custom": {
@@ -763,6 +814,7 @@
       ],
       "backend": "crates/security",
       "ui": "Settings > Providers",
+      "reachable": false,
       "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10."
     },
     "credential:dictation-agent-vision-custom": {
@@ -776,6 +828,7 @@
       ],
       "backend": "crates/security",
       "ui": "Settings > Providers",
+      "reachable": false,
       "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10."
     },
     "credential:chat-agent-custom": {
@@ -789,6 +842,7 @@
       ],
       "backend": "crates/security",
       "ui": "Settings > Providers",
+      "reachable": false,
       "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10."
     },
     "diarization-model:3dspeaker-campplus-en": {
@@ -839,6 +893,7 @@
       ],
       "backend": "crates/app-core/calendar",
       "ui": "Integrations > Calendar",
+      "reachable": false,
       "note": "Token exchange already goes direct to Google; no OpenWhispr broker. Must switch from the shipped client_secret to a PKCE-only installed-app client, and move refresh tokens out of plaintext SQLite into the credential store."
     },
     "calendar:microsoft": {
@@ -850,6 +905,7 @@
       ],
       "backend": "crates/app-core/calendar",
       "ui": "Integrations > Calendar",
+      "reachable": false,
       "note": "Direct to login.microsoftonline.com. Same refresh-token relocation as Google."
     },
     "calendar:apple": {
@@ -864,6 +920,7 @@
       ],
       "backend": "crates/platform/macos",
       "ui": "Integrations > Calendar",
+      "reachable": false,
       "note": "Native EventKit, macOS only. Unverifiable on the current dev machine."
     },
     "developer:local-rest-api": {
@@ -874,6 +931,7 @@
       ],
       "backend": "crates/local-api",
       "ui": "Integrations > API",
+      "reachable": true,
       "note": "Upstream is a good model: loopback-only, 0600 discovery file, timingSafeEqual bearer, 1 MB body cap, 15 routes under /v1/. Port nearly as-is."
     },
     "developer:cli": {
@@ -884,6 +942,7 @@
       ],
       "backend": "tools/knegiswhisper",
       "ui": "Integrations > CLI",
+      "reachable": false,
       "note": "NOT a port. The CLI is a separate npm package absent from the repo; only its documented noun-verb surface and exit codes 0-4 survive as a spec."
     },
     "developer:mcp": {
@@ -894,6 +953,7 @@
       ],
       "backend": "tools/knegiswhisper-mcp",
       "ui": "Integrations > MCP",
+      "reachable": false,
       "note": "NOT a port. Upstream MCP is a hosted Streamable-HTTP service; no local or stdio implementation exists in the checkout. Entirely new work."
     },
     "developer:agent-skills": {
@@ -964,7 +1024,8 @@
         "src/services/fileTranscription.ts"
       ],
       "backend": "crates/notes-core",
-      "ui": "Notes > Upload"
+      "ui": "Notes > Upload",
+      "reachable": false
     },
     "media:video-import": {
       "status": "ported-with-new-rust-implementation",
@@ -973,7 +1034,8 @@
         "src/helpers/ffmpegUtils.js"
       ],
       "backend": "crates/notes-core",
-      "ui": "Notes > Upload"
+      "ui": "Notes > Upload",
+      "reachable": false
     },
     "media:url-import": {
       "status": "ported-with-new-rust-implementation",
@@ -983,6 +1045,7 @@
       ],
       "backend": "crates/notes-core",
       "ui": "Notes > Upload",
+      "reachable": false,
       "note": "yt-dlp sidecar. Preserve the SSRF guards: HTTPS-only, private-address rejection after DNS, 500 MB cap, 3 redirects, 6 h duration cap, 30 s stall timeout."
     },
     "media:transcript-export": {
@@ -994,6 +1057,7 @@
       ],
       "backend": "crates/notes-core",
       "ui": "Notes > Export",
+      "reachable": true,
       "formats": [
         "txt",
         "md",

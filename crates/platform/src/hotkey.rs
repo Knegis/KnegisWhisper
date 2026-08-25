@@ -99,8 +99,17 @@ impl fmt::Display for HotkeyAction {
 }
 
 /// Modifier names the cross-platform accelerator syntax accepts.
-const MODIFIERS: [&str; 8] = [
+/// Recognised modifier spellings, compared case-insensitively.
+///
+/// `Ctrl` earns its place by measurement, not taste: the shortcut plugin
+/// registers `Ctrl+Shift+D` happily, and without this entry `Ctrl` counts as a
+/// key, so the whole accelerator was rejected as "it names 2 non-modifier keys".
+/// Being stricter than the platform is not caution — it refuses a shortcut that
+/// works, and blames the user's spelling for it. `Win` is deliberately absent:
+/// the plugin rejects that one too, so refusing it agrees with reality.
+const MODIFIERS: [&str; 9] = [
     "Control",
+    "Ctrl",
     "CommandOrControl",
     "CmdOrCtrl",
     "Command",

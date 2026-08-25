@@ -24,9 +24,7 @@
 use std::time::Duration;
 
 use kw_network_policy::NetworkPolicy;
-use kw_sidecar::{
-    manifest::PortRange, pid::PidStore, port, process, Catalog, HttpHealth, Launch, StartTimings,
-};
+use kw_sidecar::{pid::PidStore, port, process, Catalog, HttpHealth, Launch, StartTimings};
 use kw_transcription_core::local::{
     build_args, Inference, LocalTranscriber, ServerOptions, WhisperServer, HEALTH_PATH,
 };
@@ -76,10 +74,9 @@ async fn speech_goes_in_and_the_right_words_come_out() {
     );
 
     // 3. A free loopback port from the sidecar's declared range.
-    let range = PortRange {
-        first: spec.port_range.first,
-        last: spec.port_range.last,
-    };
+    let range = spec
+        .port_range()
+        .expect("whisper is a loopback server, so it declares a range");
     let chosen = port::allocate(range, &port::BindProbe).expect("a free port in the range");
 
     // 4. Start it.
