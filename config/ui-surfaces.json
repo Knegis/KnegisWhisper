@@ -1,0 +1,82 @@
+{
+  "$comment": "Every UI surface a config/integration-manifest.json entry may name, and whether it exists. `built` is mechanical: tools/integration-audit/verify-parity.mjs requires the named component to exist and to render data-surface=\"<surfaceId>\". The manifest's per-entry `reachable` is the claim that a user can actually configure that integration through the surface, and it may only be true where the surface is built. The two are separate because a surface can exist and still not configure everything it lists -- see Settings > Transcription below.",
+  "schemaVersion": 1,
+  "surfaces": {
+    "Settings > Providers": {
+      "surfaceId": "settings.providers",
+      "component": "apps/desktop/src/views/SettingsProviders.tsx",
+      "built": false,
+      "note": "There is no way to enter an API key anywhere in the application. `setProviderCredential` exists in apps/desktop/src/lib/ipc.ts and nothing calls it. Until this is built, every credential slot is unreachable and so is every provider that needs one."
+    },
+    "Settings > Transcription": {
+      "surfaceId": "settings.transcription",
+      "component": "apps/desktop/src/App.tsx",
+      "built": true,
+      "note": "Built, but nothing here is reachable yet. The section lists each provider, says whether a key is stored, and runs a real connection test -- but it cannot store the key, so a user cannot get a provider working from it. That is why `built` and `reachable` are separate fields."
+    },
+    "Settings > Transcription > Local": {
+      "surfaceId": "settings.transcription.local",
+      "component": "apps/desktop/src/App.tsx",
+      "built": true,
+      "note": "Offers whisper models only. Parakeet and Nemotron need the sherpa-onnx sidecar, which does not exist, so those four entries stay unreachable while the surface itself is built."
+    },
+    "Settings > Intelligence": {
+      "surfaceId": "settings.intelligence",
+      "component": "apps/desktop/src/views/SettingsIntelligence.tsx",
+      "built": false,
+      "note": "Cleanup and chat dispatch work in crates/reasoning-core with no screen to configure a route or a model."
+    },
+    "Settings > Intelligence > Local": {
+      "surfaceId": "settings.intelligence.local",
+      "component": "apps/desktop/src/views/SettingsIntelligenceLocal.tsx",
+      "built": false,
+      "note": "llama-server is pinned in the porting matrix and has no install or lifecycle code, let alone a screen."
+    },
+    "Settings > Intelligence > Enterprise": {
+      "surfaceId": "settings.intelligence.enterprise",
+      "component": "apps/desktop/src/views/SettingsIntelligenceEnterprise.tsx",
+      "built": false,
+      "note": "Bedrock, Azure and Vertex return ShapeNotImplemented today. Chunk 2 of the completion plan writes the request shapes; the screen comes with them."
+    },
+    "Settings > Meetings": {
+      "surfaceId": "settings.meetings",
+      "component": "apps/desktop/src/views/SettingsMeetings.tsx",
+      "built": false,
+      "note": "crates/meeting-core holds the trait and the capability model and none of the five WebSocket clients."
+    },
+    "Integrations > Calendar": {
+      "surfaceId": "integrations.calendar",
+      "component": "apps/desktop/src/views/IntegrationsCalendar.tsx",
+      "built": false,
+      "note": "Phase 5. No OAuth flow exists."
+    },
+    "Integrations > API": {
+      "surfaceId": "integrations.api",
+      "component": "apps/desktop/src/App.tsx",
+      "built": true
+    },
+    "Integrations > CLI": {
+      "surfaceId": "integrations.cli",
+      "component": "apps/desktop/src/views/IntegrationsCli.tsx",
+      "built": false,
+      "note": "The CLI is complete and tested against the running API as a compiled binary, but nothing in the application tells a user it exists or where the discovery file is."
+    },
+    "Integrations > MCP": {
+      "surfaceId": "integrations.mcp",
+      "component": "apps/desktop/src/views/IntegrationsMcp.tsx",
+      "built": false,
+      "note": "Phase 7. tools/knegiswhisper-mcp does not exist."
+    },
+    "Notes > Export": {
+      "surfaceId": "notes.export",
+      "component": "apps/desktop/src/App.tsx",
+      "built": true
+    },
+    "Notes > Upload": {
+      "surfaceId": "notes.upload",
+      "component": "apps/desktop/src/views/NotesUpload.tsx",
+      "built": false,
+      "note": "Phase 8. Audio, video and URL import need the ffmpeg and yt-dlp sidecars, neither of which is in config/sidecars.json."
+    }
+  }
+}

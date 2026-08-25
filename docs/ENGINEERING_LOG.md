@@ -41,11 +41,11 @@ badge or before the next merge to `main`.
 
 | Thing | State | What is missing |
 | --- | --- | --- |
-| Local transcription (Phase 2) | Works, in tests | The whole path is real: pinned sidecar install, digest-checked model download, loopback server, transcript. What is missing is the *interface* — a Tauri command to install a model and a hotkey that runs the dictation session with the local transcriber attached. It works before it is reachable. |
+| Local transcription (Phase 2) | Reachable, unconfirmed by hand | The interface exists now: install and server commands, a route the user can point at the local model, and a hotkey that runs the session. What is missing is a person pressing that hotkey and watching text appear — see the by-hand check in `docs/PHASES_0_6_COMPLETION_PLAN.md`. Green tests are not that. |
 | Meeting transcription (Phase 4) | Contract only | The five WebSocket clients. `is_allowed` returns true only for a provider with a client, so nothing claims otherwise. Each needs real credentials against a live service to verify. |
 | Enterprise reasoning (Bedrock, Azure, Vertex) | `ShapeNotImplemented` | The three request shapes. They refuse honestly rather than falling back. |
 | `storage::import::from_openwhispr` | Works, no UI | Deliberately absent from `config/integration-manifest.json` — adding it before it is reachable would be exactly the unconfigurable-backend the parity gate exists to catch. Add both together. |
-| Local API and CLI (Phase 6) | Works, in tests | Same gap as dictation: nothing in the application starts the server. The API, the discovery file, and the compiled CLI are complete and tested against each other. |
+| Local API and CLI (Phase 6) | Reachable, unconfirmed by hand | The application starts and stops the server now, off by default, with the discovery file's real permissions shown in settings. What is missing is the compiled CLI having been run against a running application by a person rather than by a test harness. |
 | Phases 5, 7–9 | Not started | Calendars, MCP, diarization + Qdrant, packaging. System audio and the meeting clients remain from Phase 4. |
 
 ### Claims that are unverified rather than verified
@@ -88,6 +88,12 @@ These are the places where CI going green means "it compiles", not "it works". E
   local model servers unreachable and produced an error message that blamed the wrong thing.
 - **Prefer deriving an allowlist over writing one.** The registry-derived cloud-provider set and
   the client-derived meeting allowlist each fix a class of bug rather than an instance.
+- **A development build is two processes, and instructions that name one are wrong.** `cargo run`
+  starts the Rust half; the window then loads from the Vite dev server in `tauri.conf.json` and,
+  with nothing serving it, shows the webview's own "can't reach this page" — while the log reports
+  a flawless startup. Both halves were honest and the pair was undiagnosable. A debug build now
+  probes `devUrl` at startup and names the fix in the log, which is the general shape: when a
+  component cannot see the failure it causes, make the component that *can* see it say so.
 
 ### Open decisions
 

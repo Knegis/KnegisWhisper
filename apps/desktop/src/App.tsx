@@ -2,14 +2,21 @@ import { useCallback, useEffect, useState } from "react";
 import {
   cancelDictation,
   clearHistory,
+  createFolder,
+  deleteFolder,
+  deleteNote,
+  exportNote,
+  exportNoteToFile,
   getDiagnostics,
   getDictationState,
+  getFolders,
   getHistory,
   getHotkeys,
   getInputDevices,
   getLocalApiStatus,
   getDictationRoute,
   getLocalStatus,
+  getNotes,
   getProviders,
   installLocalModel,
   isCaptureExclusionConfirmed,
@@ -20,6 +27,7 @@ import {
   onHotkey,
   onInstallProgress,
   probeProviders,
+  searchNotes,
   setInputDevice,
   startLocalApi,
   startLocalServer,
@@ -28,19 +36,25 @@ import {
   setHotkey,
   toggleDictation,
   useLocalModel,
+  EXPORT_FORMATS,
   type Accelerator,
   type CaptureExclusion,
   type Diagnostics,
   type DictationOutcome,
+  type ExportedTranscript,
+  type ExportFormat,
+  type Folder,
   type HotkeyReport,
   type InputDevice,
   type InstallProgress,
   type LocalApiStatus,
   type LocalStatus,
   type NonActivating,
+  type Note,
   type ProbeReport,
   type ProviderSummary,
   type RouteReport,
+  type SearchHit,
   type SessionState,
   type Transcription,
 } from "./lib/ipc";
@@ -198,12 +212,36 @@ function Dashboard() {
   const [route, setRoute] = useState<RouteReport | null>(null);
   const [draftKeys, setDraftKeys] = useState<Record<string, string>>({});
 
+  const [notes, setNotes] = useState<Note[]>([]);
+  const [folders, setFolders] = useState<Folder[]>([]);
+  const [folderFilter, setFolderFilter] = useState<number | null>(null);
+  const [query, setQuery] = useState("");
+  // `null` means "not searching" and is different from an empty array, which
+  // means "searched and found nothing". Collapsing the two would show the full
+  // note list as if it were the result.
+  const [hits, setHits] = useState<SearchHit[] | null>(null);
+  const [exportFormat, setExportFormat] = useState<ExportFormat>("txt");
+  const [preview, setPreview] = useState<ExportedTranscript | null>(null);
+  const [exportedTo, setExportedTo] = useState<string | null>(null);
+
   const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
   const refresh = useCallback(async () => {
     try {
-      const [d, h, p, rows, state, mics, insert, localStatus, apiStatus, routeReport] =
-        await Promise.all([
+      const [
+        d,
+        h,
+        p,
+        rows,
+        state,
+        mics,
+        insert,
+        localStatus,
+        apiStatus,
+        routeReport,
+        noteRows,
+        folderRows,
+      ] = await Promise.all([
         getDiagnostics(),
         getHotkeys(),
         getProviders(),
@@ -214,6 +252,8 @@ function Dashboard() {
         getLocalStatus(),
         getLocalApiStatus(),
         getDictationRoute(),
+        getNotes(folderFilter === null ? {} : { folderId: folderFilter }),
+        getFolders(),
       ]);
       setDiagnostics(d);
       setHotkeys(h);
@@ -225,10 +265,12 @@ function Dashboard() {
       setLocal(localStatus);
       setApi(apiStatus);
       setRoute(routeReport);
+      setNotes(noteRows);
+      setFolders(folderRows);
     } catch (e) {
       setError(message(e));
     }
-  }, []);
+  }, [folderFilter]);
 
   useEffect(() => {
     void refresh();
@@ -434,7 +476,7 @@ function Dashboard() {
         )}
       </section>
 
-      <section>
+      <section data-surface="settings.transcription">
         <h2>Transcription providers</h2>
         <p className="muted">
           A stored key is not a working provider. Only a connection test can establish that.
@@ -558,7 +600,7 @@ function Dashboard() {
         ) : null}
       </section>
 
-      <section>
+      <section data-surface="settings.transcription.local">
         <h2>Local transcription</h2>
         {local === null ? (
           <p className="muted">Loading…</p>
@@ -642,7 +684,7 @@ function Dashboard() {
         )}
       </section>
 
-      <section>
+      <section data-surface="integrations.api">
         <h2>Local API</h2>
         {api === null ? (
           <p className="muted">Loading…</p>
@@ -680,6 +722,193 @@ function Dashboard() {
             </button>
           </>
         )}
+      </section>
+
+      <section data-surface="notes.export">
+        <h2>Notes</h2>
+
+        <div className="row">
+          <span className="row-label">Search</span>
+          <span className="row-value controls">
+            <input
+              type="search"
+              value={query}
+              placeholder="Words to look for"
+              onChange={(e) => {
+                const next = e.target.value;
+                setQuery(next);
+                // An empty box is not a search for nothing — it is not
+                // searching. Rust refuses an empty query, so never send one.
+                if (next.trim() === "") {
+                  setHits(null);
+                  return;
+                }
+                void guard(async () => {
+                  setHits(await searchNotes(next, 20));
+                });
+              }}
+            />
+          </span>
+        </div>
+
+        <div className="row">
+          <span className="row-label">Folder</span>
+          <span className="row-value controls">
+            <select
+              value={folderFilter ?? ""}
+              onChange={(e) => {
+                setFolderFilter(e.target.value === "" ? null : Number(e.target.value));
+              }}
+            >
+              <option value="">All folders</option>
+              {folders.map((f) => (
+                <option key={f.id} value={f.id}>
+                  {f.name}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              onClick={() => {
+                const name = window.prompt("Folder name");
+                if (name === null || name.trim() === "") return;
+                void guard(() => createFolder(name));
+              }}
+            >
+              New folder
+            </button>
+            {folderFilter === null ? null : (
+              <button
+                type="button"
+                onClick={() => {
+                  void guard(async () => {
+                    await deleteFolder(folderFilter);
+                    // The notes survive with no folder, so the filter that
+                    // pointed at it no longer selects anything real.
+                    setFolderFilter(null);
+                  });
+                }}
+              >
+                Delete folder
+              </button>
+            )}
+          </span>
+        </div>
+
+        {hits === null ? null : (
+          <>
+            <h3>
+              {hits.length === 0
+                ? `Nothing matches "${query}"`
+                : `${hits.length} match${hits.length === 1 ? "" : "es"}`}
+            </h3>
+            <ul className="list">
+              {hits.map((hit) => (
+                <li key={hit.id}>
+                  <strong>{hit.title}</strong>
+                  <span className="muted"> {hit.snippet}</span>
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+
+        {notes.length === 0 ? (
+          <p className="muted">
+            No notes yet. Meetings and imported recordings write them; dictation writes history
+            instead.
+          </p>
+        ) : (
+          <ul className="list">
+            {notes.map((note) => (
+              <li key={note.id}>
+                <strong>{note.title}</strong>
+                <span className="muted">
+                  {" "}
+                  {note.noteType}
+                  {note.transcript ? " · has a transcript" : ""}
+                  {note.updatedAt ? ` · ${note.updatedAt}` : ""}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    void guard(async () => {
+                      setExportedTo(null);
+                      setPreview(await exportNote(note.id, exportFormat));
+                    });
+                  }}
+                >
+                  Preview {exportFormat}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    void guard(async () => {
+                      const path = await exportNoteToFile(note.id, exportFormat);
+                      // `null` is a cancelled dialog, not a failure. Saying
+                      // "exported" for it would be a lie about a file that does
+                      // not exist.
+                      setExportedTo(path);
+                    });
+                  }}
+                >
+                  Export…
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    void guard(async () => {
+                      await deleteNote(note.id);
+                      setPreview(null);
+                    });
+                  }}
+                >
+                  Delete
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+
+        <div className="row">
+          <span className="row-label">Export format</span>
+          <span className="row-value controls">
+            <select
+              value={exportFormat}
+              onChange={(e) => {
+                setExportFormat(e.target.value as ExportFormat);
+                setPreview(null);
+              }}
+            >
+              {EXPORT_FORMATS.map((f) => (
+                <option key={f} value={f}>
+                  {f}
+                </option>
+              ))}
+            </select>
+          </span>
+        </div>
+
+        {exportedTo ? <Row label="Written to" value={exportedTo} /> : null}
+
+        {preview ? (
+          <>
+            <Row
+              label={`Preview (${preview.filename})`}
+              value={
+                preview.segmentCount === 0
+                  ? "No transcript segments"
+                  : `${preview.segmentCount} segment${preview.segmentCount === 1 ? "" : "s"}`
+              }
+              detail={
+                preview.segmentCount === 0
+                  ? "this note was typed, not recorded"
+                  : undefined
+              }
+            />
+            <pre className="preview">{preview.content}</pre>
+          </>
+        ) : null}
       </section>
 
       <section>

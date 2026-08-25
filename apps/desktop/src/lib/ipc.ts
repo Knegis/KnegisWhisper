@@ -238,6 +238,183 @@ export async function clearHistory(): Promise<number> {
   return invoke<number>("history_clear");
 }
 
+/* --------------------------------------------------------------------- notes */
+
+/**
+ * Mirrors `kw_notes_core::notes::Note`. The key names are asserted against the
+ * Rust struct by `commands::tests::a_note_crosses_the_boundary_in_camel_case`.
+ */
+export type Note = {
+  id: number;
+  title: string;
+  content: string;
+  noteType: string;
+  enhancedContent: string | null;
+  folderId: number | null;
+  /** A JSON array of transcript segments, as stored. */
+  transcript: string | null;
+  /** A JSON array of `{displayName, email}`, as stored. */
+  participants: string | null;
+  audioDurationSeconds: number | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+};
+
+/** Mirrors `kw_notes_core::notes::Folder`. */
+export type Folder = {
+  id: number;
+  name: string;
+  isDefault: boolean;
+  sortOrder: number;
+};
+
+/** Mirrors `kw_notes_core::notes::SearchHit`. */
+export type SearchHit = {
+  id: number;
+  title: string;
+  /** The match is marked with `[` and `]`. */
+  snippet: string;
+};
+
+/**
+ * Notes, most recently updated first.
+ *
+ * There is no cursor and that is deliberate — notes are ordered by `updatedAt`,
+ * so an id cursor would skip or repeat rows as notes are edited. The local API
+ * refuses one for the same reason.
+ */
+export async function getNotes(options?: {
+  noteType?: string;
+  folderId?: number;
+  limit?: number;
+}): Promise<Note[]> {
+  return invoke<Note[]>("notes_list", {
+    noteType: options?.noteType ?? null,
+    folderId: options?.folderId ?? null,
+    limit: options?.limit ?? null,
+  });
+}
+
+/** Full-text search. The query is prose; Rust escapes it into FTS5 syntax. */
+export async function searchNotes(
+  query: string,
+  limit?: number,
+): Promise<SearchHit[]> {
+  return invoke<SearchHit[]>("notes_search", {
+    query,
+    limit: limit ?? null,
+  });
+}
+
+export async function getNote(id: number): Promise<Note | null> {
+  return invoke<Note | null>("notes_get", { id });
+}
+
+/** Fields of a new note. Mirrors `commands::NewNoteRequest`. */
+export type NewNote = {
+  title: string;
+  content: string;
+  noteType?: string;
+  folderId?: number;
+  transcript?: string;
+  participants?: string;
+  audioDurationSeconds?: number;
+};
+
+export async function createNote(request: NewNote): Promise<number> {
+  return invoke<number>("notes_create", { request });
+}
+
+/**
+ * Fields to change. Mirrors `commands::NoteUpdateRequest`, which refuses an
+ * update that would change nothing — send at least one field.
+ */
+export type NoteUpdate = {
+  title?: string;
+  content?: string;
+  folderId?: number;
+};
+
+/** Returns whether the note existed. */
+export async function updateNote(
+  id: number,
+  request: NoteUpdate,
+): Promise<boolean> {
+  return invoke<boolean>("notes_update", { id, request });
+}
+
+export async function deleteNote(id: number): Promise<boolean> {
+  return invoke<boolean>("notes_delete", { id });
+}
+
+export async function getFolders(): Promise<Folder[]> {
+  return invoke<Folder[]>("folders_list");
+}
+
+export async function createFolder(name: string): Promise<number> {
+  return invoke<number>("folder_create", { name });
+}
+
+/** Delete a folder. Its notes survive, with no folder. */
+export async function deleteFolder(id: number): Promise<boolean> {
+  return invoke<boolean>("folder_delete", { id });
+}
+
+/* --------------------------------------------------------- transcript export */
+
+/**
+ * Mirrors `kw_notes_core::transcript::Format`, which serializes lowercase.
+ * `commands::tests::every_export_format_has_the_wire_spelling_the_frontend_sends`
+ * asserts these exact strings, because a variant renamed on the Rust side
+ * without this following would silently stop matching.
+ */
+export type ExportFormat = "txt" | "md" | "json" | "srt" | "vtt";
+
+/** Every format, so a picker cannot miss one. Mirrors `Format::all`. */
+export const EXPORT_FORMATS: readonly ExportFormat[] = [
+  "txt",
+  "md",
+  "json",
+  "srt",
+  "vtt",
+];
+
+/** Mirrors `commands::ExportedTranscript`. */
+export type ExportedTranscript = {
+  format: ExportFormat;
+  /** A suggested filename, including the extension. */
+  filename: string;
+  content: string;
+  /**
+   * How many segments the transcript held. Zero is legitimate — a typed note
+   * has no recording — so the UI says which case it got rather than showing an
+   * export that looks empty for no reason.
+   */
+  segmentCount: number;
+};
+
+/** Render a transcript without writing anything. */
+export async function exportNote(
+  id: number,
+  format: ExportFormat,
+): Promise<ExportedTranscript> {
+  return invoke<ExportedTranscript>("note_export", { id, format });
+}
+
+/**
+ * Render a transcript and write it to a file the user picks.
+ *
+ * Returns the path written, or `null` if the user cancelled. The save dialog is
+ * opened by Rust, so no path is ever passed from here — which is why this needs
+ * no filesystem capability. See `docs/SECURITY.md`.
+ */
+export async function exportNoteToFile(
+  id: number,
+  format: ExportFormat,
+): Promise<string | null> {
+  return invoke<string | null>("note_export_to_file", { id, format });
+}
+
 /* ------------------------------------------------------------------ settings */
 
 export async function getSetting(key: string): Promise<unknown> {

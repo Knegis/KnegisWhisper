@@ -46,6 +46,11 @@ jobs:
       - name: Domain scanner self-tests
         run: node --test tools/domain-scanner/scan.test.mjs
 
+      # Same reason as the scanner's self-tests: a rule that stops matching
+      # still reports green. These assert the UI-surface rules actually fire.
+      - name: Parity gate self-tests
+        run: node --test tools/integration-audit/verify-parity.test.mjs
+
       # The baseline is generated from an OpenWhispr checkout that CI does not
       # have, so --check cannot run here. Assert instead that it is valid JSON
       # and still pinned to the commit the manifest claims.

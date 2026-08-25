@@ -173,11 +173,19 @@ every shortcut already claimed by the first and registers none of them; the star
 each refusal, so if the Shortcuts section looks dead, check there first.
 
 ```powershell
-# From the repository root. Stops anything left over, then launches.
+# Stops anything left over, then launches both halves of the application.
 taskkill /F /IM knegiswhisper-desktop.exe 2>$null
+cd apps\desktop
 $env:KNEGISWHISPER_LOG = "info"
-cargo run -q -p knegiswhisper --bin knegiswhisper-desktop
+npm run tauri:dev
 ```
+
+**`npm run tauri:dev`, not `cargo run`.** In a development build the window loads from the Vite
+dev server named in `tauri.conf.json` (`http://127.0.0.1:5183`) rather than from files on disk, so
+`cargo run` produces a perfectly healthy Rust process behind a window that says only "can't reach
+this page" — the webview's own error, naming neither cause nor fix. `tauri dev` starts Vite first
+and waits for it. A debug build now also probes that URL during startup and says so in the log
+when nothing answers, because two honest halves and no diagnosis is the worst way to fail.
 
 The window is the dashboard. Leave the terminal visible — the log is the fastest diagnosis.
 
