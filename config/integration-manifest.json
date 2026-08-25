@@ -546,7 +546,8 @@
       "backend": "crates/transcription-core",
       "ui": "Settings > Transcription > Local",
       "reachable": false,
-      "runtime": "online"
+      "runtime": "online",
+      "note": "Unreachable, and the reason is specific rather than 'no sidecar'. sherpa-onnx publishes desktop binaries only as .tar.bz2, which install::extract cannot open; it ships a one-shot CLI and a WebSocket server rather than an HTTP endpoint, so neither Transport::Loopback nor HttpHealth applies; and the per-model file layout and flags differ between the Parakeet and Nemotron families. See docs/BUILD_PLAN.md, chunk B4."
     },
     "local-asr:nemotron-speech-streaming-en-0.6b": {
       "status": "ported-with-new-rust-implementation",
@@ -560,7 +561,8 @@
       "backend": "crates/transcription-core",
       "ui": "Settings > Transcription > Local",
       "reachable": false,
-      "runtime": "online"
+      "runtime": "online",
+      "note": "Unreachable, and the reason is specific rather than 'no sidecar'. sherpa-onnx publishes desktop binaries only as .tar.bz2, which install::extract cannot open; it ships a one-shot CLI and a WebSocket server rather than an HTTP endpoint, so neither Transport::Loopback nor HttpHealth applies; and the per-model file layout and flags differ between the Parakeet and Nemotron families. See docs/BUILD_PLAN.md, chunk B4."
     },
     "local-asr:parakeet-tdt-0.6b-v3": {
       "status": "ported-with-new-rust-implementation",
@@ -574,7 +576,8 @@
       "backend": "crates/transcription-core",
       "ui": "Settings > Transcription > Local",
       "reachable": false,
-      "runtime": null
+      "runtime": null,
+      "note": "Unreachable, and the reason is specific rather than 'no sidecar'. sherpa-onnx publishes desktop binaries only as .tar.bz2, which install::extract cannot open; it ships a one-shot CLI and a WebSocket server rather than an HTTP endpoint, so neither Transport::Loopback nor HttpHealth applies; and the per-model file layout and flags differ between the Parakeet and Nemotron families. See docs/BUILD_PLAN.md, chunk B4."
     },
     "local-asr:parakeet-unified-en-0.6b": {
       "status": "ported-with-new-rust-implementation",
@@ -588,7 +591,8 @@
       "backend": "crates/transcription-core",
       "ui": "Settings > Transcription > Local",
       "reachable": false,
-      "runtime": null
+      "runtime": null,
+      "note": "Unreachable, and the reason is specific rather than 'no sidecar'. sherpa-onnx publishes desktop binaries only as .tar.bz2, which install::extract cannot open; it ships a one-shot CLI and a WebSocket server rather than an HTTP endpoint, so neither Transport::Loopback nor HttpHealth applies; and the per-model file layout and flags differ between the Parakeet and Nemotron families. See docs/BUILD_PLAN.md, chunk B4."
     },
     "meeting-stream:assemblyai-realtime": {
       "status": "rewired-to-direct-byok",

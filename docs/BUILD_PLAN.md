@@ -75,7 +75,7 @@ Why the order below is what it is. Each chunk's integrations-made-reachable:
 | F — calendars | new crate | **3** |
 | G — media import | ffmpeg, yt-dlp sidecars | **3** |
 | H — MCP + CLI screens | MCP server | **2** |
-| I — diarization + search | sherpa + Qdrant | **4** (+4 local ASR from B's sidecar) |
+| I — diarization + search | sherpa + Qdrant | **4** (+4 local ASR, once B4 is unblocked) |
 
 ---
 
@@ -230,11 +230,37 @@ is sherpa. And `local_model` and `local_llm` both had an `InstallProgress`, whic
 TypeScript file is a redeclaration where the later one silently wins; `ipc_types` now refuses a
 name collision by assertion.
 
-### B4. Local ASR — sherpa-onnx (4 models)
+### B4. Local ASR — sherpa-onnx (4 models) *(blocked; the plan underestimated it)*
 
-Same sidecar pattern: `k2-fsa/sherpa-onnx` `1.13.4`, ports **6006–6029**, **separate offline and
-online binaries** (2 Parakeet offline, 2 Nemotron `runtime: "online"`). Feeds
-`Settings > Transcription > Local`, which is already built and today offers whisper only.
+The plan said "same sidecar pattern". It is not. Looking at
+`k2-fsa/sherpa-onnx` `v1.13.4` — 303 assets — turned up three prerequisites the whisper and llama
+sidecars did not need:
+
+1. **Everything is `.tar.bz2`.** 276 of the 303 assets, including every desktop binary bundle
+   *and* all four model archives the registry already points at. The four `zip` assets are macOS
+   xcframeworks, which are libraries rather than executables — the same situation whisper.cpp is
+   in on macOS. `sidecar::manifest::Archive` knows `zip` and `tar-gz`, `install::extract` handles
+   those two, and `tools/sidecar-pin` reads those two. All three need a third.
+2. **There is no HTTP server to talk to.** whisper.cpp and llama.cpp both ship a binary that
+   serves an HTTP API on a port, which is why `Transport::Loopback` and `HttpHealth` fit them.
+   sherpa-onnx ships `sherpa-onnx-offline` (a one-shot CLI that reads a WAV and prints) and
+   `sherpa-onnx-online-websocket-server` (its own WebSocket protocol). Neither is an HTTP endpoint.
+   The offline CLI would be `Transport::Stdio`, which `sidecar::manifest` already supports; the
+   streaming ones need a client for a bespoke protocol, which is chunk E's kind of work.
+3. **The argument and directory contract is per-model.** An extracted model is a directory of
+   encoder/decoder/joiner/tokens files whose layout differs between the Parakeet and Nemotron
+   families, and the CLI flags follow. That cannot be written correctly from a release page; it
+   needs the binary and one model on a machine, which is a ~330 MB download to find out.
+
+So the four models stay unreachable, and the reason is now specific rather than "no sidecar". What
+would make it tractable, in order: a pure-Rust bz2 decompressor in `install::extract` (`bzip2-rs`
+is decompress-only, which is all that is needed, and matches why `flate2` is on `rust_backend`);
+then the two Parakeet models over `Transport::Stdio`; then the two Nemotron ones, which are
+streaming and belong with the meeting clients.
+
+Adding bz2 support on its own was considered and rejected: an archive format with no consumer is
+the scaffolding this workspace deliberately avoids, and the commit that adds it should be the
+commit that uses it.
 
 ---
 
@@ -409,6 +435,7 @@ location, reusing what `IntegrationsApi` already renders.
 | Item | Needs | Not blocked |
 | --- | --- | --- |
 | Anything macOS-native | A Mac | Compiles in CI, ships marked unverified |
+| sherpa-onnx local ASR | bz2 extraction, a `Transport::Stdio` executor path, and the binary on a machine to learn its per-model flags | Everything else local: whisper transcription and llama generation both work |
 | macOS `whisper-server` | A macOS CI job under this project's releases; upstream ships only an xcframework | Windows and Linux install today, digest-pinned |
 | 5 meeting clients, live | Keys for AssemblyAI, Deepgram, OpenAI Realtime, Corti, Tinfoil | Wire shapes vs fixtures; `meeting-stream:local`; detection; system audio |
 | 4 transcription clients, live | Keys for Tinfoil, Mistral, xAI, Corti | The clients and their fixtures |
