@@ -19,13 +19,16 @@ maintained in place rather than appended to, because its purpose is to be curren
 > phases 0–6 detail and the by-hand check that found five real defects. This section stays as the
 > short version.
 >
-> **The single most useful next piece of work** is chunk B, `Settings > Intelligence`. Cleanup and
-> chat dispatch work in `crates/reasoning-core` with no screen to configure a route or a model, and
-> `DictationRuntime::build` is still handed `None` for cleanup. Chunk A closed the same gap for
-> transcription and took reachable integrations from 8 to 26; the reasoning side is the next 16.
+> **The reachability half of the plan is done.** Chunks A, B and C took reachable integrations
+> from **8 to 45**. What is left is not screens over working backends; it is new platform
+> capability — system audio, the Windows native hooks, five WebSocket clients, calendars, MCP,
+> diarization, packaging. Chunk D is next, and the plan is right that it has no partial payoff:
+> system audio half-written unblocks nothing.
 >
-> **Chunk A has not been checked by hand.** Storing a key and watching a connection test pass has
-> not been done by a person on this machine. Green tests are not that.
+> **None of A, B or C has been checked by hand.** Storing a key, watching a connection test pass,
+> switching cleanup on and seeing tidied text, downloading a 5.9 GB model and holding a chat —
+> none of it has been done by a person on this machine. 787 green tests are not that, and the last
+> by-hand check found five real defects that all of the tests had missed.
 
 Maintained in place. If something here becomes false, edit it rather than adding a note.
 
@@ -128,6 +131,82 @@ Unchanged from the Phases 1–4 entry, restated here so they are not buried:
   porting matrix. Upstream pins both by commit and verifies neither.
 - ~~**`nircmd`**~~ — **dropped**, as leaned towards: third-tier Windows paste fallback only, and
   `SendInput` works.
+
+---
+
+## 2026-08-26 (chunks B and C) — the backends behind the screens
+
+Chunk A gave every working backend a screen. B and C are the other direction: the backends that
+were declared and refused, made real. 26 to 45 reachable.
+
+### Three refusals kept, and why none of them is laziness
+
+The temptation in a chunk like this is to make everything green. Three things are still refused,
+and each refusal is the correct answer rather than an unfinished one.
+
+**Tinfoil.** Its whole proposition is an attested enclave — the client verifies an attestation
+document against a hardware root of trust before sending anything. An ordinary HTTPS POST to the
+same host transcribes perfectly well and provides *none* of that, while appearing in the UI as
+"Tinfoil". `route.rs` already refused a Tinfoil host configured as a plain custom endpoint for
+exactly this reason; writing the client as an unattested POST would have defeated that refusal
+from the inside. So `ClientNotImplemented` stays, and it now carries the reason instead of the
+generic "not implemented yet. Choose a provider that uses the standard API" — advice written when
+the answer was the same for all four, and wrong now that three work.
+
+**sherpa-onnx.** The plan said "same sidecar pattern". It is not: 276 of the 303 release assets
+are `.tar.bz2`, which `install::extract` cannot open; the binaries are a one-shot CLI and a
+WebSocket server rather than an HTTP endpoint, so neither `Transport::Loopback` nor `HttpHealth`
+applies; and the per-model file layout differs between the Parakeet and Nemotron families. Adding
+bz2 support on its own was considered and rejected — an archive format with no consumer is the
+scaffolding this workspace avoids.
+
+**Enterprise live calls.** Bedrock's signing is verified against AWS's published vectors, which is
+a real guarantee about the *signature* and says nothing about whether Bedrock accepts the request.
+`PLATFORM_SUPPORT.md` now has a per-provider table keeping those apart.
+
+### The defect chunk C found
+
+`route.rs` defaulted Corti's environment to `us` and its tenant to `base`. Those look like
+placeholders and are not: they compose a live endpoint under a tenancy nobody chose, so an
+unconfigured Corti would have sent the user's audio *and their credential* there. That is the
+silent-substitution class the brief rules out by name, sitting inside the function written to
+prevent it.
+
+Worse, three route tests swept every registry provider and asserted each resolved — and they
+passed **because of** those defaults. A test that exercises a default while claiming to test the
+logic is a test that protects the default. They now configure the one provider that needs
+configuring.
+
+### Judgement calls worth keeping
+
+#### `Dispatch` and `ReasoningDispatch` are asked, never listed
+
+Both screens have to say which providers can actually be used. The obvious implementation is a
+list of ids in TypeScript. Both instead call the real resolver — `route::resolve` then
+`clients::shape`, and `resolve_chat` — and report what it says. Within one session that decision
+paid: three providers moved from "needs a client" to "ready" and nothing in either screen changed.
+
+#### Reading the port is what records a use
+
+The llama server holds several gigabytes and stops itself after five idle minutes. A `touch()`
+call at every use site is a call somebody forgets, so `LocalEndpoint::port()` — the only way to
+find out where to send a local request — is itself the record. Status screens read
+`running_port()`, which deliberately does not, because a settings window left open would otherwise
+hold the memory indefinitely.
+
+#### `tools/sidecar-pin` had to exist before `llama` could be added
+
+`config/sidecars.json` has instructed people to use it since the first sidecar, and it did not
+exist. Its first act was reproducing all three committed whisper pins exactly — which validates
+the tool and the pins in the same run.
+
+#### The generated types earned their keep three times over
+
+`EnterpriseConfig` had `rename_all` without `rename_all_fields`, so it would have crossed the
+boundary as `access_key_id` while everything else sends camelCase. `local_model` and `local_llm`
+both defined an `InstallProgress`, which in one TypeScript file is a redeclaration where the later
+one silently wins — the generator now refuses a name collision by assertion. And
+`ModelStatus::verified_by` was a `&'static str` the frontend re-declared by hand as a union.
 
 ---
 
