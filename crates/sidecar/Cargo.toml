@@ -23,6 +23,8 @@ zip.workspace = true
 tar.workspace = true
 flate2.workspace = true
 kw-network-policy.workspace = true
+async-trait.workspace = true
+reqwest.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

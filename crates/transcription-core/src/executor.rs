@@ -23,6 +23,7 @@ use kw_network_policy::{NetworkPolicy, RequestPurpose};
 use kw_security::{CredentialStore, Secret};
 use serde::Serialize;
 
+use crate::local::{Inference, LocalTranscriber};
 use crate::route::{Auth, AuthScheme, Transport};
 
 /// A finished transcription.
@@ -76,8 +77,16 @@ pub enum TranscriptionError {
     )]
     ClientNotImplemented { provider: String },
 
-    #[error("local transcription is not wired up yet")]
-    LocalNotImplemented,
+    #[error(
+        "local transcription is not available: {reason}. Install a local model in settings,          or choose a provider."
+    )]
+    LocalNotAvailable { reason: String },
+
+    #[error("the local model produced nothing usable from that recording")]
+    LocalEmpty,
+
+    #[error("the local model server refused the request: {detail}")]
+    LocalFailed { detail: String },
 }
 
 /// How much of a provider's error body may be reported.
@@ -111,6 +120,12 @@ struct BatchRequest<'a> {
 pub struct Executor<'a> {
     policy: &'a NetworkPolicy,
     credentials: &'a dyn CredentialStore,
+    /// Present only while a local model server is installed and running.
+    ///
+    /// `Option` rather than a stub that errors, so "no local model" is a state
+    /// the caller can see and report before the user records anything, instead
+    /// of a failure they discover after speaking.
+    local: Option<&'a dyn LocalTranscriber>,
 }
 
 impl<'a> Executor<'a> {
@@ -119,7 +134,21 @@ impl<'a> Executor<'a> {
         Self {
             policy,
             credentials,
+            local: None,
         }
+    }
+
+    /// The same executor, able to transcribe locally.
+    #[must_use]
+    pub const fn with_local(mut self, local: &'a dyn LocalTranscriber) -> Self {
+        self.local = Some(local);
+        self
+    }
+
+    /// Whether local transcription would work right now.
+    #[must_use]
+    pub const fn has_local(&self) -> bool {
+        self.local.is_some()
     }
 
     /// Transcribe `wav` according to `transport`.
@@ -132,7 +161,7 @@ impl<'a> Executor<'a> {
         wav: Vec<u8>,
     ) -> Result<Transcript, TranscriptionError> {
         match transport {
-            Transport::Local => Err(TranscriptionError::LocalNotImplemented),
+            Transport::Local => self.transcribe_locally(wav).await,
 
             Transport::ProviderClient { provider, .. } => {
                 // Honest refusal rather than a silent substitution. Falling back
@@ -169,6 +198,33 @@ impl<'a> Executor<'a> {
                 )
                 .await
             }
+        }
+    }
+
+    /// Transcribe with the running local model server.
+    async fn transcribe_locally(&self, wav: Vec<u8>) -> Result<Transcript, TranscriptionError> {
+        let Some(local) = self.local else {
+            return Err(TranscriptionError::LocalNotAvailable {
+                reason: "no local model server is running".to_owned(),
+            });
+        };
+
+        // No size check: there is no upload. The recording length cap belongs to
+        // capture, where it can stop the recording rather than discard it.
+        match local
+            .transcribe(wav, None, None)
+            .await
+            .map_err(|detail| TranscriptionError::LocalFailed { detail })?
+        {
+            Inference::Text(text) => Ok(Transcript {
+                text,
+                provider: "local".to_owned(),
+                model: local.model_name(),
+            }),
+            Inference::Empty => Err(TranscriptionError::LocalEmpty),
+            Inference::Rejected { status, body } => Err(TranscriptionError::LocalFailed {
+                detail: format!("HTTP {status}: {body}"),
+            }),
         }
     }
 

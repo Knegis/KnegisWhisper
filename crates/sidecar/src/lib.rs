@@ -47,6 +47,7 @@ pub mod integrity;
 pub mod manifest;
 pub mod pid;
 pub mod port;
+pub mod process;
 pub mod reap;
 pub mod resolve;
 
@@ -59,6 +60,7 @@ pub use manifest::{
 };
 pub use pid::{Inventory, PidError, PidRecord, PidStore};
 pub use port::{allocate, BindProbe, PortError, PortProbe, LOOPBACK};
+pub use process::{start, Health, HttpHealth, Launch, ProcessError, Running, StartTimings};
 pub use reap::{reap_one, Liveness, Outcome, ProcessTable, SystemProcessTable, Verdict};
 pub use resolve::{locate, Installation, RealFs, SearchPath};
 

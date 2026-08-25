@@ -149,6 +149,9 @@ pub enum PolicyError {
     #[error("{url} returned {status}")]
     HttpStatus { url: String, status: u16 },
 
+    #[error("{path:?} is not a usable loopback path: {reason}")]
+    NotALoopbackPath { path: String, reason: &'static str },
+
     #[error("could not write {path}: {source}")]
     Write {
         path: String,
@@ -337,6 +340,56 @@ impl NetworkPolicy {
         self.request(purpose, reqwest::Method::POST, url)
     }
 
+    /// Talk to a sidecar this application started, on loopback.
+    ///
+    /// Deliberately *not* one of the seven purposes, because this is not egress:
+    /// nothing leaves the machine. `whisper-server` and `llama-server` are
+    /// processes we spawned, bound to `127.0.0.1` by `crate::port`, and a
+    /// request to one is closer to an IPC call than to a network request.
+    ///
+    /// What keeps that claim honest is the signature. It takes a port and a
+    /// path, never a URL, and builds the address itself -- so there is no way to
+    /// aim this at another host, and no way for a later change to quietly widen
+    /// it. The path is parsed rather than trusted, so a path carrying an
+    /// authority or control characters is refused instead of producing a request
+    /// somewhere unintended.
+    pub fn loopback(
+        &self,
+        method: reqwest::Method,
+        port: u16,
+        path: &str,
+    ) -> Result<reqwest::RequestBuilder, PolicyError> {
+        if !path.starts_with('/') {
+            return Err(PolicyError::NotALoopbackPath {
+                path: path.to_owned(),
+                reason: "a loopback path has to start with /",
+            });
+        }
+        if path.contains("://") {
+            return Err(PolicyError::NotALoopbackPath {
+                path: path.to_owned(),
+                reason: "a loopback path cannot carry a scheme",
+            });
+        }
+
+        let base = format!("http://{}:{port}", std::net::Ipv4Addr::LOCALHOST);
+        let url = Url::parse(&base)
+            .and_then(|base| base.join(path))
+            .map_err(PolicyError::InvalidUrl)?;
+
+        // The host is written by us, so this can only fail if `join` replaced
+        // the authority -- which is exactly the case worth refusing rather than
+        // sending.
+        if url.host_str() != Some("127.0.0.1") || url.port() != Some(port) {
+            return Err(PolicyError::NotALoopbackPath {
+                path: path.to_owned(),
+                reason: "that path would change the host or port",
+            });
+        }
+
+        Ok(self.client.request(method, url))
+    }
+
     /// Stream a URL to a file, following redirects one validated hop at a time.
     ///
     /// The client is built with `Policy::none()` because a silently followed
@@ -500,6 +553,66 @@ mod tests {
     const AI: RequestPurpose = RequestPurpose::UserConfiguredAiProvider;
     const SELF_HOSTED: RequestPurpose = RequestPurpose::ExplicitlyConfiguredSelfHostedEndpoint;
     const DOWNLOAD: RequestPurpose = RequestPurpose::UserTriggeredModelDownload;
+
+    // ---------------------------------------------------------------- loopback
+
+    /// The URL a loopback request would actually be sent to.
+    fn loopback_url(port: u16, path: &str) -> Result<String, PolicyError> {
+        let policy = NetworkPolicy::new()?;
+        let request = policy.loopback(reqwest::Method::GET, port, path)?;
+        Ok(request
+            .build()
+            .map_err(PolicyError::Client)?
+            .url()
+            .to_string())
+    }
+
+    #[test]
+    fn a_sidecar_health_check_addresses_loopback() {
+        assert_eq!(loopback_url(8178, "/").unwrap(), "http://127.0.0.1:8178/");
+        assert_eq!(
+            loopback_url(8178, "/inference").unwrap(),
+            "http://127.0.0.1:8178/inference"
+        );
+    }
+
+    #[test]
+    fn a_path_that_tries_to_change_the_host_is_refused() {
+        // The reason this takes a port and a path rather than a URL: there has
+        // to be no way to aim it off-machine.
+        for path in [
+            "//evil.example.com/x",
+            "/x/../../..//evil.example.com",
+            "https://evil.example.com/x",
+        ] {
+            match loopback_url(8178, path) {
+                Err(_) => {}
+                Ok(url) => assert!(
+                    url.starts_with("http://127.0.0.1:8178/"),
+                    "{path:?} produced {url}"
+                ),
+            }
+        }
+    }
+
+    #[test]
+    fn a_path_without_a_leading_slash_is_refused() {
+        let err = loopback_url(8178, "inference").unwrap_err();
+        assert!(matches!(err, PolicyError::NotALoopbackPath { .. }));
+    }
+
+    #[test]
+    fn a_path_carrying_a_scheme_is_refused() {
+        let err = loopback_url(8178, "/redirect?to=http://evil.example.com").unwrap_err();
+        assert!(matches!(err, PolicyError::NotALoopbackPath { .. }));
+    }
+
+    #[test]
+    fn loopback_is_not_one_of_the_seven_purposes() {
+        // It is not egress, so it must not appear in the enumerated boundary.
+        // A test rather than a comment, because the count is a stated constraint.
+        assert_eq!(ALL_PURPOSES.len(), 7);
+    }
 
     // ------------------------------------------------------- redirect following
 
