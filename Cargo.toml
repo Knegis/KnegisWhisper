@@ -85,6 +85,15 @@ sqlx = { version = "0.8", default-features = false, features = [
 # Credentials
 subtle = "2"
 getrandom = "0.2"
+# Enterprise request signing. AWS SigV4 is HMAC-SHA256 over a canonical request;
+# Google's service-account flow is an RS256-signed JWT exchanged for an access
+# token. Both are pure-Rust here rather than through a vendor SDK: the AWS and
+# GCP SDKs pull in their own HTTP clients and credential-discovery chains, and a
+# credential chain that reads the environment and ~/.aws is exactly the implicit
+# behaviour the network boundary exists to rule out.
+hmac = "0.12"
+base64 = "0.22"
+rsa = { version = "0.9", features = ["sha2"] }
 keyring = { version = "3", features = [
     "apple-native", "windows-native", "sync-secret-service", "crypto-rust",
 ] }

@@ -20,10 +20,10 @@ What the same period established is that **the remaining work is mostly reachabi
 capability**. The parity gate now resolves each manifest entry through `config/ui-surfaces.json`
 and prints what cannot be configured:
 
-- **33 of 99 integrations are reachable**, up from 8 when this plan was written. 31 are
+- **36 of 99 integrations are reachable**, up from 8 when this plan was written. 28 are
   implemented-or-declared and unreachable; the other 35 are removed vendor services and internal
   platform capabilities with no surface by design.
-- **7 of 13 UI surfaces do not exist.** The 6 that do are one component each; `App.tsx` is the
+- **6 of 13 UI surfaces do not exist.** The 7 that do are one component each; `App.tsx` is the
   shell.
 - The keystone is closed: `Settings > Providers` stores a key for every one of the fifteen slots
   the registry declares. Before chunk A, `provider_credential_set` existed in Rust and
@@ -53,7 +53,7 @@ platform work that no amount of UI can substitute for.
 | 1 — Tauri foundation | Complete | 2 of 6 window roles exist; Linux/macOS hotkey fallbacks unwritten |
 | — Chunk A (shell, types, Providers) | **Done, unchecked by hand** | Storing a key and passing a connection test has not been done by a person on this machine |
 | 2 — Dictation | **Verified on Windows** | 4 of 7 transcription providers need their own client (`Transport::ProviderClient` → `ClientNotImplemented`); sherpa local ASR absent |
-| 3 — Reasoning | Complete except enterprise | `chat.rs:191` returns `ShapeNotImplemented` for Bedrock, Azure, Vertex; no llama-server sidecar for `ChatRoute::Local`, which already points at `127.0.0.1:8221` |
+| 3 — Reasoning | Complete, enterprise unverified | All three enterprise shapes written and tested against vectors and fixtures; no live call. No llama-server sidecar for `ChatRoute::Local`, which already points at `127.0.0.1:8221` |
 | 4 — Meetings and notes | Notes reachable; meetings contract only | No system audio anywhere; 5 WebSocket clients; 5 process detectors; AEC helper |
 | 5 — Calendars | Not started | No crate, no OAuth flow |
 | 6 — Local API and CLI | **Verified on Windows** | No `Integrations > CLI` screen |
@@ -68,7 +68,7 @@ Why the order below is what it is. Each chunk's integrations-made-reachable:
 | Chunk | New backend | Integrations unlocked |
 | --- | --- | --- |
 | A — shell + Providers *(done)* | 2 commands | **18**: 15 credential slots + 3 transcription providers |
-| B — Intelligence | 3 enterprise shapes, llama sidecar | 7 reasoning *(done)* + 3 enterprise + 6 local LLM = **16** |
+| B — Intelligence | 3 enterprise shapes, llama sidecar | 7 reasoning *(done)* + 3 enterprise *(done)* + 6 local LLM = **16** |
 | C — transcription clients | 4 clients | **7** transcription (3 immediately from A, 4 from C) |
 | D — system audio + natives | large | 0 directly; unblocks E entirely |
 | E — meetings | 5 clients + 5 detectors | **6** streams + 5 detectors |
@@ -177,18 +177,26 @@ effect on the next dictation rather than after a restart. Three things it refuse
 that cannot be used, and to report cleanup as on when a missing key means it will silently leave
 the transcript alone.
 
-### B2. Settings > Intelligence > Enterprise (3 shapes)
+### B2. Settings > Intelligence > Enterprise (3 shapes) *(done)*
 
-`crates/reasoning-core/src/chat.rs:189` — replace the `ShapeNotImplemented` arm.
+`crates/reasoning-core/src/enterprise.rs` and `sigv4.rs`. The `ShapeNotImplemented` arm is gone.
 
-- **Bedrock:** SigV4 signing plus the Converse body shape. Testable against AWS's published
-  canonical-request/string-to-sign vectors with no account, which is why this is not blocked.
-- **Azure OpenAI:** deployment-driven, 0 models in the registry; the deployment name is user
-  input, and `api-version` is a query parameter, not a header.
-- **Vertex:** service-account JWT → OAuth2 exchange, region in the host.
+- **Bedrock:** SigV4 written out rather than taken from `aws-sdk-bedrockruntime`, which would
+  bring its own HTTP stack around `network-policy` and a credential *chain* that reads the
+  environment, `~/.aws`, and IMDS. Verified against AWS's five published vectors, including
+  through the public `sign` entry point. Plus the Converse body: `system` is not a message,
+  content is a list of blocks, and the token cap is `inferenceConfig.maxTokens`.
+- **Azure OpenAI:** deployment in the path and selecting the model, `api-version` as a **query
+  parameter**, and `api-key` rather than a bearer token. Sending `api-version` as a header gets a
+  401, which reads as a credential problem.
+- **Vertex:** service-account JWT signed RS256, exchanged for an access token, region in the host
+  (`global` has its own), and the publisher prefix on the model id.
 
-Each carries `RequestPurpose::UserConfiguredCloudProvider` through `network-policy`. Live calls
-stay unverified and `PLATFORM_SUPPORT.md` says so.
+Configuration is one JSON document per connector in **one credential-store slot** — three slots
+added to the registry, since upstream kept these in loose settings fields. Not split across
+settings and the keychain: a struct half in each is a struct reassembled wrongly.
+
+Live calls stay unverified and `PLATFORM_SUPPORT.md` now has a table saying so per provider.
 
 ### B3. Local LLM — the llama-server sidecar (6 providers, ~20 models)
 

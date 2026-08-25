@@ -113,7 +113,32 @@ const CREDENTIAL_SLOTS = {
     kind: "custom-endpoint",
     feature: "chat-agent",
   },
+  // One slot each, holding the whole multi-field configuration as JSON. Not on
+  // the Providers screen, which stores a single secret per slot -- these are
+  // configured on Settings > Intelligence > Enterprise, which has the fields.
+  bedrock: { name: "AWS Bedrock", kind: "enterprise", feature: "bedrock" },
+  azure: { name: "Azure OpenAI", kind: "enterprise", feature: "azure" },
+  vertex: { name: "GCP Vertex AI", kind: "enterprise", feature: "vertex" },
 };
+
+/**
+ * Slots this project needs that upstream's `secretKeys` does not have.
+ *
+ * Upstream stored enterprise credentials as loose settings fields — an AWS
+ * secret access key in the same store as a window position. Here each connector
+ * gets one credential-store slot holding its whole configuration as JSON,
+ * because splitting it would put the secret half in the keychain and the region
+ * and deployment half in SQLite, and a struct reassembled from two stores is a
+ * struct that gets reassembled wrongly.
+ *
+ * Listed separately from `CREDENTIAL_SLOTS` so the distinction stays visible:
+ * everything above came from upstream, everything here is ours.
+ */
+const OWN_CREDENTIAL_SLOTS = [
+  { base: "bedrock", env: "AWS_BEDROCK_CONFIG" },
+  { base: "azure", env: "AZURE_OPENAI_CONFIG" },
+  { base: "vertex", env: "GCP_VERTEX_CONFIG" },
+];
 
 /** Which credential slot each provider authenticates with. */
 const AUTH_SCHEMES = {
@@ -240,7 +265,7 @@ const sherpa = Object.entries(R.parakeetModels).map(([id, m]) => ({
 // Built last, because `usedFor` is derived from the lists above rather than
 // restated: a provider that gains transcription support does not also need its
 // credential entry edited.
-const credentials = baseline.secretKeys.map((k) => {
+const credentials = [...baseline.secretKeys, ...OWN_CREDENTIAL_SLOTS].map((k) => {
   const declared = CREDENTIAL_SLOTS[k.base];
   if (!declared) {
     die(
@@ -298,6 +323,7 @@ const registry = {
       "every transcription provider declares an explicit maxUploadBytes",
       "openwhisprCloudModels dropped as removed-vendor-service",
       "credential slots come from secretKeys, not from the provider lists, so all fifteen are declared",
+      "three enterprise slots are added on top: upstream kept those credentials in loose settings fields",
     ],
   },
   credentials,
@@ -327,7 +353,7 @@ if (process.argv.includes("--check")) {
 writeFileSync(OUT, rendered, "utf8");
 
 const counts = {
-  credentials: `${credentials.length} slots (${credentials.filter((c) => c.kind === "provider").length} provider, ${credentials.filter((c) => c.kind === "custom-endpoint").length} custom endpoint)`,
+  credentials: `${credentials.length} slots (${credentials.filter((c) => c.kind === "provider").length} provider, ${credentials.filter((c) => c.kind === "custom-endpoint").length} custom endpoint, ${credentials.filter((c) => c.kind === "enterprise").length} enterprise)`,
   transcription: `${transcription.length} providers / ${transcription.reduce((n, p) => n + p.models.length, 0)} models`,
   reasoning: `${reasoning.length} providers / ${reasoning.reduce((n, p) => n + p.models.length, 0)} models`,
   enterprise: `${enterprise.length} providers / ${enterprise.reduce((n, p) => n + p.models.length, 0)} models`,

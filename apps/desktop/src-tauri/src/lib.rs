@@ -239,6 +239,8 @@ pub fn run() -> anyhow::Result<()> {
             commands::probe_providers,
             reasoning::reasoning_status,
             reasoning::reasoning_set_cleanup,
+            reasoning::enterprise_config_set,
+            reasoning::enterprise_config_clear,
             commands::import_openwhispr,
             commands::notes_list,
             commands::notes_search,

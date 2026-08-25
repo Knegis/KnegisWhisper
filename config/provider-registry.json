@@ -6,7 +6,8 @@
     "normalisations": [
       "every transcription provider declares an explicit maxUploadBytes",
       "openwhisprCloudModels dropped as removed-vendor-service",
-      "credential slots come from secretKeys, not from the provider lists, so all fifteen are declared"
+      "credential slots come from secretKeys, not from the provider lists, so all fifteen are declared",
+      "three enterprise slots are added on top: upstream kept those credentials in loose settings fields"
     ]
   },
   "credentials": [
@@ -142,6 +143,30 @@
       "env": "CHAT_AGENT_CUSTOM_API_KEY",
       "usedFor": [],
       "feature": "chat-agent"
+    },
+    {
+      "slot": "bedrock",
+      "name": "AWS Bedrock",
+      "kind": "enterprise",
+      "env": "AWS_BEDROCK_CONFIG",
+      "usedFor": [],
+      "feature": "bedrock"
+    },
+    {
+      "slot": "azure",
+      "name": "Azure OpenAI",
+      "kind": "enterprise",
+      "env": "AZURE_OPENAI_CONFIG",
+      "usedFor": [],
+      "feature": "azure"
+    },
+    {
+      "slot": "vertex",
+      "name": "GCP Vertex AI",
+      "kind": "enterprise",
+      "env": "GCP_VERTEX_CONFIG",
+      "usedFor": [],
+      "feature": "vertex"
     }
   ],
   "transcription": [

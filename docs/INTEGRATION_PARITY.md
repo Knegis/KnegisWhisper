@@ -87,15 +87,19 @@ frontend backlog, sized in integrations rather than in adjectives:
 | `Settings > Meetings` | 6 | no |
 | `Settings > Transcription` | 4 | yes — these four need a provider client that does not exist |
 | `Settings > Transcription > Local` | 4 | yes — whisper only; Parakeet and Nemotron have no sidecar |
-| `Settings > Intelligence > Enterprise` | 3 | no |
 | `Integrations > Calendar` | 3 | no |
 | `Notes > Upload` | 3 | no |
 | `Integrations > CLI` | 1 | no |
 | `Integrations > MCP` | 1 | no |
 
-**33 integrations are reachable today**, up from 8: the fifteen credential slots, three
-transcription providers, seven reasoning providers, the six whisper models, the local REST API,
-and transcript export.
+**36 integrations are reachable today**, up from 8: the fifteen credential slots, three
+transcription providers, seven reasoning providers, three enterprise connectors, the six whisper
+models, the local REST API, and transcript export.
+
+*Reachable* is still not *verified*. The three enterprise connectors can be configured and their
+request shapes are tested against AWS's published signing vectors and recorded fixtures, and no
+live call has been made to any of them. `docs/PLATFORM_SUPPORT.md` keeps that distinction per
+provider.
 
 The jump came from two screens and no new subsystem. Every one of those fifteen slots had working
 Rust behind it and nowhere to type a key; every one of those seven reasoning providers had a

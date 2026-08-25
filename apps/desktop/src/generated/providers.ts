@@ -38,7 +38,7 @@ export const SHERPA_MODEL_IDS = ["nemotron-3.5-asr-streaming-0.6b", "nemotron-sp
 export type SherpaModelId = (typeof SHERPA_MODEL_IDS)[number];
 
 /** OS credential-store slots, in upstream secretKeys order. All fifteen: ten providers and five per-feature custom endpoints. */
-export const CREDENTIAL_SLOTS = ["openai", "anthropic", "gemini", "groq", "berget", "xai", "mistral", "openrouter", "tinfoil", "corti", "note-formatting-custom", "translation-custom", "dictation-agent-custom", "dictation-agent-vision-custom", "chat-agent-custom"] as const;
+export const CREDENTIAL_SLOTS = ["openai", "anthropic", "gemini", "groq", "berget", "xai", "mistral", "openrouter", "tinfoil", "corti", "note-formatting-custom", "translation-custom", "dictation-agent-custom", "dictation-agent-vision-custom", "chat-agent-custom", "bedrock", "azure", "vertex"] as const;
 export type CredentialSlot = (typeof CREDENTIAL_SLOTS)[number];
 
 export type AuthScheme =
@@ -49,14 +49,16 @@ export type AuthScheme =
   | "none";
 
 /** What a credential slot is for. Mirrors `provider_registry::CredentialKind`. */
-export type CredentialKind = "provider" | "custom-endpoint";
+export type CredentialKind = "provider" | "custom-endpoint" | "enterprise";
 
 /**
  * One slot in the OS credential store. Mirrors
  * `provider_registry::CredentialSlot`.
  *
  * `kind` is the distinction a screen has to make. A `provider` key is enough on
- * its own to try that service; a `custom-endpoint` key configures nothing
+ * its own to try that service; an `enterprise` slot holds a whole multi-field
+ * configuration as JSON and is set on its own screen; a `custom-endpoint` key
+ * configures nothing
  * without the base URL that lives with the feature it belongs to, so a screen
  * storing one must say so rather than implying the key finished the job.
  */
@@ -323,6 +325,30 @@ export const PROVIDER_REGISTRY = {
       "env": "CHAT_AGENT_CUSTOM_API_KEY",
       "usedFor": [],
       "feature": "chat-agent"
+    },
+    {
+      "slot": "bedrock",
+      "name": "AWS Bedrock",
+      "kind": "enterprise",
+      "env": "AWS_BEDROCK_CONFIG",
+      "usedFor": [],
+      "feature": "bedrock"
+    },
+    {
+      "slot": "azure",
+      "name": "Azure OpenAI",
+      "kind": "enterprise",
+      "env": "AZURE_OPENAI_CONFIG",
+      "usedFor": [],
+      "feature": "azure"
+    },
+    {
+      "slot": "vertex",
+      "name": "GCP Vertex AI",
+      "kind": "enterprise",
+      "env": "GCP_VERTEX_CONFIG",
+      "usedFor": [],
+      "feature": "vertex"
     }
   ],
   "transcription": [

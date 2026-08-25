@@ -24,6 +24,32 @@ EventKit calendar access, and CoreAudio process taps — is written behind trait
 compile-checked in CI, but **nothing has run it**. It stays marked unverified here until someone
 runs it on hardware. Treat any claim to the contrary in this table as a bug in the table.
 
+## Providers verified against a live service
+
+Platform support is one axis; whether a provider has ever actually answered is another, and it is
+just as easy to claim falsely. Same rule: a row says "verified" only where a real request came back.
+
+| Provider group | Request shape | Live call |
+| --- | --- | --- |
+| Transcription — OpenAI, Groq, Berget | `HttpBatch`, tested against recorded fixtures | ⚠️ needs a key; unverified |
+| Transcription — Tinfoil, Mistral, xAI, Corti | not implemented; the executor refuses | — |
+| Reasoning — the seven cloud providers | OpenAI-compatible, tested against fixtures | ⚠️ needs a key; unverified |
+| **Enterprise — AWS Bedrock** | Converse body + **SigV4 signing verified against AWS's own published vectors** | ⚠️ **unverified — no AWS organisation credentials** |
+| **Enterprise — Azure OpenAI** | deployment path, `api-version` query parameter, `api-key` header | ⚠️ **unverified — no Azure organisation credentials** |
+| **Enterprise — GCP Vertex AI** | service-account JWT → OAuth2 exchange, OpenAI-compatible endpoint | ⚠️ **unverified — no GCP organisation credentials** |
+
+The Bedrock row is the strongest claim of the three and still not a verified one. AWS publishes
+signing test vectors — a request, its canonical form, its string-to-sign, its derived key, and the
+expected signature — and `crates/reasoning-core/src/sigv4.rs` reproduces all five, including
+through the public `sign` entry point. That establishes the *signature* is right. It does not
+establish that Bedrock accepts the request, that the Converse body is shaped the way a particular
+model wants it, or that the endpoint is reachable from here. Those need an account.
+
+`crates/reasoning-core/src/sigv4.rs` deliberately omits `x-amz-content-sha256`, which S3 requires
+and Bedrock does not, so that `sign` itself can be checked against AWS's vector rather than only
+its internals. A signing routine nobody can check against an outside answer is one you have to
+take on trust.
+
 ## Capture exclusion
 
 Reported as one of four states, never a boolean:

@@ -24,9 +24,13 @@ import { useCallback, useState } from "react";
 
 import { Row } from "../components/Row";
 import {
+  clearEnterpriseConfig,
   getReasoningStatus,
   setCleanup,
+  setEnterpriseConfig,
   type CleanupRoute,
+  type EnterpriseConfig,
+  type EnterpriseStatus,
   type ReasoningDispatch,
   type ReasoningProviderSummary,
 } from "../lib/ipc";
@@ -37,7 +41,7 @@ function dispatchLabel(d: ReasoningDispatch): string {
   switch (d.state) {
     case "ready":
       return "can be used";
-    case "needs-shape":
+    case "needs-config":
       return d.reason;
     case "needs-sidecar":
       return d.reason;
@@ -68,6 +72,131 @@ function routeLabel(r: CleanupRoute): { value: string; detail: string } {
   }
 }
 
+
+/**
+ * The fields each connector needs, declared once.
+ *
+ * `secret` decides the input type. Getting it wrong is not cosmetic: a secret
+ * access key in a plain text field is a secret on screen in a screen share, and
+ * this application ships an overlay whose whole purpose is not being in one.
+ */
+const ENTERPRISE_FIELDS: Record<
+  string,
+  { key: string; label: string; secret: boolean; hint?: string }[]
+> = {
+  bedrock: [
+    { key: "region", label: "Region", secret: false, hint: "e.g. eu-west-1" },
+    { key: "accessKeyId", label: "Access key ID", secret: false },
+    { key: "secretAccessKey", label: "Secret access key", secret: true },
+    {
+      key: "sessionToken",
+      label: "Session token",
+      secret: true,
+      hint: "only for temporary credentials",
+    },
+  ],
+  azure: [
+    {
+      key: "endpoint",
+      label: "Endpoint",
+      secret: false,
+      hint: "https://your-org.openai.azure.com",
+    },
+    {
+      key: "deployment",
+      label: "Deployment",
+      secret: false,
+      hint: "the deployment name selects the model",
+    },
+    { key: "apiVersion", label: "API version", secret: false, hint: "e.g. 2024-10-21" },
+    { key: "apiKey", label: "API key", secret: true },
+  ],
+  vertex: [
+    { key: "projectId", label: "Project ID", secret: false },
+    { key: "region", label: "Region", secret: false, hint: "e.g. europe-west4, or global" },
+    {
+      key: "serviceAccountJson",
+      label: "Service account JSON",
+      secret: true,
+      hint: "the key file, pasted whole",
+    },
+  ],
+};
+
+/**
+ * One connector's form.
+ *
+ * Fields are never prefilled from what is stored — nothing can read a
+ * configuration back — so a saved connector shows which fields it has and an
+ * empty form that replaces the lot. Partial edits are not offered because a
+ * partial write would leave a configuration half from one set of credentials
+ * and half from another.
+ */
+function EnterpriseForm({
+  status,
+  onSave,
+  onClear,
+}: {
+  status: EnterpriseStatus;
+  onSave: (config: EnterpriseConfig) => void;
+  onClear: () => void;
+}) {
+  const [values, setValues] = useState<Record<string, string>>({});
+  const fields = ENTERPRISE_FIELDS[status.provider] ?? [];
+
+  const save = () => {
+    // The tag Rust discriminates on. Built here rather than inferred, so an
+    // unknown provider is a missing key rather than a mis-tagged document.
+    onSave({ provider: status.provider, ...values } as unknown as EnterpriseConfig);
+    setValues({});
+  };
+
+  return (
+    <div className="row">
+      <span className="row-label">{status.name}</span>
+      <span className="row-value">
+        {status.configured ? "Configured" : "Not configured"}
+        {status.problem ? (
+          <em className="row-detail warn">{status.problem}</em>
+        ) : status.configured ? (
+          <em className="row-detail">
+            {status.fields
+              .map((f) => `${f.name}${f.filled ? "" : " (empty)"}`)
+              .join(", ")}
+          </em>
+        ) : null}
+
+        {fields.map((f) => (
+          <span key={f.key} className="controls">
+            <input
+              type={f.secret ? "password" : "text"}
+              autoComplete="off"
+              aria-label={`${status.name} ${f.label}`}
+              placeholder={f.hint ? `${f.label} — ${f.hint}` : f.label}
+              value={values[f.key] ?? ""}
+              onChange={(e) =>
+                setValues((prev) => ({ ...prev, [f.key]: e.target.value }))
+              }
+            />
+          </span>
+        ))}
+
+        <span className="controls">
+          {/* Never disabled: a control that silently does nothing is the defect. */}
+          <button type="button" onClick={save}>
+            Save
+          </button>
+          {status.configured ? (
+            <button type="button" onClick={onClear}>
+              Clear
+            </button>
+          ) : null}
+        </span>
+      </span>
+    </div>
+  );
+}
+
 export function SettingsIntelligence({
   onGoToProviders,
 }: {
@@ -90,7 +219,7 @@ export function SettingsIntelligence({
     );
   }
 
-  const { settings, route, providers } = data;
+  const { settings, route, providers, enterprise } = data;
 
   // A draft field falls back to what is stored, so the controls always show the
   // real configuration rather than an empty box next to a working setting.
@@ -271,14 +400,38 @@ export function SettingsIntelligence({
         </button>
       </section>
 
-      {/*
-        No `data-surface` marker. This section lists the enterprise connectors
-        and says why they cannot be used; it does not configure them, and
-        `Settings > Intelligence > Enterprise` stays unbuilt until B2 writes the
-        three request shapes and the fields they need.
-      */}
+      <section data-surface="settings.intelligence.enterprise">
+        <h2>Enterprise connectors</h2>
+        <p className="muted">
+          Bedrock, Azure OpenAI and Vertex AI use organisation credentials rather
+          than a single API key, so they are configured here rather than on the
+          Providers screen. The whole configuration goes into one entry in this
+          machine's credential store — nothing enterprise-shaped is written to
+          the database.
+        </p>
+        <p className="caveat">
+          The request signing and body shapes are written and tested against
+          published vectors and recorded fixtures. <strong>No live call has been
+          made to any of the three</strong>, because that needs AWS, Azure or GCP
+          organisation credentials this project does not have. See
+          <code>docs/PLATFORM_SUPPORT.md</code>.
+        </p>
+        {enterprise.map((e) => (
+          <EnterpriseForm
+            key={e.provider}
+            status={e}
+            onSave={(config) => {
+              void guard(() => setEnterpriseConfig(config));
+            }}
+            onClear={() => {
+              void guard(() => clearEnterpriseConfig(e.provider));
+            }}
+          />
+        ))}
+      </section>
+
       <section>
-        <h2>Providers</h2>
+        <h2>All providers</h2>
         <p className="muted">
           Every reasoning provider the registry declares, including the ones this
           build cannot send to. Listing them with the reason beats leaving them

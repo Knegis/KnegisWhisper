@@ -15,6 +15,7 @@ use kw_network_policy::{NetworkPolicy, RequestPurpose};
 use kw_security::{CredentialStore, Secret};
 use serde_json::{json, Value};
 
+use crate::enterprise::{self, EnterpriseConfig};
 use crate::params::{build_body, shape_for, Intent, ModelShape, RequestOptions};
 use crate::route::ChatRoute;
 
@@ -40,10 +41,13 @@ pub enum ChatError {
     #[error("the request to {provider} failed: {detail}")]
     Transport { provider: String, detail: String },
 
-    #[error(
-        "{provider} needs a request shape this application does not implement yet. \
-         Choose a provider that speaks the OpenAI-compatible chat API."
-    )]
+    /// A configuration problem, not a missing feature.
+    ///
+    /// The name is historical: this variant used to mean "Bedrock, Azure and
+    /// Vertex are unimplemented", and all three are implemented now. What
+    /// remains is the case where a stored enterprise configuration cannot be
+    /// read, or does not match the provider it was selected for.
+    #[error("{provider}")]
     ShapeNotImplemented { provider: String },
 }
 
@@ -185,12 +189,9 @@ impl<'a> Chat<'a> {
             ),
 
             ChatRoute::Enterprise { id } => {
-                // Bedrock, Azure and Vertex each need their own signing and
-                // request shape. Refusing honestly beats sending an
-                // OpenAI-shaped body to an endpoint that will reject it.
-                return Err(ChatError::ShapeNotImplemented {
-                    provider: id.clone(),
-                });
+                // Its own signing, its own body, and for Bedrock its own
+                // response shape. Nothing below this point applies.
+                return self.send_enterprise(id, model, &messages, options).await;
             }
         };
 
@@ -214,6 +215,138 @@ impl<'a> Chat<'a> {
 
         self.post(&provider, &endpoint, purpose, credential.as_ref(), &body)
             .await
+    }
+
+    /// Send to Bedrock, Azure or Vertex.
+    ///
+    /// The configuration lives in the OS credential store under the provider's
+    /// own slot, as one JSON document. Not split across settings and the
+    /// keychain: a struct where two fields are secret and three are not is a
+    /// struct that gets reassembled wrongly, and the whole thing is small.
+    async fn send_enterprise(
+        &self,
+        id: &str,
+        model: &str,
+        messages: &[Value],
+        options: &RequestOptions,
+    ) -> Result<String, ChatError> {
+        let slot = kw_security::KeyRef::new(id).ok_or_else(|| ChatError::MissingCredential {
+            slot: id.to_owned(),
+        })?;
+
+        let stored = self
+            .credentials
+            .get(&slot)
+            .ok()
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| ChatError::MissingCredential {
+                slot: id.to_owned(),
+            })?;
+
+        let config: EnterpriseConfig =
+            serde_json::from_str(stored.expose()).map_err(|e| ChatError::ShapeNotImplemented {
+                provider: format!("the stored {id} configuration could not be read: {e}"),
+            })?;
+
+        let shaped = match &config {
+            EnterpriseConfig::Bedrock { .. } => {
+                // SigV4 covers a timestamp, and AWS rejects one more than five
+                // minutes from its own clock. Read here rather than passed in,
+                // because this is the one place it is not a test.
+                let now = chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
+                enterprise::shape_bedrock(&config, model, messages, options, &now)?
+            }
+            EnterpriseConfig::Azure { .. } => enterprise::shape_azure(&config, messages, options)?,
+            EnterpriseConfig::Vertex { .. } => {
+                let token = self.vertex_access_token(&config).await?;
+                enterprise::shape_vertex(&config, model, messages, options, &token)?
+            }
+        };
+
+        let mut outbound = self
+            .policy
+            .post(RequestPurpose::UserConfiguredAiProvider, &shaped.url)?;
+        for (name, value) in &shaped.headers {
+            // `host` is set by the transport from the URL. Sending it again
+            // would duplicate the header, and it is covered by the SigV4
+            // signature either way.
+            if name != "host" {
+                outbound = outbound.header(name, value);
+            }
+        }
+
+        tracing::debug!(provider = id, "sending an enterprise completion request");
+
+        let response =
+            outbound
+                .body(shaped.body)
+                .send()
+                .await
+                .map_err(|e| ChatError::Transport {
+                    provider: id.to_owned(),
+                    detail: e.to_string(),
+                })?;
+
+        let status = response.status().as_u16();
+        let text = response.text().await.map_err(|e| ChatError::Transport {
+            provider: id.to_owned(),
+            detail: e.to_string(),
+        })?;
+
+        if shaped.converse_response {
+            enterprise::interpret_converse(status, &text)
+        } else {
+            interpret_completion(id, status, &text)
+        }
+    }
+
+    /// Exchange a service-account assertion for a Vertex access token.
+    ///
+    /// A network call of its own, against Google's token endpoint rather than
+    /// the model endpoint, and under the same purpose: it is one action the user
+    /// configured. Not cached — an hour of validity against a dictation that
+    /// happens once a minute is not worth a cache that has to be invalidated
+    /// whenever the configuration changes.
+    async fn vertex_access_token(&self, config: &EnterpriseConfig) -> Result<String, ChatError> {
+        let EnterpriseConfig::Vertex {
+            service_account_json,
+            ..
+        } = config
+        else {
+            return Err(ChatError::ShapeNotImplemented {
+                provider: "vertex was selected with another provider's configuration".to_owned(),
+            });
+        };
+
+        let account: enterprise::ServiceAccount = serde_json::from_str(service_account_json)
+            .map_err(|e| ChatError::ShapeNotImplemented {
+                provider: format!("the Vertex service account could not be read: {e}"),
+            })?;
+
+        let assertion = enterprise::vertex_assertion(&account, chrono::Utc::now().timestamp())?;
+
+        let response = self
+            .policy
+            .post(RequestPurpose::UserConfiguredAiProvider, &account.token_uri)?
+            .header(
+                reqwest::header::CONTENT_TYPE,
+                "application/x-www-form-urlencoded",
+            )
+            .body(enterprise::vertex_token_request(&assertion))
+            .send()
+            .await
+            .map_err(|e| ChatError::Transport {
+                provider: "vertex (token exchange)".to_owned(),
+                detail: e.to_string(),
+            })?;
+
+        let status = response.status().as_u16();
+        let text = response.text().await.map_err(|e| ChatError::Transport {
+            provider: "vertex (token exchange)".to_owned(),
+            detail: e.to_string(),
+        })?;
+
+        enterprise::interpret_token(status, &text)
     }
 
     async fn post(
@@ -439,8 +572,14 @@ mod tests {
 
     /* --------------------------------------------------------------- routing */
 
+    /// An unconfigured enterprise provider is a missing credential.
+    ///
+    /// It used to be `ShapeNotImplemented`, which was the honest answer while
+    /// the three shapes were unwritten. They are written now, so the only thing
+    /// missing is the configuration — and saying "not implemented" for that
+    /// would send someone looking for a feature rather than for a settings page.
     #[tokio::test]
-    async fn an_enterprise_route_is_refused_rather_than_sent_an_openai_body() {
+    async fn an_unconfigured_enterprise_provider_says_the_configuration_is_missing() {
         let policy = NetworkPolicy::new().unwrap();
         let creds = MemoryCredentialStore::new();
         let chat = Chat::new(&policy, &creds);
@@ -459,8 +598,83 @@ mod tests {
             .unwrap_err();
 
         match err {
-            ChatError::ShapeNotImplemented { provider } => assert_eq!(provider, "bedrock"),
-            other => panic!("expected an honest refusal, got {other:?}"),
+            ChatError::MissingCredential { slot } => assert_eq!(slot, "bedrock"),
+            other => panic!("expected a missing configuration, got {other:?}"),
+        }
+    }
+
+    /// A stored configuration for the wrong provider is refused, not coerced.
+    ///
+    /// The case that matters: someone configures Azure, switches the provider to
+    /// Bedrock, and the Azure key is still in the Bedrock slot. Sending an Azure
+    /// key to AWS would be a credential in a request nobody intended.
+    #[tokio::test]
+    async fn a_configuration_for_another_provider_is_refused() {
+        let policy = NetworkPolicy::new().unwrap();
+        let creds = MemoryCredentialStore::new();
+        let slot = KeyRef::new("bedrock").unwrap();
+        creds
+            .set(
+                &slot,
+                &kw_security::Secret::new(
+                    serde_json::to_string(&crate::enterprise::EnterpriseConfig::Azure {
+                        endpoint: "https://x.openai.azure.com".to_owned(),
+                        deployment: "d".to_owned(),
+                        api_version: "2024-10-21".to_owned(),
+                        api_key: "k".to_owned(),
+                    })
+                    .unwrap(),
+                ),
+            )
+            .unwrap();
+
+        let err = Chat::new(&policy, &creds)
+            .complete(
+                registry(),
+                &ChatRoute::Enterprise {
+                    id: "bedrock".to_owned(),
+                },
+                "amazon.nova-lite-v1:0",
+                vec![json!({"role": "user", "content": "hi"})],
+                &RequestOptions::default(),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(
+            format!("{err}").contains("azure"),
+            "the refusal must name what was actually stored: {err}"
+        );
+    }
+
+    /// A stored blob that is not a configuration is refused before any request.
+    #[tokio::test]
+    async fn an_unreadable_configuration_is_refused_before_anything_is_sent() {
+        let policy = NetworkPolicy::new().unwrap();
+        let creds = MemoryCredentialStore::new();
+        let slot = KeyRef::new("azure").unwrap();
+        creds
+            .set(&slot, &kw_security::Secret::new("not json".to_owned()))
+            .unwrap();
+
+        let err = Chat::new(&policy, &creds)
+            .complete(
+                registry(),
+                &ChatRoute::Enterprise {
+                    id: "azure".to_owned(),
+                },
+                "whatever",
+                vec![json!({"role": "user", "content": "hi"})],
+                &RequestOptions::default(),
+            )
+            .await
+            .unwrap_err();
+
+        match err {
+            ChatError::ShapeNotImplemented { provider } => {
+                assert!(provider.contains("could not be read"), "{provider}");
+            }
+            other => panic!("expected a configuration error, got {other:?}"),
         }
     }
 

@@ -34,9 +34,9 @@
     },
     "Settings > Intelligence > Enterprise": {
       "surfaceId": "settings.intelligence.enterprise",
-      "component": "apps/desktop/src/views/SettingsIntelligenceEnterprise.tsx",
-      "built": false,
-      "note": "Bedrock, Azure and Vertex return ShapeNotImplemented today. Chunk 2 of the completion plan writes the request shapes; the screen comes with them."
+      "component": "apps/desktop/src/views/SettingsIntelligence.tsx",
+      "built": true,
+      "note": "A form per connector on the Intelligence screen. The request signing and body shapes are written and tested against AWS's published SigV4 vectors and recorded fixtures; no live call has been made, and the section says so on screen as well as in PLATFORM_SUPPORT.md."
     },
     "Settings > Meetings": {
       "surfaceId": "settings.meetings",

@@ -194,7 +194,7 @@ models: Array<string>, dispatch: Dispatch, };
  * URL that lives with the feature it belongs to, so a screen that stores one
  * must say so rather than implying the key was all that was needed.
  */
-export type CredentialKind = "provider" | "custom-endpoint";
+export type CredentialKind = "provider" | "custom-endpoint" | "enterprise";
 
 /**
  * One credential slot and whether a secret is stored in it.
@@ -256,6 +256,49 @@ audio: AudioKind, };
 
 /* -------------------------------------------------------------- reasoning */
 /**
+ * Everything an enterprise connector needs, as the user supplies it.
+ *
+ * One value per provider rather than a bag of optional fields: Bedrock without
+ * a region and Azure without a deployment are not "partly configured", they are
+ * unconfigured, and an enum makes that unrepresentable rather than checked.
+ *
+ * Stored as JSON in a single OS-credential-store slot. Not in SQLite — some of
+ * these fields are secrets, and a struct where two fields are secret and three
+ * are not is a struct that gets split across two stores and reassembled wrongly.
+ */
+export type EnterpriseConfig = { "provider": "bedrock",
+/**
+ * e.g. `us-east-1`. Part of the host *and* of the signature scope.
+ */
+region: string, accessKeyId: string, secretAccessKey: string,
+/**
+ * Present for temporary credentials, absent for long-lived ones.
+ */
+sessionToken?: string | null, } | { "provider": "azure",
+/**
+ * The resource endpoint, e.g. `https://my-org.openai.azure.com`.
+ */
+endpoint: string,
+/**
+ * The deployment name. **This selects the model**, which is why the
+ * registry gives Azure no model list — the name is the org's own.
+ */
+deployment: string,
+/**
+ * e.g. `2024-10-21`. A query parameter, not a header; Azure rejects a
+ * request without it rather than defaulting.
+ */
+apiVersion: string, apiKey: string, } | { "provider": "vertex", projectId: string,
+/**
+ * e.g. `europe-west4`, or `global`.
+ */
+region: string,
+/**
+ * The service-account JSON key, verbatim as downloaded.
+ */
+serviceAccountJson: string, };
+
+/**
  * What the user configured, as stored.
  *
  * Kept separate from [`ChatSettings`] rather than reusing it, because the
@@ -294,7 +337,7 @@ enterprise: boolean, };
  * because the reasons differ: a transcription provider is blocked on a client,
  * a reasoning provider on a request *shape* or on a sidecar.
  */
-export type ReasoningDispatch = { "state": "ready" } | { "state": "needs-shape", reason: string, } | { "state": "needs-sidecar", reason: string, } | { "state": "unresolvable", reason: string, };
+export type ReasoningDispatch = { "state": "ready" } | { "state": "needs-config", reason: string, } | { "state": "needs-sidecar", reason: string, } | { "state": "unresolvable", reason: string, };
 
 /**
  * One model a reasoning provider offers.
@@ -318,6 +361,32 @@ credentialSlot: string | null,
  * A credential is stored. Not the same as the provider working.
  */
 configured: boolean, enterprise: boolean, dispatch: ReasoningDispatch, models: Array<ReasoningModelSummary>, };
+
+/**
+ * One enterprise connector's configuration, as the screen sees it.
+ *
+ * Field *names* and whether each is filled, never a value. There is no command
+ * that reads an enterprise configuration back, for the same reason there is
+ * none for an API key: a screen that cannot display a secret cannot leak one.
+ */
+export type EnterpriseField = { name: string, filled: boolean, };
+
+/**
+ * What is configured for one enterprise connector.
+ */
+export type EnterpriseStatus = { provider: string, name: string,
+/**
+ * Whether anything is stored at all.
+ */
+configured: boolean,
+/**
+ * Present when something is stored: which fields it has.
+ */
+fields: Array<EnterpriseField>,
+/**
+ * Present when something is stored and cannot be read, or is incomplete.
+ */
+problem: string | null, };
 
 /**
  * Where a cleanup request would go right now.
@@ -345,7 +414,7 @@ caveat: string | null, } | { "state": "problem", reason: string, };
 /**
  * Everything the Intelligence screen shows.
  */
-export type ReasoningStatus = { settings: CleanupSettings, route: CleanupRoute, providers: Array<ReasoningProviderSummary>, };
+export type ReasoningStatus = { settings: CleanupSettings, route: CleanupRoute, providers: Array<ReasoningProviderSummary>, enterprise: Array<EnterpriseStatus>, };
 
 /* ---------------------------------------------------------------- history */
 /**

@@ -135,10 +135,13 @@ fn render() -> String {
             kw_provider_probe::ProbeReport,
         ],
         "reasoning" => [
+            kw_reasoning_core::enterprise::EnterpriseConfig,
             crate::reasoning::CleanupSettings,
             crate::reasoning::ReasoningDispatch,
             crate::reasoning::ReasoningModelSummary,
             crate::reasoning::ReasoningProviderSummary,
+            crate::reasoning::EnterpriseField,
+            crate::reasoning::EnterpriseStatus,
             crate::reasoning::CleanupRoute,
             crate::reasoning::ReasoningStatus,
         ],

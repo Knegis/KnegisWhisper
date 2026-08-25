@@ -144,6 +144,11 @@ export function SettingsProviders() {
 
   const providers = slots.filter((s) => s.kind === "provider");
   const custom = slots.filter((s) => s.kind === "custom-endpoint");
+  // Enterprise slots hold a whole multi-field configuration as one JSON
+  // document, so a single-secret field cannot fill one. They are named here
+  // rather than silently absent — a slot that exists and appears nowhere is
+  // indistinguishable from a slot nobody implemented.
+  const enterprise = slots.filter((s) => s.kind === "enterprise");
   const testable = providers.filter((s) => s.stored && s.usedFor.length > 0);
 
   const field = (slot: CredentialSlotStatus) => {
@@ -265,6 +270,29 @@ export function SettingsProviders() {
           </>
         ) : null}
       </section>
+
+      {enterprise.length > 0 ? (
+        <section>
+          <h2>Enterprise connectors</h2>
+          <p className="muted">
+            {enterprise.map((s) => s.name).join(", ")} use organisation
+            credentials — a region and a key pair, or an endpoint and a
+            deployment — rather than a single API key, so they are configured on
+            the Intelligence screen where those fields are.
+          </p>
+          <Row
+            label="Stored here"
+            value={
+              enterprise.some((s) => s.stored)
+                ? enterprise
+                    .filter((s) => s.stored)
+                    .map((s) => s.name)
+                    .join(", ")
+                : "None yet"
+            }
+          />
+        </section>
+      ) : null}
 
       <section>
         <h2>Custom endpoints</h2>

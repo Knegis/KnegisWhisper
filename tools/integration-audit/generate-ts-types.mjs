@@ -69,14 +69,16 @@ export type AuthScheme =
   | "none";
 
 /** What a credential slot is for. Mirrors \`provider_registry::CredentialKind\`. */
-export type CredentialKind = "provider" | "custom-endpoint";
+export type CredentialKind = "provider" | "custom-endpoint" | "enterprise";
 
 /**
  * One slot in the OS credential store. Mirrors
  * \`provider_registry::CredentialSlot\`.
  *
  * \`kind\` is the distinction a screen has to make. A \`provider\` key is enough on
- * its own to try that service; a \`custom-endpoint\` key configures nothing
+ * its own to try that service; an \`enterprise\` slot holds a whole multi-field
+ * configuration as JSON and is set on its own screen; a \`custom-endpoint\` key
+ * configures nothing
  * without the base URL that lives with the feature it belongs to, so a screen
  * storing one must say so rather than implying the key finished the job.
  */

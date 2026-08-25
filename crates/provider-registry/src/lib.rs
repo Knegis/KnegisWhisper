@@ -197,6 +197,9 @@ pub enum CredentialKind {
     Provider,
     /// A user-supplied OpenAI-compatible endpoint for one feature.
     CustomEndpoint,
+    /// An enterprise connector whose whole multi-field configuration is stored
+    /// as one JSON document. Configured on its own screen, not on Providers.
+    Enterprise,
 }
 
 /// One slot in the OS credential store.
@@ -225,7 +228,8 @@ pub struct CredentialSlot {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Registry {
-    /// Every credential slot, including the six that belong to no provider.
+    /// Every credential slot, including the nine that belong to no cloud
+    /// provider list.
     ///
     /// Derived from upstream's `secretKeys` rather than from the provider lists
     /// below: `openrouter` has no pinned models and the five custom endpoints
@@ -521,11 +525,20 @@ mod tests {
     fn every_slot_upstream_had_is_declared_here() {
         let r = reg();
         let slots = r.credential_slots();
+
+        // Fifteen from upstream's secretKeys, plus three this project adds for
+        // the enterprise connectors -- upstream kept those in loose settings
+        // fields, so there is nothing to inherit.
+        let from_upstream = r
+            .credentials
+            .iter()
+            .filter(|c| c.kind != CredentialKind::Enterprise)
+            .count();
         assert_eq!(
-            slots.len(),
-            15,
+            from_upstream, 15,
             "expected the fifteen slots in the integration manifest, got {slots:?}"
         );
+        assert_eq!(slots.len(), 18, "{slots:?}");
 
         // The six that belong to no provider, and would therefore be invisible
         // if the set were derived from the provider lists.
@@ -582,6 +595,28 @@ mod tests {
     #[test]
     fn an_unknown_slot_fails_closed() {
         assert!(reg().credential_slot("not-a-slot").is_err());
+    }
+
+    /// Each enterprise connector has exactly one slot, named for it.
+    ///
+    /// The slot name is the provider id because `ChatRoute::Enterprise { id }`
+    /// looks it up by that id. A mismatch would be a configuration stored where
+    /// nothing reads it, which looks exactly like a configuration that works.
+    #[test]
+    fn every_enterprise_connector_has_a_slot_named_for_it() {
+        let r = reg();
+        for p in &r.enterprise {
+            let slot = r
+                .credential_slot(&p.id)
+                .unwrap_or_else(|_| panic!("{} has no credential slot", p.id));
+            assert_eq!(slot.kind, CredentialKind::Enterprise);
+            assert_eq!(slot.feature.as_deref(), Some(p.id.as_str()));
+            assert!(
+                KeyRef::new(&slot.slot).is_some(),
+                "{} is not a usable credential-store key",
+                slot.slot
+            );
+        }
     }
 
     #[test]

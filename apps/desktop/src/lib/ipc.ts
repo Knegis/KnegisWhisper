@@ -36,6 +36,9 @@ import type {
   CredentialStoreStatus,
   Diagnostics,
   Dispatch,
+  EnterpriseConfig,
+  EnterpriseField,
+  EnterpriseStatus,
   Evidence,
   ExportedTranscript,
   Folder,
@@ -94,6 +97,9 @@ export type {
   CredentialStoreStatus,
   Diagnostics,
   Dispatch,
+  EnterpriseConfig,
+  EnterpriseField,
+  EnterpriseStatus,
   Evidence,
   ExportedTranscript,
   Folder,
@@ -262,6 +268,26 @@ export async function setCleanup(
   settings: CleanupSettings,
 ): Promise<CleanupRoute> {
   return invoke<CleanupRoute>("reasoning_set_cleanup", { settings });
+}
+
+/**
+ * Store one enterprise connector's configuration.
+ *
+ * The whole document goes into a single OS-credential-store slot, because some
+ * of its fields are secrets and splitting it would put half in SQLite. Rust
+ * validates before storing, so a rejection means nothing was saved.
+ *
+ * Write-only, like every other credential path: nothing reads a configuration
+ * back, which is why `EnterpriseStatus` reports field names and not values.
+ */
+export async function setEnterpriseConfig(
+  config: EnterpriseConfig,
+): Promise<void> {
+  return invoke("enterprise_config_set", { config });
+}
+
+export async function clearEnterpriseConfig(provider: string): Promise<void> {
+  return invoke("enterprise_config_clear", { provider });
 }
 
 /* ------------------------------------------------------------------ history */

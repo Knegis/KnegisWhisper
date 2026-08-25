@@ -21,6 +21,7 @@
 use std::sync::{Arc, RwLock};
 
 use kw_provider_registry::Registry;
+use kw_reasoning_core::enterprise::EnterpriseConfig;
 use kw_reasoning_core::{ChatRoute, ChatSettings};
 use serde::{Deserialize, Serialize};
 use tauri::State;
@@ -112,10 +113,10 @@ impl CleanupSettings {
 pub enum ReasoningDispatch {
     /// OpenAI-compatible. A request would really be sent.
     Ready,
-    /// Bedrock, Azure or Vertex: organisation credentials and a request shape
-    /// this build does not implement. `chat.rs` refuses rather than sending an
-    /// OpenAI-shaped body to an endpoint that will reject it.
-    NeedsShape { reason: String },
+    /// Bedrock, Azure or Vertex. The request shape and the signing exist; what
+    /// is missing is the organisation's own credentials, which are multi-field
+    /// and have their own form.
+    NeedsConfig { reason: String },
     /// A llama.cpp server this application would manage, and does not yet.
     NeedsSidecar { reason: String },
     /// The route cannot be resolved at all.
@@ -180,6 +181,32 @@ pub enum CleanupRoute {
     Problem { reason: String },
 }
 
+/// One enterprise connector's configuration, as the screen sees it.
+///
+/// Field *names* and whether each is filled, never a value. There is no command
+/// that reads an enterprise configuration back, for the same reason there is
+/// none for an API key: a screen that cannot display a secret cannot leak one.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct EnterpriseField {
+    pub name: String,
+    pub filled: bool,
+}
+
+/// What is configured for one enterprise connector.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct EnterpriseStatus {
+    pub provider: String,
+    pub name: String,
+    /// Whether anything is stored at all.
+    pub configured: bool,
+    /// Present when something is stored: which fields it has.
+    pub fields: Vec<EnterpriseField>,
+    /// Present when something is stored and cannot be read, or is incomplete.
+    pub problem: Option<String>,
+}
+
 /// Everything the Intelligence screen shows.
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -187,6 +214,7 @@ pub struct ReasoningStatus {
     pub settings: CleanupSettings,
     pub route: CleanupRoute,
     pub providers: Vec<ReasoningProviderSummary>,
+    pub enterprise: Vec<EnterpriseStatus>,
 }
 
 /// What would happen if a request were sent to this provider.
@@ -198,9 +226,9 @@ fn dispatch_for(registry: &Registry, id: &str, enterprise: bool) -> ReasoningDis
     };
 
     match kw_reasoning_core::resolve_chat(registry, &settings) {
-        Ok(ChatRoute::Enterprise { id }) => ReasoningDispatch::NeedsShape {
+        Ok(ChatRoute::Enterprise { id }) => ReasoningDispatch::NeedsConfig {
             reason: format!(
-                "{id} needs its own request signing and body shape, which is not written yet"
+                "{id} needs its organisation credentials, set under Enterprise connectors below"
             ),
         },
         Ok(ChatRoute::Local) => ReasoningDispatch::NeedsSidecar {
@@ -254,14 +282,22 @@ fn describe(
                         ))
                     },
                 ),
-                ChatRoute::Enterprise { id } => (
-                    id.clone(),
-                    true,
-                    Some(format!(
-                        "{id} needs a request shape this build does not implement, so cleanup \
-                         will leave the transcript as it is"
-                    )),
-                ),
+                ChatRoute::Enterprise { id } => {
+                    let configured = kw_security::KeyRef::new(id)
+                        .is_some_and(|slot| credentials.contains(&slot));
+                    (
+                        id.clone(),
+                        true,
+                        if configured {
+                            None
+                        } else {
+                            Some(format!(
+                                "{id} has no configuration stored, so cleanup will leave the \
+                                 transcript as it is until one is set"
+                            ))
+                        },
+                    )
+                }
             };
 
             CleanupRoute::Ready {
@@ -345,11 +381,105 @@ pub async fn reasoning_status(
         }
     }));
 
+    let enterprise = registry
+        .enterprise
+        .iter()
+        .map(|p| enterprise_status(&p.id, &p.name, state.credentials()))
+        .collect();
+
     Ok(ReasoningStatus {
         route: describe(registry, &settings, state.credentials()),
         settings,
         providers,
+        enterprise,
     })
+}
+
+/// Read one connector's stored configuration and report its shape.
+fn enterprise_status(
+    id: &str,
+    name: &str,
+    credentials: &dyn kw_security::CredentialStore,
+) -> EnterpriseStatus {
+    let empty = EnterpriseStatus {
+        provider: id.to_owned(),
+        name: name.to_owned(),
+        configured: false,
+        fields: Vec::new(),
+        problem: None,
+    };
+
+    let Some(slot) = kw_security::KeyRef::new(id) else {
+        return empty;
+    };
+    let Some(stored) = credentials.get(&slot).ok().filter(|s| !s.is_empty()) else {
+        return empty;
+    };
+
+    match serde_json::from_str::<EnterpriseConfig>(stored.expose()) {
+        Ok(config) => {
+            // A stored configuration that no longer validates is worse than
+            // none: it reads as configured and fails at send time. Say so here.
+            let problem = config.validate().err();
+            EnterpriseStatus {
+                configured: true,
+                fields: config
+                    .filled_fields()
+                    .into_iter()
+                    .map(|(name, filled)| EnterpriseField {
+                        name: name.to_owned(),
+                        filled,
+                    })
+                    .collect(),
+                problem,
+                ..empty
+            }
+        }
+        Err(err) => EnterpriseStatus {
+            configured: true,
+            problem: Some(format!(
+                "something is stored for {id} and it could not be read: {err}"
+            )),
+            ..empty
+        },
+    }
+}
+
+/// Store an enterprise connector's configuration.
+///
+/// Validated before it is stored, so an incomplete configuration is refused
+/// where the user is looking at it rather than at the end of their next
+/// dictation. The whole document goes into one OS-credential-store slot; nothing
+/// enterprise-shaped is written to SQLite.
+#[tauri::command]
+pub fn enterprise_config_set(
+    state: State<'_, crate::state::AppState>,
+    config: EnterpriseConfig,
+) -> Result<(), String> {
+    config.validate()?;
+
+    let id = config.provider();
+    let slot = kw_security::KeyRef::new(id).ok_or_else(|| format!("{id} is not a valid slot"))?;
+    let json = serde_json::to_string(&config).map_err(|e| e.to_string())?;
+
+    state
+        .credentials()
+        .set(&slot, &kw_security::Secret::new(json))
+        .map_err(|e| format!("could not store the {id} configuration: {e}"))
+}
+
+/// Remove an enterprise connector's configuration.
+#[tauri::command]
+pub fn enterprise_config_clear(
+    state: State<'_, crate::state::AppState>,
+    provider: String,
+) -> Result<(), String> {
+    let slot = kw_security::KeyRef::new(&provider)
+        .ok_or_else(|| format!("{provider} is not a valid slot"))?;
+    state
+        .credentials()
+        .delete(&slot)
+        .map_err(|e| format!("could not remove the {provider} configuration: {e}"))
 }
 
 /// Store a cleanup configuration and apply it to the running session.
@@ -435,6 +565,7 @@ pub fn apply_at_startup(runtime: &Arc<DictationRuntime>, db: &kw_storage::Db) {
 )]
 mod tests {
     use super::*;
+    use kw_security::CredentialStore as _;
 
     fn reg() -> &'static Registry {
         kw_provider_registry::registry().expect("registry")
@@ -483,17 +614,84 @@ mod tests {
         assert!(err.contains("not-a-provider"), "{err}");
     }
 
-    /// The three enterprise connectors report the shape gap, not readiness.
+    /// The three enterprise connectors report the configuration gap.
+    ///
+    /// It used to be a *shape* gap, which was true until `enterprise.rs` wrote
+    /// the three request shapes. Reporting a missing feature for what is now a
+    /// missing setting would send someone looking in the wrong place.
     #[test]
-    fn enterprise_connectors_say_they_need_a_request_shape() {
+    fn enterprise_connectors_say_they_need_their_organisation_credentials() {
         for id in ["bedrock", "azure", "vertex"] {
             match dispatch_for(reg(), id, true) {
-                ReasoningDispatch::NeedsShape { reason } => {
+                ReasoningDispatch::NeedsConfig { reason } => {
                     assert!(reason.contains(id), "{id}: {reason}");
                 }
-                other => panic!("{id} should need a shape, got {other:?}"),
+                other => panic!("{id} should need a configuration, got {other:?}"),
             }
         }
+    }
+
+    /// A stored configuration is reported by shape, never by value.
+    #[test]
+    fn an_enterprise_status_carries_field_names_and_no_values() {
+        let store = kw_security::MemoryCredentialStore::default();
+        let slot = kw_security::KeyRef::new("bedrock").expect("slot");
+        store
+            .set(
+                &slot,
+                &kw_security::Secret::new(
+                    serde_json::to_string(&EnterpriseConfig::Bedrock {
+                        region: "eu-west-1".to_owned(),
+                        access_key_id: "AKIDEXAMPLE".to_owned(),
+                        secret_access_key: "a-real-secret".to_owned(),
+                        session_token: None,
+                    })
+                    .expect("serialize"),
+                ),
+            )
+            .expect("store");
+
+        let status = enterprise_status("bedrock", "AWS Bedrock", &store);
+        assert!(status.configured);
+        assert!(status.problem.is_none());
+
+        let printed = format!("{status:?}");
+        assert!(!printed.contains("a-real-secret"), "{printed}");
+        assert!(!printed.contains("AKIDEXAMPLE"), "{printed}");
+        assert!(
+            status
+                .fields
+                .iter()
+                .any(|f| f.name == "secretAccessKey" && f.filled),
+            "{:?}",
+            status.fields
+        );
+    }
+
+    /// A stored blob that is not a configuration reads as a problem, not as
+    /// configured and working.
+    #[test]
+    fn an_unreadable_stored_configuration_is_reported_as_a_problem() {
+        let store = kw_security::MemoryCredentialStore::default();
+        let slot = kw_security::KeyRef::new("azure").expect("slot");
+        store
+            .set(&slot, &kw_security::Secret::new("not json".to_owned()))
+            .expect("store");
+
+        let status = enterprise_status("azure", "Azure OpenAI", &store);
+        assert!(status.configured);
+        let problem = status.problem.expect("a problem");
+        assert!(problem.contains("could not be read"), "{problem}");
+    }
+
+    /// Nothing stored is nothing stored, not an empty configuration.
+    #[test]
+    fn an_unconfigured_connector_reports_nothing_rather_than_empty_fields() {
+        let store = kw_security::MemoryCredentialStore::default();
+        let status = enterprise_status("vertex", "GCP Vertex AI", &store);
+        assert!(!status.configured);
+        assert!(status.fields.is_empty());
+        assert!(status.problem.is_none());
     }
 
     /// Every cloud reasoning provider in the registry can be routed.
