@@ -42,6 +42,21 @@ pub enum RequestPurpose {
     ExplicitlyConfiguredSelfHostedEndpoint,
 }
 
+/// Every purpose, so callers can enumerate the boundary without restating it.
+///
+/// A test asserts this matches `allowedEgressPurposes` in
+/// `config/forbidden-domains.json`, which is what stops the enum, the config,
+/// and `docs/NETWORK_BOUNDARY.md` from drifting apart.
+pub const ALL_PURPOSES: [RequestPurpose; 7] = [
+    RequestPurpose::UserConfiguredAiProvider,
+    RequestPurpose::UserConfiguredTranscriptionProvider,
+    RequestPurpose::UserConfiguredCalendarProvider,
+    RequestPurpose::UserTriggeredModelDownload,
+    RequestPurpose::UserTriggeredMediaImport,
+    RequestPurpose::OwnGithubReleasesUpdater,
+    RequestPurpose::ExplicitlyConfiguredSelfHostedEndpoint,
+];
+
 impl RequestPurpose {
     /// Stable identifier used in logs and diagnostics.
     #[must_use]
@@ -341,21 +356,12 @@ mod tests {
             .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
             .unwrap_or_default();
 
-        let all = [
-            RequestPurpose::UserConfiguredAiProvider,
-            RequestPurpose::UserConfiguredTranscriptionProvider,
-            RequestPurpose::UserConfiguredCalendarProvider,
-            RequestPurpose::UserTriggeredModelDownload,
-            RequestPurpose::UserTriggeredMediaImport,
-            RequestPurpose::OwnGithubReleasesUpdater,
-            RequestPurpose::ExplicitlyConfiguredSelfHostedEndpoint,
-        ];
         assert_eq!(
-            all.len(),
+            ALL_PURPOSES.len(),
             allowed.len(),
             "purpose count drifted from config"
         );
-        for p in all {
+        for p in ALL_PURPOSES {
             assert!(
                 allowed.contains(&p.as_str()),
                 "{} is not in allowedEgressPurposes",

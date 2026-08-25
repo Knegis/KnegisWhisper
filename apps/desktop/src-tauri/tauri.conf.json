@@ -1,0 +1,67 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "KnegisWhisper",
+  "version": "0.1.0",
+  "identifier": "com.knegis.knegiswhisper",
+
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://127.0.0.1:5183",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "KnegisWhisper",
+        "width": 1000,
+        "height": 720,
+        "minWidth": 720,
+        "minHeight": 520,
+        "resizable": true,
+        "center": true,
+        "decorations": true,
+        "transparent": false,
+        "alwaysOnTop": false,
+        "skipTaskbar": false,
+        "visible": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: asset: http://asset.localhost; font-src 'self'; connect-src 'self' ipc: http://ipc.localhost; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+      "devCsp": "default-src 'self'; script-src 'self' 'unsafe-inline' http://127.0.0.1:5183; style-src 'self' 'unsafe-inline' http://127.0.0.1:5183; img-src 'self' data: asset: http://asset.localhost; font-src 'self' http://127.0.0.1:5183; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:5183 ws://127.0.0.1:5183; object-src 'none'; base-uri 'none'",
+      "freezePrototype": true,
+      "capabilities": ["default"]
+    },
+    "withGlobalTauri": false
+  },
+
+  "bundle": {
+    "active": true,
+    "targets": ["nsis", "app", "dmg", "appimage", "deb"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.ico"
+    ],
+    "createUpdaterArtifacts": false,
+    "shortDescription": "Local-first voice dictation and meeting transcription",
+    "longDescription": "Local-first voice dictation and meeting transcription. No account, no subscription, no telemetry, no hosted backend.",
+    "copyright": "Copyright (c) 2026 Axel Karlsson",
+    "category": "Productivity",
+    "licenseFile": "../../../LICENSE",
+    "windows": {
+      "nsis": {
+        "installMode": "perMachine"
+      }
+    },
+    "linux": {
+      "deb": {
+        "depends": []
+      }
+    }
+  }
+}
