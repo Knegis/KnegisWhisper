@@ -88,6 +88,33 @@ Ported from `urlAudioDownloader.js` and non-negotiable: HTTPS only; DNS resoluti
 rejection of private and link-local addresses; a 500 MB download cap; at most 3 redirects; a
 6-hour duration cap; and a 30-second stall timeout.
 
+## The local API is inbound, and not egress either
+
+`crates/local-api` *listens*; it does not send. It is in this document anyway
+because it is the other half of the same boundary — the surface through which
+this application's data can leave the process.
+
+Three properties hold it:
+
+- **Loopback only.** `serve` takes an already-bound listener and refuses one
+  whose address is not a loopback address. There is no configuration option to
+  widen it. Upstream binds `127.0.0.1` and then checks each request's remote
+  address as a second line of defence; here a non-loopback listener never reaches
+  the router, so a future edit that widens the bind fails at startup rather than
+  quietly exposing everything.
+- **Authenticated with a fresh token.** 256 bits from the operating system's
+  randomness, per run, compared in constant time. Never derived from a machine
+  identifier — that would be the device fingerprinting the brief forbids, and it
+  would be guessable.
+- **Discoverable only through a file whose permissions are read back.**
+  `~/.knegiswhisper/local-api.json` is `0600` on Unix, verified rather than
+  assumed. Windows has no `chmod`, so it reports what it actually has — the
+  user's account and administrators, inherited from the profile directory —
+  rather than claiming owner-only.
+
+An unauthenticated request gets `401` whatever the path, including paths that do
+not exist, so the surface cannot be mapped by anyone who can reach the port.
+
 ## Loopback is not egress
 
 Talking to a sidecar this application started — `whisper-server`, and later `llama-server` — is

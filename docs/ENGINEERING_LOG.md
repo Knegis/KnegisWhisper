@@ -14,6 +14,13 @@ maintained in place rather than appended to, because its purpose is to be curren
 
 ## Carry-forward — what the next session needs to know
 
+> **The single most useful next piece of work** is the Tauri layer for what is
+> already built. Local dictation and the local API both work end to end in tests
+> and neither is reachable from the running application, because no command
+> installs a model, starts whisper-server, or brings the API up. That is one
+> well-scoped chunk — commands, state, and the settings screen — and it converts
+> two phases from "tested" to "usable" without any new subsystem.
+
 Maintained in place. If something here becomes false, edit it rather than adding a note.
 
 ### Committed but not usable end to end
@@ -24,7 +31,8 @@ Maintained in place. If something here becomes false, edit it rather than adding
 | Meeting transcription (Phase 4) | Contract only | The five WebSocket clients. `is_allowed` returns true only for a provider with a client, so nothing claims otherwise. Each needs real credentials against a live service to verify. |
 | Enterprise reasoning (Bedrock, Azure, Vertex) | `ShapeNotImplemented` | The three request shapes. They refuse honestly rather than falling back. |
 | `storage::import::from_openwhispr` | Works, no UI | Deliberately absent from `config/integration-manifest.json` — adding it before it is reachable would be exactly the unconfigurable-backend the parity gate exists to catch. Add both together. |
-| Phases 5–9 | Not started | System audio, calendars, local API + CLI, MCP, diarization + Qdrant, packaging. |
+| Local API and CLI (Phase 6) | Works, in tests | Same gap as dictation: nothing in the application starts the server. The API, the discovery file, and the compiled CLI are complete and tested against each other. |
+| Phases 5, 7–9 | Not started | Calendars, MCP, diarization + Qdrant, packaging. System audio and the meeting clients remain from Phase 4. |
 
 ### Claims that are unverified rather than verified
 

@@ -19,7 +19,9 @@ when you configure them with your own credentials, and requests go straight to t
 > | 2 — Dictation | The local path works: the pinned whisper-server installs, the model downloads and its digest is checked, the server starts on loopback, and speech comes back as text. Proven by `crates/transcription-core/tests/local_dictation.rs` against the real binary. **Not yet reachable from the interface** — no Tauri command installs a model and no hotkey runs the session, so it works in tests before it works for a user. |
 > | 3 — Reasoning | Routing, request shaping, and chat dispatch complete. Cleanup works against any OpenAI-compatible provider. Bedrock, Azure, and Vertex refuse honestly. |
 > | 4 — Meetings and notes | Notes, folders, search, and transcript export complete. The meeting *contract* and capability model are complete; the five WebSocket clients are not written. |
-> | 5–9 | Not started. |
+> | 5 — Calendars | Not started. |
+> | 6 — Local API and CLI | The API and the `knegiswhisper` CLI are complete and tested end to end, including the compiled binary's exit codes. **Not yet started by the application** — no Tauri command brings the server up, the same gap as dictation. |
+> | 7–9 | Not started. |
 >
 > Every capability claim in the settings screen is read back from the operating system rather
 > than assumed, so what the application says it can do is what it can do. Where something is
