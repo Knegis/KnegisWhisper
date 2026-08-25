@@ -6,13 +6,13 @@ members = [
     "crates/overlay",
     "crates/provider-registry",
     "crates/security",
+    "crates/storage",
 ]
 
 # Crates are added by the commit that gives them real content, not up front.
 # The brief asks for vertical slices over broad unfinished scaffolding, so an
 # empty crate is not created just to reserve its name.
 #
-#   crates/storage            commit 8
 #   crates/platform           commit 10
 #   crates/audio-core         phase 2
 #   crates/transcription-core phase 2
@@ -41,6 +41,7 @@ kw-network-policy = { path = "crates/network-policy" }
 kw-overlay = { path = "crates/overlay" }
 kw-provider-registry = { path = "crates/provider-registry" }
 kw-security = { path = "crates/security" }
+kw-storage = { path = "crates/storage" }
 
 # Async
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "process"] }
@@ -81,6 +82,7 @@ ringbuf = "0.4"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
 dirs = "5"
 uuid = { version = "1", features = ["v4", "serde"] }
+tempfile = "3"
 
 # Tauri
 tauri = { version = "2", features = [] }
