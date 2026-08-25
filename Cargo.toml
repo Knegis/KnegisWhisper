@@ -4,6 +4,7 @@ members = [
     "apps/desktop/src-tauri",
     "crates/network-policy",
     "crates/overlay",
+    "crates/provider-probe",
     "crates/provider-registry",
     "crates/security",
     "crates/storage",
@@ -39,6 +40,7 @@ repository = "https://github.com/axelalbertkarlsson/KnegisWhisper"
 [workspace.dependencies]
 kw-network-policy = { path = "crates/network-policy" }
 kw-overlay = { path = "crates/overlay" }
+kw-provider-probe = { path = "crates/provider-probe" }
 kw-provider-registry = { path = "crates/provider-registry" }
 kw-security = { path = "crates/security" }
 kw-storage = { path = "crates/storage" }
@@ -70,7 +72,7 @@ keyring = { version = "3", features = [
 
 # HTTP — only crates/network-policy may depend on this. Enforced by review and
 # by the fact that nothing else declares it.
-reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "multipart", "rustls-tls"] }
 url = "2"
 
 # Audio

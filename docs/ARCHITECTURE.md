@@ -19,6 +19,7 @@ crates/
   notes-core/              notes, folders, transcripts, dictionary, export, import
   storage/                 sqlx, migrations, the OpenWhispr importer
   provider-registry/       data-driven registry; generates Rust and TS types
+  provider-probe/          live connection tests; the only thing that may call a provider "connected"
   platform/                tray, autostart, shortcuts, text insertion, clipboard, process detection
   overlay/                 privacy overlay + capture-exclusion diagnostics
   local-api/               axum, loopback only, bearer auth
@@ -79,6 +80,29 @@ Upstream expresses the transcription upload cap as a magic `sizeCapBytes: null` 
 Berget inside routing code, while OpenAI and Groq are capped at 25 MiB elsewhere. Every provider
 now declares an explicit `maxUploadBytes`, with `null` meaning genuinely uncapped. Same
 behaviour, no special case, and a test asserts each provider's value.
+
+## Provider connection tests
+
+`provider-probe` is a port of upstream's `scripts/verify-byok.mjs`, and it is what
+makes "never show a provider as connected without a real connection test" a checkable
+property rather than a promise. Three probes per provider — catalogue, chat, voice —
+and four rules worth restating:
+
+- **A 2xx is not a pass.** `200 OK` with an empty completion, a non-JSON body, or a
+  missing `text` field is a failure. This is precisely how an integration comes to be
+  displayed as working while doing nothing.
+- **A tone cannot verify recognition.** A 440 Hz sine transcribes to `""` everywhere, so
+  a tone-based pass proves endpoint, credential, and model id and nothing more. The
+  report says which audio it used; the weaker claim is stated, not implied.
+- **A run that probed nothing is not a pass.** `is_connected` is false when every probe
+  was skipped for want of a credential.
+- **The catalogue probe compares the live model list against the ids we pinned**, so a
+  provider retiring a model is caught here rather than in a user's dictation.
+
+Two upstream behaviours are deliberately dropped: its hardcoded provider list (ours comes
+from the registry, so an unknown id is an error rather than a probe of OpenAI), and its
+`gate: false` flag that downgraded some failures to warnings. `ProbeOutcome` has no
+warning state.
 
 ## Network policy
 
