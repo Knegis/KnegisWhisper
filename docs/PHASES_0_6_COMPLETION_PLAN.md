@@ -7,8 +7,8 @@ appending a note. The reasoning behind individual choices lives in
 ## Where each phase stands
 
 Status words mean something specific. **Complete** means it works and a test proves it.
-**Unreachable** means it works and a test proves it, but no user can get to it. **Contract only**
-means the types exist and the implementation does not.
+**Reachable** means a user can get to it but no person has yet exercised it by hand. **Contract
+only** means the types exist and the implementation does not.
 
 | Phase | Status | Evidence |
 | --- | --- | --- |
@@ -27,24 +27,43 @@ means the types exist and the implementation does not.
 `local-api` — and `shortcuts.rs` emitted a hotkey event nothing consumed. It was a wiring problem,
 not a missing-feature problem, which is why it was the first chunk. It now depends on all of them.
 
-## Three defects found while surveying
+## Defects found and fixed during chunk 1
 
-Each is fixed by chunk 1 rather than tracked separately.
+Kept here rather than only in commit messages, because four of the five are the *same class* of
+mistake and that pattern is the useful part.
 
-1. **Two modules own one table.** `crates/storage/src/transcriptions.rs` and
-   `crates/notes-core/src/history.rs` both read and write `transcriptions`, with two
-   `Transcription` types and two `NewTranscription` types. The Tauri commands use the first, the
-   local API the second. Neither is a superset: storage has `Status`, failure recording, `clear`
-   and `count`; notes-core has cursor paging, a redacted `Debug`, and the dictionary.
-2. **A live frontend fiction.** `apps/desktop/src/lib/ipc.ts` declares `Transcription` in
-   camelCase, but the Rust struct carries no `rename_all`, so it sends `error_message` where the
-   UI reads `errorMessage`. `App.tsx:333` therefore renders `(empty)` instead of the reason a
-   dictation failed. Same class as the `electronPresent` bug in
-   [ENGINEERING_LOG.md](ENGINEERING_LOG.md) — a field the backend never sends reads as
-   `undefined` and renders something confident and wrong.
-3. **A guarantee with nothing behind it.** `OverlayStatus::recording_indicator_visible`
-   (`overlay.rs:38`) is a hardcoded `true`, because nothing records. The brief requires the local
-   user to see when the microphone is live; wiring dictation is what turns that field into a fact.
+1. **Two modules owned one table.** `storage::transcriptions` and a `notes-core::history` both
+   read and wrote `transcriptions`, with two row types, one used by the Tauri commands and the
+   other by the local API. Merged into `storage`. Note the plan said the opposite — it assumed
+   notes-core's version was the fuller one, and reading both showed it was missing failure
+   recording, which is the thing that makes a failed dictation visible at all.
+2. **A live frontend fiction.** `ipc.ts` declared `Transcription` in camelCase while the Rust
+   struct carried no `rename_all`, so it sent `error_message` where the UI read `errorMessage`, and
+   `App.tsx` rendered `(empty)` instead of the reason a dictation failed.
+3. **Every tagged enum sent snake_case fields.** `rename_all` on an enum renames the *variants*,
+   not the fields inside them, so tagged unions sent `verified_by` while structs sent camelCase.
+   One API with two conventions is how the next person writing a frontend type gets it wrong. All
+   13 now carry `rename_all_fields = "camelCase"`.
+4. **A guessed type in brand-new code.** The `GateReason` union written for the settings screen
+   invented its variants (`"speech"`, `"too-short"`) instead of reading them; the real ones are
+   `unavailable`, `silence`, `insufficient-speech`, `speech-detected`. Caught before it landed —
+   the first time this class was.
+5. **Two workspace binaries shared a name.** The desktop app and the CLI both produced
+   `knegiswhisper`, so they overwrote each other in `target/debug` and whichever linked last won.
+   The CLI's end-to-end tests resolve `CARGO_BIN_EXE_knegiswhisper`, so once the app had been
+   linked more recently they launched the GUI application fifteen times with command-line arguments
+   it ignored — leaving a stray window on screen and a locked executable that broke the next build.
+   The tests had been passing throughout. `tools/integration-audit/verify-binaries.mjs` now fails
+   the build on any collision, verified by reintroducing this one.
+
+Items 2, 3 and 4 are one defect wearing three hats: **a type describing the other side of a
+boundary, written rather than derived.** The standing mitigation is that every such type names the
+Rust item it mirrors and a test asserts the JSON keys. Generating them from the Rust would be
+better and is not yet done.
+
+**A guarantee that had nothing behind it**, also fixed:
+`OverlayStatus::recording_indicator_visible` was a hardcoded `true` because nothing recorded. It is
+now a real read of the window, driven only by the dictation state sink.
 
 ## The work
 
@@ -57,13 +76,20 @@ The chunk that turns phases 2 and 6 from unreachable into usable.
   cursor paging, the redacted `Debug`, `AudioForgotten`'s three outcomes, and
   `rename_all = "camelCase"` (fixing defect 2). The dictionary moves to a new
   `storage::dictionary`. `notes-core::history` is deleted and its callers repointed.
-- **1b. Adapters for the six trait seams.** `crates/app-core/src/dictation.rs` defines `Recorder`,
-  `Transcriber`, `Cleanup`, `Inserter`, `History`, `StateSink`, implemented today only by test
-  fakes. Real ones go in `apps/desktop/src-tauri/src/dictation/`, reusing
-  `audio_core::capture::Capture` (real cpal), `transcription_core::{route, Executor, WhisperServer}`,
-  `reasoning_core::chat::cleanup`, and `platform::insertion::{TextInserter, SystemClipboard}`.
-  The one genuinely missing piece of platform code is a `Keyboard` implementation:
-  `platform::window::send_ctrl_v` exists, but nothing implements the trait.
+- **1b. Adapters for the six trait seams.** Real implementations of `Recorder`, `Transcriber`,
+  `Cleanup`, `Inserter`, `History`, and `StateSink` in `apps/desktop/src-tauri/src/dictation.rs`,
+  reusing `audio_core::capture::Capture` (real cpal),
+  `transcription_core::{route, Executor, WhisperServer}`, `reasoning_core::chat::cleanup`, and
+  `platform::insertion::{TextInserter, SystemClipboard}`.
+
+  No new platform code was needed after all: the plan claimed a missing `Keyboard` implementation,
+  but the trait is `PasteKeystroke`, `WindowsPaste` implements it, and `platform::paste_keystroke()`
+  already resolves per platform — returning `None` where synthetic paste does not exist, which is
+  the honest answer and the reason the settings screen can say so up front.
+
+  The microphone did need its own OS thread: `cpal::Stream` is not `Send`, so it cannot live in
+  Tauri's managed state. The `Recorder` seam hides that entirely — the state machine never learns
+  the microphone is thread-bound, and the thread never learns what a dictation is.
 - **1c. Sidecar and model lifecycle.** `AppState` gains the catalogue, the PID store, and the
   running server. Stale sidecars are reaped on boot before anything touches a port. Commands to
   check, install (with progress), start, and stop.
@@ -73,8 +99,11 @@ The chunk that turns phases 2 and 6 from unreachable into usable.
 - **1e. The hotkey does something.** `HotkeyAction::Dictation` drives the session. The overlay is
   shown for the whole recording, and `recording_indicator_visible` becomes a real read of that
   (fixing defect 3).
-- **1f. Frontend.** Three sections — local transcription, dictation, local API — and only types
+- **1f. Frontend.** Three sections — dictation, local transcription, local API — and only types
   Rust actually sends.
+
+**Still outstanding from chunk 1:** nobody has pressed the hotkey and watched text appear. That is
+the check that matters and it is the first item under Verification.
 
 ### Chunk 2 — close out phase 3
 
