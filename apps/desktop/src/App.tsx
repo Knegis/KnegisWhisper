@@ -38,12 +38,14 @@ import {
   useLocalModel,
   EXPORT_FORMATS,
   type Accelerator,
+  type Binding,
   type CaptureExclusion,
   type Diagnostics,
   type DictationOutcome,
   type ExportedTranscript,
   type ExportFormat,
   type Folder,
+  type HotkeyChange,
   type HotkeyReport,
   type InputDevice,
   type InstallProgress,
@@ -111,6 +113,30 @@ function acceleratorLabel(a: Accelerator): { text: string; problem: string | nul
     case "invalid":
       return { text: a.input, problem: a.reason };
   }
+}
+
+/** What an action's accelerators read as, for prefilling the editor. */
+function acceleratorText(b: Binding): string {
+  return b.accelerators.map((a) => acceleratorLabel(a).text).join(", ");
+}
+
+/**
+ * What a hotkey change achieved, in one line.
+ *
+ * Saved and registered are different events and the user needs to tell them
+ * apart: a well-formed accelerator that another application already owns is
+ * stored successfully and still does nothing.
+ */
+function changeLabel(change: HotkeyChange): string {
+  if (change.live) {
+    const taken = change.registrations.find((r) => r.state === "registered");
+    return `${taken?.accelerator ?? acceleratorText(change.binding)} is live.`;
+  }
+  // Narrowed to the two refusal variants, both of which carry a reason.
+  const refused = change.registrations.find((r) => r.state !== "registered");
+  return refused
+    ? `Saved, but not working: ${refused.reason}`
+    : "Saved, but nothing was registered.";
 }
 
 /** A dictation outcome as one line of plain language. */
@@ -211,6 +237,8 @@ function Dashboard() {
   const [api, setApi] = useState<LocalApiStatus | null>(null);
   const [route, setRoute] = useState<RouteReport | null>(null);
   const [draftKeys, setDraftKeys] = useState<Record<string, string>>({});
+  /** Per-action outcome of the last Set press, so the control is never silent. */
+  const [hotkeyResult, setHotkeyResult] = useState<Record<string, string>>({});
 
   const [notes, setNotes] = useState<Note[]>([]);
   const [folders, setFolders] = useState<Folder[]>([]);
@@ -308,6 +336,37 @@ function Dashboard() {
     }).then((fn) => unlisteners.push(fn));
     return () => unlisteners.forEach((fn) => fn());
   }, [refresh]);
+
+  /**
+   * Save one action's accelerator and say what happened.
+   *
+   * Every path reports something. An empty field, a refusal by the platform, and
+   * a working shortcut are three different outcomes and the row names which one
+   * it was — the previous version of this control had a fourth, silence, which
+   * is the only unacceptable one.
+   */
+  const applyHotkey = (b: Binding) => {
+    const typed = (draftKeys[b.action] ?? acceleratorText(b)).trim();
+    if (!typed) {
+      setHotkeyResult((prev) => ({
+        ...prev,
+        [b.action]: "Type an accelerator first, for example Control+Shift+D.",
+      }));
+      return;
+    }
+    void guard(async () => {
+      // A single comma-separated string, matching `hotkey_set`: one action can
+      // have several accelerators.
+      const change = await setHotkey(b.action, typed);
+      setHotkeyResult((prev) => ({ ...prev, [b.action]: changeLabel(change) }));
+      // Drop the draft so the field goes back to mirroring what is stored.
+      setDraftKeys((prev) => {
+        const next = { ...prev };
+        delete next[b.action];
+        return next;
+      });
+    });
+  };
 
   const guard = async (work: () => Promise<unknown>) => {
     setError(null);
@@ -428,30 +487,30 @@ function Dashboard() {
                       );
                     })
                   )}
+                  {/*
+                    Prefilled with what is actually configured, not a placeholder. A
+                    placeholder reading `Control+Shift+D` is indistinguishable from a typed
+                    value, so the field looked filled, the button was disabled for being
+                    empty, and pressing it did nothing and said nothing. That cost a real
+                    bench check.
+                  */}
                   <input
                     aria-label={`accelerator for ${b.action}`}
-                    placeholder="Control+Shift+D"
-                    value={draftKeys[b.action] ?? ""}
+                    value={draftKeys[b.action] ?? acceleratorText(b)}
                     onChange={(e) => {
                       setDraftKeys((prev) => ({ ...prev, [b.action]: e.target.value }));
                     }}
-                  />
-                  <button
-                    type="button"
-                    disabled={!draftKeys[b.action]?.trim()}
-                    onClick={() => {
-                      const next = draftKeys[b.action]?.trim();
-                      if (!next) return;
-                      void guard(async () => {
-                        // A single comma-separated string, matching `hotkey_set`: one action can
-                        // have several accelerators.
-                        await setHotkey(b.action, next);
-                        setDraftKeys((prev) => ({ ...prev, [b.action]: "" }));
-                      });
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") applyHotkey(b);
                     }}
-                  >
+                  />
+                  {/* Never disabled: a control that silently does nothing is the defect. */}
+                  <button type="button" onClick={() => applyHotkey(b)}>
                     Set
                   </button>
+                  {hotkeyResult[b.action] ? (
+                    <em className="row-detail">{hotkeyResult[b.action]}</em>
+                  ) : null}
                 </span>
               </div>
             ))}

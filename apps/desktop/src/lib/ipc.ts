@@ -118,11 +118,33 @@ export async function getHotkeys(): Promise<HotkeyReport> {
   return invoke<HotkeyReport>("hotkeys");
 }
 
+/**
+ * What the platform said when asked to take one accelerator.
+ *
+ * Mirrors `shortcuts::Registration`: tagged on `state`, variants kebab-case.
+ */
+export type Registration =
+  | { state: "registered"; accelerator: string }
+  | { state: "rejected"; accelerator: string; reason: string }
+  | { state: "not-registrable"; accelerator: string; reason: string };
+
+/**
+ * Mirrors `commands::HotkeyChange`.
+ *
+ * Two fields because storing and registering fail independently — `binding` is
+ * what was saved, `registrations` is whether the platform took it.
+ */
+export type HotkeyChange = {
+  binding: Binding;
+  registrations: Registration[];
+  live: boolean;
+};
+
 export async function setHotkey(
   action: HotkeyAction,
   accelerators: string,
-): Promise<Binding> {
-  return invoke<Binding>("hotkey_set", { action, accelerators });
+): Promise<HotkeyChange> {
+  return invoke<HotkeyChange>("hotkey_set", { action, accelerators });
 }
 
 /** Fired when a registered hotkey is pressed. */

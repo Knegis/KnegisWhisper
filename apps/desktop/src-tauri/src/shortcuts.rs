@@ -308,6 +308,35 @@ mod tests {
     }
 
     #[test]
+    fn the_classifier_is_never_stricter_than_the_platform() {
+        // The test above guards one direction: we must not accept what the
+        // plugin refuses, or settings shows a registered hotkey that does
+        // nothing. This guards the other, which cost a user a failed bench
+        // check: `Ctrl+Shift+D` registers perfectly well, and we were calling it
+        // invalid with the reason "it names 2 non-modifier keys" -- a message
+        // that blames the spelling for our own missing alias.
+        //
+        // Casing is included because the plugin ignores it and we preserve
+        // whatever was typed, so anyone typing naturally must still be right.
+        for accelerator in [
+            "Ctrl+Shift+D",
+            "control+shift+d",
+            "CONTROL+SHIFT+D",
+            "Control+Shift+d",
+            "Ctrl+Alt+Space",
+        ] {
+            assert!(
+                Shortcut::from_str(accelerator).is_ok(),
+                "the premise changed: the plugin now refuses {accelerator}"
+            );
+            assert!(
+                kw_platform::hotkey::classify(accelerator).is_registrable(),
+                "we refuse {accelerator}, which the platform registers"
+            );
+        }
+    }
+
+    #[test]
     fn the_plugin_also_refuses_modifier_only_accelerators() {
         // The premise behind reporting Control+Super as unregistrable. If the
         // plugin ever gains support for it, this test fails and tells us to

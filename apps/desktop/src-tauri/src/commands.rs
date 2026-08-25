@@ -121,18 +121,34 @@ pub async fn load_bindings(state: &AppState) -> CmdResult<Vec<Binding>> {
     Ok(bindings)
 }
 
+/// What changing one action's hotkey actually achieved.
+///
+/// `binding` is what was stored and how it classifies; `registrations` is what
+/// the platform said when asked to take it. Both, because they fail
+/// independently: a well-formed accelerator can still be refused because another
+/// application owns it, and reporting "saved" for that is the kind of confident
+/// success this project treats as a defect.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HotkeyChange {
+    pub binding: Binding,
+    pub registrations: Vec<crate::shortcuts::Registration>,
+    /// True when at least one accelerator for this action is now live.
+    pub live: bool,
+}
+
 /// Change one action's hotkey.
 ///
-/// Returns the classification of what was saved, so the UI can immediately show
-/// that a modifier-only accelerator will not work rather than accepting it
-/// silently.
+/// Returns the classification of what was saved *and* whether the platform took
+/// it, so the UI can immediately distinguish a modifier-only accelerator from
+/// one another application already owns.
 #[tauri::command]
 pub async fn hotkey_set(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
     action: String,
     accelerators: String,
-) -> CmdResult<Binding> {
+) -> CmdResult<HotkeyChange> {
     // Fail closed on an unknown action id rather than defaulting to dictation.
     let action = HotkeyAction::from_id(&action)
         .ok_or_else(|| format!("{action:?} is not a hotkey action"))?;
@@ -156,7 +172,17 @@ pub async fn hotkey_set(
     let live = reports.iter().filter(|r| r.is_live()).count();
     tracing::info!(live, total = reports.len(), "hotkeys re-registered");
 
-    Ok(Binding::from_stored(action, &canonical))
+    // This action's own outcome, pulled out of the whole-set re-registration.
+    // Absent only if `ALL_ACTIONS` and the stored bindings ever disagree, which
+    // would be a bug rather than a state to render, so it reports as not live
+    // with no results rather than inventing a success.
+    let mine = reports.into_iter().find(|r| r.action == action);
+
+    Ok(HotkeyChange {
+        binding: Binding::from_stored(action, &canonical),
+        registrations: mine.as_ref().map(|r| r.results.clone()).unwrap_or_default(),
+        live: mine.is_some_and(|r| r.is_live()),
+    })
 }
 
 /* -------------------------------------------------------------------- history */
