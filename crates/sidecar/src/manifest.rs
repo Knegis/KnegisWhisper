@@ -250,6 +250,52 @@ impl PortRange {
     }
 }
 
+/// How this application talks to a sidecar once it is running.
+///
+/// Five of the sidecars in `docs/PORTING_MATRIX.md` are long-lived loopback
+/// servers; seventeen are one-shot or streaming children that speak over their
+/// standard streams and never bind anything. Both are sidecars — installed,
+/// pinned, digest-verified and reaped the same way — and only this differs.
+///
+/// A tagged enum rather than an `Option<PortRange>` deliberately. An optional
+/// field is absent both when a child genuinely does not listen and when
+/// somebody forgot to write the range down, and those are not the same thing.
+/// Here the manifest has to say which, and `deny_unknown_fields` plus a missing
+/// `transport` is a deserialization error rather than a default.
+// `rename_all` on an enum renames the *variants*; the fields inside them need
+// `rename_all_fields`. Leaving it off is the mistake the completion plan records
+// as defect 3, and it produced exactly the same symptom here — a config saying
+// `portRange` refused for not being `port_range`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum Transport {
+    /// A server on loopback. Its port is allocated from this range at start-up
+    /// rather than fixed, because a previous run may still be holding one.
+    Loopback { port_range: PortRange },
+    /// A child process driven over stdin and stdout. Binds no port.
+    Stdio,
+}
+
+impl Transport {
+    /// The port range, for a sidecar that serves one.
+    ///
+    /// `None` means this sidecar does not listen at all — not that its range is
+    /// unknown. A caller that needs a port must say what it wants to happen
+    /// when there is not one.
+    #[must_use]
+    pub const fn port_range(&self) -> Option<PortRange> {
+        match self {
+            Self::Loopback { port_range } => Some(*port_range),
+            Self::Stdio => None,
+        }
+    }
+}
+
 /// Where a pinned asset came from.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -275,7 +321,8 @@ pub struct SidecarSpec {
     /// trail. Not used to build the URL — the URL is written out in full, so
     /// re-pinning is a visible diff rather than a computed surprise.
     pub source: Source,
-    pub port_range: PortRange,
+    /// Loopback server or stdio child. See [`Transport`].
+    pub transport: Transport,
     /// Substrings that must appear in a running process's command before this
     /// application will signal it. See `crate::reap`.
     pub command_fragments: Vec<String>,
@@ -296,6 +343,12 @@ impl SidecarSpec {
             }
             None => TargetState::Unknown,
         }
+    }
+
+    /// The port range this sidecar serves on, or `None` for a stdio child.
+    #[must_use]
+    pub const fn port_range(&self) -> Option<PortRange> {
+        self.transport.port_range()
     }
 
     /// Where this sidecar's files live once installed.
@@ -325,11 +378,15 @@ impl SidecarSpec {
                 self.name
             ));
         }
-        if !self.port_range.is_valid() {
-            problems.push(format!(
-                "port range {}-{} is empty or reversed",
-                self.port_range.first, self.port_range.last
-            ));
+        // Only a range that exists can be wrong. A stdio child has nothing to
+        // validate here, which is the point of modelling the two separately.
+        if let Some(range) = self.transport.port_range() {
+            if !range.is_valid() {
+                problems.push(format!(
+                    "port range {}-{} is empty or reversed",
+                    range.first, range.last
+                ));
+            }
         }
         if self.command_fragments.is_empty() {
             problems.push(format!(
@@ -543,9 +600,11 @@ mod tests {
                 release: "b4938".to_owned(),
                 pinned_because: "a bump must not change transcription output".to_owned(),
             },
-            port_range: PortRange {
-                first: 8178,
-                last: 8199,
+            transport: Transport::Loopback {
+                port_range: PortRange {
+                    first: 8178,
+                    last: 8199,
+                },
             },
             command_fragments: vec!["whisper-server".to_owned()],
             targets,
@@ -606,11 +665,73 @@ mod tests {
     #[test]
     fn a_reversed_port_range_is_a_problem() {
         let mut spec = spec();
-        spec.port_range = PortRange {
-            first: 8199,
-            last: 8178,
+        spec.transport = Transport::Loopback {
+            port_range: PortRange {
+                first: 8199,
+                last: 8178,
+            },
         };
         assert!(spec.problems().iter().any(|p| p.contains("reversed")));
+    }
+
+    #[test]
+    fn a_stdio_child_has_no_port_and_that_is_not_a_problem() {
+        // The AEC helper, ffmpeg and yt-dlp are driven over their standard
+        // streams. Before `Transport` they could only be described by inventing
+        // a port range they would never bind.
+        let mut spec = spec();
+        spec.transport = Transport::Stdio;
+
+        assert_eq!(spec.port_range(), None);
+        assert!(
+            spec.problems().is_empty(),
+            "a stdio child is a valid sidecar: {:?}",
+            spec.problems()
+        );
+    }
+
+    #[test]
+    fn a_spec_that_does_not_say_how_it_is_spoken_to_is_refused() {
+        // The reason this is an enum rather than an `Option<PortRange>`: an
+        // absent optional field would silently mean "stdio", so forgetting to
+        // write a server's range down would produce a sidecar that installs and
+        // then has nowhere to listen.
+        let json = serde_json::json!({
+            "name": "whisper",
+            "description": "Local speech-to-text",
+            "source": {
+                "repo": "ggml-org/whisper.cpp",
+                "release": "b4938",
+                "pinnedBecause": "a bump must not change transcription output"
+            },
+            "commandFragments": ["whisper-server"],
+            "targets": {}
+        });
+
+        let err = serde_json::from_value::<SidecarSpec>(json).unwrap_err();
+        assert!(err.to_string().contains("transport"), "{err}");
+    }
+
+    #[test]
+    fn both_transports_round_trip_through_the_config_format() {
+        let loopback: Transport = serde_json::from_str(
+            r#"{ "kind": "loopback", "portRange": { "first": 8178, "last": 8199 } }"#,
+        )
+        .unwrap();
+        assert_eq!(
+            loopback.port_range(),
+            Some(PortRange {
+                first: 8178,
+                last: 8199
+            })
+        );
+
+        let stdio: Transport = serde_json::from_str(r#"{ "kind": "stdio" }"#).unwrap();
+        assert_eq!(stdio.port_range(), None);
+
+        // A loopback transport without a range is a deserialization error, not
+        // a range of zero.
+        assert!(serde_json::from_str::<Transport>(r#"{ "kind": "loopback" }"#).is_err());
     }
 
     #[test]
@@ -631,7 +752,9 @@ mod tests {
         let mut spec = spec();
         spec.name = String::new();
         spec.command_fragments.clear();
-        spec.port_range = PortRange { first: 0, last: 0 };
+        spec.transport = Transport::Loopback {
+            port_range: PortRange { first: 0, last: 0 },
+        };
         assert_eq!(spec.problems().len(), 3, "{:?}", spec.problems());
     }
 

@@ -393,8 +393,12 @@ pub async fn local_server_start(
         ));
     }
 
-    let chosen =
-        port::allocate(spec.port_range, &port::BindProbe).map_err(|err| err.to_string())?;
+    let chosen = port::allocate(
+        spec.port_range()
+            .ok_or_else(|| format!("{} is a stdio child and does not serve a port", spec.name))?,
+        &port::BindProbe,
+    )
+    .map_err(|err| err.to_string())?;
 
     let options = ServerOptions {
         model_path: model_path.display().to_string(),

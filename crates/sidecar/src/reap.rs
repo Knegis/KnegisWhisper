@@ -347,7 +347,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
-    use crate::manifest::{PortRange, Source};
+    use crate::manifest::{PortRange, Source, Transport};
 
     fn spec() -> SidecarSpec {
         SidecarSpec {
@@ -358,9 +358,11 @@ mod tests {
                 release: "b4938".to_owned(),
                 pinned_because: "output stability".to_owned(),
             },
-            port_range: PortRange {
-                first: 8178,
-                last: 8199,
+            transport: Transport::Loopback {
+                port_range: PortRange {
+                    first: 8178,
+                    last: 8199,
+                },
             },
             command_fragments: vec!["whisper-server".to_owned()],
             targets: BTreeMap::new(),

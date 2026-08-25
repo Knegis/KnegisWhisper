@@ -163,7 +163,7 @@ mod tests {
             !whisper.source.repo.starts_with("OpenWhispr/"),
             "the whole exercise is not depending on the vendor's org"
         );
-        assert!(whisper.port_range.contains(8178));
+        assert!(whisper.port_range().is_some_and(|r| r.contains(8178)));
     }
 
     #[test]
@@ -239,7 +239,7 @@ mod tests {
             "name": "whisper",
             "description": "d",
             "source": {"repo": "r", "release": "t", "pinnedBecause": "w"},
-            "portRange": {"first": 8178, "last": 8199},
+            "transport": {"kind": "loopback", "portRange": {"first": 8178, "last": 8199}},
             "commandFragments": ["whisper-server"],
             "targets": {}
         }"#;
@@ -257,7 +257,7 @@ mod tests {
                 "name": "a b",
                 "description": "d",
                 "source": {{"repo": "r", "release": "t", "pinnedBecause": "w"}},
-                "portRange": {{"first": 0, "last": 0}},
+                "transport": {{"kind": "loopback", "portRange": {{"first": 0, "last": 0}}}},
                 "commandFragments": [],
                 "targets": {{}}
             }}]}}"#

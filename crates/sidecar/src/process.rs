@@ -370,7 +370,7 @@ mod tests {
     use std::sync::atomic::{AtomicU32, Ordering};
 
     use super::*;
-    use crate::manifest::{PortRange, Source};
+    use crate::manifest::{PortRange, Source, Transport};
 
     fn spec() -> SidecarSpec {
         SidecarSpec {
@@ -381,9 +381,11 @@ mod tests {
                 release: "t".to_owned(),
                 pinned_because: "w".to_owned(),
             },
-            port_range: PortRange {
-                first: 8178,
-                last: 8199,
+            transport: Transport::Loopback {
+                port_range: PortRange {
+                    first: 8178,
+                    last: 8199,
+                },
             },
             command_fragments: vec!["probe".to_owned()],
             targets: BTreeMap::new(),
