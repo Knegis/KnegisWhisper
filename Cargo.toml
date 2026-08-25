@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "apps/desktop/src-tauri",
+    "crates/app-core",
     "crates/audio-core",
     "crates/network-policy",
     "crates/overlay",
@@ -17,7 +18,6 @@ members = [
 # The brief asks for vertical slices over broad unfinished scaffolding, so an
 # empty crate is not created just to reserve its name.
 #
-#   crates/app-core           phase 2
 #   crates/reasoning-core     phase 3
 #   crates/meeting-core       phase 4
 #   crates/notes-core         phase 4
@@ -38,6 +38,7 @@ repository = "https://github.com/axelalbertkarlsson/KnegisWhisper"
 # Package names carry a `kw-` prefix so cargo output is unambiguous, while
 # directory names stay as documented in docs/ARCHITECTURE.md.
 [workspace.dependencies]
+kw-app-core = { path = "crates/app-core" }
 kw-audio-core = { path = "crates/audio-core" }
 kw-network-policy = { path = "crates/network-policy" }
 kw-overlay = { path = "crates/overlay" }

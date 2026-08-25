@@ -2480,6 +2480,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "kw-app-core"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "kw-audio-core",
+ "kw-storage",
+ "kw-transcription-core",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "kw-audio-core"
 version = "0.1.0"
 dependencies = [
