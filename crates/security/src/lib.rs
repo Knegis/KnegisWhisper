@@ -14,6 +14,10 @@
 
 use std::fmt;
 
+pub mod token;
+
+pub use token::{LocalApiToken, TokenError};
+
 /// Service name under which every credential is filed.
 pub const SERVICE: &str = "com.knegis.knegiswhisper";
 
