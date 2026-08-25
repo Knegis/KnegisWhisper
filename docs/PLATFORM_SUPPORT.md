@@ -35,16 +35,43 @@ Reported as one of four states, never a boolean:
 | `failed` | The attempt returned an error. |
 | `unknown` | Applied, but the result cannot be read back. |
 
-| Platform | Expected state | Mechanism |
+| Platform | State | Mechanism |
 | --- | --- | --- |
-| Windows 10 2004+ | `unknown` | `SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)`. The call reports success, but there is no documented getter that confirms the affinity took effect, so we report `unknown` rather than `active`. Some capture paths bypass it regardless. |
-| Windows < 10 2004 | `unsupported` | API unavailable. |
-| macOS | `unknown` | `NSWindow.sharingType = NSWindowSharingNone`. Same reasoning. |
-| Linux (all) | `unsupported` | No-op. Neither X11 nor the Wayland compositors expose per-window capture exclusion. |
+| Windows 10 2004+ | `active` | `SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)`, then **`GetWindowDisplayAffinity` read back** and compared. `active` is reported only when the read-back matches. |
+| Windows < 10 2004 | `failed` | `WDA_EXCLUDEFROMCAPTURE` is unavailable; the call fails and the OS error is reported verbatim. |
+| macOS | `unsupported` | Not implemented. `NSWindow.sharingType = NSWindowSharingNone` is the intended mechanism and it is readable, so this can become `active` with evidence — but it cannot be built or run from the current development machine, and an unverified claim about a privacy feature is worse than an admitted gap. |
+| Linux (all) | `unsupported` | There is no such facility. Neither X11 nor any current Wayland protocol lets a client ask to be omitted from a screen capture. |
 
-Reporting `unknown` where Pluely's README promises "absolute stealth" is deliberate. Pluely's
-entire mechanism is the same `contentProtected` flag, it never verifies the result, and it is a
-no-op on Linux — yet the README carries no Linux caveat. We would rather under-claim.
+### A correction to the Phase 0 audit
+
+The audit recorded that `SetWindowDisplayAffinity` has "no documented getter" and concluded
+Windows would have to report `unknown`. That was wrong: **`GetWindowDisplayAffinity` exists, and
+has since Windows 7.** Windows therefore reports `active` with real read-back evidence, and
+`unknown` is now reserved for the case where the set succeeds but the read fails.
+
+Be precise about what the read-back proves. It proves **the flag is set on the window**. It does
+not prove that a particular screen recorder is excluded — that depends on which capture API the
+recorder uses, and no API reports that from inside this process. `Evidence::ReadBack` names the
+API it consulted so the claim stays attached to its source, and the settings screen says exactly
+this rather than showing a bare green check.
+
+Under-claiming here is deliberate. Pluely's entire mechanism is Tauri's `contentProtected` flag,
+it never verifies the result, and it is a no-op on Linux — yet its README promises "absolute
+stealth" and carries no Linux caveat.
+
+## Non-activating overlay
+
+Whether the overlay declines focus. It matters functionally, not cosmetically: an overlay that
+takes focus moves the caret out of whatever the user is dictating into.
+
+| Platform | State | Mechanism |
+| --- | --- | --- |
+| Windows | `active` | `WS_EX_NOACTIVATE` set via `SetWindowLongPtrW`, then read back from `GWL_EXSTYLE`. The declarative `focused(false)` alone does not stop a click from activating the window. |
+| macOS | `unsupported` | Not implemented. `NSWindowStyleMaskNonActivatingPanel` via `tauri-nspanel` is the intended mechanism. |
+| Linux | `unsupported` | Not implemented. |
+
+Pluely does not implement this on Windows at all — its attempt is present in `window.rs` but
+commented out — so there is no reference implementation to copy.
 
 ## Privacy overlay
 

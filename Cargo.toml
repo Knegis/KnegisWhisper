@@ -4,6 +4,7 @@ members = [
     "apps/desktop/src-tauri",
     "crates/network-policy",
     "crates/overlay",
+    "crates/platform",
     "crates/provider-probe",
     "crates/provider-registry",
     "crates/security",
@@ -14,7 +15,6 @@ members = [
 # The brief asks for vertical slices over broad unfinished scaffolding, so an
 # empty crate is not created just to reserve its name.
 #
-#   crates/platform           commit 10
 #   crates/audio-core         phase 2
 #   crates/transcription-core phase 2
 #   crates/app-core           phase 2
@@ -40,6 +40,7 @@ repository = "https://github.com/axelalbertkarlsson/KnegisWhisper"
 [workspace.dependencies]
 kw-network-policy = { path = "crates/network-policy" }
 kw-overlay = { path = "crates/overlay" }
+kw-platform = { path = "crates/platform" }
 kw-provider-probe = { path = "crates/provider-probe" }
 kw-provider-registry = { path = "crates/provider-registry" }
 kw-security = { path = "crates/security" }
@@ -80,6 +81,10 @@ cpal = "0.15"
 hound = "3"
 ringbuf = "0.4"
 
+# Platform
+arboard = { version = "3", default-features = false }
+windows = "0.58"
+
 # Utilities
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
 dirs = "5"
@@ -90,6 +95,7 @@ tempfile = "3"
 tauri = { version = "2", features = [] }
 tauri-build = { version = "2", features = [] }
 tauri-plugin-global-shortcut = "2"
+tauri-plugin-autostart = "2"
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

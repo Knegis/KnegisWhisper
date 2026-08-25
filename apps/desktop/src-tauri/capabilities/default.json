@@ -1,7 +1,12 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Least-privilege permissions for the main window. Notably absent: any http, shell, fs, or process permission. The frontend has no network access and cannot spawn anything -- it asks Rust, and Rust decides. See docs/NETWORK_BOUNDARY.md and docs/SECURITY.md.",
-  "windows": ["main"],
-  "permissions": ["core:default"]
+  "description": "Least-privilege permissions for the dashboard and overlay windows. Notably absent: any http, shell, fs, or process permission. The frontend has no network access and cannot spawn anything -- it asks Rust, and Rust decides. Global shortcuts and autostart are driven from Rust, so the frontend needs no permission for either. See docs/NETWORK_BOUNDARY.md and docs/SECURITY.md.",
+  "windows": [
+    "main",
+    "overlay"
+  ],
+  "permissions": [
+    "core:default"
+  ]
 }

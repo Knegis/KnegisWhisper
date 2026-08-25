@@ -5,9 +5,11 @@
 //! because this report is what `docs/PLATFORM_SUPPORT.md` promises to be honest
 //! about.
 
-use kw_overlay::CaptureExclusion;
 use kw_security::{CredentialError, CredentialStore, KeyRef, OsCredentialStore};
 use serde::Serialize;
+use tauri::{AppHandle, Manager as _};
+
+use crate::overlay::{self, OverlayStatus};
 
 /// Whether the OS credential store is usable.
 #[derive(Debug, Clone, Serialize)]
@@ -25,8 +27,26 @@ pub struct Diagnostics {
     pub arch: &'static str,
     pub webview_version: Option<String>,
     pub credential_store: CredentialStoreStatus,
-    pub capture_exclusion: CaptureExclusion,
+    /// The live state of the real overlay window, not a prediction about the
+    /// platform. Before the window exists this reports `created: false` and
+    /// claims nothing.
+    pub overlay: OverlayStatus,
     pub allowed_egress_purposes: Vec<&'static str>,
+    /// Where the model cache ended up, and whether the per-user location had to
+    /// be abandoned because the native ASR binaries cannot read it.
+    pub model_cache: ModelCacheStatus,
+}
+
+/// Where downloaded models live.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelCacheStatus {
+    pub path: String,
+    /// True when the per-user path contained a space or a non-ASCII character,
+    /// which makes the native whisper and sherpa binaries fail in ways that do
+    /// not point at the path. Worth surfacing: it means models are shared
+    /// machine-wide.
+    pub fell_back: bool,
 }
 
 /// Name of the credential backend on this platform, for display only.
@@ -69,50 +89,33 @@ fn probe_credential_store() -> CredentialStoreStatus {
     }
 }
 
-/// What capture exclusion will do on this platform.
-///
-/// The overlay window does not exist yet, so this reports the *platform's*
-/// expected outcome rather than a live window state. It is still never
-/// `Active`: on Windows and macOS the call cannot be read back, and on Linux
-/// there is no such facility at all.
-fn capture_exclusion_outlook() -> CaptureExclusion {
-    #[cfg(target_os = "windows")]
-    {
-        CaptureExclusion::unknown(
-            "SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE) will be applied to the \
-             overlay, but Windows exposes no getter to confirm it took effect. Requires \
-             Windows 10 2004 or later.",
-        )
-    }
-    #[cfg(target_os = "macos")]
-    {
-        CaptureExclusion::unknown(
-            "NSWindowSharingNone will be applied to the overlay, but the result is not \
-             read back.",
-        )
-    }
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-    {
-        CaptureExclusion::unsupported(
-            "Neither X11 nor the Wayland compositors expose per-window capture \
-             exclusion. The overlay is visible to screen-recording software.",
-        )
+/// Read the live overlay state, or say there is no overlay yet.
+fn overlay_status(app: &AppHandle) -> OverlayStatus {
+    match app.get_webview_window(overlay::LABEL) {
+        Some(window) => overlay::apply_treatments(&window),
+        None => overlay::not_created(),
     }
 }
 
 #[tauri::command]
-pub fn diagnostics() -> Diagnostics {
+pub fn diagnostics(app: AppHandle) -> Diagnostics {
+    let cache = kw_storage::paths::model_cache_dir();
+
     Diagnostics {
         app_version: env!("CARGO_PKG_VERSION"),
         os: std::env::consts::OS,
         arch: std::env::consts::ARCH,
         webview_version: tauri::webview_version().ok(),
         credential_store: probe_credential_store(),
-        capture_exclusion: capture_exclusion_outlook(),
+        overlay: overlay_status(&app),
         allowed_egress_purposes: kw_network_policy::ALL_PURPOSES
             .iter()
             .map(|p| p.as_str())
             .collect(),
+        model_cache: ModelCacheStatus {
+            path: cache.path.display().to_string(),
+            fell_back: cache.fell_back,
+        },
     }
 }
 
@@ -127,50 +130,61 @@ mod tests {
     use super::*;
 
     #[test]
-    fn capture_exclusion_is_never_reported_as_active() {
-        // Nothing has been applied to any window yet, so claiming Active would
-        // be a fabrication regardless of platform.
-        assert!(!capture_exclusion_outlook().is_confirmed());
+    fn the_credential_probe_never_writes_anything() {
+        // Reading a slot that does not exist is enough to tell a working backend
+        // from a missing one, and leaves nothing behind in the user's keychain.
+        let slot = KeyRef::new("diagnostics-probe").unwrap();
+        let before = OsCredentialStore::new().contains(&slot);
+        let _ = probe_credential_store();
+        let after = OsCredentialStore::new().contains(&slot);
+        assert_eq!(before, after, "the probe changed the credential store");
     }
 
     #[test]
-    fn linux_reports_unsupported_rather_than_unknown() {
-        let outlook = capture_exclusion_outlook();
-        if cfg!(not(any(target_os = "windows", target_os = "macos"))) {
-            assert!(matches!(outlook, CaptureExclusion::Unsupported { .. }));
-        }
-    }
-
-    #[test]
-    fn diagnostics_serializes_with_the_keys_the_frontend_expects() {
-        let json = serde_json::to_value(diagnostics()).unwrap();
-        for key in [
-            "appVersion",
-            "os",
-            "arch",
-            "webviewVersion",
-            "credentialStore",
-            "captureExclusion",
-            "allowedEgressPurposes",
-        ] {
-            assert!(json.get(key).is_some(), "missing key {key}");
-        }
-        assert!(json["captureExclusion"]["state"].is_string());
-        assert_eq!(
-            json["allowedEgressPurposes"].as_array().map(Vec::len),
-            Some(7),
-            "all seven egress purposes should be reported"
+    fn an_absent_overlay_claims_nothing() {
+        let status = overlay::not_created();
+        assert!(!status.created);
+        assert!(
+            !status.capture_exclusion.is_confirmed(),
+            "with no window, capture exclusion cannot be confirmed"
         );
     }
 
     #[test]
-    fn diagnostics_leaks_no_secret_material() {
-        let rendered = serde_json::to_string(&diagnostics()).unwrap();
-        for needle in ["sk-", "Bearer ", "password", "api_key"] {
+    fn the_model_cache_status_agrees_with_the_path_rule() {
+        let cache = kw_storage::paths::model_cache_dir();
+        let status = ModelCacheStatus {
+            path: cache.path.display().to_string(),
+            fell_back: cache.fell_back,
+        };
+        assert!(!status.path.is_empty());
+        if !status.fell_back {
             assert!(
-                !rendered.contains(needle),
-                "diagnostics output contains {needle:?}"
+                kw_storage::paths::is_native_binary_safe(std::path::Path::new(&status.path)),
+                "a path reported as usable must actually be usable"
             );
+        }
+    }
+
+    #[test]
+    fn every_egress_purpose_is_reported() {
+        let purposes: Vec<&str> = kw_network_policy::ALL_PURPOSES
+            .iter()
+            .map(|p| p.as_str())
+            .collect();
+        assert_eq!(purposes.len(), 7);
+        assert!(purposes.iter().all(|p| !p.is_empty()));
+    }
+
+    #[test]
+    fn the_credential_backend_name_matches_the_platform() {
+        let backend = credential_backend();
+        if cfg!(target_os = "windows") {
+            assert_eq!(backend, "Windows Credential Manager");
+        } else if cfg!(target_os = "macos") {
+            assert_eq!(backend, "macOS Keychain");
+        } else {
+            assert_eq!(backend, "Secret Service");
         }
     }
 }

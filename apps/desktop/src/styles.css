@@ -124,3 +124,77 @@ section {
   color: var(--accent);
   font-size: 0.75rem;
 }
+
+/* ------------------------------------------------------------------ overlay */
+/*
+ * The overlay window is transparent, so the panel paints its own background.
+ * It must stay legible over anything behind it -- a dark editor or a white
+ * document -- so it carries its own contrast rather than inheriting.
+ */
+
+.overlay {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  height: 100%;
+  padding: 0 1rem;
+  border-radius: 12px;
+  background: rgba(18, 18, 22, 0.92);
+  color: #f4f4f5;
+  font: 500 0.95rem/1 system-ui, sans-serif;
+  /* The overlay must never intercept a click meant for the window beneath. */
+  user-select: none;
+}
+
+.indicator {
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 50%;
+  flex: none;
+  background: #6b7280;
+}
+
+.indicator-recording {
+  background: #ef4444;
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+/*
+ * Respect a reduced-motion preference, but keep the colour change: the
+ * indicator is a safety signal, not decoration, so it stays visible either way.
+ */
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .indicator-recording {
+    animation: none;
+  }
+}
+
+.row-detail.warn {
+  color: #b45309;
+}
+
+button {
+  margin-top: 0.75rem;
+  padding: 0.45rem 0.9rem;
+  border: 1px solid currentColor;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
