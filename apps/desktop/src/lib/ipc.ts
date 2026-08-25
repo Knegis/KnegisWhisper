@@ -30,7 +30,7 @@ export type Evidence = {
  * `docs/PLATFORM_SUPPORT.md` for why.
  */
 export type CaptureExclusion =
-  | { state: "active"; verified_by: Evidence }
+  | { state: "active"; verifiedBy: Evidence }
   | { state: "unsupported"; reason: string }
   | { state: "failed"; error: string }
   | { state: "unknown"; reason: string };
@@ -42,7 +42,7 @@ export function isCaptureExclusionConfirmed(c: CaptureExclusion): boolean {
 
 /** Mirrors `overlay::NonActivating`. */
 export type NonActivating =
-  | { state: "active"; verified_by: string }
+  | { state: "active"; verifiedBy: string }
   | { state: "unsupported"; reason: string }
   | { state: "failed"; error: string };
 

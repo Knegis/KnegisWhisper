@@ -32,9 +32,13 @@ pub struct OverlayStatus {
     pub capture_exclusion: CaptureExclusion,
     /// Whether the window refuses focus, and how we know.
     pub non_activating: NonActivating,
-    /// Whether a recording indicator is shown to the local user while the
-    /// microphone is live. Always true; present so the guarantee is visible in
-    /// the UI and asserted by a test rather than only described in a document.
+    /// Whether the overlay is visible right now.
+    ///
+    /// This was a hardcoded `true` while nothing recorded, which made the
+    /// guarantee it was supposed to express vacuous. It is now a real read of the
+    /// window, and [`set_visible`] is the only thing that changes it — called
+    /// from the dictation state sink, so "recording" and "the user can see it"
+    /// cannot come apart.
     pub recording_indicator_visible: bool,
     /// What the platform's display server is, for honest failure messages.
     pub display_server: String,
@@ -42,7 +46,11 @@ pub struct OverlayStatus {
 
 /// Whether the window declines activation.
 #[derive(Debug, Clone, Serialize)]
-#[serde(tag = "state", rename_all = "kebab-case")]
+#[serde(
+    tag = "state",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
 pub enum NonActivating {
     /// Applied and read back from the window's extended style.
     Active { verified_by: &'static str },
@@ -145,7 +153,9 @@ pub fn apply_treatments(overlay: &WebviewWindow) -> OverlayStatus {
         created: true,
         capture_exclusion,
         non_activating,
-        recording_indicator_visible: true,
+        // Read, not assumed. A window that failed to show would otherwise
+        // report an indicator the user cannot see.
+        recording_indicator_visible: overlay.is_visible().unwrap_or(false),
         display_server: window::display_server_description(),
     }
 }
@@ -179,8 +189,45 @@ pub fn not_created() -> OverlayStatus {
         non_activating: NonActivating::Unsupported {
             reason: "the overlay window has not been created yet".to_owned(),
         },
-        recording_indicator_visible: true,
+        // No window, so nothing is shown. Claiming otherwise here was the
+        // clearest form of the same mistake.
+        recording_indicator_visible: false,
         display_server: window::display_server_description(),
+    }
+}
+
+/// Show or hide the overlay.
+///
+/// The only thing that changes the overlay's visibility. Called from the
+/// dictation state sink with `state.is_recording()`, which is what keeps the
+/// promise that the local user always knows the microphone is open.
+///
+/// Failures are logged rather than returned: the caller is a synchronous state
+/// callback that cannot meaningfully handle one, and a dictation must not fail
+/// because a window would not show. But it is logged at `error` when *showing*
+/// fails, because that is a recording the user cannot see.
+pub fn set_visible(app: &AppHandle, visible: bool) {
+    let Some(overlay) = app.get_webview_window(LABEL) else {
+        if visible {
+            tracing::error!(
+                "recording started but there is no overlay window to show, so the user has no                  indication the microphone is open"
+            );
+        }
+        return;
+    };
+
+    let result = if visible {
+        overlay.show()
+    } else {
+        overlay.hide()
+    };
+
+    if let Err(err) = result {
+        if visible {
+            tracing::error!(error = %err, "could not show the recording overlay");
+        } else {
+            tracing::warn!(error = %err, "could not hide the recording overlay");
+        }
     }
 }
 
@@ -203,11 +250,15 @@ mod tests {
     }
 
     #[test]
-    fn the_recording_indicator_is_always_reported_as_visible() {
-        // The guarantee that the local user is never silently recorded. If this
-        // ever needs to be false, that is a product decision that has to be
-        // argued for here, not a flag someone flips.
-        assert!(not_created().recording_indicator_visible);
+    fn an_uncreated_overlay_reports_no_indicator() {
+        // This asserted the opposite until dictation was wired: the field was a
+        // hardcoded `true`, so it claimed an indicator for a window that did not
+        // exist. The guarantee is not "the field says true" — it is that
+        // `set_visible` is driven by `SessionState::is_recording`, which
+        // `crate::dictation::EventSink` does and a test there covers. Reporting
+        // an indicator nobody can see was the weaker claim pretending to be the
+        // stronger one.
+        assert!(!not_created().recording_indicator_visible);
     }
 
     #[test]

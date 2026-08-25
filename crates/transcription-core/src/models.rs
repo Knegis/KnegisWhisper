@@ -162,7 +162,8 @@ pub async fn install(
     policy: &NetworkPolicy,
     model: &WhisperModel,
     dir: &Path,
-    progress: &mut dyn FnMut(ModelProgress),
+    // Held across awaits, so `Send`; see `NetworkPolicy::download_to_file`.
+    progress: &mut (dyn FnMut(ModelProgress) + Send),
 ) -> Result<InstalledModel, ModelError> {
     std::fs::create_dir_all(dir).map_err(|source| ModelError::Io {
         action: "create",

@@ -46,7 +46,11 @@ pub enum KeytermWire {
 
 /// Whether a provider does anything with keyterms.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(tag = "state", rename_all = "kebab-case")]
+#[serde(
+    tag = "state",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
 pub enum KeytermSupport {
     /// The provider accepts them and ignores them. OpenAI Realtime and Tinfoil
     /// both do this, and it must not be reported as support.

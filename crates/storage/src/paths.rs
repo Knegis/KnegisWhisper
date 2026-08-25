@@ -56,7 +56,24 @@ pub fn is_native_binary_safe(path: &Path) -> bool {
 /// than pretending it did not happen.
 #[must_use]
 pub fn model_cache_dir() -> ModelCache {
-    let preferred = data_dir().join("models");
+    native_safe_dir("models")
+}
+
+/// Where downloaded sidecar binaries live.
+///
+/// The same rule applies for the same reason: `whisper-server` loads its sibling
+/// `ggml` libraries relative to its own directory, and the native code chokes on
+/// a path with a space or a non-ASCII character in it. A Windows account named
+/// `Ann Marie` or `Håkan` is enough to trigger it.
+#[must_use]
+pub fn sidecar_dir() -> ModelCache {
+    native_safe_dir("sidecars")
+}
+
+/// A subdirectory of [`data_dir`] that the native binaries can cope with, or a
+/// machine-wide fallback that is more likely to be safe.
+fn native_safe_dir(leaf: &str) -> ModelCache {
+    let preferred = data_dir().join(leaf);
     if is_native_binary_safe(&preferred) {
         return ModelCache {
             path: preferred,
@@ -64,9 +81,8 @@ pub fn model_cache_dir() -> ModelCache {
         };
     }
 
-    let fallback = machine_wide_cache_dir();
     ModelCache {
-        path: fallback,
+        path: machine_wide_cache_dir().join(leaf),
         fell_back: true,
     }
 }

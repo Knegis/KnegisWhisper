@@ -95,7 +95,8 @@ pub async fn install(
     spec: &SidecarSpec,
     asset: &Asset,
     root: &Path,
-    progress: &mut dyn FnMut(Progress),
+    // See `NetworkPolicy::download_to_file`: held across awaits, so `Send`.
+    progress: &mut (dyn FnMut(Progress) + Send),
 ) -> Result<Installed, InstallError> {
     let staging = root.join(format!("{}.incoming", spec.name));
     remove_dir(&staging)?;

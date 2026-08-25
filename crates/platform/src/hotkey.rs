@@ -112,7 +112,11 @@ const MODIFIERS: [&str; 8] = [
 
 /// What an accelerator string can be registered as.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(tag = "kind", rename_all = "kebab-case")]
+#[serde(
+    tag = "kind",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
 pub enum Accelerator {
     /// Has at least one non-modifier key, so the cross-platform API can take it.
     Standard { accelerator: String },

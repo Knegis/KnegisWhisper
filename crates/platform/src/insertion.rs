@@ -66,7 +66,11 @@ pub trait PasteKeystroke: Send + Sync + fmt::Debug {
 
 /// What happened to the user's original clipboard content.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(tag = "state", rename_all = "kebab-case")]
+#[serde(
+    tag = "state",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
 pub enum ClipboardRestore {
     /// Put back as it was.
     Restored,

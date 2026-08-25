@@ -117,7 +117,11 @@ pub struct CortiConfig {
 
 /// Where the audio goes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(tag = "transport", rename_all = "kebab-case")]
+#[serde(
+    tag = "transport",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
 pub enum Transport {
     /// A local model. Engine and model selection stay with the local manager.
     Local,

@@ -1,0 +1,871 @@
+//! Real implementations of the six seams `kw_app_core::dictation` defines.
+//!
+//! The state machine in that crate is complete and tested against fakes. This is
+//! the other half: the concrete microphone, provider, clipboard, and database
+//! behind each trait. Nothing here contains sequence logic — if a decision about
+//! *order* ends up in this file, it belongs in `app-core` where it can be tested
+//! without a microphone.
+//!
+//! ## Why the microphone gets a thread
+//!
+//! `cpal::Stream` is not `Send`: on Windows it holds COM objects bound to the
+//! thread that created them. The `Recorder` trait is `Send + Sync`, as it has to
+//! be to live in Tauri's managed state. So [`MicRecorder`] owns a plain OS thread
+//! that holds the stream and takes commands over a channel, and the trait seam is
+//! what makes that invisible to everything upstream of it.
+//!
+//! That is the seam earning its place rather than a workaround: the state machine
+//! never learns that the microphone is thread-bound, and the thread never learns
+//! what a dictation is.
+
+use std::sync::{mpsc, Arc, RwLock};
+
+use kw_app_core::dictation::{
+    Capture, Cleanup, DictationError, History, HistoryEntry, Inserter, InsertionResult, Recorder,
+    SessionState, StateSink, Transcribed, Transcriber,
+};
+use kw_network_policy::NetworkPolicy;
+use kw_platform::insertion::{SystemClipboard, TextInserter};
+use kw_security::CredentialStore;
+use kw_storage::{transcriptions, Db};
+use kw_transcription_core::local::WhisperServer;
+use kw_transcription_core::{Executor, Transport};
+use tauri::{AppHandle, Emitter as _, Manager as _};
+
+/// The event the frontend listens to for dictation state.
+pub const STATE_EVENT: &str = "dictation-state";
+
+/// The event a finished dictation is reported on.
+pub const OUTCOME_EVENT: &str = "dictation-outcome";
+
+/* ------------------------------------------------------------------ recorder */
+
+/// What the microphone thread is asked to do.
+enum MicCommand {
+    Start {
+        device: Option<String>,
+        reply: tokio::sync::oneshot::Sender<Result<(), String>>,
+    },
+    Finish {
+        reply: tokio::sync::oneshot::Sender<Result<kw_audio_core::Recording, String>>,
+    },
+    Cancel,
+}
+
+/// Records from the microphone on a dedicated thread.
+pub struct MicRecorder {
+    commands: mpsc::Sender<MicCommand>,
+    /// The input device the user chose, or `None` for the system default.
+    device: RwLock<Option<String>>,
+}
+
+impl std::fmt::Debug for MicRecorder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MicRecorder").finish_non_exhaustive()
+    }
+}
+
+impl MicRecorder {
+    /// Start the microphone thread. It lives as long as the application.
+    #[must_use]
+    pub fn spawn() -> Self {
+        let (tx, rx) = mpsc::channel::<MicCommand>();
+
+        std::thread::Builder::new()
+            .name("kw-microphone".to_owned())
+            .spawn(move || Self::serve(rx))
+            // A thread we cannot start means dictation cannot work, but it must
+            // not stop the application launching: the settings screen is how the
+            // user would find out why.
+            .map_or_else(
+                |err| tracing::error!(error = %err, "could not start the microphone thread"),
+                |_| (),
+            );
+
+        Self {
+            commands: tx,
+            device: RwLock::new(None),
+        }
+    }
+
+    /// Choose the input device. Takes effect on the next recording.
+    pub fn set_device(&self, device: Option<String>) {
+        if let Ok(mut held) = self.device.write() {
+            *held = device;
+        }
+    }
+
+    fn preferred_device(&self) -> Option<String> {
+        self.device.read().ok().and_then(|held| held.clone())
+    }
+
+    /// The thread body. Owns the `cpal::Stream` for its whole life.
+    fn serve(rx: mpsc::Receiver<MicCommand>) {
+        let mut active: Option<kw_audio_core::Capture> = None;
+
+        while let Ok(command) = rx.recv() {
+            match command {
+                MicCommand::Start { device, reply } => {
+                    // Dropping any previous capture stops that stream first, so
+                    // two starts in a row cannot leave the microphone open.
+                    active = None;
+                    let started = kw_audio_core::Capture::start(device.as_deref());
+                    let answer = match started {
+                        Ok(capture) => {
+                            active = Some(capture);
+                            Ok(())
+                        }
+                        Err(err) => Err(err.to_string()),
+                    };
+                    let _ = reply.send(answer);
+                }
+
+                MicCommand::Finish { reply } => {
+                    let answer = active.take().map_or_else(
+                        || Err("the microphone was not open".to_owned()),
+                        |capture| Ok(capture.finish()),
+                    );
+                    let _ = reply.send(answer);
+                }
+
+                MicCommand::Cancel => {
+                    // Drop stops the stream, which is what closes the operating
+                    // system's own recording indicator.
+                    active = None;
+                }
+            }
+        }
+    }
+
+    async fn ask<T>(
+        &self,
+        make: impl FnOnce(tokio::sync::oneshot::Sender<Result<T, String>>) -> MicCommand,
+    ) -> Result<T, String> {
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        self.commands
+            .send(make(reply_tx))
+            .map_err(|_| "the microphone thread is not running".to_owned())?;
+        reply_rx
+            .await
+            .map_err(|_| "the microphone thread stopped without answering".to_owned())?
+    }
+}
+
+#[async_trait::async_trait]
+impl Recorder for MicRecorder {
+    async fn start(&self) -> Result<(), DictationError> {
+        let device = self.preferred_device();
+        self.ask(|reply| MicCommand::Start { device, reply })
+            .await
+            .map_err(DictationError::Microphone)
+    }
+
+    async fn finish(&self) -> Result<Capture, DictationError> {
+        let recording = self
+            .ask(|reply| MicCommand::Finish { reply })
+            .await
+            .map_err(DictationError::Microphone)?;
+
+        // `Recording` already carries the encoded WAV, the gate decision, and
+        // the truncation flag, so this is a field copy rather than a conversion.
+        Ok(Capture {
+            wav: recording.wav,
+            duration_ms: recording.duration_ms,
+            gate: recording.gate,
+            truncated: recording.truncated,
+        })
+    }
+
+    async fn cancel(&self) {
+        let _ = self.commands.send(MicCommand::Cancel);
+    }
+}
+
+/* --------------------------------------------------------------- transcriber */
+
+/// Where the local model server is listening, when one is running.
+///
+/// Shared with the commands that start and stop it, so a dictation started a
+/// moment after the server came up sees it.
+pub type LocalPort = Arc<RwLock<Option<u16>>>;
+
+/// Executes a resolved route.
+pub struct RouteTranscriber {
+    policy: NetworkPolicy,
+    credentials: Arc<dyn CredentialStore>,
+    local_port: LocalPort,
+    local_model: Arc<RwLock<Option<String>>>,
+}
+
+impl std::fmt::Debug for RouteTranscriber {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RouteTranscriber").finish_non_exhaustive()
+    }
+}
+
+impl RouteTranscriber {
+    #[must_use]
+    pub const fn new(
+        policy: NetworkPolicy,
+        credentials: Arc<dyn CredentialStore>,
+        local_port: LocalPort,
+        local_model: Arc<RwLock<Option<String>>>,
+    ) -> Self {
+        Self {
+            policy,
+            credentials,
+            local_port,
+            local_model,
+        }
+    }
+
+    fn local_server(&self) -> Option<WhisperServer> {
+        let port = self.local_port.read().ok().and_then(|held| *held)?;
+        let model = self.local_model.read().ok().and_then(|held| held.clone());
+        Some(WhisperServer::new(self.policy.clone(), port, model))
+    }
+}
+
+#[async_trait::async_trait]
+impl Transcriber for RouteTranscriber {
+    async fn transcribe(
+        &self,
+        transport: &Transport,
+        wav: Vec<u8>,
+    ) -> Result<Transcribed, DictationError> {
+        let executor = Executor::new(&self.policy, self.credentials.as_ref());
+
+        // Attached only when a server is actually running. Without this the
+        // executor answers `LocalNotAvailable`, which is the honest state — a
+        // local route with no server is not something to paper over.
+        let local = self.local_server();
+        let executor = match &local {
+            Some(server) => executor.with_local(server),
+            None => executor,
+        };
+
+        let transcript = executor
+            .transcribe(transport, wav)
+            .await
+            .map_err(|err| DictationError::Transcription(err.to_string()))?;
+
+        Ok(Transcribed {
+            text: transcript.text,
+            provider: transcript.provider,
+            model: transcript.model,
+        })
+    }
+}
+
+/* ------------------------------------------------------------------ cleanup */
+
+/// Tidies a transcript with a reasoning model, when the user has asked for it.
+///
+/// Holds the policy and the credential store rather than a `Chat`, because
+/// `Chat` borrows both and is a two-reference `const fn` to build — cheaper to
+/// construct per call than to keep a self-referential struct alive.
+pub struct ModelCleanup {
+    policy: NetworkPolicy,
+    credentials: Arc<dyn CredentialStore>,
+    /// Set while cleanup is switched on; holds the route and model to use.
+    configured: Arc<RwLock<Option<(kw_reasoning_core::ChatRoute, String)>>>,
+}
+
+impl std::fmt::Debug for ModelCleanup {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ModelCleanup").finish_non_exhaustive()
+    }
+}
+
+impl ModelCleanup {
+    #[must_use]
+    pub const fn new(
+        policy: NetworkPolicy,
+        credentials: Arc<dyn CredentialStore>,
+        configured: Arc<RwLock<Option<(kw_reasoning_core::ChatRoute, String)>>>,
+    ) -> Self {
+        Self {
+            policy,
+            credentials,
+            configured,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl Cleanup for ModelCleanup {
+    async fn clean(&self, text: &str) -> String {
+        let Some((route, model)) = self.configured.read().ok().and_then(|held| held.clone()) else {
+            // Off. The raw transcript is the answer, not a failure.
+            return text.to_owned();
+        };
+
+        let Ok(registry) = kw_provider_registry::registry() else {
+            return text.to_owned();
+        };
+
+        // `Chat::cleanup` is already infallible by contract: it returns the
+        // original on any failure, because a cleanup that errors must not lose
+        // the transcript.
+        kw_reasoning_core::Chat::new(&self.policy, self.credentials.as_ref())
+            .cleanup(registry, &route, &model, text)
+            .await
+    }
+}
+
+/* ----------------------------------------------------------------- inserter */
+
+/// Puts text at the cursor by borrowing the clipboard.
+#[derive(Debug)]
+pub struct ClipboardInserter {
+    inserter:
+        Option<TextInserter<SystemClipboard, Box<dyn kw_platform::insertion::PasteKeystroke>>>,
+}
+
+impl ClipboardInserter {
+    /// Build one, or `None` where this platform has no synthetic paste.
+    ///
+    /// `None` rather than a no-op: a caller that gets it must tell the user text
+    /// insertion will not work here, instead of pasting into the void.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            inserter: kw_platform::paste_keystroke().map(|keystroke| {
+                TextInserter::new(
+                    SystemClipboard,
+                    keystroke,
+                    kw_platform::insertion::restore_delay(),
+                )
+            }),
+        }
+    }
+
+    /// Whether text insertion is possible on this platform at all.
+    #[must_use]
+    pub const fn is_supported(&self) -> bool {
+        self.inserter.is_some()
+    }
+}
+
+impl Default for ClipboardInserter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait::async_trait]
+impl Inserter for ClipboardInserter {
+    async fn insert(&self, text: &str) -> Result<InsertionResult, DictationError> {
+        let Some(inserter) = &self.inserter else {
+            return Err(DictationError::Insertion(
+                "this platform has no synthetic paste, so dictated text cannot be placed at the \
+                 cursor. The transcript is in your history."
+                    .to_owned(),
+            ));
+        };
+
+        let insertion = inserter
+            .insert(text)
+            .await
+            .map_err(|err| DictationError::Insertion(err.to_string()))?;
+
+        Ok(InsertionResult {
+            clipboard_restored: matches!(
+                insertion.clipboard,
+                kw_platform::insertion::ClipboardRestore::Restored
+                    | kw_platform::insertion::ClipboardRestore::NothingToRestore
+            ),
+        })
+    }
+}
+
+/* ------------------------------------------------------------------ history */
+
+/// Writes history rows, when history is switched on.
+#[derive(Debug)]
+pub struct DbHistory {
+    db: Db,
+}
+
+/// The settings key that switches history off.
+pub const HISTORY_ENABLED_KEY: &str = "history.enabled";
+
+impl DbHistory {
+    #[must_use]
+    pub const fn new(db: Db) -> Self {
+        Self { db }
+    }
+}
+
+#[async_trait::async_trait]
+impl History for DbHistory {
+    async fn enabled(&self) -> bool {
+        // Defaults to on, matching upstream. Switching it off is a deliberate
+        // act, and a user who has never opened settings expects to be able to
+        // find what they just dictated.
+        kw_storage::settings::get_or(self.db.pool(), HISTORY_ENABLED_KEY, true)
+            .await
+            .unwrap_or(true)
+    }
+
+    async fn record(&self, entry: HistoryEntry) -> Option<i64> {
+        let status = if entry.failed {
+            transcriptions::Status::Failed
+        } else {
+            transcriptions::Status::Completed
+        };
+
+        let row = transcriptions::NewTranscription {
+            text: entry.text,
+            raw_text: entry.raw_text,
+            has_audio: false,
+            audio_duration_ms: entry.duration_ms,
+            provider: entry.provider,
+            model: entry.model,
+            error_message: entry.error,
+            error_code: None,
+            route_kind: Some("dictation".to_owned()),
+        };
+
+        match transcriptions::record(self.db.pool(), &row, status).await {
+            Ok(id) => Some(id),
+            Err(err) => {
+                // Not fatal: the text is already at the cursor. Losing the
+                // history row is a smaller harm than failing the dictation.
+                tracing::error!(error = %err, "could not write the history row");
+                None
+            }
+        }
+    }
+}
+
+/* --------------------------------------------------------------- state sink */
+
+/// Emits state changes to the frontend and keeps the overlay honest.
+///
+/// The overlay rule is enforced here rather than left to the UI: whenever the
+/// session is recording, the overlay is shown. The local user always knows the
+/// microphone is open.
+pub struct EventSink {
+    app: AppHandle,
+    state: Arc<RwLock<SessionState>>,
+}
+
+impl std::fmt::Debug for EventSink {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EventSink").finish_non_exhaustive()
+    }
+}
+
+impl EventSink {
+    #[must_use]
+    pub const fn new(app: AppHandle, state: Arc<RwLock<SessionState>>) -> Self {
+        Self { app, state }
+    }
+}
+
+impl StateSink for EventSink {
+    fn state_changed(&self, state: SessionState) {
+        if let Ok(mut held) = self.state.write() {
+            *held = state;
+        }
+
+        // Shown for the whole of a recording, hidden as soon as it is over.
+        // `OverlayStatus::recording_indicator_visible` reads the same value, so
+        // what the settings screen reports is what actually happened.
+        crate::overlay::set_visible(&self.app, state.is_recording());
+
+        if let Err(err) = self.app.emit(STATE_EVENT, state) {
+            tracing::warn!(error = %err, "could not report the dictation state");
+        }
+    }
+}
+
+/* ----------------------------------------------------------------- runtime */
+
+/// The settings key holding the whole transcription route configuration.
+///
+/// One key rather than ten, because `RouteSettings` already deserialises as a
+/// unit and splitting it would mean ten chances for the stored shape and the
+/// struct to drift apart.
+pub const ROUTE_SETTINGS_KEY: &str = "transcription.route";
+
+/// The dictation session, assembled.
+pub struct DictationRuntime {
+    session: Arc<kw_app_core::dictation::Dictation>,
+    recorder: Arc<MicRecorder>,
+    db: Db,
+}
+
+impl std::fmt::Debug for DictationRuntime {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DictationRuntime")
+            .field("state", &self.session.state())
+            .finish_non_exhaustive()
+    }
+}
+
+impl DictationRuntime {
+    /// Assemble the session from the real adapters.
+    ///
+    /// Built in `setup` rather than in `AppState::open`, because the state sink
+    /// needs an `AppHandle` and that does not exist until Tauri has started.
+    #[must_use]
+    pub fn build(
+        app: AppHandle,
+        db: Db,
+        credentials: Arc<dyn CredentialStore>,
+        policy: NetworkPolicy,
+        local_port: LocalPort,
+        local_model: Arc<RwLock<Option<String>>>,
+        cleanup: Arc<RwLock<Option<(kw_reasoning_core::ChatRoute, String)>>>,
+    ) -> Self {
+        let recorder = Arc::new(MicRecorder::spawn());
+        let state = Arc::new(RwLock::new(SessionState::Idle));
+
+        let session = kw_app_core::dictation::Dictation::new(
+            Arc::clone(&recorder) as Arc<dyn Recorder>,
+            Arc::new(RouteTranscriber::new(
+                policy.clone(),
+                Arc::clone(&credentials),
+                local_port,
+                local_model,
+            )),
+            Arc::new(ModelCleanup::new(policy, credentials, cleanup)),
+            Arc::new(ClipboardInserter::new()),
+            Arc::new(DbHistory::new(db.clone())),
+            Arc::new(EventSink::new(app, state)),
+            // Keeping the pre-cleanup transcript is opt-in; the default is not
+            // to store two copies of what someone said.
+            false,
+        );
+
+        Self {
+            session: Arc::new(session),
+            recorder,
+            db,
+        }
+    }
+
+    /// What the session is doing.
+    #[must_use]
+    pub fn state(&self) -> SessionState {
+        self.session.state()
+    }
+
+    /// Choose the input device for the next recording.
+    pub fn set_device(&self, device: Option<String>) {
+        self.recorder.set_device(device);
+    }
+
+    /// Read the stored route configuration.
+    async fn route_settings(&self) -> kw_transcription_core::RouteSettings {
+        // A missing or unreadable setting means "never configured", which the
+        // resolver already handles by defaulting to OpenAI — and which fails
+        // closed later if no credential is stored.
+        kw_storage::settings::get(self.db.pool(), ROUTE_SETTINGS_KEY)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_default()
+    }
+
+    /// Start if idle, finish if recording.
+    ///
+    /// One entry point because that is what a single hotkey means. A press while
+    /// transcribing is ignored rather than queued: the user pressed it again
+    /// because nothing had happened yet, and starting a second recording on top
+    /// of an in-flight one is never what they wanted.
+    pub async fn toggle(&self) -> Result<kw_app_core::dictation::Outcome, String> {
+        match self.state() {
+            SessionState::Idle => {
+                self.session.start().await.map_err(|err| err.to_string())?;
+                Ok(kw_app_core::dictation::Outcome::Cancelled)
+            }
+
+            SessionState::Recording => {
+                let registry = kw_provider_registry::registry().map_err(|err| err.to_string())?;
+                let settings = self.route_settings().await;
+
+                let route = match kw_transcription_core::route::resolve(
+                    registry,
+                    &settings,
+                    &kw_transcription_core::RouteRequest::default(),
+                ) {
+                    Ok(route) => route,
+                    Err(err) => {
+                        // The recording has to be dealt with either way: leaving
+                        // the microphone open because the route was
+                        // misconfigured would be the worst of both.
+                        self.session.cancel().await;
+                        return Err(err.to_string());
+                    }
+                };
+
+                Ok(self.session.finish(&route).await)
+            }
+
+            busy => Err(format!(
+                "a dictation is already {}",
+                match busy {
+                    SessionState::Transcribing => "being transcribed",
+                    _ => "being inserted",
+                }
+            )),
+        }
+    }
+
+    /// Throw away the recording.
+    pub async fn cancel(&self) -> kw_app_core::dictation::Outcome {
+        self.session.cancel().await
+    }
+}
+
+/* ---------------------------------------------------------------- commands */
+
+/// What the session is doing, for the settings screen.
+#[tauri::command]
+pub fn dictation_state(runtime: tauri::State<'_, Arc<DictationRuntime>>) -> SessionState {
+    runtime.state()
+}
+
+/// Start or finish a dictation.
+#[tauri::command]
+pub async fn dictation_toggle(
+    runtime: tauri::State<'_, Arc<DictationRuntime>>,
+) -> Result<kw_app_core::dictation::Outcome, String> {
+    runtime.toggle().await
+}
+
+/// Abandon the recording.
+#[tauri::command]
+pub async fn dictation_cancel(
+    runtime: tauri::State<'_, Arc<DictationRuntime>>,
+) -> Result<kw_app_core::dictation::Outcome, String> {
+    Ok(runtime.cancel().await)
+}
+
+/// The microphones this machine offers.
+#[tauri::command]
+pub fn input_devices() -> Result<Vec<kw_audio_core::InputDevice>, String> {
+    kw_audio_core::input_devices().map_err(|err| err.to_string())
+}
+
+/// Choose the microphone for the next recording.
+#[tauri::command]
+pub fn dictation_set_device(
+    runtime: tauri::State<'_, Arc<DictationRuntime>>,
+    device: Option<String>,
+) -> Result<(), String> {
+    runtime.set_device(device);
+    Ok(())
+}
+
+/// Whether text insertion works on this platform at all.
+///
+/// Answered up front so the settings screen can say so, rather than the user
+/// finding out at the end of their first dictation.
+#[tauri::command]
+pub fn insertion_supported() -> bool {
+    ClipboardInserter::new().is_supported()
+}
+
+/// Drive a dictation from the global hotkey.
+///
+/// Spawned rather than awaited: this is called from the shortcut plugin's
+/// synchronous callback, which must return promptly or the whole hotkey system
+/// stalls. The outcome is emitted, not returned, because there is nobody here to
+/// return it to.
+pub fn on_hotkey(app: &AppHandle) {
+    let Some(runtime) = app
+        .try_state::<Arc<DictationRuntime>>()
+        .map(|s| Arc::clone(&s))
+    else {
+        tracing::error!("a dictation hotkey fired before the session was ready");
+        return;
+    };
+
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        match runtime.toggle().await {
+            Ok(outcome) => {
+                if let Err(err) = app.emit(OUTCOME_EVENT, outcome) {
+                    tracing::warn!(error = %err, "could not report the dictation outcome");
+                }
+            }
+            Err(message) => {
+                tracing::warn!(%message, "the dictation could not proceed");
+                if let Err(err) = app.emit(
+                    OUTCOME_EVENT,
+                    kw_app_core::dictation::Outcome::Failed {
+                        message,
+                        history_id: None,
+                    },
+                ) {
+                    tracing::warn!(error = %err, "could not report the dictation failure");
+                }
+            }
+        }
+    });
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing
+)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn history_is_on_unless_switched_off() {
+        // A user who has never opened settings expects to find what they just
+        // dictated.
+        let db = Db::open_in_memory().await.unwrap();
+        let history = DbHistory::new(db.clone());
+        assert!(history.enabled().await);
+
+        kw_storage::settings::set(db.pool(), HISTORY_ENABLED_KEY, &false)
+            .await
+            .unwrap();
+        assert!(!history.enabled().await);
+    }
+
+    #[tokio::test]
+    async fn a_recorded_entry_round_trips_with_its_status() {
+        let db = Db::open_in_memory().await.unwrap();
+        let history = DbHistory::new(db.clone());
+
+        let id = history
+            .record(HistoryEntry {
+                text: "hello there".to_owned(),
+                raw_text: None,
+                provider: Some("local".to_owned()),
+                model: Some("tiny".to_owned()),
+                duration_ms: Some(1500),
+                error: None,
+                failed: false,
+            })
+            .await
+            .expect("an id");
+
+        let row = transcriptions::get(db.pool(), id).await.unwrap().unwrap();
+        assert_eq!(row.text, "hello there");
+        assert_eq!(row.status, "completed");
+        assert_eq!(row.route_kind.as_deref(), Some("dictation"));
+        assert!(!row.has_audio);
+    }
+
+    #[tokio::test]
+    async fn a_failure_is_recorded_as_failed_with_its_reason() {
+        // The row is how a user finds out why nothing was inserted.
+        let db = Db::open_in_memory().await.unwrap();
+        let history = DbHistory::new(db.clone());
+
+        let id = history
+            .record(HistoryEntry {
+                text: String::new(),
+                raw_text: None,
+                provider: Some("openai".to_owned()),
+                model: None,
+                duration_ms: Some(900),
+                error: Some("provider returned 429".to_owned()),
+                failed: true,
+            })
+            .await
+            .expect("an id");
+
+        let row = transcriptions::get(db.pool(), id).await.unwrap().unwrap();
+        assert_eq!(row.status, "failed");
+        assert_eq!(row.error_message.as_deref(), Some("provider returned 429"));
+    }
+
+    #[tokio::test]
+    async fn history_never_claims_to_have_kept_audio() {
+        // Nothing on the dictation path retains the recording, so `has_audio`
+        // must not say otherwise -- a row claiming audio that is not there sends
+        // the user looking for a file that never existed.
+        let db = Db::open_in_memory().await.unwrap();
+        let id = DbHistory::new(db.clone())
+            .record(HistoryEntry {
+                text: "x".to_owned(),
+                raw_text: None,
+                provider: None,
+                model: None,
+                duration_ms: None,
+                error: None,
+                failed: false,
+            })
+            .await
+            .unwrap();
+
+        assert!(
+            !transcriptions::get(db.pool(), id)
+                .await
+                .unwrap()
+                .unwrap()
+                .has_audio
+        );
+    }
+
+    #[test]
+    fn insertion_reports_whether_this_platform_can_do_it_at_all() {
+        // On Windows this is supported; elsewhere it is honestly not, and the
+        // settings screen has to be able to say so rather than failing at the
+        // end of a dictation.
+        let inserter = ClipboardInserter::new();
+        assert_eq!(inserter.is_supported(), cfg!(target_os = "windows"));
+    }
+
+    #[tokio::test]
+    async fn an_unsupported_platform_refuses_insertion_and_says_where_the_text_went() {
+        if ClipboardInserter::new().is_supported() {
+            return;
+        }
+        let err = ClipboardInserter::new().insert("hello").await.unwrap_err();
+        assert!(err.to_string().contains("in your history"));
+    }
+
+    #[tokio::test]
+    async fn cleanup_returns_the_transcript_unchanged_when_it_is_switched_off() {
+        // Off is the default, and the raw transcript is the right answer rather
+        // than an error.
+        let policy = NetworkPolicy::new().unwrap();
+        let credentials: Arc<dyn CredentialStore> =
+            Arc::new(kw_security::MemoryCredentialStore::new());
+        let cleanup = ModelCleanup::new(policy, credentials, Arc::new(RwLock::new(None)));
+
+        assert_eq!(cleanup.clean("um, hello there").await, "um, hello there");
+    }
+
+    #[tokio::test]
+    async fn the_microphone_thread_answers_even_with_no_microphone() {
+        // CI has no input device. The point is that the thread replies rather
+        // than hanging, so a dictation fails with a message instead of wedging
+        // the hotkey forever.
+        let recorder = MicRecorder::spawn();
+        match recorder.start().await {
+            Ok(()) => {
+                // A real device exists on this machine; close it again.
+                recorder.cancel().await;
+            }
+            Err(err) => assert!(matches!(err, DictationError::Microphone(_))),
+        }
+    }
+
+    #[tokio::test]
+    async fn finishing_without_starting_is_an_error_rather_than_a_hang() {
+        let recorder = MicRecorder::spawn();
+        let err = recorder.finish().await.unwrap_err();
+        assert!(err.to_string().contains("not open"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn cancelling_twice_is_harmless() {
+        let recorder = MicRecorder::spawn();
+        recorder.cancel().await;
+        recorder.cancel().await;
+    }
+}

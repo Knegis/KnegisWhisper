@@ -13,6 +13,9 @@
 
 mod commands;
 mod diagnostics;
+mod dictation;
+mod local_api;
+mod local_model;
 mod overlay;
 mod shortcuts;
 mod state;
@@ -73,7 +76,45 @@ pub fn run() -> anyhow::Result<()> {
                 .map_err(|e| anyhow::anyhow!(e))
                 .context("could not read the configured hotkeys")?;
 
+            let db = state.db().clone();
+            let credentials = state.credentials_arc();
+            let policy = state.policy().clone();
             app.manage(state);
+
+            // Local transcription. The catalogue is parsed here so a malformed
+            // config/sidecars.json is a startup message rather than a surprise
+            // on the first dictation.
+            let local = std::sync::Arc::new(
+                local_model::LocalTranscription::new(policy.clone())
+                    .map_err(|e| anyhow::anyhow!(e))
+                    .context("could not load config/sidecars.json")?,
+            );
+
+            // Before anything asks for a port: a previous run that crashed may
+            // have left a server holding one.
+            tauri::async_runtime::block_on(local.reap_stale());
+
+            let shared = local.shared();
+            app.manage(std::sync::Arc::clone(&local));
+
+            let session = std::sync::Arc::new(dictation::DictationRuntime::build(
+                handle.clone(),
+                db.clone(),
+                credentials,
+                policy,
+                shared.port,
+                shared.model,
+                // Cleanup is off until the settings screen configures a route.
+                // The raw transcript is a correct answer; a half-configured
+                // cleanup that silently does nothing is not.
+                std::sync::Arc::new(std::sync::RwLock::new(None)),
+            ));
+            app.manage(session);
+
+            // Off unless the user has switched it on. See local_api.rs.
+            let api = std::sync::Arc::new(local_api::LocalApiRuntime::new(db));
+            tauri::async_runtime::block_on(api.start_if_enabled());
+            app.manage(api);
 
             tray::create(&handle).context("could not create the tray icon")?;
 
@@ -129,6 +170,19 @@ pub fn run() -> anyhow::Result<()> {
             commands::provider_credential_present,
             commands::probe_providers,
             commands::import_openwhispr,
+            dictation::dictation_state,
+            dictation::dictation_toggle,
+            dictation::dictation_cancel,
+            dictation::dictation_set_device,
+            dictation::input_devices,
+            dictation::insertion_supported,
+            local_model::local_model_status,
+            local_model::local_model_install,
+            local_model::local_server_start,
+            local_model::local_server_stop,
+            local_api::local_api_status,
+            local_api::local_api_start,
+            local_api::local_api_stop,
         ])
         .run(tauri::generate_context!())
         .context("the application exited with an error")

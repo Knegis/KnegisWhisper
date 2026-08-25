@@ -157,7 +157,11 @@ pub enum ArchiveKind {
 /// an absent map entry means the UI can say why, and `docs/PLATFORM_SUPPORT.md`
 /// can cite the same fact rather than restating it by hand.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "availability", rename_all = "kebab-case")]
+#[serde(
+    tag = "availability",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
 pub enum Availability {
     Published(Asset),
     NotPublished {

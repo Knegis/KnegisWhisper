@@ -36,7 +36,7 @@ function captureExclusionLabel(c: CaptureExclusion): {
     case "active":
       return {
         text: "Hidden from screen capture",
-        detail: `verified via ${c.verified_by.api} = ${c.verified_by.value}`,
+        detail: `verified via ${c.verifiedBy.api} = ${c.verifiedBy.value}`,
       };
     case "unsupported":
       return { text: "Not supported on this system", detail: c.reason };
@@ -50,7 +50,7 @@ function captureExclusionLabel(c: CaptureExclusion): {
 function nonActivatingLabel(n: NonActivating): { text: string; detail: string } {
   switch (n.state) {
     case "active":
-      return { text: "Will not take focus", detail: `verified via ${n.verified_by}` };
+      return { text: "Will not take focus", detail: `verified via ${n.verifiedBy}` };
     case "unsupported":
       return { text: "Not supported on this system", detail: n.reason };
     case "failed":

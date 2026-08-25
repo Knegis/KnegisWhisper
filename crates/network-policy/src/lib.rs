@@ -410,7 +410,10 @@ impl NetworkPolicy {
         purpose: RequestPurpose,
         url: &str,
         destination: &std::path::Path,
-        progress: &mut dyn FnMut(u64, Option<u64>),
+        // `+ Send` because this callback is held across awaits: without it the
+        // returned future is not `Send` and cannot be spawned or used in a
+        // Tauri command.
+        progress: &mut (dyn FnMut(u64, Option<u64>) + Send),
     ) -> Result<Download, PolicyError> {
         use tokio::io::AsyncWriteExt as _;
 
