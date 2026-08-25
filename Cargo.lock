@@ -2088,6 +2088,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "kw-provider-registry"
+version = "0.1.0"
+dependencies = [
+ "kw-security",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "kw-security"
 version = "0.1.0"
 dependencies = [

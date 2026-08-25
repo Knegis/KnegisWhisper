@@ -53,13 +53,32 @@ unrestricted shell, filesystem, HTTP, process-spawning, database, or credential 
 
 ## Single source of truth for providers
 
-`config/provider-registry.json` is generated once from the upstream registry and is thereafter
-authoritative. A build script emits **both** Rust structs and TypeScript types from it.
+`config/provider-registry.json` is derived once from the frozen upstream baseline and is
+thereafter authoritative. **23 providers, 96 models, 9 credential slots, declared once.**
+
+Both languages read that one file:
+
+- **Rust** — `crates/provider-registry` embeds it with `include_str!` and parses it into typed
+  structs, so a shape mismatch is a test failure rather than a runtime surprise.
+- **TypeScript** — `tools/integration-audit/generate-ts-types.mjs` emits
+  `apps/desktop/src/generated/providers.ts`: literal-union id types, interfaces, and the data.
+  An invalid provider id is a compile error.
+
+Three CI checks keep them from drifting: the registry must be current against the baseline, the
+generated TypeScript must be current against the registry, and the parity gate must still pass.
 
 This matters because upstream duplicates its provider list across four places —
 `secretKeys.js`, the `BYOK_KEY_BRIDGES` array inlined in `preload.js` (sandboxing prevents it
 requiring the module), `PROVIDER_REGISTRY`, and `CLOUD_CHAT_PROVIDERS` — and keeps them in sync
-with a test. Codegen makes the duplication impossible instead of merely detected.
+with a test. That was not merely untidy: Berget fell through `CLOUD_CHAT_PROVIDERS` and got
+silently classified as a *local* model, which is the bug the BYOK commit had to fix.
+
+### One normalisation applied on the way through
+
+Upstream expresses the transcription upload cap as a magic `sizeCapBytes: null` special case for
+Berget inside routing code, while OpenAI and Groq are capped at 25 MiB elsewhere. Every provider
+now declares an explicit `maxUploadBytes`, with `null` meaning genuinely uncapped. Same
+behaviour, no special case, and a test asserts each provider's value.
 
 ## Network policy
 

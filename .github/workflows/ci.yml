@@ -32,6 +32,15 @@ jobs:
       - name: Forbidden domains
         run: node tools/domain-scanner/scan.mjs
 
+      # The registry and the generated TypeScript are derived artifacts. If
+      # either is stale, the Rust and TypeScript views of provider identity have
+      # drifted, which is exactly what the single source of truth prevents.
+      - name: Provider registry is current
+        run: node tools/integration-audit/generate-provider-registry.mjs --check
+
+      - name: Generated TypeScript types are current
+        run: node tools/integration-audit/generate-ts-types.mjs --check
+
       - name: Domain scanner self-tests
         run: node --test tools/domain-scanner/scan.test.mjs
 

@@ -4,6 +4,7 @@ members = [
     "apps/desktop/src-tauri",
     "crates/network-policy",
     "crates/overlay",
+    "crates/provider-registry",
     "crates/security",
 ]
 
@@ -11,7 +12,6 @@ members = [
 # The brief asks for vertical slices over broad unfinished scaffolding, so an
 # empty crate is not created just to reserve its name.
 #
-#   crates/provider-registry  commit 6
 #   crates/storage            commit 8
 #   crates/platform           commit 10
 #   crates/audio-core         phase 2
@@ -39,6 +39,7 @@ repository = "https://github.com/axelalbertkarlsson/KnegisWhisper"
 [workspace.dependencies]
 kw-network-policy = { path = "crates/network-policy" }
 kw-overlay = { path = "crates/overlay" }
+kw-provider-registry = { path = "crates/provider-registry" }
 kw-security = { path = "crates/security" }
 
 # Async
