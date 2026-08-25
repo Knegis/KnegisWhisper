@@ -1,0 +1,18 @@
+[package]
+name = "kw-provider-registry"
+description = "Data-driven provider and model registry. The single source of truth for provider and model identity."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+kw-security.workspace = true

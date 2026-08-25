@@ -1,0 +1,194 @@
+{
+  "$comment": "Hosts and identifiers that must never appear in runtime code, config, built assets, or CI workflows. Enforced by the domain scanner (see docs/NETWORK_BOUNDARY.md). Attribution, migration docs, and test fixtures are allowlisted by path.",
+  "schemaVersion": 1,
+  "forbidden": [
+    {
+      "pattern": "auth\\.openwhispr\\.com",
+      "reason": "OpenWhispr hosted auth. Still injected by upstream CI as the VITE_AUTH_URL default, past an unguarded getAuthUrl() \u2014 this is the specific regression the scanner exists to catch."
+    },
+    {
+      "pattern": "api\\.openwhispr\\.com",
+      "reason": "OpenWhispr hosted REST API"
+    },
+    {
+      "pattern": "mcp\\.openwhispr\\.com",
+      "reason": "OpenWhispr hosted MCP endpoint"
+    },
+    {
+      "pattern": "docs\\.openwhispr\\.com",
+      "reason": "Vendor documentation links"
+    },
+    {
+      "pattern": "\\bopenwhispr\\.com\\b",
+      "reason": "Any OpenWhispr host, including the OAuth desktop-callback shim"
+    },
+    {
+      "pattern": "\\bpluely\\.com\\b",
+      "reason": "Pluely backend, licensing, payments, and updater"
+    },
+    {
+      "pattern": "OpenWhispr/whisper\\.cpp",
+      "reason": "Vendor-controlled whisper.cpp fork. Build-time dependency on the vendor's GitHub org, invisible to a host-only blocklist. Use upstream ggml-org/whisper.cpp at a pinned tag, or our own fork."
+    },
+    {
+      "pattern": "OpenWhispr/openwhispr/releases",
+      "reason": "The AEC helper and five Windows helpers download from vendor release assets. Rebuild and publish under this project's own releases."
+    },
+    {
+      "pattern": "\\bposthog\\b",
+      "reason": "Analytics. Pluely ships tauri-plugin-posthog; we ship no telemetry."
+    },
+    {
+      "pattern": "machine-uid",
+      "reason": "Device fingerprinting"
+    },
+    {
+      "pattern": "sentry\\.io|@sentry/|\\bsentry-(native|rust|cli)\\b|^\\s*sentry\\s*=",
+      "reason": "Vendor crash reporting. Matched on the host, npm scope, SDK name, and dependency declaration rather than the bare word: `sentry` is ordinary programming English (a sentry value, a sentry object), so the bare pattern would produce false positives that get allowlisted -- which is how a scanner stops being trusted."
+    },
+    {
+      "pattern": "amplitude\\.com|@amplitude/",
+      "reason": "Analytics. Matched on the vendor's host and npm scope rather than the bare word: `amplitude` is ordinary audio terminology (peak amplitude, signal amplitude) and the bare pattern matched crates/audio-core's own DSP code. The Phase 0 audit found the same false positive upstream, where every apparent hit was `peakAmplitude`."
+    },
+    {
+      "pattern": "\\bmixpanel\\b",
+      "reason": "Analytics"
+    },
+    {
+      "pattern": "\\bdatadoghq\\b",
+      "reason": "Analytics"
+    },
+    {
+      "pattern": "com\\.gizmolabs\\.openwhispr",
+      "reason": "Upstream bundle identifier"
+    },
+    {
+      "pattern": "com\\.srikanthnani\\.pluely",
+      "reason": "Pluely bundle identifier"
+    },
+    {
+      "pattern": "Gizmo Labs Inc\\.",
+      "reason": "Upstream code-signing identity"
+    },
+    {
+      "pattern": "T832773L2J",
+      "reason": "Upstream Apple Team ID"
+    },
+    {
+      "pattern": "owk_live_",
+      "reason": "OpenWhispr hosted API key prefix"
+    },
+    {
+      "pattern": "\\bisPaid\\b",
+      "reason": "Paid-plan gating. No capability may be gated behind a plan."
+    },
+    {
+      "pattern": "VITE_BYOK_ONLY",
+      "reason": "Upstream's paid/BYOK build flag. BYOK is the only mode here, so the flag must not exist."
+    },
+    {
+      "pattern": "stripe",
+      "reason": "Billing. There is no billing."
+    }
+  ],
+  "scanPaths": [
+    "crates/**/*.rs",
+    "apps/**/*.rs",
+    "apps/**/*.ts",
+    "apps/**/*.tsx",
+    "apps/**/*.js",
+    "apps/**/*.jsx",
+    "tools/**/*.rs",
+    "tools/**/*.mjs",
+    "tools/**/*.ts",
+    "**/tauri.conf.json",
+    "**/capabilities/*.json",
+    "**/Cargo.toml",
+    "**/package.json",
+    ".env.example",
+    ".github/workflows/*.yml",
+    ".github/workflows/*.yaml",
+    "config/*.json",
+    "sidecars/**/*.json",
+    "sidecars/**/*.mjs"
+  ],
+  "$scanPathsComment": "Workflows and built assets are in scope deliberately. Upstream's live auth.openwhispr.com leak lives in .github/workflows and is invisible to a src/-only scan; a leaked host can also survive only in a bundled asset.",
+  "builtAssetPaths": [
+    "apps/desktop/dist/**/*.js",
+    "apps/desktop/dist/**/*.css",
+    "apps/desktop/dist/**/*.html"
+  ],
+  "allowlist": [
+    {
+      "path": "docs/**",
+      "reason": "Audit, porting, and migration documentation must name what was removed."
+    },
+    {
+      "path": "NOTICE",
+      "reason": "Upstream attribution."
+    },
+    {
+      "path": "LICENSE*",
+      "reason": "License text."
+    },
+    {
+      "path": "config/forbidden-domains.json",
+      "reason": "This file necessarily contains the patterns it forbids."
+    },
+    {
+      "path": "config/upstream-integration-baseline.json",
+      "reason": "Frozen record of the upstream surface, including vendor identifiers."
+    },
+    {
+      "path": "config/integration-manifest.json",
+      "reason": "Declares vendor services as removed-vendor-service by name."
+    },
+    {
+      "path": "**/test/fixtures/**",
+      "reason": "Fixtures that assert the scanner works."
+    },
+    {
+      "path": "**/*.test.rs",
+      "reason": "Negative tests must embed forbidden strings."
+    },
+    {
+      "path": "**/*.test.ts",
+      "reason": "Negative tests must embed forbidden strings."
+    },
+    {
+      "path": "**/*.test.mjs",
+      "reason": "Negative tests must embed forbidden strings."
+    },
+    {
+      "path": "crates/*/tests/**",
+      "reason": "Rust integration tests. Negative tests must name the hosts they assert are blocked; keeping them here rather than inline means crates/network-policy/src/lib.rs stays fully scanned."
+    },
+    {
+      "path": "tools/domain-scanner/**",
+      "reason": "The scanner and its tests necessarily contain the patterns they detect, for the same reason this config does."
+    }
+  ],
+  "$suppressionComment": "For the few source lines that legitimately need a forbidden string, prefer an inline `domain-scanner:allow <reason>` or `domain-scanner:allow-next-line <reason>` comment over allowlisting the whole file. A reason is required. Allowlisting a file blinds the scanner everywhere in it, which is worst in the files that handle egress.",
+  "runtimeBlockedHosts": [
+    "openwhispr.com",
+    "auth.openwhispr.com",
+    "api.openwhispr.com",
+    "mcp.openwhispr.com",
+    "docs.openwhispr.com",
+    "pluely.com",
+    "app.posthog.com",
+    "us.i.posthog.com",
+    "eu.i.posthog.com"
+  ],
+  "$runtimeBlockedHostsComment": "Compiled into crates/network-policy via include_str! and enforced per request as defense in depth behind the CI scanner. Host suffixes only -- the identifier patterns above are source-scanner concerns and have no runtime meaning.",
+  "allowedEgressPurposes": [
+    "user-configured-ai-provider",
+    "user-configured-transcription-provider",
+    "user-configured-calendar-provider",
+    "user-triggered-model-download",
+    "user-triggered-media-import",
+    "own-github-releases-updater",
+    "explicitly-configured-self-hosted-endpoint"
+  ],
+  "$egressComment": "Mirrors the RequestPurpose enum in crates/network-policy. Every outbound request must declare one; there is no default and no unlabelled path."
+}

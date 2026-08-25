@@ -1,0 +1,135 @@
+[workspace]
+resolver = "2"
+members = [
+    "apps/desktop/src-tauri",
+    "crates/app-core",
+    "crates/audio-core",
+    "crates/meeting-core",
+    "crates/network-policy",
+    "crates/notes-core",
+    "crates/overlay",
+    "crates/platform",
+    "crates/provider-probe",
+    "crates/provider-registry",
+    "crates/reasoning-core",
+    "crates/security",
+    "crates/transcription-core",
+    "crates/storage",
+]
+
+# Crates are added by the commit that gives them real content, not up front.
+# The brief asks for vertical slices over broad unfinished scaffolding, so an
+# empty crate is not created just to reserve its name.
+#
+#   crates/local-api          phase 6
+#   tools/knegiswhisper       phase 6
+#   tools/knegiswhisper-mcp   phase 7
+#
+# See docs/ARCHITECTURE.md for the full intended layout.
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.90"
+license = "MIT"
+authors = ["Axel Karlsson"]
+repository = "https://github.com/axelalbertkarlsson/KnegisWhisper"
+
+# Package names carry a `kw-` prefix so cargo output is unambiguous, while
+# directory names stay as documented in docs/ARCHITECTURE.md.
+[workspace.dependencies]
+kw-app-core = { path = "crates/app-core" }
+kw-audio-core = { path = "crates/audio-core" }
+kw-meeting-core = { path = "crates/meeting-core" }
+kw-network-policy = { path = "crates/network-policy" }
+kw-notes-core = { path = "crates/notes-core" }
+kw-overlay = { path = "crates/overlay" }
+kw-platform = { path = "crates/platform" }
+kw-provider-probe = { path = "crates/provider-probe" }
+kw-provider-registry = { path = "crates/provider-registry" }
+kw-reasoning-core = { path = "crates/reasoning-core" }
+kw-security = { path = "crates/security" }
+kw-storage = { path = "crates/storage" }
+kw-transcription-core = { path = "crates/transcription-core" }
+
+# Async
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "process"] }
+async-trait = "0.1"
+futures = "0.3"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Errors and logging
+anyhow = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Storage
+sqlx = { version = "0.8", default-features = false, features = [
+    "runtime-tokio", "sqlite", "macros", "migrate", "chrono", "json",
+] }
+
+# Credentials
+keyring = { version = "3", features = [
+    "apple-native", "windows-native", "sync-secret-service", "crypto-rust",
+] }
+
+# HTTP — only crates/network-policy may depend on this. Enforced by review and
+# by the fact that nothing else declares it.
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "multipart", "rustls-tls"] }
+url = "2"
+
+# Audio
+cpal = "0.15"
+hound = "3"
+ringbuf = "0.4"
+
+# Platform
+arboard = { version = "3", default-features = false }
+windows = "0.58"
+
+# Utilities
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+dirs = "5"
+uuid = { version = "1", features = ["v4", "serde"] }
+tempfile = "3"
+
+# Tauri
+tauri = { version = "2", features = [] }
+tauri-build = { version = "2", features = [] }
+tauri-plugin-global-shortcut = "2"
+tauri-plugin-autostart = "2"
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+# Fail the build on anything that panics in library code. This app runs
+# unattended in the background; an unwrap on a missing window handle or a
+# poisoned mutex is a crash the user cannot diagnose. Pluely's
+# `get_webview_panel("main").unwrap()` is the pattern being ruled out here.
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+indexing_slicing = "warn"
+todo = "warn"
+unimplemented = "warn"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true
+
+[profile.dev]
+# Sidecar-heavy debugging is unbearable without optimized dependencies, but
+# keep our own crates unoptimized so breakpoints stay useful.
+opt-level = 0
+
+[profile.dev.package."*"]
+opt-level = 2

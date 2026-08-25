@@ -1,0 +1,40 @@
+[package]
+name = "knegiswhisper"
+description = "KnegisWhisper desktop application shell"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+# Tauri convention: the binary is a thin wrapper so the app can also be driven
+# from integration tests and, later, from the mobile targets.
+name = "knegiswhisper_lib"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[lints]
+workspace = true
+
+[build-dependencies]
+tauri-build.workspace = true
+
+[dependencies]
+tauri = { workspace = true, features = ["tray-icon", "image-png"] }
+tauri-plugin-global-shortcut.workspace = true
+tauri-plugin-autostart.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+kw-network-policy.workspace = true
+kw-overlay.workspace = true
+kw-platform.workspace = true
+kw-provider-probe.workspace = true
+kw-provider-registry.workspace = true
+kw-security.workspace = true
+kw-storage.workspace = true

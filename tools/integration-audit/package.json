@@ -1,0 +1,11 @@
+{
+  "name": "@knegiswhisper/integration-audit",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Generates and verifies the frozen upstream integration baseline. No runtime dependencies by design.",
+  "scripts": {
+    "generate": "node generate-baseline.mjs",
+    "check": "node generate-baseline.mjs --check"
+  }
+}

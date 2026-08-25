@@ -1,0 +1,1181 @@
+{
+  "$comment": "Hand-maintained declaration of intent for every upstream integration. CI diffs this against config/upstream-integration-baseline.json and fails if a baseline provider ID lacks an entry here, if an entry lacks a status, or if a frontend/backend pairing is missing.",
+  "schemaVersion": 1,
+  "baseline": {
+    "commit": "c4000db9802d696341f1d239c1d81dc6d1ee233e",
+    "branch": "feat/byok-only-dyve"
+  },
+  "statusVocabulary": [
+    "ported",
+    "ported-with-new-rust-implementation",
+    "rewired-to-direct-byok",
+    "replaced-with-local-equivalent",
+    "platform-specific",
+    "temporarily-deferred",
+    "removed-vendor-service",
+    "not-applicable"
+  ],
+  "entries": {
+    "transcription:openai": {
+      "status": "rewired-to-direct-byok",
+      "name": "OpenAI",
+      "phase": 3,
+      "models": [
+        "gpt-4o-mini-transcribe",
+        "gpt-4o-transcribe",
+        "whisper-1"
+      ],
+      "upstream": [
+        "src/models/modelRegistryData.json#transcriptionProviders",
+        "src/helpers/transcriptionRoute.ts"
+      ],
+      "backend": "crates/transcription-core",
+      "ui": "Settings > Transcription"
+    },
+    "transcription:groq": {
+      "status": "rewired-to-direct-byok",
+      "name": "Groq",
+      "phase": 3,
+      "models": [
+        "whisper-large-v3",
+        "whisper-large-v3-turbo"
+      ],
+      "upstream": [
+        "src/models/modelRegistryData.json#transcriptionProviders",
+        "src/helpers/transcriptionRoute.ts"
+      ],
+      "backend": "crates/transcription-core",
+      "ui": "Settings > Transcription"
+    },
+    "transcription:berget": {
+      "status": "rewired-to-direct-byok",
+      "name": "Berget AI",
+      "phase": 3,
+      "models": [
+        "KBLab/kb-whisper-large",
+        "NbAiLab/nb-whisper-large",
+        "Systran/faster-whisper-large-v3"
+      ],
+      "upstream": [
+        "src/models/modelRegistryData.json#transcriptionProviders",
+        "src/helpers/transcriptionRoute.ts"
+      ],
+      "backend": "crates/transcription-core",
+      "ui": "Settings > Transcription"
+    },
+    "transcription:xai": {
+      "status": "rewired-to-direct-byok",
+      "name": "xAI",
+      "phase": 3,
+      "models": [
+        "grok-stt"
+      ],
+      "upstream": [
+        "src/models/modelRegistryData.json#transcriptionProviders",
+        "src/helpers/transcriptionRoute.ts"
+      ],
+      "backend": "crates/transcription-core",
+      "ui": "Settings > Transcription"
+    },
+    "transcription:mistral": {
+      "status": "rewired-to-direct-byok",
+      "name": "Mistral",
+      "phase": 3,
+      "models": [
+        "voxtral-mini-latest"
+      ],
+      "upstream": [
+        "src/models/modelRegistryData.json#transcriptionProviders",
+        "src/helpers/transcriptionRoute.ts"
+      ],
+      "backend": "crates/transcription-core",
+      "ui": "Settings > Transcription"
+    },
+    "transcription:corti": {
+      "status": "rewired-to-direct-byok",
+      "name": "Corti",
+      "phase": 3,
+      "models": [
+        "corti-transcribe"
+      ],
+      "upstream": [
+        "src/models/modelRegistryData.json#transcriptionProviders",
+        "src/helpers/transcriptionRoute.ts"
+      ],
+      "backend": "crates/transcription-core",
+      "ui": "Settings > Transcription"
+    },
+    "transcription:tinfoil": {
+      "status": "rewired-to-direct-byok",
+      "name": "Tinfoil",
+      "phase": 3,
+      "models": [
+        "voxtral-mini-4b-realtime"
+      ],
+      "upstream": [
+        "src/models/modelRegistryData.json#transcriptionProviders",
+        "src/helpers/transcriptionRoute.ts"
+      ],
+      "backend": "crates/transcription-core",
+      "ui": "Settings > Transcription"
+    },
+    "reasoning:openai": {
+      "status": "rewired-to-direct-byok",
+      "name": "OpenAI",
+      "phase": 3,
+      "models": [
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
+        "gpt-5.5",
+        "gpt-5.2",
+        "gpt-5-mini",
+        "gpt-5-nano",
+        "gpt-4.1",
+        "gpt-4.1-mini",
+        "gpt-4.1-nano"
+      ],
+      "upstream": [
+        "src/models/modelRegistryData.json#cloudProviders",
+        "src/services/ai/inferenceProviders/index.ts"
+      ],
+      "backend": "crates/reasoning-core",
+      "ui": "Settings > Intelligence"
+    },
+    "reasoning:anthropic": {
+      "status": "rewired-to-direct-byok",
+      "name": "Anthropic",
+      "phase": 3,
+      "models": [
+        "claude-fable-5",
+        "claude-sonnet-5",
+        "claude-sonnet-4-6",
+        "claude-haiku-4-5",
+        "claude-opus-5",
+        "claude-opus-4-8",
+        "claude-opus-4-7",
+        "claude-opus-4-6",
+        "claude-sonnet-4-5",
+        "claude-opus-4-5"
+      ],
+      "upstream": [
+        "src/models/modelRegistryData.json#cloudProviders",
+        "src/services/ai/inferenceProviders/index.ts"
+      ],
+      "backend": "crates/reasoning-core",
+      "ui": "Settings > Intelligence"
+    },
+    "reasoning:gemini": {
+      "status": "rewired-to-direct-byok",
+      "name": "Google Gemini",
+      "phase": 3,
+      "models": [
+        "gemini-3.5-flash",
+        "gemini-3.5-flash-lite",
+        "gemini-3.1-pro-preview",
+        "gemini-3.1-flash-lite",
+        "gemini-3-flash-preview",
+        "gemini-2.5-flash-lite",
+        "gemma-4-31b-it",
+        "gemma-4-26b-a4b-it"
+      ],
+      "upstream": [
+        "src/models/modelRegistryData.json#cloudProviders",
+        "src/services/ai/inferenceProviders/index.ts"
+      ],
+      "backend": "crates/reasoning-core",
+      "ui": "Settings > Intelligence"
+    },
+    "reasoning:groq": {
+      "status": "rewired-to-direct-byok",
+      "name": "Groq",
+      "phase": 3,
+      "models": [
+        "openai/gpt-oss-120b",
+        "openai/gpt-oss-20b",
+        "groq/compound",
+        "groq/compound-mini"
+      ],
+      "upstream": [
+        "src/models/modelRegistryData.json#cloudProviders",
+        "src/services/ai/inferenceProviders/index.ts"
+      ],
+      "backend": "crates/reasoning-core",
+      "ui": "Settings > Intelligence"
+    },
+    "reasoning:tinfoil": {
+      "status": "rewired-to-direct-byok",
+      "name": "Tinfoil",
+      "phase": 3,
+      "models": [
+        "glm-5-2",
+        "gpt-oss-120b",
+        "gemma4-31b"
+      ],
+      "upstream": [
+        "src/models/modelRegistryData.json#cloudProviders",
+        "src/services/ai/inferenceProviders/index.ts"
+      ],
+      "backend": "crates/reasoning-core",
+      "ui": "Settings > Intelligence"
+    },
+    "reasoning:berget": {
+      "status": "rewired-to-direct-byok",
+      "name": "Berget AI",
+      "phase": 3,
+      "models": [
+        "openai/gpt-oss-120b"
+      ],
+      "upstream": [
+        "src/models/modelRegistryData.json#cloudProviders",
+        "src/services/ai/inferenceProviders/index.ts"
+      ],
+      "backend": "crates/reasoning-core",
+      "ui": "Settings > Intelligence"
+    },
+    "reasoning:corti": {
+      "status": "rewired-to-direct-byok",
+      "name": "Corti",
+      "phase": 3,
+      "models": [
+        "corti-s1-instant",
+        "corti-s1",
+        "corti-s1-mini-instant",
+        "corti-s1-mini"
+      ],
+      "upstream": [
+        "src/models/modelRegistryData.json#cloudProviders",
+        "src/services/ai/inferenceProviders/index.ts"
+      ],
+      "backend": "crates/reasoning-core",
+      "ui": "Settings > Intelligence"
+    },
+    "enterprise:bedrock": {
+      "status": "rewired-to-direct-byok",
+      "name": "AWS Bedrock",
+      "phase": 3,
+      "models": [
+        "us.anthropic.claude-fable-5",
+        "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "us.anthropic.claude-sonnet-5",
+        "us.anthropic.claude-opus-4-8",
+        "openai.gpt-oss-120b-1:0",
+        "deepseek.v3.2",
+        "qwen.qwen3-next-80b-a3b"
+      ],
+      "upstream": [
+        "src/helpers/enterpriseAiProviders.js",
+        "src/helpers/enterpriseProviderErrors.js"
+      ],
+      "backend": "crates/reasoning-core",
+      "ui": "Settings > Intelligence > Enterprise",
+      "note": "Org credentials supplied by the user or organization. No OpenWhispr org account, policy server, or SSO."
+    },
+    "enterprise:azure": {
+      "status": "rewired-to-direct-byok",
+      "name": "Azure OpenAI",
+      "phase": 3,
+      "models": [],
+      "upstream": [
+        "src/helpers/enterpriseAiProviders.js",
+        "src/helpers/enterpriseProviderErrors.js"
+      ],
+      "backend": "crates/reasoning-core",
+      "ui": "Settings > Intelligence > Enterprise",
+      "note": "Deployment-name driven; upstream ships an empty models array."
+    },
+    "enterprise:vertex": {
+      "status": "rewired-to-direct-byok",
+      "name": "GCP Vertex AI",
+      "phase": 3,
+      "models": [
+        "gemini-2.5-flash",
+        "gemini-2.5-pro"
+      ],
+      "upstream": [
+        "src/helpers/enterpriseAiProviders.js",
+        "src/helpers/enterpriseProviderErrors.js"
+      ],
+      "backend": "crates/reasoning-core",
+      "ui": "Settings > Intelligence > Enterprise",
+      "note": "Org credentials supplied by the user or organization. No OpenWhispr org account, policy server, or SSO."
+    },
+    "local-llm:qwen": {
+      "status": "ported-with-new-rust-implementation",
+      "name": "Qwen",
+      "phase": 3,
+      "models": [
+        "qwen3.5-9b-q4_k_m",
+        "qwen3.5-4b-q4_k_m",
+        "qwen3.5-2b-q4_k_m",
+        "qwen3-8b-q4_k_m",
+        "qwen3-8b-q5_k_m",
+        "qwen3-4b-q4_k_m",
+        "qwen3-1.7b-q8_0",
+        "qwen3-32b-q4_k_m",
+        "qwen2.5-1.5b-instruct-q5_k_m",
+        "qwen2.5-3b-instruct-q5_k_m",
+        "qwen2.5-7b-instruct-q4_k_m",
+        "qwen2.5-7b-instruct-q5_k_m"
+      ],
+      "upstream": [
+        "src/helpers/llamaServer.js",
+        "src/helpers/llamaCppInstaller.js",
+        "src/helpers/llamaVulkanManager.js"
+      ],
+      "backend": "crates/reasoning-core",
+      "ui": "Settings > Intelligence > Local"
+    },
+    "local-llm:mistral": {
+      "status": "ported-with-new-rust-implementation",
+      "name": "Mistral",
+      "phase": 3,
+      "models": [
+        "mistral-nemo-12b-instruct-q4_k_m",
+        "mistral-7b-instruct-v0.3-q4_k_m",
+        "mistral-7b-instruct-v0.3-q5_k_m"
+      ],
+      "upstream": [
+        "src/helpers/llamaServer.js",
+        "src/helpers/llamaCppInstaller.js",
+        "src/helpers/llamaVulkanManager.js"
+      ],
+      "backend": "crates/reasoning-core",
+      "ui": "Settings > Intelligence > Local"
+    },
+    "local-llm:llama": {
+      "status": "ported-with-new-rust-implementation",
+      "name": "Meta Llama",
+      "phase": 3,
+      "models": [
+        "llama-3.2-1b-instruct-q4_k_m",
+        "llama-3.2-3b-instruct-q4_k_m",
+        "llama-3.1-8b-instruct-q4_k_m"
+      ],
+      "upstream": [
+        "src/helpers/llamaServer.js",
+        "src/helpers/llamaCppInstaller.js",
+        "src/helpers/llamaVulkanManager.js"
+      ],
+      "backend": "crates/reasoning-core",
+      "ui": "Settings > Intelligence > Local"
+    },
+    "local-llm:openai-oss": {
+      "status": "ported-with-new-rust-implementation",
+      "name": "OpenAI",
+      "phase": 3,
+      "models": [
+        "gpt-oss-20b-mxfp4"
+      ],
+      "upstream": [
+        "src/helpers/llamaServer.js",
+        "src/helpers/llamaCppInstaller.js",
+        "src/helpers/llamaVulkanManager.js"
+      ],
+      "backend": "crates/reasoning-core",
+      "ui": "Settings > Intelligence > Local"
+    },
+    "local-llm:gemma": {
+      "status": "ported-with-new-rust-implementation",
+      "name": "Gemma (Google)",
+      "phase": 3,
+      "models": [
+        "gemma-4-31b-it-q4_k_m",
+        "gemma-4-31b-it-qat-q4_0",
+        "gemma-4-26b-a4b-it-q4_k_m",
+        "gemma-4-26b-a4b-it-qat-q4_0",
+        "gemma-4-e4b-it-q4_k_m",
+        "gemma-4-e4b-it-qat-q4_0",
+        "gemma-4-e2b-it-q4_k_m",
+        "gemma-4-e2b-it-qat-q4_0",
+        "gemma-3-12b-it-q4_k_m",
+        "gemma-3-4b-it-q4_k_m",
+        "gemma-3-1b-it-q4_k_m"
+      ],
+      "upstream": [
+        "src/helpers/llamaServer.js",
+        "src/helpers/llamaCppInstaller.js",
+        "src/helpers/llamaVulkanManager.js"
+      ],
+      "backend": "crates/reasoning-core",
+      "ui": "Settings > Intelligence > Local"
+    },
+    "local-llm:liquidai": {
+      "status": "ported-with-new-rust-implementation",
+      "name": "Liquid AI",
+      "phase": 3,
+      "models": [
+        "lfm2.5-1.2b-instruct-q4_k_m",
+        "lfm2.5-8b-a1b-q4_k_m",
+        "lfm2-2.6b-q4_k_m",
+        "lfm2.5-350m-q8_0",
+        "lfm2.5-230m-q8_0"
+      ],
+      "upstream": [
+        "src/helpers/llamaServer.js",
+        "src/helpers/llamaCppInstaller.js",
+        "src/helpers/llamaVulkanManager.js"
+      ],
+      "backend": "crates/reasoning-core",
+      "ui": "Settings > Intelligence > Local"
+    },
+    "local-asr:whisper-base": {
+      "status": "ported-with-new-rust-implementation",
+      "name": "Whisper base",
+      "phase": 2,
+      "upstream": [
+        "src/helpers/whisper.js",
+        "src/helpers/whisperServer.js"
+      ],
+      "backend": "crates/transcription-core",
+      "ui": "Settings > Transcription > Local"
+    },
+    "local-asr:whisper-large": {
+      "status": "ported-with-new-rust-implementation",
+      "name": "Whisper large",
+      "phase": 2,
+      "upstream": [
+        "src/helpers/whisper.js",
+        "src/helpers/whisperServer.js"
+      ],
+      "backend": "crates/transcription-core",
+      "ui": "Settings > Transcription > Local"
+    },
+    "local-asr:whisper-medium": {
+      "status": "ported-with-new-rust-implementation",
+      "name": "Whisper medium",
+      "phase": 2,
+      "upstream": [
+        "src/helpers/whisper.js",
+        "src/helpers/whisperServer.js"
+      ],
+      "backend": "crates/transcription-core",
+      "ui": "Settings > Transcription > Local"
+    },
+    "local-asr:whisper-small": {
+      "status": "ported-with-new-rust-implementation",
+      "name": "Whisper small",
+      "phase": 2,
+      "upstream": [
+        "src/helpers/whisper.js",
+        "src/helpers/whisperServer.js"
+      ],
+      "backend": "crates/transcription-core",
+      "ui": "Settings > Transcription > Local"
+    },
+    "local-asr:whisper-tiny": {
+      "status": "ported-with-new-rust-implementation",
+      "name": "Whisper tiny",
+      "phase": 2,
+      "upstream": [
+        "src/helpers/whisper.js",
+        "src/helpers/whisperServer.js"
+      ],
+      "backend": "crates/transcription-core",
+      "ui": "Settings > Transcription > Local"
+    },
+    "local-asr:whisper-turbo": {
+      "status": "ported-with-new-rust-implementation",
+      "name": "Whisper turbo",
+      "phase": 2,
+      "upstream": [
+        "src/helpers/whisper.js",
+        "src/helpers/whisperServer.js"
+      ],
+      "backend": "crates/transcription-core",
+      "ui": "Settings > Transcription > Local"
+    },
+    "local-asr:nemotron-3.5-asr-streaming-0.6b": {
+      "status": "ported-with-new-rust-implementation",
+      "name": "Nemotron 3.5 ASR Streaming 0.6B",
+      "phase": 8,
+      "upstream": [
+        "src/helpers/parakeet.js",
+        "src/helpers/parakeetWsServer.js",
+        "src/helpers/parakeetCapability.js"
+      ],
+      "backend": "crates/transcription-core",
+      "ui": "Settings > Transcription > Local",
+      "runtime": "online"
+    },
+    "local-asr:nemotron-speech-streaming-en-0.6b": {
+      "status": "ported-with-new-rust-implementation",
+      "name": "Nemotron Speech Streaming EN 0.6B",
+      "phase": 8,
+      "upstream": [
+        "src/helpers/parakeet.js",
+        "src/helpers/parakeetWsServer.js",
+        "src/helpers/parakeetCapability.js"
+      ],
+      "backend": "crates/transcription-core",
+      "ui": "Settings > Transcription > Local",
+      "runtime": "online"
+    },
+    "local-asr:parakeet-tdt-0.6b-v3": {
+      "status": "ported-with-new-rust-implementation",
+      "name": "Parakeet TDT 0.6B",
+      "phase": 8,
+      "upstream": [
+        "src/helpers/parakeet.js",
+        "src/helpers/parakeetWsServer.js",
+        "src/helpers/parakeetCapability.js"
+      ],
+      "backend": "crates/transcription-core",
+      "ui": "Settings > Transcription > Local",
+      "runtime": null
+    },
+    "local-asr:parakeet-unified-en-0.6b": {
+      "status": "ported-with-new-rust-implementation",
+      "name": "Parakeet Unified EN 0.6B",
+      "phase": 8,
+      "upstream": [
+        "src/helpers/parakeet.js",
+        "src/helpers/parakeetWsServer.js",
+        "src/helpers/parakeetCapability.js"
+      ],
+      "backend": "crates/transcription-core",
+      "ui": "Settings > Transcription > Local",
+      "runtime": null
+    },
+    "meeting-stream:assemblyai-realtime": {
+      "status": "rewired-to-direct-byok",
+      "phase": 4,
+      "upstream": [
+        "src/helpers/meetingStreamingProviders.js",
+        "src/helpers/realtimeTokenProviders.js"
+      ],
+      "backend": "crates/meeting-core",
+      "ui": "Settings > Meetings"
+    },
+    "meeting-stream:corti-realtime": {
+      "status": "ported",
+      "phase": 4,
+      "upstream": [
+        "src/helpers/meetingStreamingProviders.js",
+        "src/helpers/realtimeTokenProviders.js"
+      ],
+      "backend": "crates/meeting-core",
+      "ui": "Settings > Meetings"
+    },
+    "meeting-stream:deepgram-realtime": {
+      "status": "rewired-to-direct-byok",
+      "phase": 4,
+      "upstream": [
+        "src/helpers/meetingStreamingProviders.js",
+        "src/helpers/realtimeTokenProviders.js"
+      ],
+      "backend": "crates/meeting-core",
+      "ui": "Settings > Meetings"
+    },
+    "meeting-stream:openai-realtime": {
+      "status": "rewired-to-direct-byok",
+      "phase": 4,
+      "upstream": [
+        "src/helpers/meetingStreamingProviders.js",
+        "src/helpers/realtimeTokenProviders.js"
+      ],
+      "backend": "crates/meeting-core",
+      "ui": "Settings > Meetings"
+    },
+    "meeting-stream:tinfoil-realtime": {
+      "status": "ported",
+      "phase": 4,
+      "upstream": [
+        "src/helpers/meetingStreamingProviders.js",
+        "src/helpers/realtimeTokenProviders.js"
+      ],
+      "backend": "crates/meeting-core",
+      "ui": "Settings > Meetings"
+    },
+    "meeting-stream:local": {
+      "status": "ported-with-new-rust-implementation",
+      "phase": 4,
+      "upstream": [
+        "src/helpers/parakeetWsServer.js"
+      ],
+      "backend": "crates/meeting-core",
+      "ui": "Settings > Meetings"
+    },
+    "credential:openai": {
+      "status": "ported-with-new-rust-implementation",
+      "env": "OPENAI_API_KEY",
+      "phase": 1,
+      "upstream": [
+        "src/config/secretKeys.js",
+        "src/helpers/environment.js",
+        "src/helpers/secretCrypto.js"
+      ],
+      "backend": "crates/security",
+      "ui": "Settings > Providers",
+      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10."
+    },
+    "credential:anthropic": {
+      "status": "ported-with-new-rust-implementation",
+      "env": "ANTHROPIC_API_KEY",
+      "phase": 1,
+      "upstream": [
+        "src/config/secretKeys.js",
+        "src/helpers/environment.js",
+        "src/helpers/secretCrypto.js"
+      ],
+      "backend": "crates/security",
+      "ui": "Settings > Providers",
+      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10."
+    },
+    "credential:gemini": {
+      "status": "ported-with-new-rust-implementation",
+      "env": "GEMINI_API_KEY",
+      "phase": 1,
+      "upstream": [
+        "src/config/secretKeys.js",
+        "src/helpers/environment.js",
+        "src/helpers/secretCrypto.js"
+      ],
+      "backend": "crates/security",
+      "ui": "Settings > Providers",
+      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10."
+    },
+    "credential:groq": {
+      "status": "ported-with-new-rust-implementation",
+      "env": "GROQ_API_KEY",
+      "phase": 1,
+      "upstream": [
+        "src/config/secretKeys.js",
+        "src/helpers/environment.js",
+        "src/helpers/secretCrypto.js"
+      ],
+      "backend": "crates/security",
+      "ui": "Settings > Providers",
+      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10."
+    },
+    "credential:berget": {
+      "status": "ported-with-new-rust-implementation",
+      "env": "BERGET_API_KEY",
+      "phase": 1,
+      "upstream": [
+        "src/config/secretKeys.js",
+        "src/helpers/environment.js",
+        "src/helpers/secretCrypto.js"
+      ],
+      "backend": "crates/security",
+      "ui": "Settings > Providers",
+      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10."
+    },
+    "credential:xai": {
+      "status": "ported-with-new-rust-implementation",
+      "env": "XAI_API_KEY",
+      "phase": 1,
+      "upstream": [
+        "src/config/secretKeys.js",
+        "src/helpers/environment.js",
+        "src/helpers/secretCrypto.js"
+      ],
+      "backend": "crates/security",
+      "ui": "Settings > Providers",
+      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10."
+    },
+    "credential:mistral": {
+      "status": "ported-with-new-rust-implementation",
+      "env": "MISTRAL_API_KEY",
+      "phase": 1,
+      "upstream": [
+        "src/config/secretKeys.js",
+        "src/helpers/environment.js",
+        "src/helpers/secretCrypto.js"
+      ],
+      "backend": "crates/security",
+      "ui": "Settings > Providers",
+      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10."
+    },
+    "credential:openrouter": {
+      "status": "ported-with-new-rust-implementation",
+      "env": "OPENROUTER_API_KEY",
+      "phase": 1,
+      "upstream": [
+        "src/config/secretKeys.js",
+        "src/helpers/environment.js",
+        "src/helpers/secretCrypto.js"
+      ],
+      "backend": "crates/security",
+      "ui": "Settings > Providers",
+      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10."
+    },
+    "credential:tinfoil": {
+      "status": "ported-with-new-rust-implementation",
+      "env": "TINFOIL_API_KEY",
+      "phase": 1,
+      "upstream": [
+        "src/config/secretKeys.js",
+        "src/helpers/environment.js",
+        "src/helpers/secretCrypto.js"
+      ],
+      "backend": "crates/security",
+      "ui": "Settings > Providers",
+      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10."
+    },
+    "credential:corti": {
+      "status": "ported-with-new-rust-implementation",
+      "env": "CORTI_API_KEY",
+      "phase": 1,
+      "upstream": [
+        "src/config/secretKeys.js",
+        "src/helpers/environment.js",
+        "src/helpers/secretCrypto.js"
+      ],
+      "backend": "crates/security",
+      "ui": "Settings > Providers",
+      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10."
+    },
+    "credential:note-formatting-custom": {
+      "status": "ported-with-new-rust-implementation",
+      "env": "NOTE_FORMATTING_CUSTOM_API_KEY",
+      "phase": 1,
+      "upstream": [
+        "src/config/secretKeys.js",
+        "src/helpers/environment.js",
+        "src/helpers/secretCrypto.js"
+      ],
+      "backend": "crates/security",
+      "ui": "Settings > Providers",
+      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10."
+    },
+    "credential:translation-custom": {
+      "status": "ported-with-new-rust-implementation",
+      "env": "TRANSLATION_CUSTOM_API_KEY",
+      "phase": 1,
+      "upstream": [
+        "src/config/secretKeys.js",
+        "src/helpers/environment.js",
+        "src/helpers/secretCrypto.js"
+      ],
+      "backend": "crates/security",
+      "ui": "Settings > Providers",
+      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10."
+    },
+    "credential:dictation-agent-custom": {
+      "status": "ported-with-new-rust-implementation",
+      "env": "DICTATION_AGENT_CUSTOM_API_KEY",
+      "phase": 1,
+      "upstream": [
+        "src/config/secretKeys.js",
+        "src/helpers/environment.js",
+        "src/helpers/secretCrypto.js"
+      ],
+      "backend": "crates/security",
+      "ui": "Settings > Providers",
+      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10."
+    },
+    "credential:dictation-agent-vision-custom": {
+      "status": "ported-with-new-rust-implementation",
+      "env": "DICTATION_AGENT_VISION_CUSTOM_API_KEY",
+      "phase": 1,
+      "upstream": [
+        "src/config/secretKeys.js",
+        "src/helpers/environment.js",
+        "src/helpers/secretCrypto.js"
+      ],
+      "backend": "crates/security",
+      "ui": "Settings > Providers",
+      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10."
+    },
+    "credential:chat-agent-custom": {
+      "status": "ported-with-new-rust-implementation",
+      "env": "CHAT_AGENT_CUSTOM_API_KEY",
+      "phase": 1,
+      "upstream": [
+        "src/config/secretKeys.js",
+        "src/helpers/environment.js",
+        "src/helpers/secretCrypto.js"
+      ],
+      "backend": "crates/security",
+      "ui": "Settings > Providers",
+      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10."
+    },
+    "diarization-model:3dspeaker-campplus-en": {
+      "status": "temporarily-deferred",
+      "name": "CAM++ Speaker Embedding (English)",
+      "phase": 8,
+      "upstream": [
+        "src/helpers/diarization.js",
+        "src/helpers/diarizationPolicy.js"
+      ],
+      "deferral": {
+        "why": "Needs ONNX Runtime plus three models, and the dictation and meeting slices must be reliable before speaker attribution is worth having.",
+        "dependencies": [
+          "ort crate (ONNX Runtime)",
+          "sherpa-onnx-diarize sidecar",
+          "silero_vad.onnx (hardcoded upstream, absent from the registry)"
+        ],
+        "interface": "meeting_core::diarization::Diarizer",
+        "expectedPhase": 8
+      }
+    },
+    "diarization-model:sherpa-onnx-pyannote-segmentation-3-0": {
+      "status": "temporarily-deferred",
+      "name": "Pyannote Segmentation 3.0",
+      "phase": 8,
+      "upstream": [
+        "src/helpers/diarization.js",
+        "src/helpers/diarizationPolicy.js"
+      ],
+      "deferral": {
+        "why": "Needs ONNX Runtime plus three models, and the dictation and meeting slices must be reliable before speaker attribution is worth having.",
+        "dependencies": [
+          "ort crate (ONNX Runtime)",
+          "sherpa-onnx-diarize sidecar",
+          "silero_vad.onnx (hardcoded upstream, absent from the registry)"
+        ],
+        "interface": "meeting_core::diarization::Diarizer",
+        "expectedPhase": 8
+      }
+    },
+    "calendar:google": {
+      "status": "ported-with-new-rust-implementation",
+      "phase": 5,
+      "upstream": [
+        "src/helpers/googleCalendarManager.js",
+        "src/helpers/googleCalendarOAuth.js",
+        "src/helpers/oauthLoopbackFlow.js"
+      ],
+      "backend": "crates/app-core/calendar",
+      "ui": "Integrations > Calendar",
+      "note": "Token exchange already goes direct to Google; no OpenWhispr broker. Must switch from the shipped client_secret to a PKCE-only installed-app client, and move refresh tokens out of plaintext SQLite into the credential store."
+    },
+    "calendar:microsoft": {
+      "status": "ported-with-new-rust-implementation",
+      "phase": 5,
+      "upstream": [
+        "src/helpers/microsoftCalendarManager.js",
+        "src/helpers/microsoftCalendarOAuth.js"
+      ],
+      "backend": "crates/app-core/calendar",
+      "ui": "Integrations > Calendar",
+      "note": "Direct to login.microsoftonline.com. Same refresh-token relocation as Google."
+    },
+    "calendar:apple": {
+      "status": "platform-specific",
+      "phase": 5,
+      "platforms": [
+        "macos"
+      ],
+      "upstream": [
+        "src/helpers/appleCalendarManager.js",
+        "resources/macos-calendar-listener.swift"
+      ],
+      "backend": "crates/platform/macos",
+      "ui": "Integrations > Calendar",
+      "note": "Native EventKit, macOS only. Unverifiable on the current dev machine."
+    },
+    "developer:local-rest-api": {
+      "status": "ported-with-new-rust-implementation",
+      "phase": 6,
+      "upstream": [
+        "src/helpers/cliBridge.js"
+      ],
+      "backend": "crates/local-api",
+      "ui": "Integrations > API",
+      "note": "Upstream is a good model: loopback-only, 0600 discovery file, timingSafeEqual bearer, 1 MB body cap, 15 routes under /v1/. Port nearly as-is."
+    },
+    "developer:cli": {
+      "status": "ported-with-new-rust-implementation",
+      "phase": 6,
+      "upstream": [
+        "agent-skills/openwhispr-cli/SKILL.md (surface only)"
+      ],
+      "backend": "tools/knegiswhisper",
+      "ui": "Integrations > CLI",
+      "note": "NOT a port. The CLI is a separate npm package absent from the repo; only its documented noun-verb surface and exit codes 0-4 survive as a spec."
+    },
+    "developer:mcp": {
+      "status": "ported-with-new-rust-implementation",
+      "phase": 7,
+      "upstream": [
+        "agent-skills/openwhispr-api/SKILL.md (surface only)"
+      ],
+      "backend": "tools/knegiswhisper-mcp",
+      "ui": "Integrations > MCP",
+      "note": "NOT a port. Upstream MCP is a hosted Streamable-HTTP service; no local or stdio implementation exists in the checkout. Entirely new work."
+    },
+    "developer:agent-skills": {
+      "status": "ported",
+      "phase": 7,
+      "kind": "documentation",
+      "upstream": [
+        "agent-skills/openwhispr-api/SKILL.md",
+        "agent-skills/openwhispr-cli/SKILL.md"
+      ],
+      "target": "docs/agent-skills/",
+      "note": "Rewrite to reference knegiswhisper / knegiswhisper-mcp and the local API only. Upstream text still points at api.openwhispr.com and mcp.openwhispr.com. Documentation only -- no backend or UI surface of its own."
+    },
+    "meeting-detect:zoom": {
+      "status": "ported-with-new-rust-implementation",
+      "phase": 4,
+      "upstream": [
+        "src/helpers/meetingProcessDetector.js",
+        "src/helpers/meetingDetectionEngine.js"
+      ],
+      "backend": "crates/platform"
+    },
+    "meeting-detect:teams": {
+      "status": "ported-with-new-rust-implementation",
+      "phase": 4,
+      "upstream": [
+        "src/helpers/meetingProcessDetector.js",
+        "src/helpers/meetingDetectionEngine.js"
+      ],
+      "backend": "crates/platform"
+    },
+    "meeting-detect:webex": {
+      "status": "ported-with-new-rust-implementation",
+      "phase": 4,
+      "upstream": [
+        "src/helpers/meetingProcessDetector.js",
+        "src/helpers/meetingDetectionEngine.js"
+      ],
+      "backend": "crates/platform"
+    },
+    "meeting-detect:facetime": {
+      "status": "platform-specific",
+      "phase": 4,
+      "upstream": [
+        "src/helpers/meetingProcessDetector.js",
+        "src/helpers/meetingDetectionEngine.js"
+      ],
+      "backend": "crates/platform",
+      "platforms": [
+        "macos"
+      ]
+    },
+    "meeting-detect:generic": {
+      "status": "ported-with-new-rust-implementation",
+      "phase": 4,
+      "upstream": [
+        "src/helpers/meetingDetectionEngine.js",
+        "src/helpers/audioActivityDetector.js"
+      ],
+      "backend": "crates/platform",
+      "note": "Mic activity, system-audio activity, calendar events, process allow/blocklists. Browser meetings such as Google Meet are covered here plus manual capture; no per-tab detector is possible."
+    },
+    "media:audio-import": {
+      "status": "ported-with-new-rust-implementation",
+      "phase": 8,
+      "upstream": [
+        "src/helpers/ffmpegUtils.js",
+        "src/services/fileTranscription.ts"
+      ],
+      "backend": "crates/notes-core",
+      "ui": "Notes > Upload"
+    },
+    "media:video-import": {
+      "status": "ported-with-new-rust-implementation",
+      "phase": 8,
+      "upstream": [
+        "src/helpers/ffmpegUtils.js"
+      ],
+      "backend": "crates/notes-core",
+      "ui": "Notes > Upload"
+    },
+    "media:url-import": {
+      "status": "ported-with-new-rust-implementation",
+      "phase": 8,
+      "upstream": [
+        "src/helpers/urlAudioDownloader.js"
+      ],
+      "backend": "crates/notes-core",
+      "ui": "Notes > Upload",
+      "note": "yt-dlp sidecar. Preserve the SSRF guards: HTTPS-only, private-address rejection after DNS, 500 MB cap, 3 redirects, 6 h duration cap, 30 s stall timeout."
+    },
+    "media:transcript-export": {
+      "status": "ported",
+      "phase": 4,
+      "upstream": [
+        "src/helpers/transcriptFormatter.js",
+        "src/helpers/transcriptText.js"
+      ],
+      "backend": "crates/notes-core",
+      "ui": "Notes > Export",
+      "formats": [
+        "txt",
+        "md",
+        "json",
+        "srt",
+        "vtt"
+      ]
+    },
+    "search:sqlite-fts": {
+      "status": "ported-with-new-rust-implementation",
+      "phase": 1,
+      "upstream": [
+        "src/helpers/database.js#notes_fts",
+        "src/helpers/noteSearch.js"
+      ],
+      "backend": "crates/storage",
+      "note": "FTS5 external-content table mirroring notes via three triggers. Port verbatim."
+    },
+    "search:semantic": {
+      "status": "temporarily-deferred",
+      "phase": 8,
+      "upstream": [
+        "src/helpers/qdrantManager.js",
+        "src/helpers/speakerEmbeddings.js",
+        "src/workers/onnxWorker.js"
+      ],
+      "deferral": {
+        "why": "Qdrant sidecar plus MiniLM embeddings plus ONNX Runtime is a large dependency for a feature the app must work without anyway.",
+        "dependencies": [
+          "qdrant sidecar",
+          "all-MiniLM-L6-v2",
+          "ort crate"
+        ],
+        "interface": "notes_core::search::SemanticIndex",
+        "expectedPhase": 8,
+        "degradation": "FTS5 keyword search remains fully functional; the UI hides semantic ranking rather than failing."
+      }
+    },
+    "platform:text-insertion": {
+      "status": "ported-with-new-rust-implementation",
+      "phase": 2,
+      "upstream": [
+        "src/helpers/clipboard.js",
+        "src/helpers/selectionManager.js",
+        "resources/macos-fast-paste.swift",
+        "resources/windows-fast-paste.c",
+        "resources/linux-fast-paste.c"
+      ],
+      "backend": "crates/platform"
+    },
+    "platform:system-audio": {
+      "status": "ported-with-new-rust-implementation",
+      "phase": 4,
+      "upstream": [
+        "src/helpers/audioTapManager.js",
+        "src/helpers/windowsLoopbackAudioManager.js",
+        "src/helpers/linuxPortalAudioManager.js"
+      ],
+      "backend": "crates/audio-core"
+    },
+    "platform:global-shortcuts": {
+      "status": "ported-with-new-rust-implementation",
+      "phase": 1,
+      "upstream": [
+        "src/helpers/hotkeyManager.js",
+        "src/helpers/gnomeShortcut.js",
+        "src/helpers/kdeShortcut.js",
+        "src/helpers/hyprlandShortcut.js"
+      ],
+      "backend": "crates/platform",
+      "note": "Five backends upstream. Modifier-only, right-side modifiers, Globe/Fn, mouse buttons and push-to-talk are invisible to the cross-platform API."
+    },
+    "platform:privacy-overlay": {
+      "status": "ported-with-new-rust-implementation",
+      "phase": 1,
+      "upstream": [
+        "src/helpers/windowConfig.js",
+        "src/helpers/windowManager.js"
+      ],
+      "backend": "crates/overlay",
+      "note": "Windows non-activating behaviour is new work: Pluely set_focusable(false) is commented out and it has no click-through code at all."
+    },
+    "platform:capture-exclusion": {
+      "status": "ported-with-new-rust-implementation",
+      "phase": 1,
+      "upstream": [
+        "src/helpers/windowManager.js#setContentProtection"
+      ],
+      "backend": "crates/overlay",
+      "note": "Must return the four-state diagnostic with evidence. Never report active by assumption; no-op on Linux."
+    },
+    "platform:aec": {
+      "status": "ported-with-new-rust-implementation",
+      "phase": 4,
+      "upstream": [
+        "src/helpers/meetingAecManager.js",
+        "native/meeting-aec-helper/"
+      ],
+      "backend": "crates/audio-core",
+      "note": "WebRTC APM sidecar. Must be rebuilt under this project own releases; upstream downloads it from OpenWhispr/openwhispr release assets."
+    },
+    "platform:tray-autostart": {
+      "status": "ported-with-new-rust-implementation",
+      "phase": 1,
+      "upstream": [
+        "src/helpers/autoStart.js",
+        "src/helpers/linuxAutostart.js",
+        "src/helpers/menuManager.js"
+      ],
+      "backend": "crates/platform"
+    },
+    "vendor:openwhispr-cloud-transcription": {
+      "status": "removed-vendor-service",
+      "detail": "cloud-transcribe IPC and /api/transcribe"
+    },
+    "vendor:openwhispr-cloud-reasoning": {
+      "status": "removed-vendor-service",
+      "detail": "cloud-reason IPC and inferenceProviders/openwhispr.ts"
+    },
+    "vendor:openwhispr-auth": {
+      "status": "removed-vendor-service",
+      "detail": "better-auth client, auth.openwhispr.com, openwhispr:// deep-link auth"
+    },
+    "vendor:openwhispr-hosted-mcp": {
+      "status": "removed-vendor-service",
+      "detail": "mcp.openwhispr.com/mcp"
+    },
+    "vendor:openwhispr-hosted-api": {
+      "status": "removed-vendor-service",
+      "detail": "api.openwhispr.com/api/v1"
+    },
+    "vendor:openwhispr-cloud-sync": {
+      "status": "removed-vendor-service",
+      "detail": "SyncService and every cloud_id / sync_status / deleted_at column"
+    },
+    "vendor:openwhispr-team-spaces": {
+      "status": "removed-vendor-service",
+      "detail": "spaces table, WorkspacesService, invitations"
+    },
+    "vendor:openwhispr-usage-metering": {
+      "status": "removed-vendor-service",
+      "detail": "useUsage, usageStore, /api/usage"
+    },
+    "vendor:openwhispr-billing": {
+      "status": "removed-vendor-service",
+      "detail": "five Stripe endpoints, useBillingPortal, WorkspaceBillingCard"
+    },
+    "vendor:openwhispr-referrals": {
+      "status": "removed-vendor-service",
+      "detail": "get-referral-stats, send-referral-invite"
+    },
+    "vendor:openwhispr-realtime-token-broker": {
+      "status": "removed-vendor-service",
+      "detail": "/api/streaming-token, /api/deepgram-streaming-token, /api/openai-realtime-token"
+    },
+    "vendor:openwhispr-cloud-model-tiers": {
+      "status": "removed-vendor-service",
+      "detail": "openwhisprCloudModels registry block, zero readers upstream"
+    },
+    "vendor:pluely-backend": {
+      "status": "removed-vendor-service",
+      "detail": "APP_ENDPOINT /api/response, /transcribe, /chat, /models, /prompts, /prompt, /activity, /error"
+    },
+    "vendor:pluely-licensing": {
+      "status": "removed-vendor-service",
+      "detail": "activate.rs, get_checkout_url, license validation"
+    },
+    "vendor:pluely-updater": {
+      "status": "removed-vendor-service",
+      "detail": "https://pluely.com/api/update"
+    },
+    "vendor:posthog": {
+      "status": "removed-vendor-service",
+      "detail": "tauri-plugin-posthog and the posthog:allow-capture capability"
+    },
+    "vendor:machine-uid": {
+      "status": "removed-vendor-service",
+      "detail": "tauri-plugin-machine-uid device fingerprinting"
+    },
+    "vendor:openwhispr-telemetry-switch": {
+      "status": "removed-vendor-service",
+      "detail": "telemetryEnabled setting with no collector behind it"
+    }
+  }
+}
