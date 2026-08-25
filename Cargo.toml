@@ -8,6 +8,7 @@ members = [
     "crates/provider-probe",
     "crates/provider-registry",
     "crates/security",
+    "crates/transcription-core",
     "crates/storage",
 ]
 
@@ -16,7 +17,6 @@ members = [
 # empty crate is not created just to reserve its name.
 #
 #   crates/audio-core         phase 2
-#   crates/transcription-core phase 2
 #   crates/app-core           phase 2
 #   crates/reasoning-core     phase 3
 #   crates/meeting-core       phase 4
@@ -45,6 +45,7 @@ kw-provider-probe = { path = "crates/provider-probe" }
 kw-provider-registry = { path = "crates/provider-registry" }
 kw-security = { path = "crates/security" }
 kw-storage = { path = "crates/storage" }
+kw-transcription-core = { path = "crates/transcription-core" }
 
 # Async
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "process"] }
