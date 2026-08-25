@@ -496,6 +496,11 @@ pub struct DictationRuntime {
     session: Arc<kw_app_core::dictation::Dictation>,
     recorder: Arc<MicRecorder>,
     db: Db,
+    /// The live cleanup destination, shared with the `ModelCleanup` inside
+    /// `session`. Held here so `reasoning::reasoning_set_cleanup` can change it
+    /// without a restart — a setting that only takes effect after a relaunch is
+    /// not what "Save" means.
+    cleanup: crate::reasoning::CleanupSlot,
 }
 
 impl std::fmt::Debug for DictationRuntime {
@@ -532,7 +537,7 @@ impl DictationRuntime {
                 local_port,
                 local_model,
             )),
-            Arc::new(ModelCleanup::new(policy, credentials, cleanup)),
+            Arc::new(ModelCleanup::new(policy, credentials, Arc::clone(&cleanup))),
             Arc::new(ClipboardInserter::new()),
             Arc::new(DbHistory::new(db.clone())),
             Arc::new(EventSink::new(app, state)),
@@ -545,7 +550,14 @@ impl DictationRuntime {
             session: Arc::new(session),
             recorder,
             db,
+            cleanup,
         }
+    }
+
+    /// The shared cleanup destination, for the command that changes it.
+    #[must_use]
+    pub fn cleanup_slot(&self) -> &crate::reasoning::CleanupSlot {
+        &self.cleanup
     }
 
     /// What the session is doing.

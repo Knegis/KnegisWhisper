@@ -155,7 +155,8 @@
       ],
       "backend": "crates/reasoning-core",
       "ui": "Settings > Intelligence",
-      "reachable": false
+      "reachable": true,
+      "note": "Reachable: a key is stored on Settings > Providers and the provider and model are chosen on Settings > Intelligence, both from the registry. OpenAI-compatible, so reasoning-core has a request shape for it."
     },
     "reasoning:anthropic": {
       "status": "rewired-to-direct-byok",
@@ -179,7 +180,8 @@
       ],
       "backend": "crates/reasoning-core",
       "ui": "Settings > Intelligence",
-      "reachable": false
+      "reachable": true,
+      "note": "Reachable: a key is stored on Settings > Providers and the provider and model are chosen on Settings > Intelligence, both from the registry. OpenAI-compatible, so reasoning-core has a request shape for it."
     },
     "reasoning:gemini": {
       "status": "rewired-to-direct-byok",
@@ -201,7 +203,8 @@
       ],
       "backend": "crates/reasoning-core",
       "ui": "Settings > Intelligence",
-      "reachable": false
+      "reachable": true,
+      "note": "Reachable: a key is stored on Settings > Providers and the provider and model are chosen on Settings > Intelligence, both from the registry. OpenAI-compatible, so reasoning-core has a request shape for it."
     },
     "reasoning:groq": {
       "status": "rewired-to-direct-byok",
@@ -219,7 +222,8 @@
       ],
       "backend": "crates/reasoning-core",
       "ui": "Settings > Intelligence",
-      "reachable": false
+      "reachable": true,
+      "note": "Reachable: a key is stored on Settings > Providers and the provider and model are chosen on Settings > Intelligence, both from the registry. OpenAI-compatible, so reasoning-core has a request shape for it."
     },
     "reasoning:tinfoil": {
       "status": "rewired-to-direct-byok",
@@ -236,7 +240,8 @@
       ],
       "backend": "crates/reasoning-core",
       "ui": "Settings > Intelligence",
-      "reachable": false
+      "reachable": true,
+      "note": "Reachable: a key is stored on Settings > Providers and the provider and model are chosen on Settings > Intelligence, both from the registry. OpenAI-compatible, so reasoning-core has a request shape for it."
     },
     "reasoning:berget": {
       "status": "rewired-to-direct-byok",
@@ -251,7 +256,8 @@
       ],
       "backend": "crates/reasoning-core",
       "ui": "Settings > Intelligence",
-      "reachable": false
+      "reachable": true,
+      "note": "Reachable: a key is stored on Settings > Providers and the provider and model are chosen on Settings > Intelligence, both from the registry. OpenAI-compatible, so reasoning-core has a request shape for it."
     },
     "reasoning:corti": {
       "status": "rewired-to-direct-byok",
@@ -269,7 +275,8 @@
       ],
       "backend": "crates/reasoning-core",
       "ui": "Settings > Intelligence",
-      "reachable": false
+      "reachable": true,
+      "note": "Reachable: a key is stored on Settings > Providers and the provider and model are chosen on Settings > Intelligence, both from the registry. OpenAI-compatible, so reasoning-core has a request shape for it."
     },
     "enterprise:bedrock": {
       "status": "rewired-to-direct-byok",
@@ -291,7 +298,7 @@
       "backend": "crates/reasoning-core",
       "ui": "Settings > Intelligence > Enterprise",
       "reachable": false,
-      "note": "Org credentials supplied by the user or organization. No OpenWhispr org account, policy server, or SSO."
+      "note": "Listed on Settings > Intelligence with the reason it cannot be used, so a user is not left wondering. Unreachable until chat.rs implements the request shape and signing, which is what Settings > Intelligence > Enterprise will configure."
     },
     "enterprise:azure": {
       "status": "rewired-to-direct-byok",
@@ -305,7 +312,7 @@
       "backend": "crates/reasoning-core",
       "ui": "Settings > Intelligence > Enterprise",
       "reachable": false,
-      "note": "Deployment-name driven; upstream ships an empty models array."
+      "note": "Listed on Settings > Intelligence with the reason it cannot be used, so a user is not left wondering. Unreachable until chat.rs implements the request shape and signing, which is what Settings > Intelligence > Enterprise will configure."
     },
     "enterprise:vertex": {
       "status": "rewired-to-direct-byok",
@@ -322,7 +329,7 @@
       "backend": "crates/reasoning-core",
       "ui": "Settings > Intelligence > Enterprise",
       "reachable": false,
-      "note": "Org credentials supplied by the user or organization. No OpenWhispr org account, policy server, or SSO."
+      "note": "Listed on Settings > Intelligence with the reason it cannot be used, so a user is not left wondering. Unreachable until chat.rs implements the request shape and signing, which is what Settings > Intelligence > Enterprise will configure."
     },
     "local-llm:qwen": {
       "status": "ported-with-new-rust-implementation",

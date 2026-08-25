@@ -20,10 +20,10 @@ What the same period established is that **the remaining work is mostly reachabi
 capability**. The parity gate now resolves each manifest entry through `config/ui-surfaces.json`
 and prints what cannot be configured:
 
-- **26 of 99 integrations are reachable**, up from 8 when this plan was written. 38 are
+- **33 of 99 integrations are reachable**, up from 8 when this plan was written. 31 are
   implemented-or-declared and unreachable; the other 35 are removed vendor services and internal
   platform capabilities with no surface by design.
-- **8 of 13 UI surfaces do not exist.** The 5 that do are one component each; `App.tsx` is the
+- **7 of 13 UI surfaces do not exist.** The 6 that do are one component each; `App.tsx` is the
   shell.
 - The keystone is closed: `Settings > Providers` stores a key for every one of the fifteen slots
   the registry declares. Before chunk A, `provider_credential_set` existed in Rust and
@@ -68,7 +68,7 @@ Why the order below is what it is. Each chunk's integrations-made-reachable:
 | Chunk | New backend | Integrations unlocked |
 | --- | --- | --- |
 | A — shell + Providers *(done)* | 2 commands | **18**: 15 credential slots + 3 transcription providers |
-| B — Intelligence | 3 enterprise shapes, llama sidecar | 7 reasoning + 3 enterprise + 6 local LLM = **16** |
+| B — Intelligence | 3 enterprise shapes, llama sidecar | 7 reasoning *(done)* + 3 enterprise + 6 local LLM = **16** |
 | C — transcription clients | 4 clients | **7** transcription (3 immediately from A, 4 from C) |
 | D — system audio + natives | large | 0 directly; unblocks E entirely |
 | E — meetings | 5 clients + 5 detectors | **6** streams + 5 detectors |
@@ -163,13 +163,19 @@ providers), `apps/desktop/src/views/SettingsProviders.tsx`.
 
 ## Chunk B — Intelligence: reasoning, enterprise, local LLM
 
-### B1. Settings > Intelligence (7 reasoning providers)
+### B1. Settings > Intelligence (7 reasoning providers) *(done)*
 
-Backend is done: `reasoning-core::{route, chat, params}` dispatch, with the cloud set **derived
-from the registry** so an unknown id fails closed. The screen chooses provider and model, sets
-cleanup on or off for dictation, and the dictation route gains a cleanup destination — today
-`DictationRuntime::build` is handed `Arc::new(RwLock::new(None))` for cleanup with a comment
-saying a half-configured cleanup is worse than none. This screen is what makes it configurable.
+Backend was done: `reasoning-core::{route, chat, params}` dispatch, with the cloud set **derived
+from the registry** so an unknown id fails closed. `DictationRuntime::build` was handed
+`Arc::new(RwLock::new(None))` for cleanup with a comment saying a half-configured cleanup is worse
+than none, and nothing could make it a `Some`.
+
+`apps/desktop/src-tauri/src/reasoning.rs` now holds `CleanupSettings`, two commands, and the
+startup path that restores the configuration. The runtime keeps the shared slot so a change takes
+effect on the next dictation rather than after a restart. Three things it refuses: to guess a model
+(providers disagree about `max_tokens` versus `max_completion_tokens`), to hide the ten providers
+that cannot be used, and to report cleanup as on when a missing key means it will silently leave
+the transcript alone.
 
 ### B2. Settings > Intelligence > Enterprise (3 shapes)
 

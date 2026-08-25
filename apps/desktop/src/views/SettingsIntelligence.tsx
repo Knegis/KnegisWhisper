@@ -1,0 +1,291 @@
+/**
+ * Settings > Intelligence — the reasoning model that tidies a dictation.
+ *
+ * `crates/reasoning-core` has routed, shaped and sent chat requests since phase
+ * 3, and none of it was configurable: `DictationRuntime::build` was handed
+ * `None` for cleanup with a comment saying a half-configured cleanup is worse
+ * than none. This screen is what makes it a `Some`.
+ *
+ * What it refuses to do:
+ *
+ * - **Guess a model.** Seven providers disagree about `max_tokens` versus
+ *   `max_completion_tokens`, and several reasoning models reject `temperature`
+ *   rather than ignoring it. Rust refuses a configuration with no model instead
+ *   of picking one.
+ * - **Hide the ten providers that cannot be used.** Three enterprise connectors
+ *   need a request shape nobody has written and the local route needs a sidecar
+ *   that is not in this build. They are listed, with the reason, rather than
+ *   quietly missing.
+ * - **Say cleanup is on when it will do nothing.** A provider with no stored key
+ *   resolves fine and then leaves the transcript alone, so the caveat says so.
+ */
+
+import { useCallback, useState } from "react";
+
+import { Row } from "../components/Row";
+import {
+  getReasoningStatus,
+  setCleanup,
+  type CleanupRoute,
+  type ReasoningDispatch,
+  type ReasoningProviderSummary,
+} from "../lib/ipc";
+import { useRefresh } from "../lib/useRefresh";
+
+/** Why a provider can or cannot be used, said plainly. */
+function dispatchLabel(d: ReasoningDispatch): string {
+  switch (d.state) {
+    case "ready":
+      return "can be used";
+    case "needs-shape":
+      return d.reason;
+    case "needs-sidecar":
+      return d.reason;
+    case "unresolvable":
+      return `cannot be routed: ${d.reason}`;
+  }
+}
+
+/** Where cleanup currently sends a transcript. */
+function routeLabel(r: CleanupRoute): { value: string; detail: string } {
+  switch (r.state) {
+    case "off":
+      return {
+        value: "Off",
+        detail: "dictations are inserted exactly as they were transcribed",
+      };
+    case "problem":
+      return { value: "On, and not usable", detail: r.reason };
+    case "ready":
+      return {
+        value: `${r.destination} · ${r.model}`,
+        detail:
+          r.caveat ??
+          (r.leavesDevice
+            ? "the transcript leaves this machine for cleanup"
+            : "the transcript stays on this machine"),
+      };
+  }
+}
+
+export function SettingsIntelligence({
+  onGoToProviders,
+}: {
+  onGoToProviders: () => void;
+}) {
+  const load = useCallback(() => getReasoningStatus(), []);
+  const { data, error, guard } = useRefresh(load);
+
+  /** Draft edits, so nothing is saved until Apply. */
+  const [draftProvider, setDraftProvider] = useState<string | null>(null);
+  const [draftModel, setDraftModel] = useState<string | null>(null);
+  const [draftUrl, setDraftUrl] = useState<string | null>(null);
+  const [said, setSaid] = useState<string | null>(null);
+
+  if (!data) {
+    return (
+      <div className="view">
+        {error ? <p className="error">{error}</p> : <p className="muted">Loading…</p>}
+      </div>
+    );
+  }
+
+  const { settings, route, providers } = data;
+
+  // A draft field falls back to what is stored, so the controls always show the
+  // real configuration rather than an empty box next to a working setting.
+  const provider = draftProvider ?? settings.provider ?? "";
+  const url = draftUrl ?? settings.selfHostedUrl ?? "";
+  const selfHosted = url.trim() !== "";
+  const chosen = providers.find((p) => p.id === provider);
+  const model =
+    draftModel ?? settings.model ?? (selfHosted ? "" : (chosen?.models[0]?.id ?? ""));
+
+  const usable = providers.filter((p) => p.dispatch.state === "ready");
+
+  const apply = (enabled: boolean) => {
+    setSaid(null);
+    void guard(async () => {
+      const next = await setCleanup({
+        enabled,
+        provider: provider || null,
+        model: model || null,
+        selfHostedUrl: url.trim() || null,
+        enterprise: chosen?.enterprise ?? false,
+      });
+      const label = routeLabel(next);
+      setSaid(`${label.value} — ${label.detail}`);
+      // Drafts drop so the controls go back to mirroring what is stored.
+      setDraftProvider(null);
+      setDraftModel(null);
+      setDraftUrl(null);
+    });
+  };
+
+  const providerRow = (p: ReasoningProviderSummary) => (
+    <div key={p.id} className="row">
+      <span className="row-label">{p.name}</span>
+      <span className="row-value">
+        {p.enterprise
+          ? "Enterprise connector"
+          : p.configured
+            ? "Key stored"
+            : "No key stored"}
+        <em className="row-detail">
+          {dispatchLabel(p.dispatch)} · {p.models.length} model
+          {p.models.length === 1 ? "" : "s"}
+          {p.credentialSlot ? (
+            <>
+              {" "}
+              · slot <code>{p.credentialSlot}</code>
+            </>
+          ) : (
+            " · multi-field credentials, so there is no single slot"
+          )}
+        </em>
+      </span>
+    </div>
+  );
+
+  return (
+    <div className="view">
+      {error ? <p className="error">{error}</p> : null}
+
+      <section data-surface="settings.intelligence">
+        <h2>Dictation cleanup</h2>
+        <p className="muted">
+          A reasoning model can tidy a transcript — punctuation, filler words,
+          proper nouns — before it is typed at the cursor. Off by default,
+          because it sends what you said to whichever provider you choose, and
+          because a raw transcript is already a correct answer.
+        </p>
+
+        <Row
+          label="Currently"
+          value={routeLabel(route).value}
+          detail={routeLabel(route).detail}
+        />
+
+        <div className="row">
+          <span className="row-label">Provider</span>
+          <span className="row-value controls">
+            <select
+              aria-label="cleanup provider"
+              value={provider}
+              onChange={(e) => {
+                setDraftProvider(e.target.value);
+                // The previous provider's model does not exist on the new one.
+                // Rust would refuse the pair; clearing it here means the user
+                // sees the new provider's list rather than an error.
+                setDraftModel(null);
+              }}
+            >
+              <option value="">Choose a provider</option>
+              {providers.map((p) => (
+                <option
+                  key={p.id}
+                  value={p.id}
+                  disabled={p.dispatch.state !== "ready"}
+                >
+                  {p.name}
+                  {p.dispatch.state === "ready" ? "" : " — not usable yet"}
+                </option>
+              ))}
+            </select>
+          </span>
+        </div>
+
+        <div className="row">
+          <span className="row-label">Model</span>
+          <span className="row-value controls">
+            {selfHosted ? (
+              // A server the user runs has no model list to offer. Typed, and
+              // required all the same: `params::shape_for` needs the real id.
+              <input
+                aria-label="cleanup model"
+                placeholder="the model id your server serves"
+                value={model}
+                onChange={(e) => setDraftModel(e.target.value)}
+              />
+            ) : (
+              <select
+                aria-label="cleanup model"
+                value={model}
+                disabled={!chosen || chosen.models.length === 0}
+                onChange={(e) => setDraftModel(e.target.value)}
+              >
+                {chosen?.models.length ? (
+                  chosen.models.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.name}
+                      {m.supportsThinking ? " · thinking" : ""}
+                    </option>
+                  ))
+                ) : (
+                  <option value="">Choose a provider first</option>
+                )}
+              </select>
+            )}
+          </span>
+        </div>
+
+        <div className="row">
+          <span className="row-label">Or a server you run</span>
+          <span className="row-value controls">
+            <input
+              type="url"
+              aria-label="self-hosted endpoint"
+              placeholder="http://127.0.0.1:11434/v1"
+              value={url}
+              onChange={(e) => setDraftUrl(e.target.value)}
+            />
+          </span>
+        </div>
+        <p className="caveat">
+          {selfHosted
+            ? "This URL is in use, so the provider above is ignored — "
+            : "A URL here wins over the provider above — "}
+          it is a route you declared.
+          Plaintext HTTP is refused to anything but a loopback or private
+          address, so a key cannot be sent over the open internet in the clear.
+        </p>
+
+        <span className="controls">
+          {/* Never disabled: a control that silently does nothing is the defect. */}
+          <button type="button" onClick={() => apply(true)}>
+            Turn cleanup on
+          </button>
+          <button type="button" onClick={() => apply(false)}>
+            Turn it off
+          </button>
+        </span>
+        {said ? <p className="muted">{said}</p> : null}
+        {usable.length === 0 ? (
+          <p className="caveat">
+            No provider can be used yet. Store a key on the Providers screen
+            first.
+          </p>
+        ) : null}
+        <button type="button" onClick={onGoToProviders}>
+          Open Providers
+        </button>
+      </section>
+
+      {/*
+        No `data-surface` marker. This section lists the enterprise connectors
+        and says why they cannot be used; it does not configure them, and
+        `Settings > Intelligence > Enterprise` stays unbuilt until B2 writes the
+        three request shapes and the fields they need.
+      */}
+      <section>
+        <h2>Providers</h2>
+        <p className="muted">
+          Every reasoning provider the registry declares, including the ones this
+          build cannot send to. Listing them with the reason beats leaving them
+          out and saying nothing.
+        </p>
+        {providers.map(providerRow)}
+      </section>
+    </div>
+  );
+}

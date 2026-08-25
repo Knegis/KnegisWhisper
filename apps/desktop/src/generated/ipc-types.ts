@@ -254,6 +254,99 @@ export type ProbeReport = { results: Array<ProbeResult>,
  */
 audio: AudioKind, };
 
+/* -------------------------------------------------------------- reasoning */
+/**
+ * What the user configured, as stored.
+ *
+ * Kept separate from [`ChatSettings`] rather than reusing it, because the
+ * reasoning crate's own comment is worth honouring: chat settings must never be
+ * read as cleanup settings. Two structs cannot be confused for each other; one
+ * struct with a mode field can.
+ */
+export type CleanupSettings = {
+/**
+ * Off unless explicitly switched on.
+ */
+enabled: boolean,
+/**
+ * A cloud or enterprise provider id from the registry.
+ */
+provider?: string | null,
+/**
+ * The model to send to. Required: there is no safe default across seven
+ * providers, and `params::shape_for` needs the real id to pick the right
+ * token parameter.
+ */
+model?: string | null,
+/**
+ * An endpoint the user runs. Wins over `provider`, as in `resolve_chat`.
+ */
+selfHostedUrl?: string | null,
+/**
+ * Whether `provider` names an enterprise connector rather than a cloud one.
+ */
+enterprise: boolean, };
+
+/**
+ * Whether a reasoning provider can actually be used for a request today.
+ *
+ * The same three-state shape as `commands::Dispatch`, and a separate type
+ * because the reasons differ: a transcription provider is blocked on a client,
+ * a reasoning provider on a request *shape* or on a sidecar.
+ */
+export type ReasoningDispatch = { "state": "ready" } | { "state": "needs-shape", reason: string, } | { "state": "needs-sidecar", reason: string, } | { "state": "unresolvable", reason: string, };
+
+/**
+ * One model a reasoning provider offers.
+ */
+export type ReasoningModelSummary = { id: string, name: string,
+/**
+ * `max_tokens` or `max_completion_tokens`. Shown because getting it wrong
+ * is a 400 that reads as a broken integration rather than a wrong field.
+ */
+tokenParam: string, supportsThinking: boolean, supportsVision: boolean, };
+
+/**
+ * One reasoning provider, and whether it could be used.
+ */
+export type ReasoningProviderSummary = { id: string, name: string,
+/**
+ * `None` for enterprise connectors, whose credentials are multi-field.
+ */
+credentialSlot: string | null,
+/**
+ * A credential is stored. Not the same as the provider working.
+ */
+configured: boolean, enterprise: boolean, dispatch: ReasoningDispatch, models: Array<ReasoningModelSummary>, };
+
+/**
+ * Where a cleanup request would go right now.
+ *
+ * The *resolved* destination rather than the stored setting, for the same
+ * reason `dictation::RouteReport` is: a provider with no credential resolves
+ * differently from what the setting says, and showing the setting would be
+ * showing an intention.
+ */
+export type CleanupRoute = { "state": "off" } | { "state": "ready",
+/**
+ * A short phrase for the UI: `openai`, `self-hosted`, and so on.
+ */
+destination: string, model: string,
+/**
+ * Whether the transcript leaves this machine on this route.
+ */
+leavesDevice: boolean,
+/**
+ * Set when the destination resolves but could not actually be used —
+ * no credential stored, or a shape that is not implemented.
+ */
+caveat: string | null, } | { "state": "problem", reason: string, };
+
+/**
+ * Everything the Intelligence screen shows.
+ */
+export type ReasoningStatus = { settings: CleanupSettings, route: CleanupRoute, providers: Array<ReasoningProviderSummary>, };
+
 /* ---------------------------------------------------------------- history */
 /**
  * A stored history entry.

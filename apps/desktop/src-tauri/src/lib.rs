@@ -21,6 +21,7 @@ mod ipc_types;
 mod local_api;
 mod local_model;
 mod overlay;
+mod reasoning;
 mod shortcuts;
 mod state;
 mod tray;
@@ -164,11 +165,17 @@ pub fn run() -> anyhow::Result<()> {
                 policy,
                 shared.port,
                 shared.model,
-                // Cleanup is off until the settings screen configures a route.
-                // The raw transcript is a correct answer; a half-configured
-                // cleanup that silently does nothing is not.
+                // Off until `reasoning::apply_at_startup` fills it, and off
+                // for good if the user has never switched cleanup on. The raw
+                // transcript is a correct answer; a half-configured cleanup
+                // that silently does nothing is not.
                 std::sync::Arc::new(std::sync::RwLock::new(None)),
             ));
+
+            // The route survives a restart. Bring it back, in the background:
+            // the window should not wait on a settings read.
+            reasoning::apply_at_startup(&session, &db);
+
             app.manage(session);
 
             // Off unless the user has switched it on. See local_api.rs.
@@ -230,6 +237,8 @@ pub fn run() -> anyhow::Result<()> {
             commands::provider_credential_set,
             commands::provider_credential_present,
             commands::probe_providers,
+            reasoning::reasoning_status,
+            reasoning::reasoning_set_cleanup,
             commands::import_openwhispr,
             commands::notes_list,
             commands::notes_search,

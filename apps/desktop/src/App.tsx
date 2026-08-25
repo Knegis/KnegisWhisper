@@ -32,6 +32,7 @@ import { DiagnosticsView } from "./views/Diagnostics";
 import { DictationView } from "./views/Dictation";
 import { IntegrationsApi } from "./views/IntegrationsApi";
 import { Notes } from "./views/Notes";
+import { SettingsIntelligence } from "./views/SettingsIntelligence";
 import { SettingsProviders } from "./views/SettingsProviders";
 import { SettingsTranscription } from "./views/SettingsTranscription";
 
@@ -47,6 +48,7 @@ const VIEWS = [
   { id: "dictation", label: "Dictation" },
   { id: "providers", label: "Providers" },
   { id: "transcription", label: "Transcription" },
+  { id: "intelligence", label: "Intelligence" },
   { id: "notes", label: "Notes" },
   { id: "api", label: "Local API" },
   { id: "diagnostics", label: "Diagnostics" },
@@ -160,6 +162,9 @@ function Shell() {
             <SettingsTranscription
               onGoToProviders={() => setView("providers")}
             />
+          ) : null}
+          {view === "intelligence" ? (
+            <SettingsIntelligence onGoToProviders={() => setView("providers")} />
           ) : null}
           {view === "notes" ? <Notes /> : null}
           {view === "api" ? <IntegrationsApi /> : null}

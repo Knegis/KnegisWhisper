@@ -83,7 +83,6 @@ frontend backlog, sized in integrations rather than in adjectives:
 
 | Surface | Entries | Surface built |
 | --- | --- | --- |
-| `Settings > Intelligence` | 7 | no |
 | `Settings > Intelligence > Local` | 6 | no |
 | `Settings > Meetings` | 6 | no |
 | `Settings > Transcription` | 4 | yes — these four need a provider client that does not exist |
@@ -94,11 +93,13 @@ frontend backlog, sized in integrations rather than in adjectives:
 | `Integrations > CLI` | 1 | no |
 | `Integrations > MCP` | 1 | no |
 
-**26 integrations are reachable today**, up from 8: the fifteen credential slots, three
-transcription providers, the six whisper models, the local REST API, and transcript export.
+**33 integrations are reachable today**, up from 8: the fifteen credential slots, three
+transcription providers, seven reasoning providers, the six whisper models, the local REST API,
+and transcript export.
 
-The jump came from one screen and no new subsystem. Every one of those fifteen slots had working
-Rust behind it and nowhere to type a key.
+The jump came from two screens and no new subsystem. Every one of those fifteen slots had working
+Rust behind it and nowhere to type a key; every one of those seven reasoning providers had a
+resolved route and no way to select it.
 
 ## Status vocabulary
 

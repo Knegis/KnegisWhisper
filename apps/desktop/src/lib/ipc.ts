@@ -28,6 +28,8 @@ import type {
   Availability,
   Binding,
   CaptureExclusion,
+  CleanupRoute,
+  CleanupSettings,
   Conflict,
   CredentialKind,
   CredentialSlotStatus,
@@ -60,6 +62,10 @@ import type {
   ProbeReport,
   ProbeResult,
   ProviderSummary,
+  ReasoningDispatch,
+  ReasoningModelSummary,
+  ReasoningProviderSummary,
+  ReasoningStatus,
   Registration,
   RelocatedCredential,
   RouteReport,
@@ -80,6 +86,8 @@ export type {
   Accelerator,
   Binding,
   CaptureExclusion,
+  CleanupRoute,
+  CleanupSettings,
   Conflict,
   CredentialKind,
   CredentialSlotStatus,
@@ -108,6 +116,10 @@ export type {
   ProbeReport,
   ProbeResult,
   ProviderSummary,
+  ReasoningDispatch,
+  ReasoningModelSummary,
+  ReasoningProviderSummary,
+  ReasoningStatus,
   Registration,
   RelocatedCredential,
   RouteReport,
@@ -226,6 +238,30 @@ export function isProviderConnected(
   const mine = report.results.filter((r) => r.provider === provider);
   const ran = mine.some((r) => r.outcome.outcome !== "skipped");
   return ran && !mine.some((r) => r.outcome.outcome === "fail");
+}
+
+/* ---------------------------------------------------------------- reasoning */
+
+/**
+ * What tidies a dictation, and where that request would go.
+ *
+ * `route` is the resolved destination rather than the stored setting: a provider
+ * with no credential resolves differently from what the setting says.
+ */
+export async function getReasoningStatus(): Promise<ReasoningStatus> {
+  return invoke<ReasoningStatus>("reasoning_status");
+}
+
+/**
+ * Store a cleanup configuration and apply it to the running session.
+ *
+ * Rust refuses a configuration that cannot resolve rather than storing it, so a
+ * rejection here means nothing was saved. Returns where cleanup now goes.
+ */
+export async function setCleanup(
+  settings: CleanupSettings,
+): Promise<CleanupRoute> {
+  return invoke<CleanupRoute>("reasoning_set_cleanup", { settings });
 }
 
 /* ------------------------------------------------------------------ history */

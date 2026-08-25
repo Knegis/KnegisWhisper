@@ -134,6 +134,14 @@ fn render() -> String {
             kw_provider_probe::AudioKind,
             kw_provider_probe::ProbeReport,
         ],
+        "reasoning" => [
+            crate::reasoning::CleanupSettings,
+            crate::reasoning::ReasoningDispatch,
+            crate::reasoning::ReasoningModelSummary,
+            crate::reasoning::ReasoningProviderSummary,
+            crate::reasoning::CleanupRoute,
+            crate::reasoning::ReasoningStatus,
+        ],
         "history" => [
             kw_storage::transcriptions::Transcription,
         ],
