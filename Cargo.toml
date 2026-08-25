@@ -64,6 +64,12 @@ futures = "0.3"
 # Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# TypeScript declarations for everything that crosses the IPC boundary.
+# Not optional, and not behind a feature: a type that crosses the boundary
+# without a `TS` derive is one the generator cannot see, and an optional
+# dependency would make that a silent omission rather than a compile error.
+# Nothing calls into it at runtime; release builds strip the impls.
+ts-rs = "12"
 
 # Errors and logging
 anyhow = "1"

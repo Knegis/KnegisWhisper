@@ -14,16 +14,16 @@ maintained in place rather than appended to, because its purpose is to be curren
 
 ## Carry-forward — what the next session needs to know
 
-> **The plan for closing all of this is [PHASES_0_6_COMPLETION_PLAN.md](PHASES_0_6_COMPLETION_PLAN.md)**,
-> which tracks what is left per phase and what each blocked item needs. This section stays as the
+> **The plan for the whole remaining build is [BUILD_PLAN.md](BUILD_PLAN.md)**, covering phases
+> 0–9 as chunks A–J. [PHASES_0_6_COMPLETION_PLAN.md](PHASES_0_6_COMPLETION_PLAN.md) keeps the
+> phases 0–6 detail and the by-hand check that found five real defects. This section stays as the
 > short version.
 >
-> **The single most useful next piece of work** is the Tauri layer for what is
-> already built. Local dictation and the local API both work end to end in tests
-> and neither is reachable from the running application, because no command
-> installs a model, starts whisper-server, or brings the API up. That is one
-> well-scoped chunk — commands, state, and the settings screen — and it converts
-> two phases from "tested" to "usable" without any new subsystem.
+> **The single most useful next piece of work** is `Settings > Providers`. There is nowhere in the
+> application to enter an API key: `provider_credential_set` exists in Rust and
+> `setProviderCredential` is exported from `ipc.ts`, and nothing calls either. One screen over
+> backend that already works makes 15 credential slots reachable and unblocks 22 more behind them.
+> No new backend code.
 
 Maintained in place. If something here becomes false, edit it rather than adding a note.
 
@@ -126,6 +126,88 @@ Unchanged from the Phases 1–4 entry, restated here so they are not buried:
   porting matrix. Upstream pins both by commit and verifies neither.
 - ~~**`nircmd`**~~ — **dropped**, as leaned towards: third-tier Windows paste fallback only, and
   `SendInput` works.
+
+---
+
+## 2026-08-25 (chunk A1) — the IPC types are generated from Rust now
+
+### The spike, and what it answered
+
+[BUILD_PLAN.md](BUILD_PLAN.md) made A1 a gate rather than a formality: **13 files carry
+`rename_all_fields = "camelCase"` on internally tagged enums**, and if no generator could express
+that shape, generating the IPC types would have meant writing an emitter by hand. The instruction
+was to find out rather than guess.
+
+`ts-rs` 12.0.1 expresses it. Derived on `overlay::CaptureExclusion` — the hardest shape in the
+tree, internally tagged with kebab-case variants, camelCase struct-variant fields and a nested
+`Evidence` — it emitted
+
+```ts
+export type CaptureExclusion =
+  | { "state": "active", verifiedBy: Evidence }
+  | { "state": "unsupported", reason: string }
+  ...
+```
+
+which is exactly the hand-written union it replaces. `specta` and the custom-emitter fallback were
+not needed. A test now asserts that specific property directly, because it is the one that would
+silently regress: `ipc_types::tests::a_tagged_enums_struct_fields_are_camel_case`.
+
+### Judgement calls
+
+#### One writer, not `#[ts(export)]`
+
+`ts-rs` can export each type on its own during `cargo test`, and the obvious thing would have been
+to point every derive at one file. But the types live in eight crates whose test binaries run
+concurrently, and they would all have been writing that file. Instead
+`apps/desktop/src-tauri/src/ipc_types.rs` names every type in one list and renders the whole file
+in one pass, from one test. No race, a deterministic order, and the list itself is greppable — a
+type that crosses the boundary and is not in it stands out.
+
+#### The check is a test, not a CI step
+
+There are already three `--check` steps in the contracts job, and a fourth was the obvious shape.
+A `cargo test` assertion is better: it runs on every machine and in every job that runs the test
+suite, so it cannot be forgotten the way a workflow step can. `KW_WRITE_IPC_TYPES=1` turns the same
+test into the generator.
+
+#### `ts-rs` is a normal dependency, not an optional one
+
+It could have been feature-gated so release builds never see it. That would make a type crossing
+the boundary *without* a `TS` derive a silent omission rather than a compile error, which is the
+defect class this whole change exists to close. Nothing calls into `ts-rs` at runtime and release
+builds strip the impls, so the cost is compile time only.
+
+#### 64-bit integers are declared `number`, not `bigint`
+
+`ts-rs` defaults `i64`/`u64` to `bigint`. Every 64-bit integer crossing this boundary is a SQLite
+rowid, a byte count or a millisecond duration; `serde_json` sends them as JSON numbers and Tauri's
+`invoke` parses them with `JSON.parse`, so a `bigint` declaration would have described a value the
+frontend never receives. `Config::with_large_int("number")`, and a test.
+
+### Two real defects the generator exposed
+
+Both were invisible while the declarations were written by hand, and both are the same shape as the
+`electronPresent` defect: a type and the thing it describes, disagreeing.
+
+| Where | What was wrong | Fix |
+| --- | --- | --- |
+| `storage::import::{TableReport, RelocatedCredential, ImportReport}` | Sent `absent_columns`, `skip_reason`, `fts_rows` — **snake_case**, while every other struct in the application sends camelCase. One API with two conventions is how the next person writing a frontend type gets it wrong. | `#[serde(rename_all = "camelCase")]`. No consumer existed yet; the importer has no UI. |
+| `local_model::ModelStatus::verified_by` | A `&'static str` with three possible values, which the frontend re-declared by hand as `"digest" \| "size" \| "nothing"`. Nothing held the two in step, so a fourth value added in Rust would have reached a UI that did not know about it. | A real `VerifiedBy` enum, generated into the union. |
+
+`provider_probe::ProbeOutcome` was a third, milder case: the hand-written type said
+`{ outcome: "skipped" } & Partial<SkipReason>`, which admits `{ outcome: "skipped" }` with no
+reason at all — something serde never sends. The generated declaration drops the `Partial`.
+
+### What did not change
+
+The hand-written `invoke()` wrappers in `apps/desktop/src/lib/ipc.ts`, because the defect was never
+in the wrappers. That file is now command names, argument names, and two predicates that mirror a
+Rust method; every payload type it exports comes from `../generated/ipc-types`.
+
+`EXPORT_FORMATS` is the one list still written by hand — `ts-rs` declares the union but cannot emit
+a runtime array. The Rust test `every_export_format_has_the_wire_spelling_the_frontend_sends`
+already pins those five strings.
 
 ---
 

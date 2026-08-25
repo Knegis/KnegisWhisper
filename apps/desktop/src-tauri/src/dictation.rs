@@ -19,6 +19,7 @@
 //! what a dictation is.
 
 use std::sync::{mpsc, Arc, RwLock};
+use ts_rs::TS;
 
 use kw_app_core::dictation::{
     Capture, Cleanup, DictationError, History, HistoryEntry, Inserter, InsertionResult, Recorder,
@@ -627,7 +628,7 @@ impl DictationRuntime {
 /// the same thing: a mode of "local" with no server running, or a provider with
 /// no credential, resolves differently from what the setting says. Showing the
 /// setting would be showing an intention.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct RouteReport {
     /// A short phrase for the UI: `local model`, `openai`, and so on.

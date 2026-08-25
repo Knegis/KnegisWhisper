@@ -16,6 +16,7 @@ use kw_provider_probe::{ProbeAudio, ProbeReport};
 use kw_storage::{settings, transcriptions};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
+use ts_rs::TS;
 
 use crate::state::AppState;
 
@@ -69,7 +70,7 @@ pub async fn settings_keys(state: State<'_, AppState>) -> CmdResult<Vec<String>>
 /* -------------------------------------------------------------------- hotkeys */
 
 /// One action's hotkeys, classified, with any problems spelled out.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct HotkeyReport {
     pub bindings: Vec<Binding>,
@@ -128,7 +129,7 @@ pub async fn load_bindings(state: &AppState) -> CmdResult<Vec<Binding>> {
 /// independently: a well-formed accelerator can still be refused because another
 /// application owns it, and reporting "saved" for that is the kind of confident
 /// success this project treats as a defect.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct HotkeyChange {
     pub binding: Binding,
@@ -222,7 +223,7 @@ pub async fn history_clear(state: State<'_, AppState>) -> CmdResult<u64> {
 /// The distinction is the point. `configured` means a key is present;
 /// `connected` requires a passing connection test, which only
 /// [`probe_providers`] can establish.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderSummary {
     pub id: String,
@@ -380,8 +381,11 @@ fn positive_id(value: Option<i64>, field: &str) -> CmdResult<Option<i64>> {
 /// `deny_unknown_fields` is deliberate. A mistyped field name would otherwise be
 /// dropped in silence and the note saved without it — the same shape of defect
 /// as a frontend type declaring a field the backend never sends.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+// serde defaults an absent `Option<T>` to `None`, so these keys may be omitted
+// as well as sent as null. The declaration says both rather than only one.
+#[ts(optional_fields = nullable)]
 pub struct NewNoteRequest {
     pub title: String,
     pub content: String,
@@ -395,8 +399,11 @@ pub struct NewNoteRequest {
 }
 
 /// The fields of a note to change. Absent means leave it alone.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+// serde defaults an absent `Option<T>` to `None`, so these keys may be omitted
+// as well as sent as null. The declaration says both rather than only one.
+#[ts(optional_fields = nullable)]
 pub struct NoteUpdateRequest {
     pub title: Option<String>,
     pub content: Option<String>,
@@ -556,7 +563,7 @@ pub async fn folder_delete(state: State<'_, AppState>, id: i64) -> CmdResult<boo
 /* ------------------------------------------------------------ transcript export */
 
 /// A rendered transcript, ready to preview or write.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ExportedTranscript {
     pub format: transcript::Format,

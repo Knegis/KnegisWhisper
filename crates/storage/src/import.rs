@@ -36,6 +36,7 @@ use kw_security::{CredentialStore, KeyRef, Secret};
 use serde::Serialize;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Row as _, SqlitePool, TypeInfo as _, ValueRef as _};
+use ts_rs::TS;
 
 use crate::{Db, StorageError};
 
@@ -239,7 +240,8 @@ const MUST_BE_EMPTY: &[&str] = &[
 ];
 
 /// What one table's copy achieved.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, TS)]
+#[serde(rename_all = "camelCase")]
 pub struct TableReport {
     pub table: String,
     /// Rows written.
@@ -257,7 +259,8 @@ pub struct TableReport {
 }
 
 /// A token moved out of SQLite and into the OS credential store.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, TS)]
+#[serde(rename_all = "camelCase")]
 pub struct RelocatedCredential {
     /// The source table it came from.
     pub source_table: String,
@@ -268,7 +271,8 @@ pub struct RelocatedCredential {
 }
 
 /// The outcome of an import.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
 pub struct ImportReport {
     pub source: PathBuf,
     pub tables: Vec<TableReport>,

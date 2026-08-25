@@ -8,11 +8,12 @@
 use kw_security::{CredentialError, CredentialStore, KeyRef, OsCredentialStore};
 use serde::Serialize;
 use tauri::{AppHandle, Manager as _};
+use ts_rs::TS;
 
 use crate::overlay::{self, OverlayStatus};
 
 /// Whether the OS credential store is usable.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(
     tag = "state",
     rename_all = "kebab-case",
@@ -23,7 +24,7 @@ pub enum CredentialStoreStatus {
     Unavailable { reason: String },
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct Diagnostics {
     pub app_version: &'static str,
@@ -42,7 +43,7 @@ pub struct Diagnostics {
 }
 
 /// Where downloaded models live.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelCacheStatus {
     pub path: String,

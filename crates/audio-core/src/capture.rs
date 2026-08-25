@@ -14,6 +14,7 @@
 //! reasonable ceiling for something described as dictation.
 
 use std::sync::{Arc, Mutex};
+use ts_rs::TS;
 
 use cpal::traits::{DeviceTrait as _, HostTrait as _, StreamTrait as _};
 
@@ -48,7 +49,7 @@ pub enum CaptureError {
 }
 
 /// An audio input device the user can choose.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct InputDevice {
     pub name: String,

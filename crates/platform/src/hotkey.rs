@@ -24,6 +24,7 @@ use std::collections::BTreeSet;
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 /// The separator used in stored hotkey lists.
 const LIST_SEPARATOR: char = ',';
@@ -32,7 +33,7 @@ const LIST_SEPARATOR: char = ',';
 ///
 /// Upstream names these `DICTATION_KEY`, `CHAT_AGENT_KEY`, `VOICE_AGENT_KEY`,
 /// `TRANSLATION_KEY`, and `MEETING_KEY`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, TS)]
 #[serde(rename_all = "kebab-case")]
 pub enum HotkeyAction {
     Dictation,
@@ -120,7 +121,7 @@ const MODIFIERS: [&str; 9] = [
 ];
 
 /// What an accelerator string can be registered as.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[serde(
     tag = "kind",
     rename_all = "kebab-case",
@@ -275,7 +276,7 @@ pub fn serialize_list(hotkeys: &[String]) -> String {
 }
 
 /// One action's configured hotkeys, classified.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 pub struct Binding {
     pub action: HotkeyAction,
     pub accelerators: Vec<Accelerator>,
@@ -321,7 +322,7 @@ impl Binding {
 }
 
 /// A conflict between two actions bound to the same accelerator.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 pub struct Conflict {
     pub accelerator: String,
     pub actions: Vec<HotkeyAction>,

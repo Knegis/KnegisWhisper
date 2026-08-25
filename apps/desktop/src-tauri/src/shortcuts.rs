@@ -16,12 +16,13 @@ use kw_platform::hotkey::{Binding, HotkeyAction};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter as _};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt as _, Shortcut, ShortcutState};
+use ts_rs::TS;
 
 /// The event emitted when a hotkey fires.
 pub const HOTKEY_EVENT: &str = "hotkey";
 
 /// What happened when we tried to register one accelerator.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(
     tag = "state",
     rename_all = "kebab-case",

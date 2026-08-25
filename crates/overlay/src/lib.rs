@@ -13,9 +13,10 @@
 //! See `docs/PLATFORM_SUPPORT.md`.
 
 use serde::Serialize;
+use ts_rs::TS;
 
 /// How we know a capture-exclusion claim is true.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[serde(
     tag = "kind",
     rename_all = "kebab-case",
@@ -36,7 +37,7 @@ pub enum Evidence {
 ///
 /// Four states rather than a boolean, because "we called the API and it did not
 /// complain" is genuinely different from "we know this works".
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[serde(
     tag = "state",
     rename_all = "kebab-case",

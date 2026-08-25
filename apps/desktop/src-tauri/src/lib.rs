@@ -14,6 +14,10 @@
 mod commands;
 mod diagnostics;
 mod dictation;
+// Test-only: it renders `apps/desktop/src/generated/ipc-types.ts` and asserts
+// the committed copy still matches the Rust types. Nothing at runtime calls it.
+#[cfg(test)]
+mod ipc_types;
 mod local_api;
 mod local_model;
 mod overlay;

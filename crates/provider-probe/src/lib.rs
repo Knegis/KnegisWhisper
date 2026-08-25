@@ -43,12 +43,13 @@ use kw_network_policy::{NetworkPolicy, RequestPurpose};
 use kw_provider_registry::Registry;
 use kw_security::{CredentialStore, KeyRef, Secret};
 use serde::Serialize;
+use ts_rs::TS;
 
 /// How much of a provider's response body may appear in a report.
 const DETAIL_LIMIT: usize = 300;
 
 /// Which probe ran.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "kebab-case")]
 pub enum ProbeKind {
     /// The live model catalogue, compared against the ids we pinned.
@@ -71,7 +72,7 @@ impl ProbeKind {
 }
 
 /// Why a probe did not run.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[serde(
     tag = "reason",
     rename_all = "kebab-case",
@@ -88,7 +89,7 @@ pub enum SkipReason {
 ///
 /// Deliberately three states with no "warning". A probe either demonstrated the
 /// provider works, demonstrated it does not, or did not run.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[serde(
     tag = "outcome",
     rename_all = "kebab-case",
@@ -139,7 +140,7 @@ fn truncate(mut s: String) -> String {
 }
 
 /// One probe's result.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 pub struct ProbeResult {
     pub provider: String,
     pub kind: ProbeKind,
@@ -147,7 +148,7 @@ pub struct ProbeResult {
 }
 
 /// Whether the audio used for the voice probe can prove recognition.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "kebab-case")]
 pub enum AudioKind {
     /// Real speech. A transcript that contains the expected words proves the
@@ -230,7 +231,7 @@ fn wav_container(pcm: &[u8], rate: u32) -> Vec<u8> {
 }
 
 /// The result of probing one or more providers.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 pub struct ProbeReport {
     pub results: Vec<ProbeResult>,
     /// Which audio the voice probes used, so a pass is not over-read.

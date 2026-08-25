@@ -16,6 +16,7 @@
 //! deliberately does not use it.
 
 use serde::Serialize;
+use ts_rs::TS;
 
 /// Below this peak RMS the recording is silence.
 const SILENCE_RMS: f32 = 0.002;
@@ -54,7 +55,7 @@ pub struct GateDecision {
 }
 
 /// Why the gate decided what it did.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "kebab-case")]
 pub enum GateReason {
     /// Nothing was measured. Fails open — see the module documentation.
