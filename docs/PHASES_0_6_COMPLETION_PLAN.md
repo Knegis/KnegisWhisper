@@ -14,20 +14,18 @@ means the types exist and the implementation does not.
 | --- | --- | --- |
 | 0 — Audit and contracts | Complete | `docs/UPSTREAM_AUDIT.md`, `config/integration-manifest.json`, the parity and domain gates |
 | 1 — Tauri foundation | Complete | Tray, autostart, shortcuts, overlay, capture exclusion, credential store, FTS all real; `apps/desktop/src-tauri/src/` and `docs/PLATFORM_SUPPORT.md` |
-| 2 — Dictation | **Unreachable** | `crates/transcription-core/tests/local_dictation.rs` transcribes real speech end to end in ~6 s; nothing in the app starts it |
+| 2 — Dictation | Reachable, unverified by hand | The hotkey drives a real session: microphone, route, transcription, cleanup, clipboard insertion, history. `crates/transcription-core/tests/local_dictation.rs` proves the local path against the real binary. **Not yet exercised by a person** — see Verification |
 | 3 — Reasoning | Complete except enterprise | `crates/reasoning-core/src/chat.rs:191` returns `ShapeNotImplemented` for Bedrock, Azure, Vertex |
 | 4 — Meetings and notes | Notes complete; meetings contract only | `crates/notes-core/`; `crates/meeting-core/src/lib.rs` documents the five missing clients. No system audio exists — `grep -r wasapi crates/` is empty |
 | 5 — Calendars | Not started | No `crates/calendar-core`, no OAuth flow |
-| 6 — Local API and CLI | **Unreachable** | `crates/local-api/tests/api.rs` (20) and `tools/knegiswhisper/tests/end_to_end.rs` (16, driving the compiled binary); nothing in the app starts the server |
+| 6 — Local API and CLI | Reachable | Off by default, started from the settings screen, discovery file written and removed with it. `crates/local-api/tests/api.rs` (20) and `tools/knegiswhisper/tests/end_to_end.rs` (16, driving the compiled binary) |
 
-### Why two phases are "unreachable"
+### What made them unreachable, and what fixed it
 
-`apps/desktop/src-tauri/Cargo.toml` depends on 7 of the 14 workspace crates. It does not depend on
+`apps/desktop/src-tauri/Cargo.toml` depended on 7 of the 14 workspace crates — not on
 `app-core`, `audio-core`, `transcription-core`, `reasoning-core`, `notes-core`, `sidecar`, or
-`local-api`. `shortcuts.rs:167` emits a hotkey event that nothing consumes.
-
-That is the whole gap. It is a wiring problem, not a missing-feature problem, which is why it is
-the first chunk.
+`local-api` — and `shortcuts.rs` emitted a hotkey event nothing consumed. It was a wiring problem,
+not a missing-feature problem, which is why it was the first chunk. It now depends on all of them.
 
 ## Three defects found while surveying
 
@@ -50,7 +48,7 @@ Each is fixed by chunk 1 rather than tracked separately.
 
 ## The work
 
-### Chunk 1 — consolidate, then wire *(in progress)*
+### Chunk 1 — consolidate, then wire *(done)*
 
 The chunk that turns phases 2 and 6 from unreachable into usable.
 

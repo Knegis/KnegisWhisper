@@ -1,21 +1,43 @@
 import { useCallback, useEffect, useState } from "react";
 import {
+  cancelDictation,
   clearHistory,
   getDiagnostics,
+  getDictationState,
   getHistory,
   getHotkeys,
+  getInputDevices,
+  getLocalApiStatus,
+  getLocalStatus,
   getProviders,
+  installLocalModel,
   isCaptureExclusionConfirmed,
+  isInsertionSupported,
   isProviderConnected,
+  onDictationOutcome,
+  onDictationState,
   onHotkey,
+  onInstallProgress,
   probeProviders,
+  setInputDevice,
+  startLocalApi,
+  startLocalServer,
+  stopLocalApi,
+  stopLocalServer,
+  toggleDictation,
   type Accelerator,
   type CaptureExclusion,
   type Diagnostics,
+  type DictationOutcome,
   type HotkeyReport,
+  type InputDevice,
+  type InstallProgress,
+  type LocalApiStatus,
+  type LocalStatus,
   type NonActivating,
   type ProbeReport,
   type ProviderSummary,
+  type SessionState,
   type Transcription,
 } from "./lib/ipc";
 import { Overlay } from "./Overlay";
@@ -73,6 +95,63 @@ function acceleratorLabel(a: Accelerator): { text: string; problem: string | nul
   }
 }
 
+/** A dictation outcome as one line of plain language. */
+function outcomeLabel(outcome: DictationOutcome): string {
+  switch (outcome.outcome) {
+    case "inserted":
+      return outcome.clipboardRestored
+        ? `Inserted ${outcome.text.length} characters; your clipboard was put back.`
+        : `Inserted ${outcome.text.length} characters. Your clipboard was left as you changed it.`;
+    case "nothing-to-transcribe":
+      // Not an error. Saying "failed" here would send someone looking for a
+      // fault when the microphone simply heard nothing.
+      return outcome.reason === "silence"
+        ? "Nothing was sent: the recording was silent."
+        : `Nothing was sent: ${outcome.reason.replace("-", " ")}.`;
+    case "cancelled":
+      return "Cancelled.";
+    case "failed":
+      return outcome.message;
+  }
+}
+
+/** How a model's bytes were checked, said plainly rather than implied. */
+function verificationLabel(verifiedBy: ModelVerification): string {
+  switch (verifiedBy) {
+    case "digest":
+      return "checksum verified";
+    case "size":
+      // The honest wording. A file of about the right length has not been proven
+      // to be the file the publisher built.
+      return "size checked only";
+    case "nothing":
+      return "not verified";
+  }
+}
+
+type ModelVerification = "digest" | "size" | "nothing";
+
+function bytes(written: number, total: number | null): string {
+  const mb = (n: number) => `${(n / 1_000_000).toFixed(1)} MB`;
+  return total ? `${mb(written)} of ${mb(total)}` : mb(written);
+}
+
+/** Progress as one short line. */
+function progressLabel(progress: InstallProgress): string {
+  switch (progress.stage) {
+    case "server":
+      return `Downloading the server — ${bytes(progress.written, progress.total)}`;
+    case "model":
+      return `Downloading ${progress.id} — ${bytes(progress.written, progress.total)}`;
+    case "verifying":
+      return "Verifying…";
+    case "extracting":
+      return "Unpacking…";
+    case "done":
+      return `Installed (${verificationLabel(progress.verifiedBy)})`;
+  }
+}
+
 function Row({
   label,
   value,
@@ -80,7 +159,9 @@ function Row({
 }: {
   label: string;
   value: string;
-  detail?: string;
+  // `| undefined` explicitly, because exactOptionalPropertyTypes is on: a
+  // caller passing a computed `string | undefined` is the normal case here.
+  detail?: string | undefined;
 }) {
   return (
     <div className="row">
@@ -103,20 +184,38 @@ function Dashboard() {
   const [lastHotkey, setLastHotkey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  const [session, setSession] = useState<SessionState>("idle");
+  const [lastOutcome, setLastOutcome] = useState<string | null>(null);
+  const [devices, setDevices] = useState<InputDevice[]>([]);
+  const [canInsert, setCanInsert] = useState<boolean | null>(null);
+  const [local, setLocal] = useState<LocalStatus | null>(null);
+  const [installing, setInstalling] = useState<string | null>(null);
+  const [api, setApi] = useState<LocalApiStatus | null>(null);
+
   const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
   const refresh = useCallback(async () => {
     try {
-      const [d, h, p, rows] = await Promise.all([
+      const [d, h, p, rows, state, mics, insert, localStatus, apiStatus] = await Promise.all([
         getDiagnostics(),
         getHotkeys(),
         getProviders(),
         getHistory(20),
+        getDictationState(),
+        getInputDevices(),
+        isInsertionSupported(),
+        getLocalStatus(),
+        getLocalApiStatus(),
       ]);
       setDiagnostics(d);
       setHotkeys(h);
       setProviders(p);
       setHistory(rows);
+      setSession(state);
+      setDevices(mics);
+      setCanInsert(insert);
+      setLocal(localStatus);
+      setApi(apiStatus);
     } catch (e) {
       setError(message(e));
     }
@@ -138,6 +237,36 @@ function Dashboard() {
     });
     return () => unlisten?.();
   }, []);
+
+  // Dictation state arrives from Rust rather than being tracked here: the
+  // hotkey works while this window is hidden, so the window cannot be the thing
+  // that knows.
+  useEffect(() => {
+    const unlisteners: Array<() => void> = [];
+    void onDictationState(setSession).then((fn) => unlisteners.push(fn));
+    void onDictationOutcome((outcome) => {
+      setLastOutcome(outcomeLabel(outcome));
+      // History and the session both moved, so re-read rather than guessing.
+      void refresh();
+    }).then((fn) => unlisteners.push(fn));
+    void onInstallProgress((progress) => {
+      setInstalling(progressLabel(progress));
+      if (progress.stage === "done") {
+        void refresh();
+      }
+    }).then((fn) => unlisteners.push(fn));
+    return () => unlisteners.forEach((fn) => fn());
+  }, [refresh]);
+
+  const guard = async (work: () => Promise<unknown>) => {
+    setError(null);
+    try {
+      await work();
+      await refresh();
+    } catch (e) {
+      setError(message(e));
+    }
+  };
 
   const runProbe = async () => {
     setProbing(true);
@@ -318,6 +447,178 @@ function Dashboard() {
             </ul>
           </>
         ) : null}
+      </section>
+
+      <section>
+        <h2>Dictation</h2>
+        <Row
+          label="Session"
+          value={session}
+          detail={session === "recording" ? "the overlay is visible" : undefined}
+        />
+        <Row
+          label="Text insertion"
+          value={
+            canInsert === null ? "checking…" : canInsert ? "Supported" : "Not supported here"
+          }
+          detail={
+            canInsert === false
+              ? "dictations are transcribed and kept in history, but cannot be typed at the cursor"
+              : undefined
+          }
+        />
+        {lastOutcome ? <Row label="Last result" value={lastOutcome} /> : null}
+        <div className="row">
+          <span className="row-label">Microphone</span>
+          <span className="row-value">
+            <select
+              onChange={(e) => {
+                void guard(() => setInputDevice(e.target.value || null));
+              }}
+            >
+              <option value="">System default</option>
+              {devices.map((d) => (
+                <option key={d.name} value={d.name}>
+                  {d.name}
+                  {d.isDefault ? " (default)" : ""}
+                </option>
+              ))}
+            </select>
+          </span>
+        </div>
+        <button
+          type="button"
+          onClick={() => {
+            void guard(toggleDictation);
+          }}
+        >
+          {session === "recording" ? "Stop and transcribe" : "Start dictation"}
+        </button>
+        {session === "recording" ? (
+          <button
+            type="button"
+            onClick={() => {
+              void guard(cancelDictation);
+            }}
+          >
+            Discard
+          </button>
+        ) : null}
+      </section>
+
+      <section>
+        <h2>Local transcription</h2>
+        {local === null ? (
+          <p className="muted">Loading…</p>
+        ) : local.availability.state === "not-published" ? (
+          <>
+            <Row label="Availability" value="No server is published for this platform" />
+            <p className="muted">{local.availability.reason}</p>
+            <p className="muted">{local.availability.tracking}</p>
+          </>
+        ) : (
+          <>
+            <Row
+              label="Server"
+              value={local.serverInstalled ? "Installed" : "Not installed"}
+              detail={local.port ? `running on 127.0.0.1:${local.port}` : undefined}
+            />
+            <Row
+              label="Installed to"
+              value={local.installDir}
+              detail={
+                local.installDirFellBack
+                  ? "the per-user location contained a space or a non-ASCII character, which the native binaries cannot load from, so a machine-wide location is used instead"
+                  : undefined
+              }
+            />
+            {installing ? <Row label="Progress" value={installing} /> : null}
+            <ul className="purposes">
+              {local.models.map((m) => (
+                <li key={m.id}>
+                  <code>{m.id}</code> {m.name}
+                  {m.sizeMb ? ` · ${m.sizeMb} MB` : ""}
+                  {m.recommended ? " · recommended" : ""}
+                  <em className="row-detail">
+                    {m.installed
+                      ? `installed, ${verificationLabel(m.verifiedBy)}`
+                      : `not installed — will be ${verificationLabel(m.verifiedBy)}`}
+                  </em>
+                  {m.installed ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void guard(() => startLocalServer(m.id));
+                      }}
+                    >
+                      Use
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setInstalling("Starting…");
+                        void guard(() => installLocalModel(m.id));
+                      }}
+                    >
+                      Install
+                    </button>
+                  )}
+                </li>
+              ))}
+            </ul>
+            {local.port ? (
+              <button
+                type="button"
+                onClick={() => {
+                  void guard(stopLocalServer);
+                }}
+              >
+                Stop the server
+              </button>
+            ) : null}
+          </>
+        )}
+      </section>
+
+      <section>
+        <h2>Local API</h2>
+        {api === null ? (
+          <p className="muted">Loading…</p>
+        ) : (
+          <>
+            <Row
+              label="State"
+              value={api.running ? `Listening on 127.0.0.1:${api.port}` : "Not listening"}
+              detail={api.enabled && !api.running ? "switched on but failed to start" : undefined}
+            />
+            <p className="muted">
+              Off by default. It exposes every note and transcript to anything running as you, so it
+              only listens when you ask it to. It never binds anything but loopback.
+            </p>
+            {api.discoveryPath ? (
+              <Row
+                label="Discovery file"
+                value={api.discoveryPath}
+                detail={api.discoveryPermissions ?? undefined}
+              />
+            ) : null}
+            {api.discoveryPermissionsAsExpected === false ? (
+              <p className="error">
+                The discovery file is more readable than intended. Anything that can read it can use
+                the local API.
+              </p>
+            ) : null}
+            <button
+              type="button"
+              onClick={() => {
+                void guard(api.running ? stopLocalApi : startLocalApi);
+              }}
+            >
+              {api.running ? "Stop the local API" : "Start the local API"}
+            </button>
+          </>
+        )}
       </section>
 
       <section>
