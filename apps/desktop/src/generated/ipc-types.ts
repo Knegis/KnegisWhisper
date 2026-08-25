@@ -660,6 +660,61 @@ export type InstallProgress = { "stage": "server", written: number, total: numbe
  */
 verifiedBy: VerifiedBy, };
 
+/* -------------------------------------------------- local text generation */
+/**
+ * A drafter alongside the main model.
+ */
+export type DraftStatus = { fileName: string, sizeBytes: number | null, installed: boolean, };
+
+/**
+ * One local model on offer.
+ */
+export type LocalLlmModelStatus = { id: string, name: string,
+/**
+ * The family it belongs to, e.g. `qwen`.
+ */
+provider: string,
+/**
+ * `None` when the registry does not say. Shown before anyone commits to a
+ * download that can be six gigabytes.
+ */
+sizeBytes: number | null, quantization: string | null, contextLength: number | null, recommended: boolean, supportsThinking: boolean, installed: boolean,
+/**
+ * Whether this model has a speculative-decoding drafter, and whether that
+ * drafter is installed. Absent for the models without one.
+ */
+draft: DraftStatus | null, };
+
+/**
+ * What the Intelligence > Local screen needs, with no network access.
+ */
+export type LocalLlmStatus = {
+/**
+ * Whether a server binary is published for this platform.
+ */
+availability: Availability, serverInstalled: boolean, models: Array<LocalLlmModelStatus>,
+/**
+ * The port the server is on, if it is running.
+ */
+port: number | null,
+/**
+ * Which model that server loaded.
+ */
+runningModel: string | null, installDir: string,
+/**
+ * Minutes of inactivity before the server stops itself.
+ */
+idleStopMinutes: number, };
+
+/**
+ * Progress of an install, and the one lifecycle event worth reporting.
+ *
+ * Named for its sidecar rather than `InstallProgress`, because
+ * `local_model` already has one of those and a TypeScript file cannot hold
+ * two declarations of the same name. `ipc_types` refuses the collision.
+ */
+export type LocalLlmProgress = { "stage": "server", written: number, total: number | null, } | { "stage": "model", id: string, written: number, total: number | null, } | { "stage": "draft", id: string, written: number, total: number | null, } | { "stage": "extracting" } | { "stage": "done", id: string, } | { "stage": "stopped-when-idle" };
+
 /* -------------------------------------------------------------- local api */
 /**
  * What the settings screen shows about the local API.

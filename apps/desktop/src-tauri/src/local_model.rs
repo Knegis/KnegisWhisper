@@ -175,6 +175,29 @@ pub enum Availability {
     Unknown,
 }
 
+impl Availability {
+    /// What the catalogue says about one sidecar on the platform we are on.
+    ///
+    /// Shared by both local runtimes rather than written twice. The `Unknown`
+    /// arms matter: an unrecognised target and a target the manifest does not
+    /// mention are both "we do not know", and answering `Installable` for
+    /// either would be a claim about a binary nobody has looked for.
+    #[must_use]
+    pub fn of(catalog: &kw_sidecar::catalog::Catalog, sidecar: &str) -> Self {
+        let Some(target) = kw_sidecar::Target::current() else {
+            return Self::Unknown;
+        };
+        match catalog.get(sidecar).map(|s| s.availability(target)) {
+            Some(kw_sidecar::TargetState::Installable(_)) => Self::Installable,
+            Some(kw_sidecar::TargetState::Unsupported { reason, tracking }) => Self::NotPublished {
+                reason: reason.to_owned(),
+                tracking: tracking.to_owned(),
+            },
+            _ => Self::Unknown,
+        }
+    }
+}
+
 /// How firmly a model's identity can be established.
 ///
 /// Three states rather than a boolean, and an enum rather than a string. It was
@@ -245,19 +268,7 @@ pub async fn local_model_status(
     let cache = paths::sidecar_dir();
     let models_dir = paths::model_cache_dir();
 
-    let availability = match kw_sidecar::Target::current() {
-        None => Availability::Unknown,
-        Some(target) => match local.catalog.get(SIDECAR).map(|s| s.availability(target)) {
-            Some(kw_sidecar::TargetState::Installable(_)) => Availability::Installable,
-            Some(kw_sidecar::TargetState::Unsupported { reason, tracking }) => {
-                Availability::NotPublished {
-                    reason: reason.to_owned(),
-                    tracking: tracking.to_owned(),
-                }
-            }
-            _ => Availability::Unknown,
-        },
-    };
+    let availability = Availability::of(&local.catalog, SIDECAR);
 
     let server_installed = local
         .catalog

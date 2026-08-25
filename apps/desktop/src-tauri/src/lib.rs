@@ -19,6 +19,7 @@ mod dictation;
 #[cfg(test)]
 mod ipc_types;
 mod local_api;
+mod local_llm;
 mod local_model;
 mod overlay;
 mod reasoning;
@@ -158,13 +159,28 @@ pub fn run() -> anyhow::Result<()> {
 
             app.manage(std::sync::Arc::clone(&local));
 
+            // Local text generation. Same lifecycle, one more sidecar. Nothing
+            // starts here: the model is gigabytes and starting it uninvited
+            // would be several of them resident before anyone asked.
+            let llm = std::sync::Arc::new(
+                local_llm::LocalLlm::new(policy.clone())
+                    .map_err(|e| anyhow::anyhow!(e))
+                    .context("could not prepare the local text-generation server")?,
+            );
+            tauri::async_runtime::block_on(llm.reap_stale());
+            let llm_endpoint = llm.endpoint();
+            app.manage(std::sync::Arc::clone(&llm));
+
             let session = std::sync::Arc::new(dictation::DictationRuntime::build(
                 handle.clone(),
                 db.clone(),
                 credentials,
                 policy,
-                shared.port,
-                shared.model,
+                dictation::LocalTargets {
+                    transcription_port: shared.port,
+                    transcription_model: shared.model,
+                    generation: llm_endpoint,
+                },
                 // Off until `reasoning::apply_at_startup` fills it, and off
                 // for good if the user has never switched cleanup on. The raw
                 // transcript is a correct answer; a half-configured cleanup
@@ -269,6 +285,10 @@ pub fn run() -> anyhow::Result<()> {
             local_api::local_api_status,
             local_api::local_api_start,
             local_api::local_api_stop,
+            local_llm::local_llm_status,
+            local_llm::local_llm_install,
+            local_llm::local_llm_start,
+            local_llm::local_llm_stop,
         ])
         .run(tauri::generate_context!())
         .context("the application exited with an error")

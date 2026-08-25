@@ -29,8 +29,8 @@
     "Settings > Intelligence > Local": {
       "surfaceId": "settings.intelligence.local",
       "component": "apps/desktop/src/views/SettingsIntelligenceLocal.tsx",
-      "built": false,
-      "note": "llama-server is pinned in the porting matrix and has no install or lifecycle code, let alone a screen."
+      "built": true,
+      "note": "Installs and runs the pinned llama.cpp CPU build and any of the registry's GGUF models. Sizes are shown before the install button because the recommended model is 5.9 GB, and the five-minute idle shutdown is stated rather than being a surprise later."
     },
     "Settings > Intelligence > Enterprise": {
       "surfaceId": "settings.intelligence.enterprise",

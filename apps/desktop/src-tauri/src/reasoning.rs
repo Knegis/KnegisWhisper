@@ -218,7 +218,15 @@ pub struct ReasoningStatus {
 }
 
 /// What would happen if a request were sent to this provider.
-fn dispatch_for(registry: &Registry, id: &str, enterprise: bool) -> ReasoningDispatch {
+///
+/// `local_running` is the port of a running llama.cpp server, or `None`. Passed
+/// in rather than looked up, so this stays a pure function of what is true.
+fn dispatch_for(
+    registry: &Registry,
+    id: &str,
+    enterprise: bool,
+    local_running: Option<u16>,
+) -> ReasoningDispatch {
     let settings = ChatSettings {
         provider: Some(id.to_owned()),
         self_hosted_url: None,
@@ -231,10 +239,18 @@ fn dispatch_for(registry: &Registry, id: &str, enterprise: bool) -> ReasoningDis
                 "{id} needs its organisation credentials, set under Enterprise connectors below"
             ),
         },
-        Ok(ChatRoute::Local) => ReasoningDispatch::NeedsSidecar {
-            reason: "this needs the llama.cpp server, which is not installed by this build yet"
-                .to_owned(),
-        },
+        Ok(ChatRoute::Local) => {
+            if local_running.is_some() {
+                ReasoningDispatch::Ready
+            } else {
+                // The server exists in this build; it just is not running. A
+                // request would be refused rather than sent to a dead port, and
+                // saying "not running" points at the screen that starts it.
+                ReasoningDispatch::NeedsSidecar {
+                    reason: "no local model is running. Start one under Local models.".to_owned(),
+                }
+            }
+        }
         Ok(_) => ReasoningDispatch::Ready,
         Err(err) => ReasoningDispatch::Unresolvable {
             reason: err.to_string(),
@@ -247,6 +263,7 @@ fn describe(
     registry: &Registry,
     settings: &CleanupSettings,
     credentials: &dyn kw_security::CredentialStore,
+    local_running: Option<u16>,
 ) -> CleanupRoute {
     match settings.resolve(registry) {
         Ok(None) => CleanupRoute::Off,
@@ -263,11 +280,15 @@ fn describe(
                 ChatRoute::Local => (
                     "local model".to_owned(),
                     false,
-                    Some(
-                        "the llama.cpp server this would use is not part of this build yet, so \
-                         cleanup will quietly leave the transcript as it is"
-                            .to_owned(),
-                    ),
+                    if local_running.is_some() {
+                        None
+                    } else {
+                        Some(
+                            "no local model is running, so cleanup will leave the transcript as \
+                             it is until one is started under Local models"
+                                .to_owned(),
+                        )
+                    },
                 ),
                 ChatRoute::Provider { id, key_ref, .. } => (
                     id.clone(),
@@ -323,9 +344,13 @@ async fn stored(db: &kw_storage::Db) -> CleanupSettings {
 #[tauri::command]
 pub async fn reasoning_status(
     state: State<'_, crate::state::AppState>,
+    llm: State<'_, Arc<crate::local_llm::LocalLlm>>,
 ) -> Result<ReasoningStatus, String> {
     let registry = kw_provider_registry::registry().map_err(|e| e.to_string())?;
     let settings = stored(state.db()).await;
+    // Read without recording a use: a settings window left open must not keep
+    // the idle timer from ever firing.
+    let local_running = llm.running_port();
 
     let mut providers: Vec<ReasoningProviderSummary> = registry
         .reasoning
@@ -337,7 +362,7 @@ pub async fn reasoning_status(
             configured: kw_security::KeyRef::new(&p.credential_slot)
                 .is_some_and(|slot| state.credentials().contains(&slot)),
             enterprise: false,
-            dispatch: dispatch_for(registry, &p.id, false),
+            dispatch: dispatch_for(registry, &p.id, false, local_running),
             models: p
                 .models
                 .iter()
@@ -364,7 +389,7 @@ pub async fn reasoning_status(
             credential_slot: None,
             configured: false,
             enterprise: true,
-            dispatch: dispatch_for(registry, &p.id, true),
+            dispatch: dispatch_for(registry, &p.id, true, local_running),
             models: p
                 .models
                 .iter()
@@ -387,8 +412,40 @@ pub async fn reasoning_status(
         .map(|p| enterprise_status(&p.id, &p.name, state.credentials()))
         .collect();
 
+    // The local route is a real destination and is not in either registry list,
+    // so it is added here. Without it the screen offers ten cloud providers and
+    // no way to point cleanup at a model on this machine -- which is the one
+    // route that needs no key and sends nothing anywhere.
+    providers.insert(
+        0,
+        ReasoningProviderSummary {
+            id: "local".to_owned(),
+            name: "On this machine (llama.cpp)".to_owned(),
+            credential_slot: None,
+            configured: local_running.is_some(),
+            enterprise: false,
+            dispatch: dispatch_for(registry, "local", false, local_running),
+            models: registry
+                .local_llm
+                .iter()
+                .flat_map(|p| {
+                    p.models.iter().map(|m| ReasoningModelSummary {
+                        id: m.id.clone(),
+                        name: m.name.clone(),
+                        // llama.cpp speaks the OpenAI shape and takes
+                        // `max_tokens`; there is no second spelling to worry
+                        // about on a server we run ourselves.
+                        token_param: "max_tokens".to_owned(),
+                        supports_thinking: m.supports_thinking,
+                        supports_vision: false,
+                    })
+                })
+                .collect(),
+        },
+    );
+
     Ok(ReasoningStatus {
-        route: describe(registry, &settings, state.credentials()),
+        route: describe(registry, &settings, state.credentials(), local_running),
         settings,
         providers,
         enterprise,
@@ -495,6 +552,7 @@ pub fn enterprise_config_clear(
 pub async fn reasoning_set_cleanup(
     state: State<'_, crate::state::AppState>,
     runtime: State<'_, Arc<DictationRuntime>>,
+    llm: State<'_, Arc<crate::local_llm::LocalLlm>>,
     settings: CleanupSettings,
 ) -> Result<CleanupRoute, String> {
     let registry = kw_provider_registry::registry().map_err(|e| e.to_string())?;
@@ -511,7 +569,12 @@ pub async fn reasoning_set_cleanup(
         *slot = resolved;
     }
 
-    Ok(describe(registry, &settings, state.credentials()))
+    Ok(describe(
+        registry,
+        &settings,
+        state.credentials(),
+        llm.running_port(),
+    ))
 }
 
 /// Apply the stored cleanup configuration at startup.
@@ -622,7 +685,7 @@ mod tests {
     #[test]
     fn enterprise_connectors_say_they_need_their_organisation_credentials() {
         for id in ["bedrock", "azure", "vertex"] {
-            match dispatch_for(reg(), id, true) {
+            match dispatch_for(reg(), id, true, None) {
                 ReasoningDispatch::NeedsConfig { reason } => {
                     assert!(reason.contains(id), "{id}: {reason}");
                 }
@@ -694,6 +757,59 @@ mod tests {
         assert!(status.problem.is_none());
     }
 
+    /// The local route is ready when a server is running and not before.
+    ///
+    /// Reporting it ready with nothing running would be a selectable option that
+    /// fails at the end of the next dictation, which is the exact shape of
+    /// defect the three-state dispatch exists to prevent.
+    #[test]
+    fn the_local_route_is_ready_only_while_a_server_runs() {
+        assert!(matches!(
+            dispatch_for(reg(), "local", false, None),
+            ReasoningDispatch::NeedsSidecar { .. }
+        ));
+        assert!(matches!(
+            dispatch_for(reg(), "local", false, Some(8221)),
+            ReasoningDispatch::Ready
+        ));
+    }
+
+    /// A local cleanup route never says the transcript leaves the machine.
+    #[test]
+    fn a_local_route_keeps_the_transcript_here() {
+        let settings = CleanupSettings {
+            enabled: true,
+            provider: Some("local".to_owned()),
+            model: Some("qwen3.5-9b-q4_k_m".to_owned()),
+            ..CleanupSettings::default()
+        };
+        let store = kw_security::MemoryCredentialStore::default();
+
+        match describe(reg(), &settings, &store, Some(8221)) {
+            CleanupRoute::Ready {
+                destination,
+                leaves_device,
+                caveat,
+                ..
+            } => {
+                assert_eq!(destination, "local model");
+                assert!(!leaves_device);
+                assert!(caveat.is_none(), "{caveat:?}");
+            }
+            other => panic!("expected a resolved route, got {other:?}"),
+        }
+
+        // And with nothing running, the caveat says so rather than the screen
+        // reading as configured and working.
+        match describe(reg(), &settings, &store, None) {
+            CleanupRoute::Ready { caveat, .. } => {
+                let caveat = caveat.expect("a caveat when nothing is running");
+                assert!(caveat.contains("no local model is running"), "{caveat}");
+            }
+            other => panic!("expected a resolved route, got {other:?}"),
+        }
+    }
+
     /// Every cloud reasoning provider in the registry can be routed.
     ///
     /// If one cannot, the screen would offer a provider that fails at send time,
@@ -702,7 +818,10 @@ mod tests {
     fn every_cloud_provider_the_registry_lists_is_routable() {
         for p in &reg().reasoning {
             assert!(
-                matches!(dispatch_for(reg(), &p.id, false), ReasoningDispatch::Ready),
+                matches!(
+                    dispatch_for(reg(), &p.id, false, None),
+                    ReasoningDispatch::Ready
+                ),
                 "{} is in the registry and cannot be routed",
                 p.id
             );
@@ -720,7 +839,7 @@ mod tests {
         };
         let store = kw_security::MemoryCredentialStore::default();
 
-        match describe(reg(), &settings, &store) {
+        match describe(reg(), &settings, &store, None) {
             CleanupRoute::Ready {
                 destination,
                 leaves_device,
@@ -749,7 +868,7 @@ mod tests {
         };
         let store = kw_security::MemoryCredentialStore::default();
 
-        match describe(reg(), &settings, &store) {
+        match describe(reg(), &settings, &store, None) {
             CleanupRoute::Ready { leaves_device, .. } => assert!(!leaves_device),
             other => panic!("expected a resolved route, got {other:?}"),
         }

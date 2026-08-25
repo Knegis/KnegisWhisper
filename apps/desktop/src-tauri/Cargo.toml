@@ -43,6 +43,7 @@ tauri-plugin-dialog.workspace = true
 tokio.workspace = true
 async-trait.workspace = true
 url.workspace = true
+chrono.workspace = true
 serde.workspace = true
 ts-rs.workspace = true
 serde_json.workspace = true

@@ -270,6 +270,12 @@ pub struct ModelCleanup {
     credentials: Arc<dyn CredentialStore>,
     /// Set while cleanup is switched on; holds the route and model to use.
     configured: Arc<RwLock<Option<(kw_reasoning_core::ChatRoute, String)>>>,
+    /// Where a local model is listening, if one is.
+    ///
+    /// Reading it is also what tells the idle timer the server is wanted, so
+    /// cleanup running every minute keeps it alive and cleanup switched off
+    /// lets it stop.
+    local: crate::local_llm::LocalEndpoint,
 }
 
 impl std::fmt::Debug for ModelCleanup {
@@ -284,11 +290,13 @@ impl ModelCleanup {
         policy: NetworkPolicy,
         credentials: Arc<dyn CredentialStore>,
         configured: Arc<RwLock<Option<(kw_reasoning_core::ChatRoute, String)>>>,
+        local: crate::local_llm::LocalEndpoint,
     ) -> Self {
         Self {
             policy,
             credentials,
             configured,
+            local,
         }
     }
 }
@@ -309,6 +317,7 @@ impl Cleanup for ModelCleanup {
         // original on any failure, because a cleanup that errors must not lose
         // the transcript.
         kw_reasoning_core::Chat::new(&self.policy, self.credentials.as_ref())
+            .with_local_port(self.local.port())
             .cleanup(registry, &route, &model, text)
             .await
     }
@@ -491,6 +500,23 @@ impl StateSink for EventSink {
 /// struct to drift apart.
 pub const ROUTE_SETTINGS_KEY: &str = "transcription.route";
 
+/// The three places local work can go, gathered.
+///
+/// They travel together and always have: a dictation either goes to the whisper
+/// server on this machine or to a provider, and its cleanup either goes to the
+/// llama server on this machine or to a provider. Passing them as three
+/// parameters made `build` an eight-argument function, which is a shape that
+/// invites the next one — and the next one is the sherpa server.
+#[derive(Debug, Clone)]
+pub struct LocalTargets {
+    /// Where the whisper server is listening, if it is.
+    pub transcription_port: LocalPort,
+    /// Which model that server loaded.
+    pub transcription_model: Arc<RwLock<Option<String>>>,
+    /// Where the llama server is listening, if it is.
+    pub generation: crate::local_llm::LocalEndpoint,
+}
+
 /// The dictation session, assembled.
 pub struct DictationRuntime {
     session: Arc<kw_app_core::dictation::Dictation>,
@@ -522,10 +548,15 @@ impl DictationRuntime {
         db: Db,
         credentials: Arc<dyn CredentialStore>,
         policy: NetworkPolicy,
-        local_port: LocalPort,
-        local_model: Arc<RwLock<Option<String>>>,
+        local: LocalTargets,
         cleanup: Arc<RwLock<Option<(kw_reasoning_core::ChatRoute, String)>>>,
     ) -> Self {
+        let LocalTargets {
+            transcription_port: local_port,
+            transcription_model: local_model,
+            generation: local_llm,
+        } = local;
+
         let recorder = Arc::new(MicRecorder::spawn());
         let state = Arc::new(RwLock::new(SessionState::Idle));
 
@@ -537,7 +568,12 @@ impl DictationRuntime {
                 local_port,
                 local_model,
             )),
-            Arc::new(ModelCleanup::new(policy, credentials, Arc::clone(&cleanup))),
+            Arc::new(ModelCleanup::new(
+                policy,
+                credentials,
+                Arc::clone(&cleanup),
+                local_llm,
+            )),
             Arc::new(ClipboardInserter::new()),
             Arc::new(DbHistory::new(db.clone())),
             Arc::new(EventSink::new(app, state)),
@@ -967,7 +1003,12 @@ mod tests {
         let policy = NetworkPolicy::new().unwrap();
         let credentials: Arc<dyn CredentialStore> =
             Arc::new(kw_security::MemoryCredentialStore::new());
-        let cleanup = ModelCleanup::new(policy, credentials, Arc::new(RwLock::new(None)));
+        let cleanup = ModelCleanup::new(
+            policy,
+            credentials,
+            Arc::new(RwLock::new(None)),
+            crate::local_llm::LocalEndpoint::default(),
+        );
 
         assert_eq!(cleanup.clean("um, hello there").await, "um, hello there");
     }

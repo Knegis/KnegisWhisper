@@ -49,7 +49,19 @@ fn config() -> Config {
 }
 
 /// Render one type: its doc comment, then its declaration.
-fn declare<T: TS + 'static + ?Sized>(out: &mut String, cfg: &Config) {
+fn declare<T: TS + 'static + ?Sized>(out: &mut String, cfg: &Config, seen: &mut Vec<String>) {
+    // Two Rust types in different modules can share a name -- `InstallProgress`
+    // existed in both `local_model` and `local_llm` within an hour of the second
+    // one being written. In one TypeScript file that is a redeclaration, and the
+    // later one silently wins for every consumer. Caught here rather than by
+    // `tsc`, because the message here can name the type.
+    let name = T::ident(cfg);
+    assert!(
+        !seen.contains(&name),
+        "two types are both declared as `{name}`. Rename one on the Rust side: a          TypeScript file cannot hold both, and the later one would win."
+    );
+    seen.push(name);
+
     if let Some(docs) = T::docs() {
         // `ts-rs` yields the JSDoc block already wrapped, with a trailing
         // newline. Anything else would need reflowing; nothing else appears.
@@ -66,10 +78,10 @@ fn declare<T: TS + 'static + ?Sized>(out: &mut String, cfg: &Config) {
 /// field still belongs here — `ts-rs` refers to it by name rather than inlining
 /// it, so an omission is a TypeScript compile error rather than a silent gap.
 macro_rules! declared {
-    ($out:ident, $cfg:ident, $($section:literal => [$($ty:ty),* $(,)?]),* $(,)?) => {
+    ($out:ident, $cfg:ident, $seen:ident, $($section:literal => [$($ty:ty),* $(,)?]),* $(,)?) => {
         $(
             let _ = writeln!($out, "{}", section_rule($section));
-            $( declare::<$ty>(&mut $out, &$cfg); )*
+            $( declare::<$ty>(&mut $out, &$cfg, &mut $seen); )*
         )*
     };
 }
@@ -86,6 +98,7 @@ fn section_rule(title: &str) -> String {
 fn render() -> String {
     let cfg = config();
     let mut out = String::with_capacity(8 * 1024);
+    let mut seen: Vec<String> = Vec::new();
 
     out.push_str(
         "/**\n\
@@ -103,7 +116,7 @@ fn render() -> String {
          \x20*/\n\n",
     );
 
-    declared! { out, cfg,
+    declared! { out, cfg, seen,
         "capabilities" => [
             kw_overlay::Evidence,
             kw_overlay::CaptureExclusion,
@@ -175,6 +188,12 @@ fn render() -> String {
             crate::local_model::ModelStatus,
             crate::local_model::LocalStatus,
             crate::local_model::InstallProgress,
+        ],
+        "local text generation" => [
+            crate::local_llm::DraftStatus,
+            crate::local_llm::LocalLlmModelStatus,
+            crate::local_llm::LocalLlmStatus,
+            crate::local_llm::LocalLlmProgress,
         ],
         "local api" => [
             crate::local_api::LocalApiStatus,

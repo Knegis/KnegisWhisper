@@ -81,6 +81,14 @@ only the corrected text, with no preamble, explanation, or quotation marks.";
 pub struct Chat<'a> {
     policy: &'a NetworkPolicy,
     credentials: &'a dyn CredentialStore,
+    /// Where the llama.cpp server this application manages is listening.
+    ///
+    /// `None` when nothing is running, and [`ChatRoute::Local`] then refuses
+    /// rather than trying a default port. The port used to be the literal
+    /// `8221` in this file, which was right only while no other process held
+    /// it: `port::allocate` searches 8221–8240, so the second instance on a
+    /// machine would have had its requests sent to the first one's server.
+    local_port: Option<u16>,
 }
 
 impl<'a> Chat<'a> {
@@ -89,7 +97,15 @@ impl<'a> Chat<'a> {
         Self {
             policy,
             credentials,
+            local_port: None,
         }
+    }
+
+    /// Point local requests at a running server.
+    #[must_use]
+    pub const fn with_local_port(mut self, port: Option<u16>) -> Self {
+        self.local_port = port;
+        self
     }
 
     /// Tidy a dictated transcript.
@@ -179,14 +195,24 @@ impl<'a> Chat<'a> {
                 RequestPurpose::ExplicitlyConfiguredSelfHostedEndpoint,
             ),
 
-            ChatRoute::Local => (
-                "local".to_owned(),
-                // The llama.cpp sidecar's loopback address.
-                "http://127.0.0.1:8221/v1".to_owned(),
-                None,
-                ModelShape::default(),
-                RequestPurpose::ExplicitlyConfiguredSelfHostedEndpoint,
-            ),
+            ChatRoute::Local => {
+                // Refused rather than guessed. A request to a port nothing is
+                // listening on fails with a connection error that reads as a
+                // network problem, and the real answer is "no server is
+                // running" — which the caller can act on.
+                let port = self.local_port.ok_or_else(|| ChatError::Transport {
+                    provider: "local".to_owned(),
+                    detail: "the local text-generation server is not running".to_owned(),
+                })?;
+
+                (
+                    "local".to_owned(),
+                    format!("http://127.0.0.1:{port}/v1"),
+                    None,
+                    ModelShape::default(),
+                    RequestPurpose::ExplicitlyConfiguredSelfHostedEndpoint,
+                )
+            }
 
             ChatRoute::Enterprise { id } => {
                 // Its own signing, its own body, and for Bedrock its own

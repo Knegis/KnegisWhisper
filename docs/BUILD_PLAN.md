@@ -20,10 +20,10 @@ What the same period established is that **the remaining work is mostly reachabi
 capability**. The parity gate now resolves each manifest entry through `config/ui-surfaces.json`
 and prints what cannot be configured:
 
-- **36 of 99 integrations are reachable**, up from 8 when this plan was written. 28 are
+- **42 of 99 integrations are reachable**, up from 8 when this plan was written. 22 are
   implemented-or-declared and unreachable; the other 35 are removed vendor services and internal
   platform capabilities with no surface by design.
-- **6 of 13 UI surfaces do not exist.** The 7 that do are one component each; `App.tsx` is the
+- **5 of 13 UI surfaces do not exist.** The 8 that do are one component each; `App.tsx` is the
   shell.
 - The keystone is closed: `Settings > Providers` stores a key for every one of the fifteen slots
   the registry declares. Before chunk A, `provider_credential_set` existed in Rust and
@@ -68,7 +68,7 @@ Why the order below is what it is. Each chunk's integrations-made-reachable:
 | Chunk | New backend | Integrations unlocked |
 | --- | --- | --- |
 | A — shell + Providers *(done)* | 2 commands | **18**: 15 credential slots + 3 transcription providers |
-| B — Intelligence | 3 enterprise shapes, llama sidecar | 7 reasoning *(done)* + 3 enterprise *(done)* + 6 local LLM = **16** |
+| B — Intelligence *(done but B4)* | 3 enterprise shapes, llama sidecar | 7 reasoning + 3 enterprise + 6 local LLM = **16**, all reachable |
 | C — transcription clients | 4 clients | **7** transcription (3 immediately from A, 4 from C) |
 | D — system audio + natives | large | 0 directly; unblocks E entirely |
 | E — meetings | 5 clients + 5 detectors | **6** streams + 5 detectors |
@@ -198,20 +198,37 @@ settings and the keychain: a struct half in each is a struct reassembled wrongly
 
 Live calls stay unverified and `PLATFORM_SUPPORT.md` now has a table saying so per provider.
 
-### B3. Local LLM — the llama-server sidecar (6 providers, ~20 models)
+### B3. Local LLM — the llama-server sidecar (6 providers, ~20 models) *(done)*
 
-`ChatRoute::Local` already points at `http://127.0.0.1:8221/v1`. Nothing serves it.
+`ChatRoute::Local` pointed at `http://127.0.0.1:8221/v1` and nothing served it. Now something does.
 
-- `config/sidecars.json` gains `llama` — `ggml-org/llama.cpp` tag `b9763`, ports **8221–8240**,
-  `transport: loopback`, digests **measured, not copied from a release note** (the standing rule).
-- GGUF download reusing `transcription-core::models` (`.partial` then rename, `Integrity`/
-  `Verification` reporting), extended for `hfRepo`/`fileName` and the 4 Gemma QAT models with
-  speculative-decoding draft pairs (`draftHfRepo`).
-- **5-minute idle auto-stop**, per the porting matrix. Reuse `sidecar::process::start` and the
-  `HttpHealth` readiness poll; extend `LocalTranscription`'s lifecycle shape rather than inventing
-  a second one — rename it to a shared `SidecarRuntime` if it generalises cleanly.
-- Model sizes reach 5.9 GB. The install UI must show bytes and be cancellable, unlike the current
-  86 MB path.
+- **`tools/sidecar-pin/pin.mjs` had to be written first.** `config/sidecars.json` has instructed
+  people to use it since the first sidecar, and it did not exist — so the one rule protecting the
+  digests was unfollowable. It downloads while hashing, records the *observed* size, and reads the
+  archive index to find the executable, so `executableInArchive` is measured too. Its first act was
+  to reproduce all three committed whisper pins exactly, which validates the tool and the pins at
+  once. `--verify` re-measures every published target: the only thing that notices a release
+  retagged in place.
+- `llama` is pinned at `ggml-org/llama.cpp` `b9763`, ports **8221–8240**, all five targets
+  measured — including **both macOS ones**, which whisper.cpp does not publish. CPU builds: an
+  accelerated build is 15–25× the download, needs a matching driver, and fails at launch in a way
+  that reads as a broken install.
+- GGUF download through `network-policy` with `.partial`-then-rename, size-checked against the
+  registry. **Not digest-checked**, and the screen says so: the registry carries no SHA-256 for
+  these files, and inventing one from a download would pin whatever arrived while looking like a
+  guarantee.
+- **5-minute idle auto-stop.** `LocalEndpoint` is the trick: reading the port is what records a
+  use, so there is no `touch()` for anyone to forget, and a settings screen reads through
+  `running_port()` which does not.
+- `Chat` no longer hardcodes `8221`. It took a real port, because `port::allocate` searches
+  8221–8240 and a second instance would otherwise have had its requests sent to the first one's
+  server.
+
+Two things the work turned up. `DictationRuntime::build` reached eight arguments, so the three
+local destinations became a `LocalTargets` struct — the shape was inviting a ninth, and the ninth
+is sherpa. And `local_model` and `local_llm` both had an `InstallProgress`, which in one
+TypeScript file is a redeclaration where the later one silently wins; `ipc_types` now refuses a
+name collision by assertion.
 
 ### B4. Local ASR — sherpa-onnx (4 models)
 
@@ -362,6 +379,9 @@ location, reusing what `IntegrationsApi` already renders.
 
 - **Unpause CI.** `.github/workflows/ci.yml` has its `push` and `pull_request` triggers commented
   out. Every gate described here is only as good as the fact that something runs it.
+- **A scheduled `sidecar-pin --verify` job.** It re-downloads every pinned target, so it does not
+  belong in the per-push contracts job — but nothing else notices a release retagged in place, and
+  a pin that is never re-measured is a pin nobody is checking. Weekly is enough.
 - Updater against this project's own releases (`createUpdaterArtifacts: false` today), its own
   signing key, and the **update notification** window role.
 - NSIS/dmg/AppImage/deb bundles; unsigned until an identity exists.

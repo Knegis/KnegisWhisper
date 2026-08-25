@@ -50,7 +50,11 @@ import type {
   ImportReport,
   InputDevice,
   InstallProgress,
+  DraftStatus,
   LocalApiStatus,
+  LocalLlmModelStatus,
+  LocalLlmProgress,
+  LocalLlmStatus,
   LocalStatus,
   ModelCacheStatus,
   ModelStatus,
@@ -110,7 +114,11 @@ export type {
   ImportReport,
   InputDevice,
   InstallProgress,
+  DraftStatus,
   LocalApiStatus,
+  LocalLlmModelStatus,
+  LocalLlmProgress,
+  LocalLlmStatus,
   LocalStatus,
   ModelCacheStatus,
   ModelStatus,
@@ -510,6 +518,44 @@ export async function onInstallProgress(
   handler: (progress: InstallProgress) => void,
 ): Promise<UnlistenFn> {
   return listen<InstallProgress>("local-model-progress", (event) =>
+    handler(event.payload),
+  );
+}
+
+/* --------------------------------------------------- local text generation */
+
+export async function getLocalLlmStatus(): Promise<LocalLlmStatus> {
+  return invoke<LocalLlmStatus>("local_llm_status");
+}
+
+/**
+ * Download the server and one model, and its drafter if it has one.
+ *
+ * These are gigabytes. The caller shows the size before offering the button.
+ */
+export async function installLocalLlm(modelId: string): Promise<void> {
+  return invoke<void>("local_llm_install", { modelId });
+}
+
+/** Start the server on a model, and return the port it took. */
+export async function startLocalLlm(modelId: string): Promise<number> {
+  return invoke<number>("local_llm_start", { modelId });
+}
+
+export async function stopLocalLlm(): Promise<void> {
+  return invoke<void>("local_llm_stop");
+}
+
+/**
+ * Install progress, and the idle-stop notice.
+ *
+ * One channel for both because they change the same screen: a server that
+ * stopped itself is as much news as a download that finished.
+ */
+export async function onLocalLlmProgress(
+  handler: (progress: LocalLlmProgress) => void,
+): Promise<UnlistenFn> {
+  return listen<LocalLlmProgress>("local-llm-progress", (event) =>
     handler(event.payload),
   );
 }

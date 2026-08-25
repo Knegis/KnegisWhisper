@@ -2651,6 +2651,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "chrono",
  "kw-app-core",
  "kw-audio-core",
  "kw-local-api",

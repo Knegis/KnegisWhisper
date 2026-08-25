@@ -356,7 +356,8 @@
       ],
       "backend": "crates/reasoning-core",
       "ui": "Settings > Intelligence > Local",
-      "reachable": false
+      "reachable": true,
+      "note": "Reachable: the llama.cpp server is pinned in config/sidecars.json with digests measured by tools/sidecar-pin, and Settings > Intelligence > Local installs it along with the family's GGUF models. GGUF files are checked by size, not digest -- the registry carries no SHA-256 for them and inventing one from a download would pin whatever arrived."
     },
     "local-llm:mistral": {
       "status": "ported-with-new-rust-implementation",
@@ -374,7 +375,8 @@
       ],
       "backend": "crates/reasoning-core",
       "ui": "Settings > Intelligence > Local",
-      "reachable": false
+      "reachable": true,
+      "note": "Reachable: the llama.cpp server is pinned in config/sidecars.json with digests measured by tools/sidecar-pin, and Settings > Intelligence > Local installs it along with the family's GGUF models. GGUF files are checked by size, not digest -- the registry carries no SHA-256 for them and inventing one from a download would pin whatever arrived."
     },
     "local-llm:llama": {
       "status": "ported-with-new-rust-implementation",
@@ -392,7 +394,8 @@
       ],
       "backend": "crates/reasoning-core",
       "ui": "Settings > Intelligence > Local",
-      "reachable": false
+      "reachable": true,
+      "note": "Reachable: the llama.cpp server is pinned in config/sidecars.json with digests measured by tools/sidecar-pin, and Settings > Intelligence > Local installs it along with the family's GGUF models. GGUF files are checked by size, not digest -- the registry carries no SHA-256 for them and inventing one from a download would pin whatever arrived."
     },
     "local-llm:openai-oss": {
       "status": "ported-with-new-rust-implementation",
@@ -408,7 +411,8 @@
       ],
       "backend": "crates/reasoning-core",
       "ui": "Settings > Intelligence > Local",
-      "reachable": false
+      "reachable": true,
+      "note": "Reachable: the llama.cpp server is pinned in config/sidecars.json with digests measured by tools/sidecar-pin, and Settings > Intelligence > Local installs it along with the family's GGUF models. GGUF files are checked by size, not digest -- the registry carries no SHA-256 for them and inventing one from a download would pin whatever arrived."
     },
     "local-llm:gemma": {
       "status": "ported-with-new-rust-implementation",
@@ -434,7 +438,8 @@
       ],
       "backend": "crates/reasoning-core",
       "ui": "Settings > Intelligence > Local",
-      "reachable": false
+      "reachable": true,
+      "note": "Reachable: the llama.cpp server is pinned in config/sidecars.json with digests measured by tools/sidecar-pin, and Settings > Intelligence > Local installs it along with the family's GGUF models. GGUF files are checked by size, not digest -- the registry carries no SHA-256 for them and inventing one from a download would pin whatever arrived."
     },
     "local-llm:liquidai": {
       "status": "ported-with-new-rust-implementation",
@@ -454,7 +459,8 @@
       ],
       "backend": "crates/reasoning-core",
       "ui": "Settings > Intelligence > Local",
-      "reachable": false
+      "reachable": true,
+      "note": "Reachable: the llama.cpp server is pinned in config/sidecars.json with digests measured by tools/sidecar-pin, and Settings > Intelligence > Local installs it along with the family's GGUF models. GGUF files are checked by size, not digest -- the registry carries no SHA-256 for them and inventing one from a download would pin whatever arrived."
     },
     "local-asr:whisper-base": {
       "status": "ported-with-new-rust-implementation",

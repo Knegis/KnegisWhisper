@@ -83,7 +83,6 @@ frontend backlog, sized in integrations rather than in adjectives:
 
 | Surface | Entries | Surface built |
 | --- | --- | --- |
-| `Settings > Intelligence > Local` | 6 | no |
 | `Settings > Meetings` | 6 | no |
 | `Settings > Transcription` | 4 | yes — these four need a provider client that does not exist |
 | `Settings > Transcription > Local` | 4 | yes — whisper only; Parakeet and Nemotron have no sidecar |
@@ -92,9 +91,9 @@ frontend backlog, sized in integrations rather than in adjectives:
 | `Integrations > CLI` | 1 | no |
 | `Integrations > MCP` | 1 | no |
 
-**36 integrations are reachable today**, up from 8: the fifteen credential slots, three
-transcription providers, seven reasoning providers, three enterprise connectors, the six whisper
-models, the local REST API, and transcript export.
+**42 integrations are reachable today**, up from 8: the fifteen credential slots, three
+transcription providers, seven reasoning providers, three enterprise connectors, six local LLM
+families, the six whisper models, the local REST API, and transcript export.
 
 *Reachable* is still not *verified*. The three enterprise connectors can be configured and their
 request shapes are tested against AWS's published signing vectors and recorded fixtures, and no
