@@ -1,0 +1,28 @@
+# Normalize to LF in the working tree on every platform.
+#
+# This is load-bearing, not cosmetic: tools/integration-audit compares the
+# committed baseline against freshly generated output byte-for-byte, and the
+# generator emits LF. Without this, a Windows clone with core.autocrlf=true
+# checks the baseline out as CRLF and `--check` fails on a clean tree.
+* text=auto eol=lf
+
+# Generated, deterministic, and diffed byte-for-byte by CI. Marking it linguist-
+# generated keeps it out of language stats and collapses it in review diffs.
+config/upstream-integration-baseline.json linguist-generated=true
+
+# Windows batch files genuinely need CRLF.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary — never convert, never diff as text.
+*.png binary
+*.jpg binary
+*.ico binary
+*.icns binary
+*.gguf binary
+*.bin binary
+*.onnx binary
+*.exe binary
+*.dll binary
+*.dylib binary
+*.so binary
