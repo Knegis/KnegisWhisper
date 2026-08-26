@@ -128,6 +128,18 @@ Unchanged from the Phases 1–4 entry, restated here so they are not buried:
   tagged `v*` releases carry source only, which is what made this look impossible at first.
   macOS gets an xcframework — a library for embedding in an Xcode project, not a server — so it
   is recorded as `NotPublished` with a reason and needs a macOS CI job of our own.
+- ~~**ffmpeg and yt-dlp sources**~~ — **settled.** `yt-dlp/yt-dlp` at tag `2026.08.19` (GitHub
+  marks the release `immutable` itself) ships a bare executable on Windows, Linux x86_64, Linux
+  aarch64 and — one universal2 binary covering both — macOS, so all five targets are pinned with
+  `archive: "bare"`. `BtbN/FFmpeg-Builds` at `autobuild-2026-07-31-14-10` covers Windows and Linux
+  only; per its own README it never builds macOS at all, under any tag, so that gap is not a
+  missing pin to chase but recorded `NotPublished`, the same shape as whisper-server's macOS gap
+  above. That release was chosen over a more recent daily autobuild deliberately: BtbN prunes
+  daily builds after 14 days and keeps only the last build of each month for two years, so a dated
+  tag alone was not enough here — it also had to be one their own retention policy will not delete
+  out from under the pin. The `lgpl` (not `gpl`) variant is used because this project stays wary
+  of GPL entanglement (see `docs/UPSTREAM_AUDIT.md`'s reasoning about Pluely) and decode-to-WAV
+  transcoding never calls the GPL-only encoders (`libx264`, `libx265`) that variant lacks.
 - ~~**AEC helper and the five Windows native helpers**~~ — **settled**, see
   [PORTING_MATRIX.md](PORTING_MATRIX.md). Two corrections came out of looking properly. First,
   this tree never fetched any of them; the claim that they "still come from OpenWhispr release
