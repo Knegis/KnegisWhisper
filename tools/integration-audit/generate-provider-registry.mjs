@@ -119,17 +119,34 @@ const CREDENTIAL_SLOTS = {
   bedrock: { name: "AWS Bedrock", kind: "enterprise", feature: "bedrock" },
   azure: { name: "Azure OpenAI", kind: "enterprise", feature: "azure" },
   vertex: { name: "GCP Vertex AI", kind: "enterprise", feature: "vertex" },
+  // Meeting-streaming providers whose upstream client minted a realtime token
+  // from api.openwhispr.com rather than asking the user for a key -- see
+  // OWN_CREDENTIAL_SLOTS below. A plain BYOK slot each, same shape as any
+  // other `provider` credential.
+  assemblyai: { name: "AssemblyAI", kind: "provider" },
+  deepgram: { name: "Deepgram", kind: "provider" },
 };
 
 /**
  * Slots this project needs that upstream's `secretKeys` does not have.
  *
- * Upstream stored enterprise credentials as loose settings fields — an AWS
- * secret access key in the same store as a window position. Here each connector
- * gets one credential-store slot holding its whole configuration as JSON,
- * because splitting it would put the secret half in the keychain and the region
- * and deployment half in SQLite, and a struct reassembled from two stores is a
- * struct that gets reassembled wrongly.
+ * Two different reasons, in one list because both are "ours, not upstream's":
+ *
+ * - `bedrock`/`azure`/`vertex` — upstream stored enterprise credentials as
+ *   loose settings fields, an AWS secret access key in the same store as a
+ *   window position. Here each connector gets one credential-store slot
+ *   holding its whole configuration as JSON, because splitting it would put
+ *   the secret half in the keychain and the region/deployment half in
+ *   SQLite, and a struct reassembled from two stores is a struct that gets
+ *   reassembled wrongly.
+ *
+ * - `assemblyai`/`deepgram` — upstream's meeting client never asked the user
+ *   for either key. It minted a short-lived realtime token by calling
+ *   `api.openwhispr.com`, the vendor's hosted broker (recorded as
+ *   `vendor:openwhispr-realtime-token-broker`, `removed-vendor-service`, in
+ *   the integration manifest), so `baseline.secretKeys` has no entry for
+ *   either provider. A direct client needs its own key, and this is where it
+ *   is stored.
  *
  * Listed separately from `CREDENTIAL_SLOTS` so the distinction stays visible:
  * everything above came from upstream, everything here is ours.
@@ -138,6 +155,8 @@ const OWN_CREDENTIAL_SLOTS = [
   { base: "bedrock", env: "AWS_BEDROCK_CONFIG" },
   { base: "azure", env: "AZURE_OPENAI_CONFIG" },
   { base: "vertex", env: "GCP_VERTEX_CONFIG" },
+  { base: "assemblyai", env: "ASSEMBLYAI_API_KEY" },
+  { base: "deepgram", env: "DEEPGRAM_API_KEY" },
 ];
 
 /** Which credential slot each provider authenticates with. */
@@ -324,6 +343,7 @@ const registry = {
       "openwhisprCloudModels dropped as removed-vendor-service",
       "credential slots come from secretKeys, not from the provider lists, so all fifteen are declared",
       "three enterprise slots are added on top: upstream kept those credentials in loose settings fields",
+      "two meeting-provider slots are added on top: upstream minted their realtime tokens from a removed vendor service instead of asking for a key",
     ],
   },
   credentials,

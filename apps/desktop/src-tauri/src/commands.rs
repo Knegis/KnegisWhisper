@@ -400,7 +400,7 @@ pub struct CredentialSlotStatus {
 /// Every credential slot, in registry order, with whether each is filled.
 ///
 /// One call rather than one `provider_credential_present` per slot: there are
-/// fifteen, the screen re-reads after every save, and the list itself has to
+/// twenty, the screen re-reads after every save, and the list itself has to
 /// come from the registry anyway so that no screen writes provider ids by hand.
 #[tauri::command]
 pub fn credential_slots(state: State<'_, AppState>) -> CmdResult<Vec<CredentialSlotStatus>> {

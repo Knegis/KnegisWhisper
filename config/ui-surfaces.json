@@ -6,7 +6,7 @@
       "surfaceId": "settings.providers",
       "component": "apps/desktop/src/views/SettingsProviders.tsx",
       "built": true,
-      "note": "Stores a key for every one of the fifteen credential slots the registry declares, and runs the real connection test. Write-only: no command returns a credential value, so the field replaces or removes and never displays. A stored key is reported as stored, never as connected."
+      "note": "Stores a key for every one of the seventeen provider and custom-endpoint credential slots the registry declares -- the three enterprise slots are multi-field and configured on Settings > Intelligence > Enterprise instead -- and runs the real connection test. Write-only: no command returns a credential value, so the field replaces or removes and never displays. A stored key is reported as stored, never as connected."
     },
     "Settings > Transcription": {
       "surfaceId": "settings.transcription",

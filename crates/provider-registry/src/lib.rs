@@ -228,8 +228,10 @@ pub struct CredentialSlot {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Registry {
-    /// Every credential slot, including the nine that belong to no cloud
-    /// provider list.
+    /// Every credential slot, including the eleven that belong to no cloud
+    /// provider list: `openrouter`, the five custom endpoints, the three
+    /// enterprise connectors, and `assemblyai`/`deepgram`, which exist for a
+    /// meeting client rather than a transcription or reasoning one.
     ///
     /// Derived from upstream's `secretKeys` rather than from the provider lists
     /// below: `openrouter` has no pinned models and the five custom endpoints
@@ -300,11 +302,11 @@ impl Registry {
 
     /// Every credential slot the application can store a key for.
     ///
-    /// All fifteen, not just the nine a provider names. It used to be the nine,
-    /// derived from the provider lists — which meant `openrouter` and the five
-    /// custom endpoints were declared in the integration manifest and invisible
-    /// here, so a settings screen would have had to write those six ids out by
-    /// hand.
+    /// All twenty, not just the ones a transcription or reasoning provider
+    /// names. It used to be derived from the provider lists, which meant
+    /// `openrouter` and the five custom endpoints were declared in the
+    /// integration manifest and invisible here, so a settings screen would
+    /// have had to write those six ids out by hand.
     #[must_use]
     pub fn credential_slots(&self) -> BTreeSet<&str> {
         self.credentials.iter().map(|c| c.slot.as_str()).collect()
@@ -528,17 +530,21 @@ mod tests {
 
         // Fifteen from upstream's secretKeys, plus three this project adds for
         // the enterprise connectors -- upstream kept those in loose settings
-        // fields, so there is nothing to inherit.
-        let from_upstream = r
+        // fields, so there is nothing to inherit -- plus two more for
+        // AssemblyAI and Deepgram meeting streaming, which upstream also never
+        // needed: it minted a realtime token from a removed vendor service
+        // instead of asking the user for a key.
+        let non_enterprise = r
             .credentials
             .iter()
             .filter(|c| c.kind != CredentialKind::Enterprise)
             .count();
         assert_eq!(
-            from_upstream, 15,
-            "expected the fifteen slots in the integration manifest, got {slots:?}"
+            non_enterprise, 17,
+            "expected the fifteen slots in the integration manifest plus assemblyai and \
+             deepgram, got {slots:?}"
         );
-        assert_eq!(slots.len(), 18, "{slots:?}");
+        assert_eq!(slots.len(), 20, "{slots:?}");
 
         // The six that belong to no provider, and would therefore be invisible
         // if the set were derived from the provider lists.
@@ -559,6 +565,36 @@ mod tests {
                 KeyRef::new(&c.slot).is_some(),
                 "slot {:?} cannot be a credential-store key",
                 c.slot
+            );
+        }
+    }
+
+    /// New relative to upstream, for the same reason the three enterprise
+    /// slots are: `baseline.secretKeys` has neither, because upstream's
+    /// meeting client minted a short-lived realtime token from
+    /// `api.openwhispr.com` rather than asking the user for a key. `usedFor`
+    /// is empty rather than `["meeting-stream"]` -- that string is not a value
+    /// `generate-provider-registry.mjs` derives, and widening its vocabulary
+    /// to fit a label was rejected on purpose. The purpose lives in
+    /// `config/integration-manifest.json`'s `credential:assemblyai` and
+    /// `credential:deepgram` notes instead.
+    #[test]
+    fn assemblyai_and_deepgram_are_provider_slots_upstream_never_needed() {
+        let r = reg();
+        for (slot, env, name) in [
+            ("assemblyai", "ASSEMBLYAI_API_KEY", "AssemblyAI"),
+            ("deepgram", "DEEPGRAM_API_KEY", "Deepgram"),
+        ] {
+            let c = r
+                .credential_slot(slot)
+                .unwrap_or_else(|_| panic!("{slot} has no credential slot"));
+            assert_eq!(c.kind, CredentialKind::Provider);
+            assert_eq!(c.env, env);
+            assert_eq!(c.name, name);
+            assert!(c.feature.is_none());
+            assert!(
+                c.used_for.is_empty(),
+                "{slot} belongs to no transcription or reasoning provider list"
             );
         }
     }

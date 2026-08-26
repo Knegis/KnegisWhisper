@@ -7,7 +7,8 @@
       "every transcription provider declares an explicit maxUploadBytes",
       "openwhisprCloudModels dropped as removed-vendor-service",
       "credential slots come from secretKeys, not from the provider lists, so all fifteen are declared",
-      "three enterprise slots are added on top: upstream kept those credentials in loose settings fields"
+      "three enterprise slots are added on top: upstream kept those credentials in loose settings fields",
+      "two meeting-provider slots are added on top: upstream minted their realtime tokens from a removed vendor service instead of asking for a key"
     ]
   },
   "credentials": [
@@ -167,6 +168,20 @@
       "env": "GCP_VERTEX_CONFIG",
       "usedFor": [],
       "feature": "vertex"
+    },
+    {
+      "slot": "assemblyai",
+      "name": "AssemblyAI",
+      "kind": "provider",
+      "env": "ASSEMBLYAI_API_KEY",
+      "usedFor": []
+    },
+    {
+      "slot": "deepgram",
+      "name": "Deepgram",
+      "kind": "provider",
+      "env": "DEEPGRAM_API_KEY",
+      "usedFor": []
     }
   ],
   "transcription": [

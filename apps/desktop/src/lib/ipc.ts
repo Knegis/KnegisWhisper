@@ -333,7 +333,7 @@ export async function getProviders(): Promise<ProviderSummary[]> {
  * Every credential slot, in registry order, with whether each is filled.
  *
  * One call rather than one `isProviderCredentialPresent` per slot: there are
- * fifteen and the screen re-reads after every save. The list comes from
+ * twenty and the screen re-reads after every save. The list comes from
  * `config/provider-registry.json` through Rust, so no screen writes a slot name.
  */
 export async function getCredentialSlots(): Promise<CredentialSlotStatus[]> {
