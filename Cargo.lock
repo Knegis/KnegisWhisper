@@ -2752,7 +2752,9 @@ name = "kw-meeting-core"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "kw-audio-core",
  "kw-security",
+ "kw-transcription-core",
  "serde",
  "serde_json",
  "thiserror 2.0.20",

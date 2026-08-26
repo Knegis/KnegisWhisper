@@ -159,6 +159,24 @@ pub fn encode_wav(samples: &[f32], sample_rate: u32) -> Vec<u8> {
     wrap_pcm(&pcm, sample_rate, 1)
 }
 
+/// Decode little-endian 16-bit PCM back to `f32`, the inverse of the encoder.
+///
+/// Needed because audio crosses a boundary as PCM bytes — a meeting provider
+/// takes `AudioChunk { pcm, .. }` — and the windowing arithmetic works in `f32`.
+/// A trailing odd byte is dropped: half a sample is a framing error, and
+/// inventing the other half puts a click in the audio.
+#[must_use]
+pub fn from_pcm(bytes: &[u8]) -> Vec<f32> {
+    bytes
+        .chunks_exact(2)
+        // `chunks_exact(2)` guarantees the length, but `try_into` proves it to
+        // the compiler rather than to a reader -- and this workspace denies
+        // indexing in library code precisely so that distinction is kept.
+        .filter_map(|pair| <[u8; 2]>::try_from(pair).ok())
+        .map(|pair| f32::from(i16::from_le_bytes(pair)) / 32_767.0)
+        .collect()
+}
+
 /// Wrap raw little-endian 16-bit PCM in a WAV container.
 #[must_use]
 pub fn wrap_pcm(pcm: &[u8], sample_rate: u32, channels: u16) -> Vec<u8> {

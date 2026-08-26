@@ -24,6 +24,7 @@
 //! will need.
 
 pub mod capabilities;
+pub mod local;
 
 pub use capabilities::{
     availability, capabilities, client, declined, is_allowed, listing, Availability, Client,
@@ -92,6 +93,13 @@ pub struct MeetingTranscript {
     /// How many times the session had to reconnect. Surfaced because a
     /// transcript with gaps should not look complete.
     pub reconnects: u32,
+    /// How many stretches of audio were never transcribed at all.
+    ///
+    /// A separate count from `reconnects` because the causes differ and so does
+    /// what a user would do about them: a reconnect is the network, and a gap is
+    /// the transcriber failing to keep up with the meeting. Both leave a hole,
+    /// and a transcript with a hole in it must not look complete.
+    pub gaps: u32,
 }
 
 /// Why a meeting session failed.
@@ -340,9 +348,14 @@ mod tests {
             }],
             duration_seconds: 12.0,
             reconnects: 2,
+            gaps: 1,
         };
         let json = serde_json::to_value(&transcript).unwrap();
         assert_eq!(json["reconnects"], 2);
+        assert_eq!(
+            json["gaps"], 1,
+            "a gap is not the same failure as a reconnect"
+        );
         assert_eq!(json["events"][0]["isFinal"], true);
         assert_eq!(json["events"][0]["source"], "mic");
     }

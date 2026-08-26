@@ -124,6 +124,15 @@ impl WindowFeed {
         })
     }
 
+    /// Seconds of audio this feed has already moved past.
+    ///
+    /// The session clock: [`Self::lag`] is what is still waiting, and the two
+    /// together are how much audio has been seen.
+    #[must_use]
+    pub fn consumed_seconds(&self) -> f64 {
+        seconds(self.consumed)
+    }
+
     /// How far behind the live edge the next window would start.
     #[must_use]
     pub fn lag(&self) -> Duration {

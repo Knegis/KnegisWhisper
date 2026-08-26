@@ -276,7 +276,12 @@ pub const PROVIDERS: &[MeetingProviderCapabilities] = &[
     },
     MeetingProviderCapabilities {
         id: "local",
-        name: "Local streaming model",
+        // Not "streaming": it is repeated short passes over a local
+        // `whisper-server`, about three seconds behind the room. Upstream's local
+        // provider is a sherpa-onnx WebSocket server that does emit words as they
+        // are recognised, and that runtime is blocked -- see chunk B4. Borrowing
+        // its name would be the overclaim this project keeps finding upstream.
+        name: "Local windowed model",
         // The only provider for which this is false, and the reason someone
         // would choose it.
         audio_leaves_device: false,
