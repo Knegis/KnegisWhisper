@@ -229,6 +229,41 @@ Nothing here needs a developer. All of it is buttons, one sentence spoken aloud,
 7. **Look at the overlay.** Position, size, and whether it says anything useful. Nobody has looked
    at it once.
 
+### Added by Task 16 (the updater and its notification window), and unchecked
+
+Deliberately not run by hand in this session: launching the actual dev build would leave a real
+window and a running process on a machine other agents' Rust builds share right now, and this
+checkout's own history already has one story about a stray `knegiswhisper-desktop.exe` from a
+launched GUI locking the binary and breaking the next build (see the `[[bin]]` comment in
+`apps/desktop/src-tauri/Cargo.toml`). Everything below is green tests and a read of the code, not a
+person at the machine.
+
+1. **Press "Check for updates" on `Settings > Diagnostics`.** This is the one part of the whole
+   feature that is honestly reachable right now, with nothing missing: no updater public key is
+   configured, so the button should report "Update checking is not securely configured" rather than
+   either freezing, doing nothing visible, or claiming an update check that did not happen. Confirm
+   the sentence appears and the button re-enables afterward.
+2. **Generate a real keypair** (`docs/SECURITY.md`), paste the public half into
+   `plugins.updater.pubkey`, and press the button again with a real repository that has no releases
+   yet. `GET /repos/{owner}/{repo}/releases/latest` should now attempt a real request rather than
+   short-circuiting, and — for a repository with zero releases — come back 404, surfaced as
+   `CheckFailed` rather than a silent "up to date". This is the first real exercise of
+   `NetworkPolicy::get_text` outside its own unit tests, which use a hand-rolled local server rather
+   than GitHub's actual API.
+3. **Publish one real release** (dispatching `.github/workflows/release.yml` for the first time,
+   which nobody has done) and press the button again. This is the only way to learn whether
+   GitHub's actual response shape matches the `tag_name`/`html_url` fields `updater.rs` assumes, and
+   whether the update-available sentence and the notification window both appear together and say
+   the same version.
+4. **Screen-record the desktop while the update notification is up**, the same claim as item 5 for
+   the meeting notification above: it must be absent from the recording and visible on the real
+   screen. It reuses the identical `overlay::apply_treatments` call, so this is expected to pass, but
+   nobody has looked.
+5. **Dispatch the release workflow once with `TAURI_SIGNING_PRIVATE_KEY` set and once without.**
+   Confirms two things nobody has checked: that `createUpdaterArtifacts: true` does not make
+   `tauri build` fail outright when the key is absent and the workflow's own `--config` override is
+   in effect, and that a `.sig` file actually appears next to a bundle when the key is present.
+
 ### What this run changed on the machine
 
 - `transcription.localModel` was set to `tiny`, which is exactly what pressing **Use for dictation**
