@@ -382,6 +382,35 @@ impl NetworkPolicy {
         self.request(purpose, reqwest::Method::POST, url)
     }
 
+    /// Fetch a small text payload -- a release manifest, not a bundle.
+    ///
+    /// Kept inside this crate, the same way [`Self::download_to_file`] is, so a
+    /// caller checking for an update never needs `reqwest` in scope just to read
+    /// the response. This stays the one crate that names it.
+    ///
+    /// Unlike `download_to_file` this does not follow redirects: a release
+    /// *asset* genuinely gets one (GitHub answers with a 302 to a storage
+    /// host), but a small JSON manifest is not expected to, and a scheme this
+    /// purpose does not allow, or a host the redirect chain wanders onto, would
+    /// be exactly the downgrade this crate exists to refuse. A redirect
+    /// therefore surfaces as an ordinary `HttpStatus` error rather than being
+    /// followed silently or hidden.
+    pub async fn get_text(
+        &self,
+        purpose: RequestPurpose,
+        url: &str,
+    ) -> Result<String, PolicyError> {
+        let response = self.get(purpose, url)?.send().await?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(PolicyError::HttpStatus {
+                url: url.to_owned(),
+                status: status.as_u16(),
+            });
+        }
+        Ok(response.text().await?)
+    }
+
     /// Talk to a sidecar this application started, on loopback.
     ///
     /// Deliberately *not* one of the seven purposes, because this is not egress:
@@ -599,6 +628,7 @@ mod tests {
     const TRANSCRIPTION: RequestPurpose = RequestPurpose::UserConfiguredTranscriptionProvider;
     const SELF_HOSTED: RequestPurpose = RequestPurpose::ExplicitlyConfiguredSelfHostedEndpoint;
     const DOWNLOAD: RequestPurpose = RequestPurpose::UserTriggeredModelDownload;
+    const UPDATER: RequestPurpose = RequestPurpose::OwnGithubReleasesUpdater;
 
     // ---------------------------------------------------------------- loopback
 
@@ -744,6 +774,88 @@ mod tests {
         assert!(
             !dir.path().join("out.zip").exists(),
             "a refused download must not leave a file behind"
+        );
+    }
+
+    // -------------------------------------------------------------- get_text
+
+    #[tokio::test]
+    async fn a_text_fetch_target_is_validated_before_any_socket_is_opened() {
+        // Nothing is listening on this port, and the updater purpose does not
+        // allow plaintext at all -- so a scheme refusal proves the validation
+        // ran before any connection was attempted.
+        let policy = NetworkPolicy::new().unwrap();
+        let err = policy
+            .get_text(
+                UPDATER,
+                "http://127.0.0.1:9/repos/owner/repo/releases/latest",
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, PolicyError::SchemeNotPermitted { .. }),
+            "expected a policy refusal, got {err}"
+        );
+    }
+
+    /// A minimal HTTP/1.1 server for one request, so `get_text`'s success and
+    /// failure paths can be exercised without a real host. It does not parse
+    /// the request at all -- reading enough bytes to let the client finish
+    /// writing is all a single-request test needs.
+    async fn respond_once(status_line: &'static str, body: &'static [u8]) -> std::net::SocketAddr {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 1024];
+            // Best-effort: enough to drain the request so the client's write
+            // does not block on us, not a real parse.
+            let _ = socket.read(&mut buf).await;
+
+            let response = format!(
+                "{status_line}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = socket.write_all(response.as_bytes()).await;
+            let _ = socket.write_all(body).await;
+            let _ = socket.shutdown().await;
+        });
+
+        addr
+    }
+
+    #[tokio::test]
+    async fn a_small_text_payload_is_fetched_and_returned() {
+        let body = br#"{"tag_name":"v9.9.9","html_url":"https://example.invalid/releases/v9.9.9"}"#;
+        let addr = respond_once("HTTP/1.1 200 OK", body).await;
+
+        let policy = NetworkPolicy::new().unwrap();
+        // Loopback, plaintext: only the self-hosted purpose may reach it, but
+        // the mechanism under test -- reading a small body back as text -- has
+        // nothing to do with which purpose validated the URL.
+        let text = policy
+            .get_text(SELF_HOSTED, &format!("http://{addr}/release.json"))
+            .await
+            .unwrap();
+        assert_eq!(text, String::from_utf8_lossy(body));
+    }
+
+    #[tokio::test]
+    async fn a_non_success_status_is_reported_rather_than_returned_as_text() {
+        let addr = respond_once("HTTP/1.1 404 Not Found", b"not found").await;
+
+        let policy = NetworkPolicy::new().unwrap();
+        let err = policy
+            .get_text(SELF_HOSTED, &format!("http://{addr}/missing"))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, PolicyError::HttpStatus { status: 404, .. }),
+            "expected a 404 to be reported, got {err}"
         );
     }
 
