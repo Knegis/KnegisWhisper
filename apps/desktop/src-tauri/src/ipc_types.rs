@@ -171,6 +171,7 @@ fn render() -> String {
             kw_meeting_core::KeytermSupport,
             kw_meeting_core::ClientAvailability,
             kw_meeting_core::MeetingProviderSummary,
+            kw_meeting_core::ConfigReview,
             crate::meeting::MeetingState,
             crate::meeting::Sources,
             crate::meeting::MeetingStatus,

@@ -194,7 +194,7 @@ pub fn validate(config: &MeetingProviderConfig) -> Result<ConfigReview, MeetingE
 }
 
 /// What a configuration will actually do, once the provider's limits apply.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ConfigReview {
     pub keyterms_requested: usize,

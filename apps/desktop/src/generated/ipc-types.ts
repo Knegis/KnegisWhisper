@@ -562,6 +562,19 @@ audioLeavesDevice: boolean, keyterms: KeytermSupport, sessionLimitSeconds: numbe
 summary: string, };
 
 /**
+ * What a configuration will actually do, once the provider's limits apply.
+ */
+export type ConfigReview = { keytermsRequested: number, keytermsUsed: number,
+/**
+ * Non-zero when terms will be silently discarded. Worth telling the user.
+ */
+keytermsDropped: number,
+/**
+ * True when the provider cannot detect a language and none was given.
+ */
+languageRequired: boolean, sessionLimitSeconds: number | null, };
+
+/**
  * What a meeting session is doing.
  */
 export type MeetingState = "idle" | "recording" | "finishing";

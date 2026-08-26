@@ -108,6 +108,11 @@ const DETECT_INTERVAL: Duration = Duration::from_secs(5);
 const PROMPT_KEY: &str = "meetings.promptOnDetect";
 /// Settings key: the user's own process names.
 const LISTS_KEY: &str = "meetings.detect";
+/// Settings key: the language to give the provider, or the empty string for
+/// automatic detection where the provider supports it.
+const LANGUAGE_KEY: &str = "meetings.language";
+/// Settings key: terms to bias recognition towards.
+const KEYTERMS_KEY: &str = "meetings.keyterms";
 
 /// Prompting is on by default.
 ///
@@ -589,6 +594,100 @@ fn resolve_client(provider_id: &str) -> Result<Client, String> {
     })
 }
 
+/// A language setting normalised to what [`MeetingProviderConfig`] wants: a
+/// blank field becomes `None` rather than the literal empty string, so
+/// [`kw_meeting_core::validate`] reads it the same way whether the setting was
+/// never written or was written and cleared.
+fn normalize_language(language: &str) -> Option<String> {
+    let trimmed = language.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_owned())
+    }
+}
+
+/// Keyterms normalised the same way: each one trimmed, and blanks dropped so a
+/// stray empty line from the editor does not count against a provider's cap.
+fn normalize_keyterms(keyterms: &[String]) -> Vec<String> {
+    keyterms
+        .iter()
+        .map(|k| k.trim().to_owned())
+        .filter(|k| !k.is_empty())
+        .collect()
+}
+
+/// Build the config a settings-screen preview should see for `provider_id`,
+/// from raw form values.
+///
+/// A free function, taking the draft values directly rather than reading them
+/// from settings, so the screen can preview a value before it is saved and so
+/// this can be tested with no database in sight. Whether the result needs a
+/// language is [`kw_meeting_core::validate`]'s answer to give, not this
+/// function's -- it only normalises and looks up the provider's declared
+/// sample rate, the same way [`MeetingRuntime::start`] does.
+fn draft_config(
+    provider_id: &str,
+    language: &str,
+    keyterms: &[String],
+) -> Result<MeetingProviderConfig, String> {
+    let caps = kw_meeting_core::capabilities(provider_id)
+        .ok_or_else(|| format!("{provider_id:?} is not a described meeting provider"))?;
+    let sample_rate = *caps.sample_rates.first().ok_or_else(|| {
+        format!(
+            "{} declares no sample rate, so nothing can be reviewed for it",
+            caps.name
+        )
+    })?;
+
+    Ok(MeetingProviderConfig {
+        provider: provider_id.to_owned(),
+        model: None,
+        language: normalize_language(language),
+        keyterms: normalize_keyterms(keyterms),
+        key_ref: None,
+        sample_rate,
+    })
+}
+
+/// Build the config [`MeetingTranscriptionProvider::connect`] will use,
+/// refusing first if `caps` needs a language and `language` gives it none.
+///
+/// A free function taking the provider's capabilities and the raw settings
+/// values rather than reading them itself, for the same reason
+/// `resolve_key_ref` is one: `start`'s refusal can then be tested with neither
+/// a database nor an `AppHandle` in sight. [`kw_meeting_core::validate`] is
+/// the one place the keyterm and language arithmetic lives; this only acts on
+/// what it reports, and never picks a language on its own -- a guessed
+/// language is a worse transcript that looks like a working one.
+fn resolve_provider_config(
+    provider_id: &str,
+    caps: &kw_meeting_core::MeetingProviderCapabilities,
+    key_ref: Option<kw_security::KeyRef>,
+    sample_rate: u32,
+    language: &str,
+    keyterms: &[String],
+) -> Result<MeetingProviderConfig, String> {
+    let config = MeetingProviderConfig {
+        provider: provider_id.to_owned(),
+        model: None,
+        language: normalize_language(language),
+        keyterms: normalize_keyterms(keyterms),
+        key_ref,
+        sample_rate,
+    };
+
+    let review = kw_meeting_core::validate(&config).map_err(|e| e.to_string())?;
+    if review.language_required {
+        return Err(format!(
+            "{} needs a concrete language, and none is set. Add one under Settings > Meetings.",
+            caps.name
+        ));
+    }
+
+    Ok(config)
+}
+
 impl MeetingRuntime {
     #[must_use]
     pub fn new(
@@ -777,14 +876,27 @@ impl MeetingRuntime {
             )
         })?;
 
-        let config = MeetingProviderConfig {
-            provider: provider_id.to_owned(),
-            model: None,
-            language: None,
-            keyterms: Vec::new(),
+        let language: String =
+            kw_storage::settings::get_or(self.db.pool(), LANGUAGE_KEY, String::new())
+                .await
+                .unwrap_or_default();
+        let keyterms: Vec<String> =
+            kw_storage::settings::get_or(self.db.pool(), KEYTERMS_KEY, Vec::new())
+                .await
+                .unwrap_or_default();
+
+        // Refuses here, before anything is opened, when the provider cannot
+        // detect a language and none is set -- see `resolve_provider_config`'s
+        // doc comment. A guessed language would be a worse transcript that
+        // looks like a working one, so this never picks one on its own.
+        let config = resolve_provider_config(
+            provider_id,
+            caps,
             key_ref,
-            sample_rate: session_rate,
-        };
+            session_rate,
+            &language,
+            &keyterms,
+        )?;
         provider.connect(config).await.map_err(|e| e.to_string())?;
 
         let path = Self::recording_dir().join(format!(
@@ -1202,6 +1314,63 @@ pub async fn meeting_set_detect_lists(
         .map_err(|e| format!("could not save the detection lists: {e}"))
 }
 
+/// The language to give the provider, or the empty string for automatic
+/// detection where the provider supports it.
+#[tauri::command]
+pub async fn meeting_language(state: State<'_, crate::state::AppState>) -> Result<String, String> {
+    kw_storage::settings::get_or(state.db().pool(), LANGUAGE_KEY, String::new())
+        .await
+        .map_err(|e| format!("could not read the language setting: {e}"))
+}
+
+#[tauri::command]
+pub async fn meeting_set_language(
+    state: State<'_, crate::state::AppState>,
+    language: String,
+) -> Result<(), String> {
+    kw_storage::settings::set(state.db().pool(), LANGUAGE_KEY, &language)
+        .await
+        .map_err(|e| format!("could not save the language setting: {e}"))
+}
+
+/// Terms to bias recognition towards. How many a provider actually uses
+/// depends on its cap -- see [`meeting_review_config`].
+#[tauri::command]
+pub async fn meeting_keyterms(
+    state: State<'_, crate::state::AppState>,
+) -> Result<Vec<String>, String> {
+    kw_storage::settings::get_or(state.db().pool(), KEYTERMS_KEY, Vec::new())
+        .await
+        .map_err(|e| format!("could not read the keyterms: {e}"))
+}
+
+#[tauri::command]
+pub async fn meeting_set_keyterms(
+    state: State<'_, crate::state::AppState>,
+    keyterms: Vec<String>,
+) -> Result<(), String> {
+    kw_storage::settings::set(state.db().pool(), KEYTERMS_KEY, &keyterms)
+        .await
+        .map_err(|e| format!("could not save the keyterms: {e}"))
+}
+
+/// Preview what `provider` will actually do with `language` and `keyterms`,
+/// without saving anything or starting a meeting.
+///
+/// Takes the draft values directly rather than reading the settings, so the
+/// screen can show a warning as someone edits a field, before they save it.
+/// [`kw_meeting_core::validate`] does the arithmetic; this only carries its
+/// answer across the wire.
+#[tauri::command]
+pub async fn meeting_review_config(
+    provider: String,
+    language: String,
+    keyterms: Vec<String>,
+) -> Result<kw_meeting_core::ConfigReview, String> {
+    let config = draft_config(&provider, &language, &keyterms)?;
+    kw_meeting_core::validate(&config).map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,
@@ -1351,6 +1520,124 @@ mod tests {
 
         let err = resolve_key_ref("openai-realtime", Client::OpenAiRealtime, &store).unwrap_err();
         assert!(err.contains("Settings > Providers"), "{err}");
+    }
+
+    // `resolve_provider_config`, `draft_config` and the settings keys are all
+    // free functions and a database, precisely so the properties below can be
+    // asserted with no `AppHandle` in sight -- see their doc comments.
+
+    #[tokio::test]
+    async fn the_language_and_keyterms_settings_round_trip() {
+        let db = Db::open_in_memory().await.unwrap();
+        let pool = db.pool();
+
+        // Nothing stored yet: language is unset and there are no keyterms.
+        assert_eq!(
+            kw_storage::settings::get_or(pool, LANGUAGE_KEY, String::new())
+                .await
+                .unwrap(),
+            ""
+        );
+        assert!(
+            kw_storage::settings::get_or(pool, KEYTERMS_KEY, Vec::<String>::new())
+                .await
+                .unwrap()
+                .is_empty()
+        );
+
+        kw_storage::settings::set(pool, LANGUAGE_KEY, &"sv".to_owned())
+            .await
+            .unwrap();
+        let keyterms = vec!["Sprint".to_owned(), "Q3 roadmap".to_owned()];
+        kw_storage::settings::set(pool, KEYTERMS_KEY, &keyterms)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            kw_storage::settings::get_or(pool, LANGUAGE_KEY, String::new())
+                .await
+                .unwrap(),
+            "sv"
+        );
+        assert_eq!(
+            kw_storage::settings::get_or(pool, KEYTERMS_KEY, Vec::<String>::new())
+                .await
+                .unwrap(),
+            keyterms
+        );
+    }
+
+    #[test]
+    fn corti_refuses_to_start_naming_the_provider_and_the_field_when_no_language_is_set() {
+        // The tripwire for the property this task exists to add: `start` used
+        // to build its config with `language: None` unconditionally and no
+        // check at all, so a provider that cannot detect a language would have
+        // failed three seconds later at `connect`, or worse, produced a
+        // transcript in the wrong language with nothing said about it.
+        let caps = kw_meeting_core::capabilities("corti-realtime").unwrap();
+        let err =
+            resolve_provider_config("corti-realtime", caps, None, 16_000, "", &[]).unwrap_err();
+        assert!(err.contains("Corti Realtime"), "{err}");
+        assert!(err.contains("language"), "{err}");
+        assert!(err.contains("Settings > Meetings"), "{err}");
+    }
+
+    #[test]
+    fn corti_proceeds_once_a_language_is_given() {
+        let caps = kw_meeting_core::capabilities("corti-realtime").unwrap();
+        let config =
+            resolve_provider_config("corti-realtime", caps, None, 16_000, "sv", &[]).unwrap();
+        assert_eq!(config.language, Some("sv".to_owned()));
+    }
+
+    #[test]
+    fn a_provider_that_detects_language_is_not_blocked_by_a_blank_field() {
+        let caps = kw_meeting_core::capabilities("openai-realtime").unwrap();
+        let config =
+            resolve_provider_config("openai-realtime", caps, None, 24_000, "", &[]).unwrap();
+        assert_eq!(config.language, None);
+    }
+
+    #[test]
+    fn the_local_provider_is_not_blocked_by_a_blank_field_either() {
+        // The regression this task's own change to `capabilities.rs` guards
+        // against: the one provider that needs no credentials and no network
+        // must keep working with nothing configured.
+        let caps = kw_meeting_core::capabilities("local").unwrap();
+        let config = resolve_provider_config("local", caps, None, 16_000, "", &[]).unwrap();
+        assert_eq!(config.language, None);
+    }
+
+    #[test]
+    fn a_blank_language_setting_is_not_sent_as_the_literal_empty_string() {
+        assert_eq!(normalize_language("   "), None);
+        assert_eq!(normalize_language("  sv  "), Some("sv".to_owned()));
+    }
+
+    #[test]
+    fn blank_keyterms_are_dropped_before_they_reach_a_providers_cap() {
+        let keyterms = vec!["  ".to_owned(), "Sprint".to_owned(), String::new()];
+        assert_eq!(normalize_keyterms(&keyterms), vec!["Sprint".to_owned()]);
+    }
+
+    #[test]
+    fn a_keyterm_count_over_the_cap_is_reported_rather_than_silently_truncated() {
+        // What the settings screen renders: AssemblyAI caps at 100 and
+        // truncates without complaint on the wire, so this is the data that
+        // makes the truncation visible instead.
+        let keyterms: Vec<String> = (0..150).map(|i| format!("term{i}")).collect();
+        let config = draft_config("assemblyai-realtime", "en", &keyterms).unwrap();
+        let review = kw_meeting_core::validate(&config).unwrap();
+        assert_eq!(review.keyterms_requested, 150);
+        assert_eq!(review.keyterms_used, 100);
+        assert_eq!(review.keyterms_dropped, 50);
+        assert!(review.has_warnings());
+    }
+
+    #[test]
+    fn draft_config_refuses_a_provider_nothing_describes() {
+        let err = draft_config("not-a-real-provider", "", &[]).unwrap_err();
+        assert!(err.contains("not-a-real-provider"), "{err}");
     }
 
     fn detected(provider: &'static str, in_call: bool) -> Detected {

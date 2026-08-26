@@ -342,6 +342,11 @@ pub fn run() -> anyhow::Result<()> {
             meeting::meeting_set_prompt,
             meeting::meeting_detect_lists,
             meeting::meeting_set_detect_lists,
+            meeting::meeting_language,
+            meeting::meeting_set_language,
+            meeting::meeting_keyterms,
+            meeting::meeting_set_keyterms,
+            meeting::meeting_review_config,
         ])
         .run(tauri::generate_context!())
         .context("the application exited with an error")
