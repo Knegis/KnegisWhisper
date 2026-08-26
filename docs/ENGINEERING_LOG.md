@@ -21,14 +21,23 @@ maintained in place rather than appended to, because its purpose is to be curren
 >
 > **The reachability half of the plan is done.** Chunks A, B and C took reachable integrations
 > from **8 to 45**. What is left is not screens over working backends; it is new platform
-> capability — system audio, the Windows native hooks, five WebSocket clients, calendars, MCP,
-> diarization, packaging. Chunk D is next, and the plan is right that it has no partial payoff:
-> system audio half-written unblocks nothing.
+> capability — five WebSocket clients, the last two Windows natives, calendars, MCP, diarization,
+> packaging.
 >
-> **None of A, B or C has been checked by hand.** Storing a key, watching a connection test pass,
+> **Chunk D is done and is the only part of it verified on hardware.** System audio needed no new
+> dependency (`cpal` already does WASAPI loopback) and the keyboard hook makes `Control+Super`
+> work. That unblocks meetings, which was the thing actually waiting on it — not the AEC helper.
+>
+> **Chunk C from [COMPLETION_PLAN.md](COMPLETION_PLAN.md) is done too:** four of the five hotkey
+> actions had no feature behind them and were registering real system shortcuts anyway. They are
+> now not registered, and the screen says why. The same fault was in the day-old keyboard hook,
+> which fired and never reached the dictation handler.
+>
+> **Almost nothing has been checked by hand.** Storing a key, watching a connection test pass,
 > switching cleanup on and seeing tidied text, downloading a 5.9 GB model and holding a chat —
-> none of it has been done by a person on this machine. 787 green tests are not that, and the last
-> by-hand check found five real defects that all of the tests had missed.
+> none of it has been done by a person on this machine. 826 green tests are not that, and the last
+> by-hand check found five real defects that all of the tests had missed. The two chunk-D probes
+> are the exception, and one of them turned out to have verified less than it appeared to.
 
 Maintained in place. If something here becomes false, edit it rather than adding a note.
 
@@ -131,6 +140,125 @@ Unchanged from the Phases 1–4 entry, restated here so they are not buried:
   porting matrix. Upstream pins both by commit and verifies neither.
 - ~~**`nircmd`**~~ — **dropped**, as leaned towards: third-tier Windows paste fallback only, and
   `SendInput` works.
+
+---
+
+## 2026-08-26 (honest hotkeys) — four shortcuts that registered and did nothing
+
+`HotkeyAction` declares five actions. `shortcuts.rs` dispatched with
+`if action == HotkeyAction::Dictation`, so the other four registered a real OS shortcut, claimed
+the chord from every other application on the machine, emitted an event nothing acted on, and fell
+off the end of an `if`. A user could bind chat agent to `Control+Shift+Space`, press it, and get
+silence — with the settings screen showing a tidy accelerator and no problem beside it.
+
+Same class as `electronPresent` and `recording_indicator_visible`: a confident answer from the half
+of the path that worked.
+
+### The second half of the same defect, found while fixing the first
+
+The keyboard hook that landed the day before had it too. Its callback emitted `HOTKEY_EVENT` and
+returned. Nothing called `dictation::on_hotkey`, and the frontend's `onHotkey` only writes a "last
+fired" line — so `Control+Super`, the *default* dictation hotkey, announced itself in the interface
+and dictated nothing.
+
+The probe that verified the hook is honest about what it checked: installed, fired exactly twice
+for two injected presses, uninstalled cleanly. All true. It verified that the hook *fires*, and
+"the hotkey works" is a different claim. Worth remembering the next time a probe is offered as
+evidence — ask which link it exercised, not whether it passed.
+
+### Judgement calls
+
+#### A fifth `Registration` state, rather than reusing `NotRegistrable`
+
+The plan said to report an unhandled action as `NotRegistrable` with a plain reason: no new type,
+no new rendering, and the settings screen starts telling the truth through a channel it already
+reads. Tempting, and rejected.
+
+`NotRegistrable` means *the accelerator* cannot be taken — modifier-only, or malformed — and the
+user fixes it by typing a different one. `Control+Shift+Space` is faultless. Filing it under
+"not registrable" would blame the accelerator for the absence of a feature, and this file already
+has an entry about a message that blamed a user's spelling for our own missing alias. The reasons
+matter more than the fact: they need different words because they need different actions, and only
+one of them is the user's to take.
+
+So `Unhandled { accelerator, reason }`, and `changeLabel` says "Saved. The chat agent is not built
+yet." rather than "Saved, but not working" — which would send somebody hunting for a typo in a
+correctly spelled shortcut.
+
+#### Not registered at all, rather than registered and ignored
+
+The active harm was not the silence; it was the theft. A global shortcut for an action nothing
+handles takes `Control+Shift+Space` away from every other application in exchange for nothing.
+Four of them. The chord is now left alone, and the reason string says so, because "we deliberately
+did not claim these keys" is a thing a user might want to know.
+
+#### The dispatch table is data, and that was forced by a crash
+
+The design is one function both paths read, so the register path cannot offer an accelerator the
+fire path will not handle. First attempt returned the handler itself —
+`Handler::Rust(fn(&AppHandle))` — on the reasoning that a function pointer makes the coupling
+structural: making an action live means putting a function in the table, and both paths follow from
+that one edit.
+
+It made the whole test binary unloadable. Every test in the desktop crate died at
+`STATUS_ENTRYPOINT_NOT_FOUND` (0xc0000139) *before any of them ran* — not a failure, a process that
+could not start. Bisected to the three new tests that called the lookup, and confirmed with a
+one-line probe:
+
+```rust
+#[test]
+fn probe() { let _f: fn(&AppHandle) = crate::dictation::on_hotkey; }
+```
+
+That alone reproduces it. Naming the handler as a value keeps it, and the Tauri runtime it reaches,
+alive in the test binary — and a `cargo test` executable has no WebView2 beside it. Calling it from
+inside a function no test reaches is fine, because the linker drops the whole path.
+
+**This is a general constraint on testing in this workspace, not a quirk of one file:** a unit test
+may exercise a decision about Tauri-dependent code, and may not hold a reference to the code
+itself. So `Dispatch` is a plain enum naming its handler, `unhandled_reason` is data and testable,
+and the pointer appears at the two call sites only. The compiler still enforces the coupling —
+adding a variant breaks both `match`es — which is the guarantee that was wanted, checked at each
+site instead of carried in a value.
+
+#### The startup warning loop stays quiet about it
+
+`register_all` warns per accelerator when an action has no working hotkey, with the reason, because
+"another application owns it" and "this is two modifiers and no key" need different fixes. Four
+unhandled actions would have added four warnings to every launch, all restating what the plan says.
+They log at `debug` instead. A warning that fires every time on a designed state is how a log stops
+being read.
+
+The condition is read from the dispatch table rather than inferred from the results, so it cannot
+disagree with what was actually done.
+
+#### `report_for` split out of the `hotkeys` command
+
+The command takes Tauri state, which is why the interesting part of it had no test. Splitting the
+report construction into a plain function made the two new command-level tests possible. `unusable`
+is now the union — no live accelerator, for any reason — and `unhandled` is the subset with a
+reason, because a caller asking "is this action dead?" should get one answer and a caller rendering
+it needs the words.
+
+### Also corrected
+
+`Accelerator::ModifierOnly`'s doc comment still said the hook "this application does not yet have
+on any platform". That stopped being true when the hook landed. Same defect as the frontend string
+that asserted a platform fact — a doc comment can rot into a lie as easily as a label.
+
+Added `Accelerator::text()` while I was there: three call sites were each re-deriving the
+accelerator text per variant, one of them through a match arm that was unreachable.
+
+### Left undone, deliberately
+
+The four actions still have no features. This chunk makes the interface honest about that; it does
+not build them. Their home is phase 10 in [COMPLETION_PLAN.md](COMPLETION_PLAN.md), and
+`nothing_handles_an_action_that_is_not_dictation` is a tripwire: the day one of them gains a
+handler, that test fails and asks for the plan and `PLATFORM_SUPPORT.md` to be updated in the same
+commit. Leaving the docs describing a state that has ended is how four dead hotkeys survived this
+long.
+
+826 tests, clippy, fmt, tsc, vite build and all contract gates green.
 
 ---
 

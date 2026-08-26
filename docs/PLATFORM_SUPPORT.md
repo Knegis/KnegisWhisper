@@ -176,6 +176,19 @@ because modifier-only combinations do not work there.
 | Windows mouse buttons, push-to-talk | Not built. Both need a second hook (`WH_MOUSE_LL`) or key-up routing, and neither has a consumer yet. |
 | macOS, Linux | Not built, and the reason is reported rather than the capability being silently absent: macOS needs a `CGEventTap` and the Accessibility permission that goes with it, and Wayland's global-shortcuts portal takes only chords the compositor can register. |
 
+**An accelerator being live is only half of a working hotkey.** Of the five actions
+`HotkeyAction` declares, exactly one — dictation — has anything behind it. The other four used to
+register a genuine system shortcut, take the chord away from every other application, and do
+nothing at all when pressed; the settings screen showed the accelerator with no problem beside it,
+which is the interface agreeing that it worked. They are now not registered and not hooked, and the
+screen names the action and says which feature is missing. `shortcuts::unhandled_reason` is the one
+place that knows, and both the registration path and the dispatch path read it.
+
+The same half-a-path fault reached the hook itself: it delivered the `hotkey` event and stopped, so
+`Control+Super` — the default — announced itself in the interface and started no dictation. The
+probe that verified the hook had verified that it *fires*, which is not the same claim. Both paths
+now run one dispatch table.
+
 The hook **does not consume** the keystroke. `Control+Super` still reaches the shell and Windows
 still does whatever it does with it. Consuming it is possible and is deliberately not done: an
 application that silently eats a system shortcut is indistinguishable from a broken keyboard.

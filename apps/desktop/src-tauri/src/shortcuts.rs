@@ -53,13 +53,32 @@ pub enum Registration {
         accelerator: String,
         reason: String,
     },
+    /// Nothing in the application handles this action, so the accelerator was
+    /// deliberately never offered to the platform.
+    ///
+    /// A separate state from `NotRegistrable` because the cause differs and so
+    /// does the fix. `NotRegistrable` is about the *accelerator* — modifier-only,
+    /// or malformed — and the user can fix it by typing a different one. This is
+    /// about the *action*: the accelerator is faultless and there is nothing to
+    /// type that would help, because the feature does not exist yet.
+    ///
+    /// It is also why the chord is left alone rather than claimed. Registering a
+    /// global shortcut for an action nothing handles takes those keys away from
+    /// every other application in exchange for nothing at all.
+    Unhandled {
+        accelerator: String,
+        reason: String,
+    },
 }
 
 impl Registration {
-    /// Whether this accelerator will actually fire.
+    /// Whether this accelerator will actually fire *and* reach a handler.
     ///
-    /// Both mechanisms count. The distinction between them is for the user to
-    /// read, not for the "does my hotkey work" question to hinge on.
+    /// Both mechanisms count, and only those two. The distinction between the
+    /// register and the hook is for the user to read, not for the "does my
+    /// hotkey work" question to hinge on — but `Unhandled` is not a third
+    /// mechanism, it is the absence of one, and counting it here is precisely
+    /// the lie this state was added to end.
     #[must_use]
     pub const fn succeeded(&self) -> bool {
         matches!(self, Self::Registered { .. } | Self::Hooked { .. })
@@ -90,6 +109,62 @@ pub struct HotkeyFired {
     pub accelerator: String,
 }
 
+/// What handles an action when its hotkey fires, or why nothing does.
+///
+/// The one place that knows, and that is the point. Both the registration path
+/// and the fire path read this function, and the defect it replaces was those
+/// two disagreeing: the dispatch was `if action == HotkeyAction::Dictation`, so
+/// the other four actions registered a real OS shortcut, took the chord away
+/// from every other application, and then fell off the end of an `if`. A user
+/// could bind chat agent, press it, and get silence.
+///
+/// Naming the handler rather than holding it is what keeps the two in step: this
+/// enum has one variant per handler, so every `match` on it — the register path
+/// and the hook path both — stops compiling the moment a variant is added. The
+/// compiler enforces at each site what a boolean could only promise.
+///
+/// It is data and not a `fn(&AppHandle)` for a measured reason. A unit test that
+/// merely took the address of the handler made the whole test binary
+/// unloadable: keeping the pointer alive keeps the Tauri runtime it reaches
+/// alive, and a `cargo test` executable has no WebView2 beside it, so the
+/// process died at load with `STATUS_ENTRYPOINT_NOT_FOUND` before a single test
+/// ran. `let _f: fn(&AppHandle) = crate::dictation::on_hotkey;` in a test is
+/// enough to reproduce it. So the decision is data, testable on its own, and the
+/// pointer is never named anywhere but the two call sites.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Dispatch {
+    /// Handled in Rust, so it works whether or not a window is listening.
+    Dictation,
+    /// Nothing handles it yet, and this is the sentence saying so.
+    Missing(&'static str),
+}
+
+const fn dispatch(action: HotkeyAction) -> Dispatch {
+    match action {
+        // In Rust rather than the frontend. The dashboard can be hidden, closed
+        // to the tray, or still starting up, and a hotkey that only works while
+        // a window is listening is not a global hotkey.
+        HotkeyAction::Dictation => Dispatch::Dictation,
+        HotkeyAction::ChatAgent => Dispatch::Missing("The chat agent is not built yet."),
+        HotkeyAction::VoiceAgent => Dispatch::Missing("The voice agent is not built yet."),
+        HotkeyAction::Translation => Dispatch::Missing("Translation is not built yet."),
+        HotkeyAction::Meeting => Dispatch::Missing("Meeting capture is not built yet."),
+    }
+}
+
+/// Why nothing handles this action, or `None` if something does.
+///
+/// Exposed because the settings screen has to say it once per *action*: "nothing
+/// handles the chat agent" is a fact about the action, and repeating it under
+/// each of its accelerators would just be repeating it.
+#[must_use]
+pub const fn unhandled_reason(action: HotkeyAction) -> Option<&'static str> {
+    match dispatch(action) {
+        Dispatch::Dictation => None,
+        Dispatch::Missing(why) => Some(why),
+    }
+}
+
 /// Register every accelerator in `bindings`.
 ///
 /// Unregisters everything first, so calling this after a settings change is the
@@ -116,6 +191,29 @@ pub fn register_all(
     for binding in bindings {
         let mut results = Vec::new();
 
+        // An action nothing handles is not offered to the platform at all, and
+        // every one of its accelerators says why. This comes before the
+        // classifier because the classification does not matter here: a
+        // perfectly good accelerator for an action with no handler is still
+        // dead, and registering it would claim the chord from other
+        // applications in exchange for nothing.
+        if let Some(reason) = unhandled_reason(binding.action) {
+            for accelerator in &binding.accelerators {
+                results.push(Registration::Unhandled {
+                    accelerator: accelerator.text().to_owned(),
+                    reason: format!(
+                        "{reason} The shortcut is deliberately not registered, so other \
+                         applications can still use the same keys."
+                    ),
+                });
+            }
+            reports.push(RegistrationReport {
+                action: binding.action,
+                results,
+            });
+            continue;
+        }
+
         // Everything the classifier already rejected, reported as-is rather
         // than attempted and failed.
         for accelerator in &binding.accelerators {
@@ -129,23 +227,10 @@ pub fn register_all(
                         accelerator: accelerator.clone(),
                     });
                 }
-                other => {
-                    let (accel, reason) = match other {
-                        kw_platform::hotkey::Accelerator::ModifierOnly { accelerator, .. } => {
-                            (accelerator.clone(), other.explain())
-                        }
-                        kw_platform::hotkey::Accelerator::Invalid { input, .. } => {
-                            (input.clone(), other.explain())
-                        }
-                        kw_platform::hotkey::Accelerator::Standard { accelerator } => {
-                            (accelerator.clone(), String::new())
-                        }
-                    };
-                    results.push(Registration::NotRegistrable {
-                        accelerator: accel,
-                        reason,
-                    });
-                }
+                other => results.push(Registration::NotRegistrable {
+                    accelerator: other.text().to_owned(),
+                    reason: other.explain(),
+                }),
             }
         }
 
@@ -160,40 +245,59 @@ pub fn register_all(
     }
 
     for report in &reports {
-        if !report.is_live() {
-            // Every reason, not just the fact. A count told me all five actions
-            // had failed and nothing about why, which is useless: "the platform
-            // refused it because another application owns it" and "this is two
-            // modifiers and no key" need completely different fixes, and only one
-            // of them is the user's to make.
-            for result in &report.results {
-                match result {
-                    Registration::Registered { .. } | Registration::Hooked { .. } => {}
-                    Registration::Rejected {
-                        accelerator,
-                        reason,
-                    } => tracing::warn!(
-                        action = %report.action,
-                        %accelerator,
-                        %reason,
-                        "the platform refused this accelerator"
-                    ),
-                    Registration::NotRegistrable {
-                        accelerator,
-                        reason,
-                    } => tracing::warn!(
-                        action = %report.action,
-                        %accelerator,
-                        %reason,
-                        "this accelerator cannot be registered at all"
-                    ),
-                }
-            }
-            tracing::warn!(
-                action = %report.action,
-                "no working hotkey for this action"
-            );
+        if report.is_live() {
+            continue;
         }
+
+        // An action nothing handles is a designed state, not a fault to
+        // investigate. Warning about it would put four warnings in every log on
+        // every launch, all saying what the plan already says, which is how a
+        // log stops being read. The condition is read from `handler` rather than
+        // inferred from the results, so it cannot disagree with what was done.
+        if unhandled_reason(report.action).is_some() {
+            tracing::debug!(
+                action = %report.action,
+                "nothing handles this action, so its hotkey was not registered"
+            );
+            continue;
+        }
+
+        // Every reason, not just the fact. A count told me all five actions
+        // had failed and nothing about why, which is useless: "the platform
+        // refused it because another application owns it" and "this is two
+        // modifiers and no key" need completely different fixes, and only one
+        // of them is the user's to make.
+        for result in &report.results {
+            match result {
+                Registration::Registered { .. } | Registration::Hooked { .. } => {}
+                Registration::Rejected {
+                    accelerator,
+                    reason,
+                } => tracing::warn!(
+                    action = %report.action,
+                    %accelerator,
+                    %reason,
+                    "the platform refused this accelerator"
+                ),
+                Registration::NotRegistrable {
+                    accelerator,
+                    reason,
+                }
+                | Registration::Unhandled {
+                    accelerator,
+                    reason,
+                } => tracing::warn!(
+                    action = %report.action,
+                    %accelerator,
+                    %reason,
+                    "this accelerator cannot be registered at all"
+                ),
+            }
+        }
+        tracing::warn!(
+            action = %report.action,
+            "no working hotkey for this action"
+        );
     }
 
     reports
@@ -235,6 +339,12 @@ impl Hooks {
         // reports an index rather than a name.
         let mut wanted: Vec<(HotkeyAction, String)> = Vec::new();
         for binding in bindings {
+            // An action nothing handles gets no hook either. A hook watching a
+            // chord for a dead action costs a comparison on every keystroke on
+            // the machine and delivers an event nothing acts on.
+            if unhandled_reason(binding.action).is_some() {
+                continue;
+            }
             for accelerator in &binding.accelerators {
                 if let kw_platform::hotkey::Accelerator::ModifierOnly { accelerator, .. } =
                     accelerator
@@ -263,7 +373,7 @@ impl Hooks {
 
         match kw_platform::keyhook::KeyHook::install(&accelerators, move |index| {
             // Runs on the hook thread, which is in the input path of every
-            // keystroke on the machine. Emit and return; nothing else.
+            // keystroke on the machine. Everything here has to return promptly.
             let Some((action, accelerator)) = routes.get(index) else {
                 return;
             };
@@ -273,6 +383,17 @@ impl Hooks {
             };
             if let Err(err) = app.emit(HOTKEY_EVENT, payload) {
                 tracing::warn!(error = %err, "could not deliver a hooked hotkey");
+            }
+
+            // The same dispatch the register path runs. Emitting and stopping
+            // is what this did when the hook first landed, which made
+            // `Control+Super` announce itself in the interface and dictate
+            // nothing -- the hook fired, so it looked verified, and the
+            // handler was never reached. The handler spawns, so this returns
+            // promptly enough for the input path.
+            match dispatch(*action) {
+                Dispatch::Dictation => crate::dictation::on_hotkey(&app),
+                Dispatch::Missing(_) => {}
             }
         }) {
             Ok(hook) => {
@@ -324,13 +445,16 @@ fn register_one(app: &AppHandle, action: HotkeyAction, accelerator: &str) -> Reg
                 tracing::warn!(error = %err, "could not deliver the hotkey event");
             }
 
-            // Dictation is handled here rather than in the frontend. The
-            // dashboard can be hidden, closed to the tray, or still starting up,
-            // and a hotkey that only works while a window is listening is not a
-            // global hotkey. Everything else is still forwarded for the UI to
-            // act on.
-            if action == HotkeyAction::Dictation {
-                crate::dictation::on_hotkey(&app_for_handler);
+            // Dispatch through the same table that decided this accelerator was
+            // worth registering at all. The event above is emitted either way,
+            // so the UI can still show that a key fired.
+            match dispatch(action) {
+                Dispatch::Dictation => crate::dictation::on_hotkey(&app_for_handler),
+                // Unreachable: an unhandled action is never registered, so
+                // nothing can fire. Doing nothing is still the truthful
+                // response, and this runs in the input path where a panic
+                // would take the hotkey system down with it.
+                Dispatch::Missing(_) => {}
             }
         });
 
@@ -372,6 +496,70 @@ mod tests {
             reason: "modifier only".to_owned()
         }
         .succeeded());
+    }
+
+    #[test]
+    fn nothing_handles_an_action_that_is_not_dictation() {
+        // A deliberate tripwire. When the chat agent gains a handler this test
+        // fails, which is the prompt to update the plan and PLATFORM_SUPPORT.md
+        // in the same commit -- rather than leaving them describing a state that
+        // has ended, which is how four dead hotkeys survived this long.
+        let handled: Vec<HotkeyAction> = kw_platform::hotkey::ALL_ACTIONS
+            .into_iter()
+            .filter(|a| unhandled_reason(*a).is_none())
+            .collect();
+        assert_eq!(handled, vec![HotkeyAction::Dictation]);
+    }
+
+    #[test]
+    fn every_unhandled_action_gives_a_whole_sentence() {
+        // The reason is concatenated into a user-facing string, so a fragment or
+        // a missing full stop lands in the interface as one.
+        for action in kw_platform::hotkey::ALL_ACTIONS {
+            let Some(reason) = unhandled_reason(action) else {
+                continue;
+            };
+            assert!(reason.ends_with('.'), "{action}: {reason}");
+            assert!(
+                reason.starts_with(|c: char| c.is_uppercase()),
+                "{action}: {reason}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unhandled_action_is_dead_however_good_its_accelerator_is() {
+        // `Control+Shift+Space` is perfectly registrable. The *action* is what is
+        // dead, and this is the assertion that was false before: it registered,
+        // reported success, and nothing happened when it fired.
+        let report = RegistrationReport {
+            action: HotkeyAction::ChatAgent,
+            results: vec![Registration::Unhandled {
+                accelerator: "Control+Shift+Space".to_owned(),
+                reason: "The chat agent is not built yet.".to_owned(),
+            }],
+        };
+        assert!(!report.is_live());
+        assert!(!report.results[0].succeeded());
+    }
+
+    #[test]
+    fn the_dispatch_and_the_registration_read_the_same_table() {
+        // The pair this table exists to hold together. If dictation ever stopped
+        // naming a handler, the registration path would go on offering it to the
+        // platform -- which is the shape of the original defect in reverse.
+        assert_eq!(dispatch(HotkeyAction::Dictation), Dispatch::Dictation);
+        assert!(matches!(
+            dispatch(HotkeyAction::Meeting),
+            Dispatch::Missing(_)
+        ));
+
+        // And this is deliberately as far as a test goes. Naming the handler
+        // itself -- `let _f: fn(&AppHandle) = crate::dictation::on_hotkey;` --
+        // keeps the Tauri runtime alive in the test binary, which then cannot
+        // load at all: every test in this crate dies at
+        // STATUS_ENTRYPOINT_NOT_FOUND before any of them runs. Measured, not
+        // guessed. Test the decision; leave the pointer to the call sites.
     }
 
     #[test]

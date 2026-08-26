@@ -32,6 +32,7 @@ import {
   toggleDictation,
   type Binding,
   type ShortcutHookStatus,
+  type UnhandledAction,
 } from "../lib/ipc";
 import {
   acceleratorLabel,
@@ -140,6 +141,11 @@ export function DictationView({
   }
 
   const { hotkeys, devices, canInsert, route, history } = data;
+  // Keyed by action, because that is the shape of the fact: nothing handles the
+  // chat agent, whatever it happens to be bound to.
+  const unhandled = new Map<string, string>(
+    hotkeys.unhandled.map((u: UnhandledAction) => [u.action, u.reason]),
+  );
   const state = session ?? data.session;
   const recording = state === "recording";
 
@@ -153,6 +159,17 @@ export function DictationView({
           <div key={b.action} className="row">
             <span className="row-label">{b.action}</span>
             <span className="row-value">
+              {/*
+                First, and ahead of the accelerator, because it outranks anything
+                the accelerator could say. Four of these five actions used to
+                register a real system shortcut and then do nothing whatsoever
+                when pressed — and the row showed a tidy `Control+Shift+Space`
+                with no problem beside it, which is the interface agreeing that
+                it worked.
+              */}
+              {unhandled.has(b.action) ? (
+                <em className="row-detail warn">{unhandled.get(b.action)}</em>
+              ) : null}
               {b.accelerators.length === 0 ? (
                 <em className="row-detail">none configured</em>
               ) : (
@@ -209,6 +226,14 @@ export function DictationView({
           </p>
         ) : null}
         {lastHotkey ? <Row label="Last fired" value={lastHotkey} /> : null}
+        {hotkeys.unhandled.length > 0 ? (
+          <p className="caveat">
+            {hotkeys.unhandled.length} of {hotkeys.bindings.length} actions have
+            nothing behind them yet. Their shortcuts are still saved, and they
+            are deliberately not registered with the system — so those keys stay
+            free for the applications that do something with them.
+          </p>
+        ) : null}
         <p className="caveat">
           A shortcut takes effect as soon as you set it. The dictation default,{" "}
           <code>Control+Super</code>, is two modifiers and no key, which no

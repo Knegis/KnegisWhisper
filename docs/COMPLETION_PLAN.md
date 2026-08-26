@@ -9,9 +9,9 @@ choices lives in [ENGINEERING_LOG.md](ENGINEERING_LOG.md); this file is about wh
 > letter is ambiguous between them. Where they disagree about what is done, `BUILD_PLAN.md` is the
 > one being kept current against the commits.
 >
-> **Chunks B, D, F and G have been removed from this file because they are finished**, along with
-> everything else here that has landed. The letters are not renumbered: a gap where a chunk used to
-> be is more useful than a renumbering that silently invalidates every reference to it.
+> **Chunks B, C, D, F and G have been removed from this file because they are finished**, along
+> with everything else here that has landed. The letters are not renumbered: a gap where a chunk
+> used to be is more useful than a renumbering that silently invalidates every reference to it.
 
 ## Where this actually stands
 
@@ -22,16 +22,17 @@ grouped by surface.
 The framing this file opened with — *"the dominant problem is not missing subsystems; it is built,
 tested backend with no way in"* — was right, and that problem is now largely closed. The credential
 screen, the intelligence screen, the enterprise shapes and the local LLM lifecycle all exist. What
-is left is genuinely new capability, plus two things that belonged to no plan and still do not have
-one:
+is left is genuinely new capability, plus one thing that belonged to no plan and still does not
+have one:
 
-1. **Four of five hotkeys register real OS shortcuts and do nothing.** `shortcuts.rs:332` handles
-   `HotkeyAction::Dictation` and nothing else. A user can bind chat agent, voice agent, translation
-   or meeting, press it, and get silence. Same class as the `electronPresent` bug and
-   `recording_indicator_visible`: a confident, wrong answer. Chunk C.
-2. **CI has not run on push since `afe59b4`.** The triggers are commented out "temporarily" and no
+1. **CI has not run on push since `afe59b4`.** The triggers are commented out "temporarily" and no
    reason was recorded. The macOS and Linux jobs are the only runtime evidence this project has for
    those platforms. Chunk A.
+
+The other item that used to sit here — *four of five hotkeys register real OS shortcuts and do
+nothing* — was chunk C and is fixed. Those four actions are no longer registered at all, and the
+settings screen names the action and says why. The keys they used to claim are back with the
+applications that use them.
 
 ## Order, and why
 
@@ -40,7 +41,6 @@ Ordered by integrations unlocked per unit of work, not by phase number.
 | # | Chunk | Unlocks | New subsystem? |
 | --- | --- | --- | --- |
 | A | CI back on | — | no |
-| C | Honest hotkeys | — | no |
 | E | CLI screen | 1 | no |
 | H | The two remaining Windows natives | — | yes |
 | I | Meetings screen and clients | 6 | yes |
@@ -66,30 +66,6 @@ Two additions the tree has grown since this was written, both belonging here:
   pinned target, so it does not belong in the per-push contracts job — but nothing else notices a
   release retagged in place, and a pin that is never re-measured is a pin nobody is checking. Weekly
   is enough.
-
-## C — Honest hotkeys
-
-`crates/platform/src/hotkey.rs` declares five actions; `shortcuts.rs:332` implements one.
-
-**Almost all the machinery already exists.** `shortcuts.rs` has
-`Registration::NotRegistrable { accelerator, reason }` — "not registrable in principle" — and
-`hotkey_set` already returns registrations to the frontend, which already renders them. An action
-nothing handles is simply a further reason to be not-registrable.
-
-So: give `HotkeyAction` a predicate for whether a handler exists, and have `register_all` return
-`NotRegistrable` with a plain reason instead of taking the accelerator. No new type, no new event,
-no new rendering — the settings screen starts telling the truth because the truth now travels
-through the channel it already reads.
-
-`Registration` has since gained a fifth state, `Hooked`, for a chord live through the keyboard hook
-rather than the system register. That does not change this chunk: a hooked accelerator for an action
-nothing handles is exactly as dead as a registered one, so the handler predicate has to be checked
-before either mechanism is offered.
-
-**Record the deferral properly.** Chat agent, voice agent and translation are a whole feature area —
-hotkey actions, five credential slots, the `agent_conversations`, `agent_messages`, `actions` and
-`contacts` tables, and a 420×300 "Agent overlay" window role in the porting matrix — with no phase.
-Phase 10 below is their home.
 
 ## E — CLI screen
 
@@ -168,7 +144,8 @@ CI, and signing. `tauri.conf.json` already declares nsis/dmg/appimage/deb target
 `createUpdaterArtifacts: false`, and no CI job builds any of them.
 
 **Phase 10 — agents.** Chat agent, voice agent and translation: the window role, the dispatch, the
-four `*-custom` credential slots, and the orphan tables. The home for what chunk C defers.
+four `*-custom` credential slots, and the orphan tables. The home for the three actions whose
+hotkeys now say, honestly, that nothing handles them.
 
 The five `*-custom` credential slots can now be *stored* — `Settings > Providers` lists them, with
 the caveat that a key alone configures nothing until the feature that owns the base URL exists. This
@@ -220,8 +197,6 @@ progress measure: **19 today.**
 
 By hand on Windows, which is the only thing that actually proves any of it:
 
-- **C** — bind a hotkey to chat agent and confirm the interface refuses it with a reason rather than
-  accepting it. Dictation still works.
 - **E** — `knegiswhisper health` against the port the screen displays.
 - **I** — join a call in Zoom and see detection fire; run `meeting-stream:local` end to end with
   system audio and the microphone both recording.

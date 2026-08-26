@@ -132,6 +132,14 @@ export function changeLabel(change: HotkeyChange): string {
     const taken = change.registrations.find((r) => r.state === "registered");
     return `${taken?.accelerator ?? acceleratorText(change.binding)} is live.`;
   }
+  // Nothing handles the action, which is not the same failure and must not
+  // borrow the same words. "Not working" sends somebody looking for a mistake in
+  // an accelerator that is spelled perfectly well; the shortcut is saved,
+  // correct, and waiting for a feature.
+  const unhandled = change.registrations.find((r) => r.state === "unhandled");
+  if (unhandled) {
+    return `Saved. ${unhandled.reason}`;
+  }
   // Narrowed to the refusal variants, which are the ones carrying a reason.
   const refused = change.registrations.find(
     (r) => r.state === "rejected" || r.state === "not-registrable",

@@ -50,7 +50,7 @@ platform work that no amount of UI can substitute for.
 | Phase | Status | The gap |
 | --- | --- | --- |
 | 0 — Audit and contracts | Complete | — |
-| 1 — Tauri foundation | Complete | 2 of 6 window roles exist; Linux/macOS hotkey fallbacks unwritten. Modifier-only shortcuts work on Windows through a keyboard hook |
+| 1 — Tauri foundation | Complete | 2 of 6 window roles exist; Linux/macOS hotkey fallbacks unwritten. Modifier-only shortcuts work on Windows through a keyboard hook. Four of the five hotkey actions have no feature behind them and are now reported as such rather than registered |
 | — Chunk A (shell, types, Providers) | **Done, unchecked by hand** | Storing a key and passing a connection test has not been done by a person on this machine |
 | 2 — Dictation | **Verified on Windows** | 6 of 7 transcription providers reachable; Tinfoil declined pending enclave attestation. sherpa local ASR blocked — see B4 |
 | 3 — Reasoning | Complete, enterprise unverified | All three enterprise shapes written and tested against vectors and fixtures; no live call. No llama-server sidecar for `ChatRoute::Local`, which already points at `127.0.0.1:8221` |
@@ -477,7 +477,18 @@ location, reusing what `IntegrationsApi` already renders.
    named screens nobody had written.
 3. **Never report success without evidence.** The `CaptureExclusion`/`Permissions`/`Verification`
    pattern extends to every new capability: a state, and what verified it.
-4. **Each chunk ends with a by-hand check on Windows**, in the shape that found five real defects
+   *Corollary, learned the hard way twice:* it applies to a capability that exists but has nothing
+   behind it, not only to one that failed. Four hotkeys registered successfully and dispatched
+   nowhere, and the keyboard hook fired for `Control+Super` and dictated nothing — both reported
+   success from the half of the path that worked. See the honest-hotkeys entry in
+   [ENGINEERING_LOG.md](ENGINEERING_LOG.md).
+4. **The agent features have no phase in this plan.** Chat agent, voice agent and translation are a
+   whole feature area — three hotkey actions, five `*-custom` credential slots, the
+   `agent_conversations`, `agent_messages`, `actions` and `contacts` tables, and a 420×300 "Agent
+   overlay" window role in [PORTING_MATRIX.md](PORTING_MATRIX.md) — and phases 0–9 do not contain
+   them. [COMPLETION_PLAN.md](COMPLETION_PLAN.md) defines phase 10 as their home; this plan does
+   not cover it.
+5. **Each chunk ends with a by-hand check on Windows**, in the shape that found five real defects
    on 2026-08-25. The bench check in `PHASES_0_6_COMPLETION_PLAN.md` is the template.
 
 ## Blocked, and what is not blocked by it

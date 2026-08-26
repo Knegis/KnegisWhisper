@@ -69,6 +69,18 @@ pub async fn settings_keys(state: State<'_, AppState>) -> CmdResult<Vec<String>>
 
 /* -------------------------------------------------------------------- hotkeys */
 
+/// An action nothing in the application handles, and the sentence saying so.
+///
+/// Reported per action rather than per accelerator because that is the shape of
+/// the fact. Nothing about the accelerator is wrong; there is no handler behind
+/// it, and typing a different chord would not change that.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct UnhandledAction {
+    pub action: HotkeyAction,
+    pub reason: String,
+}
+
 /// One action's hotkeys, classified, with any problems spelled out.
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -76,8 +88,14 @@ pub struct HotkeyReport {
     pub bindings: Vec<Binding>,
     /// Accelerators claimed by more than one action.
     pub conflicts: Vec<hotkey::Conflict>,
-    /// Actions with no working hotkey at all.
+    /// Actions with no working hotkey at all, for any reason — a bad accelerator
+    /// or a missing handler. The union, so a caller asking "is this action
+    /// dead?" gets one answer.
     pub unusable: Vec<HotkeyAction>,
+    /// The subset of `unusable` that is dead because nothing handles it, with
+    /// the reason. Separate because the two need different words: one is the
+    /// user's to fix and the other is not.
+    pub unhandled: Vec<UnhandledAction>,
 }
 
 /// Read the configured hotkeys and say what will actually work.
@@ -88,19 +106,44 @@ pub struct HotkeyReport {
 /// key, so it comes back as a problem with an explanation.
 #[tauri::command]
 pub async fn hotkeys(state: State<'_, AppState>) -> CmdResult<HotkeyReport> {
-    let bindings = load_bindings(&state).await?;
+    Ok(report_for(load_bindings(&state).await?))
+}
+
+/// Build the report from bindings that have already been loaded.
+///
+/// Split from the command so a test can reach it. The command takes Tauri state;
+/// the interesting part — which actions are dead, and whether the reason is the
+/// user's to fix — has nothing to do with Tauri, and leaving it inside the
+/// command is what made it untested.
+fn report_for(bindings: Vec<Binding>) -> HotkeyReport {
     let conflicts = hotkey::conflicts(&bindings);
+
+    // Asked of the registration module rather than recomputed, because that is
+    // the module that decides. `Binding::is_usable` can only speak about the
+    // accelerator: it called chat agent's `Control+Shift+Space` usable, and it
+    // was right about the accelerator and wrong about the hotkey.
+    let unhandled: Vec<UnhandledAction> = hotkey::ALL_ACTIONS
+        .into_iter()
+        .filter_map(|action| {
+            crate::shortcuts::unhandled_reason(action).map(|reason| UnhandledAction {
+                action,
+                reason: reason.to_owned(),
+            })
+        })
+        .collect();
+
     let unusable = bindings
         .iter()
-        .filter(|b| !b.is_usable())
+        .filter(|b| !b.is_usable() || unhandled.iter().any(|u| u.action == b.action))
         .map(|b| b.action)
         .collect();
 
-    Ok(HotkeyReport {
+    HotkeyReport {
         bindings,
         conflicts,
         unusable,
-    })
+        unhandled,
+    }
 }
 
 /// Load every action's binding from settings, falling back to the default.
@@ -885,6 +928,54 @@ mod tests {
         } else {
             assert!(problem.contains("does nothing"), "{problem}");
         }
+    }
+
+    #[tokio::test]
+    async fn an_action_nothing_handles_is_reported_dead_with_the_reason() {
+        let s = state().await;
+        // A faultless accelerator for an action with no handler. Before this,
+        // `Control+Shift+Space` registered with the platform, reported success,
+        // took the chord away from every other application, and did nothing.
+        settings::set(
+            s.db().pool(),
+            &HotkeyAction::ChatAgent.settings_key(),
+            &"Control+Shift+Space",
+        )
+        .await
+        .unwrap();
+
+        let report = report_for(load_bindings(&s).await.unwrap());
+
+        let chat = report
+            .bindings
+            .iter()
+            .find(|b| b.action == HotkeyAction::ChatAgent)
+            .unwrap();
+        // The accelerator itself is still fine, and the report still says so.
+        // The two facts are separate and both are reported.
+        assert!(chat.is_usable(), "the accelerator is not the problem");
+        assert!(chat.problems().is_empty());
+
+        let reason = report
+            .unhandled
+            .iter()
+            .find(|u| u.action == HotkeyAction::ChatAgent)
+            .map(|u| u.reason.clone())
+            .expect("chat agent has no handler, so it must appear here");
+        assert!(reason.contains("not built yet"), "{reason}");
+
+        // And it counts as unusable, which is the question the interface asks.
+        assert!(report.unusable.contains(&HotkeyAction::ChatAgent));
+    }
+
+    #[tokio::test]
+    async fn only_dictation_is_missing_from_the_unhandled_list() {
+        let s = state().await;
+        let report = report_for(load_bindings(&s).await.unwrap());
+
+        let unhandled: Vec<HotkeyAction> = report.unhandled.iter().map(|u| u.action).collect();
+        assert!(!unhandled.contains(&HotkeyAction::Dictation));
+        assert_eq!(unhandled.len(), hotkey::ALL_ACTIONS.len() - 1);
     }
 
     #[tokio::test]

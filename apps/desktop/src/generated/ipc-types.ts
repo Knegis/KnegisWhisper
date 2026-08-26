@@ -168,6 +168,15 @@ export type Accelerator = { "kind": "standard", accelerator: string, } | { "kind
 export type Binding = { action: HotkeyAction, accelerators: Array<Accelerator>, };
 
 /**
+ * An action nothing in the application handles, and the sentence saying so.
+ *
+ * Reported per action rather than per accelerator because that is the shape of
+ * the fact. Nothing about the accelerator is wrong; there is no handler behind
+ * it, and typing a different chord would not change that.
+ */
+export type UnhandledAction = { action: HotkeyAction, reason: string, };
+
+/**
  * A conflict between two actions bound to the same accelerator.
  */
 export type Conflict = { accelerator: string, actions: Array<HotkeyAction>, };
@@ -181,14 +190,22 @@ export type HotkeyReport = { bindings: Array<Binding>,
  */
 conflicts: Array<Conflict>,
 /**
- * Actions with no working hotkey at all.
+ * Actions with no working hotkey at all, for any reason — a bad accelerator
+ * or a missing handler. The union, so a caller asking "is this action
+ * dead?" gets one answer.
  */
-unusable: Array<HotkeyAction>, };
+unusable: Array<HotkeyAction>,
+/**
+ * The subset of `unusable` that is dead because nothing handles it, with
+ * the reason. Separate because the two need different words: one is the
+ * user's to fix and the other is not.
+ */
+unhandled: Array<UnhandledAction>, };
 
 /**
  * What happened when we tried to register one accelerator.
  */
-export type Registration = { "state": "registered", accelerator: string, } | { "state": "hooked", accelerator: string, } | { "state": "rejected", accelerator: string, reason: string, } | { "state": "not-registrable", accelerator: string, reason: string, };
+export type Registration = { "state": "registered", accelerator: string, } | { "state": "hooked", accelerator: string, } | { "state": "rejected", accelerator: string, reason: string, } | { "state": "not-registrable", accelerator: string, reason: string, } | { "state": "unhandled", accelerator: string, reason: string, };
 
 /**
  * What changing one action's hotkey actually achieved.
