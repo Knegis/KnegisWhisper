@@ -342,6 +342,30 @@ pub fn client(id: &str) -> Option<Client> {
     }
 }
 
+/// The credential slot a client resolves a key from, or `None` for a client
+/// that needs no cloud credential.
+///
+/// Deliberately exhaustive with **no catch-all arm**: adding a `Client`
+/// variant is a compile error here until someone states its slot. That
+/// property is the point of this function existing at all. Before it, nothing
+/// forced the question: `MeetingRuntime::start` built its
+/// `MeetingProviderConfig` with `key_ref: None` unconditionally, so
+/// `OpenAiRealtime` shipped with `openai::token` refusing every connection
+/// attempt while the integration manifest claimed `reachable: true`. A missing
+/// arm here now fails the build instead of failing a socket three seconds
+/// after the user clicked "start".
+///
+/// The returned string is a slot name, not a [`kw_security::KeyRef`] — turning
+/// it into one, and deciding what an absent credential means, is the caller's
+/// job. This function only says which slot a client would use.
+#[must_use]
+pub const fn credential_slot(client: Client) -> Option<&'static str> {
+    match client {
+        Client::LocalWindow => None,
+        Client::OpenAiRealtime => Some("openai"),
+    }
+}
+
 /// Why a provider is *refused* rather than merely unbuilt.
 ///
 /// The distinction matters to the person reading the screen: one of these will
@@ -523,6 +547,57 @@ mod tests {
             .filter(|id| client(id).is_some())
             .collect();
         assert_eq!(with_clients, vec!["openai-realtime", "local"]);
+    }
+
+    #[test]
+    fn local_window_needs_no_credential_and_openai_realtime_names_its_slot() {
+        assert_eq!(credential_slot(Client::LocalWindow), None);
+        assert_eq!(credential_slot(Client::OpenAiRealtime), Some("openai"));
+    }
+
+    /// The tripwire the brief asks for, and the one that would have caught the
+    /// `key_ref: None` defect: every client other than the local one must
+    /// resolve a slot the provider registry actually declares. A slot named
+    /// here that the registry does not know about would be unreachable no
+    /// matter what a user stored, which is the silent-failure shape this test
+    /// exists to rule out.
+    ///
+    /// Driven from [`PROVIDERS`] and [`client`] rather than a hard-coded list
+    /// of `Client` variants, so it keeps checking every cloud client as more
+    /// land -- each one arrives with its `credential_slot` arm in the same
+    /// commit as its `Client` variant, and this asserts the registry side of
+    /// that same commit was not forgotten.
+    #[test]
+    fn every_cloud_client_resolves_a_slot_the_registry_declares() {
+        let registry = kw_provider_registry::registry()
+            .unwrap_or_else(|e| panic!("provider registry must parse: {e}"));
+        let slots = registry.credential_slots();
+
+        let mut checked = 0;
+        for provider in PROVIDERS {
+            let Some(client) = client(provider.id) else {
+                continue;
+            };
+            if client == Client::LocalWindow {
+                continue;
+            }
+            let slot = credential_slot(client).unwrap_or_else(|| {
+                panic!(
+                    "{} has a client but credential_slot returns None",
+                    provider.id
+                )
+            });
+            assert!(
+                slots.contains(slot),
+                "{} resolves slot {slot:?}, which config/provider-registry.json does not declare",
+                provider.id
+            );
+            checked += 1;
+        }
+        assert!(
+            checked > 0,
+            "no cloud client was checked -- this test would pass vacuously"
+        );
     }
 
     #[test]

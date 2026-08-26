@@ -536,6 +536,44 @@ impl std::fmt::Debug for MeetingRuntime {
     }
 }
 
+/// Resolve the credential reference `client` should connect with, refusing
+/// with a message naming the settings screen when its slot has nothing
+/// stored.
+///
+/// A free function taking `&dyn CredentialStore` rather than a
+/// `MeetingRuntime` method, so it can be unit-tested against a
+/// `MemoryCredentialStore` with no `AppHandle` in sight. It only ever calls
+/// [`kw_security::CredentialStore::contains`], never `get`: this is the
+/// controller deciding whether to proceed, not the moment a secret is
+/// needed, so it must never hold one.
+///
+/// This is the fix for a real defect: `start` used to build its
+/// `MeetingProviderConfig` with `key_ref: None` unconditionally, so
+/// `openai::token` refused every OpenAI Realtime connection attempt no matter
+/// what was stored, and the failure only ever surfaced from inside `connect`
+/// -- a socket error, not this message.
+fn resolve_key_ref(
+    provider_id: &str,
+    client: Client,
+    credentials: &dyn kw_security::CredentialStore,
+) -> Result<Option<kw_security::KeyRef>, String> {
+    let Some(slot) = kw_meeting_core::credential_slot(client) else {
+        return Ok(None);
+    };
+
+    let key_ref = kw_security::KeyRef::new(slot)
+        .ok_or_else(|| format!("the credential slot {slot:?} for this provider is not valid"))?;
+
+    if !credentials.contains(&key_ref) {
+        let name = kw_meeting_core::capabilities(provider_id).map_or(provider_id, |c| c.name);
+        return Err(format!(
+            "no {name} key is stored. Add one under Settings > Providers."
+        ));
+    }
+
+    Ok(Some(key_ref))
+}
+
 impl MeetingRuntime {
     #[must_use]
     pub fn new(
@@ -638,22 +676,18 @@ impl MeetingRuntime {
         kw_storage::paths::data_dir().join("meetings")
     }
 
-    /// Build the provider for `id`.
+    /// Build the provider for an already-resolved `client`.
     ///
     /// An exhaustive match on [`Client`], which is the point of it being data: a
     /// new client stops this compiling until it says how to build one, and a
-    /// provider with no client cannot reach here at all.
+    /// provider with no client cannot reach here at all. Resolving the id to a
+    /// `Client` is the caller's job now, because `start` also needs it to look
+    /// up the credential slot before this is called.
     async fn provider(
         &self,
-        id: &str,
+        client: Client,
         events: mpsc::UnboundedSender<TranscriptEvent>,
     ) -> Result<Box<dyn MeetingTranscriptionProvider>, String> {
-        let client =
-            kw_meeting_core::client(id).ok_or_else(|| match kw_meeting_core::declined(id) {
-                Some(reason) => reason.to_owned(),
-                None => format!("there is no meeting client for {id:?}"),
-            })?;
-
         match client {
             Client::LocalWindow => {
                 let port =
@@ -706,8 +740,21 @@ impl MeetingRuntime {
             return Err("a meeting is already being recorded".to_owned());
         }
 
+        let client =
+            kw_meeting_core::client(provider_id).ok_or_else(|| match kw_meeting_core::declined(
+                provider_id,
+            ) {
+                Some(reason) => reason.to_owned(),
+                None => format!("there is no meeting client for {provider_id:?}"),
+            })?;
+
+        // Fail before anything is opened, not three seconds later at the
+        // socket. See `resolve_key_ref`'s doc comment for the defect this
+        // replaces.
+        let key_ref = resolve_key_ref(provider_id, client, self.credentials.as_ref())?;
+
         let (events_tx, events_rx) = mpsc::unbounded_channel();
-        let mut provider = self.provider(provider_id, events_tx).await?;
+        let mut provider = self.provider(client, events_tx).await?;
 
         let caps = provider.capabilities();
         // The provider's own first declared rate, and the pump converts to it.
@@ -726,7 +773,7 @@ impl MeetingRuntime {
             model: None,
             language: None,
             keyterms: Vec::new(),
-            key_ref: None,
+            key_ref,
             sample_rate: session_rate,
         };
         provider.connect(config).await.map_err(|e| e.to_string())?;
@@ -1155,6 +1202,10 @@ pub async fn meeting_set_detect_lists(
 )]
 mod tests {
     use super::*;
+    // Only for `resolve_key_ref`'s tests, to call `set`/`contains` on a
+    // `MemoryCredentialStore` by trait method rather than a fully-qualified
+    // path.
+    use kw_security::CredentialStore as _;
 
     #[test]
     fn pcm_round_trips_through_the_one_encoder() {
@@ -1217,6 +1268,59 @@ mod tests {
             let client = kw_meeting_core::client(provider.id);
             assert_eq!(allowed, client.is_some(), "{}", provider.id);
         }
+    }
+
+    // `resolve_key_ref` is a free function taking `&dyn CredentialStore`
+    // precisely so these can run with no `AppHandle`, no Tauri runtime, and no
+    // real keychain -- see its doc comment for why holding a reference to
+    // Tauri-dependent code in a test is not an option here.
+
+    #[test]
+    fn local_needs_no_credential_even_when_the_store_is_empty() {
+        let store = kw_security::MemoryCredentialStore::new();
+        let key_ref = resolve_key_ref("local", Client::LocalWindow, &store).unwrap();
+        assert_eq!(key_ref, None);
+    }
+
+    #[test]
+    fn openai_realtime_refuses_to_start_naming_the_settings_screen_when_nothing_is_stored() {
+        // The tripwire for the defect this task fixes: `key_ref: None` used to
+        // reach `connect` regardless, so the failure a user saw was a socket
+        // error with no mention of where to fix it.
+        let store = kw_security::MemoryCredentialStore::new();
+        let err = resolve_key_ref("openai-realtime", Client::OpenAiRealtime, &store).unwrap_err();
+        assert!(err.contains("Settings > Providers"), "{err}");
+    }
+
+    #[test]
+    fn openai_realtime_gets_past_the_check_once_a_key_is_stored() {
+        let store = kw_security::MemoryCredentialStore::new();
+        store
+            .set(
+                &kw_security::KeyRef::new("openai").unwrap(),
+                &kw_security::Secret::new("sk-test".to_owned()),
+            )
+            .unwrap();
+
+        let key_ref = resolve_key_ref("openai-realtime", Client::OpenAiRealtime, &store).unwrap();
+        assert_eq!(key_ref, kw_security::KeyRef::new("openai"));
+    }
+
+    #[test]
+    fn a_blank_stored_credential_is_treated_as_absent() {
+        // `CredentialStore::contains` already treats whitespace-only as empty;
+        // this asserts the controller's refusal actually depends on that, not
+        // on some looser check of its own.
+        let store = kw_security::MemoryCredentialStore::new();
+        store
+            .set(
+                &kw_security::KeyRef::new("openai").unwrap(),
+                &kw_security::Secret::new("   ".to_owned()),
+            )
+            .unwrap();
+
+        let err = resolve_key_ref("openai-realtime", Client::OpenAiRealtime, &store).unwrap_err();
+        assert!(err.contains("Settings > Providers"), "{err}");
     }
 
     fn detected(provider: &'static str, in_call: bool) -> Detected {

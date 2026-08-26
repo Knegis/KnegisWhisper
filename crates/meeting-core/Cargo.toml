@@ -34,3 +34,7 @@ kw-transcription-core.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
+# Only for the test that checks every cloud client's credential slot against
+# config/provider-registry.json -- the mapping itself is a plain function over
+# `Client` with no registry dependency at runtime.
+kw-provider-registry.workspace = true
