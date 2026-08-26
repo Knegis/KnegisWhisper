@@ -157,6 +157,15 @@ says "seen to match". Everything else about chunk E is green tests.
    all, which is item 7 below.
 7. **Dictate while a meeting is recording** and check the tray tooltip, the
    overlay and the notification window all say something true at once.
+8. **Record a meeting through OpenAI Realtime**, with the key that exists on this
+   machine. Nothing about it has touched a live service: the request shaping and
+   the event grammar are fixtures, and a 401 from a malformed header would look
+   exactly like a network failure until somebody tries.
+9. **A meeting longer than an hour through OpenAI Realtime.** Sixty minutes is a
+   hard server cap and the client rebuilds both sockets two minutes early. The
+   transcript must carry `reconnects: 1` and must not have lost a sentence at the
+   seam. This is the only provider where that path exists, and no fixture reaches
+   it.
 
 ### Still unchecked, and needs a person at the machine
 

@@ -228,11 +228,18 @@ pub enum MeetingOutcome {
 
 /* ------------------------------------------------------------ the recorder */
 
-/// Audio drained from both captures at one moment, mono at 16 kHz.
+/// Audio drained from both captures at one moment, mono.
+///
+/// At a rate the *recorder* chose, not the provider's. The recorder cannot know
+/// what the session wants — OpenAI Realtime takes 24 kHz and whisper 16 — so it
+/// brings both devices to one rate, says which, and leaves the last conversion
+/// to the pump, which knows.
 #[derive(Debug)]
 struct Drained {
     mic: Vec<f32>,
     system: Vec<f32>,
+    /// The rate `mic` and `system` are at.
+    sample_rate: u32,
 }
 
 enum RecorderCommand {
@@ -340,6 +347,12 @@ fn record(
 
     // A closure so the tick and the final drain cannot diverge.
     let drain_once = |writer: &mut WavWriter, mixer: &mut MixFeed| {
+        // Downmixed and brought to one rate here, because the two devices need
+        // not agree: a 44.1 kHz microphone and a 48 kHz output endpoint is an
+        // ordinary pairing, and mixing them without a common rate would drift.
+        // 16 kHz because that is what the file on disk is for -- the
+        // whole-recording pass at the end -- and a provider wanting something
+        // else gets it from the pump.
         let mic_track = mic.drain();
         let mic_mono = wav::resample_to_target(
             &wav::to_mono(&mic_track.samples, mic_track.channels),
@@ -370,6 +383,7 @@ fn record(
         audio.send(Drained {
             mic: mic_mono,
             system: system_mono,
+            sample_rate: wav::TARGET_SAMPLE_RATE,
         })
     };
 
@@ -497,6 +511,9 @@ pub struct MeetingRuntime {
     app: AppHandle,
     db: Db,
     policy: NetworkPolicy,
+    /// Resolved only at the moment a cloud socket is opened. Nothing in the
+    /// meeting configuration holds a secret.
+    credentials: Arc<dyn kw_security::CredentialStore>,
     /// Where the local model server is listening, and what it loaded.
     local: crate::local_model::SharedLocal,
     live: Mutex<Option<Live>>,
@@ -525,12 +542,14 @@ impl MeetingRuntime {
         app: AppHandle,
         db: Db,
         policy: NetworkPolicy,
+        credentials: Arc<dyn kw_security::CredentialStore>,
         local: crate::local_model::SharedLocal,
     ) -> Self {
         Self {
             app,
             db,
             policy,
+            credentials,
             live: Mutex::new(None),
             local,
             watch: Mutex::new((Watcher::default(), Vec::new())),
@@ -662,6 +681,10 @@ impl MeetingRuntime {
                     LocalWindowProvider::new(Arc::new(server)).with_live_events(events),
                 ))
             }
+            Client::OpenAiRealtime => Ok(Box::new(
+                kw_meeting_core::openai_socket::OpenAiRealtime::new(Arc::clone(&self.credentials))
+                    .with_live_events(events),
+            )),
         }
     }
 
@@ -687,23 +710,25 @@ impl MeetingRuntime {
         let mut provider = self.provider(provider_id, events_tx).await?;
 
         let caps = provider.capabilities();
+        // The provider's own first declared rate, and the pump converts to it.
+        // This used to be hardcoded to 16 kHz, which meant OpenAI Realtime -- 24
+        // kHz only -- could never have connected at all: `connect` would have
+        // refused every time, correctly, and the client would have looked broken.
+        let session_rate = *caps.sample_rates.first().ok_or_else(|| {
+            format!(
+                "{} declares no sample rate, so nothing can be sent to it",
+                caps.name
+            )
+        })?;
+
         let config = MeetingProviderConfig {
             provider: provider_id.to_owned(),
             model: None,
             language: None,
             keyterms: Vec::new(),
             key_ref: None,
-            // The captures are resampled to this before anything sees them, so
-            // offering a rate the provider does not take would be a bug here
-            // rather than a choice the user made.
-            sample_rate: wav::TARGET_SAMPLE_RATE,
+            sample_rate: session_rate,
         };
-        if !caps.sample_rates.contains(&config.sample_rate) {
-            return Err(format!(
-                "{} takes {:?} Hz audio and everything here is {} Hz",
-                caps.name, caps.sample_rates, config.sample_rate
-            ));
-        }
         provider.connect(config).await.map_err(|e| e.to_string())?;
 
         let path = Self::recording_dir().join(format!(
@@ -712,7 +737,13 @@ impl MeetingRuntime {
         ));
         let (audio, commands, sources) = spawn_recorder(path, system_audio)?;
 
-        let pump = tokio::spawn(pump(provider, audio, events_rx, self.app.clone()));
+        let pump = tokio::spawn(pump(
+            provider,
+            session_rate,
+            audio,
+            events_rx,
+            self.app.clone(),
+        ));
 
         *held = Some(Live {
             provider_id: provider_id.to_owned(),
@@ -962,6 +993,7 @@ impl MeetingRuntime {
 /// Feed the provider what the recorder forwards, emitting transcript as it comes.
 async fn pump(
     mut provider: Box<dyn MeetingTranscriptionProvider>,
+    session_rate: u32,
     mut audio: mpsc::UnboundedReceiver<Drained>,
     mut events: mpsc::UnboundedReceiver<TranscriptEvent>,
     app: AppHandle,
@@ -974,8 +1006,13 @@ async fn pump(
             if samples.is_empty() {
                 continue;
             }
+            // The last conversion, and the only place that knows both rates.
+            // Sending 16 kHz audio to a provider expecting 24 would transcribe a
+            // stream of chipmunks rather than fail, which is the worst kind of
+            // wrong.
+            let at_rate = wav::resample(&samples, drained.sample_rate, session_rate);
             let chunk = AudioChunk {
-                pcm: pcm_bytes(&samples),
+                pcm: pcm_bytes(&at_rate, session_rate),
                 source,
             };
             provider.send_audio(chunk).await?;
@@ -1001,10 +1038,14 @@ async fn pump(
 }
 
 /// Mono `f32` as the 16-bit PCM a provider takes.
-fn pcm_bytes(samples: &[f32]) -> Vec<u8> {
+///
+/// The rate is only carried in the header this then strips, so it changes
+/// nothing about the bytes — but passing it means the call site says what rate
+/// the samples are, which is the thing that was wrong here before.
+fn pcm_bytes(samples: &[f32], sample_rate: u32) -> Vec<u8> {
     // Through the encoder and back out, so there is one clamp-and-scale in the
     // workspace rather than a second copy that could round differently.
-    let wav = wav::encode_wav(samples, wav::TARGET_SAMPLE_RATE);
+    let wav = wav::encode_wav(samples, sample_rate);
     wav.get(44..).unwrap_or_default().to_vec()
 }
 
@@ -1121,7 +1162,7 @@ mod tests {
         // goes through `encode_wav` and strips the header. If that ever stops
         // producing 44 bytes of header, this catches it.
         let samples = vec![0.0_f32, 0.5, -0.5, 1.0, -1.0];
-        let pcm = pcm_bytes(&samples);
+        let pcm = pcm_bytes(&samples, wav::TARGET_SAMPLE_RATE);
         assert_eq!(pcm.len(), samples.len() * 2);
         assert_eq!(wav::from_pcm(&pcm).len(), samples.len());
 

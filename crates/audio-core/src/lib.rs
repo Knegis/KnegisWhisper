@@ -30,4 +30,4 @@ pub use meeting::{MixFeed, Window, WindowFeed};
 pub use mix::{mix, mix_to_wav, Mixed, Track};
 pub use system_audio::{SystemAudioSupport, SystemCapture};
 pub use vad::{silero_enabled_for, Context, SileroPreferences, VadConfig};
-pub use wav::{duration_ms, prepare, WavWriter, TARGET_SAMPLE_RATE};
+pub use wav::{duration_ms, prepare, resample, WavWriter, TARGET_SAMPLE_RATE};

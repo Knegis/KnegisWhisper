@@ -965,7 +965,9 @@ mod tests {
         // The whole point of sharing the rules. A vendor service the brief
         // removes must not be reachable by changing the scheme.
         for url in [
+            // domain-scanner:allow-next-line a negative test must name the host it asserts is blocked
             "wss://api.openwhispr.com/realtime",
+            // domain-scanner:allow-next-line a negative test must name the host it asserts is blocked
             "wss://mcp.openwhispr.com/stream",
         ] {
             let err = validate_websocket(url, TRANSCRIPTION).unwrap_err();
@@ -1002,6 +1004,7 @@ mod tests {
         assert_eq!(parsed.path(), "/");
 
         // And the blocklist still applies to a host that arrives this way.
+        // domain-scanner:allow-next-line a negative test must name the host it asserts is blocked
         let err = validate_websocket("wss:///api.openwhispr.com", TRANSCRIPTION).unwrap_err();
         assert!(
             matches!(err, PolicyError::BlockedVendorHost { .. }),

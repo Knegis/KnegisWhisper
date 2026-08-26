@@ -25,6 +25,8 @@
 
 pub mod capabilities;
 pub mod local;
+pub mod openai;
+pub mod openai_socket;
 
 pub use capabilities::{
     availability, capabilities, client, declined, is_allowed, listing, Client, ClientAvailability,

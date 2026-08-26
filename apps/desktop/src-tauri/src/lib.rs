@@ -136,6 +136,8 @@ pub fn run() -> anyhow::Result<()> {
 
             let db = state.db().clone();
             let credentials = state.credentials_arc();
+            // Cloned before it is moved into the dictation runtime below.
+            let meeting_credentials = std::sync::Arc::clone(&credentials);
             let policy = state.policy().clone();
             // Cloned before `policy` is moved into the dictation runtime below.
             let meeting_policy = policy.clone();
@@ -224,6 +226,7 @@ pub fn run() -> anyhow::Result<()> {
                 handle.clone(),
                 db.clone(),
                 meeting_policy,
+                meeting_credentials,
                 local.shared(),
             ));
             // Polls the process table while idle and offers to record a meeting

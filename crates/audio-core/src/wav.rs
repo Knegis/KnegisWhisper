@@ -58,15 +58,27 @@ pub fn to_mono(interleaved: &[f32], channels: u16) -> Vec<f32> {
 
 /// Resample mono audio to [`TARGET_SAMPLE_RATE`] by linear interpolation.
 ///
-/// Returns the input unchanged when it is already at the target rate, so the
-/// common case costs nothing.
+/// The whisper case, which is most of them. [`resample`] is the same thing for a
+/// provider that wants a different rate — OpenAI Realtime takes 24 kHz only, and
+/// treating 16 kHz as universal is how a stream of chipmunks gets sent to it.
 #[must_use]
 pub fn resample_to_target(samples: &[f32], from_rate: u32) -> Vec<f32> {
-    if from_rate == TARGET_SAMPLE_RATE || from_rate == 0 || samples.len() < 2 {
+    resample(samples, from_rate, TARGET_SAMPLE_RATE)
+}
+
+/// Resample mono audio between any two rates by linear interpolation.
+///
+/// Returns the input unchanged when the rates match, so the common case costs
+/// nothing. Linear interpolation is adequate for speech going into a speech
+/// model and has no dependencies; it is not adequate for music, and nothing here
+/// carries music.
+#[must_use]
+pub fn resample(samples: &[f32], from_rate: u32, to_rate: u32) -> Vec<f32> {
+    if from_rate == to_rate || from_rate == 0 || to_rate == 0 || samples.len() < 2 {
         return samples.to_vec();
     }
 
-    let ratio = f64::from(TARGET_SAMPLE_RATE) / f64::from(from_rate);
+    let ratio = f64::from(to_rate) / f64::from(from_rate);
     #[allow(
         clippy::cast_possible_truncation,
         clippy::cast_precision_loss,
@@ -604,5 +616,45 @@ mod tests {
         assert_eq!(samples, 16_000 * 40 * 60);
         let expected = HEADER_LEN as u64 + samples * 2;
         assert_eq!(std::fs::metadata(&path).unwrap().len(), expected);
+    }
+
+    /* ------------------------------------------------- resampling generally */
+
+    #[test]
+    fn resampling_upwards_lengthens_by_the_ratio() {
+        // The case that made this general: OpenAI Realtime takes 24 kHz only.
+        let one_second: Vec<f32> = (0..16_000)
+            .map(|i| ((i as f32) / 200.0).sin() * 0.5)
+            .collect();
+
+        let up = resample(&one_second, 16_000, 24_000);
+        assert_eq!(up.len(), 24_000, "one second is still one second");
+
+        let back = resample(&up, 24_000, 16_000);
+        assert_eq!(back.len(), 16_000);
+    }
+
+    #[test]
+    fn resampling_between_equal_rates_is_free_and_exact() {
+        let samples = vec![0.1_f32, -0.2, 0.3];
+        assert_eq!(resample(&samples, 24_000, 24_000), samples);
+    }
+
+    #[test]
+    fn a_zero_rate_is_returned_unchanged_rather_than_dividing_by_it() {
+        let samples = vec![0.1_f32, 0.2];
+        assert_eq!(resample(&samples, 0, 24_000), samples);
+        assert_eq!(resample(&samples, 16_000, 0), samples);
+    }
+
+    #[test]
+    fn the_whisper_helper_is_the_general_one_at_sixteen_kilohertz() {
+        // One implementation, so a fix to the interpolation cannot reach one
+        // caller and miss the other.
+        let samples: Vec<f32> = (0..4_800).map(|i| ((i as f32) / 90.0).sin()).collect();
+        assert_eq!(
+            resample_to_target(&samples, 48_000),
+            resample(&samples, 48_000, TARGET_SAMPLE_RATE)
+        );
     }
 }

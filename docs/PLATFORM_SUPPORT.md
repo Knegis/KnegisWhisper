@@ -152,6 +152,33 @@ the answer names the device that would be captured rather than describing the pl
 stream, and reports whether the callback fired, whether it produced silence, and what the mixer did
 with it — three different facts that a single "it works" would collapse.
 
+## Meeting transcription providers
+
+| Provider | Client | Verified |
+| --- | --- | --- |
+| Local windowed model | repeated `/inference` passes over the local `whisper-server` | ⚠️ built, never run by a person |
+| OpenAI Realtime | two WebSockets, one per capture | ⚠️ request shaping and the event grammar against fixtures. **No live call.** A key exists on this machine and has not been used |
+| AssemblyAI Realtime | — | not written |
+| Deepgram Realtime | — | not written |
+| Corti Realtime | — | not written |
+| Tinfoil Realtime | — | **declined.** An unattested socket would present as Tinfoil while providing none of the confidentiality the name means. Same reason as the batch client |
+
+Three things about the OpenAI client are unlike the others and each is a place a
+live call would tell us something a fixture cannot:
+
+- **24 kHz only**, where every other provider takes 16. The meeting pipeline
+  resamples per session because of it; it used to hardcode 16 kHz, so this client
+  could never have connected at all.
+- **A sixty-minute server cap.** A longer meeting rebuilds both sockets two
+  minutes early, so the gap falls where the client chooses rather than
+  mid-sentence, and `MeetingTranscript::reconnects` counts it. This is the only
+  provider where that path is reachable, and nothing but a call over an hour long
+  exercises it.
+- **Two sockets, one per capture.** The provider labels no speakers, so
+  attribution comes from which capture the audio came from. One socket would make
+  `AudioSource` on every event a guess and would hand the server's voice-activity
+  detection two overlapping speakers.
+
 ## Meeting detection
 
 Noticing that a meeting application is running, so recording can be *offered*.

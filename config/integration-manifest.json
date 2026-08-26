@@ -634,9 +634,11 @@
         "src/helpers/meetingStreamingProviders.js",
         "src/helpers/realtimeTokenProviders.js"
       ],
-      "backend": "crates/meeting-core",
+      "backend": "crates/meeting-core/src/{openai,openai_socket}.rs",
       "ui": "Settings > Meetings",
-      "reachable": false
+      "reachable": true,
+      "frontend": "apps/desktop/src/views/SettingsMeetings.tsx",
+      "notes": "Two WebSockets, one per capture, because this provider labels no speakers and one socket would make AudioSource on every event a guess. 24 kHz only, which is why the meeting pipeline resamples per session. Sixty-minute server cap, so a longer meeting reconnects and MeetingTranscript::reconnects says how often. Keyterms are accepted and ignored upstream, so none are sent. Request shaping and the event grammar are covered by fixtures; no live call has been made -- see docs/PLATFORM_SUPPORT.md."
     },
     "meeting-stream:tinfoil-realtime": {
       "status": "ported",

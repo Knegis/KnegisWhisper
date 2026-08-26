@@ -325,6 +325,8 @@ pub enum Client {
     /// Repeated short passes over a local `whisper-server`. Not word-by-word
     /// streaming, and named so it cannot be mistaken for it.
     LocalWindow,
+    /// OpenAI Realtime over two WebSockets, one per capture.
+    OpenAiRealtime,
 }
 
 /// The client for `id`, or `None` when there is none.
@@ -335,6 +337,7 @@ pub enum Client {
 pub fn client(id: &str) -> Option<Client> {
     match id {
         "local" => Some(Client::LocalWindow),
+        "openai-realtime" => Some(Client::OpenAiRealtime),
         _ => None,
     }
 }
@@ -509,16 +512,17 @@ mod tests {
     }
 
     #[test]
-    fn only_the_local_client_exists_so_far() {
-        // A tripwire. When a cloud client lands this fails, which is the prompt
-        // to flip its manifest entry and its PLATFORM_SUPPORT.md row in the same
-        // commit rather than leaving them describing a state that has ended.
+    fn the_clients_that_exist_are_exactly_these() {
+        // A tripwire, and it has already fired once: it read `vec!["local"]`
+        // until the OpenAI Realtime client landed. Failing is the prompt to flip
+        // that provider's manifest entry and its PLATFORM_SUPPORT.md row in the
+        // same commit, rather than leaving them describing a state that ended.
         let with_clients: Vec<&str> = PROVIDERS
             .iter()
             .map(|p| p.id)
             .filter(|id| client(id).is_some())
             .collect();
-        assert_eq!(with_clients, vec!["local"]);
+        assert_eq!(with_clients, vec!["openai-realtime", "local"]);
     }
 
     #[test]
@@ -567,6 +571,12 @@ mod tests {
         let json = serde_json::to_value(openai).unwrap();
         assert_eq!(json["sessionLimitSeconds"], 3_600);
         assert_eq!(json["audioLeavesDevice"], true);
+        // Availability is asserted on a provider that still has none, not on
+        // this one: pinning "no-client" here made the test fail the day the
+        // OpenAI client landed, which is the tripwire doing its job but the wrong
+        // assertion to have written.
+        let deepgram = listed.iter().find(|p| p.id == "deepgram-realtime").unwrap();
+        let json = serde_json::to_value(deepgram).unwrap();
         assert_eq!(json["availability"]["state"], "no-client");
     }
 
@@ -580,10 +590,19 @@ mod tests {
             .collect();
         assert_eq!(local, vec!["local"]);
 
-        // And it is the one that is available, which is not a coincidence worth
-        // hiding: it is the only client that could be verified without a key.
         let local = listed.iter().find(|p| p.id == "local").unwrap();
         assert!(local.availability.is_available());
+    }
+
+    #[test]
+    fn a_cloud_client_being_available_does_not_make_its_audio_local() {
+        // The two facts are independent and the screen shows both. Being able to
+        // use OpenAI Realtime does not make it private, and saying so plainly is
+        // the point of `audio_leaves_device` being the first field.
+        let listed = listing();
+        let openai = listed.iter().find(|p| p.id == "openai-realtime").unwrap();
+        assert!(openai.availability.is_available());
+        assert!(openai.audio_leaves_device);
     }
 
     #[test]
