@@ -334,6 +334,10 @@ pub enum Client {
     LocalWindow,
     /// OpenAI Realtime over two WebSockets, one per capture.
     OpenAiRealtime,
+    /// AssemblyAI Realtime over two WebSockets, one per capture -- the same
+    /// shape as `OpenAiRealtime` and for the same reason: a speaker label says
+    /// who *within* a stream, never *which* stream.
+    AssemblyAi,
 }
 
 /// The client for `id`, or `None` when there is none.
@@ -345,6 +349,7 @@ pub fn client(id: &str) -> Option<Client> {
     match id {
         "local" => Some(Client::LocalWindow),
         "openai-realtime" => Some(Client::OpenAiRealtime),
+        "assemblyai-realtime" => Some(Client::AssemblyAi),
         _ => None,
     }
 }
@@ -370,6 +375,7 @@ pub const fn credential_slot(client: Client) -> Option<&'static str> {
     match client {
         Client::LocalWindow => None,
         Client::OpenAiRealtime => Some("openai"),
+        Client::AssemblyAi => Some("assemblyai"),
     }
 }
 
@@ -553,13 +559,17 @@ mod tests {
             .map(|p| p.id)
             .filter(|id| client(id).is_some())
             .collect();
-        assert_eq!(with_clients, vec!["openai-realtime", "local"]);
+        assert_eq!(
+            with_clients,
+            vec!["openai-realtime", "assemblyai-realtime", "local"]
+        );
     }
 
     #[test]
-    fn local_window_needs_no_credential_and_openai_realtime_names_its_slot() {
+    fn local_window_needs_no_credential_and_the_cloud_clients_name_their_slots() {
         assert_eq!(credential_slot(Client::LocalWindow), None);
         assert_eq!(credential_slot(Client::OpenAiRealtime), Some("openai"));
+        assert_eq!(credential_slot(Client::AssemblyAi), Some("assemblyai"));
     }
 
     /// The tripwire the brief asks for, and the one that would have caught the

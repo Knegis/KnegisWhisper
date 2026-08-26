@@ -2789,6 +2789,7 @@ dependencies = [
  "tokio-tungstenite",
  "tracing",
  "ts-rs",
+ "url",
 ]
 
 [[package]]

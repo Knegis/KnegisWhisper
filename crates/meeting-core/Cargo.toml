@@ -21,6 +21,10 @@ tokio = { workspace = true, features = ["sync", "time"] }
 tokio-tungstenite.workspace = true
 tracing.workspace = true
 ts-rs.workspace = true
+# For query-string construction in `assemblyai.rs` -- keyterms and other
+# session settings travel there rather than in a message sent after the
+# handshake, and this is what percent-encodes them correctly.
+url.workspace = true
 
 futures.workspace = true
 

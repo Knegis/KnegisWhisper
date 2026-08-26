@@ -23,6 +23,8 @@
 //! See `docs/PORTING_MATRIX.md` for the per-provider wire details each client
 //! will need.
 
+pub mod assemblyai;
+pub mod assemblyai_socket;
 pub mod capabilities;
 pub mod local;
 pub mod openai;
