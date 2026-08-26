@@ -16,10 +16,12 @@
 
 import type {
   Accelerator,
+  AppleCalendarSupport,
   Binding,
   CaptureExclusion,
   ClientAvailability,
   ConfigReview,
+  ConnectOutcome,
   Detected,
   DictationOutcome,
   HotkeyChange,
@@ -29,7 +31,9 @@ import type {
   NonActivating,
   ShortcutHookStatus,
   Sources,
+  SyncOutcome,
   SystemAudioSupport,
+  TokenStatus,
   UpdateCheckResult,
   VerifiedBy,
 } from "./ipc";
@@ -414,4 +418,76 @@ export function updateCheckLabel(result: UpdateCheckResult): Stated {
         detail: `you have v${result.current} — ${result.url}`,
       };
   }
+}
+
+/* ----------------------------------------------------------------- calendars */
+
+/**
+ * A connected account's token, without overclaiming.
+ *
+ * `active` means the cached access token has not yet passed its recorded
+ * expiry — a local fact, not a network probe. `needs-refresh` is not shown
+ * as "disconnected": the next sync refreshes it automatically, and most of
+ * the time that succeeds silently. `missing` covers both "never connected"
+ * and the credential having been removed while a database row lingers —
+ * see `calendar.rs::token_status` — and both read the same to a person: not
+ * connected.
+ */
+export function tokenStatusLabel(status: TokenStatus): Stated {
+  switch (status) {
+    case "active":
+      return { text: "Connected", detail: "the cached access token is still valid" };
+    case "needs-refresh":
+      return {
+        text: "Connected",
+        detail: "the access token has expired; the next sync refreshes it automatically",
+      };
+    case "missing":
+      return { text: "Not connected", detail: "" };
+  }
+}
+
+/** What clicking "Connect" produced. */
+export function connectOutcomeLabel(outcome: ConnectOutcome): string {
+  switch (outcome.state) {
+    case "connected":
+      return `Connected as ${outcome.accountEmail} (${outcome.calendars} calendar${outcome.calendars === 1 ? "" : "s"}).`;
+    case "denied":
+      return `Not connected: access was declined (${outcome.reason}).`;
+  }
+}
+
+/**
+ * What one sync attempt found, distinguishing "nothing changed" from
+ * "could not check". An empty count on `completed` is a real fact — nothing
+ * changed since the last sync — never used to paper over `token-unavailable`
+ * or `failed`, which get their own sentences naming what went wrong.
+ */
+export function syncOutcomeLabel(outcome: SyncOutcome): string {
+  switch (outcome.state) {
+    case "completed": {
+      const parts = [
+        `Synced: ${outcome.eventsUpserted} event${outcome.eventsUpserted === 1 ? "" : "s"} updated, ${outcome.eventsRemoved} removed.`,
+      ];
+      if (outcome.calendarErrors.length > 0) {
+        parts.push(
+          `${outcome.calendarErrors.length} calendar(s) could not be synced: ${outcome.calendarErrors.join("; ")}`,
+        );
+      }
+      return parts.join(" ");
+    }
+    case "token-unavailable":
+      return `Could not sync: the token could not be refreshed (${outcome.message}). Reconnect the account.`;
+    case "failed":
+      return `Sync failed: ${outcome.message}`;
+  }
+}
+
+/**
+ * What this build can do about Apple Calendar. Always the reason EventKit is
+ * unimplemented — see `kw_calendar_core::apple`'s module doc — never an
+ * empty calendar list that would read as "you have none".
+ */
+export function appleCalendarSupportLabel(support: AppleCalendarSupport): Stated {
+  return { text: "Not supported in this build", detail: support.reason };
 }

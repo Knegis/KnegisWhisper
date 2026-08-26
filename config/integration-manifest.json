@@ -944,10 +944,10 @@
         "src/helpers/googleCalendarOAuth.js",
         "src/helpers/oauthLoopbackFlow.js"
       ],
-      "backend": "crates/app-core/calendar",
+      "backend": "crates/calendar-core",
       "ui": "Integrations > Calendar",
-      "reachable": false,
-      "note": "Token exchange already goes direct to Google; no OpenWhispr broker. Must switch from the shipped client_secret to a PKCE-only installed-app client, and move refresh tokens out of plaintext SQLite into the credential store."
+      "reachable": true,
+      "note": "Reachable: the loopback PKCE flow (crates/calendar-core) plus this task's calendar list and incremental event sync are wired into apps/desktop/src-tauri/src/calendar.rs and driven from Integrations > Calendar, which is where the user pastes in the client ID for a PKCE-only installed-app client they registered themselves -- no client_secret anywhere. Refresh tokens live in the OS credential store, never SQLite. The calendarList/events.list wire shapes are covered by fixtures modelled on Google's public docs; no client ID exists on this machine, so no live call has been made -- see the task report for the full list of what that leaves unverified."
     },
     "calendar:microsoft": {
       "status": "ported-with-new-rust-implementation",
@@ -956,10 +956,10 @@
         "src/helpers/microsoftCalendarManager.js",
         "src/helpers/microsoftCalendarOAuth.js"
       ],
-      "backend": "crates/app-core/calendar",
+      "backend": "crates/calendar-core",
       "ui": "Integrations > Calendar",
-      "reachable": false,
-      "note": "Direct to login.microsoftonline.com. Same refresh-token relocation as Google."
+      "reachable": true,
+      "note": "Reachable: same path as calendar:google, direct to login.microsoftonline.com and graph.microsoft.com, with the delta-query event sync this task adds. No client ID exists on this machine, so the /me/calendars and events/delta wire shapes are covered by fixtures modelled on Microsoft's public docs rather than a live call -- see the task report."
     },
     "calendar:apple": {
       "status": "platform-specific",
@@ -971,10 +971,10 @@
         "src/helpers/appleCalendarManager.js",
         "resources/macos-calendar-listener.swift"
       ],
-      "backend": "crates/platform/macos",
+      "backend": "crates/calendar-core",
       "ui": "Integrations > Calendar",
-      "reachable": false,
-      "note": "Native EventKit, macOS only. Unverifiable on the current dev machine."
+      "reachable": true,
+      "note": "Reachable in the sense the screen names the reason rather than hiding the row: kw_calendar_core::apple describes the EventKit shape a future implementation would fill in but implements none of it, on any platform including macOS, and reports Unsupported with that reason. Integrations > Calendar shows the reason rather than an empty calendar list. Native EventKit is macOS-only and unverifiable on this development machine even once written."
     },
     "developer:local-rest-api": {
       "status": "ported-with-new-rust-implementation",

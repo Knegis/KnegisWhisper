@@ -25,15 +25,21 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 import type {
   Accelerator,
+  AccountStatus,
+  AppleCalendarSupport,
   AudioSource,
   Availability,
   Binding,
+  CalendarProvider,
+  CalendarStatus,
+  CalendarSummary,
   CaptureExclusion,
   CleanupRoute,
   CleanupSettings,
   ClientAvailability,
   ConfigReview,
   Conflict,
+  ConnectOutcome,
   CredentialKind,
   CredentialSlotStatus,
   CredentialStoreStatus,
@@ -79,6 +85,7 @@ import type {
   ProbeOutcome,
   ProbeReport,
   ProbeResult,
+  ProviderStatus,
   ProviderSummary,
   ReasoningDispatch,
   ReasoningModelSummary,
@@ -92,8 +99,11 @@ import type {
   ShortcutHookStatus,
   SkipReason,
   Sources,
+  SyncOutcome,
+  SyncRecord,
   SystemAudioSupport,
   TableReport,
+  TokenStatus,
   TranscriptEvent,
   Transcription,
   UnhandledAction,
@@ -108,14 +118,20 @@ import type {
  */
 export type {
   Accelerator,
+  AccountStatus,
+  AppleCalendarSupport,
   AudioSource,
   Binding,
+  CalendarProvider,
+  CalendarStatus,
+  CalendarSummary,
   CaptureExclusion,
   CleanupRoute,
   CleanupSettings,
   ClientAvailability,
   ConfigReview,
   Conflict,
+  ConnectOutcome,
   CredentialKind,
   CredentialSlotStatus,
   CredentialStoreStatus,
@@ -157,6 +173,7 @@ export type {
   ProbeOutcome,
   ProbeReport,
   ProbeResult,
+  ProviderStatus,
   ProviderSummary,
   ReasoningDispatch,
   ReasoningModelSummary,
@@ -169,8 +186,11 @@ export type {
   SessionState,
   ShortcutHookStatus,
   Sources,
+  SyncOutcome,
+  SyncRecord,
   SystemAudioSupport,
   TableReport,
+  TokenStatus,
   TranscriptEvent,
   Transcription,
   UnhandledAction,
@@ -813,4 +833,68 @@ export async function onUpdateCheckResult(
   return listen<UpdateCheckResult>("update-check-result", (event) =>
     handler(event.payload),
   );
+}
+
+/* -------------------------------------------------------------- calendars */
+
+/**
+ * The whole calendar picture: both OAuth providers plus Apple's unsupported
+ * state. A pure local read — see `calendar.rs`'s module doc — so calling
+ * this on every mount and after every mutation, the way `useRefresh` does,
+ * never reaches the network on its own.
+ */
+export async function getCalendarStatus(): Promise<CalendarStatus> {
+  return invoke<CalendarStatus>("calendar_status");
+}
+
+/**
+ * Save (or, given a blank string, clear) the OAuth client ID for `provider`.
+ * Never a secret — there is no client secret in this flow at all — so this
+ * is a plain settings write, not a credential-store one.
+ */
+export async function setCalendarClientId(
+  provider: CalendarProvider,
+  clientId: string,
+): Promise<void> {
+  return invoke("calendar_set_client_id", { provider, clientId });
+}
+
+/**
+ * Run the loopback OAuth flow for `provider`: opens the system browser,
+ * waits for it to come back, and identifies the account from its own
+ * calendar list. Takes as long as the person takes at the consent screen —
+ * up to five minutes — so this is only ever an explicit click, never
+ * anything automatic.
+ */
+export async function connectCalendar(
+  provider: CalendarProvider,
+): Promise<ConnectOutcome> {
+  return invoke<ConnectOutcome>("calendar_connect", { provider });
+}
+
+/** Disconnect whichever account is connected for `provider`, if any. */
+export async function disconnectCalendar(
+  provider: CalendarProvider,
+): Promise<void> {
+  return invoke("calendar_disconnect", { provider });
+}
+
+/**
+ * Refresh the calendar list and every selected calendar's events for the
+ * connected account. Also an explicit click — the only two commands that
+ * reach the network on this screen are this one and `connectCalendar`.
+ */
+export async function syncCalendar(
+  provider: CalendarProvider,
+): Promise<SyncOutcome> {
+  return invoke<SyncOutcome>("calendar_sync", { provider });
+}
+
+/** Toggle whether one calendar is synced. */
+export async function setCalendarSelected(
+  provider: CalendarProvider,
+  calendarId: string,
+  selected: boolean,
+): Promise<void> {
+  return invoke("calendar_set_selected", { provider, calendarId, selected });
 }

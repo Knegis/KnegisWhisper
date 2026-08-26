@@ -34,6 +34,7 @@ import { UpdateNotification } from "./UpdateNotification";
 import { DiagnosticsView } from "./views/Diagnostics";
 import { DictationView } from "./views/Dictation";
 import { IntegrationsApi } from "./views/IntegrationsApi";
+import { IntegrationsCalendar } from "./views/IntegrationsCalendar";
 import { Notes } from "./views/Notes";
 import { SettingsMeetings } from "./views/SettingsMeetings";
 import { SettingsIntelligence } from "./views/SettingsIntelligence";
@@ -57,6 +58,7 @@ const VIEWS = [
   { id: "local-llm", label: "Local models" },
   { id: "meetings", label: "Meetings" },
   { id: "notes", label: "Notes" },
+  { id: "calendar", label: "Calendar" },
   { id: "api", label: "Local API" },
   { id: "diagnostics", label: "Diagnostics" },
 ] as const;
@@ -178,6 +180,7 @@ function Shell() {
           {view === "local-llm" ? <SettingsIntelligenceLocal /> : null}
           {view === "meetings" ? <SettingsMeetings /> : null}
           {view === "notes" ? <Notes /> : null}
+          {view === "calendar" ? <IntegrationsCalendar /> : null}
           {view === "api" ? <IntegrationsApi /> : null}
           {view === "diagnostics" ? (
             <DiagnosticsView diagnostics={diagnostics} />
