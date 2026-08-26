@@ -47,6 +47,25 @@ Verbatim Pluely code in this repository would be a defect. Please report it.
 
 
 ================================================================================
+Vendored fonts
+================================================================================
+
+Committed to this repository and served from the application bundle rather than
+from a CDN. The production CSP is `font-src 'self'`, set in
+apps/desktop/src-tauri/tauri.conf.json, so a hosted font would load during
+`npm run dev` and fail silently in the packaged build.
+
+    Switzer           Indian Type Foundry, via Fontshare — fontshare.com
+                      apps/desktop/src/fonts/switzer-400.woff2
+
+    ProFontWindows    ProFont, originally by Andrew Welch; Windows port
+                      apps/desktop/src/fonts/ProFontWindows.ttf
+
+Both files were taken unmodified from the knegis.com deployment, which serves
+the same two faces. Each retains its own license.
+
+
+================================================================================
 Bundled third-party components
 ================================================================================
 
