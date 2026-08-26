@@ -23,14 +23,20 @@ import { useCallback, useEffect, useState } from "react";
 import { Row } from "../components/Row";
 import {
   cancelMeeting,
+  getMeetingKeyterms,
+  getMeetingLanguage,
   getMeetingProviders,
   getMeetingStatus,
+  reviewMeetingConfig,
+  setMeetingKeyterms,
+  setMeetingLanguage,
   setMeetingPrompt,
   onMeetingOutcome,
   onMeetingState,
   onMeetingTranscript,
   startMeeting,
   stopMeeting,
+  type ConfigReview,
   type MeetingOutcome,
   type MeetingState,
   type Sources,
@@ -41,22 +47,34 @@ import {
   captureExclusionLabel,
   detectedLabel,
   keytermLabel,
+  keytermReviewLabel,
+  languageRequiredWarning,
   meetingOutcomeLabel,
   sourcesLabel,
   systemAudioValue,
 } from "../lib/labels";
 import { useRefresh } from "../lib/useRefresh";
 
+/** One keyterm per line, trimmed, with blank lines dropped. */
+function parseKeyterms(text: string): string[] {
+  return text
+    .split("\n")
+    .map((k) => k.trim())
+    .filter((k) => k.length > 0);
+}
+
 /** The newest partial per source, which is what a partial means. */
 type Live = Partial<Record<TranscriptEvent["source"], string>>;
 
 export function SettingsMeetings() {
   const load = useCallback(async () => {
-    const [providers, status] = await Promise.all([
+    const [providers, status, language, keyterms] = await Promise.all([
       getMeetingProviders(),
       getMeetingStatus(),
+      getMeetingLanguage(),
+      getMeetingKeyterms(),
     ]);
-    return { providers, status };
+    return { providers, status, language, keyterms };
   }, []);
 
   const { data, error, reload, guard } = useRefresh(load);
@@ -67,6 +85,12 @@ export function SettingsMeetings() {
   const [sources, setSources] = useState<Sources | null>(null);
   const [live, setLive] = useState<Live>({});
   const [outcome, setOutcome] = useState<MeetingOutcome | null>(null);
+  // `null` means "not yet touched" -- the loaded, saved value is shown until
+  // the user types something, the same idea `chosen` already uses for the
+  // provider select.
+  const [languageDraft, setLanguageDraft] = useState<string | null>(null);
+  const [keytermsDraft, setKeytermsDraft] = useState<string | null>(null);
+  const [review, setReview] = useState<ConfigReview | null>(null);
 
   useEffect(() => {
     const unlisteners: Array<() => void> = [];
@@ -87,6 +111,38 @@ export function SettingsMeetings() {
     return () => unlisteners.forEach((fn) => fn());
   }, [reload]);
 
+  // Computed defensively before `data` is known to have loaded, and reused
+  // below once it has, so this effect can sit above the loading guard rather
+  // than after it -- a hook cannot be called only on some renders.
+  const usable = (data?.providers ?? []).filter(
+    (p) => p.availability.state === "available",
+  );
+  const selected = chosen ?? usable[0]?.id ?? null;
+  const effectiveLanguage = languageDraft ?? data?.language ?? "";
+  const effectiveKeytermsText = keytermsDraft ?? (data?.keyterms ?? []).join("\n");
+
+  useEffect(() => {
+    if (!selected) {
+      setReview(null);
+      return;
+    }
+    let cancelled = false;
+    void reviewMeetingConfig(
+      selected,
+      effectiveLanguage,
+      parseKeyterms(effectiveKeytermsText),
+    )
+      .then((result) => {
+        if (!cancelled) setReview(result);
+      })
+      .catch(() => {
+        if (!cancelled) setReview(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selected, effectiveLanguage, effectiveKeytermsText]);
+
   if (!data) {
     return (
       <div className="view">
@@ -98,9 +154,9 @@ export function SettingsMeetings() {
   const { providers, status } = data;
   const current = state ?? status.state;
   const recording = current === "recording";
-  const usable = providers.filter((p) => p.availability.state === "available");
-  const selected = chosen ?? usable[0]?.id ?? null;
   const selectedProvider = providers.find((p) => p.id === selected) ?? null;
+  const keytermReview = review ? keytermReviewLabel(review) : null;
+  const languageWarning = review ? languageRequiredWarning(review) : null;
 
   return (
     <div className="view">
@@ -171,12 +227,72 @@ export function SettingsMeetings() {
         </div>
 
         {selectedProvider ? (
-          <p className="caveat">
-            {selectedProvider.summary}.{" "}
-            {selectedProvider.audioLeavesDevice
-              ? "Audio is sent to this provider."
-              : "Audio stays on this machine."}
-          </p>
+          <>
+            <p className="caveat">
+              {selectedProvider.summary}.{" "}
+              {selectedProvider.audioLeavesDevice
+                ? "Audio is sent to this provider."
+                : "Audio stays on this machine."}
+            </p>
+
+            <div className="row">
+              <span className="row-label">Language</span>
+              <span className="row-value controls">
+                <input
+                  type="text"
+                  aria-label="Meeting language"
+                  placeholder="leave blank to detect automatically, where the provider supports it"
+                  value={effectiveLanguage}
+                  disabled={recording}
+                  onChange={(e) => setLanguageDraft(e.target.value)}
+                />
+              </span>
+            </div>
+            <div className="row">
+              <span className="row-label">Keyterms</span>
+              <span className="row-value controls">
+                <textarea
+                  aria-label="Meeting keyterms, one per line"
+                  placeholder="one term per line"
+                  rows={3}
+                  value={effectiveKeytermsText}
+                  disabled={recording}
+                  onChange={(e) => setKeytermsDraft(e.target.value)}
+                />
+              </span>
+            </div>
+            <div className="row">
+              <span className="row-value controls">
+                <button
+                  type="button"
+                  disabled={recording}
+                  onClick={() => {
+                    void guard(async () => {
+                      await setMeetingLanguage(effectiveLanguage.trim());
+                      await setMeetingKeyterms(parseKeyterms(effectiveKeytermsText));
+                    });
+                  }}
+                >
+                  Save language and keyterms
+                </button>
+              </span>
+            </div>
+            {/*
+             * `validate` computed this, not a re-implementation here — see
+             * `kw_meeting_core::validate`. Shown for the draft above, before
+             * it is saved or a meeting is started, so a truncated keyterm
+             * list or a missing language is never discovered only after the
+             * click.
+             */}
+            {keytermReview ? (
+              <Row
+                label="Keyterms in use"
+                value={keytermReview.value}
+                detail={keytermReview.detail}
+              />
+            ) : null}
+            {languageWarning ? <p className="caveat">{languageWarning}</p> : null}
+          </>
         ) : null}
 
         <div className="row">

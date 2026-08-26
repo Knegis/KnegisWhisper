@@ -19,6 +19,7 @@ import type {
   Binding,
   CaptureExclusion,
   ClientAvailability,
+  ConfigReview,
   Detected,
   DictationOutcome,
   HotkeyChange,
@@ -263,6 +264,41 @@ export function keytermLabel(k: KeytermSupport): string {
         ? "keyterms are used"
         : `up to ${k.max} keyterms are used; any more are dropped`;
   }
+}
+
+/**
+ * How many keyterms will actually reach the provider, from a `ConfigReview`.
+ *
+ * Always rendered, not only once something is dropped — the cap is worth
+ * seeing before it is ever exceeded, and a screen that only speaks up once
+ * something goes wrong is a screen that computed the truncation and dropped
+ * it right back on the floor.
+ */
+export function keytermReviewLabel(review: ConfigReview): {
+  value: string;
+  detail: string | undefined;
+} {
+  return {
+    value: `${review.keytermsUsed} of ${review.keytermsRequested} used`,
+    detail:
+      review.keytermsDropped > 0
+        ? `${review.keytermsDropped} dropped — over this provider's cap`
+        : undefined,
+  };
+}
+
+/**
+ * Why starting will be refused, when a provider needs a language and none is
+ * set. `null` when there is nothing to warn about.
+ *
+ * Told before the click rather than only after it: `validate` is checked
+ * here, live, so the warning is visible while there is still time to type a
+ * language in, not just as the text of the error `meeting_start` returns.
+ */
+export function languageRequiredWarning(review: ConfigReview): string | null {
+  return review.languageRequired
+    ? "This provider cannot detect the language on its own. Set one below, or starting will be refused."
+    : null;
 }
 
 /** Which captures a running meeting actually opened. */

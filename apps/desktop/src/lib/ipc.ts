@@ -32,6 +32,7 @@ import type {
   CleanupRoute,
   CleanupSettings,
   ClientAvailability,
+  ConfigReview,
   Conflict,
   CredentialKind,
   CredentialSlotStatus,
@@ -112,6 +113,7 @@ export type {
   CleanupRoute,
   CleanupSettings,
   ClientAvailability,
+  ConfigReview,
   Conflict,
   CredentialKind,
   CredentialSlotStatus,
@@ -308,6 +310,47 @@ export async function getMeetingDetectLists(): Promise<DetectLists> {
 
 export async function setMeetingDetectLists(lists: DetectLists): Promise<void> {
   return invoke("meeting_set_detect_lists", { lists });
+}
+
+/**
+ * The language to give the provider, or the empty string for automatic
+ * detection where the provider supports it.
+ */
+export async function getMeetingLanguage(): Promise<string> {
+  return invoke<string>("meeting_language");
+}
+
+export async function setMeetingLanguage(language: string): Promise<void> {
+  return invoke("meeting_set_language", { language });
+}
+
+/** Terms to bias recognition towards. How many survive depends on the provider. */
+export async function getMeetingKeyterms(): Promise<string[]> {
+  return invoke<string[]>("meeting_keyterms");
+}
+
+export async function setMeetingKeyterms(keyterms: string[]): Promise<void> {
+  return invoke("meeting_set_keyterms", { keyterms });
+}
+
+/**
+ * Preview what `provider` will actually do with `language` and `keyterms`,
+ * without saving anything or starting a meeting.
+ *
+ * `kw_meeting_core::validate` does the arithmetic; this only carries its
+ * answer across the wire, so the screen never has to know a provider's cap or
+ * whether it detects a language on its own.
+ */
+export async function reviewMeetingConfig(
+  provider: string,
+  language: string,
+  keyterms: string[],
+): Promise<ConfigReview> {
+  return invoke<ConfigReview>("meeting_review_config", {
+    provider,
+    language,
+    keyterms,
+  });
 }
 
 /**
