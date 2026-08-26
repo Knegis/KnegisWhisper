@@ -158,7 +158,7 @@ with it — three different facts that a single "it works" would collapse.
 | --- | --- | --- |
 | Local windowed model | repeated `/inference` passes over the local `whisper-server` | ⚠️ built, never run by a person |
 | OpenAI Realtime | two WebSockets, one per capture | ⚠️ request shaping and the event grammar against fixtures. **No live call.** A key exists on this machine and has not been used |
-| AssemblyAI Realtime | — | not written |
+| AssemblyAI Realtime | two WebSockets, one per capture | ⚠️ request shaping and the event grammar against fixtures, and most of the wire shape **believed rather than confirmed** -- see below. **No live call and no key for this provider exists on any machine this project has touched.** |
 | Deepgram Realtime | — | not written |
 | Corti Realtime | — | not written |
 | Tinfoil Realtime | — | **declined.** An unattested socket would present as Tinfoil while providing none of the confidentiality the name means. Same reason as the batch client |
@@ -178,6 +178,32 @@ live call would tell us something a fixture cannot:
   attribution comes from which capture the audio came from. One socket would make
   `AudioSource` on every event a guess and would hand the server's voice-activity
   detection two overlapping speakers.
+
+The AssemblyAI client is a clean-room build: no vendor source for this wire exists
+anywhere in this repository to check against, so most of it is **believed from
+public documentation, not confirmed**. `crates/meeting-core/src/assemblyai.rs`'s
+module documentation carries the full list; the highest-risk item is repeated here
+because it bears on a capability claim rather than only on plumbing:
+
+- **Whether a real-time turn carries a per-speaker label at all.** The capability
+  table declares `speaker_labels: true`, and this client reads a `speaker` field
+  from each turn if the wire carries one. If it does not, every event from this
+  provider reports `speaker: None` — the same degradation OpenAI Realtime already
+  reports honestly, and `AudioSource` still attributes the transcript correctly
+  either way. This is a safe failure mode, not a silent one, but it means the
+  `speaker_labels: true` row should be read as "believed" until a live session
+  confirms it.
+- The endpoint path, the query parameter names (`sample_rate`, `encoding`,
+  `language_code`, `keyterms_prompt`), the `Authorization` header carrying the
+  raw key with no `Bearer` prefix, and the `Begin`/`Turn`/`Termination`/`Error`
+  message envelope are all likewise unverified against a live socket.
+- Audio leaving as raw binary WebSocket frames (not JSON-plus-base64, the
+  opposite of OpenAI Realtime's convention) is the one piece believed with more
+  confidence, since it matches AssemblyAI's documented batch-upload convention.
+
+Two sockets, one per capture, for the same reason as OpenAI Realtime: this
+provider's speaker labels say who *within* a stream, never *which* stream, so
+`AudioSource` still needs two connections to stay a fact rather than a guess.
 
 ## Meeting detection
 
