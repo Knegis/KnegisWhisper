@@ -973,8 +973,8 @@
       ],
       "backend": "crates/calendar-core",
       "ui": "Integrations > Calendar",
-      "reachable": true,
-      "note": "Reachable in the sense the screen names the reason rather than hiding the row: kw_calendar_core::apple describes the EventKit shape a future implementation would fill in but implements none of it, on any platform including macOS, and reports Unsupported with that reason. Integrations > Calendar shows the reason rather than an empty calendar list. Native EventKit is macOS-only and unverifiable on this development machine even once written."
+      "reachable": false,
+      "note": "Unreachable, not merely unfinished-looking: EventKit is macOS-only native API, and kw_calendar_core::apple describes the shape a future implementation would fill in but implements none of it, on any platform including macOS. Integrations > Calendar reports it as Unsupported with that reason rather than hiding the row or showing an empty calendar list, which is honest UI -- but honest UI about an absent capability is not the same claim as reachable, the same distinction transcription:tinfoil already draws. Implementing it needs a macOS build of this application and EventKit bindings, neither of which exists; unverifiable on this development machine even once written."
     },
     "developer:local-rest-api": {
       "status": "ported-with-new-rust-implementation",
