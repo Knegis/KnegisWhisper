@@ -14,7 +14,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -210,6 +210,27 @@ pub struct Asset {
     /// executable on its own does not start. Upstream copies a single file out
     /// of its archive, which works only because its fork links statically.
     pub executable_in_archive: String,
+}
+
+/// Whether `name` is a single, ordinary path component: not empty, not `.`
+/// or `..`, not a drive prefix, and (implied by having no separator to begin
+/// with) not more than one segment.
+///
+/// This is the same zip-slip family `install::payload_relative` refuses
+/// inside an archive, cut down to the one-component case a plain file name
+/// is. Shared rather than reinvented at each call site: [`SidecarSpec::problems`]
+/// uses it so a bad `executableInArchive` is caught when the manifest is
+/// read, and `install::extract_bare` uses it again so a `Bare` asset that
+/// somehow got past that check still cannot copy itself to `dest.join("..")`.
+///
+/// `Asset::executable_name` already guarantees no `/` or `\` survives into
+/// its result -- whatever follows the *last* separator cannot itself contain
+/// one -- so this exists only to catch the separator-free ways a name can
+/// still escape: `".."` on its own, `"."`, an empty string, or (on Windows) a
+/// bare drive prefix like `"C:"`.
+pub(crate) fn is_plain_file_name(name: &str) -> bool {
+    let mut components = Path::new(name).components();
+    matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none()
 }
 
 impl Asset {
@@ -428,6 +449,20 @@ impl SidecarSpec {
                     self.name,
                     target.as_str()
                 ));
+            } else if !is_plain_file_name(asset.executable_name()) {
+                // Caught here, at manifest-read time, rather than only at
+                // install time: `install::extract_bare` refuses the same
+                // shape, but a `Zip`/`TarGz`/`TarXz` asset never reaches that
+                // check at all, so this is the only place those catch it.
+                problems.push(format!(
+                    "{}/{}: executable name {:?} (from executableInArchive {:?}) is not a \
+                     plain file name -- copying or looking it up by that name would escape \
+                     the install directory",
+                    self.name,
+                    target.as_str(),
+                    asset.executable_name(),
+                    asset.executable_in_archive,
+                ));
             } else if target.is_windows() != asset.executable_name().ends_with(".exe") {
                 problems.push(format!(
                     "{}/{}: executable {:?} does not match the target's convention",
@@ -606,6 +641,18 @@ mod tests {
     }
 
     #[test]
+    fn is_plain_file_name_accepts_an_ordinary_name_and_refuses_the_escaping_shapes() {
+        assert!(is_plain_file_name("yt-dlp"));
+        assert!(is_plain_file_name("yt-dlp.exe"));
+        for unsafe_name in ["..", ".", ""] {
+            assert!(
+                !is_plain_file_name(unsafe_name),
+                "{unsafe_name:?} must be refused"
+            );
+        }
+    }
+
+    #[test]
     fn a_bare_asset_with_no_directory_part_has_an_empty_payload_directory() {
         // yt-dlp's shape on every platform: there is no archive around the
         // download at all, so `executableInArchive` is just a file name with
@@ -702,6 +749,24 @@ mod tests {
         let problems = spec.problems();
         assert_eq!(problems.len(), 1, "{problems:?}");
         assert!(problems[0].contains("not https"));
+    }
+
+    #[test]
+    fn an_executable_in_archive_of_dotdot_is_a_problem() {
+        // The case that motivated `is_plain_file_name`: `executable_name`
+        // returns the whole string when it has no separator, so an
+        // `executableInArchive` of exactly `".."` would resolve one
+        // directory above wherever that name is later joined -- caught here
+        // rather than only when `Bare` tries to extract it.
+        let mut spec = spec();
+        spec.targets
+            .insert(Target::LinuxX8664, Availability::Published(asset("..")));
+        let problems = spec.problems();
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(
+            problems[0].contains("not a plain file name"),
+            "{problems:?}"
+        );
     }
 
     #[test]

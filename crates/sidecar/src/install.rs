@@ -25,7 +25,7 @@ use std::path::{Component, Path, PathBuf};
 use kw_network_policy::{NetworkPolicy, RequestPurpose};
 
 use crate::integrity;
-use crate::manifest::{ArchiveKind, Asset, SidecarSpec};
+use crate::manifest::{is_plain_file_name, ArchiveKind, Asset, SidecarSpec};
 
 /// Why an install did not finish.
 #[derive(Debug, thiserror::Error)]
@@ -51,10 +51,7 @@ pub enum InstallError {
         detail: String,
     },
 
-    #[error(
-        "{name:?} in the archive would write outside the install directory. Refusing to \\
-         extract it."
-    )]
+    #[error("{name:?} would write outside the install directory. Refusing to extract it.")]
     UnsafeEntry { name: String },
 
     #[error(
@@ -320,10 +317,23 @@ fn extract_tar<R: io::Read>(
 /// strip.
 ///
 /// `executable_name` is [`Asset::executable_name`], which is always the
-/// substring after the last path separator (or the whole string, if there is
-/// none), so it can never itself contain a separator. `dest.join` cannot be
-/// walked outside `dest` by it.
+/// substring after the last path separator -- *or the whole string, if there
+/// is none*. That second case is why this cannot just trust it: an
+/// `executableInArchive` of exactly `".."`, with no separator at all, comes
+/// back from `executable_name` unchanged, and `dest.join("..")` is the
+/// staging directory's parent, not a path inside it. `is_plain_file_name`
+/// refuses that shape (and `.`, and an empty name) before it ever reaches
+/// `dest.join`.
+///
+/// `SidecarSpec::problems` runs the same check at manifest-read time, so this
+/// is the defence for a value that got past that check some other way (a
+/// spec built by hand in a test, for instance), not the only one.
 fn extract_bare(archive: &Path, executable_name: &str, dest: &Path) -> Result<usize, InstallError> {
+    if !is_plain_file_name(executable_name) {
+        return Err(InstallError::UnsafeEntry {
+            name: executable_name.to_owned(),
+        });
+    }
     let target = dest.join(executable_name);
     fs::copy(archive, &target).map_err(|source| InstallError::Io {
         action: "copy",
@@ -691,6 +701,35 @@ mod tests {
             fs::read(dest.join("yt-dlp")).unwrap(),
             b"#!/bin/sh\necho yt-dlp\n"
         );
+    }
+
+    #[test]
+    fn a_bare_executable_name_of_dotdot_is_refused() {
+        // `Asset::executable_name` returns the whole string when it has no
+        // separator, so an `executableInArchive` of exactly ".." would
+        // otherwise make `extract_bare` copy the download to the staging
+        // directory's *parent* -- caught here rather than actually doing it.
+        // `SidecarSpec::problems` refuses the same shape at manifest-read
+        // time; this is `extract_bare`'s own defence underneath that.
+        let dir = tempfile::tempdir().unwrap();
+        let archive = write_archive(dir.path(), b"payload");
+        let dest = dir.path().join("out");
+        fs::create_dir_all(&dest).unwrap();
+
+        for unsafe_name in ["..", ".", ""] {
+            let err = extract(&archive, ArchiveKind::Bare, "", unsafe_name, &dest).unwrap_err();
+            assert!(
+                matches!(err, InstallError::UnsafeEntry { .. }),
+                "{unsafe_name:?} produced {err}"
+            );
+        }
+
+        // Nothing was written inside `dest` either -- not just that the call
+        // returned an error. (The shared system temp directory above `dir` is
+        // not asserted on: other tests create and remove entries there
+        // concurrently, which would make that check flaky rather than
+        // meaningful.)
+        assert_eq!(fs::read_dir(&dest).unwrap().count(), 0);
     }
 
     #[test]
