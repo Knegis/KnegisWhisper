@@ -538,25 +538,32 @@ and **both** pinned Parakeet models said
 -- identical words, differing only in whisper's mid-sentence capitalisation.
 Real-time factor was 0.109-0.124 on this development machine (single thread),
 against whisper `tiny`'s comparable speed. Quality was not materially worse
-than whisper's on this input; on the strength of that, and of transcribing
-successfully with *both* pinned Parakeet models, `local-asr:parakeet-tdt-0.6b-v3`
-and `local-asr:parakeet-unified-en-0.6b` are `reachable: true` in
-`config/integration-manifest.json` as of this measurement. One fixture is not
-a benchmark suite, and nothing here claims Parakeet is whisper's equal on
-noisy audio, accents, or long-form speech -- only that on the one real input
-this project has a known-good transcript for, it was not worse.
+than whisper's on this input. One fixture is not a benchmark suite, and
+nothing here claims Parakeet is whisper's equal on noisy audio, accents, or
+long-form speech -- only that on the one real input this project has a
+known-good transcript for, it was not worse.
 
-**What is proven and what is not.** `kw_transcription_core::sherpa::
-SherpaOffline` (the second `LocalTranscriber`) and `sherpa_models::install`
-are real, tested code, exercised end to end against the real pinned binary
-and both real pinned Parakeet archives. What does **not** exist yet is the
-Tauri command layer and Settings UI wiring that would let a user install and
-select a Parakeet model from Settings > Transcription > Local the way they
-already can for a whisper model -- `apps/desktop/src-tauri/src/dictation.rs`'s
-own comment on `LocalTargets` already names this as the anticipated next
-step ("the next one is the sherpa server"). Until that lands, the two
-Parakeet models are reachable at the backend/library level and proven by a
-real test, not yet reachable by a person clicking through the app.
+**What is proven, and why that is not the same as reachable.**
+`kw_transcription_core::sherpa::SherpaOffline` (the second `LocalTranscriber`)
+and `sherpa_models::install` are real, tested code, exercised end to end
+against the real pinned binary and both real pinned Parakeet archives. What
+does **not** exist yet is the Tauri command layer and Settings UI wiring that
+would let a user install and select a Parakeet model from Settings >
+Transcription > Local the way they already can for a whisper model --
+`apps/desktop/src-tauri/src/dictation.rs`'s own comment on `LocalTargets`
+already names this as the anticipated next step ("the next one is the
+sherpa server"), and `SettingsTranscription.tsx` names the gap directly to
+the user rather than staying silent about it. So
+`local-asr:parakeet-tdt-0.6b-v3` and `local-asr:parakeet-unified-en-0.6b`
+stay `reachable: false` in `config/integration-manifest.json`: this
+project's settled reading of `reachable` (the same one applied to
+`calendar:apple`) is that a person must be able to configure the integration
+through the named, *built* surface, and today nobody can pick a Parakeet
+model from `Settings > Transcription > Local` no matter how well the
+runtime underneath it works. The note on both entries was rewritten to
+record the real, narrower gap -- a missing selector, not a missing runtime --
+rather than the stale "blocked on the archive format" reason from before
+this task.
 
 **The two Nemotron models stay unreached, on purpose.** Both
 (`nemotron-3.5-asr-streaming-0.6b`, `nemotron-speech-streaming-en-0.6b`) are

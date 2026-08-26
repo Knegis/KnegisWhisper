@@ -18,7 +18,7 @@
       "surfaceId": "settings.transcription.local",
       "component": "apps/desktop/src/views/SettingsTranscription.tsx",
       "built": true,
-      "note": "Offers whisper models only. The sherpa-onnx sidecar now exists (Task 17) and Task 18 measured and implemented its offline CLI contract for the two Parakeet models -- both transcribe correctly, proven by a real test -- but this screen has not been extended to install or select them yet; apps/desktop/src-tauri/src/dictation.rs's own comment on LocalTargets names that as the anticipated next step. The two Nemotron entries stay unreachable for an unrelated reason: they are streaming models over sherpa's own WebSocket protocol, which this screen's whisper-shaped install/select flow does not cover and nobody has built a client for."
+      "note": "Offers whisper models only. The sherpa-onnx sidecar now exists (Task 17) and Task 18 measured and implemented its offline CLI contract for the two Parakeet models -- both transcribe correctly, proven by a real test -- but this screen has not been extended to install or select them, so all four non-whisper local-asr entries stay unreachable: the two Parakeet ones because the runtime is proven but has no selector here yet, and the two Nemotron ones for an unrelated reason -- they are streaming models over sherpa's own WebSocket protocol, which nobody has built a client for. apps/desktop/src-tauri/src/dictation.rs's own comment on LocalTargets names the Parakeet wiring as the anticipated next step."
     },
     "Settings > Intelligence": {
       "surfaceId": "settings.intelligence",

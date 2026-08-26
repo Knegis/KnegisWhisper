@@ -318,8 +318,11 @@ export function SettingsTranscription({
               ))}
             </ul>
             <p className="muted">
-              Only whisper models are offered here. Parakeet and Nemotron need
-              the sherpa-onnx sidecar, which is not built yet.
+              Only whisper models are offered here. Parakeet's sherpa-onnx
+              runtime is implemented and verified, but this screen does not
+              yet offer a way to install or choose a Parakeet model. Nemotron
+              is a streaming model over a different protocol nobody has
+              built a client for.
             </p>
             {local.port ? (
               <button

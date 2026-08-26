@@ -285,13 +285,18 @@ Corrections to what the plan assumed, found by actually running it:
 - **Both Parakeet models transcribe the same fixture whisper's `tiny` model does, correctly** —
   same words, differing only in capitalisation. `kw_transcription_core::sherpa::SherpaOffline` and
   `sherpa_models::install` are real, tested code, proven end to end by a `--ignored` integration
-  test (`tests/sherpa_dictation.rs`), and `local-asr:parakeet-tdt-0.6b-v3` /
-  `local-asr:parakeet-unified-en-0.6b` are `reachable: true` in `config/integration-manifest.json`
-  on that strength.
-- **What is not yet built**: the Tauri command layer and Settings UI wiring this list's remaining
-  work assumed would follow immediately — `apps/desktop/src-tauri/src/dictation.rs`'s `LocalTargets`
-  comment already names this as the next shape change. The two Parakeet models are reachable at the
-  backend/library level, not yet by a person clicking through Settings > Transcription > Local.
+  test (`tests/sherpa_dictation.rs`).
+- **`local-asr:parakeet-tdt-0.6b-v3` and `local-asr:parakeet-unified-en-0.6b` stay
+  `reachable: false`, on a much narrower ground than before.** A first pass through this task flipped
+  both to `true` on the strength of the transcript above, on the reading that "the probe proved it
+  works". That reading conflated *the runtime works* with *a user can reach it*, which is exactly the
+  distinction this project already drew for `calendar:apple`: reachable means configurable through
+  the named, *built* surface, and `Settings > Transcription > Local` has no selector for a Parakeet
+  model — `SettingsTranscription.tsx` said so directly, in words that contradicted the manifest's own
+  claim. Corrected before this chunk closed. The Tauri command layer and Settings UI wiring this
+  list's remaining work assumed would follow immediately — `apps/desktop/src-tauri/src/dictation.rs`'s
+  `LocalTargets` comment already names this as the next shape change — is what actually turns these
+  two `true`.
 - **The two Nemotron models stay exactly where point 2 above left them**: streaming, over
   `sherpa-onnx-online-websocket-server`'s own protocol, "chunk E's kind of work" — not attempted by
   this task, and not offline-shaped, so the offline CLI measured here says nothing about whether it
