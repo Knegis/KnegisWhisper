@@ -152,10 +152,11 @@ pub async fn install(
 
 /// Unpack `archive` into `dest`, returning how many files were written.
 ///
-/// For `Zip`, `TarGz` and `TarXz`, `payload_dir` is stripped from each entry
-/// name, so `Release/whisper-server.exe` becomes `whisper-server.exe`; an
-/// empty `payload_dir` means the whole archive. `executable_name` is unused
-/// for those three -- the destination name comes from the entry itself.
+/// For `Zip`, `TarGz`, `TarXz` and `TarBz2`, `payload_dir` is stripped from
+/// each entry name, so `Release/whisper-server.exe` becomes
+/// `whisper-server.exe`; an empty `payload_dir` means the whole archive.
+/// `executable_name` is unused for those four -- the destination name comes
+/// from the entry itself.
 ///
 /// For `Bare` there is no archive to read entries from: `archive` already
 /// *is* the executable, `payload_dir` is meaningless, and the file is copied
@@ -171,6 +172,7 @@ pub fn extract(
         ArchiveKind::Zip => extract_zip(archive, payload_dir, dest),
         ArchiveKind::TarGz => extract_tar_gz(archive, payload_dir, dest),
         ArchiveKind::TarXz => extract_tar_xz(archive, payload_dir, dest),
+        ArchiveKind::TarBz2 => extract_tar_bz2(archive, payload_dir, dest),
         ArchiveKind::Bare => extract_bare(archive, executable_name, dest),
     }
 }
@@ -260,9 +262,35 @@ fn extract_tar_xz(archive: &Path, payload_dir: &str, dest: &Path) -> Result<usiz
     )
 }
 
-/// The part of `extract_tar_gz` and `extract_tar_xz` that does not care how
-/// `reader` was decompressed: walk the tar, skip non-files and entries outside
-/// `payload_dir`, and write the rest.
+/// Decompress a `.tar.bz2` with `bzip2-rs` (pure Rust, decode-only -- same
+/// reasoning as `lzma-rs` for `TarXz`, see the `bzip2-rs` comment in the root
+/// `Cargo.toml`), then read the result as a tar the same way `extract_tar_gz`
+/// does.
+///
+/// Unlike `lzma-rs::xz_decompress`, `bzip2_rs::DecoderReader` implements
+/// `Read` directly over the underlying compressed reader, so this streams
+/// through `tar::Archive` entry-by-entry rather than buffering the whole
+/// decompressed tar in memory first. sherpa-onnx's binary bundles are the
+/// pinned use of this and are large enough (tens of megabytes) that the
+/// difference matters.
+fn extract_tar_bz2(archive: &Path, payload_dir: &str, dest: &Path) -> Result<usize, InstallError> {
+    let file = fs::File::open(archive).map_err(|source| InstallError::Io {
+        action: "open",
+        path: archive.to_path_buf(),
+        source,
+    })?;
+    extract_tar(
+        bzip2_rs::DecoderReader::new(file),
+        ArchiveKind::TarBz2,
+        archive,
+        payload_dir,
+        dest,
+    )
+}
+
+/// The part of `extract_tar_gz`, `extract_tar_xz` and `extract_tar_bz2` that
+/// does not care how `reader` was decompressed: walk the tar, skip non-files
+/// and entries outside `payload_dir`, and write the rest.
 fn extract_tar<R: io::Read>(
     reader: R,
     kind: ArchiveKind,
@@ -681,6 +709,27 @@ mod tests {
         fs::create_dir_all(&dest).unwrap();
 
         let err = extract(&archive, ArchiveKind::TarXz, "", "", &dest).unwrap_err();
+        assert!(matches!(err, InstallError::Archive { .. }), "{err}");
+    }
+
+    // -------------------------------------------------------------- tar.bz2
+    //
+    // `bzip2-rs` is decode-only, so unlike the zip/tar.gz/tar.xz sections
+    // above there is no in-memory encoder to build a round-trip fixture with.
+    // The extraction-and-flattening behaviour for a real `.tar.bz2` stream is
+    // proved instead by `tests/tar_bz2_fixture.rs`, against a fixture built
+    // with the standalone `bzip2` command-line tool. This is the one case
+    // that does not need real bytes: any non-bzip2 input, however produced,
+    // must fail the same way.
+
+    #[test]
+    fn a_non_bz2_file_produces_a_clear_archive_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let archive = write_archive(dir.path(), b"not a bzip2 stream at all");
+        let dest = dir.path().join("out");
+        fs::create_dir_all(&dest).unwrap();
+
+        let err = extract(&archive, ArchiveKind::TarBz2, "", "", &dest).unwrap_err();
         assert!(matches!(err, InstallError::Archive { .. }), "{err}");
     }
 

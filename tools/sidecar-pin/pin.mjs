@@ -19,19 +19,21 @@
  *   4. Prints a JSON fragment ready to paste, or writes it with `--write`.
  *
  * Archives are read with a central-directory reader for zip and a header walk
- * for tar.gz and tar.xz, rather than with a dependency. This tool runs in the
- * contracts job, which has no `npm install`.
+ * for tar.gz, tar.xz and tar.bz2, rather than with a dependency. This tool
+ * runs in the contracts job, which has no `npm install`.
  *
  * Two shapes need no archive reader at all:
  *   - `--bare`: the release asset has no archive around it -- yt-dlp ships a
  *     bare executable on every platform. There is no index to read; the
  *     digest of the download already covers the whole executable.
- *   - tar.xz (ffmpeg on Linux): Node's `zlib` has no XZ decoder the way it has
- *     one for gzip, so reading its entries shells out to the system `xz`
- *     binary (present on every CI image this project targets, and bundled
- *     with Git for Windows) rather than hand-rolling an LZMA2 decoder for a
- *     tool that never ships inside the application. The Rust installer, which
- *     does ship, uses `lzma-rs` instead -- see `crates/sidecar/src/install.rs`.
+ *   - tar.xz (ffmpeg on Linux) and tar.bz2 (sherpa-onnx, almost everywhere):
+ *     Node's `zlib` has no XZ or bzip2 decoder the way it has one for gzip,
+ *     so reading their entries shells out to the system `xz` or `bzip2`
+ *     binary (both present on every CI image this project targets, and
+ *     bundled with Git for Windows) rather than hand-rolling an LZMA2 or
+ *     bzip2 decoder for a tool that never ships inside the application. The
+ *     Rust installer, which does ship, uses `lzma-rs` and `bzip2-rs` instead
+ *     -- see `crates/sidecar/src/install.rs`.
  *
  * Usage:
  *   node tools/sidecar-pin/pin.mjs \
@@ -254,6 +256,42 @@ function tarXzEntries(path) {
 }
 
 /**
+ * Entry names in a tar.bz2, by decompressing with the system `bzip2` binary
+ * and walking 512-byte headers the same way `tarGzEntries` does.
+ *
+ * Same reasoning as `tarXzEntries` above: Node's `zlib` has no bzip2 decoder,
+ * and this tool never ships inside the application, so shelling out to the
+ * system `bzip2` binary (present on every CI image this project targets, and
+ * bundled with Git for Windows) is the pragmatic choice here too. The Rust
+ * installer uses `bzip2-rs` (pure Rust) instead -- see
+ * `crates/sidecar/src/install.rs`. sherpa-onnx is the reason this exists: 276
+ * of its 303 release assets are `.tar.bz2`, including every desktop binary
+ * bundle and all four model archives the provider registry points at.
+ */
+function tarBz2Entries(path) {
+  // sherpa-onnx's static (self-contained, no separate .so/.dylib) desktop
+  // bundles decompress to more than 1 GiB -- comfortably over the 1 GiB
+  // `tarXzEntries` uses for ffmpeg's much smaller tar.xz -- so this needs a
+  // larger ceiling.
+  const result = spawnSync("bzip2", ["--decompress", "--stdout", "--keep", path], {
+    maxBuffer: 2 * 1024 * 1024 * 1024,
+  });
+  if (result.error) {
+    die(
+      `could not run the system "bzip2" binary to read ${path}: ${result.error.message}. Install ` +
+        `bzip2 (e.g. "apt install bzip2", "brew install bzip2"; it ships with Git for Windows) ` +
+        "to pin a tar.bz2 asset."
+    );
+  }
+  if (result.status !== 0) {
+    die(
+      `"bzip2 --decompress" exited ${result.status} on ${path}:\n${result.stderr.toString("utf8")}`
+    );
+  }
+  return tarEntriesFromBuffer(result.stdout);
+}
+
+/**
  * Find the one entry that is the executable we asked for.
  *
  * Ambiguity is an error, not a first match. `llama-server` and
@@ -280,7 +318,7 @@ function findExecutable(entries, executable) {
 }
 
 /**
- * `zip`, `tar-gz` or `tar-xz`, from the asset name.
+ * `zip`, `tar-gz`, `tar-xz` or `tar-bz2`, from the asset name.
  *
  * Never guesses `bare`: an asset with no recognised archive extension is far
  * more likely a typo than a bare executable, so that shape is only ever
@@ -290,9 +328,10 @@ function archiveKind(asset) {
   if (asset.endsWith(".zip")) return "zip";
   if (asset.endsWith(".tar.gz") || asset.endsWith(".tgz")) return "tar-gz";
   if (asset.endsWith(".tar.xz") || asset.endsWith(".txz")) return "tar-xz";
+  if (asset.endsWith(".tar.bz2") || asset.endsWith(".tbz2")) return "tar-bz2";
   return die(
-    `${asset} is neither a .zip, .tar.gz nor .tar.xz, so its index cannot be read. If it ships ` +
-      "with no archive at all, pass --bare."
+    `${asset} is neither a .zip, .tar.gz, .tar.xz nor .tar.bz2, so its index cannot be read. If ` +
+      "it ships with no archive at all, pass --bare."
   );
 }
 
@@ -302,7 +341,9 @@ async function entriesOf(path, kind) {
       ? await zipEntries(path)
       : kind === "tar-gz"
         ? tarGzEntries(path)
-        : tarXzEntries(path);
+        : kind === "tar-xz"
+          ? tarXzEntries(path)
+          : tarBz2Entries(path);
   if (entries === null) {
     die("the archive index could not be read (zip64 archives are not supported)");
   }
