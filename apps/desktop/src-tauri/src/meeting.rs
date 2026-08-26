@@ -35,9 +35,15 @@
 //!
 //! # The user always knows it is recording
 //!
-//! `meeting_status` reports the state, the tray reflects it, and the notification
-//! window in chunk E2 will make it unmissable. Nothing here starts a recording on
-//! its own: detection, when it exists, suggests.
+//! `meeting_status` reports the state and the tray says which recordings are
+//! live. Nothing here starts a recording on its own: detection suggests, and a
+//! person clicks.
+//!
+//! An earlier version of this comment said the tray reflected the state before
+//! `tray.rs` had any state to reflect. Left recorded rather than quietly
+//! corrected, because a doc comment asserting an unbuilt feature is the same
+//! defect as an interface reporting a value it never read, and this project has
+//! now found that three times.
 
 use std::sync::mpsc as sync_mpsc;
 use std::sync::Arc;
@@ -437,6 +443,11 @@ impl MeetingRuntime {
     }
 
     fn emit_state(&self, state: MeetingState) {
+        // Recording *and* finishing keep the tray saying so: the microphone is
+        // closed once finishing starts, but a meeting that still has work to do
+        // has not finished, and an idle tray would say it had.
+        crate::tray::meeting(&self.app, state != MeetingState::Idle);
+
         if let Err(err) = self.app.emit(STATE_EVENT, state) {
             tracing::warn!(error = %err, "could not report the meeting state");
         }
