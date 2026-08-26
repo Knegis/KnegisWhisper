@@ -601,9 +601,11 @@
         "src/helpers/meetingStreamingProviders.js",
         "src/helpers/realtimeTokenProviders.js"
       ],
-      "backend": "crates/meeting-core",
+      "backend": "crates/meeting-core/src/{assemblyai,assemblyai_socket}.rs",
       "ui": "Settings > Meetings",
-      "reachable": false
+      "reachable": true,
+      "frontend": "apps/desktop/src/views/SettingsMeetings.tsx",
+      "note": "Reachable: a key is stored on Settings > Providers and the provider is chosen on Settings > Meetings. Keyterms travel as a capped JSON array in the query string (`keyterms_prompt`, KeytermWire::JsonQueryParam). Request shaping and the event grammar are covered by fixtures; no live call has been made -- no AssemblyAI key exists on this machine. See docs/PLATFORM_SUPPORT.md for the full list of wire-shape items believed from public documentation but not confirmed."
     },
     "meeting-stream:corti-realtime": {
       "status": "ported",
@@ -612,9 +614,11 @@
         "src/helpers/meetingStreamingProviders.js",
         "src/helpers/realtimeTokenProviders.js"
       ],
-      "backend": "crates/meeting-core",
+      "backend": "crates/meeting-core/src/{corti,corti_socket}.rs",
       "ui": "Settings > Meetings",
-      "reachable": false
+      "reachable": true,
+      "frontend": "apps/desktop/src/views/SettingsMeetings.tsx",
+      "note": "Reachable: a key is stored on Settings > Providers and the provider, environment and tenant are chosen on Settings > Meetings. Keyterms travel inside the session-config message (`configuration.keyterms`, KeytermWire::SessionConfig). Two different confidence levels here, not one: the OAuth2 token exchange reuses kw_transcription_core::clients::corti_token_endpoint/corti_token_request, already implemented and tested for batch Corti transcription -- reused, not believed. The socket wire is a different matter: the endpoint path, the message envelope, and most of the session-config block beyond `configuration.keyterms` have no vendor source anywhere in this repository -- they were invented, not read from documentation, and the implementer said so directly. No live call has been made -- no Corti credential exists on this machine. See docs/PLATFORM_SUPPORT.md for the full breakdown."
     },
     "meeting-stream:deepgram-realtime": {
       "status": "rewired-to-direct-byok",
@@ -623,9 +627,11 @@
         "src/helpers/meetingStreamingProviders.js",
         "src/helpers/realtimeTokenProviders.js"
       ],
-      "backend": "crates/meeting-core",
+      "backend": "crates/meeting-core/src/{deepgram,deepgram_socket}.rs",
       "ui": "Settings > Meetings",
-      "reachable": false
+      "reachable": true,
+      "frontend": "apps/desktop/src/views/SettingsMeetings.tsx",
+      "note": "Reachable: a key is stored on Settings > Providers and the provider is chosen on Settings > Meetings. Keyterms travel as one repeated `keyterm` query parameter each (KeytermWire::RepeatedQueryParam). Request shaping and the event grammar are covered by fixtures; no live call has been made -- no Deepgram key exists on this machine. See docs/PLATFORM_SUPPORT.md for the full list of wire-shape items believed from public documentation but not confirmed."
     },
     "meeting-stream:openai-realtime": {
       "status": "rewired-to-direct-byok",
@@ -649,7 +655,8 @@
       ],
       "backend": "crates/meeting-core",
       "ui": "Settings > Meetings",
-      "reachable": false
+      "reachable": false,
+      "note": "Deliberately unreachable, not unfinished -- same reason as transcription:tinfoil. Tinfoil's proposition is an attested enclave: the client verifies an attestation document against a hardware root of trust before sending anything. An unattested socket to the same host would stream audio correctly and provide none of that, while appearing in the UI as Tinfoil -- a confidentiality claim the connection did not earn. No client exists for this provider and none is planned until attestation is implemented."
     },
     "meeting-stream:local": {
       "status": "ported-with-new-rust-implementation",
