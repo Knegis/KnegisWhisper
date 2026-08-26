@@ -11,10 +11,12 @@
 //! connection tests are explicitly invoked by the user, never run at startup.
 //! See `docs/NETWORK_BOUNDARY.md`.
 
+mod binary_locator;
 mod calendar;
 mod commands;
 mod diagnostics;
 mod dictation;
+mod integrations;
 // Test-only: it renders `apps/desktop/src/generated/ipc-types.ts` and asserts
 // the committed copy still matches the Rust types. Nothing at runtime calls it.
 #[cfg(test)]
@@ -366,6 +368,8 @@ pub fn run() -> anyhow::Result<()> {
             local_api::local_api_status,
             local_api::local_api_start,
             local_api::local_api_stop,
+            integrations::cli_status,
+            integrations::mcp_status,
             local_llm::local_llm_status,
             local_llm::local_llm_install,
             local_llm::local_llm_start,

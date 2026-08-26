@@ -215,7 +215,13 @@ fn render() -> String {
             crate::local_llm::LocalLlmProgress,
         ],
         "local api" => [
+            crate::local_api::DiscoveryPermissions,
             crate::local_api::LocalApiStatus,
+        ],
+        "developer tools" => [
+            crate::binary_locator::BinaryLocation,
+            crate::integrations::CliStatus,
+            crate::integrations::McpStatus,
         ],
         "updater" => [
             crate::updater::UpdateCheckResult,

@@ -1005,6 +1005,31 @@ export type LocalLlmProgress = { "stage": "server", written: number, total: numb
 
 /* -------------------------------------------------------------- local api */
 /**
+ * The discovery file's permissions, shown as a state and its evidence — not
+ * reduced to a boolean.
+ *
+ * Mirrors `kw_local_api::Permissions` variant for variant, converted here
+ * rather than derived there: `kw-local-api` has no reason to depend on
+ * `ts-rs`, the same reasoning `diagnostics.rs`'s `ShortcutHookStatus` and
+ * `local_model.rs`'s `VerifiedBy` already follow for their own core types.
+ *
+ * This type exists because of one specific defect.
+ * `Permissions::is_as_expected()` returns `true` for `InheritedFromProfile`
+ * — correct as "the best this build currently achieves on this platform",
+ * read by a screen that only has the boolean as "verified restricted", which
+ * it is not: nothing was checked, it is simply what a file under
+ * `%USERPROFILE%` gets by default, and two other trustees turned up in that
+ * default on a real machine. See `docs/BENCH_CHECK.md`, 2026-08-26 finding 2.
+ * `Integrations > CLI` switches on `state` and gives `InheritedFromProfile`
+ * its own honest sentence rather than a green tick that reuses the boolean.
+ */
+export type DiscoveryPermissions = { "state": "owner-only" } | { "state": "inherited-from-profile" } | { "state": "wider",
+/**
+ * Octal, e.g. `"644"`, matching how a person would type it to `chmod`.
+ */
+mode: string, } | { "state": "unknown", reason: string, };
+
+/**
  * What the settings screen shows about the local API.
  */
 export type LocalApiStatus = {
@@ -1029,6 +1054,73 @@ discoveryPermissions: string | null,
  * True when the permissions are the best this platform offers.
  */
 discoveryPermissionsAsExpected: boolean | null, };
+
+/* -------------------------------------------------------- developer tools */
+/**
+ * Where a companion binary was found, if this checked and found it anywhere.
+ *
+ * Three states rather than a boolean. "Next to this executable" and
+ * "somewhere on PATH" are different facts — the first means the same build
+ * that produced this application also produced the tool; the second means
+ * something else put a same-named file somewhere the shell would run it —
+ * and collapsing either into "not found" would be exactly the
+ * boolean-collapse this project's `Permissions` pattern exists to avoid.
+ */
+export type BinaryLocation = { "state": "sibling", path: string, } | { "state": "on-path", path: string, } | { "state": "not-found" };
+
+/**
+ * What `Integrations > CLI` shows.
+ */
+export type CliStatus = {
+/**
+ * The binary's name on this platform, e.g. `knegiswhisper.exe`.
+ */
+binaryName: string,
+/**
+ * Where this actually found it, if anywhere.
+ */
+binaryLocation: BinaryLocation,
+/**
+ * Where the CLI looks for the port and token. Deterministic, so shown
+ * whether or not the local API is running right now.
+ */
+discoveryPath: string,
+/**
+ * Whether the local API is running right now, and so whether the
+ * discovery file exists at all.
+ */
+localApiRunning: boolean,
+/**
+ * The discovery file's real permission state, evidence and all. `None`
+ * exactly when `local_api_running` is `false`: the file goes with the
+ * server, so there is then nothing to describe.
+ */
+discoveryPermissions: DiscoveryPermissions | null, };
+
+/**
+ * What `Integrations > MCP` shows.
+ */
+export type McpStatus = {
+/**
+ * The binary's name on this platform, e.g. `knegiswhisper-mcp.exe`.
+ */
+binaryName: string,
+/**
+ * Where this actually found it, if anywhere.
+ */
+binaryLocation: BinaryLocation,
+/**
+ * The value to put in an MCP client's `command` field: the resolved
+ * path when this found the binary, or the bare name otherwise — legible
+ * either way, but nothing here claims a bare name will actually resolve.
+ */
+command: string,
+/**
+ * Whether the local API is running right now. The server is a second
+ * front end over it and does nothing on its own, so a client configured
+ * with `command` will fail every call until this is `true`.
+ */
+localApiRunning: boolean, };
 
 /* ---------------------------------------------------------------- updater */
 /**

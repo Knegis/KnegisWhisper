@@ -166,6 +166,20 @@ impl LocalApiRuntime {
         Ok(port)
     }
 
+    /// Where the discovery file lives. Deterministic and independent of
+    /// whether the API is running right now, so a screen can show it either
+    /// way — see `integrations.rs`.
+    pub(crate) fn discovery_path(&self) -> &std::path::Path {
+        &self.discovery_path
+    }
+
+    /// The discovery file's permissions as of the last successful write.
+    /// `None` once the API has stopped: the file is removed with it, so
+    /// there is nothing left to describe.
+    pub(crate) fn permissions_snapshot(&self) -> Option<Permissions> {
+        self.permissions.read().ok().and_then(|held| held.clone())
+    }
+
     /// Stop the server and remove the discovery file.
     ///
     /// The file goes with the server: a leftover sends the next client at a port
@@ -182,6 +196,60 @@ impl LocalApiRuntime {
 
         if let Ok(mut permissions) = self.permissions.write() {
             *permissions = None;
+        }
+    }
+}
+
+/// The discovery file's permissions, shown as a state and its evidence — not
+/// reduced to a boolean.
+///
+/// Mirrors `kw_local_api::Permissions` variant for variant, converted here
+/// rather than derived there: `kw-local-api` has no reason to depend on
+/// `ts-rs`, the same reasoning `diagnostics.rs`'s `ShortcutHookStatus` and
+/// `local_model.rs`'s `VerifiedBy` already follow for their own core types.
+///
+/// This type exists because of one specific defect.
+/// `Permissions::is_as_expected()` returns `true` for `InheritedFromProfile`
+/// — correct as "the best this build currently achieves on this platform",
+/// read by a screen that only has the boolean as "verified restricted", which
+/// it is not: nothing was checked, it is simply what a file under
+/// `%USERPROFILE%` gets by default, and two other trustees turned up in that
+/// default on a real machine. See `docs/BENCH_CHECK.md`, 2026-08-26 finding 2.
+/// `Integrations > CLI` switches on `state` and gives `InheritedFromProfile`
+/// its own honest sentence rather than a green tick that reuses the boolean.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(
+    tag = "state",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
+pub enum DiscoveryPermissions {
+    /// Verified by reading the file's mode back: owner read/write only.
+    OwnerOnly,
+    /// Windows. Inherits the profile directory's ACL. **Not** a verified
+    /// restriction — nothing here checked what that ACL actually grants,
+    /// only that no narrower one was applied.
+    InheritedFromProfile,
+    /// The mode was set and read back wider than intended.
+    Wider {
+        /// Octal, e.g. `"644"`, matching how a person would type it to `chmod`.
+        mode: String,
+    },
+    /// The mode could not be set or could not be read back.
+    Unknown { reason: String },
+}
+
+impl From<&Permissions> for DiscoveryPermissions {
+    fn from(permissions: &Permissions) -> Self {
+        match permissions {
+            Permissions::OwnerOnly => Self::OwnerOnly,
+            Permissions::InheritedFromProfile => Self::InheritedFromProfile,
+            Permissions::Wider { mode } => Self::Wider {
+                mode: format!("{mode:o}"),
+            },
+            Permissions::Unknown { reason } => Self::Unknown {
+                reason: reason.clone(),
+            },
         }
     }
 }
@@ -367,5 +435,73 @@ mod tests {
         let (api, _db, _dir) = runtime().await;
         api.stop().await;
         api.stop().await;
+    }
+
+    #[tokio::test]
+    async fn the_discovery_path_accessor_is_stable_whether_or_not_it_is_running() {
+        // `integrations.rs` shows this path unconditionally -- a person
+        // configuring the CLI wants to know where to look even before they
+        // have switched the local API on.
+        let (api, _db, _dir) = runtime().await;
+        let before = api.discovery_path().to_path_buf();
+        assert_eq!(before, api.discovery_path);
+
+        api.start().await.unwrap();
+        assert_eq!(api.discovery_path(), before);
+        api.stop().await;
+        assert_eq!(api.discovery_path(), before);
+    }
+
+    #[tokio::test]
+    async fn the_permissions_snapshot_tracks_running_not_a_cached_start() {
+        let (api, _db, _dir) = runtime().await;
+        assert_eq!(api.permissions_snapshot(), None, "nothing has run yet");
+
+        api.start().await.unwrap();
+        assert!(
+            api.permissions_snapshot().is_some(),
+            "a real file was just written"
+        );
+
+        api.stop().await;
+        assert_eq!(
+            api.permissions_snapshot(),
+            None,
+            "the file is gone, so there is nothing left to report"
+        );
+    }
+
+    #[test]
+    fn discovery_permissions_carries_every_variant_without_collapsing_it() {
+        // The property this type exists for: `InheritedFromProfile` must
+        // convert to its own tag, never to `OwnerOnly` -- collapsing the two
+        // is exactly the boolean-shaped defect this replaces.
+        assert_eq!(
+            DiscoveryPermissions::from(&Permissions::OwnerOnly),
+            DiscoveryPermissions::OwnerOnly
+        );
+        assert_eq!(
+            DiscoveryPermissions::from(&Permissions::InheritedFromProfile),
+            DiscoveryPermissions::InheritedFromProfile
+        );
+        assert_ne!(
+            DiscoveryPermissions::from(&Permissions::InheritedFromProfile),
+            DiscoveryPermissions::OwnerOnly,
+            "an inherited ACL must never present as a verified restriction"
+        );
+        assert_eq!(
+            DiscoveryPermissions::from(&Permissions::Wider { mode: 0o644 }),
+            DiscoveryPermissions::Wider {
+                mode: "644".to_owned()
+            }
+        );
+        assert_eq!(
+            DiscoveryPermissions::from(&Permissions::Unknown {
+                reason: "no chmod on this filesystem".to_owned()
+            }),
+            DiscoveryPermissions::Unknown {
+                reason: "no chmod on this filesystem".to_owned()
+            }
+        );
     }
 }
