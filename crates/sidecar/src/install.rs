@@ -25,7 +25,7 @@ use std::path::{Component, Path, PathBuf};
 use kw_network_policy::{NetworkPolicy, RequestPurpose};
 
 use crate::integrity;
-use crate::manifest::{ArchiveKind, Asset, SidecarSpec};
+use crate::manifest::{is_plain_file_name, ArchiveKind, Asset, SidecarSpec};
 
 /// Why an install did not finish.
 #[derive(Debug, thiserror::Error)]
@@ -51,10 +51,7 @@ pub enum InstallError {
         detail: String,
     },
 
-    #[error(
-        "{name:?} in the archive would write outside the install directory. Refusing to \\
-         extract it."
-    )]
+    #[error("{name:?} would write outside the install directory. Refusing to extract it.")]
     UnsafeEntry { name: String },
 
     #[error(
@@ -119,7 +116,13 @@ pub async fn install(
     progress(Progress::Extracting);
     let unpacked = staging.join("files");
     create_dir(&unpacked)?;
-    let files = extract(&archive, asset.archive, asset.payload_dir(), &unpacked)?;
+    let files = extract(
+        &archive,
+        asset.archive,
+        asset.payload_dir(),
+        asset.executable_name(),
+        &unpacked,
+    )?;
 
     let executable = unpacked.join(asset.executable_name());
     if !executable.is_file() {
@@ -147,20 +150,28 @@ pub async fn install(
     })
 }
 
-/// Unpack the entries under `payload_dir` into `dest`, returning how many files
-/// were written.
+/// Unpack `archive` into `dest`, returning how many files were written.
 ///
-/// `payload_dir` is stripped from each name, so `Release/whisper-server.exe`
-/// becomes `whisper-server.exe`. An empty `payload_dir` means the whole archive.
+/// For `Zip`, `TarGz` and `TarXz`, `payload_dir` is stripped from each entry
+/// name, so `Release/whisper-server.exe` becomes `whisper-server.exe`; an
+/// empty `payload_dir` means the whole archive. `executable_name` is unused
+/// for those three -- the destination name comes from the entry itself.
+///
+/// For `Bare` there is no archive to read entries from: `archive` already
+/// *is* the executable, `payload_dir` is meaningless, and the file is copied
+/// to `dest.join(executable_name)` verbatim.
 pub fn extract(
     archive: &Path,
     kind: ArchiveKind,
     payload_dir: &str,
+    executable_name: &str,
     dest: &Path,
 ) -> Result<usize, InstallError> {
     match kind {
         ArchiveKind::Zip => extract_zip(archive, payload_dir, dest),
         ArchiveKind::TarGz => extract_tar_gz(archive, payload_dir, dest),
+        ArchiveKind::TarXz => extract_tar_xz(archive, payload_dir, dest),
+        ArchiveKind::Bare => extract_bare(archive, executable_name, dest),
     }
 }
 
@@ -206,11 +217,64 @@ fn extract_tar_gz(archive: &Path, payload_dir: &str, dest: &Path) -> Result<usiz
         path: archive.to_path_buf(),
         source,
     })?;
-    let mut tar = tar::Archive::new(flate2::read::GzDecoder::new(file));
+    extract_tar(
+        flate2::read::GzDecoder::new(file),
+        ArchiveKind::TarGz,
+        archive,
+        payload_dir,
+        dest,
+    )
+}
+
+/// Decompress a `.tar.xz` with `lzma-rs` (pure Rust, decode-only -- see the
+/// `lzma-rs` comment in the root `Cargo.toml`), then read the result as a tar
+/// the same way `extract_tar_gz` does.
+///
+/// `lzma-rs` decompresses into a `Write` rather than exposing a streaming
+/// `Read`, so the whole tar is held in memory instead of being streamed
+/// entry-by-entry the way the gzip path is. ffmpeg's tar.xz is the only
+/// pinned use of this today and is small enough that a hand-rolled streaming
+/// adapter is not worth building.
+fn extract_tar_xz(archive: &Path, payload_dir: &str, dest: &Path) -> Result<usize, InstallError> {
+    let file = fs::File::open(archive).map_err(|source| InstallError::Io {
+        action: "open",
+        path: archive.to_path_buf(),
+        source,
+    })?;
+    let mut reader = io::BufReader::new(file);
+    let mut decompressed = Vec::new();
+    lzma_rs::xz_decompress(&mut reader, &mut decompressed).map_err(|err| {
+        InstallError::Archive {
+            archive: archive.to_path_buf(),
+            kind: ArchiveKind::TarXz,
+            detail: err.to_string(),
+        }
+    })?;
+
+    extract_tar(
+        io::Cursor::new(decompressed),
+        ArchiveKind::TarXz,
+        archive,
+        payload_dir,
+        dest,
+    )
+}
+
+/// The part of `extract_tar_gz` and `extract_tar_xz` that does not care how
+/// `reader` was decompressed: walk the tar, skip non-files and entries outside
+/// `payload_dir`, and write the rest.
+fn extract_tar<R: io::Read>(
+    reader: R,
+    kind: ArchiveKind,
+    archive: &Path,
+    payload_dir: &str,
+    dest: &Path,
+) -> Result<usize, InstallError> {
+    let mut tar = tar::Archive::new(reader);
 
     let entries = tar.entries().map_err(|err| InstallError::Archive {
         archive: archive.to_path_buf(),
-        kind: ArchiveKind::TarGz,
+        kind,
         detail: err.to_string(),
     })?;
 
@@ -218,7 +282,7 @@ fn extract_tar_gz(archive: &Path, payload_dir: &str, dest: &Path) -> Result<usiz
     for entry in entries {
         let mut entry = entry.map_err(|err| InstallError::Archive {
             archive: archive.to_path_buf(),
-            kind: ArchiveKind::TarGz,
+            kind,
             detail: err.to_string(),
         })?;
 
@@ -230,7 +294,7 @@ fn extract_tar_gz(archive: &Path, payload_dir: &str, dest: &Path) -> Result<usiz
             .path()
             .map_err(|err| InstallError::Archive {
                 archive: archive.to_path_buf(),
-                kind: ArchiveKind::TarGz,
+                kind,
                 detail: err.to_string(),
             })?
             .to_string_lossy()
@@ -246,6 +310,37 @@ fn extract_tar_gz(archive: &Path, payload_dir: &str, dest: &Path) -> Result<usiz
     }
 
     Ok(written)
+}
+
+/// `Bare`: the downloaded file *is* the executable. Copied verbatim to
+/// `dest.join(executable_name)` -- no entries to walk, no payload directory to
+/// strip.
+///
+/// `executable_name` is [`Asset::executable_name`], which is always the
+/// substring after the last path separator -- *or the whole string, if there
+/// is none*. That second case is why this cannot just trust it: an
+/// `executableInArchive` of exactly `".."`, with no separator at all, comes
+/// back from `executable_name` unchanged, and `dest.join("..")` is the
+/// staging directory's parent, not a path inside it. `is_plain_file_name`
+/// refuses that shape (and `.`, and an empty name) before it ever reaches
+/// `dest.join`.
+///
+/// `SidecarSpec::problems` runs the same check at manifest-read time, so this
+/// is the defence for a value that got past that check some other way (a
+/// spec built by hand in a test, for instance), not the only one.
+fn extract_bare(archive: &Path, executable_name: &str, dest: &Path) -> Result<usize, InstallError> {
+    if !is_plain_file_name(executable_name) {
+        return Err(InstallError::UnsafeEntry {
+            name: executable_name.to_owned(),
+        });
+    }
+    let target = dest.join(executable_name);
+    fs::copy(archive, &target).map_err(|source| InstallError::Io {
+        action: "copy",
+        path: target,
+        source,
+    })?;
+    Ok(1)
 }
 
 /// An archive entry's path relative to the payload directory, or `None` if it
@@ -393,6 +488,30 @@ mod tests {
         gz.finish().unwrap()
     }
 
+    /// Build a `.tar.xz` in memory from (name, contents) pairs, using
+    /// `lzma-rs` for both the tar step (via the same `tar` crate the other
+    /// helpers use) and the xz step. This proves the round trip through this
+    /// crate's own code; `tests/tar_xz_fixture.rs` separately proves
+    /// `lzma_rs::xz_decompress` against a stream this crate never produced.
+    fn tar_xz_with(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut tar_bytes = Vec::new();
+        {
+            let mut builder = tar::Builder::new(&mut tar_bytes);
+            for (name, contents) in entries {
+                let mut header = tar::Header::new_gnu();
+                header.set_size(contents.len() as u64);
+                header.set_mode(0o644);
+                header.set_cksum();
+                builder.append_data(&mut header, name, *contents).unwrap();
+            }
+            builder.finish().unwrap();
+        }
+
+        let mut compressed = Vec::new();
+        lzma_rs::xz_compress(&mut io::Cursor::new(tar_bytes), &mut compressed).unwrap();
+        compressed
+    }
+
     fn write_archive(dir: &Path, bytes: &[u8]) -> PathBuf {
         let path = dir.join("asset");
         fs::write(&path, bytes).unwrap();
@@ -417,7 +536,8 @@ mod tests {
         let dest = dir.path().join("out");
         fs::create_dir_all(&dest).unwrap();
 
-        let count = extract(&archive, ArchiveKind::Zip, "Release", &dest).unwrap();
+        // "" for executable_name: unused for Zip -- see the doc comment on `extract`.
+        let count = extract(&archive, ArchiveKind::Zip, "Release", "", &dest).unwrap();
         assert_eq!(count, 3);
         assert_eq!(
             fs::read(dest.join("whisper-server.exe")).unwrap(),
@@ -445,7 +565,7 @@ mod tests {
         fs::create_dir_all(&dest).unwrap();
 
         assert_eq!(
-            extract(&archive, ArchiveKind::Zip, "Release", &dest).unwrap(),
+            extract(&archive, ArchiveKind::Zip, "Release", "", &dest).unwrap(),
             1
         );
         assert_eq!(
@@ -464,7 +584,10 @@ mod tests {
         );
         let dest = dir.path().join("out");
         fs::create_dir_all(&dest).unwrap();
-        assert_eq!(extract(&archive, ArchiveKind::Zip, "", &dest).unwrap(), 2);
+        assert_eq!(
+            extract(&archive, ArchiveKind::Zip, "", "", &dest).unwrap(),
+            2
+        );
     }
 
     #[test]
@@ -478,7 +601,7 @@ mod tests {
         fs::create_dir_all(&dest).unwrap();
 
         assert_eq!(
-            extract(&archive, ArchiveKind::Zip, "Release", &dest).unwrap(),
+            extract(&archive, ArchiveKind::Zip, "Release", "", &dest).unwrap(),
             1
         );
         assert!(dest.join("models").join("vad.onnx").is_file());
@@ -505,6 +628,7 @@ mod tests {
             &archive,
             ArchiveKind::TarGz,
             "whisper-bin-ubuntu-x64",
+            "",
             &dest,
         )
         .unwrap();
@@ -520,8 +644,118 @@ mod tests {
         let dest = dir.path().join("out");
         fs::create_dir_all(&dest).unwrap();
 
-        let err = extract(&archive, ArchiveKind::TarGz, "a", &dest).unwrap_err();
+        let err = extract(&archive, ArchiveKind::TarGz, "a", "", &dest).unwrap_err();
         assert!(matches!(err, InstallError::Archive { .. }), "{err}");
+    }
+
+    // --------------------------------------------------------------- tar.xz
+
+    #[test]
+    fn a_tar_xz_payload_directory_is_extracted_flattened() {
+        // The real Linux ffmpeg layout: a payload directory holding the
+        // executable and its sibling shared libraries.
+        let dir = tempfile::tempdir().unwrap();
+        let archive = write_archive(
+            dir.path(),
+            &tar_xz_with(&[
+                ("ffmpeg-bin/ffmpeg", b"server"),
+                ("ffmpeg-bin/libavcodec.so", b"lib"),
+                ("ffmpeg-bin/ffprobe", b"unused but inside"),
+            ]),
+        );
+        let dest = dir.path().join("out");
+        fs::create_dir_all(&dest).unwrap();
+
+        let count = extract(&archive, ArchiveKind::TarXz, "ffmpeg-bin", "", &dest).unwrap();
+        assert_eq!(count, 3);
+        assert_eq!(fs::read(dest.join("ffmpeg")).unwrap(), b"server");
+        assert!(dest.join("libavcodec.so").is_file());
+        assert!(!dest.join("ffmpeg-bin").exists(), "the prefix is stripped");
+    }
+
+    #[test]
+    fn a_non_xz_file_produces_a_clear_archive_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let archive = write_archive(dir.path(), b"not an xz stream at all");
+        let dest = dir.path().join("out");
+        fs::create_dir_all(&dest).unwrap();
+
+        let err = extract(&archive, ArchiveKind::TarXz, "", "", &dest).unwrap_err();
+        assert!(matches!(err, InstallError::Archive { .. }), "{err}");
+    }
+
+    // ----------------------------------------------------------------- bare
+
+    #[test]
+    fn a_bare_asset_is_copied_verbatim_to_the_executable_name() {
+        // yt-dlp's shape: no archive at all, so the digest already covers the
+        // exact bytes that will run -- see the comment on `ArchiveKind::Bare`.
+        let dir = tempfile::tempdir().unwrap();
+        let archive = write_archive(dir.path(), b"#!/bin/sh\necho yt-dlp\n");
+        let dest = dir.path().join("out");
+        fs::create_dir_all(&dest).unwrap();
+
+        let count = extract(&archive, ArchiveKind::Bare, "", "yt-dlp", &dest).unwrap();
+        assert_eq!(count, 1);
+        assert_eq!(
+            fs::read(dest.join("yt-dlp")).unwrap(),
+            b"#!/bin/sh\necho yt-dlp\n"
+        );
+    }
+
+    #[test]
+    fn a_bare_executable_name_of_dotdot_is_refused() {
+        // `Asset::executable_name` returns the whole string when it has no
+        // separator, so an `executableInArchive` of exactly ".." would
+        // otherwise make `extract_bare` copy the download to the staging
+        // directory's *parent* -- caught here rather than actually doing it.
+        // `SidecarSpec::problems` refuses the same shape at manifest-read
+        // time; this is `extract_bare`'s own defence underneath that.
+        let dir = tempfile::tempdir().unwrap();
+        let archive = write_archive(dir.path(), b"payload");
+        let dest = dir.path().join("out");
+        fs::create_dir_all(&dest).unwrap();
+
+        for unsafe_name in ["..", ".", ""] {
+            let err = extract(&archive, ArchiveKind::Bare, "", unsafe_name, &dest).unwrap_err();
+            assert!(
+                matches!(err, InstallError::UnsafeEntry { .. }),
+                "{unsafe_name:?} produced {err}"
+            );
+        }
+
+        // Nothing was written inside `dest` either -- not just that the call
+        // returned an error. (The shared system temp directory above `dir` is
+        // not asserted on: other tests create and remove entries there
+        // concurrently, which would make that check flaky rather than
+        // meaningful.)
+        assert_eq!(fs::read_dir(&dest).unwrap().count(), 0);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_bare_install_ends_up_executable_on_unix() {
+        // The end-to-end path through `install()`, not just `extract()`: this
+        // is what actually flips the executable bit, and it only exists on
+        // Unix. Unverified on this development machine, which is Windows --
+        // see the report for that caveat.
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let dir = tempfile::tempdir().unwrap();
+        let archive = write_archive(dir.path(), b"#!/bin/sh\necho yt-dlp\n");
+        let dest = dir.path().join("out");
+        fs::create_dir_all(&dest).unwrap();
+
+        extract(&archive, ArchiveKind::Bare, "", "yt-dlp", &dest).unwrap();
+        let extracted = dest.join("yt-dlp");
+        assert!(extracted.is_file());
+
+        // `extract` alone does not set the bit -- `install()` does, via
+        // `make_executable`, after the digest has already been checked. This
+        // asserts the bit-setting helper directly against the extracted file.
+        make_executable(&extracted).unwrap();
+        let mode = fs::metadata(&extracted).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o755);
     }
 
     // ------------------------------------------------------------- zip slip
@@ -539,7 +773,7 @@ mod tests {
             let dest = dir.path().join("out");
             fs::create_dir_all(&dest).unwrap();
 
-            let err = extract(&archive, ArchiveKind::Zip, "Release", &dest).unwrap_err();
+            let err = extract(&archive, ArchiveKind::Zip, "Release", "", &dest).unwrap_err();
             assert!(
                 matches!(err, InstallError::UnsafeEntry { .. }),
                 "{name} produced {err}"

@@ -14,7 +14,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -138,15 +138,31 @@ impl Target {
 
 /// How a downloaded asset is packed.
 ///
-/// Only the two forms the pinned assets actually use. A variant for `tar.bz2`
-/// (which sherpa-onnx uses) is deliberately absent rather than present and
-/// unimplemented: an enum arm that fails at runtime is a promise the type made
-/// and the code did not keep. It gets added by the commit that can extract one.
+/// Only the forms some pinned or soon-to-be-pinned asset actually uses. A
+/// variant for `tar.bz2` (which sherpa-onnx uses) is deliberately absent
+/// rather than present and unimplemented: an enum arm that fails at runtime is
+/// a promise the type made and the code did not keep. It gets added by the
+/// commit that can extract one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ArchiveKind {
     Zip,
     TarGz,
+    /// A `.tar.xz` archive: decompressed with `lzma-rs` (pure Rust,
+    /// decode-only) and then read as a tar with the same `tar` crate the
+    /// other variants use. ffmpeg ships this shape on Linux.
+    TarXz,
+    /// No archive at all: the downloaded file *is* the executable, verbatim.
+    /// yt-dlp ships this shape on every platform.
+    ///
+    /// This is the strongest row in the pinning table, not a weaker one.
+    /// [`Asset::sha256`] is mandatory for every variant, but for the other
+    /// three it pins a container that is then partially extracted, so it
+    /// proves the container matched without, on its own, saying that
+    /// extraction produced exactly what upstream built. Here there is no
+    /// container: the pinned digest is the digest of the exact bytes that
+    /// will be copied into place and executed.
+    Bare,
 }
 
 /// Whether a sidecar can be installed on a given target at all.
@@ -194,6 +210,27 @@ pub struct Asset {
     /// executable on its own does not start. Upstream copies a single file out
     /// of its archive, which works only because its fork links statically.
     pub executable_in_archive: String,
+}
+
+/// Whether `name` is a single, ordinary path component: not empty, not `.`
+/// or `..`, not a drive prefix, and (implied by having no separator to begin
+/// with) not more than one segment.
+///
+/// This is the same zip-slip family `install::payload_relative` refuses
+/// inside an archive, cut down to the one-component case a plain file name
+/// is. Shared rather than reinvented at each call site: [`SidecarSpec::problems`]
+/// uses it so a bad `executableInArchive` is caught when the manifest is
+/// read, and `install::extract_bare` uses it again so a `Bare` asset that
+/// somehow got past that check still cannot copy itself to `dest.join("..")`.
+///
+/// `Asset::executable_name` already guarantees no `/` or `\` survives into
+/// its result -- whatever follows the *last* separator cannot itself contain
+/// one -- so this exists only to catch the separator-free ways a name can
+/// still escape: `".."` on its own, `"."`, an empty string, or (on Windows) a
+/// bare drive prefix like `"C:"`.
+pub(crate) fn is_plain_file_name(name: &str) -> bool {
+    let mut components = Path::new(name).components();
+    matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none()
 }
 
 impl Asset {
@@ -412,6 +449,20 @@ impl SidecarSpec {
                     self.name,
                     target.as_str()
                 ));
+            } else if !is_plain_file_name(asset.executable_name()) {
+                // Caught here, at manifest-read time, rather than only at
+                // install time: `install::extract_bare` refuses the same
+                // shape, but a `Zip`/`TarGz`/`TarXz` asset never reaches that
+                // check at all, so this is the only place those catch it.
+                problems.push(format!(
+                    "{}/{}: executable name {:?} (from executableInArchive {:?}) is not a \
+                     plain file name -- copying or looking it up by that name would escape \
+                     the install directory",
+                    self.name,
+                    target.as_str(),
+                    asset.executable_name(),
+                    asset.executable_in_archive,
+                ));
             } else if target.is_windows() != asset.executable_name().ends_with(".exe") {
                 problems.push(format!(
                     "{}/{}: executable {:?} does not match the target's convention",
@@ -553,6 +604,16 @@ mod tests {
         }
     }
 
+    fn bare_asset(exe: &str) -> Asset {
+        Asset {
+            url: "https://example.invalid/yt-dlp".to_owned(),
+            archive: ArchiveKind::Bare,
+            sha256: Sha256Digest::parse(REAL).unwrap(),
+            size_bytes: 10,
+            executable_in_archive: exe.to_owned(),
+        }
+    }
+
     #[test]
     fn the_payload_directory_is_the_executables_parent() {
         // Real layouts from the two archives this was built against.
@@ -577,6 +638,53 @@ mod tests {
         let asset = asset("Release\\whisper-server.exe");
         assert_eq!(asset.payload_dir(), "Release");
         assert_eq!(asset.executable_name(), "whisper-server.exe");
+    }
+
+    #[test]
+    fn is_plain_file_name_accepts_an_ordinary_name_and_refuses_the_escaping_shapes() {
+        assert!(is_plain_file_name("yt-dlp"));
+        assert!(is_plain_file_name("yt-dlp.exe"));
+        for unsafe_name in ["..", ".", ""] {
+            assert!(
+                !is_plain_file_name(unsafe_name),
+                "{unsafe_name:?} must be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn a_bare_asset_with_no_directory_part_has_an_empty_payload_directory() {
+        // yt-dlp's shape on every platform: there is no archive around the
+        // download at all, so `executableInArchive` is just a file name with
+        // no directory part -- `payload_dir` and `executable_name` have to
+        // keep behaving the same way they do for an archive-root entry.
+        let windows = bare_asset("yt-dlp.exe");
+        assert_eq!(windows.payload_dir(), "");
+        assert_eq!(windows.executable_name(), "yt-dlp.exe");
+
+        let unix = bare_asset("yt-dlp");
+        assert_eq!(unix.payload_dir(), "");
+        assert_eq!(unix.executable_name(), "yt-dlp");
+    }
+
+    #[test]
+    fn tar_xz_and_bare_serialize_as_kebab_case() {
+        assert_eq!(
+            serde_json::to_string(&ArchiveKind::TarXz).unwrap(),
+            "\"tar-xz\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ArchiveKind::Bare).unwrap(),
+            "\"bare\""
+        );
+        assert_eq!(
+            serde_json::from_str::<ArchiveKind>("\"tar-xz\"").unwrap(),
+            ArchiveKind::TarXz
+        );
+        assert_eq!(
+            serde_json::from_str::<ArchiveKind>("\"bare\"").unwrap(),
+            ArchiveKind::Bare
+        );
     }
 
     fn spec() -> SidecarSpec {
@@ -641,6 +749,24 @@ mod tests {
         let problems = spec.problems();
         assert_eq!(problems.len(), 1, "{problems:?}");
         assert!(problems[0].contains("not https"));
+    }
+
+    #[test]
+    fn an_executable_in_archive_of_dotdot_is_a_problem() {
+        // The case that motivated `is_plain_file_name`: `executable_name`
+        // returns the whole string when it has no separator, so an
+        // `executableInArchive` of exactly `".."` would resolve one
+        // directory above wherever that name is later joined -- caught here
+        // rather than only when `Bare` tries to extract it.
+        let mut spec = spec();
+        spec.targets
+            .insert(Target::LinuxX8664, Availability::Published(asset("..")));
+        let problems = spec.problems();
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(
+            problems[0].contains("not a plain file name"),
+            "{problems:?}"
+        );
     }
 
     #[test]
