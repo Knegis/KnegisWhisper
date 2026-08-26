@@ -1207,14 +1207,24 @@
       "note": "Must return the four-state diagnostic with evidence. Never report active by assumption; no-op on Linux."
     },
     "platform:aec": {
-      "status": "ported-with-new-rust-implementation",
+      "status": "temporarily-deferred",
       "phase": 4,
       "upstream": [
         "src/helpers/meetingAecManager.js",
         "native/meeting-aec-helper/"
       ],
-      "backend": "crates/audio-core",
-      "note": "Declined for now, not unfinished. The WebRTC audio processing module this wraps has no Rust equivalent that is not itself a binding to the same C++, so building the sidecar needs a C++ toolchain -- cmake, ninja, clang -- and none is installed on this development machine, which is also why every decompressor in this workspace (zip, bzip2, tar) is pure Rust rather than a C binding. It also needs a port of upstream's 446-line scripts/lib/meeting-aec-build.js, which downloads webrtc-apm and Abseil and drives a Python generator over GN labels across five targets with per-architecture AVX2 handling, plus a CI workflow granted contents: write to publish the built binaries as this project's own release assets rather than fetching OpenWhispr's. What it costs to lack: a meeting recorded while the far end plays through speakers gets that audio transcribed twice, once from each capture; on headphones there is nothing to cancel, so the gap is invisible there. It gates nothing -- what actually blocks meeting transcription is system audio capture, which is Rust work and already done (platform:system-audio); echo cancellation improves a working pipeline, it is not a precondition for one. docs/PORTING_MATRIX.md records the two measured third-party pins (abseil-cpp and webrtc-apm) this build would consume if attempted; keep them, since the webrtc-apm digest is not byte-stable across downloads and re-measuring it would cost a day."
+      "deferral": {
+        "why": "The WebRTC audio processing module this wraps has no Rust equivalent that is not itself a binding to the same C++, so the sidecar can only be built by compiling upstream C++ sources, and this development machine has no C++ toolchain at all -- which is also why every decompressor in this workspace (zip, bzip2, tar) is pure Rust rather than a C binding, not a stylistic choice.",
+        "dependencies": [
+          "a C++ toolchain (cmake, ninja, clang) -- none installed on this development machine",
+          "a port of upstream's 446-line scripts/lib/meeting-aec-build.js generator, which downloads webrtc-apm and Abseil and drives a Python generator over GN labels across five targets with per-architecture AVX2 handling",
+          "a five-target CI workflow granted contents: write, to publish the built binaries as this project's own release assets rather than fetching OpenWhispr's"
+        ],
+        "interface": "none written yet -- crates/sidecar::manifest::Transport::Stdio is the existing generic child-process transport this helper would use once built, but no AEC-specific trait or module exists in this codebase",
+        "expectedPhase": 4,
+        "degradation": "Meetings still record and transcribe correctly without it. On speakers, the far end's own audio is transcribed twice -- once per capture -- instead of once; on headphones there is nothing to cancel, so the gap does not appear at all. It gates nothing: what actually blocks a meeting from being recorded is system audio capture, which is separate, is Rust, and is already done (platform:system-audio)."
+      },
+      "note": "Declined for now, not unfinished -- no helper, no generator port, and no workflow exist, so `temporarily-deferred` is the honest status rather than claiming a Rust implementation that is not there. docs/PORTING_MATRIX.md records the two measured third-party pins (abseil-cpp and webrtc-apm) this build would consume if attempted; keep them, since the webrtc-apm digest is not byte-stable across downloads and re-measuring it would cost a day for the same answer."
     },
     "platform:tray-autostart": {
       "status": "ported-with-new-rust-implementation",
