@@ -117,6 +117,114 @@
           "executableInArchive": "llama-b9763/llama-server"
         }
       }
+    },
+    {
+      "name": "ffmpeg",
+      "description": "Transcodes an imported audio or video file to 16 kHz mono WAV. Runs entirely on this machine; the input file never leaves the device.",
+      "source": {
+        "repo": "BtbN/FFmpeg-Builds",
+        "release": "autobuild-2026-07-31-14-10",
+        "pinnedBecause": "Tracking BtbN's floating 'latest' tag would let an upstream rebuild change transcode output between our releases with no diff to review, the same reason whisper and llama are pinned. This is BtbN's last autobuild of July 2026, which their retention policy keeps for two years -- their daily autobuilds are pruned after 14 days, so a dated tag alone is not enough here; it also has to be one their policy does not delete out from under a pin. The lgpl (not gpl) variant is deliberate: this project is MIT and stays wary of GPL entanglement (see docs/UPSTREAM_AUDIT.md's reasoning about Pluely), and the lgpl build is missing only the GPL-only encoders (libx264, libx265) that decode-to-WAV transcoding never calls. The non-shared build is chosen over -shared so the pinned digest covers one self-contained executable rather than a set of versioned .so/.dll siblings that could individually drift."
+      },
+      "transport": {
+        "kind": "stdio"
+      },
+      "commandFragments": [
+        "ffmpeg"
+      ],
+      "targets": {
+        "windows-x86_64": {
+          "availability": "published",
+          "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-07-31-14-10/ffmpeg-n8.1.2-34-g9b6c8969e0-win64-lgpl-8.1.zip",
+          "archive": "zip",
+          "sha256": "089e4169e93b2b3f3acbfced3c0704d24276a225641bdda04d796d28b07a2a38",
+          "sizeBytes": 145349121,
+          "executableInArchive": "ffmpeg-n8.1.2-34-g9b6c8969e0-win64-lgpl-8.1/bin/ffmpeg.exe"
+        },
+        "linux-x86_64": {
+          "availability": "published",
+          "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-07-31-14-10/ffmpeg-n8.1.2-34-g9b6c8969e0-linux64-lgpl-8.1.tar.xz",
+          "archive": "tar-xz",
+          "sha256": "8c8b2897f2a8093ae2d985f7f1867d218451d4c567c1b2437f86a7c73a950b9f",
+          "sizeBytes": 111679252,
+          "executableInArchive": "ffmpeg-n8.1.2-34-g9b6c8969e0-linux64-lgpl-8.1/bin/ffmpeg"
+        },
+        "linux-aarch64": {
+          "availability": "published",
+          "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-07-31-14-10/ffmpeg-n8.1.2-34-g9b6c8969e0-linuxarm64-lgpl-8.1.tar.xz",
+          "archive": "tar-xz",
+          "sha256": "0c8716a94ac1fe22eb56e7a0cedd0f00c1d8fae712ec19973d679a7a87916743",
+          "sizeBytes": 96564568,
+          "executableInArchive": "ffmpeg-n8.1.2-34-g9b6c8969e0-linuxarm64-lgpl-8.1/bin/ffmpeg"
+        },
+        "macos-x86_64": {
+          "availability": "not-published",
+          "reason": "BtbN/FFmpeg-Builds only targets Windows and Linux; it publishes no macOS asset at all under any tag, dated or floating. There is nothing here to download and run.",
+          "tracking": "docs/ENGINEERING_LOG.md -- carry-forward. Needs a macOS CI job building a static ffmpeg from source and publishing under this project's own releases, the same treatment docs/PORTING_MATRIX.md already records for the AEC and Windows helpers, and the same gap whisper-server has on macOS above."
+        },
+        "macos-aarch64": {
+          "availability": "not-published",
+          "reason": "BtbN/FFmpeg-Builds only targets Windows and Linux; it publishes no macOS asset at all under any tag, dated or floating. There is nothing here to download and run.",
+          "tracking": "docs/ENGINEERING_LOG.md -- carry-forward. Needs a macOS CI job building a static ffmpeg from source and publishing under this project's own releases, the same treatment docs/PORTING_MATRIX.md already records for the AEC and Windows helpers, and the same gap whisper-server has on macOS above."
+        }
+      }
+    },
+    {
+      "name": "yt-dlp",
+      "description": "Downloads media from a user-supplied URL for import. The only sidecar whose job is to reach the network on the user's behalf, rather than running entirely on this machine.",
+      "source": {
+        "repo": "yt-dlp/yt-dlp",
+        "release": "2026.08.19",
+        "pinnedBecause": "Tracking the newest release would let an upstream change alter what a user's URL import fetches between our releases with no diff to review, the same reason whisper and llama are pinned. yt-dlp marks this release 'immutable' in GitHub's own release metadata, and it is a dated version tag rather than a floating one. The macOS asset (yt-dlp_macos) is a universal2 executable covering both Apple architectures, so both macos-x86_64 and macos-aarch64 below are the same pinned file, independently measured."
+      },
+      "transport": {
+        "kind": "stdio"
+      },
+      "commandFragments": [
+        "yt-dlp"
+      ],
+      "targets": {
+        "windows-x86_64": {
+          "availability": "published",
+          "url": "https://github.com/yt-dlp/yt-dlp/releases/download/2026.08.19/yt-dlp.exe",
+          "archive": "bare",
+          "sha256": "66674953fe251b89f4d08c5f0e35e0728679bd67ab3d7d05c0562af101dd3e7a",
+          "sizeBytes": 17840399,
+          "executableInArchive": "yt-dlp.exe"
+        },
+        "linux-x86_64": {
+          "availability": "published",
+          "url": "https://github.com/yt-dlp/yt-dlp/releases/download/2026.08.19/yt-dlp_linux",
+          "archive": "bare",
+          "sha256": "58162f9bfdc27458ea47bfcb311cf47028f17d8154a8bf7d689861d46399230a",
+          "sizeBytes": 40446224,
+          "executableInArchive": "yt-dlp"
+        },
+        "linux-aarch64": {
+          "availability": "published",
+          "url": "https://github.com/yt-dlp/yt-dlp/releases/download/2026.08.19/yt-dlp_linux_aarch64",
+          "archive": "bare",
+          "sha256": "b16e4dab368a816cd05d477d698a605a6ae87ccee1c8ffd38fa21d7254141fcc",
+          "sizeBytes": 40167448,
+          "executableInArchive": "yt-dlp"
+        },
+        "macos-x86_64": {
+          "availability": "published",
+          "url": "https://github.com/yt-dlp/yt-dlp/releases/download/2026.08.19/yt-dlp_macos",
+          "archive": "bare",
+          "sha256": "0f192b7ec147ab6288885d6351d9ab67367640029b4377576ef46dd79cf7b202",
+          "sizeBytes": 37146048,
+          "executableInArchive": "yt-dlp"
+        },
+        "macos-aarch64": {
+          "availability": "published",
+          "url": "https://github.com/yt-dlp/yt-dlp/releases/download/2026.08.19/yt-dlp_macos",
+          "archive": "bare",
+          "sha256": "0f192b7ec147ab6288885d6351d9ab67367640029b4377576ef46dd79cf7b202",
+          "sizeBytes": 37146048,
+          "executableInArchive": "yt-dlp"
+        }
+      }
     }
   ]
 }
