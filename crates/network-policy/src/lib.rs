@@ -282,6 +282,48 @@ pub fn validate(url: &str, purpose: RequestPurpose) -> Result<Url, PolicyError> 
     }
 }
 
+/// Validate a WebSocket URL against the same boundary.
+///
+/// A separate function rather than two more arms in [`validate`], because the two
+/// answer different questions and a caller must not be able to hand a `wss://`
+/// URL to the HTTP client by accident. `validate` stays the HTTP gate and refuses
+/// `wss` exactly as it did.
+///
+/// The rules are the same rules. `wss` is checked as `https` and `ws` as `http`,
+/// so the vendor blocklist, the private-address exemption and the
+/// plaintext refusal all apply unchanged — there is one set of rules about where
+/// audio may go, not one per transport.
+///
+/// Meeting audio travels under [`RequestPurpose::UserConfiguredTranscriptionProvider`].
+/// The brief fixes the number of purposes at seven, and a socket carrying audio
+/// to a provider the user configured is that purpose whatever the scheme.
+pub fn validate_websocket(url: &str, purpose: RequestPurpose) -> Result<Url, PolicyError> {
+    let parsed = Url::parse(url)?;
+    let host = parsed.host_str().ok_or(PolicyError::MissingHost)?;
+
+    if is_blocked(host) {
+        return Err(PolicyError::BlockedVendorHost {
+            host: host.to_owned(),
+        });
+    }
+
+    match parsed.scheme() {
+        "wss" => Ok(parsed),
+        "ws" if purpose.allows_plaintext_private() => {
+            if is_private_host(host) {
+                Ok(parsed)
+            } else {
+                Err(PolicyError::PlaintextNonPrivate {
+                    host: host.to_owned(),
+                })
+            }
+        }
+        scheme => Err(PolicyError::SchemeNotPermitted {
+            scheme: scheme.to_owned(),
+        }),
+    }
+}
+
 /// The workspace's single HTTP client.
 #[derive(Debug, Clone)]
 pub struct NetworkPolicy {
@@ -554,6 +596,7 @@ mod tests {
     use super::*;
 
     const AI: RequestPurpose = RequestPurpose::UserConfiguredAiProvider;
+    const TRANSCRIPTION: RequestPurpose = RequestPurpose::UserConfiguredTranscriptionProvider;
     const SELF_HOSTED: RequestPurpose = RequestPurpose::ExplicitlyConfiguredSelfHostedEndpoint;
     const DOWNLOAD: RequestPurpose = RequestPurpose::UserTriggeredModelDownload;
 
@@ -855,5 +898,114 @@ mod tests {
                 p.as_str()
             );
         }
+    }
+
+    /* -------------------------------------------------------- websockets */
+
+    #[test]
+    fn a_websocket_to_a_provider_is_allowed_over_tls() {
+        assert!(validate_websocket("wss://api.openai.com/v1/realtime", AI).is_ok());
+        assert!(validate_websocket(
+            "wss://api.deepgram.com/v1/listen?model=nova-3",
+            TRANSCRIPTION
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn the_http_gate_still_refuses_a_websocket_url() {
+        // The reason this is a second function and not two more arms. A caller
+        // that hands a wss:// URL to the HTTP client has made a mistake, and the
+        // gate should say so rather than quietly accepting a scheme reqwest
+        // cannot use.
+        let err = validate("wss://api.openai.com/v1/realtime", AI).unwrap_err();
+        match err {
+            PolicyError::SchemeNotPermitted { scheme } => assert_eq!(scheme, "wss"),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_websocket_gate_refuses_an_http_url_for_the_same_reason() {
+        for url in [
+            "https://api.openai.com/v1/realtime",
+            "http://api.openai.com/v1/realtime",
+        ] {
+            let err = validate_websocket(url, AI).unwrap_err();
+            assert!(
+                matches!(err, PolicyError::SchemeNotPermitted { .. }),
+                "{url}: {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn plaintext_websockets_follow_the_same_rule_as_plaintext_http() {
+        // One set of rules about where audio may go, not one per transport.
+        assert!(validate_websocket("ws://127.0.0.1:8221/stream", SELF_HOSTED).is_ok());
+        assert!(validate_websocket("ws://192.168.1.20:9000/stream", SELF_HOSTED).is_ok());
+
+        // A public host in the clear is refused, exactly as over http.
+        let err = validate_websocket("ws://api.deepgram.com/v1/listen", SELF_HOSTED).unwrap_err();
+        assert!(
+            matches!(err, PolicyError::PlaintextNonPrivate { .. }),
+            "{err:?}"
+        );
+
+        // And plaintext is only for the self-hosted purpose.
+        let err = validate_websocket("ws://127.0.0.1:8221/stream", TRANSCRIPTION).unwrap_err();
+        assert!(
+            matches!(err, PolicyError::SchemeNotPermitted { .. }),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn a_blocked_vendor_host_is_blocked_over_a_websocket_too() {
+        // The whole point of sharing the rules. A vendor service the brief
+        // removes must not be reachable by changing the scheme.
+        for url in [
+            "wss://api.openwhispr.com/realtime",
+            "wss://mcp.openwhispr.com/stream",
+        ] {
+            let err = validate_websocket(url, TRANSCRIPTION).unwrap_err();
+            assert!(
+                matches!(err, PolicyError::BlockedVendorHost { .. }),
+                "{url}: {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_malformed_websocket_url_is_refused_rather_than_attempted() {
+        for url in ["wss://", "realtime", "not a url", ""] {
+            let err = validate_websocket(url, TRANSCRIPTION).unwrap_err();
+            assert!(
+                matches!(err, PolicyError::InvalidUrl(_) | PolicyError::MissingHost),
+                "{url:?}: {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_empty_authority_makes_the_first_path_segment_the_host() {
+        // Recorded because it surprised me while writing the test above:
+        // `wss:///realtime` does not have an empty host, it has a host called
+        // `realtime`. The `url` crate resolves the authority that way and
+        // `validate` has always behaved the same for `https:///x`.
+        //
+        // Harmless -- a single-label name that will not resolve -- and worth
+        // pinning, because the obvious reading of that URL is a missing host and
+        // a future reader might "fix" the code to match the obvious reading.
+        let parsed = validate_websocket("wss:///realtime", TRANSCRIPTION).unwrap();
+        assert_eq!(parsed.host_str(), Some("realtime"));
+        assert_eq!(parsed.path(), "/");
+
+        // And the blocklist still applies to a host that arrives this way.
+        let err = validate_websocket("wss:///api.openwhispr.com", TRANSCRIPTION).unwrap_err();
+        assert!(
+            matches!(err, PolicyError::BlockedVendorHost { .. }),
+            "{err:?}"
+        );
     }
 }

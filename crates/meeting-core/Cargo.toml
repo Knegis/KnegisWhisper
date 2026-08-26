@@ -16,11 +16,15 @@ async-trait.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["sync"] }
+tokio = { workspace = true, features = ["sync", "time"] }
+tokio-tungstenite.workspace = true
 tracing.workspace = true
 ts-rs.workspace = true
 
+futures.workspace = true
+
 kw-audio-core.workspace = true
+kw-network-policy.workspace = true
 kw-security.workspace = true
 # For the `LocalTranscriber` trait only. The concrete `WhisperServer` is supplied
 # by the caller, which is what makes the whole window-to-transcript path testable

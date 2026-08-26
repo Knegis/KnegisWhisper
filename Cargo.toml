@@ -102,6 +102,11 @@ keyring = { version = "3", features = [
 # by the fact that nothing else declares it.
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "multipart", "rustls-tls"] }
+# Meeting audio streams over a WebSocket. `rustls-tls-webpki-roots` rather than
+# native roots, because that is what reqwest's `rustls-tls` already pulls in:
+# one rustls and one trust store in the binary rather than two, so a certificate
+# accepted by one half of the application is accepted by the other.
+tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "handshake", "rustls-tls-webpki-roots"] }
 url = "2"
 
 # Audio
