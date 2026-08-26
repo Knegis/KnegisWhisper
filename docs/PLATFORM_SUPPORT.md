@@ -160,7 +160,7 @@ with it — three different facts that a single "it works" would collapse.
 | OpenAI Realtime | two WebSockets, one per capture | ⚠️ request shaping and the event grammar against fixtures. **No live call.** A key exists on this machine and has not been used |
 | AssemblyAI Realtime | two WebSockets, one per capture | ⚠️ request shaping and the event grammar against fixtures, and most of the wire shape **believed rather than confirmed** -- see below. **No live call and no key for this provider exists on any machine this project has touched.** |
 | Deepgram Realtime | two WebSockets, one per capture | ⚠️ request shaping and the event grammar against fixtures, and most of the wire shape **believed rather than confirmed** -- see below. **No live call and no Deepgram key exists on any machine this project has touched.** |
-| Corti Realtime | — | not written |
+| Corti Realtime | two WebSockets, one per capture, authenticated by an OAuth2 client-credentials exchange first | ⚠️ request shaping and the event grammar against fixtures. The **token exchange is reused, not invented** -- `kw_transcription_core::clients::corti_token_endpoint`/`corti_token_request`/`interpret_token` already exist and are already tested for batch Corti transcription. The **socket wire is believed rather than confirmed** -- see below. **No live call and no Corti credential exists on any machine this project has touched.** |
 | Tinfoil Realtime | — | **declined.** An unattested socket would present as Tinfoil while providing none of the confidentiality the name means. Same reason as the batch client |
 
 Three things about the OpenAI client are unlike the others and each is a place a
@@ -247,6 +247,64 @@ Two sockets, one per capture, for the same reason as AssemblyAI and OpenAI
 Realtime: Deepgram's diarization says who *within* a stream, never *which*
 stream, so `AudioSource` still needs two connections to stay a fact rather
 than a guess.
+
+The Corti client is the only one of the five where **two different claims
+deserve two different confidence levels**, because it crosses the network
+twice for two different reasons.
+
+**The OAuth2 token exchange is reused from working, tested code, not
+believed.** `kw_transcription_core::clients::corti_token_endpoint`,
+`corti_token_request` and `interpret_token` already exist and are already
+exercised by `Executor::corti_token` for batch Corti transcription
+(`crates/transcription-core/src/executor.rs`). `crates/meeting-core/src/corti.rs`
+wraps them rather than re-deriving them, and copies the one decision that
+code already makes: the tenant name is the OAuth2 client id, and the secret
+stored under the `corti` credential slot is the client secret. The exchange
+runs once per meeting, before either socket opens, and both sockets carry the
+same access token -- an OAuth2 client-credentials token is meant to be
+presented on more than one request, and nothing in this project's own audit
+of Corti suggests otherwise, unlike Deepgram's documented per-session minted
+tokens.
+
+**The socket itself is genuinely believed, not confirmed** -- a clean-room
+construction in the same position as AssemblyAI's and Deepgram's, since no
+vendor source for Corti's *streaming* wire exists anywhere in this
+repository. `crates/meeting-core/src/corti.rs`'s module documentation carries
+the full list; repeated here because it bears on capability claims:
+
+- The endpoint path, `wss://api.{environment}.corti.app/audio-bridge/v1/streams`.
+  Only the host template -- `api.{environment}.corti.app` -- is reused from
+  the tested batch endpoint; the path after it is invented.
+- The `Authorization: Bearer <token>` scheme is the one item believed with
+  more confidence than the rest of the socket wire: it is the standard OAuth2
+  bearer convention (RFC 6750), not a Corti-specific guess.
+- That the tenant travels on the socket handshake as a `Tenant-Name` header --
+  the same header name the tested batch request uses, assumed here to apply
+  to a WebSocket handshake, which it has never been tried against.
+- The whole shape of the session configuration message beyond one thing:
+  `configuration.keyterms` as the path for keyterms comes from this project's
+  own audit (`docs/INTEGRATION_PARITY.md`), written before this client and
+  independent of it -- the only piece of the streaming wire with a textual
+  anchor in this repository. `primaryLanguage` (reused from the batch field
+  name), and the `encoding`/`sampleRate`/`channels` fields, are this client's
+  own construction.
+- The incoming message envelope entirely -- a `type` field naming
+  `"ready"`/`"transcript"`/`"error"`, and the fields `text`/`isFinal`/`speaker`
+  -- is the lowest-confidence area in this module, with no textual anchor at
+  all.
+
+`language_detection: false` is declared for Corti, and it is the first
+provider whose client actually reaches `MeetingRuntime::start`'s
+`language_required` refusal in practice: every other client built so far
+declares detection, so the refusal existed but nothing could exercise it end
+to end until a real client existed to be denied a language. Tests in
+`crates/meeting-core/src/capabilities.rs` and
+`apps/desktop/src-tauri/src/meeting.rs` (`corti_refuses_to_start_naming_the_provider_and_the_field_when_no_language_is_set`)
+assert it fires.
+
+Two sockets, one per capture, for the same reason as every client before it:
+a speaker label Corti's wire might carry says who *within* a stream, never
+*which* stream.
 
 ## Meeting detection
 
