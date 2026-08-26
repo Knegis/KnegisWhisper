@@ -16,6 +16,16 @@
 //!   whisper.cpp resamples internally, but sending 48 kHz means three times the
 //!   upload for no accuracy. The resampler here is linear interpolation, which is
 //!   adequate for speech going into a speech model and has no dependencies.
+//!
+//! [`encode_wav`] assembles a whole recording in memory, which is right for a
+//! dictation of a few seconds. [`WavWriter`] is the same format written straight
+//! through to a file, which is what a meeting needs: four hours of 48 kHz stereo
+//! `f32` is gigabytes before it is encoded at all. Both build the header with
+//! [`header`], so there is one description of the layout rather than two.
+
+use std::fs;
+use std::io::{self, Seek as _, SeekFrom, Write as _};
+use std::path::Path;
 
 /// The sample rate every model here expects.
 pub const TARGET_SAMPLE_RATE: u32 = 16_000;
@@ -88,34 +98,33 @@ pub fn resample_to_target(samples: &[f32], from_rate: u32) -> Vec<f32> {
     out
 }
 
-/// Encode mono `f32` samples as a 16-bit PCM WAV.
+/// Convert mono `f32` samples to little-endian 16-bit PCM, appending to `out`.
 ///
 /// Samples are clamped to `-1.0..=1.0` before scaling. Without the clamp, a
 /// sample above 1.0 — which mixing or gain can easily produce — wraps around and
 /// becomes a loud click rather than clipping quietly.
-#[must_use]
-pub fn encode_wav(samples: &[f32], sample_rate: u32) -> Vec<u8> {
-    let mut pcm = Vec::with_capacity(samples.len() * 2);
+fn pcm_bytes(samples: &[f32], out: &mut Vec<u8>) {
     for sample in samples {
         let clamped = sample.clamp(-1.0, 1.0);
         // 32767 rather than 32768: scaling by 32768 makes -1.0 valid and +1.0
         // overflow by one.
         #[allow(clippy::cast_possible_truncation)]
         let scaled = (clamped * 32_767.0) as i16;
-        pcm.extend_from_slice(&scaled.to_le_bytes());
+        out.extend_from_slice(&scaled.to_le_bytes());
     }
-
-    wrap_pcm(&pcm, sample_rate, 1)
 }
 
-/// Wrap raw little-endian 16-bit PCM in a WAV container.
+/// The 44-byte canonical WAV header for `data_len` bytes of PCM.
+///
+/// One builder for both writers. `data_len` is not known until the last frame
+/// arrives, so [`WavWriter`] passes zero here and patches the two fields
+/// afterwards — which is only safe while the layout lives in one place.
 #[must_use]
-pub fn wrap_pcm(pcm: &[u8], sample_rate: u32, channels: u16) -> Vec<u8> {
-    let data_len = u32::try_from(pcm.len()).unwrap_or(u32::MAX);
+fn header(data_len: u32, sample_rate: u32, channels: u16) -> [u8; HEADER_LEN] {
     let byte_rate = sample_rate * u32::from(channels) * 2;
     let block_align = channels * 2;
 
-    let mut out = Vec::with_capacity(pcm.len() + 44);
+    let mut out = Vec::with_capacity(HEADER_LEN);
     out.extend_from_slice(b"RIFF");
     out.extend_from_slice(&(36_u32.saturating_add(data_len)).to_le_bytes());
     out.extend_from_slice(b"WAVE");
@@ -129,8 +138,117 @@ pub fn wrap_pcm(pcm: &[u8], sample_rate: u32, channels: u16) -> Vec<u8> {
     out.extend_from_slice(&16_u16.to_le_bytes()); // bits per sample
     out.extend_from_slice(b"data");
     out.extend_from_slice(&data_len.to_le_bytes());
+
+    let mut fixed = [0_u8; HEADER_LEN];
+    fixed.copy_from_slice(&out);
+    fixed
+}
+
+/// Length of the canonical header the two writers share.
+const HEADER_LEN: usize = 44;
+/// Where the RIFF chunk size sits, for a writer that has to go back and patch it.
+const RIFF_SIZE_OFFSET: u64 = 4;
+/// Where the data chunk size sits, same reason.
+const DATA_SIZE_OFFSET: u64 = 40;
+
+/// Encode mono `f32` samples as a 16-bit PCM WAV.
+#[must_use]
+pub fn encode_wav(samples: &[f32], sample_rate: u32) -> Vec<u8> {
+    let mut pcm = Vec::with_capacity(samples.len() * 2);
+    pcm_bytes(samples, &mut pcm);
+    wrap_pcm(&pcm, sample_rate, 1)
+}
+
+/// Wrap raw little-endian 16-bit PCM in a WAV container.
+#[must_use]
+pub fn wrap_pcm(pcm: &[u8], sample_rate: u32, channels: u16) -> Vec<u8> {
+    let data_len = u32::try_from(pcm.len()).unwrap_or(u32::MAX);
+    let mut out = Vec::with_capacity(pcm.len() + HEADER_LEN);
+    out.extend_from_slice(&header(data_len, sample_rate, channels));
     out.extend_from_slice(pcm);
     out
+}
+
+/// A WAV file written while the recording is still going on.
+///
+/// The counterpart to [`encode_wav`], for audio too long to hold. Frames go
+/// through to the file as they arrive and nothing accumulates in memory.
+///
+/// The header carries two lengths that are unknown until the last frame, so both
+/// are written as zero and patched by [`WavWriter::finish`]. A file left behind
+/// by a crash therefore has a zero-length `data` chunk, which every decoder
+/// reads as an empty recording. That is the right failure: a meeting recording
+/// that was cut short must not present as a complete one.
+///
+/// Mono, 16-bit, at whatever rate it is given — the same format everything
+/// downstream accepts, so a caller downmixes and resamples before appending.
+#[derive(Debug)]
+pub struct WavWriter {
+    file: fs::File,
+    sample_rate: u32,
+    samples: u64,
+}
+
+impl WavWriter {
+    /// Create the file and write a placeholder header.
+    pub fn create(path: &Path, sample_rate: u32) -> io::Result<Self> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let mut file = fs::File::create(path)?;
+        file.write_all(&header(0, sample_rate, 1))?;
+
+        Ok(Self {
+            file,
+            sample_rate,
+            samples: 0,
+        })
+    }
+
+    /// Append mono samples.
+    pub fn append(&mut self, samples: &[f32]) -> io::Result<()> {
+        if samples.is_empty() {
+            return Ok(());
+        }
+
+        let mut pcm = Vec::with_capacity(samples.len() * 2);
+        pcm_bytes(samples, &mut pcm);
+        self.file.write_all(&pcm)?;
+        self.samples = self.samples.saturating_add(samples.len() as u64);
+        Ok(())
+    }
+
+    /// How many samples have been written.
+    #[must_use]
+    pub const fn samples(&self) -> u64 {
+        self.samples
+    }
+
+    /// How long the file is so far.
+    #[must_use]
+    pub fn duration_ms(&self) -> u64 {
+        if self.sample_rate == 0 {
+            return 0;
+        }
+        self.samples.saturating_mul(1_000) / u64::from(self.sample_rate)
+    }
+
+    /// Patch the two lengths and close the file.
+    ///
+    /// Returns the sample count, so a caller does not have to ask the filesystem
+    /// how long the recording it just made was.
+    pub fn finish(mut self) -> io::Result<u64> {
+        let data_len = u32::try_from(self.samples.saturating_mul(2)).unwrap_or(u32::MAX);
+
+        self.file.seek(SeekFrom::Start(RIFF_SIZE_OFFSET))?;
+        self.file
+            .write_all(&(36_u32.saturating_add(data_len)).to_le_bytes())?;
+        self.file.seek(SeekFrom::Start(DATA_SIZE_OFFSET))?;
+        self.file.write_all(&data_len.to_le_bytes())?;
+        self.file.flush()?;
+
+        Ok(self.samples)
+    }
 }
 
 /// Prepare captured audio for transcription: mono, 16 kHz, WAV.
@@ -356,5 +474,117 @@ mod tests {
             0,
             "a zero rate must not divide by zero"
         );
+    }
+
+    /* ------------------------------------------------------ writing to disk */
+
+    #[test]
+    fn a_streamed_file_is_byte_identical_to_one_encoded_whole() {
+        // The strongest statement available: whatever `encode_wav` produces for a
+        // recording, appending the same samples in arbitrary chunks produces the
+        // same bytes. If the header patching is wrong by a single field, this
+        // fails.
+        let samples: Vec<f32> = (0..5_000)
+            .map(|i| ((i as f32) / 400.0).sin() * 0.6)
+            .collect();
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("streamed.wav");
+
+        let mut writer = WavWriter::create(&path, TARGET_SAMPLE_RATE).unwrap();
+        // Deliberately uneven chunks, including an empty one -- a capture
+        // callback delivers whatever it has.
+        for chunk in samples.chunks(777) {
+            writer.append(chunk).unwrap();
+        }
+        writer.append(&[]).unwrap();
+        let written = writer.finish().unwrap();
+
+        assert_eq!(written, samples.len() as u64);
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            encode_wav(&samples, TARGET_SAMPLE_RATE)
+        );
+    }
+
+    #[test]
+    fn the_two_length_fields_are_patched_and_agree_with_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("lengths.wav");
+
+        let mut writer = WavWriter::create(&path, 16_000).unwrap();
+        writer.append(&[0.5; 100]).unwrap();
+        writer.finish().unwrap();
+
+        let bytes = std::fs::read(&path).unwrap();
+        let riff = u32::from_le_bytes(bytes[4..8].try_into().unwrap());
+        let data = u32::from_le_bytes(bytes[40..44].try_into().unwrap());
+
+        assert_eq!(data, 200, "100 samples at 2 bytes each");
+        assert_eq!(riff, 236, "36 plus the data length");
+        assert_eq!(bytes.len(), HEADER_LEN + 200);
+        assert_eq!(
+            riff as usize,
+            bytes.len() - 8,
+            "RIFF counts what follows it"
+        );
+    }
+
+    #[test]
+    fn an_unfinished_file_reads_as_empty_rather_than_as_garbage() {
+        // The failure this design chooses. A meeting recording cut short by a
+        // crash has a zero-length data chunk, so every decoder reads it as an
+        // empty recording -- which is far better than a file that looks complete
+        // and is not.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("abandoned.wav");
+
+        let mut writer = WavWriter::create(&path, 16_000).unwrap();
+        writer.append(&[0.5; 4_000]).unwrap();
+        drop(writer); // no finish
+
+        let bytes = std::fs::read(&path).unwrap();
+        assert!(bytes.len() > HEADER_LEN, "the samples are on disk");
+        assert_eq!(
+            u32::from_le_bytes(bytes[40..44].try_into().unwrap()),
+            0,
+            "and the header does not claim them"
+        );
+    }
+
+    #[test]
+    fn a_streamed_file_reports_its_own_length_as_it_grows() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("growing.wav");
+
+        let mut writer = WavWriter::create(&path, 16_000).unwrap();
+        assert_eq!(writer.duration_ms(), 0);
+
+        writer.append(&[0.0; 16_000]).unwrap();
+        assert_eq!(writer.duration_ms(), 1_000);
+
+        writer.append(&[0.0; 8_000]).unwrap();
+        assert_eq!(writer.samples(), 24_000);
+        assert_eq!(writer.duration_ms(), 1_500);
+    }
+
+    #[test]
+    fn a_file_longer_than_the_old_in_memory_cap_is_written_without_holding_it() {
+        // The reason this type exists. Forty minutes is past
+        // `capture::MAX_RECORDING_SECONDS`, and the peak allocation here is one
+        // chunk rather than the recording.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("long.wav");
+
+        let chunk = vec![0.25_f32; 16_000];
+        let mut writer = WavWriter::create(&path, 16_000).unwrap();
+        for _ in 0..(40 * 60) {
+            writer.append(&chunk).unwrap();
+        }
+        let samples = writer.finish().unwrap();
+
+        assert_eq!(samples, 16_000 * 40 * 60);
+        let expected = HEADER_LEN as u64 + samples * 2;
+        assert_eq!(std::fs::metadata(&path).unwrap().len(), expected);
     }
 }

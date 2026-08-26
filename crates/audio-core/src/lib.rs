@@ -28,4 +28,4 @@ pub use gate::{GateDecision, GateReason, SpeechGate};
 pub use mix::{mix, mix_to_wav, Mixed, Track};
 pub use system_audio::{SystemAudioSupport, SystemCapture};
 pub use vad::{silero_enabled_for, Context, SileroPreferences, VadConfig};
-pub use wav::{duration_ms, prepare, TARGET_SAMPLE_RATE};
+pub use wav::{duration_ms, prepare, WavWriter, TARGET_SAMPLE_RATE};
