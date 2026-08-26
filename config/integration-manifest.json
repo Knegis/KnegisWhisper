@@ -547,7 +547,7 @@
       "ui": "Settings > Transcription > Local",
       "reachable": false,
       "runtime": "online",
-      "note": "Unreachable, and the reason is specific rather than 'no sidecar'. sherpa-onnx publishes desktop binaries only as .tar.bz2, which install::extract cannot open; it ships a one-shot CLI and a WebSocket server rather than an HTTP endpoint, so neither Transport::Loopback nor HttpHealth applies; and the per-model file layout and flags differ between the Parakeet and Nemotron families. See docs/BUILD_PLAN.md, chunk B4."
+      "note": "Still unreachable, but not for the reason previously recorded: Task 17 pinned sherpa-onnx and gave install::extract a tar.bz2 reader, so the archive format is no longer the blocker, and Task 18 measured and implemented the offline CLI contract for the Parakeet family (kw_transcription_core::sherpa, proven end to end against both pinned Parakeet models). This model is not Parakeet, though: it is one of the two Nemotron models, which are streaming over sherpa-onnx-online-websocket-server's own bespoke WebSocket protocol rather than the sherpa-onnx-offline CLI that was measured. Nobody has written or tested a client for that protocol, and the offline path was not attempted against this model -- it is not offline-shaped, so there is no evidence either way about whether it would apply. Deferred with the reason stated, per docs/BUILD_PLAN.md chunk B4 and docs/PLATFORM_SUPPORT.md's 'Local ASR: sherpa-onnx' section."
     },
     "local-asr:nemotron-speech-streaming-en-0.6b": {
       "status": "ported-with-new-rust-implementation",
@@ -562,7 +562,7 @@
       "ui": "Settings > Transcription > Local",
       "reachable": false,
       "runtime": "online",
-      "note": "Unreachable, and the reason is specific rather than 'no sidecar'. sherpa-onnx publishes desktop binaries only as .tar.bz2, which install::extract cannot open; it ships a one-shot CLI and a WebSocket server rather than an HTTP endpoint, so neither Transport::Loopback nor HttpHealth applies; and the per-model file layout and flags differ between the Parakeet and Nemotron families. See docs/BUILD_PLAN.md, chunk B4."
+      "note": "Still unreachable, but not for the reason previously recorded: Task 17 pinned sherpa-onnx and gave install::extract a tar.bz2 reader, so the archive format is no longer the blocker, and Task 18 measured and implemented the offline CLI contract for the Parakeet family (kw_transcription_core::sherpa, proven end to end against both pinned Parakeet models). This model is not Parakeet, though: it is one of the two Nemotron models, which are streaming over sherpa-onnx-online-websocket-server's own bespoke WebSocket protocol rather than the sherpa-onnx-offline CLI that was measured. Nobody has written or tested a client for that protocol, and the offline path was not attempted against this model -- it is not offline-shaped, so there is no evidence either way about whether it would apply. Deferred with the reason stated, per docs/BUILD_PLAN.md chunk B4 and docs/PLATFORM_SUPPORT.md's 'Local ASR: sherpa-onnx' section."
     },
     "local-asr:parakeet-tdt-0.6b-v3": {
       "status": "ported-with-new-rust-implementation",
@@ -575,9 +575,9 @@
       ],
       "backend": "crates/transcription-core",
       "ui": "Settings > Transcription > Local",
-      "reachable": false,
+      "reachable": true,
       "runtime": null,
-      "note": "Unreachable, and the reason is specific rather than 'no sidecar'. sherpa-onnx publishes desktop binaries only as .tar.bz2, which install::extract cannot open; it ships a one-shot CLI and a WebSocket server rather than an HTTP endpoint, so neither Transport::Loopback nor HttpHealth applies; and the per-model file layout and flags differ between the Parakeet and Nemotron families. See docs/BUILD_PLAN.md, chunk B4."
+      "note": "Measured, not guessed: cargo run -p kw-transcription-core --example sherpa_probe installed the pinned sherpa-onnx-offline CLI, downloaded this exact model, and transcribed tests/fixtures/speech-16k-mono.wav with it, producing the same words whisper's tiny model does on the same input (differing only in capitalisation). kw_transcription_core::sherpa::SherpaOffline (a second LocalTranscriber, alongside WhisperServer) and sherpa_models::install are real, tested code, and tests/sherpa_dictation.rs pins the same finding behind a --ignored test against the production types rather than only the throwaway probe. What is not yet built: the Tauri command layer and Settings UI wiring that would let a person install and select this model the way they already can a whisper model -- apps/desktop/src-tauri/src/dictation.rs's own comment on LocalTargets names this as the anticipated next step ('the next one is the sherpa server'). Reachable at the backend/library level and proven by a real test; not yet reachable by a person clicking through the app. See docs/PLATFORM_SUPPORT.md's 'Local ASR: sherpa-onnx' section for the measured layout and CLI contract."
     },
     "local-asr:parakeet-unified-en-0.6b": {
       "status": "ported-with-new-rust-implementation",
@@ -590,9 +590,9 @@
       ],
       "backend": "crates/transcription-core",
       "ui": "Settings > Transcription > Local",
-      "reachable": false,
+      "reachable": true,
       "runtime": null,
-      "note": "Unreachable, and the reason is specific rather than 'no sidecar'. sherpa-onnx publishes desktop binaries only as .tar.bz2, which install::extract cannot open; it ships a one-shot CLI and a WebSocket server rather than an HTTP endpoint, so neither Transport::Loopback nor HttpHealth applies; and the per-model file layout and flags differ between the Parakeet and Nemotron families. See docs/BUILD_PLAN.md, chunk B4."
+      "note": "Measured, not guessed: cargo run -p kw-transcription-core --example sherpa_probe installed the pinned sherpa-onnx-offline CLI, downloaded this exact model, and transcribed tests/fixtures/speech-16k-mono.wav with it, producing the same words whisper's tiny model does on the same input (differing only in capitalisation). kw_transcription_core::sherpa::SherpaOffline (a second LocalTranscriber, alongside WhisperServer) and sherpa_models::install are real, tested code, and tests/sherpa_dictation.rs pins the same finding behind a --ignored test against the production types rather than only the throwaway probe. What is not yet built: the Tauri command layer and Settings UI wiring that would let a person install and select this model the way they already can a whisper model -- apps/desktop/src-tauri/src/dictation.rs's own comment on LocalTargets names this as the anticipated next step ('the next one is the sherpa server'). Reachable at the backend/library level and proven by a real test; not yet reachable by a person clicking through the app. See docs/PLATFORM_SUPPORT.md's 'Local ASR: sherpa-onnx' section for the measured layout and CLI contract."
     },
     "meeting-stream:assemblyai-realtime": {
       "status": "rewired-to-direct-byok",

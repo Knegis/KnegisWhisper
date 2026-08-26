@@ -52,7 +52,7 @@ platform work that no amount of UI can substitute for.
 | 0 — Audit and contracts | Complete | — |
 | 1 — Tauri foundation | Complete | 4 of 6 window roles exist; Linux/macOS hotkey fallbacks unwritten. Modifier-only shortcuts work on Windows through a keyboard hook. Four of the five hotkey actions have no feature behind them and are now reported as such rather than registered |
 | — Chunk A (shell, types, Providers) | **Done, unchecked by hand** | Storing a key and passing a connection test has not been done by a person on this machine |
-| 2 — Dictation | **Verified on Windows** | 6 of 7 transcription providers reachable; Tinfoil declined pending enclave attestation. sherpa local ASR blocked — see B4 |
+| 2 — Dictation | **Verified on Windows** | 6 of 7 transcription providers reachable; Tinfoil declined pending enclave attestation. 2 of 4 sherpa local ASR models (Parakeet) proven at the backend level but not yet wired into Settings; the 2 Nemotron models stay blocked, deliberately (streaming protocol) — see B4 |
 | 3 — Reasoning | Complete, enterprise unverified | All three enterprise shapes written and tested against vectors and fixtures; no live call. No llama-server sidecar for `ChatRoute::Local`, which already points at `127.0.0.1:8221` |
 | 4 — Meetings and notes | Notes reachable; meetings contract only | No system audio anywhere; 5 WebSocket clients; 5 process detectors; AEC helper |
 | 5 — Calendars | Not started | No crate, no OAuth flow |
@@ -75,7 +75,7 @@ Why the order below is what it is. Each chunk's integrations-made-reachable:
 | F — calendars | new crate | **3** |
 | G — media import | ffmpeg, yt-dlp sidecars | **3** |
 | H — MCP + CLI screens | MCP server | **2** |
-| I — diarization + search | sherpa + Qdrant | **4** (+4 local ASR, once B4 is unblocked) |
+| I — diarization + search | sherpa + Qdrant | **4** (+2 more local ASR once Settings wiring exists for the 2 Parakeet models Task 18 already proved; the 2 Nemotron models need a streaming client first) |
 
 ---
 
@@ -230,7 +230,7 @@ is sherpa. And `local_model` and `local_llm` both had an `InstallProgress`, whic
 TypeScript file is a redeclaration where the later one silently wins; `ipc_types` now refuses a
 name collision by assertion.
 
-### B4. Local ASR — sherpa-onnx (4 models) *(blocked; the plan underestimated it)*
+### B4. Local ASR — sherpa-onnx (4 models) *(Parakeet done; Nemotron deferred, on purpose)*
 
 The plan said "same sidecar pattern". It is not. Looking at
 `k2-fsa/sherpa-onnx` `v1.13.4` — 303 assets — turned up three prerequisites the whisper and llama
@@ -261,6 +261,41 @@ streaming and belong with the meeting clients.
 Adding bz2 support on its own was considered and rejected: an archive format with no consumer is
 the scaffolding this workspace deliberately avoids, and the commit that adds it should be the
 commit that uses it.
+
+**Update (Task 18): the tractability list's first two steps are done.** bz2 support landed with
+its consumer (Task 17, `ArchiveKind::TarBz2`, the sherpa-onnx CLI pinned for all five platforms).
+This task did the third: `cargo run -p kw-transcription-core --example sherpa_probe` installed the
+real CLI and both pinned Parakeet archives and drove a real transcription with each, rather than
+guessing at the contract from the release page as point 3 above said could not be done safely.
+Corrections to what the plan assumed, found by actually running it:
+
+- **No `Transport::Stdio` variant was needed.** `crates/transcription-core::local::LocalTranscriber`
+  already existed as the seam `WhisperServer` implements; `SherpaOffline` is a second
+  implementation of the same trait, and `route::Transport::Local` already says engine selection
+  stays with the local manager. `kw_sidecar::manifest::Transport::Stdio` (already declared for
+  sherpa in `config/sidecars.json`) describes how the *sidecar binary* is installed and run, which
+  is a different question from how a transcription request is routed — the plan's phrasing
+  conflated the two.
+- **The measured layout is flat, not nested**, and identical between the two Parakeet models:
+  `encoder.int8.onnx`, `decoder.int8.onnx`, `joiner.int8.onnx`, `tokens.txt` directly in the model
+  directory, plus a `test_wavs/` sample folder. See docs/PLATFORM_SUPPORT.md's "Local ASR:
+  sherpa-onnx" section for the full measurement, including a real bug the measurement caught (the
+  registry's `sizeMb` is the extracted footprint, not the download size, so a byte-count check
+  against the download had to be replaced with a check that the real files are actually there).
+- **Both Parakeet models transcribe the same fixture whisper's `tiny` model does, correctly** —
+  same words, differing only in capitalisation. `kw_transcription_core::sherpa::SherpaOffline` and
+  `sherpa_models::install` are real, tested code, proven end to end by a `--ignored` integration
+  test (`tests/sherpa_dictation.rs`), and `local-asr:parakeet-tdt-0.6b-v3` /
+  `local-asr:parakeet-unified-en-0.6b` are `reachable: true` in `config/integration-manifest.json`
+  on that strength.
+- **What is not yet built**: the Tauri command layer and Settings UI wiring this list's remaining
+  work assumed would follow immediately — `apps/desktop/src-tauri/src/dictation.rs`'s `LocalTargets`
+  comment already names this as the next shape change. The two Parakeet models are reachable at the
+  backend/library level, not yet by a person clicking through Settings > Transcription > Local.
+- **The two Nemotron models stay exactly where point 2 above left them**: streaming, over
+  `sherpa-onnx-online-websocket-server`'s own protocol, "chunk E's kind of work" — not attempted by
+  this task, and not offline-shaped, so the offline CLI measured here says nothing about whether it
+  would serve them.
 
 ---
 

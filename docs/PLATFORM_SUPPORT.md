@@ -446,6 +446,143 @@ present; where it is not, the app reports `unsupported` rather than appearing to
 
 Calendar access is optional and is never required for meeting transcription.
 
+## Local ASR: sherpa-onnx
+
+`docs/BUILD_PLAN.md`'s chunk B4 recorded that an extracted sherpa model is a
+directory of encoder/decoder/joiner/tokens files whose layout differs between
+the Parakeet and Nemotron families, and that the CLI flags follow the layout
+-- something that "cannot be written correctly from a release page". This is
+the measurement, not a guess: `cargo run -p kw-transcription-core --example
+sherpa_probe` installed the real pinned `sherpa-onnx-offline` CLI on Windows,
+downloaded each pinned Parakeet archive in turn, and drove a real
+transcription with each. `crates/transcription-core/tests/sherpa_dictation.rs`
+pins the same finding behind a `--ignored` test against the production
+`SherpaOffline` type (`cargo test -p kw-transcription-core --test
+sherpa_dictation -- --ignored --nocapture`), so it stays true as the pinned
+sherpa release moves rather than being true only on the day the probe ran.
+
+**The measured directory layout.** Both pinned Parakeet archives --
+`parakeet-unified-en-0.6b` and `parakeet-tdt-0.6b-v3` -- extract to a flat
+directory, not a nested one:
+
+```
+sherpa-onnx-nemo-parakeet-unified-en-0.6b-int8-non-streaming/
+  encoder.int8.onnx       (654,040,552 bytes)
+  decoder.int8.onnx       (7,257,753 bytes)
+  joiner.int8.onnx        (1,735,860 bytes)
+  tokens.txt              (8,952 bytes)
+  test_wavs/0.wav         (sample audio -- not part of the model)
+  bias.md, explainability.md, privacy.md, safety.md
+```
+
+`parakeet-tdt-0.6b-v3` has the identical shape (`encoder.int8.onnx`,
+`decoder.int8.onnx`, `joiner.int8.onnx`, `tokens.txt` at the top level, a
+`test_wavs/` sample folder, no `.md` files). `kw_transcription_core::sherpa::
+discover_transducer_files` looks for exactly these four files by name pattern,
+directly inside the model directory, and refuses -- rather than guessing --
+if one is missing or if more than one file could be it.
+
+**The measured CLI contract.** `sherpa-onnx-offline --help`'s own usage block
+for "(1) Transducer from icefall" is:
+
+```
+sherpa-onnx-offline \
+  --tokens=/path/to/tokens.txt \
+  --encoder=/path/to/encoder.onnx \
+  --decoder=/path/to/decoder.onnx \
+  --joiner=/path/to/joiner.onnx \
+  --num-threads=1 \
+  --decoding-method=greedy_search \
+  /path/to/foo.wav [bar.wav foobar.wav ...]
+```
+
+which is what both probe runs actually invoked (`--num-threads` only, since
+`kw_transcription_core::sherpa::build_args` omits it -- like whisper's own
+`threads` field -- unless a caller chooses a value). A clean run prints one
+line of JSON to stdout per input file, `{"text": "...", ...}` among fields
+this build does not read (`timestamps`, `tokens`, `ys_log_probs`, `words`);
+`sherpa::interpret` parses that shape the same way `local::interpret` parses
+whisper-server's JSON.
+
+There is **no persistent server**: `sherpa-onnx-offline` is a one-shot CLI
+that reads one WAV path and exits, unlike `whisper-server`'s HTTP endpoint on
+a port. `SherpaOffline::transcribe` writes the audio to a temp file and spawns
+a fresh child per request rather than holding a `port` the way `WhisperServer`
+does.
+
+**A real bug this measurement caught.** `config/provider-registry.json`'s
+`sizeMb` for a sherpa model (631 for Parakeet Unified EN 0.6B) is **the
+extracted model's footprint on disk, not the compressed `.tar.bz2` download**:
+the real download was 501,350,460 bytes (~478 MB) and the real extracted
+total is ~663 MB. An early version of `sherpa_models::install` checked the
+*download* against `sizeMb` with the same 5% tolerance `models.rs` uses for
+whisper models, and it failed every install -- a 25-30% gap does not fit a 5%
+tolerance. The fix does not size-check the download at all; instead, after
+extraction, `discover_transducer_files` has to find the real files, which is
+a stronger and more honest check than a byte-count guess: a truncated or
+corrupted archive either fails to extract (`tar`/`bzip2-rs` notice a
+malformed stream) or extracts without a complete file set, and either way the
+install is refused before the model is treated as ready.
+
+**The transcript, compared to whisper on the same input.**
+`tests/fixtures/speech-16k-mono.wav` (the fixture `local_dictation.rs` already
+used for whisper) was transcribed by all three: whisper's pinned `tiny` model
+said
+
+> The Quick Brown Fox jumps over the lazy dog. This is a test of local transcription.
+
+and **both** pinned Parakeet models said
+
+> The quick brown fox jumps over the lazy dog. This is a test of local transcription.
+
+-- identical words, differing only in whisper's mid-sentence capitalisation.
+Real-time factor was 0.109-0.124 on this development machine (single thread),
+against whisper `tiny`'s comparable speed. Quality was not materially worse
+than whisper's on this input; on the strength of that, and of transcribing
+successfully with *both* pinned Parakeet models, `local-asr:parakeet-tdt-0.6b-v3`
+and `local-asr:parakeet-unified-en-0.6b` are `reachable: true` in
+`config/integration-manifest.json` as of this measurement. One fixture is not
+a benchmark suite, and nothing here claims Parakeet is whisper's equal on
+noisy audio, accents, or long-form speech -- only that on the one real input
+this project has a known-good transcript for, it was not worse.
+
+**What is proven and what is not.** `kw_transcription_core::sherpa::
+SherpaOffline` (the second `LocalTranscriber`) and `sherpa_models::install`
+are real, tested code, exercised end to end against the real pinned binary
+and both real pinned Parakeet archives. What does **not** exist yet is the
+Tauri command layer and Settings UI wiring that would let a user install and
+select a Parakeet model from Settings > Transcription > Local the way they
+already can for a whisper model -- `apps/desktop/src-tauri/src/dictation.rs`'s
+own comment on `LocalTargets` already names this as the anticipated next
+step ("the next one is the sherpa server"). Until that lands, the two
+Parakeet models are reachable at the backend/library level and proven by a
+real test, not yet reachable by a person clicking through the app.
+
+**The two Nemotron models stay unreached, on purpose.** Both
+(`nemotron-3.5-asr-streaming-0.6b`, `nemotron-speech-streaming-en-0.6b`) are
+*streaming* models over sherpa's own bespoke WebSocket protocol
+(`sherpa-onnx-online-websocket-server`, confirmed present in the CLI sidecar's
+`bin/` directory -- see below), not the offline CLI this measurement drove.
+Nobody has written or tested a client for that protocol, so
+`config/integration-manifest.json` keeps both `reachable: false`, with the
+note updated to say this specifically rather than repeating the now-false
+claim that the archive format itself was the blocker (Task 17 fixed that).
+
+**Installing the sherpa-onnx CLI extracts the whole `bin/` directory.**
+Confirmed by the probe on Windows: 23 files, not just
+`sherpa-onnx-offline.exe` -- `onnxruntime.dll`, `onnxruntime_providers_shared.dll`,
+and 20 other `sherpa-onnx-*.exe` tools (keyword spotting, audio tagging,
+denoising, TTS, the online and offline WebSocket servers, `sherpa-onnx.exe`
+itself, and more). This is `install::extract`'s existing payload-directory
+model doing what it always does -- installing everything beside the named
+executable, the same as it does for `whisper-server`'s sibling `ggml`
+libraries -- not a defect specific to sherpa. It is also why the Linux and
+macOS archives are 230-385 MB against the Windows CLI's 24 MB: those targets
+ship the "static" build (see `config/sidecars.json`'s `sherpa` entry), which
+statically links `onnxruntime` into every one of those ~23 executables rather
+than sharing one `onnxruntime.dll` beside them the way the Windows "shared"
+build does.
+
 ## GPU acceleration
 
 | Backend | Windows | macOS | Linux |
