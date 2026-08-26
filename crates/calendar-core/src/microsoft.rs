@@ -324,7 +324,17 @@ pub struct EventsFetch {
 /// meant to be replayed as-is, unlike Google's `syncToken`. When it is
 /// `None`, this asks for a fresh delta from the start.
 ///
-/// UNVERIFIED network path; [`parse_delta_page`] is what is fixture-tested.
+/// A 410 is reported as [`SyncError::SyncTokenExpired`], the same as
+/// `crate::google::fetch_events` -- Microsoft's own delta-query guide
+/// documents a 410 with an `Location` header carrying a fresh, tokenless
+/// delta link on an invalidated one, which this treats the same as Google's
+/// bare 410: clear the cursor and ask the caller to retry with `None`. The
+/// `Location` header itself is not read, so a retry always starts a full
+/// delta rather than resuming from wherever Microsoft's header pointed --
+/// UNVERIFIED, believed rather than confirmed against a real tenant.
+///
+/// UNVERIFIED network path otherwise too; [`parse_delta_page`] is what is
+/// fixture-tested.
 pub async fn fetch_events_delta(
     policy: &NetworkPolicy,
     access_token: &Secret,
@@ -339,6 +349,9 @@ pub async fn fetch_events_delta(
 
     for _ in 0..MAX_PAGES {
         let (status, body) = get(policy, access_token, &url).await?;
+        if status == 410 {
+            return Err(SyncError::SyncTokenExpired);
+        }
         if status != 200 {
             return Err(SyncError::HttpStatus { status });
         }

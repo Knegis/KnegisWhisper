@@ -2676,6 +2676,7 @@ dependencies = [
  "chrono",
  "kw-app-core",
  "kw-audio-core",
+ "kw-calendar-core",
  "kw-local-api",
  "kw-meeting-core",
  "kw-network-policy",

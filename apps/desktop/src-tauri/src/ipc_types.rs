@@ -220,6 +220,18 @@ fn render() -> String {
         "updater" => [
             crate::updater::UpdateCheckResult,
         ],
+        "calendars" => [
+            crate::calendar::CalendarProvider,
+            crate::calendar::ConnectOutcome,
+            crate::calendar::SyncOutcome,
+            crate::calendar::SyncRecord,
+            crate::calendar::TokenStatus,
+            crate::calendar::CalendarSummary,
+            crate::calendar::AccountStatus,
+            crate::calendar::ProviderStatus,
+            crate::calendar::CalendarStatus,
+            kw_calendar_core::AppleCalendarSupport,
+        ],
     }
 
     // `ts-rs` leaves a space before the newline it inserts ahead of a field's

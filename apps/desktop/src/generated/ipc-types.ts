@@ -1035,3 +1035,95 @@ discoveryPermissionsAsExpected: boolean | null, };
  * What checking for an update found.
  */
 export type UpdateCheckResult = { "state": "no-public-key-configured" } | { "state": "check-failed", error: string, } | { "state": "current-version-unparseable", version: string, } | { "state": "latest-version-unparseable", tag: string, } | { "state": "up-to-date", current: string, latest: string, } | { "state": "update-available", current: string, latest: string, url: string, };
+
+/* -------------------------------------------------------------- calendars */
+/**
+ * Which calendar provider a command is about, as it crosses the wire.
+ * Mirrors `kw_calendar_core::CalendarProviderKind`, which has no `Serialize`
+ * of its own -- that crate has no reason to know about JSON at all, so the
+ * wire vocabulary lives here instead.
+ */
+export type CalendarProvider = "google" | "microsoft";
+
+/**
+ * What happened when someone clicked "Connect".
+ *
+ * Only the two outcomes that are not simply a refusal: a plain error (no
+ * client ID configured, the loopback receiver could not bind, the token
+ * exchange itself failed) crosses as `Err` the same as every other command,
+ * because there is nothing more for the frontend to do with those than show
+ * them. Being turned down at the consent screen is different -- an ordinary
+ * outcome, not a bug -- so it gets its own state rather than the same
+ * generic error text.
+ */
+export type ConnectOutcome = { "state": "connected", accountEmail: string, calendars: number, } | { "state": "denied", reason: string, };
+
+/**
+ * What one sync attempt found. Both the command's own return value and
+ * what [`CalendarRuntime::record_sync`] persists to settings -- one shape
+ * for both means the screen can never see a different answer from a sync
+ * it just ran than from the record `calendar_status` reads back later.
+ */
+export type SyncOutcome = { "state": "completed", eventsUpserted: number, eventsRemoved: number,
+/**
+ * Per-calendar failures within an otherwise-completed sync -- a
+ * calendar list refresh can succeed while one calendar's events
+ * fail, and reporting only the aggregate would hide which one.
+ */
+calendarErrors: Array<string>, } | { "state": "token-unavailable", message: string, } | { "state": "failed", message: string, };
+
+/**
+ * A sync outcome together with when it happened, persisted to settings so
+ * [`calendar_status`] can report it without a network call.
+ */
+export type SyncRecord = {
+/**
+ * RFC 3339.
+ */
+at: string, outcome: SyncOutcome, };
+
+/**
+ * Whether a token is on file and, if so, whether it is still within its
+ * recorded expiry.
+ *
+ * A local read, not a network probe -- reaching the network on every status
+ * poll is exactly what `docs/NETWORK_BOUNDARY.md` rules out for a passive
+ * status command. `Missing` covers both "never connected" and "the
+ * credential is gone even though the database row is still there", which is
+ * exactly the state [`CalendarRuntime::disconnect`] leaves behind -- see its
+ * doc comment on why the row itself is not deleted. Checking the credential
+ * store directly, rather than trusting the row's mere existence, is what
+ * keeps that decision from ever reading back as "connected".
+ */
+export type TokenStatus = "active" | "needs-refresh" | "missing";
+
+export type CalendarSummary = { id: string, summary: string, isPrimary: boolean, isSelected: boolean,
+/**
+ * What sync actually wrote for this calendar, not the provider's own
+ * total -- see `kw_calendar_core::events_repo::count_events`.
+ */
+eventCount: number, };
+
+export type AccountStatus = { email: string, token: TokenStatus, calendars: Array<CalendarSummary>, lastSync: SyncRecord | null, };
+
+export type ProviderStatus = { clientIdConfigured: boolean,
+/**
+ * The client ID itself, shown back rather than only "configured" or
+ * not. It is not a secret -- there is no client secret in this flow at
+ * all, see `kw_calendar_core`'s module doc -- so there is nothing to
+ * protect by hiding it, and showing it is what makes "you supplied
+ * this" a fact on screen rather than a claim in a comment.
+ */
+clientId: string | null, account: AccountStatus | null, };
+
+export type CalendarStatus = { google: ProviderStatus, microsoft: ProviderStatus, apple: AppleCalendarSupport, };
+
+/**
+ * What this build can do about Apple Calendar, checked rather than assumed.
+ *
+ * One variant today because nothing is implemented anywhere -- see the
+ * module doc. Shaped as a tagged enum, like
+ * [`kw_audio_core::SystemAudioSupport`], so a future `Available` variant
+ * slots in without changing how the frontend switches on it.
+ */
+export type AppleCalendarSupport = { "state": "unsupported", reason: string, };

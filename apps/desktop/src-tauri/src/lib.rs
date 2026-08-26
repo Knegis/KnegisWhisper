@@ -11,6 +11,7 @@
 //! connection tests are explicitly invoked by the user, never run at startup.
 //! See `docs/NETWORK_BOUNDARY.md`.
 
+mod calendar;
 mod commands;
 mod diagnostics;
 mod dictation;
@@ -140,9 +141,11 @@ pub fn run() -> anyhow::Result<()> {
             let credentials = state.credentials_arc();
             // Cloned before it is moved into the dictation runtime below.
             let meeting_credentials = std::sync::Arc::clone(&credentials);
+            let calendar_credentials = std::sync::Arc::clone(&credentials);
             let policy = state.policy().clone();
             // Cloned before `policy` is moved into the dictation runtime below.
             let meeting_policy = policy.clone();
+            let calendar_policy = policy.clone();
             app.manage(state);
 
             // Local transcription. The catalogue is parsed here so a malformed
@@ -257,6 +260,16 @@ pub fn run() -> anyhow::Result<()> {
             // in progress. There is no path from it to `start` without a click.
             meetings.watch();
             app.manage(meetings);
+
+            // Calendars. Nothing here reaches the network either: connecting an
+            // account and syncing one are both explicit clicks on
+            // `Integrations > Calendar` -- see calendar.rs's module doc.
+            let calendars = std::sync::Arc::new(calendar::CalendarRuntime::new(
+                db.clone(),
+                calendar_credentials,
+                calendar_policy,
+            ));
+            app.manage(calendars);
 
             // Off unless the user has switched it on. See local_api.rs.
             let api = std::sync::Arc::new(local_api::LocalApiRuntime::new(db));
@@ -374,6 +387,12 @@ pub fn run() -> anyhow::Result<()> {
             updater::update_check,
             updater::update_check_last,
             updater::update_dismiss,
+            calendar::calendar_status,
+            calendar::calendar_set_client_id,
+            calendar::calendar_connect,
+            calendar::calendar_disconnect,
+            calendar::calendar_sync,
+            calendar::calendar_set_selected,
         ])
         .run(tauri::generate_context!())
         .context("the application exited with an error")

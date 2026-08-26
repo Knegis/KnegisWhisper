@@ -31,7 +31,9 @@ pub enum SyncError {
     /// its cursor and perform a full resync. Believed from
     /// <https://developers.google.com/calendar/api/guides/sync>, not
     /// confirmed against a live account -- see the module doc on
-    /// `crate::google`.
+    /// `crate::google`. `crate::microsoft::fetch_events_delta` reports the
+    /// same variant for a 410 on a Graph delta query, for the analogous
+    /// reason documented in its own module doc.
     #[error("the sync cursor has expired; a full resync is required")]
     SyncTokenExpired,
 
