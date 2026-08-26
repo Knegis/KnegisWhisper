@@ -121,17 +121,38 @@ jobs:
       # build: tsc --noEmit && vite build) itself, unlike the CI rust job
       # which calls `cargo build` directly and so has to build the frontend
       # as a separate step first.
+      #
+      # Task 16 turned `bundle.createUpdaterArtifacts` on in
+      # apps/desktop/src-tauri/tauri.conf.json, which asks the bundler to
+      # produce a `.sig` file next to each updater-capable bundle, signed
+      # with TAURI_SIGNING_PRIVATE_KEY. No such secret exists in this
+      # repository yet -- see docs/SECURITY.md for how a maintainer
+      # generates one and where it goes -- so this step overrides that
+      # setting back off, via `tauri build`'s own `--config` merge flag,
+      # for exactly the run that has no key to sign with. The alternative --
+      # leaving the flag on and hoping the bundler tolerates a missing key
+      # -- would risk turning Task 15's verified "builds successfully,
+      # unsigned" state into a hard failure the moment this task's flag
+      # change reached a real runner.
+      #
+      # UNVERIFIED: whether `tauri build` would in fact refuse to run at all
+      # with `createUpdaterArtifacts: true` and no signing key present,
+      # rather than simply skipping the `.sig` files, has never been
+      # exercised on any of the three runners below -- this workflow has
+      # never run. `shell: bash` is set explicitly so the same conditional
+      # runs identically on windows-latest, which defaults to PowerShell.
       - name: tauri build
-        run: npm run tauri:build
+        shell: bash
+        run: |
+          if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            npm run tauri:build
+          else
+            npm run tauri:build -- --config '{"bundle":{"createUpdaterArtifacts":false}}'
+          fi
         working-directory: apps/desktop
-
-      # -----------------------------------------------------------------
-      # Placeholder for Task 16: once `createUpdaterArtifacts` is turned on
-      # in apps/desktop/src-tauri/tauri.conf.json, an updater-signing step
-      # (TAURI_SIGNING_PRIVATE_KEY / TAURI_SIGNING_PRIVATE_KEY_PASSWORD, set
-      # as env on the build step above) belongs here. Deliberately not added
-      # by this task -- see task-15-brief.md decision 4.
-      # -----------------------------------------------------------------
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
       # UNVERIFIED: this path assumes Cargo's default workspace target
       # directory. apps/desktop/src-tauri is a member of the workspace
@@ -150,6 +171,14 @@ jobs:
             target/release/bundle/**/*.app
             target/release/bundle/**/*.AppImage
             target/release/bundle/**/*.deb
+            target/release/bundle/**/*.sig
+          # `*.sig` matches nothing yet -- no TAURI_SIGNING_PRIVATE_KEY secret
+          # exists, so the build step above turns createUpdaterArtifacts back
+          # off for this run -- but it belongs in the same glob list as the
+          # bundles themselves for the day a signing key is added: without
+          # it, the signatures the bundler produced would silently never
+          # leave this job, and "signed" would be true of the build and false
+          # of the release nobody could tell apart from an unsigned one.
           if-no-files-found: error
 
   publish:
@@ -177,7 +206,7 @@ jobs:
       # glob follow this action's documented usage pattern from memory, but
       # neither its GITHUB_TOKEN handling nor its glob semantics for this
       # major version have been exercised -- this workflow has never run.
-      - name: Create GitHub release (unsigned)
+      - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -190,8 +219,20 @@ jobs:
           tag_name: ${{ inputs.tag }}
           draft: ${{ inputs.draft }}
           name: ${{ inputs.tag }}
+          # The updater-signing sentence is conditional on the same secret
+          # the build job checks, so this body cannot go on claiming
+          # "unsigned updater artifacts" the first release built after a real
+          # TAURI_SIGNING_PRIVATE_KEY is added -- the two would otherwise
+          # drift apart exactly the way an unmaintained status message does.
+          #
+          # UNVERIFIED: `cond && 'a' || 'b'` is the standard way to write a
+          # ternary in GitHub Actions expression syntax, but nothing else in
+          # this repository's workflows has used it before now, and it has
+          # not been exercised by an actual dispatch.
           body: |
-            Unsigned build. No code-signing identity is configured for this
+            Unsigned bundles. No code-signing identity is configured for this
             project; see the "Import Apple/Windows signing certificate" steps
             in .github/workflows/release.yml.
+
+            Updater artifacts: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' && 'signed with the configured updater key.' || 'not signed -- no TAURI_SIGNING_PRIVATE_KEY secret is configured yet. See docs/SECURITY.md.' }}
           files: bundles/**/*

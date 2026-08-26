@@ -91,10 +91,28 @@ Two upstream mechanisms to port rather than reinvent:
 | `ps-list` | `sysinfo` | `meetingProcessDetector.js` |
 | `onnxruntime-node` | `ort` | `onnxWorker.js` |
 | `ws` | `tokio-tungstenite` | 5 streaming clients |
-| `electron-updater` | `tauri-plugin-updater` → **our own** releases | `updater.js` |
+| `electron-updater` | **our own** releases, checked via `kw_network_policy::NetworkPolicy` rather than `tauri-plugin-updater` — see below | `updater.js` |
 | `http.createServer` | `axum` on loopback | `cliBridge.js` (429) |
 | `utilityProcess` + `MessageChannelMain` | `tokio` task or sidecar | `onnxWorkerClient.js` |
 | `unzipper` / `unbzip2-stream` / `tar` | `zip`, `bzip2`, `tar` | download scripts |
+
+### The updater does not use `tauri-plugin-updater`
+
+An earlier pass at this table named that plugin as the replacement for
+`electron-updater`, and `docs/COMPLETION_PLAN.md`'s phase 9 said the same. The
+plugin ships its own HTTP client, and using it as intended would mean a
+second piece of code in the workspace opening its own connections outside
+`kw_network_policy::NetworkPolicy` — the crate whose module doc and the
+brief's network-boundary section both say is *the* egress point, not one of
+several. `apps/desktop/src-tauri/src/updater.rs` gets the same outcome
+(checking this project's own GitHub releases, never at startup, never
+without a person asking) by calling `NetworkPolicy::get_text` under
+`RequestPurpose::OwnGithubReleasesUpdater` directly. `bundle.createUpdaterArtifacts`
+in `tauri.conf.json` is still turned on, because producing signed artifacts is
+the bundler's job and has nothing to do with which client later checks for
+them; `plugins.updater.pubkey` is still read from the location that plugin
+would use, so a keypair generated the standard way (`docs/SECURITY.md`) needs
+no translation if this project adopts the plugin later.
 
 ### Window roles
 
@@ -107,7 +125,7 @@ All `frame: false`.
 | Agent overlay | 420×300 | `transparent`, **`focusable: true`** |
 | Transcription preview | 460×132 | `focusable: false` |
 | Meeting notification | 392×92 | **content-protected** — "visible to user but out of screen shares". **Built.** `apps/desktop/src-tauri/src/meeting_window.rs`, reusing `overlay::apply_treatments` unchanged so it reports the same read-back evidence. Positioned bottom-right, which the dictation panel still does not do |
-| Update notification | 392×92 | as above |
+| Update notification | 392×92 | **content-protected** — same rule as the meeting notification. **Built.** `apps/desktop/src-tauri/src/update_window.rs`, the same builder and `overlay::apply_treatments` unchanged, so it reports the same read-back evidence. Shown only once `updater.rs`'s explicit, user-triggered check finds a newer release; never on its own |
 
 Per-platform z-order policy from `setupAlwaysOnTop()`, worth copying exactly: macOS
 `("floating", 1)` plus `setVisibleOnAllWorkspaces({visibleOnFullScreen, skipTransformProcessType})`;

@@ -139,9 +139,18 @@ manifest entries.
 - Diarization and semantic search, which are the three `temporarily-deferred` entries and already
   carry dependencies and named interfaces.
 
-**Phase 9 — shipping.** `tauri-plugin-updater` against this project's own releases, a bundle job in
-CI, and signing. `tauri.conf.json` already declares nsis/dmg/appimage/deb targets with
-`createUpdaterArtifacts: false`, and no CI job builds any of them.
+**Phase 9 — shipping.** Done except by-hand verification. `.github/workflows/release.yml`
+(`workflow_dispatch` only) builds and publishes unsigned nsis/dmg/appimage/deb bundles on
+all three OSes. `createUpdaterArtifacts` is now `true`, and the update check itself
+(`apps/desktop/src-tauri/src/updater.rs`) is opt-in and user-triggered, against this
+project's own GitHub releases through `kw_network_policy::NetworkPolicy` -- **not**
+`tauri-plugin-updater` as originally planned here, so that crate's "only egress point in
+the workspace" stays a real property rather than a nominal one with a second HTTP client
+sitting beside it. `docs/SECURITY.md` documents the keypair procedure; no keypair exists,
+so a check reports `NoPublicKeyConfigured` rather than checking unsafely or silently. The
+workflow has never been dispatched and no release has ever been published, so every path
+past `git tag` -- including whether the bundler actually needs the signing key present
+when `createUpdaterArtifacts` is on -- stays unverified; see `docs/PLATFORM_SUPPORT.md`.
 
 **Phase 10 — agents.** Chat agent, voice agent and translation: the window role, the dispatch, the
 four `*-custom` credential slots, and the orphan tables. The home for the three actions whose
@@ -156,10 +165,11 @@ phase is what makes them mean something.
 Not chunks of their own; each belongs to whichever chunk touches it first. All three were still true
 at the last check.
 
-- **Three `RequestPurpose` variants have no caller.** `UserTriggeredMediaImport`,
-  `UserConfiguredCalendarProvider` and `OwnGithubReleasesUpdater` appear only in the allowlist array
-  in `crates/network-policy/src/lib.rs`. They are promises with nothing behind them; phase 8,
-  chunk J and phase 9 respectively make them true.
+- **Two `RequestPurpose` variants still have no caller.** `UserTriggeredMediaImport` and
+  `UserConfiguredCalendarProvider` appear only in the allowlist array in
+  `crates/network-policy/src/lib.rs`. They are promises with nothing behind them; phase 8 and
+  chunk J respectively make them true. `OwnGithubReleasesUpdater` is no longer in this list --
+  `apps/desktop/src-tauri/src/updater.rs` calls it now.
 - **Five orphan tables.** `snippets`, `actions`, `agent_conversations`, `agent_messages` and
   `contacts` are created by `0001_initial.sql` and touched only by the importer. No crate owns them
   and no manifest entry mentions them. Phase 10 claims four; `snippets` needs a decision.

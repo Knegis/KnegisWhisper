@@ -76,6 +76,10 @@ AWS Bedrock, and Google Vertex AI.
 
 **Model and binary downloads** — `huggingface.co`, `github.com` release assets.
 
+**Update check** — `api.github.com`, for this project's own release listing
+only, and only when a person explicitly asks (`updater.rs`). Never on
+startup, never on a timer.
+
 **Calendars** — `accounts.google.com`, `oauth2.googleapis.com`, `www.googleapis.com`,
 `login.microsoftonline.com`, `graph.microsoft.com`.
 

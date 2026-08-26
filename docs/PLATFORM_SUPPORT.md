@@ -459,6 +459,43 @@ GPU packs are downloaded separately with a verified digest. First Vulkan start n
 timeout — shader compilation can take well over a minute. On failure the app falls back to CPU
 and records why.
 
+## Updates
+
+`apps/desktop/src-tauri/src/updater.rs` checks this project's own GitHub
+releases, opt-in and only when a person presses "Check for updates" on
+Settings > Diagnostics -- never at startup, never on a timer. It has never
+been exercised end to end, for one specific reason rather than a general
+disclaimer: **no release has ever been published.**
+`.github/workflows/release.yml` is `workflow_dispatch`-only and nobody has
+run it, so `GET /repos/{owner}/{repo}/releases/latest` has only ever had one
+possible answer, 404, on every platform.
+
+Everything downstream of that fact is unverified in the ordinary sense of the
+word -- believed rather than observed -- and each piece is marked at its
+point of use rather than only here:
+
+- **The response shape `updater.rs` parses** (`tag_name`, `html_url`) is
+  GitHub's documented shape for that endpoint, not one this code has seen.
+- **Whether `tauri build` tolerates `bundle.createUpdaterArtifacts: true`
+  with no `TAURI_SIGNING_PRIVATE_KEY` present**, rather than refusing to run
+  at all, has never been checked on any of the three CI runners. The
+  workflow defends against the worse of the two possibilities by overriding
+  the setting back off when the secret is absent, but which possibility is
+  actually true is unconfirmed either way.
+- **Whether a real GitHub release actually carries the `.sig` files the
+  bundler would produce**, once a signing key exists, in a shape
+  `actions/upload-artifact`'s glob and `softprops/action-gh-release`'s
+  `files: bundles/**/*` both pick up -- untested, because no signing key and
+  no release exist yet.
+- **The version comparison itself** (`semver::Version`, with a published tag's
+  leading `v` stripped) is exercised by unit tests against invented tags, not
+  against a tag this project has actually cut.
+
+None of this bears on whether the application works without an update check;
+it bears only on whether that specific, opt-in feature would behave as
+designed the first time somebody actually uses it. See `docs/SECURITY.md` for
+the keypair procedure and `docs/COMPLETION_PLAN.md` phase 9 for what remains.
+
 ## Known environment constraints
 
 - **Non-ASCII or space characters in the user data path** crash the native whisper and parakeet

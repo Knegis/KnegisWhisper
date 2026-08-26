@@ -48,6 +48,61 @@ URL import keeps upstream's SSRF guards: HTTPS only, DNS resolution followed by 
 link-local address rejection, a 500 MB cap, at most 3 redirects, a 6-hour duration cap, and a
 30-second stall timeout.
 
+## Updates
+
+Optional and user-initiated only. No check runs at startup or on a timer;
+`updater.rs`'s only caller is the "Check for updates" button on
+Settings > Diagnostics. See `docs/NETWORK_BOUNDARY.md`.
+
+The bundler can produce signed update artifacts
+(`bundle.createUpdaterArtifacts` in `apps/desktop/src-tauri/tauri.conf.json`,
+turned on), but this repository ships no keypair and generates none as part
+of its own tooling or CI. A maintainer who wants signed, verifiable updates
+makes one themselves:
+
+1. From `apps/desktop`, run
+   `npx tauri signer generate -w ~/.tauri/knegiswhisper.key` (any path
+   outside this repository; `-p` sets a password instead of an interactive
+   prompt). This writes a private key to that path and prints the matching
+   public key to the terminal.
+2. Paste the printed public key into `plugins.updater.pubkey` in
+   `apps/desktop/src-tauri/tauri.conf.json` and commit that change. The
+   public key is not a secret — it is what a client checks a downloaded
+   update's signature against, the same role a TLS certificate's public half
+   plays.
+3. Add the private key file's contents as the repository secret
+   `TAURI_SIGNING_PRIVATE_KEY` (repository Settings > Secrets and variables >
+   Actions). If step 1 set a password, also add
+   `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. `.github/workflows/release.yml`
+   reads both as environment variables on its `tauri build` step and signs
+   updater artifacts only when they are present; without them, that workflow
+   builds unsigned bundles, which is the state this repository is in today.
+4. **The private key must never be committed, and must never be generated on
+   a machine this project's CI or tooling controls.** It belongs nowhere in
+   this repository, in `Cargo.lock`, or in any workflow file — only in the
+   repository secret and, before that, on whatever machine ran step 1.
+
+Until a keypair exists, `plugins.updater.pubkey` stays empty, and a check
+reports that state explicitly (`UpdateCheckResult::NoPublicKeyConfigured`)
+rather than either extreme: checking anyway would mean trusting a downloaded
+update on the strength of an HTTPS connection to GitHub alone, with nothing
+that verifies the bytes came from this project's own signing key; silently
+reporting nothing would look identical to "no update exists" for a reason
+that has nothing to do with whether one does.
+
+This feature does not depend on the `tauri-plugin-updater` crate. Every
+request it makes stays behind `kw_network_policy::NetworkPolicy`, tagged
+`RequestPurpose::OwnGithubReleasesUpdater` like every other network call in
+this application, rather than through that plugin's own HTTP client — see
+`crates/network-policy/src/lib.rs`'s module doc on why this crate stays the
+only one that builds a `reqwest::Client`. `plugins.updater.pubkey` is still
+read from the conventional location the plugin itself would use, so a
+keypair generated the standard way drops in without translation.
+
+Installing an update is not implemented. A check reports that a newer
+release exists and where; nothing downloads or runs it without a further,
+separate, explicit action, which is not part of this project today.
+
 ## Local API
 
 Loopback only — never `0.0.0.0`, and not on the LAN by default. A 32-byte random bearer token
