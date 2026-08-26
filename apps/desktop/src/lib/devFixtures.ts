@@ -37,6 +37,7 @@ import type {
   Binding,
   CleanupRoute,
   CleanupSettings,
+  ConfigReview,
   CredentialSlotStatus,
   Diagnostics,
   ExportedTranscript,
@@ -71,6 +72,7 @@ import type {
   Sources,
   TranscriptEvent,
   Transcription,
+  UpdateCheckResult,
 } from "../generated/ipc-types";
 
 /* ------------------------------------------------------------- capabilities */
@@ -559,6 +561,9 @@ let meetingStatus: MeetingStatus = {
     reason: "this platform cannot exclude a window from screen capture",
   },
 };
+
+let meetingLanguage = "en";
+let meetingKeyterms = ["Nordbank", "KnegisWhisper", "WASAPI", "Realtek"];
 
 let detectLists: Lists = {
   allow: ["webex.exe", "bluejeans.exe"],
@@ -1173,6 +1178,46 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
     };
     return null;
   },
+  meeting_language: () => meetingLanguage,
+  meeting_set_language: (a) => {
+    meetingLanguage = arg<string>(a, "language") ?? meetingLanguage;
+    return null;
+  },
+  meeting_keyterms: () => meetingKeyterms,
+  meeting_set_keyterms: (a) => {
+    meetingKeyterms = arg<string[]>(a, "keyterms") ?? meetingKeyterms;
+    return null;
+  },
+  /*
+   * Deliberately reports terms being dropped. Deepgram's fixture caps keyterms
+   * at 100 and this asks for more, so the screen's "silently discarded" warning
+   * has something to render -- the branch nobody sees if the fixture is tidy.
+   */
+  meeting_review_config: () =>
+    ({
+      keytermsRequested: meetingKeyterms.length,
+      keytermsUsed: Math.min(meetingKeyterms.length, 2),
+      keytermsDropped: Math.max(0, meetingKeyterms.length - 2),
+      languageRequired: false,
+      sessionLimitSeconds: 1800,
+    }) satisfies ConfigReview,
+
+  /* updates */
+  update_check: () =>
+    ({
+      state: "update-available",
+      current: "0.1.0-dev",
+      latest: "0.2.0",
+      url: "https://github.com/axelalbertkarlsson/KnegisWhisper/releases/tag/v0.2.0",
+    }) satisfies UpdateCheckResult,
+  update_check_last: () =>
+    ({
+      state: "up-to-date",
+      current: "0.1.0-dev",
+      latest: "0.1.0-dev",
+    }) satisfies UpdateCheckResult,
+  update_dismiss: () => null,
+
   meeting_detect_lists: () => detectLists,
   meeting_set_detect_lists: (a) => {
     detectLists = arg<Lists>(a, "lists") ?? detectLists;
