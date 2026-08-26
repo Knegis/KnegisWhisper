@@ -2771,6 +2771,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "kw-mcp"
+version = "0.1.0"
+dependencies = [
+ "kw-cli",
+ "kw-local-api",
+ "kw-notes-core",
+ "kw-security",
+ "kw-storage",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "kw-meeting-core"
 version = "0.1.0"
 dependencies = [

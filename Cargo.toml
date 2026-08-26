@@ -17,14 +17,13 @@ members = [
     "crates/sidecar",
     "crates/transcription-core",
     "tools/knegiswhisper",
+    "tools/knegiswhisper-mcp",
     "crates/storage",
 ]
 
 # Crates are added by the commit that gives them real content, not up front.
 # The brief asks for vertical slices over broad unfinished scaffolding, so an
 # empty crate is not created just to reserve its name.
-#
-#   tools/knegiswhisper-mcp   phase 7
 #
 # See docs/ARCHITECTURE.md for the full intended layout.
 
@@ -55,6 +54,7 @@ kw-sidecar = { path = "crates/sidecar" }
 kw-storage = { path = "crates/storage" }
 kw-transcription-core = { path = "crates/transcription-core" }
 kw-cli = { path = "tools/knegiswhisper" }
+kw-mcp = { path = "tools/knegiswhisper-mcp" }
 
 # Async
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "process", "net"] }
