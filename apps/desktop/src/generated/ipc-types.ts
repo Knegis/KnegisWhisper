@@ -1094,8 +1094,17 @@ at: string, outcome: SyncOutcome, };
  * doc comment on why the row itself is not deleted. Checking the credential
  * store directly, rather than trusting the row's mere existence, is what
  * keeps that decision from ever reading back as "connected".
+ *
+ * `RefreshFailed` exists because `expires_at` alone cannot distinguish "past
+ * its expiry, never tried since" from "past its expiry, and the most recent
+ * attempt to refresh it already failed" -- see [`combine_token_status`].
+ * Reporting the second case as plain `NeedsRefresh`, the way this type used
+ * to before a token could carry a known, recorded failure, is what let
+ * `calendar_status` say "Connected -- the next sync refreshes it
+ * automatically" in the same payload as a `SyncOutcome::TokenUnavailable`
+ * telling the user to reconnect.
  */
-export type TokenStatus = "active" | "needs-refresh" | "missing";
+export type TokenStatus = { "state": "active" } | { "state": "needs-refresh" } | { "state": "missing" } | { "state": "refresh-failed", message: string, };
 
 export type CalendarSummary = { id: string, summary: string, isPrimary: boolean, isSelected: boolean,
 /**

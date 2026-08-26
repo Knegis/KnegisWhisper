@@ -191,6 +191,21 @@ impl CalendarRuntime {
         Ok(trimmed.to_owned())
     }
 
+    /// The account currently on file as connected for `provider`, if any.
+    ///
+    /// A read failure is propagated as `Err`, never folded into `Ok(None)`.
+    /// `connect` uses this to decide whether to disconnect a previously
+    /// connected account before storing a new one; treating a failed read
+    /// the same as "nothing was connected" would skip that disconnect
+    /// silently, leaving a different account's refresh token live in the OS
+    /// credential store with no way for `calendar_status` to ever find it
+    /// again once `account_key` is overwritten.
+    async fn read_previous_account(&self, provider: CalendarProvider) -> CmdResult<Option<String>> {
+        settings::get::<String>(self.db.pool(), account_key(provider))
+            .await
+            .map_err(|e| fail("could not read the previously connected account", e))
+    }
+
     /// Run the loopback OAuth flow, discover which account it belongs to
     /// from the provider's own calendar list, and store the result --
     /// replacing whichever account was previously connected for this
@@ -245,10 +260,12 @@ impl CalendarRuntime {
             }
         };
 
-        if let Some(previous) = settings::get::<String>(self.db.pool(), account_key(provider))
-            .await
-            .unwrap_or(None)
-        {
+        // A read failure here must not be treated as "nothing was
+        // previously connected" -- that would silently skip disconnecting a
+        // different account, leaving its refresh token live in the OS
+        // credential store with no row anywhere pointing at it once
+        // `account_key` is overwritten below. See `read_previous_account`.
+        if let Some(previous) = self.read_previous_account(provider).await? {
             if previous != account_email {
                 self.disconnect(provider, &previous).await?;
             }
@@ -436,13 +453,21 @@ impl CalendarRuntime {
             }
         }
         let keep_ids: Vec<String> = calendars.iter().map(|c| c.id.clone()).collect();
-        let _ = calendars_repo::prune_calendars(
+        if let Err(err) = calendars_repo::prune_calendars(
             self.db.pool(),
             CalendarProviderKind::Google,
             email,
             &keep_ids,
         )
-        .await;
+        .await
+        {
+            // Matches `finish_connect_google`: a prune failure must not let
+            // this report `Completed` while a calendar the provider no
+            // longer lists is still sitting here locally.
+            return SyncOutcome::Failed {
+                message: fail("could not remove calendars no longer listed", err),
+            };
+        }
 
         let rows = match calendars_repo::list_calendars(
             self.db.pool(),
@@ -580,13 +605,21 @@ impl CalendarRuntime {
             }
         }
         let keep_ids: Vec<String> = calendars.iter().map(|c| c.id.clone()).collect();
-        let _ = calendars_repo::prune_calendars(
+        if let Err(err) = calendars_repo::prune_calendars(
             self.db.pool(),
             CalendarProviderKind::Microsoft,
             email,
             &keep_ids,
         )
-        .await;
+        .await
+        {
+            // Matches `finish_connect_microsoft`: a prune failure must not
+            // let this report `Completed` while a calendar the provider no
+            // longer lists is still sitting here locally.
+            return SyncOutcome::Failed {
+                message: fail("could not remove calendars no longer listed", err),
+            };
+        }
 
         let rows = match calendars_repo::list_calendars(
             self.db.pool(),
@@ -800,12 +833,26 @@ pub struct SyncRecord {
 /// doc comment on why the row itself is not deleted. Checking the credential
 /// store directly, rather than trusting the row's mere existence, is what
 /// keeps that decision from ever reading back as "connected".
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
-#[serde(rename_all = "kebab-case")]
+///
+/// `RefreshFailed` exists because `expires_at` alone cannot distinguish "past
+/// its expiry, never tried since" from "past its expiry, and the most recent
+/// attempt to refresh it already failed" -- see [`combine_token_status`].
+/// Reporting the second case as plain `NeedsRefresh`, the way this type used
+/// to before a token could carry a known, recorded failure, is what let
+/// `calendar_status` say "Connected -- the next sync refreshes it
+/// automatically" in the same payload as a `SyncOutcome::TokenUnavailable`
+/// telling the user to reconnect.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(
+    tag = "state",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
 pub enum TokenStatus {
     Active,
     NeedsRefresh,
     Missing,
+    RefreshFailed { message: String },
 }
 
 async fn token_status(
@@ -831,6 +878,41 @@ async fn token_status(
     } else {
         TokenStatus::NeedsRefresh
     })
+}
+
+/// Fold the most recent recorded sync's own attempt to resolve this token
+/// into what [`token_status`] derived from the row and the credential store
+/// alone.
+///
+/// Pure, taking already-computed inputs, so the decision is testable without
+/// a database or a credential store -- `token_status`'s own async I/O is a
+/// separate concern from this one.
+///
+/// Only `NeedsRefresh` is ever downgraded. `Active` means the cached access
+/// token is not due to expire yet, which can only be true because a refresh
+/// succeeded (or was never needed) more recently than any recorded failure
+/// -- `ensure_fresh_access_token` never advances `expires_at` on a failed
+/// attempt, so `Active` and a *current* recorded `TokenUnavailable` cannot
+/// both be true at once. `Missing` already says everything there is to say.
+///
+/// A `NeedsRefresh` paired with a recorded `TokenUnavailable` is not merely
+/// "expired, untested" -- it is definitively broken *right now*, because the
+/// only way the row's `expires_at` could have moved back into the future
+/// since that recorded failure is a refresh that succeeded, which would have
+/// produced `Active` instead. Any other recorded outcome (`Completed`,
+/// `Failed` for a non-token reason, or none at all) leaves `NeedsRefresh`
+/// exactly as `token_status` reported it: expired, but not known to be
+/// broken.
+fn combine_token_status(row_status: TokenStatus, last_sync: Option<&SyncRecord>) -> TokenStatus {
+    if row_status != TokenStatus::NeedsRefresh {
+        return row_status;
+    }
+    match last_sync.map(|record| &record.outcome) {
+        Some(SyncOutcome::TokenUnavailable { message }) => TokenStatus::RefreshFailed {
+            message: message.clone(),
+        },
+        _ => TokenStatus::NeedsRefresh,
+    }
 }
 
 #[derive(Debug, Clone, Serialize, TS)]
@@ -915,6 +997,10 @@ async fn provider_status(
             let last_sync = settings::get::<SyncRecord>(db.pool(), last_sync_key(provider))
                 .await
                 .map_err(|e| fail("could not read the last sync record", e))?;
+            // Never let a bare `NeedsRefresh` read as "will refresh
+            // automatically" once a sync has already tried that and
+            // recorded that it failed -- see `combine_token_status`.
+            let token = combine_token_status(token, last_sync.as_ref());
 
             Some(AccountStatus {
                 email,
@@ -1247,5 +1333,108 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(status, TokenStatus::NeedsRefresh);
+    }
+
+    fn token_unavailable_record(message: &str) -> SyncRecord {
+        SyncRecord {
+            at: "2026-01-01T00:00:00Z".to_owned(),
+            outcome: SyncOutcome::TokenUnavailable {
+                message: message.to_owned(),
+            },
+        }
+    }
+
+    #[test]
+    fn needs_refresh_with_a_recorded_token_failure_becomes_refresh_failed() {
+        let record = token_unavailable_record("invalid_grant");
+        let combined = combine_token_status(TokenStatus::NeedsRefresh, Some(&record));
+        assert_eq!(
+            combined,
+            TokenStatus::RefreshFailed {
+                message: "invalid_grant".to_owned()
+            }
+        );
+    }
+
+    #[test]
+    fn needs_refresh_with_no_recorded_sync_stays_needs_refresh() {
+        // Expired, but nothing has tried and failed yet -- a real difference
+        // from the case above, and the label for it must not say the same
+        // thing as a known failure.
+        assert_eq!(
+            combine_token_status(TokenStatus::NeedsRefresh, None),
+            TokenStatus::NeedsRefresh
+        );
+    }
+
+    #[test]
+    fn needs_refresh_with_an_unrelated_recorded_outcome_stays_needs_refresh() {
+        let completed = SyncRecord {
+            at: "2026-01-01T00:00:00Z".to_owned(),
+            outcome: SyncOutcome::Completed {
+                events_upserted: 3,
+                events_removed: 0,
+                calendar_errors: Vec::new(),
+            },
+        };
+        assert_eq!(
+            combine_token_status(TokenStatus::NeedsRefresh, Some(&completed)),
+            TokenStatus::NeedsRefresh
+        );
+
+        let failed = SyncRecord {
+            at: "2026-01-01T00:00:00Z".to_owned(),
+            outcome: SyncOutcome::Failed {
+                message: "the calendar list could not be read".to_owned(),
+            },
+        };
+        assert_eq!(
+            combine_token_status(TokenStatus::NeedsRefresh, Some(&failed)),
+            TokenStatus::NeedsRefresh
+        );
+    }
+
+    #[test]
+    fn active_and_missing_are_never_downgraded_by_a_recorded_failure() {
+        // `Active` cannot coexist with a *current* recorded `TokenUnavailable`
+        // in practice -- see the doc comment -- but this pins that the
+        // function does not even try to second-guess either state: only
+        // `NeedsRefresh` is ever folded together with the sync record.
+        let record = token_unavailable_record("invalid_grant");
+        assert_eq!(
+            combine_token_status(TokenStatus::Active, Some(&record)),
+            TokenStatus::Active
+        );
+        assert_eq!(
+            combine_token_status(TokenStatus::Missing, Some(&record)),
+            TokenStatus::Missing
+        );
+    }
+
+    #[tokio::test]
+    async fn a_previous_account_read_failure_is_propagated_not_treated_as_absent() {
+        // The regression this guards against: `connect` used to fold a
+        // settings-read error into `unwrap_or(None)`, which took the
+        // "nothing was previously connected" branch on a database failure
+        // and silently skipped disconnecting a different account -- leaving
+        // its refresh token live in the OS credential store with nothing
+        // pointing at it once `account_key` was overwritten.
+        let db = kw_storage::Db::open_in_memory().await.unwrap();
+        let creds: Arc<dyn CredentialStore> = Arc::new(kw_security::MemoryCredentialStore::new());
+        let policy = NetworkPolicy::new().unwrap();
+        let runtime = CalendarRuntime::new(db.clone(), creds, policy);
+
+        // A closed pool fails every subsequent query, which is the cheapest
+        // way to force `settings::get` into `Err` without a real outage.
+        db.pool().close().await;
+
+        let err = runtime
+            .read_previous_account(CalendarProvider::Google)
+            .await
+            .unwrap_err();
+        assert!(
+            err.contains("could not read"),
+            "a read failure must surface as an error, not as Ok(None): {err}"
+        );
     }
 }

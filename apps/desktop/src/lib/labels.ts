@@ -427,14 +427,18 @@ export function updateCheckLabel(result: UpdateCheckResult): Stated {
  *
  * `active` means the cached access token has not yet passed its recorded
  * expiry — a local fact, not a network probe. `needs-refresh` is not shown
- * as "disconnected": the next sync refreshes it automatically, and most of
- * the time that succeeds silently. `missing` covers both "never connected"
- * and the credential having been removed while a database row lingers —
- * see `calendar.rs::token_status` — and both read the same to a person: not
- * connected.
+ * as "disconnected": nothing has tried to refresh it yet since it expired,
+ * and the next sync does that automatically, most of the time silently.
+ * `missing` covers both "never connected" and the credential having been
+ * removed while a database row lingers — see `calendar.rs::token_status` —
+ * and both read the same to a person: not connected. `refresh-failed` is the
+ * state `needs-refresh` must never be confused with: it means a sync
+ * already tried to refresh this exact token and recorded that it failed
+ * (`calendar.rs::combine_token_status`), so this reads as not connected
+ * rather than as an automatic retry that is quietly pending.
  */
 export function tokenStatusLabel(status: TokenStatus): Stated {
-  switch (status) {
+  switch (status.state) {
     case "active":
       return { text: "Connected", detail: "the cached access token is still valid" };
     case "needs-refresh":
@@ -444,6 +448,11 @@ export function tokenStatusLabel(status: TokenStatus): Stated {
       };
     case "missing":
       return { text: "Not connected", detail: "" };
+    case "refresh-failed":
+      return {
+        text: "Not connected",
+        detail: `the last attempt to refresh the access token failed (${status.message}); reconnect the account`,
+      };
   }
 }
 
