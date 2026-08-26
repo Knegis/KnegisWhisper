@@ -30,21 +30,32 @@
 //!   migration to). `kw_storage::assert_no_credential_columns` is the
 //!   backstop that would catch a regression, not the reason this is safe.
 //!
-//! Task 8 builds calendar event sync, the Tauri commands, and the settings
-//! screen on top of this. This crate stops at: build the authorize URL, run
-//! the loopback receiver, exchange the code, store the refresh token, and
-//! mint a fresh access token on demand. There is no Apple/EventKit support
-//! here -- that is local platform access, not an OAuth flow, and belongs to
-//! whatever does event sync.
+//! Task 8 builds on top of this: [`apple`], [`google`], and [`microsoft`] are
+//! event sync for the three providers the schema names
+//! (`crates/storage/migrations/0001_initial.sql`), [`calendars_repo`] and
+//! [`events_repo`] persist what they fetch, and
+//! `apps/desktop/src-tauri/src/calendar.rs` is the Tauri command layer built
+//! on both this module and the flow above it.
 
+pub mod apple;
+pub mod calendars_repo;
 pub mod credentials;
+pub mod events_repo;
 pub mod exchange;
 pub mod flow;
+pub mod google;
+pub mod microsoft;
 pub mod pkce;
 pub mod provider;
 pub mod redirect;
+pub mod sync_support;
 pub mod tokens_repo;
 
+pub use crate::apple::{
+    AppleCalendarError, AppleCalendarSource, AppleCalendarSummary, AppleCalendarSupport,
+};
+pub use crate::calendars_repo::CalendarRow;
+pub use crate::events_repo::EventRow;
 pub use crate::exchange::{ExchangeError, NetworkPolicySender, TokenSender, TokenSet};
 pub use crate::flow::{
     begin_authorization, complete_authorization, ensure_fresh_access_token, store_tokens,
@@ -53,4 +64,5 @@ pub use crate::flow::{
 pub use crate::pkce::{constant_time_eq, generate_state, Pkce, PkceError};
 pub use crate::provider::{CalendarProviderKind, ProviderEndpoints};
 pub use crate::redirect::{CallbackParams, LoopbackReceiver, RedirectError};
+pub use crate::sync_support::{StoredAttendee, SyncError};
 pub use crate::tokens_repo::TokenRow;
