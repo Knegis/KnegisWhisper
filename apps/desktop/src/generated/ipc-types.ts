@@ -492,6 +492,126 @@ export type ReasoningStatus = { settings: CleanupSettings, route: CleanupRoute, 
  */
 export type Transcription = { id: number, text: string, rawText: string | null, createdAt: string | null, hasAudio: boolean, audioDurationMs: number | null, provider: string | null, model: string | null, status: string, errorMessage: string | null, errorCode: string | null, routeKind: string | null, };
 
+/* --------------------------------------------------------------- meetings */
+/**
+ * Which capture a chunk came from.
+ */
+export type AudioSource = "mic" | "system";
+
+/**
+ * One piece of transcript from a provider.
+ */
+export type TranscriptEvent = { text: string,
+/**
+ * False while the provider may still revise this text.
+ */
+isFinal: boolean,
+/**
+ * Seconds from the start of the session.
+ */
+timestamp: number, speaker: string | null, source: AudioSource, };
+
+/**
+ * How a provider expects keyterms on the wire.
+ *
+ * The differences are not cosmetic: each needs different serialisation, and one
+ * of them silently truncates.
+ */
+export type KeytermWire = "json-query-param" | "repeated-query-param" | "session-config";
+
+/**
+ * Whether a provider does anything with keyterms.
+ */
+export type KeytermSupport = { "state": "unsupported" } | { "state": "supported",
+/**
+ * `None` means no documented limit.
+ */
+max: number | null, wire: KeytermWire, };
+
+/**
+ * Whether a provider can be used, and if not, why not.
+ *
+ * Three states rather than a boolean, because the three need different words on
+ * the screen and lead to different actions.
+ *
+ * Named `Client…` rather than plain `Availability` because `local_model` already
+ * exports one — whether a *server binary* is published for this platform — and
+ * two Rust types cannot share a TypeScript name. `ipc_types.rs` asserts on that,
+ * and caught this.
+ */
+export type ClientAvailability = { "state": "available" } | { "state": "no-client", reason: string, } | { "state": "declined", reason: string, };
+
+/**
+ * One provider as the settings screen needs it.
+ *
+ * A flattened view rather than [`MeetingProviderCapabilities`] itself: that type
+ * carries a `Duration`, which serialises as `{secs, nanos}` and is not what a
+ * screen wants, and `&'static [u32]`. Named `Meeting…` because
+ * `provider-registry` already exports a `ProviderSummary` and two Rust types
+ * cannot share one TypeScript name — `ipc_types.rs` asserts on exactly that.
+ */
+export type MeetingProviderSummary = { id: string, name: string,
+/**
+ * First, because it is the first thing a privacy-conscious user asks.
+ */
+audioLeavesDevice: boolean, keyterms: KeytermSupport, sessionLimitSeconds: number | null, tokenRotation: boolean, sampleRates: Array<number>, speakerLabels: boolean, partials: boolean, languageDetection: boolean, reconnect: boolean, batchFallback: boolean, availability: ClientAvailability,
+/**
+ * The same honest sentence [`MeetingProviderCapabilities::summary`] builds,
+ * rendered once here rather than reassembled in TypeScript.
+ */
+summary: string, };
+
+/**
+ * What a meeting session is doing.
+ */
+export type MeetingState = "idle" | "recording" | "finishing";
+
+/**
+ * Which captures are actually running.
+ *
+ * Reported rather than assumed, because a meeting works microphone-only and the
+ * user should know which one they got. Zero system-audio samples means nobody
+ * else spoke; *no system capture at all* is a different fact.
+ */
+export type Sources = { microphone: boolean, systemAudio: boolean,
+/**
+ * Why system audio is not being captured, when it is not.
+ */
+systemAudioReason: string | null, };
+
+/**
+ * What can be said about the meeting session.
+ */
+export type MeetingStatus = { state: MeetingState,
+/**
+ * The provider in use, while there is one.
+ */
+provider: string | null, elapsedSeconds: number, sources: Sources | null,
+/**
+ * What this platform can do about system audio, whether or not a meeting is
+ * running.
+ */
+systemAudio: SystemAudioSupport, };
+
+/**
+ * How a meeting ended.
+ */
+export type MeetingOutcome = { "outcome": "saved", noteId: number, durationSeconds: number,
+/**
+ * Where the recording is, so the note is not the only copy.
+ */
+recordingPath: string,
+/**
+ * Non-zero when audio was never transcribed. A transcript with a hole in
+ * it must not look complete.
+ */
+gaps: number,
+/**
+ * True when the whole-file pass failed and the overlapping live
+ * partials were saved instead.
+ */
+transcriptIsPartials: boolean, } | { "outcome": "nothing-transcribed", recordingPath: string, } | { "outcome": "cancelled" } | { "outcome": "failed", message: string, };
+
 /* ------------------------------------------------------------------ notes */
 /**
  * A note, as listed.

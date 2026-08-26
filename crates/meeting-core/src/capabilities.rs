@@ -372,13 +372,18 @@ pub fn is_allowed(id: &str) -> bool {
 ///
 /// Three states rather than a boolean, because the three need different words on
 /// the screen and lead to different actions.
+///
+/// Named `Client…` rather than plain `Availability` because `local_model` already
+/// exports one — whether a *server binary* is published for this platform — and
+/// two Rust types cannot share a TypeScript name. `ipc_types.rs` asserts on that,
+/// and caught this.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
 #[serde(
     tag = "state",
     rename_all = "kebab-case",
     rename_all_fields = "camelCase"
 )]
-pub enum Availability {
+pub enum ClientAvailability {
     /// A client exists. This provider can be selected.
     Available,
     /// No client is written yet. Not a promise that one will be.
@@ -388,7 +393,7 @@ pub enum Availability {
     Declined { reason: &'static str },
 }
 
-impl Availability {
+impl ClientAvailability {
     #[must_use]
     pub const fn is_available(self) -> bool {
         matches!(self, Self::Available)
@@ -397,13 +402,13 @@ impl Availability {
 
 /// What can be said about `id` today.
 #[must_use]
-pub fn availability(id: &str) -> Availability {
+pub fn availability(id: &str) -> ClientAvailability {
     if is_allowed(id) {
-        return Availability::Available;
+        return ClientAvailability::Available;
     }
     match declined(id) {
-        Some(reason) => Availability::Declined { reason },
-        None => Availability::NoClient {
+        Some(reason) => ClientAvailability::Declined { reason },
+        None => ClientAvailability::NoClient {
             reason: "No streaming client for this provider has been written yet.",
         },
     }
@@ -432,7 +437,7 @@ pub struct MeetingProviderSummary {
     pub language_detection: bool,
     pub reconnect: bool,
     pub batch_fallback: bool,
-    pub availability: Availability,
+    pub availability: ClientAvailability,
     /// The same honest sentence [`MeetingProviderCapabilities::summary`] builds,
     /// rendered once here rather than reassembled in TypeScript.
     pub summary: String,
@@ -526,7 +531,7 @@ mod tests {
 
         let deepgram = listed.iter().find(|p| p.id == "deepgram-realtime").unwrap();
         match deepgram.availability {
-            Availability::NoClient { reason } => {
+            ClientAvailability::NoClient { reason } => {
                 assert!(reason.contains("written yet"), "{reason}")
             }
             other => panic!("{other:?}"),
@@ -542,7 +547,7 @@ mod tests {
         let listed = listing();
         let tinfoil = listed.iter().find(|p| p.id == "tinfoil-realtime").unwrap();
         match tinfoil.availability {
-            Availability::Declined { reason } => {
+            ClientAvailability::Declined { reason } => {
                 assert!(reason.contains("attestation"), "{reason}");
                 assert!(reason.contains("refused"), "{reason}");
             }

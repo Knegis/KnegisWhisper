@@ -91,11 +91,24 @@ test("an entry that does not say whether it is reachable is caught", () => {
 
 test("claiming to be reachable through a surface that is not built is caught", () => {
   const found = newViolations((input) => {
-    // Settings > Meetings is the real case: six providers named, no screen.
-    const key = Object.keys(input.manifest.entries).find(
-      (k) => input.manifest.entries[k].ui === "Settings > Meetings"
+    // Any surface that is not built yet will do, and the test finds one rather
+    // than naming one. It used to name `Settings > Meetings`, and when that
+    // screen was written this test started passing vacuously: setting
+    // `reachable: true` on an entry behind a *built* surface is not a violation,
+    // so it asserted nothing. Finding the surface -- and failing loudly if there
+    // is none -- is what stops that happening again.
+    const unbuilt = Object.entries(input.surfaces.surfaces)
+      .filter(([, surface]) => !surface.built)
+      .map(([name]) => name);
+
+    const key = Object.keys(input.manifest.entries).find((k) =>
+      unbuilt.includes(input.manifest.entries[k].ui)
     );
-    assert.ok(key, "Settings > Meetings should still be claimed by an entry");
+    assert.ok(
+      key,
+      `no entry names an unbuilt surface, so this test cannot check anything. ` +
+        `Unbuilt: ${unbuilt.join(", ") || "none"}. Point it at a real case or delete it.`
+    );
     input.manifest.entries[key].reachable = true;
   });
 

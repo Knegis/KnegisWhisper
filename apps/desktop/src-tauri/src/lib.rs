@@ -21,6 +21,7 @@ mod ipc_types;
 mod local_api;
 mod local_llm;
 mod local_model;
+mod meeting;
 mod overlay;
 mod reasoning;
 mod shortcuts;
@@ -135,6 +136,8 @@ pub fn run() -> anyhow::Result<()> {
             let db = state.db().clone();
             let credentials = state.credentials_arc();
             let policy = state.policy().clone();
+            // Cloned before `policy` is moved into the dictation runtime below.
+            let meeting_policy = policy.clone();
             app.manage(state);
 
             // Local transcription. The catalogue is parsed here so a malformed
@@ -193,6 +196,16 @@ pub fn run() -> anyhow::Result<()> {
             reasoning::apply_at_startup(&session, &db);
 
             app.manage(session);
+
+            // Meetings. Nothing starts here and nothing is scheduled: a meeting
+            // begins only when somebody presses the button, which is what "the
+            // user must know it is recording" means in practice.
+            app.manage(std::sync::Arc::new(meeting::MeetingRuntime::new(
+                handle.clone(),
+                db.clone(),
+                meeting_policy,
+                local.shared(),
+            )));
 
             // Off unless the user has switched it on. See local_api.rs.
             let api = std::sync::Arc::new(local_api::LocalApiRuntime::new(db));
@@ -293,6 +306,11 @@ pub fn run() -> anyhow::Result<()> {
             local_llm::local_llm_install,
             local_llm::local_llm_start,
             local_llm::local_llm_stop,
+            meeting::meeting_providers,
+            meeting::meeting_status,
+            meeting::meeting_start,
+            meeting::meeting_stop,
+            meeting::meeting_cancel,
         ])
         .run(tauri::generate_context!())
         .context("the application exited with an error")

@@ -18,11 +18,16 @@ import type {
   Accelerator,
   Binding,
   CaptureExclusion,
+  ClientAvailability,
   DictationOutcome,
   HotkeyChange,
   InstallProgress,
+  KeytermSupport,
+  MeetingOutcome,
   NonActivating,
   ShortcutHookStatus,
+  Sources,
+  SystemAudioSupport,
   VerifiedBy,
 } from "./ipc";
 
@@ -201,5 +206,106 @@ export function progressLabel(progress: InstallProgress): string {
       return "Unpacking…";
     case "done":
       return `Installed (${verificationLabel(progress.verifiedBy)})`;
+  }
+}
+
+/* ----------------------------------------------------------------- meetings */
+
+/**
+ * What can be said about system audio, without overclaiming.
+ *
+ * Lifted out of `Diagnostics.tsx` because the meetings screen needs the same
+ * answer, and two copies of it would be two chances to describe the same state
+ * differently.
+ */
+export function systemAudioValue(s: SystemAudioSupport): string {
+  switch (s.state) {
+    case "available":
+      // Deliberately not "Available": the mechanism exists and, on Linux,
+      // nobody has heard it produce sound.
+      return s.unverified ? "Available, never tested" : "Available";
+    case "no-device":
+      return "No device offers it";
+    case "unsupported":
+      return "Not supported here";
+  }
+}
+
+/**
+ * Why a meeting provider can or cannot be chosen.
+ *
+ * The three states get three different sentences because they lead to three
+ * different actions, and because "coming soon" over a deliberate refusal is the
+ * quiet dishonesty this project keeps finding upstream.
+ */
+export function availabilityLabel(a: ClientAvailability): string {
+  switch (a.state) {
+    case "available":
+      return "ready to use";
+    case "no-client":
+      return a.reason;
+    case "declined":
+      return `refused: ${a.reason}`;
+  }
+}
+
+/** What a provider does with keyterms, including nothing. */
+export function keytermLabel(k: KeytermSupport): string {
+  switch (k.state) {
+    case "unsupported":
+      // Both providers that do this accept them without complaint, so saying
+      // nothing here would leave a field that does nothing looking like one that
+      // works.
+      return "keyterms are accepted and ignored";
+    case "supported":
+      return k.max === null
+        ? "keyterms are used"
+        : `up to ${k.max} keyterms are used; any more are dropped`;
+  }
+}
+
+/** Which captures a running meeting actually opened. */
+export function sourcesLabel(s: Sources | null): string {
+  if (!s) return "";
+  if (s.microphone && s.systemAudio) {
+    return "your microphone and what the other participants say";
+  }
+  if (s.microphone) {
+    return s.systemAudioReason
+      ? `your microphone only — ${s.systemAudioReason}`
+      : "your microphone only";
+  }
+  return "nothing is being recorded";
+}
+
+/** How a meeting ended, in one line. */
+export function meetingOutcomeLabel(outcome: MeetingOutcome): string {
+  switch (outcome.outcome) {
+    case "saved": {
+      const minutes = Math.round(outcome.durationSeconds / 60);
+      const parts = [`Saved as note ${outcome.noteId} (${minutes} min).`];
+      if (outcome.transcriptIsPartials) {
+        // Said plainly rather than left for the reader to notice repeated
+        // phrases and wonder.
+        parts.push(
+          "The whole-recording pass did not complete, so the saved transcript is the live one and some phrases repeat.",
+        );
+      }
+      if (outcome.gaps > 0) {
+        parts.push(
+          `${outcome.gaps} stretch(es) of audio were never transcribed — the transcriber could not keep up.`,
+        );
+      }
+      parts.push(`The recording is at ${outcome.recordingPath}.`);
+      return parts.join(" ");
+    }
+    case "nothing-transcribed":
+      // Not a failure. Saying "failed" would send somebody looking for a fault
+      // when the room was simply quiet.
+      return `Nothing was transcribed — no speech was recognised. The recording is at ${outcome.recordingPath}.`;
+    case "cancelled":
+      return "Discarded. The recording was deleted.";
+    case "failed":
+      return outcome.message;
   }
 }

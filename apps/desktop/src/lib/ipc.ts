@@ -25,17 +25,20 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 import type {
   Accelerator,
+  AudioSource,
   Availability,
   Binding,
   CaptureExclusion,
   CleanupRoute,
   CleanupSettings,
+  ClientAvailability,
   Conflict,
   CredentialKind,
   CredentialSlotStatus,
   CredentialStoreStatus,
   Diagnostics,
   Dispatch,
+  DraftStatus,
   EnterpriseConfig,
   EnterpriseField,
   EnterpriseStatus,
@@ -50,12 +53,16 @@ import type {
   ImportReport,
   InputDevice,
   InstallProgress,
-  DraftStatus,
+  KeytermSupport,
   LocalApiStatus,
   LocalLlmModelStatus,
   LocalLlmProgress,
   LocalLlmStatus,
   LocalStatus,
+  MeetingOutcome,
+  MeetingProviderSummary,
+  MeetingState,
+  MeetingStatus,
   ModelCacheStatus,
   ModelStatus,
   NewNoteRequest,
@@ -80,10 +87,12 @@ import type {
   SessionState,
   ShortcutHookStatus,
   SkipReason,
+  Sources,
   SystemAudioSupport,
-  UnhandledAction,
   TableReport,
+  TranscriptEvent,
   Transcription,
+  UnhandledAction,
   VerifiedBy,
 } from "../generated/ipc-types";
 
@@ -94,16 +103,19 @@ import type {
  */
 export type {
   Accelerator,
+  AudioSource,
   Binding,
   CaptureExclusion,
   CleanupRoute,
   CleanupSettings,
+  ClientAvailability,
   Conflict,
   CredentialKind,
   CredentialSlotStatus,
   CredentialStoreStatus,
   Diagnostics,
   Dispatch,
+  DraftStatus,
   EnterpriseConfig,
   EnterpriseField,
   EnterpriseStatus,
@@ -117,12 +129,16 @@ export type {
   ImportReport,
   InputDevice,
   InstallProgress,
-  DraftStatus,
+  KeytermSupport,
   LocalApiStatus,
   LocalLlmModelStatus,
   LocalLlmProgress,
   LocalLlmStatus,
   LocalStatus,
+  MeetingOutcome,
+  MeetingProviderSummary,
+  MeetingState,
+  MeetingStatus,
   ModelCacheStatus,
   ModelStatus,
   NonActivating,
@@ -143,10 +159,12 @@ export type {
   SearchHit,
   SessionState,
   ShortcutHookStatus,
+  Sources,
   SystemAudioSupport,
-  UnhandledAction,
   TableReport,
+  TranscriptEvent,
   Transcription,
+  UnhandledAction,
   VerifiedBy,
 };
 
@@ -197,6 +215,68 @@ export async function onHotkey(
   handler: (fired: HotkeyFired) => void,
 ): Promise<UnlistenFn> {
   return listen<HotkeyFired>("hotkey", (event) => handler(event.payload));
+}
+
+/* ----------------------------------------------------------------- meetings */
+
+/**
+ * Every meeting provider, with whether it can be used.
+ *
+ * The list comes from Rust, and so does the reason a provider cannot be chosen.
+ * A screen that decided that for itself would be a second source of truth about
+ * which clients exist — which is exactly the defect that had all six providers
+ * reporting as permitted with no client behind any of them.
+ */
+export async function getMeetingProviders(): Promise<MeetingProviderSummary[]> {
+  return invoke<MeetingProviderSummary[]>("meeting_providers");
+}
+
+export async function getMeetingStatus(): Promise<MeetingStatus> {
+  return invoke<MeetingStatus>("meeting_status");
+}
+
+/**
+ * Start recording a meeting.
+ *
+ * Returns which captures actually started: a meeting works microphone-only, and
+ * the user should be told which one they got rather than left to assume.
+ */
+export async function startMeeting(
+  provider: string,
+  systemAudio: boolean,
+): Promise<Sources> {
+  return invoke<Sources>("meeting_start", { provider, systemAudio });
+}
+
+export async function stopMeeting(): Promise<MeetingOutcome> {
+  return invoke<MeetingOutcome>("meeting_stop");
+}
+
+export async function cancelMeeting(): Promise<void> {
+  return invoke("meeting_cancel");
+}
+
+export async function onMeetingState(
+  handler: (state: MeetingState) => void,
+): Promise<UnlistenFn> {
+  return listen<MeetingState>("meeting-state", (event) => handler(event.payload));
+}
+
+/** Live transcript, a window at a time. Every one is a partial. */
+export async function onMeetingTranscript(
+  handler: (event: TranscriptEvent) => void,
+): Promise<UnlistenFn> {
+  return listen<TranscriptEvent>("meeting-transcript", (event) =>
+    handler(event.payload),
+  );
+}
+
+export async function onMeetingOutcome(
+  handler: (outcome: MeetingOutcome) => void,
+): Promise<UnlistenFn> {
+  return listen<MeetingOutcome>("meeting-outcome", (event) =>
+    handler(event.payload),
+  );
 }
 
 /* ---------------------------------------------------------------- providers */

@@ -27,7 +27,7 @@ pub mod capabilities;
 pub mod local;
 
 pub use capabilities::{
-    availability, capabilities, client, declined, is_allowed, listing, Availability, Client,
+    availability, capabilities, client, declined, is_allowed, listing, Client, ClientAvailability,
     KeytermSupport, KeytermWire, MeetingProviderCapabilities, MeetingProviderSummary, PROVIDERS,
 };
 
@@ -45,7 +45,7 @@ pub struct AudioChunk {
 }
 
 /// Which capture a chunk came from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ts_rs::TS)]
 #[serde(rename_all = "kebab-case")]
 pub enum AudioSource {
     /// The user's microphone.
@@ -72,7 +72,7 @@ pub struct MeetingProviderConfig {
 }
 
 /// One piece of transcript from a provider.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
 pub struct TranscriptEvent {
     pub text: String,

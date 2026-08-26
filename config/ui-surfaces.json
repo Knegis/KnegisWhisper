@@ -41,8 +41,7 @@
     "Settings > Meetings": {
       "surfaceId": "settings.meetings",
       "component": "apps/desktop/src/views/SettingsMeetings.tsx",
-      "built": false,
-      "note": "crates/meeting-core holds the trait and the capability model and none of the five WebSocket clients."
+      "built": true
     },
     "Integrations > Calendar": {
       "surfaceId": "integrations.calendar",

@@ -2655,6 +2655,7 @@ dependencies = [
  "kw-app-core",
  "kw-audio-core",
  "kw-local-api",
+ "kw-meeting-core",
  "kw-network-policy",
  "kw-notes-core",
  "kw-overlay",

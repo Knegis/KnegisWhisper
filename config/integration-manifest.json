@@ -655,9 +655,11 @@
       "upstream": [
         "src/helpers/parakeetWsServer.js"
       ],
-      "backend": "crates/meeting-core",
+      "backend": "crates/meeting-core/src/local.rs",
       "ui": "Settings > Meetings",
-      "reachable": false
+      "reachable": true,
+      "frontend": "apps/desktop/src/views/SettingsMeetings.tsx",
+      "notes": "Repeated short passes over the local whisper-server, not the sherpa-onnx WebSocket server upstream used -- that runtime is blocked, see chunk B4. Named 'Local windowed model' so it is not mistaken for word-by-word streaming."
     },
     "credential:openai": {
       "status": "ported-with-new-rust-implementation",

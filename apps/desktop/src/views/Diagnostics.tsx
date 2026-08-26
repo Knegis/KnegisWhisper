@@ -16,21 +16,8 @@ import {
   type Diagnostics,
   type SystemAudioSupport,
 } from "../lib/ipc";
+import { systemAudioValue } from "../lib/labels";
 import { captureExclusionLabel, nonActivatingLabel } from "../lib/labels";
-
-/** What can be said about system audio, without overclaiming. */
-function systemAudioValue(s: SystemAudioSupport): string {
-  switch (s.state) {
-    case "available":
-      // The unverified case is deliberately not "Available": the mechanism
-      // exists and nobody has heard it produce sound.
-      return s.unverified ? "Available, never tested" : "Available";
-    case "no-device":
-      return "No device offers it";
-    case "unsupported":
-      return "Not supported here";
-  }
-}
 
 function systemAudioDetail(s: SystemAudioSupport): string {
   switch (s.state) {

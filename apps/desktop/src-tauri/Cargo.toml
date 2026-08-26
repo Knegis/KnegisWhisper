@@ -55,6 +55,7 @@ kw-app-core.workspace = true
 kw-audio-core.workspace = true
 kw-local-api.workspace = true
 kw-network-policy.workspace = true
+kw-meeting-core.workspace = true
 kw-notes-core.workspace = true
 kw-reasoning-core.workspace = true
 kw-sidecar.workspace = true

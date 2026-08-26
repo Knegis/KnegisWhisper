@@ -164,6 +164,18 @@ fn render() -> String {
         "history" => [
             kw_storage::transcriptions::Transcription,
         ],
+        "meetings" => [
+            kw_meeting_core::AudioSource,
+            kw_meeting_core::TranscriptEvent,
+            kw_meeting_core::KeytermWire,
+            kw_meeting_core::KeytermSupport,
+            kw_meeting_core::ClientAvailability,
+            kw_meeting_core::MeetingProviderSummary,
+            crate::meeting::MeetingState,
+            crate::meeting::Sources,
+            crate::meeting::MeetingStatus,
+            crate::meeting::MeetingOutcome,
+        ],
         "notes" => [
             kw_notes_core::notes::Note,
             kw_notes_core::notes::Folder,
