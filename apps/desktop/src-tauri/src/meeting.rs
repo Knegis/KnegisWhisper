@@ -44,6 +44,21 @@
 //! corrected, because a doc comment asserting an unbuilt feature is the same
 //! defect as an interface reporting a value it never read, and this project has
 //! now found that three times.
+//!
+//! # Detection offers; it never records
+//!
+//! [`Watcher`] polls the process table while idle and, when it finds a meeting
+//! *in progress*, shows the notification window with an offer. There is no path
+//! from it to [`MeetingRuntime::start`] that does not go through a click.
+//!
+//! **Only in-call evidence prompts**, and that is a measurement rather than a
+//! preference. `meeting_detect_probe` on this machine found `ms-teams.exe`
+//! running with no call in progress — new Teams runs the call inside its own
+//! process, so there is no separate in-call signal to find. Prompting on "the
+//! client is open" would therefore fire every launch for anyone whose Teams
+//! starts with Windows, which is most corporate machines, and the feature would
+//! be switched off within a day. Teams and FaceTime are reported on the screen
+//! instead, with the reason, so the limit is visible rather than felt as a bug.
 
 use std::sync::mpsc as sync_mpsc;
 use std::sync::Arc;
@@ -57,9 +72,11 @@ use kw_meeting_core::{
     MeetingTranscriptionProvider, TranscriptEvent,
 };
 use kw_network_policy::NetworkPolicy;
+use kw_overlay::CaptureExclusion;
+use kw_platform::meeting_detect::{self, Detected, Lists};
 use kw_storage::Db;
 use serde::Serialize;
-use tauri::{AppHandle, Emitter as _, State};
+use tauri::{AppHandle, Emitter as _, Manager as _, State};
 use tokio::sync::{mpsc, Mutex};
 use ts_rs::TS;
 
@@ -69,6 +86,8 @@ pub const STATE_EVENT: &str = "meeting-state";
 pub const TRANSCRIPT_EVENT: &str = "meeting-transcript";
 /// The meeting ended, with what came of it.
 pub const OUTCOME_EVENT: &str = "meeting-outcome";
+/// A meeting appears to be in progress. Carries an `Offer`, or null to clear it.
+pub const OFFER_EVENT: &str = "meeting-offer";
 
 /// How often the recorder drains the captures.
 ///
@@ -76,6 +95,27 @@ pub const OUTCOME_EVENT: &str = "meeting-outcome";
 /// when audio is transcribed, and this only decides how often it is moved out of
 /// the capture buffers. Draining more often would cost locks for nothing.
 const DRAIN_INTERVAL: Duration = Duration::from_secs(1);
+
+/// How often the process table is walked, while no meeting is being recorded.
+///
+/// Five seconds. A full walk is not free — 628 processes on the machine this was
+/// written on — and five seconds still arrives while a call is being joined.
+/// There is nothing to detect during a meeting, so the watcher skips the walk
+/// entirely then rather than polling and discarding.
+const DETECT_INTERVAL: Duration = Duration::from_secs(5);
+
+/// Settings key: whether a detected meeting offers to record.
+const PROMPT_KEY: &str = "meetings.promptOnDetect";
+/// Settings key: the user's own process names.
+const LISTS_KEY: &str = "meetings.detect";
+
+/// Prompting is on by default.
+///
+/// A dismissible offer is the whole point of detection, and one that has to be
+/// found in settings first would ship invisible. It only ever appears for a
+/// meeting actually in progress — see the module documentation on why that
+/// matters.
+const PROMPT_BY_DEFAULT: bool = true;
 
 /// What a meeting session is doing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
@@ -117,6 +157,43 @@ pub struct MeetingStatus {
     /// What this platform can do about system audio, whether or not a meeting is
     /// running.
     pub system_audio: SystemAudioSupport,
+    /// Meeting applications seen running at the last poll.
+    ///
+    /// Everything found, not only what would prompt: the screen shows "Teams is
+    /// open" even though Teams cannot be prompted for, because that is more
+    /// useful than silence and it is where the reason lives.
+    pub detected: Vec<Detected>,
+    /// Whether a detected meeting offers to record.
+    pub prompt_on_detect: bool,
+    /// Whether the notification window is confirmed absent from screen shares.
+    ///
+    /// Reported rather than assumed. On a platform where exclusion fails the
+    /// window still shows: an indicator visible in a screen share is a cost the
+    /// user can be told about, and no indicator at all is the thing the brief
+    /// forbids.
+    pub notification_excluded: Option<CaptureExclusion>,
+}
+
+/// An offer to record a meeting that appears to be happening.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct Offer {
+    /// The `meeting-detect:*` id.
+    pub provider: String,
+    /// What to call it on screen.
+    pub name: String,
+    /// The process that gave it away, so the offer can say why it appeared.
+    pub evidence: String,
+}
+
+impl From<&Detected> for Offer {
+    fn from(detected: &Detected) -> Self {
+        Self {
+            provider: detected.provider.to_owned(),
+            name: detected.name.to_owned(),
+            evidence: detected.evidence.clone(),
+        }
+    }
 }
 
 /// How a meeting ended.
@@ -347,6 +424,72 @@ fn record(
     }
 }
 
+/* -------------------------------------------------------------- the watcher */
+
+/// Decides what to offer, and remembers what it has already offered.
+///
+/// Pure, and separate from the polling for that reason: "does this prompt, and
+/// has it prompted already" is the whole of the behaviour worth testing, and none
+/// of it needs a process table.
+#[derive(Debug, Default)]
+pub struct Watcher {
+    /// Providers already offered and not yet gone away.
+    ///
+    /// Keyed on the provider rather than on a timestamp: an offer dismissed
+    /// during a two-hour call must stay dismissed for that call, and must come
+    /// back for the next one. A time-based suppression would either re-prompt
+    /// mid-meeting or swallow the next meeting, depending which way it was tuned.
+    offered: std::collections::BTreeSet<String>,
+}
+
+impl Watcher {
+    /// What to offer for this poll, if anything.
+    ///
+    /// Returns at most one offer. Two meetings at once is possible and offering
+    /// both would stack windows; the first is the one to ask about.
+    pub fn consider(&mut self, detected: &[Detected]) -> Option<Offer> {
+        // Anything that has stopped running can be offered again next time.
+        let live: std::collections::BTreeSet<String> =
+            detected.iter().map(|d| d.provider.to_owned()).collect();
+        self.offered.retain(|provider| live.contains(provider));
+
+        // Only a meeting actually in progress. See the module documentation: new
+        // Teams has no in-call process, so prompting on "the client is open"
+        // would fire on every launch for most corporate machines.
+        //
+        // And the first one *not already offered*, not simply the first. Finding
+        // the first in-call provider and then discarding it for being a repeat
+        // meant a second meeting running alongside the first was never offered at
+        // all -- silently, which is the part that matters. A test caught it.
+        let candidate = detected
+            .iter()
+            .find(|d| d.in_call && !self.offered.contains(d.provider))?;
+
+        self.offered.insert(candidate.provider.to_owned());
+        Some(Offer::from(candidate))
+    }
+
+    /// Forget that a provider was offered, so it can be offered again.
+    ///
+    /// Used when a meeting *ends*: having recorded one Zoom call should not stop
+    /// the next one being offered, even if Zoom never quit in between.
+    pub fn forget(&mut self, provider: &str) {
+        self.offered.remove(provider);
+    }
+
+    /// Whether `provider` has an outstanding offer.
+    ///
+    /// Test-only. The runtime never asks — it acts on what `consider` returns —
+    /// and a `pub` method nothing in the binary calls is scaffolding. Kept
+    /// because asserting that a suppression was *released* reads better than
+    /// inferring it from a second call.
+    #[cfg(test)]
+    #[must_use]
+    pub fn has_offered(&self, provider: &str) -> bool {
+        self.offered.contains(provider)
+    }
+}
+
 /* -------------------------------------------------------------- the runtime */
 
 /// One meeting at a time, and everything it needs.
@@ -357,6 +500,8 @@ pub struct MeetingRuntime {
     /// Where the local model server is listening, and what it loaded.
     local: crate::local_model::SharedLocal,
     live: Mutex<Option<Live>>,
+    /// Detection state: what was last seen, and what has been offered.
+    watch: Mutex<(Watcher, Vec<Detected>)>,
 }
 
 /// A meeting in progress.
@@ -388,7 +533,85 @@ impl MeetingRuntime {
             policy,
             live: Mutex::new(None),
             local,
+            watch: Mutex::new((Watcher::default(), Vec::new())),
         }
+    }
+
+    /// Poll for meetings and offer to record one, once per meeting.
+    ///
+    /// Called on a timer. Returns nothing: an offer is delivered by showing the
+    /// notification window, and there is deliberately no path from here to
+    /// [`Self::start`].
+    pub async fn poll_for_meetings(&self) {
+        // Nothing to detect while recording, and nothing to offer either.
+        if self.live.lock().await.is_some() {
+            return;
+        }
+
+        let lists: Lists =
+            kw_storage::settings::get_or(self.db.pool(), LISTS_KEY, Lists::default())
+                .await
+                .unwrap_or_default();
+        let prompt = kw_storage::settings::get_or(self.db.pool(), PROMPT_KEY, PROMPT_BY_DEFAULT)
+            .await
+            .unwrap_or(PROMPT_BY_DEFAULT);
+
+        let detected = meeting_detect::detect(&meeting_detect::running(), &lists);
+
+        let offer = {
+            let mut held = self.watch.lock().await;
+            held.1 = detected.clone();
+            // `consider` runs whether or not prompting is on, so its
+            // already-offered bookkeeping stays correct if the setting is turned
+            // on mid-call -- otherwise switching it on would immediately prompt
+            // for a meeting that started an hour ago.
+            let offer = held.0.consider(&detected);
+            if prompt {
+                offer
+            } else {
+                None
+            }
+        };
+
+        if let Some(offer) = offer {
+            tracing::info!(
+                provider = %offer.provider,
+                evidence = %offer.evidence,
+                "a meeting appears to be in progress; offering to record it"
+            );
+            if let Err(err) = self.app.emit(OFFER_EVENT, &offer) {
+                tracing::warn!(error = %err, "could not deliver the recording offer");
+            }
+            crate::meeting_window::set_visible(&self.app, true);
+        }
+    }
+
+    /// Dismiss the outstanding offer without recording.
+    ///
+    /// The provider stays suppressed until its process goes away, which is what
+    /// stops a dismissed offer coming back five seconds later.
+    pub async fn dismiss(&self) {
+        crate::meeting_window::set_visible(&self.app, false);
+        if let Err(err) = self.app.emit(OFFER_EVENT, Option::<Offer>::None) {
+            tracing::warn!(error = %err, "could not clear the recording offer");
+        }
+    }
+
+    /// Start the detection timer.
+    ///
+    /// Spawned once at startup and runs for the life of the process. The interval
+    /// ticks regardless of how long a poll took, and a poll that overran simply
+    /// makes the next one immediate rather than accumulating.
+    pub fn watch(self: &Arc<Self>) {
+        let runtime = Arc::clone(self);
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(DETECT_INTERVAL);
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                ticker.tick().await;
+                runtime.poll_for_meetings().await;
+            }
+        });
     }
 
     /// Where recordings are kept.
@@ -505,6 +728,9 @@ impl MeetingRuntime {
             "meeting started"
         );
         self.emit_state(MeetingState::Recording);
+        // The window changes from an offer to an indicator, and stays up. A
+        // recording with nothing on screen is what the brief forbids.
+        crate::meeting_window::set_visible(&self.app, true);
 
         Ok(sources)
     }
@@ -535,6 +761,10 @@ impl MeetingRuntime {
 
         let outcome = self.keep(&live.provider_id, finished, transcript).await;
         self.emit_state(MeetingState::Idle);
+        crate::meeting_window::set_visible(&self.app, false);
+        // Recording one Zoom call must not stop the next being offered, even if
+        // Zoom never quit in between.
+        self.watch.lock().await.0.forget(&live.provider_id);
 
         if let Err(err) = self.app.emit(OUTCOME_EVENT, &outcome) {
             tracing::warn!(error = %err, "could not report the meeting outcome");
@@ -551,6 +781,8 @@ impl MeetingRuntime {
         let _ = live.commands.send(RecorderCommand::Cancel);
         live.pump.abort();
         self.emit_state(MeetingState::Idle);
+        crate::meeting_window::set_visible(&self.app, false);
+        self.watch.lock().await.0.forget(&live.provider_id);
 
         if let Err(err) = self.app.emit(OUTCOME_EVENT, MeetingOutcome::Cancelled) {
             tracing::warn!(error = %err, "could not report the cancellation");
@@ -562,6 +794,18 @@ impl MeetingRuntime {
     pub async fn status(&self) -> MeetingStatus {
         let held = self.live.lock().await;
         let system_audio = kw_audio_core::system_audio::support();
+        let detected = self.watch.lock().await.1.clone();
+        let prompt_on_detect =
+            kw_storage::settings::get_or(self.db.pool(), PROMPT_KEY, PROMPT_BY_DEFAULT)
+                .await
+                .unwrap_or(PROMPT_BY_DEFAULT);
+
+        // Asked of the window rather than remembered, so the screen reports what
+        // the platform actually did rather than what was attempted at startup.
+        let notification_excluded = self
+            .app
+            .get_webview_window(crate::meeting_window::LABEL)
+            .map(|window| crate::meeting_window::apply_treatments(&window).capture_exclusion);
 
         match held.as_ref() {
             Some(live) => MeetingStatus {
@@ -570,6 +814,9 @@ impl MeetingRuntime {
                 elapsed_seconds: live.started.elapsed().as_secs_f64(),
                 sources: Some(live.sources.clone()),
                 system_audio,
+                detected,
+                prompt_on_detect,
+                notification_excluded,
             },
             None => MeetingStatus {
                 state: MeetingState::Idle,
@@ -577,6 +824,9 @@ impl MeetingRuntime {
                 elapsed_seconds: 0.0,
                 sources: None,
                 system_audio,
+                detected,
+                prompt_on_detect,
+                notification_excluded,
             },
         }
     }
@@ -817,6 +1067,44 @@ pub async fn meeting_cancel(runtime: State<'_, Arc<MeetingRuntime>>) -> Result<(
     runtime.cancel().await
 }
 
+/// Turn away an offer to record, without recording.
+#[tauri::command]
+pub async fn meeting_dismiss(runtime: State<'_, Arc<MeetingRuntime>>) -> Result<(), String> {
+    runtime.dismiss().await;
+    Ok(())
+}
+
+/// Whether a detected meeting offers to record.
+#[tauri::command]
+pub async fn meeting_set_prompt(
+    state: State<'_, crate::state::AppState>,
+    enabled: bool,
+) -> Result<(), String> {
+    kw_storage::settings::set(state.db().pool(), PROMPT_KEY, &enabled)
+        .await
+        .map_err(|e| format!("could not save the setting: {e}"))
+}
+
+/// The user's own process names, for `meeting-detect:generic`.
+#[tauri::command]
+pub async fn meeting_detect_lists(
+    state: State<'_, crate::state::AppState>,
+) -> Result<Lists, String> {
+    kw_storage::settings::get_or(state.db().pool(), LISTS_KEY, Lists::default())
+        .await
+        .map_err(|e| format!("could not read the detection lists: {e}"))
+}
+
+#[tauri::command]
+pub async fn meeting_set_detect_lists(
+    state: State<'_, crate::state::AppState>,
+    lists: Lists,
+) -> Result<(), String> {
+    kw_storage::settings::set(state.db().pool(), LISTS_KEY, &lists)
+        .await
+        .map_err(|e| format!("could not save the detection lists: {e}"))
+}
+
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,
@@ -888,6 +1176,90 @@ mod tests {
             let client = kw_meeting_core::client(provider.id);
             assert_eq!(allowed, client.is_some(), "{}", provider.id);
         }
+    }
+
+    fn detected(provider: &'static str, in_call: bool) -> Detected {
+        Detected {
+            provider,
+            name: "Something",
+            evidence: format!("{provider}.exe"),
+            in_call,
+        }
+    }
+
+    #[test]
+    fn a_meeting_in_progress_is_offered_once_and_not_again() {
+        // The property that decides whether this feature is tolerable. Polling is
+        // every five seconds; a second offer would be twelve windows a minute.
+        let mut watcher = Watcher::default();
+        let running = vec![detected("zoom", true)];
+
+        let offer = watcher.consider(&running).expect("the first poll offers");
+        assert_eq!(offer.provider, "zoom");
+        assert_eq!(offer.evidence, "zoom.exe");
+
+        for _ in 0..10 {
+            assert!(watcher.consider(&running).is_none(), "offered twice");
+        }
+    }
+
+    #[test]
+    fn a_client_merely_being_open_is_not_offered() {
+        // Measured, not preferred: `meeting_detect_probe` found ms-teams.exe
+        // running with no call in progress, because new Teams runs the call
+        // inside its own process. Offering on "the client is open" would fire on
+        // every launch for anyone whose Teams starts with Windows.
+        let mut watcher = Watcher::default();
+        assert!(watcher.consider(&[detected("teams", false)]).is_none());
+        assert!(!watcher.has_offered("teams"));
+    }
+
+    #[test]
+    fn the_next_meeting_is_offered_after_the_application_quits() {
+        let mut watcher = Watcher::default();
+        let running = vec![detected("zoom", true)];
+
+        assert!(watcher.consider(&running).is_some());
+        // Zoom quits.
+        assert!(watcher.consider(&[]).is_none());
+        assert!(!watcher.has_offered("zoom"), "the suppression was released");
+        // And a new call is offered.
+        assert!(watcher.consider(&running).is_some());
+    }
+
+    #[test]
+    fn recording_one_call_does_not_suppress_the_next() {
+        // `forget` is what the end of a meeting calls. Without it, a second call
+        // in the same Zoom session would never be offered, because Zoom never
+        // quit in between.
+        let mut watcher = Watcher::default();
+        let running = vec![detected("zoom", true)];
+
+        assert!(watcher.consider(&running).is_some());
+        watcher.forget("zoom");
+        assert!(watcher.consider(&running).is_some());
+    }
+
+    #[test]
+    fn only_one_offer_is_made_when_two_meetings_are_running() {
+        // Two windows stacked on top of each other is worse than one question.
+        let mut watcher = Watcher::default();
+        let running = vec![detected("zoom", true), detected("webex", true)];
+
+        assert!(watcher.consider(&running).is_some());
+        // The second is offered on the next poll, not simultaneously.
+        let second = watcher.consider(&running).expect("the other one follows");
+        assert_eq!(second.provider, "webex");
+        assert!(watcher.consider(&running).is_none());
+    }
+
+    #[test]
+    fn a_call_starting_inside_an_already_open_client_is_offered() {
+        // The sequence a real Zoom meeting produces: the client is open first and
+        // must not be offered, then the call starts and must be.
+        let mut watcher = Watcher::default();
+        assert!(watcher.consider(&[detected("zoom", false)]).is_none());
+        assert!(watcher.consider(&[detected("zoom", true)]).is_some());
     }
 
     #[test]

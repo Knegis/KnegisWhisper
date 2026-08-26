@@ -27,6 +27,7 @@ import { Component, useCallback, useState, type ReactNode } from "react";
 
 import { getDiagnostics } from "./lib/ipc";
 import { useRefresh } from "./lib/useRefresh";
+import { MeetingNotification } from "./MeetingNotification";
 import { Overlay } from "./Overlay";
 import { DiagnosticsView } from "./views/Diagnostics";
 import { DictationView } from "./views/Dictation";
@@ -190,6 +191,14 @@ function Shell() {
  * means one CSP and one build.
  */
 export default function App() {
-  const isOverlay = window.location.hash === "#overlay";
-  return isOverlay ? <Overlay /> : <Shell />;
+  // One bundle, three surfaces, routed on the fragment. A `switch` rather than
+  // a chain of ternaries so a fourth window is a compile-visible addition.
+  switch (window.location.hash) {
+    case "#overlay":
+      return <Overlay />;
+    case "#meeting":
+      return <MeetingNotification />;
+    default:
+      return <Shell />;
+  }
 }

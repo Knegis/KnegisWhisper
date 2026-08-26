@@ -22,6 +22,7 @@ mod local_api;
 mod local_llm;
 mod local_model;
 mod meeting;
+mod meeting_window;
 mod overlay;
 mod reasoning;
 mod shortcuts;
@@ -200,12 +201,35 @@ pub fn run() -> anyhow::Result<()> {
             // Meetings. Nothing starts here and nothing is scheduled: a meeting
             // begins only when somebody presses the button, which is what "the
             // user must know it is recording" means in practice.
-            app.manage(std::sync::Arc::new(meeting::MeetingRuntime::new(
+            // The notification window, hidden. Created at startup rather than on
+            // demand: one created at the moment a meeting is detected would
+            // appear a second late and, on Windows, would steal focus while its
+            // webview initialised.
+            match meeting_window::create(&handle) {
+                Ok(window) => {
+                    let status = meeting_window::apply_treatments(&window);
+                    tracing::info!(
+                        capture_exclusion = ?status.capture_exclusion,
+                        non_activating = ?status.non_activating,
+                        "meeting notification window ready"
+                    );
+                }
+                Err(err) => tracing::error!(
+                    error = %err,
+                    "no meeting notification window, so a recording meeting will have no                      indicator of its own"
+                ),
+            }
+
+            let meetings = std::sync::Arc::new(meeting::MeetingRuntime::new(
                 handle.clone(),
                 db.clone(),
                 meeting_policy,
                 local.shared(),
-            )));
+            ));
+            // Polls the process table while idle and offers to record a meeting
+            // in progress. There is no path from it to `start` without a click.
+            meetings.watch();
+            app.manage(meetings);
 
             // Off unless the user has switched it on. See local_api.rs.
             let api = std::sync::Arc::new(local_api::LocalApiRuntime::new(db));
@@ -311,6 +335,10 @@ pub fn run() -> anyhow::Result<()> {
             meeting::meeting_start,
             meeting::meeting_stop,
             meeting::meeting_cancel,
+            meeting::meeting_dismiss,
+            meeting::meeting_set_prompt,
+            meeting::meeting_detect_lists,
+            meeting::meeting_set_detect_lists,
         ])
         .run(tauri::generate_context!())
         .context("the application exited with an error")

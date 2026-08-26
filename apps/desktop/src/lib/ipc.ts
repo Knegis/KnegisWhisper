@@ -36,6 +36,7 @@ import type {
   CredentialKind,
   CredentialSlotStatus,
   CredentialStoreStatus,
+  Detected,
   Diagnostics,
   Dispatch,
   DraftStatus,
@@ -54,6 +55,7 @@ import type {
   InputDevice,
   InstallProgress,
   KeytermSupport,
+  Lists,
   LocalApiStatus,
   LocalLlmModelStatus,
   LocalLlmProgress,
@@ -69,6 +71,7 @@ import type {
   NonActivating,
   Note,
   NoteUpdateRequest,
+  Offer,
   Outcome,
   OverlayStatus,
   ProbeKind,
@@ -113,6 +116,7 @@ export type {
   CredentialKind,
   CredentialSlotStatus,
   CredentialStoreStatus,
+  Detected,
   Diagnostics,
   Dispatch,
   DraftStatus,
@@ -130,6 +134,7 @@ export type {
   InputDevice,
   InstallProgress,
   KeytermSupport,
+  Lists,
   LocalApiStatus,
   LocalLlmModelStatus,
   LocalLlmProgress,
@@ -143,6 +148,7 @@ export type {
   ModelStatus,
   NonActivating,
   Note,
+  Offer,
   OverlayStatus,
   ProbeKind,
   ProbeOutcome,
@@ -277,6 +283,44 @@ export async function onMeetingOutcome(
   return listen<MeetingOutcome>("meeting-outcome", (event) =>
     handler(event.payload),
   );
+}
+
+/** `meeting_detect::Lists` — the user's own process names. */
+export type DetectLists = Lists;
+
+/**
+ * Turn away an offer to record.
+ *
+ * The provider stays suppressed until its process goes away, so a dismissed
+ * offer does not come back five seconds later.
+ */
+export async function dismissMeetingOffer(): Promise<void> {
+  return invoke("meeting_dismiss");
+}
+
+export async function setMeetingPrompt(enabled: boolean): Promise<void> {
+  return invoke("meeting_set_prompt", { enabled });
+}
+
+export async function getMeetingDetectLists(): Promise<DetectLists> {
+  return invoke<DetectLists>("meeting_detect_lists");
+}
+
+export async function setMeetingDetectLists(lists: DetectLists): Promise<void> {
+  return invoke("meeting_set_detect_lists", { lists });
+}
+
+/**
+ * A meeting appears to be in progress, or `null` to clear the offer.
+ *
+ * Only fires for a meeting actually in a call. A client merely being open never
+ * produces one — see `meeting.rs` on why, which is a measurement rather than a
+ * preference.
+ */
+export async function onMeetingOffer(
+  handler: (offer: Offer | null) => void,
+): Promise<UnlistenFn> {
+  return listen<Offer | null>("meeting-offer", (event) => handler(event.payload));
 }
 
 /* ---------------------------------------------------------------- providers */

@@ -25,6 +25,7 @@ import {
   cancelMeeting,
   getMeetingProviders,
   getMeetingStatus,
+  setMeetingPrompt,
   onMeetingOutcome,
   onMeetingState,
   onMeetingTranscript,
@@ -37,6 +38,8 @@ import {
 } from "../lib/ipc";
 import {
   availabilityLabel,
+  captureExclusionLabel,
+  detectedLabel,
   keytermLabel,
   meetingOutcomeLabel,
   sourcesLabel,
@@ -232,6 +235,53 @@ export function SettingsMeetings() {
           <Row label="Everyone else" value={live.system ?? "—"} />
         </section>
       ) : null}
+
+      <section>
+        <h2>Detection</h2>
+        <p className="caveat">
+          Meeting applications that are running. Nothing is ever recorded without
+          you pressing a button — when a meeting is detectably in progress, a
+          small window offers to record it.
+        </p>
+        <div className="row">
+          <span className="row-label">Offer to record</span>
+          <span className="row-value controls">
+            <label>
+              <input
+                type="checkbox"
+                checked={status.promptOnDetect}
+                onChange={(e) => {
+                  const enabled = e.target.checked;
+                  void guard(async () => {
+                    await setMeetingPrompt(enabled);
+                    await reload();
+                  });
+                }}
+              />
+              Show a window when a meeting starts
+            </label>
+          </span>
+        </div>
+        {status.detected.length === 0 ? (
+          <p className="muted">No meeting application is running.</p>
+        ) : (
+          status.detected.map((d) => (
+            <Row
+              key={`${d.provider}-${d.evidence}`}
+              label={d.name}
+              value={d.inCall ? "In a call" : "Open"}
+              detail={detectedLabel(d)}
+            />
+          ))
+        )}
+        {status.notificationExcluded ? (
+          <Row
+            label="The recording window"
+            value={captureExclusionLabel(status.notificationExcluded).text}
+            detail={captureExclusionLabel(status.notificationExcluded).detail}
+          />
+        ) : null}
+      </section>
 
       <section>
         <h2>Providers</h2>

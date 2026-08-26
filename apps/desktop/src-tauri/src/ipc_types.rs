@@ -175,6 +175,9 @@ fn render() -> String {
             crate::meeting::Sources,
             crate::meeting::MeetingStatus,
             crate::meeting::MeetingOutcome,
+            crate::meeting::Offer,
+            kw_platform::meeting_detect::Detected,
+            kw_platform::meeting_detect::Lists,
         ],
         "notes" => [
             kw_notes_core::notes::Note,

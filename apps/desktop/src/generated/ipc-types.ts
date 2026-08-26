@@ -591,7 +591,28 @@ provider: string | null, elapsedSeconds: number, sources: Sources | null,
  * What this platform can do about system audio, whether or not a meeting is
  * running.
  */
-systemAudio: SystemAudioSupport, };
+systemAudio: SystemAudioSupport,
+/**
+ * Meeting applications seen running at the last poll.
+ *
+ * Everything found, not only what would prompt: the screen shows "Teams is
+ * open" even though Teams cannot be prompted for, because that is more
+ * useful than silence and it is where the reason lives.
+ */
+detected: Array<Detected>,
+/**
+ * Whether a detected meeting offers to record.
+ */
+promptOnDetect: boolean,
+/**
+ * Whether the notification window is confirmed absent from screen shares.
+ *
+ * Reported rather than assumed. On a platform where exclusion fails the
+ * window still shows: an indicator visible in a screen share is a cost the
+ * user can be told about, and no indicator at all is the thing the brief
+ * forbids.
+ */
+notificationExcluded: CaptureExclusion | null, };
 
 /**
  * How a meeting ended.
@@ -611,6 +632,75 @@ gaps: number,
  * partials were saved instead.
  */
 transcriptIsPartials: boolean, } | { "outcome": "nothing-transcribed", recordingPath: string, } | { "outcome": "cancelled" } | { "outcome": "failed", message: string, };
+
+/**
+ * An offer to record a meeting that appears to be happening.
+ */
+export type Offer = {
+/**
+ * The `meeting-detect:*` id.
+ */
+provider: string,
+/**
+ * What to call it on screen.
+ */
+name: string,
+/**
+ * The process that gave it away, so the offer can say why it appeared.
+ */
+evidence: string, };
+
+/**
+ * A meeting application that appears to be running.
+ */
+export type Detected = {
+/**
+ * The `meeting-detect:*` id, so a caller can name the integration.
+ */
+provider: string,
+/**
+ * What to call it on screen.
+ */
+name: string,
+/**
+ * The process name that matched.
+ *
+ * Carried so a false positive can be diagnosed rather than argued about: a
+ * prompt that says *why* it appeared can be told it is wrong.
+ */
+evidence: string,
+/**
+ * True when the matched process only exists during a call, rather than
+ * whenever the application is open.
+ *
+ * The difference between "in a meeting" and "has Zoom installed", and the
+ * reason a caller can choose to prompt only on the stronger signal.
+ */
+inCall: boolean, };
+
+/**
+ * The user's own process names.
+ *
+ * `meeting-detect:generic` upstream also covered calendar events, microphone
+ * activity and system-audio activity. Only the lists are built: calendars are
+ * chunk F, and microphone activity needs the `IAudioSessionManager2` listener
+ * that is still unwritten. Named here rather than left implied, because a
+ * half-built detector that looks whole is how a user comes to trust one that
+ * misses half the meetings.
+ */
+export type Lists = {
+/**
+ * Extra process names that count as a meeting.
+ */
+allow: Array<string>,
+/**
+ * Names that never do, whatever else matches.
+ *
+ * Applied after the built-in table as well as after `allow`, so a user can
+ * silence a false positive this crate is wrong about without waiting for a
+ * release.
+ */
+block: Array<string>, };
 
 /* ------------------------------------------------------------------ notes */
 /**

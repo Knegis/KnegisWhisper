@@ -127,6 +127,37 @@ Phase 6 is marked verified, and this is in it.
   for. Not evidence about the gate either way — it is why the microphone leg below still needs a
   person.
 
+### Added by chunk E, and unchecked
+
+Stage 1 (a meeting recorded, transcribed and saved) and stage 2 (detection and
+the notification window) have both landed and **neither has been run by a
+person**. The detection half already produced one measurement without a bench
+check — `meeting_detect_probe` found `ms-teams.exe` on this machine, which is why
+the Teams row in [PLATFORM_SUPPORT.md](PLATFORM_SUPPORT.md) is the only one that
+says "seen to match". Everything else about chunk E is green tests.
+
+1. **Record a meeting.** Play a video, start a meeting from `Settings > Meetings`,
+   speak, stop. Confirm two transcript streams with the right source on each, a
+   note with the transcript and duration, and — with the speakers muted — that
+   zero system-audio samples reads as *nobody else spoke* rather than a failure.
+2. **A meeting longer than thirty minutes**, to prove the old in-memory cap is
+   gone and the recording on disk is complete.
+3. **Run `meeting_detect_probe` three times**: nothing open, the client open, and
+   during a real call. Zoom's `CptHost.exe` and Webex's `webexmta.exe` are
+   written and unverified, and the difference between the second and third run is
+   the whole feature.
+4. **Join a real Zoom or Webex call** and see the offer appear. Dismiss it, and
+   confirm it does not come back while the call runs. Confirm nothing recorded.
+5. **Screen-record the desktop while the notification window is up.** It must be
+   absent from the recording and still visible on screen. That is the entire
+   claim of the window role, and no test can make it.
+6. **Look at where the window lands.** Bottom-right is computed from the monitor
+   size and a margin, because Tauri does not expose the work area — so the
+   taskbar is cleared by guess. The dictation overlay still sets no position at
+   all, which is item 7 below.
+7. **Dictate while a meeting is recording** and check the tray tooltip, the
+   overlay and the notification window all say something true at once.
+
 ### Still unchecked, and needs a person at the machine
 
 Nothing here needs a developer. All of it is buttons, one sentence spoken aloud, and a restart.

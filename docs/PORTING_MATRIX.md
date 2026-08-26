@@ -106,7 +106,7 @@ All `frame: false`.
 | Control panel | 1200×800 | opaque, normal, resizable |
 | Agent overlay | 420×300 | `transparent`, **`focusable: true`** |
 | Transcription preview | 460×132 | `focusable: false` |
-| Meeting notification | 392×92 | **content-protected** — "visible to user but out of screen shares" |
+| Meeting notification | 392×92 | **content-protected** — "visible to user but out of screen shares". **Built.** `apps/desktop/src-tauri/src/meeting_window.rs`, reusing `overlay::apply_treatments` unchanged so it reports the same read-back evidence. Positioned bottom-right, which the dictation panel still does not do |
 | Update notification | 392×92 | as above |
 
 Per-platform z-order policy from `setupAlwaysOnTop()`, worth copying exactly: macOS

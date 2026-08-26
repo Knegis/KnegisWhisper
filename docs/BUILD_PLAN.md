@@ -50,7 +50,7 @@ platform work that no amount of UI can substitute for.
 | Phase | Status | The gap |
 | --- | --- | --- |
 | 0 — Audit and contracts | Complete | — |
-| 1 — Tauri foundation | Complete | 2 of 6 window roles exist; Linux/macOS hotkey fallbacks unwritten. Modifier-only shortcuts work on Windows through a keyboard hook. Four of the five hotkey actions have no feature behind them and are now reported as such rather than registered |
+| 1 — Tauri foundation | Complete | 3 of 6 window roles exist; Linux/macOS hotkey fallbacks unwritten. Modifier-only shortcuts work on Windows through a keyboard hook. Four of the five hotkey actions have no feature behind them and are now reported as such rather than registered |
 | — Chunk A (shell, types, Providers) | **Done, unchecked by hand** | Storing a key and passing a connection test has not been done by a person on this machine |
 | 2 — Dictation | **Verified on Windows** | 6 of 7 transcription providers reachable; Tinfoil declined pending enclave attestation. sherpa local ASR blocked — see B4 |
 | 3 — Reasoning | Complete, enterprise unverified | All three enterprise shapes written and tested against vectors and fixtures; no live call. No llama-server sidecar for `ChatRoute::Local`, which already points at `127.0.0.1:8221` |

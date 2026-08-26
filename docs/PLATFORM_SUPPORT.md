@@ -152,6 +152,42 @@ the answer names the device that would be captured rather than describing the pl
 stream, and reports whether the callback fired, whether it produced silence, and what the mixer did
 with it — three different facts that a single "it works" would collapse.
 
+## Meeting detection
+
+Noticing that a meeting application is running, so recording can be *offered*.
+Nothing here starts a recording: `crates/platform/src/meeting_detect.rs` cannot,
+and `MeetingRuntime::start` has exactly one caller, the command a button invokes.
+
+**The names were written, not ported.** Upstream's `meetingProcessDetector.js` is
+not in this checkout, so the table is knowledge rather than a port, and each row
+below says whether it has actually been seen to match. `cargo run -p kw-platform
+--example meeting_detect_probe` is how a row moves from one column to the other.
+
+| Application | Open | In a call | State |
+| --- | --- | --- | --- |
+| Microsoft Teams | `ms-teams.exe`, `teams.exe`, `msteams`, `teams` | — | **`ms-teams.exe` seen to match** (2026-08-26, 628 processes). New Teams runs the call inside its own process, so there is no in-call signal |
+| Zoom | `zoom.exe`, `zoom`, `zoom.us` | `cpthost.exe`, `caphost` | ⚠️ written, not seen to match |
+| Webex | `webex.exe`, `webexhost.exe`, `ciscocollabhost.exe` | `webexmta.exe` | ⚠️ written, not seen to match |
+| FaceTime | `facetime` | — | ⚠️ macOS only, compiled out elsewhere, unverified |
+| Anything else | the user's own allowlist | — | works by construction |
+
+**Only an in-call process offers to record**, and that is a measurement rather
+than a preference. Teams was found running with no call in progress, and Teams
+starts with Windows on most corporate machines — so offering on "the client is
+open" would put a window on screen at every launch, and the feature would be
+switched off the same day. Teams and FaceTime are therefore reported on
+`Settings > Meetings` and never prompted for, which is a limit worth stating
+rather than leaving somebody to discover.
+
+Matching is on the **image name and exact**, not the command line and not by
+substring. `kw_sidecar::reap` matches command lines because it must prove a
+process is ours before signalling it; detection has the opposite job, and
+`zoomboard.exe` is not Zoom.
+
+`meeting-detect:generic` is the allow/blocklist and nothing else yet. Calendar
+events need chunk F; microphone activity needs the `IAudioSessionManager2`
+listener that is still unwritten.
+
 ## Global shortcuts
 
 | Capability | Windows | macOS | Linux X11 | GNOME Wayland | KDE Wayland | Hyprland |

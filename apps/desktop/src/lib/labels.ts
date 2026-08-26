@@ -19,6 +19,7 @@ import type {
   Binding,
   CaptureExclusion,
   ClientAvailability,
+  Detected,
   DictationOutcome,
   HotkeyChange,
   InstallProgress,
@@ -308,4 +309,20 @@ export function meetingOutcomeLabel(outcome: MeetingOutcome): string {
     case "failed":
       return outcome.message;
   }
+}
+
+/**
+ * What a detected meeting application means, and whether it can be offered.
+ *
+ * The distinction is measured, not chosen. `meeting_detect_probe` found
+ * `ms-teams.exe` running with no call in progress, because new Teams runs the
+ * call inside its own process — so there is no separate signal to offer on, and
+ * offering on "the client is open" would prompt on every launch for anyone whose
+ * Teams starts with Windows. Saying so here is what keeps that a known limit
+ * rather than a bug somebody has to work out.
+ */
+export function detectedLabel(d: Detected): string {
+  return d.inCall
+    ? `in a call — detected as ${d.evidence}`
+    : `open, but not detectably in a call, so recording is not offered for it — detected as ${d.evidence}`;
 }

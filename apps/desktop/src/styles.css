@@ -319,6 +319,70 @@ section {
   }
 }
 
+/* ------------------------------------------------- meeting notification */
+/*
+ * 392x92, transparent window, so the panel paints itself. Wider than the
+ * overlay because it carries two lines and up to two buttons, and it must stay
+ * legible over a video call -- which is the one thing guaranteed to be behind
+ * it.
+ */
+
+.notify {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  height: 100%;
+  padding: 0 0.9rem;
+  border-radius: 12px;
+  background: rgba(18, 18, 22, 0.94);
+  color: #f4f4f5;
+  font: 500 0.9rem/1.25 system-ui, sans-serif;
+  user-select: none;
+}
+
+/* Hidden by the window, not by CSS. This only shows through a stray render. */
+.notify-empty {
+  background: transparent;
+}
+
+.notify-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  /* Takes the slack so the buttons sit against the right edge. */
+  flex: 1;
+  min-width: 0;
+}
+
+.notify-detail {
+  color: #a1a1aa;
+  font-size: 0.8rem;
+  /* A process name or an error can be long; the panel cannot grow. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.notify button {
+  flex: none;
+  padding: 0.35rem 0.7rem;
+  border: 1px solid #3f3f46;
+  border-radius: 8px;
+  background: #27272a;
+  color: #f4f4f5;
+  font: inherit;
+  cursor: pointer;
+}
+
+.notify button:hover {
+  background: #3f3f46;
+}
+
+.notify-recording {
+  /* A red edge, so "recording" reads at a glance and not only in words. */
+  box-shadow: inset 0 0 0 1.5px rgba(239, 68, 68, 0.75);
+}
+
 .row-detail.warn {
   color: #b45309;
 }
