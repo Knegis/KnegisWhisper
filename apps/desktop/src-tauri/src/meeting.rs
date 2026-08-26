@@ -574,6 +574,21 @@ fn resolve_key_ref(
     Ok(Some(key_ref))
 }
 
+/// Resolve `provider_id` to the [`Client`] that implements it, refusing with
+/// the declined reason or a generic "no client" message when there is none.
+///
+/// A free function for the same reason `resolve_key_ref` is: `start` needs
+/// the result before it can look up a credential slot, so pulling it out of
+/// `provider` keeps that lookup from happening twice.
+fn resolve_client(provider_id: &str) -> Result<Client, String> {
+    kw_meeting_core::client(provider_id).ok_or_else(|| {
+        match kw_meeting_core::declined(provider_id) {
+            Some(reason) => reason.to_owned(),
+            None => format!("there is no meeting client for {provider_id:?}"),
+        }
+    })
+}
+
 impl MeetingRuntime {
     #[must_use]
     pub fn new(
@@ -740,13 +755,7 @@ impl MeetingRuntime {
             return Err("a meeting is already being recorded".to_owned());
         }
 
-        let client =
-            kw_meeting_core::client(provider_id).ok_or_else(|| match kw_meeting_core::declined(
-                provider_id,
-            ) {
-                Some(reason) => reason.to_owned(),
-                None => format!("there is no meeting client for {provider_id:?}"),
-            })?;
+        let client = resolve_client(provider_id)?;
 
         // Fail before anything is opened, not three seconds later at the
         // socket. See `resolve_key_ref`'s doc comment for the defect this
@@ -1268,6 +1277,27 @@ mod tests {
             let client = kw_meeting_core::client(provider.id);
             assert_eq!(allowed, client.is_some(), "{}", provider.id);
         }
+    }
+
+    #[test]
+    fn resolve_client_resolves_the_clients_that_exist() {
+        assert_eq!(resolve_client("local"), Ok(Client::LocalWindow));
+        assert_eq!(
+            resolve_client("openai-realtime"),
+            Ok(Client::OpenAiRealtime)
+        );
+    }
+
+    #[test]
+    fn resolve_client_names_the_declined_reason_rather_than_a_generic_message() {
+        let err = resolve_client("tinfoil-realtime").unwrap_err();
+        assert!(err.contains("attestation"), "{err}");
+    }
+
+    #[test]
+    fn resolve_client_refuses_an_unknown_provider_id() {
+        let err = resolve_client("not-a-real-provider").unwrap_err();
+        assert!(err.contains("no meeting client"), "{err}");
     }
 
     // `resolve_key_ref` is a free function taking `&dyn CredentialStore`
