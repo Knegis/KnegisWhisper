@@ -338,6 +338,11 @@ pub enum Client {
     /// shape as `OpenAiRealtime` and for the same reason: a speaker label says
     /// who *within* a stream, never *which* stream.
     AssemblyAi,
+    /// Deepgram Realtime over two WebSockets, one per capture -- the same
+    /// shape and the same reason as `AssemblyAi`. Deepgram's diarization adds
+    /// a label *within* a stream; it is not a substitute for the two
+    /// connections that say *which* stream.
+    DeepgramRealtime,
 }
 
 /// The client for `id`, or `None` when there is none.
@@ -350,6 +355,7 @@ pub fn client(id: &str) -> Option<Client> {
         "local" => Some(Client::LocalWindow),
         "openai-realtime" => Some(Client::OpenAiRealtime),
         "assemblyai-realtime" => Some(Client::AssemblyAi),
+        "deepgram-realtime" => Some(Client::DeepgramRealtime),
         _ => None,
     }
 }
@@ -376,6 +382,7 @@ pub const fn credential_slot(client: Client) -> Option<&'static str> {
         Client::LocalWindow => None,
         Client::OpenAiRealtime => Some("openai"),
         Client::AssemblyAi => Some("assemblyai"),
+        Client::DeepgramRealtime => Some("deepgram"),
     }
 }
 
@@ -561,7 +568,12 @@ mod tests {
             .collect();
         assert_eq!(
             with_clients,
-            vec!["openai-realtime", "assemblyai-realtime", "local"]
+            vec![
+                "openai-realtime",
+                "assemblyai-realtime",
+                "deepgram-realtime",
+                "local"
+            ]
         );
     }
 
@@ -570,6 +582,7 @@ mod tests {
         assert_eq!(credential_slot(Client::LocalWindow), None);
         assert_eq!(credential_slot(Client::OpenAiRealtime), Some("openai"));
         assert_eq!(credential_slot(Client::AssemblyAi), Some("assemblyai"));
+        assert_eq!(credential_slot(Client::DeepgramRealtime), Some("deepgram"));
     }
 
     /// The tripwire the brief asks for, and the one that would have caught the
@@ -621,18 +634,21 @@ mod tests {
     fn a_described_provider_with_no_client_is_listed_and_explained() {
         // The reason `PROVIDERS` and the allowlist are separate lists at all: a
         // provider the screen cannot offer still has to be visible, with a
-        // reason, rather than absent.
+        // reason, rather than absent. Corti is the provider currently in that
+        // state -- Deepgram moved out of it when this client landed, which is
+        // exactly the tripwire `the_clients_that_exist_are_exactly_these`
+        // exists to catch when it happens again.
         let listed = listing();
         assert_eq!(listed.len(), PROVIDERS.len());
 
-        let deepgram = listed.iter().find(|p| p.id == "deepgram-realtime").unwrap();
-        match deepgram.availability {
+        let corti = listed.iter().find(|p| p.id == "corti-realtime").unwrap();
+        match corti.availability {
             ClientAvailability::NoClient { reason } => {
                 assert!(reason.contains("written yet"), "{reason}")
             }
             other => panic!("{other:?}"),
         }
-        assert!(!deepgram.availability.is_available());
+        assert!(!corti.availability.is_available());
     }
 
     #[test]
@@ -666,9 +682,10 @@ mod tests {
         // Availability is asserted on a provider that still has none, not on
         // this one: pinning "no-client" here made the test fail the day the
         // OpenAI client landed, which is the tripwire doing its job but the wrong
-        // assertion to have written.
-        let deepgram = listed.iter().find(|p| p.id == "deepgram-realtime").unwrap();
-        let json = serde_json::to_value(deepgram).unwrap();
+        // assertion to have written. Corti is the provider currently in that
+        // state; Deepgram moved out of it when this client landed.
+        let corti = listed.iter().find(|p| p.id == "corti-realtime").unwrap();
+        let json = serde_json::to_value(corti).unwrap();
         assert_eq!(json["availability"]["state"], "no-client");
     }
 

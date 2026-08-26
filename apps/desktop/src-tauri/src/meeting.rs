@@ -839,6 +839,12 @@ impl MeetingRuntime {
                 ))
                 .with_live_events(events),
             )),
+            Client::DeepgramRealtime => Ok(Box::new(
+                kw_meeting_core::deepgram_socket::DeepgramRealtime::new(Arc::clone(
+                    &self.credentials,
+                ))
+                .with_live_events(events),
+            )),
         }
     }
 
@@ -1465,6 +1471,10 @@ mod tests {
             resolve_client("assemblyai-realtime"),
             Ok(Client::AssemblyAi)
         );
+        assert_eq!(
+            resolve_client("deepgram-realtime"),
+            Ok(Client::DeepgramRealtime)
+        );
     }
 
     #[test]
@@ -1554,6 +1564,29 @@ mod tests {
     }
 
     #[test]
+    fn deepgram_realtime_refuses_to_start_naming_the_settings_screen_when_nothing_is_stored() {
+        let store = kw_security::MemoryCredentialStore::new();
+        let err =
+            resolve_key_ref("deepgram-realtime", Client::DeepgramRealtime, &store).unwrap_err();
+        assert!(err.contains("Settings > Providers"), "{err}");
+    }
+
+    #[test]
+    fn deepgram_realtime_gets_past_the_check_once_a_key_is_stored() {
+        let store = kw_security::MemoryCredentialStore::new();
+        store
+            .set(
+                &kw_security::KeyRef::new("deepgram").unwrap(),
+                &kw_security::Secret::new("dg-test".to_owned()),
+            )
+            .unwrap();
+
+        let key_ref =
+            resolve_key_ref("deepgram-realtime", Client::DeepgramRealtime, &store).unwrap();
+        assert_eq!(key_ref, kw_security::KeyRef::new("deepgram"));
+    }
+
+    #[test]
     fn every_clients_credential_slot_is_a_valid_key_ref() {
         // `resolve_key_ref`'s `KeyRef::new(slot).ok_or_else(...)` branch stayed
         // unreachable and untested while only two `Client` variants existed --
@@ -1567,6 +1600,7 @@ mod tests {
             Client::LocalWindow,
             Client::OpenAiRealtime,
             Client::AssemblyAi,
+            Client::DeepgramRealtime,
         ] {
             if let Some(slot) = kw_meeting_core::credential_slot(client) {
                 assert!(

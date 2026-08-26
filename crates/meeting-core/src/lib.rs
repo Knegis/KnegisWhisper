@@ -16,9 +16,10 @@
 //! different facts and the code now keeps them apart, which is also what lets
 //! the settings screen list a provider it cannot offer and say why.
 //!
-//! Of the six, `local` has a client. Four of the cloud providers need real
-//! credentials against a live service to verify, and `tinfoil-realtime` is
-//! [`declined`] rather than pending — see [`availability`].
+//! Of the six, `local`, `openai-realtime`, `assemblyai-realtime` and
+//! `deepgram-realtime` have clients. `corti-realtime` needs real credentials
+//! against a live service to verify and has none yet, and `tinfoil-realtime`
+//! is [`declined`] rather than pending — see [`availability`].
 //!
 //! See `docs/PORTING_MATRIX.md` for the per-provider wire details each client
 //! will need.
@@ -26,6 +27,8 @@
 pub mod assemblyai;
 pub mod assemblyai_socket;
 pub mod capabilities;
+pub mod deepgram;
+pub mod deepgram_socket;
 pub mod local;
 pub mod openai;
 pub mod openai_socket;
