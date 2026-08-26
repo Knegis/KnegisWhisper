@@ -132,6 +132,9 @@ flate2 = { version = "1", default-features = false, features = ["rust_backend"] 
 # ffmpeg ships `.tar.xz` on Linux. Same reasoning as `flate2` above -- pure
 # Rust, decode-only is all extraction needs.
 lzma-rs = "0.3"
+# sherpa-onnx ships `.tar.bz2` almost exclusively. Same reasoning again --
+# decode-only, pure Rust.
+bzip2-rs = "0.1"
 
 # CLI
 clap = { version = "4", features = ["derive"] }

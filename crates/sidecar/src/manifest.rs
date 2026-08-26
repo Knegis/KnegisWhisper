@@ -138,11 +138,11 @@ impl Target {
 
 /// How a downloaded asset is packed.
 ///
-/// Only the forms some pinned or soon-to-be-pinned asset actually uses. A
-/// variant for `tar.bz2` (which sherpa-onnx uses) is deliberately absent
-/// rather than present and unimplemented: an enum arm that fails at runtime is
-/// a promise the type made and the code did not keep. It gets added by the
-/// commit that can extract one.
+/// Only the forms some pinned asset actually uses. An enum arm that fails at
+/// runtime would be a promise the type made and the code did not keep, so
+/// each variant here has a matching arm in `install::extract` and a matching
+/// reader in `tools/sidecar-pin/pin.mjs` -- added together, in the commit
+/// that first pins an asset of that shape.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ArchiveKind {
@@ -152,12 +152,18 @@ pub enum ArchiveKind {
     /// decode-only) and then read as a tar with the same `tar` crate the
     /// other variants use. ffmpeg ships this shape on Linux.
     TarXz,
+    /// A `.tar.bz2` archive: decompressed with `bzip2-rs` (pure Rust,
+    /// decode-only, same reasoning as `lzma-rs` for `TarXz`) and then read as
+    /// a tar the same way. sherpa-onnx ships almost everything this shape --
+    /// 276 of `v1.13.4`'s 303 release assets, including every desktop binary
+    /// bundle and all four model archives the provider registry points at.
+    TarBz2,
     /// No archive at all: the downloaded file *is* the executable, verbatim.
     /// yt-dlp ships this shape on every platform.
     ///
     /// This is the strongest row in the pinning table, not a weaker one.
     /// [`Asset::sha256`] is mandatory for every variant, but for the other
-    /// three it pins a container that is then partially extracted, so it
+    /// four it pins a container that is then partially extracted, so it
     /// proves the container matched without, on its own, saying that
     /// extraction produced exactly what upstream built. Here there is no
     /// container: the pinned digest is the digest of the exact bytes that
@@ -684,6 +690,18 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<ArchiveKind>("\"bare\"").unwrap(),
             ArchiveKind::Bare
+        );
+    }
+
+    #[test]
+    fn tar_bz2_serializes_as_kebab_case() {
+        assert_eq!(
+            serde_json::to_string(&ArchiveKind::TarBz2).unwrap(),
+            "\"tar-bz2\""
+        );
+        assert_eq!(
+            serde_json::from_str::<ArchiveKind>("\"tar-bz2\"").unwrap(),
+            ArchiveKind::TarBz2
         );
     }
 

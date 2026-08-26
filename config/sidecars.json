@@ -225,6 +225,63 @@
           "executableInArchive": "yt-dlp"
         }
       }
+    },
+    {
+      "name": "sherpa",
+      "description": "sherpa-onnx's offline speech-to-text CLI: reads a WAV file and one model's encoder/decoder/tokens files, and prints a transcript. Runs entirely on this machine; no audio leaves the device. Pinned so the four Parakeet and Nemotron local ASR models in the provider registry can route through it once a caller is written; nothing invokes it yet. The streaming WebSocket server is a separate binary and is not pinned here.",
+      "source": {
+        "repo": "k2-fsa/sherpa-onnx",
+        "release": "v1.13.4",
+        "pinnedBecause": "Same reason as whisper and llama: tracking the newest release would let an upstream change alter transcription output between our releases with no diff to review. This release is also the one the provider registry's four sherpa model archives were pinned against, so bumping it is a decision that has to consider the models too, not just the CLI. 276 of this release's 303 assets are .tar.bz2, including every desktop binary bundle -- ArchiveKind::TarBz2 exists because of this sidecar."
+      },
+      "transport": {
+        "kind": "stdio"
+      },
+      "commandFragments": [
+        "sherpa-onnx-offline"
+      ],
+      "targets": {
+        "windows-x86_64": {
+          "availability": "published",
+          "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.4/sherpa-onnx-v1.13.4-win-x64-shared-MT-Release.tar.bz2",
+          "archive": "tar-bz2",
+          "sha256": "c312b30e55258d291067537ce4a6f90e155f1c16b6a10381a5729924e98b7879",
+          "sizeBytes": 24378225,
+          "executableInArchive": "sherpa-onnx-v1.13.4-win-x64-shared-MT-Release/bin/sherpa-onnx-offline.exe"
+        },
+        "linux-x86_64": {
+          "availability": "published",
+          "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.4/sherpa-onnx-v1.13.4-linux-x64-static.tar.bz2",
+          "archive": "tar-bz2",
+          "sha256": "c98b4d91edbcba5087e7847e07529337001b834fe352931ff008ac7c5722fa6f",
+          "sizeBytes": 384752102,
+          "executableInArchive": "sherpa-onnx-v1.13.4-linux-x64-static/bin/sherpa-onnx-offline"
+        },
+        "linux-aarch64": {
+          "availability": "published",
+          "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.4/sherpa-onnx-v1.13.4-linux-aarch64-static.tar.bz2",
+          "archive": "tar-bz2",
+          "sha256": "418bda59e5d02b16d309c6c7850d967c5c855e71184ab6ac6a9b1c79456b2d8f",
+          "sizeBytes": 337820882,
+          "executableInArchive": "sherpa-onnx-v1.13.4-linux-aarch64-static/bin/sherpa-onnx-offline"
+        },
+        "macos-x86_64": {
+          "availability": "published",
+          "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.4/sherpa-onnx-v1.13.4-osx-x64-static.tar.bz2",
+          "archive": "tar-bz2",
+          "sha256": "15cf31d64456ae033c9d81c52df796d9bf003893ed060eb8434012a297945103",
+          "sizeBytes": 254918578,
+          "executableInArchive": "sherpa-onnx-v1.13.4-osx-x64-static/bin/sherpa-onnx-offline"
+        },
+        "macos-aarch64": {
+          "availability": "published",
+          "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.4/sherpa-onnx-v1.13.4-osx-arm64-static.tar.bz2",
+          "archive": "tar-bz2",
+          "sha256": "b1830ce2f19169070c23c2a44b70e1d416e0265e98870a2f62f7aa94811db342",
+          "sizeBytes": 231438974,
+          "executableInArchive": "sherpa-onnx-v1.13.4-osx-arm64-static/bin/sherpa-onnx-offline"
+        }
+      }
     }
   ]
 }
