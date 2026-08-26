@@ -171,7 +171,7 @@
     },
     {
       "name": "yt-dlp",
-      "description": "Downloads media from a user-supplied URL for import. The only sidecar whose job is to reach the network on the user's behalf; the request goes through its own RequestPurpose and SSRF guards, not a general-purpose fetch.",
+      "description": "Downloads media from a user-supplied URL for import. The only sidecar whose job is to reach the network on the user's behalf, rather than running entirely on this machine.",
       "source": {
         "repo": "yt-dlp/yt-dlp",
         "release": "2026.08.19",
