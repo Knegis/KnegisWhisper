@@ -209,10 +209,20 @@ Two facts were measured before designing the pin, and they decide its shape:
 
 An archive digest on that second URL would fail on every build, which is worse than no pin: it
 would be removed by whoever hit it first. Upstream pins both by commit only and verifies neither.
+Both pins above are the durable part of this work and are kept as measured — re-downloading
+`webrtc-apm` to re-derive its digest would cost a day, for no different an answer.
+
+**Declined for now, not unfinished.** What remains beyond the two pins is vendoring six source
+files, porting the 446-line generator, and a five-target CI workflow granted `contents: write` to
+publish the built binaries as this project's own release assets. All three need a C++ toolchain —
+cmake, ninja, clang — and none is installed on this development machine, which is also why every
+decompressor in this workspace (`zip`, `bzip2`, `tar`) is pure Rust rather than a C binding. See
+`config/integration-manifest.json`'s `platform:aec` entry for the full accounting.
 
 **Echo cancellation is a quality feature, not a gate.** Without it, a meeting recorded on
 speakers picks up the far-end voice through the microphone and transcribes it twice; on headphones
-there is nothing to cancel. What blocks meetings is system audio, which is Rust work in chunk 3.
+there is nothing to cancel. It gates nothing: what actually blocks a meeting from being recorded at
+all is system audio capture, and that is Rust work that is already done (`platform:system-audio`).
 
 **Identity:** appId `com.gizmolabs.openwhispr`, protocol `openwhispr://`, signing identity
 `Gizmo Labs Inc. (T832773L2J)`, Azure Trusted Signing endpoint, and Pluely's

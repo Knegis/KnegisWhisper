@@ -154,13 +154,29 @@ with it — three different facts that a single "it works" would collapse.
 
 ## Meeting transcription providers
 
+Four cloud providers, one local model, and Tinfoil's deliberate refusal. Three different
+epistemic states sit inside the "unverified" claims below, and they are not interchangeable:
+
+1. **Reused from tested code.** Corti's OAuth2 token exchange reuses
+   `kw_transcription_core::clients::corti_token_endpoint`/`corti_token_request`/`interpret_token`,
+   already implemented and tested for batch Corti transcription. Not believed -- known to work
+   against that shape.
+2. **Read from vendor documentation, unverified against a live call.** AssemblyAI's and Deepgram's
+   wire shapes, and most of OpenAI Realtime's, are clean-room builds against public documentation
+   with no live socket to check them against yet. Wrong only if that documentation is wrong.
+3. **Invented, with no vendor source at all.** Corti's *socket* wire -- the endpoint path, the
+   message envelope, and most of the session-config block -- has no documentation anywhere to be
+   wrong about; its own implementer said so directly. This is a strictly weaker position than (2),
+   and the table and prose below keep it separate rather than folding it into the same "unverified"
+   word.
+
 | Provider | Client | Verified |
 | --- | --- | --- |
 | Local windowed model | repeated `/inference` passes over the local `whisper-server` | ⚠️ built, never run by a person |
 | OpenAI Realtime | two WebSockets, one per capture | ⚠️ request shaping and the event grammar against fixtures. **No live call.** A key exists on this machine and has not been used |
 | AssemblyAI Realtime | two WebSockets, one per capture | ⚠️ request shaping and the event grammar against fixtures, and most of the wire shape **believed rather than confirmed** -- see below. **No live call and no key for this provider exists on any machine this project has touched.** |
 | Deepgram Realtime | two WebSockets, one per capture | ⚠️ request shaping and the event grammar against fixtures, and most of the wire shape **believed rather than confirmed** -- see below. **No live call and no Deepgram key exists on any machine this project has touched.** |
-| Corti Realtime | two WebSockets, one per capture, authenticated by an OAuth2 client-credentials exchange first | ⚠️ request shaping and the event grammar against fixtures. The **token exchange is reused, not invented** -- `kw_transcription_core::clients::corti_token_endpoint`/`corti_token_request`/`interpret_token` already exist and are already tested for batch Corti transcription. The **socket wire is believed rather than confirmed** -- see below. **No live call and no Corti credential exists on any machine this project has touched.** |
+| Corti Realtime | two WebSockets, one per capture, authenticated by an OAuth2 client-credentials exchange first | ⚠️ request shaping and the event grammar against fixtures. Two different epistemic states, not one: the **token exchange is reused from working, tested code**, not believed -- `kw_transcription_core::clients::corti_token_endpoint`/`corti_token_request`/`interpret_token` already exist and are already tested for batch Corti transcription. The **socket wire, by contrast, was invented with no vendor source at all** -- weaker than "believed," see below. **No live call and no Corti credential exists on any machine this project has touched.** |
 | Tinfoil Realtime | — | **declined.** An unattested socket would present as Tinfoil while providing none of the confidentiality the name means. Same reason as the batch client |
 
 Three things about the OpenAI client are unlike the others and each is a place a
@@ -266,11 +282,19 @@ presented on more than one request, and nothing in this project's own audit
 of Corti suggests otherwise, unlike Deepgram's documented per-session minted
 tokens.
 
-**The socket itself is genuinely believed, not confirmed** -- a clean-room
-construction in the same position as AssemblyAI's and Deepgram's, since no
-vendor source for Corti's *streaming* wire exists anywhere in this
-repository. `crates/meeting-core/src/corti.rs`'s module documentation carries
-the full list; repeated here because it bears on capability claims:
+**The socket wire was invented, which is a weaker claim than "believed" and
+should not be read as the same thing as AssemblyAI's or Deepgram's
+unconfirmed-but-documented wires.** Those two clients are wrong, if they are
+wrong, because public vendor documentation was wrong or was misread -- there
+is a source to check them against. Corti's socket has no such source: no
+vendor documentation for its *streaming* wire exists anywhere in this
+repository or was found while building it, and the person who wrote it said
+so directly and unprompted rather than presenting a guess as a citation.
+Endpoint path, message envelope, and most of the session-config block below
+are this client's own invention, with one exception
+(`configuration.keyterms`) that does have a textual anchor.
+`crates/meeting-core/src/corti.rs`'s module documentation carries the full
+list; repeated here because it bears on capability claims:
 
 - The endpoint path, `wss://api.{environment}.corti.app/audio-bridge/v1/streams`.
   Only the host template -- `api.{environment}.corti.app` -- is reused from

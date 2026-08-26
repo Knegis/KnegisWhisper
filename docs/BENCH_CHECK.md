@@ -166,6 +166,42 @@ says "seen to match". Everything else about chunk E is green tests.
    transcript must carry `reconnects: 1` and must not have lost a sentence at the
    seam. This is the only provider where that path exists, and no fixture reaches
    it.
+10. **Record a meeting through AssemblyAI Realtime**, with a real API key. The
+    endpoint, the query parameters, the `Authorization` header carrying the raw
+    key with no `Bearer` prefix, the `Begin`/`Turn`/`Error` message envelope, and
+    above all whether a real `Turn` frame carries a `speaker` field at all, are
+    all read from public documentation and unconfirmed against a live socket --
+    see docs/PLATFORM_SUPPORT.md. The capability table's `speaker_labels: true`
+    for this provider rests on the last one.
+11. **Record a meeting through Deepgram Realtime**, with a real API key. Same
+    shape of gap as AssemblyAI: the endpoint, the query parameters (including
+    whether sending `detect_language=true` actually makes the server
+    auto-detect, versus falling back to some undocumented default), the
+    `Authorization: Token` scheme, and whether the *first* word's speaker in a
+    `Results` message is a safe stand-in for the whole message, are all
+    unconfirmed against a live socket.
+12. **Record a meeting through Corti Realtime**, with a real tenant, environment
+    and credential. This is the one call that would tell us the most: the
+    OAuth2 token exchange reuses code already tested for batch Corti
+    transcription, so a live call would not be its first evidence -- but the
+    socket wire underneath it (the endpoint path, the message envelope, and
+    most of the session-config block) was invented outright, with no vendor
+    documentation anywhere to check it against. A live connection here is the
+    *first* evidence of any kind for that wire, not a second opinion on a
+    documented one, and the most likely single outcome is a rejected handshake
+    or a response nothing in this client recognises.
+13. **Start a meeting on each cloud provider and confirm that a provider-reported
+    failure is visible to the person in the room, not only in a log line.** This
+    predates the three clients this phase added and is shared by every cloud
+    client, OpenAI Realtime included: `assemblyai_socket.rs`, `deepgram_socket.rs`,
+    `corti_socket.rs` and `openai_socket.rs` all read a provider error frame,
+    log it with `tracing::warn!("the provider reported an error")`, and continue
+    -- none of `connect`, `send_audio` or `finish` ever returns an `Err` because
+    of it. A server that accepts a malformed session-config frame, keeps the
+    socket open, and simply never emits a transcript would let a meeting
+    "complete successfully" with an empty transcript, with nothing to show for
+    it but that one background log line nobody in the room can see. Confirm the
+    UI itself surfaces this, not just the log.
 
 ### Still unchecked, and needs a person at the machine
 
