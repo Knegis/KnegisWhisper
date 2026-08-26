@@ -476,16 +476,58 @@ mod tests {
         // This client resolves the user's own stored key once per socket and
         // schedules no refresh, so there is deliberately no field here for a
         // rotation deadline the way `openai_socket::OpenAiRealtime` carries a
-        // `clock: Option<SessionClock>` for its session cap. `Debug`'s
-        // output is the tripwire: if a future change adds a rotation clock,
-        // it will show up here and this comment is where to explain why
-        // `token_rotation: true` does not mean this struct should grow one --
-        // implementing a refresh loop that re-reads an unchanging key would
-        // be ceremony that looks like a safeguard and is not one.
+        // `clock: Option<SessionClock>` for its session cap.
+        //
+        // A string scan of `Debug`'s output is not a real tripwire for that:
+        // this struct's `Debug` impl is hand-written from individual
+        // `.field(...)` calls plus `finish_non_exhaustive()`, so it prints
+        // only `mic` and `system` and would say nothing about a field added
+        // anywhere else. `OpenAiRealtime` already demonstrates the failure
+        // mode -- it holds a real `clock: Option<SessionClock>` field, and
+        // its own `Debug` impl relabels it `"reconnects"`, so a scan for
+        // "clock" against its rendered output finds nothing even though the
+        // clock is right there.
+        //
+        // Destructuring the struct here instead, field by field with no `..`
+        // rest pattern, is a compile-time tripwire rather than a runtime
+        // string match: adding any field to `DeepgramRealtime` fails this to
+        // compile until someone updates this pattern and states what the new
+        // field is, which is what actually forces the "is this a rotation
+        // clock?" question to be answered rather than merely hoped past.
+        // `credentials`, `caps` and `events` are not asserted on -- their
+        // values are not what this test is about -- but they still have to
+        // be named for the pattern to be exhaustive, which is the point.
+        //
+        // Every field that does exist is either a socket, the pending
+        // configuration, or plain bookkeeping. `started: Option<Instant>` is
+        // the one field shaped like part of a clock, and it is not one: it
+        // is a single instant recorded once, used only for
+        // `elapsed().as_secs_f64()` event timestamps, with no paired
+        // `Duration` limit the way `SessionClock` pairs `opened: Instant`
+        // with `limit: Duration` to know when to act. A freshly constructed
+        // provider has never connected, so every optional field below starts
+        // empty and `paused` starts false.
         let provider = DeepgramRealtime::new(store());
-        let rendered = format!("{provider:?}").to_lowercase();
-        assert!(!rendered.contains("rotat"), "{rendered}");
-        assert!(!rendered.contains("refresh"), "{rendered}");
-        assert!(!rendered.contains("clock"), "{rendered}");
+        let DeepgramRealtime {
+            credentials: _,
+            config,
+            caps: _,
+            mic,
+            system,
+            events: _,
+            live,
+            started,
+            paused,
+        } = provider;
+
+        assert!(config.is_none());
+        assert!(mic.is_none());
+        assert!(system.is_none());
+        assert!(live.is_none());
+        assert!(
+            started.is_none(),
+            "session-start bookkeeping, not a rotation deadline -- see the comment above"
+        );
+        assert!(!paused);
     }
 }
