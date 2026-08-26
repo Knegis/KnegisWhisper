@@ -29,12 +29,21 @@ use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt};
 use crate::protocol::{ErrorObject, Response, INVALID_REQUEST, PARSE_ERROR};
 use crate::tools;
 
-/// The protocol version this server was written against.
-///
-/// Echoed back only when the client did not send one; when it did, its own
-/// value is echoed instead, since nothing in this server's behaviour actually
-/// varies by MCP protocol revision.
+/// The protocol version this server answers with when the client either did
+/// not name one or named one outside [`SUPPORTED_PROTOCOL_VERSIONS`].
 const PROTOCOL_VERSION: &str = "2024-11-05";
+
+/// Every protocol revision this server has actually been built and tested
+/// against.
+///
+/// `initialize` echoes the client's requested version back only when it is
+/// in this set — agreeing to a revision this server was never checked
+/// against would tell the client "yes, I speak your dialect" for a dialect
+/// that might add something this server does not implement. A version
+/// outside this set gets [`PROTOCOL_VERSION`] instead: not an error, but not
+/// agreement either, which is what lets the client decide whether to
+/// proceed or disconnect.
+const SUPPORTED_PROTOCOL_VERSIONS: &[&str] = &["2024-11-05", "2025-03-26", "2025-06-18"];
 
 /// A response that could not be encoded — which would mean `serde_json`
 /// failed on this crate's own, entirely serialisable [`Response`] type. That
@@ -153,10 +162,11 @@ async fn dispatch(method: &str, params: &Value, client: &Client) -> Outcome {
 }
 
 fn handle_initialize(params: &Value) -> Value {
-    let protocol_version = params
-        .get("protocolVersion")
-        .and_then(Value::as_str)
-        .unwrap_or(PROTOCOL_VERSION);
+    let requested = params.get("protocolVersion").and_then(Value::as_str);
+    let protocol_version = match requested {
+        Some(version) if SUPPORTED_PROTOCOL_VERSIONS.contains(&version) => version,
+        _ => PROTOCOL_VERSION,
+    };
 
     json!({
         "protocolVersion": protocol_version,
@@ -254,7 +264,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn initialize_echoes_the_clients_protocol_version() {
+    async fn initialize_echoes_a_supported_protocol_version() {
+        // "2025-06-18" is in `SUPPORTED_PROTOCOL_VERSIONS` and is not the
+        // fallback, so an unconditional-fallback bug would show up here.
+        let response = handle_line(
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}"#,
+            &bogus_client(),
+        )
+        .await
+        .unwrap();
+        let result = response.result.unwrap();
+        assert_eq!(result["protocolVersion"], "2025-06-18");
+        assert_eq!(result["serverInfo"]["name"], "knegiswhisper-mcp");
+    }
+
+    #[tokio::test]
+    async fn initialize_answers_an_unsupported_version_with_its_own_rather_than_agreeing() {
+        // Agreeing to a revision this server has never been checked against
+        // is a claim it cannot back up. It must answer with its own version,
+        // not the client's, so the client can decide whether to proceed.
         let response = handle_line(
             r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2099-01-01"}}"#,
             &bogus_client(),
@@ -262,8 +290,8 @@ mod tests {
         .await
         .unwrap();
         let result = response.result.unwrap();
-        assert_eq!(result["protocolVersion"], "2099-01-01");
-        assert_eq!(result["serverInfo"]["name"], "knegiswhisper-mcp");
+        assert_eq!(result["protocolVersion"], PROTOCOL_VERSION);
+        assert_ne!(result["protocolVersion"], "2099-01-01");
     }
 
     #[tokio::test]
