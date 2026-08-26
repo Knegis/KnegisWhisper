@@ -833,6 +833,12 @@ impl MeetingRuntime {
                 kw_meeting_core::openai_socket::OpenAiRealtime::new(Arc::clone(&self.credentials))
                     .with_live_events(events),
             )),
+            Client::AssemblyAi => Ok(Box::new(
+                kw_meeting_core::assemblyai_socket::AssemblyAiRealtime::new(Arc::clone(
+                    &self.credentials,
+                ))
+                .with_live_events(events),
+            )),
         }
     }
 
@@ -1455,6 +1461,10 @@ mod tests {
             resolve_client("openai-realtime"),
             Ok(Client::OpenAiRealtime)
         );
+        assert_eq!(
+            resolve_client("assemblyai-realtime"),
+            Ok(Client::AssemblyAi)
+        );
     }
 
     #[test]
@@ -1520,6 +1530,51 @@ mod tests {
 
         let err = resolve_key_ref("openai-realtime", Client::OpenAiRealtime, &store).unwrap_err();
         assert!(err.contains("Settings > Providers"), "{err}");
+    }
+
+    #[test]
+    fn assemblyai_realtime_refuses_to_start_naming_the_settings_screen_when_nothing_is_stored() {
+        let store = kw_security::MemoryCredentialStore::new();
+        let err = resolve_key_ref("assemblyai-realtime", Client::AssemblyAi, &store).unwrap_err();
+        assert!(err.contains("Settings > Providers"), "{err}");
+    }
+
+    #[test]
+    fn assemblyai_realtime_gets_past_the_check_once_a_key_is_stored() {
+        let store = kw_security::MemoryCredentialStore::new();
+        store
+            .set(
+                &kw_security::KeyRef::new("assemblyai").unwrap(),
+                &kw_security::Secret::new("aai-test".to_owned()),
+            )
+            .unwrap();
+
+        let key_ref = resolve_key_ref("assemblyai-realtime", Client::AssemblyAi, &store).unwrap();
+        assert_eq!(key_ref, kw_security::KeyRef::new("assemblyai"));
+    }
+
+    #[test]
+    fn every_clients_credential_slot_is_a_valid_key_ref() {
+        // `resolve_key_ref`'s `KeyRef::new(slot).ok_or_else(...)` branch stayed
+        // unreachable and untested while only two `Client` variants existed --
+        // both slots happened to be valid strings, so nothing ever exercised
+        // the refusal. A third arm is exactly where a typo producing an
+        // invalid slot name (stray punctuation, a capital letter) would first
+        // show up, so this checks every arm directly against the validation
+        // `resolve_key_ref` depends on, rather than trusting that the slots
+        // that happen to exist today stay well-formed by accident.
+        for client in [
+            Client::LocalWindow,
+            Client::OpenAiRealtime,
+            Client::AssemblyAi,
+        ] {
+            if let Some(slot) = kw_meeting_core::credential_slot(client) {
+                assert!(
+                    kw_security::KeyRef::new(slot).is_some(),
+                    "{slot:?} is not a valid credential slot name"
+                );
+            }
+        }
     }
 
     // `resolve_provider_config`, `draft_config` and the settings keys are all
