@@ -217,6 +217,13 @@ fn render() -> String {
         "local api" => [
             crate::local_api::LocalApiStatus,
         ],
+        "media import" => [
+            crate::media::MediaSidecar,
+            crate::media::SidecarStatus,
+            crate::media::MediaImportSource,
+            crate::media::MediaImportResult,
+            crate::media::MediaImportProgress,
+        ],
         "updater" => [
             crate::updater::UpdateCheckResult,
         ],

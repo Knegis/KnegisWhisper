@@ -22,6 +22,7 @@ mod ipc_types;
 mod local_api;
 mod local_llm;
 mod local_model;
+mod media;
 mod meeting;
 mod meeting_window;
 mod overlay;
@@ -162,6 +163,23 @@ pub fn run() -> anyhow::Result<()> {
             tauri::async_runtime::block_on(local.reap_stale());
 
             let shared = local.shared();
+
+            // Media import: audio, video and url import all end by going
+            // through the existing transcription route, so this needs exactly
+            // the handles that route does. Cloned before `credentials` and
+            // `policy` are moved into the dictation runtime below.
+            let media_import = std::sync::Arc::new(
+                media::MediaImportRuntime::new(
+                    policy.clone(),
+                    std::sync::Arc::clone(&credentials),
+                    std::sync::Arc::clone(&shared.port),
+                    std::sync::Arc::clone(&shared.model),
+                    db.clone(),
+                )
+                .map_err(|e| anyhow::anyhow!(e))
+                .context("could not load config/sidecars.json for media import")?,
+            );
+            app.manage(media_import);
 
             // The route survives a restart; the server process does not. Bring
             // back whichever model the user was last dictating with, in the
@@ -370,6 +388,11 @@ pub fn run() -> anyhow::Result<()> {
             local_llm::local_llm_install,
             local_llm::local_llm_start,
             local_llm::local_llm_stop,
+            media::media_import_status,
+            media::media_import_install_sidecar,
+            media::media_import_audio,
+            media::media_import_video,
+            media::media_import_url,
             meeting::meeting_providers,
             meeting::meeting_status,
             meeting::meeting_start,

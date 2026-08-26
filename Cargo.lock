@@ -2699,11 +2699,13 @@ dependencies = [
  "tauri-plugin-dialog",
  "tauri-plugin-global-shortcut",
  "tempfile",
+ "thiserror 2.0.20",
  "tokio",
  "tracing",
  "tracing-subscriber",
  "ts-rs",
  "url",
+ "uuid",
 ]
 
 [[package]]

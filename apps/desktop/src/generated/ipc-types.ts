@@ -1030,6 +1030,60 @@ discoveryPermissions: string | null,
  */
 discoveryPermissionsAsExpected: boolean | null, };
 
+/* ----------------------------------------------------------- media import */
+/**
+ * The two sidecars this module drives. Deliberately a closed enum rather than
+ * a catalogue name typed by the frontend: a stringly-typed sidecar id would
+ * let a caller ask this command to install `whisper` or `llama` too, which is
+ * not what "media import" means.
+ */
+export type MediaSidecar = "ffmpeg" | "yt-dlp";
+
+/**
+ * What can be said about one media-import sidecar without touching the
+ * network.
+ */
+export type SidecarStatus = { sidecar: MediaSidecar,
+/**
+ * Reused from `local_model` rather than redeclared: the same three
+ * states (installable / not published for this platform / a gap in the
+ * manifest) apply to any sidecar, and `local_llm` already reuses it for
+ * the same reason.
+ */
+availability: Availability, installed: boolean, };
+
+/**
+ * Where an imported transcript came from.
+ *
+ * Never the full URL: a query string can carry a token, and this value may
+ * end up quoted back into a note. The host is enough to show the user where
+ * it came from.
+ */
+export type MediaImportSource = { "kind": "audio" } | { "kind": "video" } | { "kind": "url", host: string, };
+
+/**
+ * What a finished import produced. The frontend turns this into a note; this
+ * module does not write one itself.
+ */
+export type MediaImportResult = { text: string, provider: string, model: string | null,
+/**
+ * Computed from the converted WAV, not asked of the source file, so it
+ * reflects what was actually transcribed.
+ */
+durationMs: number, source: MediaImportSource, };
+
+/**
+ * Progress of installing a media-import sidecar, or of running an import
+ * once both are ready.
+ *
+ * Shares the shape of `local_model::InstallProgress` and
+ * `local_llm::LocalLlmProgress` -- a staged, tagged enum reported on one
+ * event -- but is a distinctly named type so it cannot collide with either
+ * in the generated TypeScript. `ipc_types` asserts against exactly that
+ * collision.
+ */
+export type MediaImportProgress = { "stage": "downloading", sidecar: string, written: number, total: number | null, } | { "stage": "verifying" } | { "stage": "extracting" } | { "stage": "fetching" } | { "stage": "converting" } | { "stage": "transcribing" } | { "stage": "done" };
+
 /* ---------------------------------------------------------------- updater */
 /**
  * What checking for an update found.

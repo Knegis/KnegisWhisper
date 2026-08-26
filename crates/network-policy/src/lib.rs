@@ -749,6 +749,33 @@ mod tests {
         assert!(next_hop(from, "http://192.168.1.11:8080/v1", DOWNLOAD).is_err());
     }
 
+    #[test]
+    fn a_media_import_redirect_to_a_private_address_is_refused() {
+        // `UserTriggeredMediaImport` (media URL import, task 11) is the
+        // purpose this task introduces real use of. A public host redirecting
+        // to a link-local address is exactly the shape a cloud metadata-service
+        // SSRF takes -- most such services (AWS, GCP, Azure) answer only on
+        // plain HTTP, which is refused here for the same reason a model
+        // download redirecting to plaintext is refused above.
+        //
+        // This proves the mechanism holds for this purpose; it does not, and
+        // is not meant to, say anything about the yt-dlp child process media
+        // import actually fetches through -- that process's own networking
+        // does not run through this crate at all. See
+        // `apps/desktop/src-tauri/src/media.rs`'s module doc.
+        const MEDIA_IMPORT: RequestPurpose = RequestPurpose::UserTriggeredMediaImport;
+        let err = next_hop(
+            "https://cdn.example.com/clip.mp4",
+            "http://169.254.169.254/latest/meta-data/",
+            MEDIA_IMPORT,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, PolicyError::RedirectNotPermitted { .. }),
+            "{err}"
+        );
+    }
+
     #[tokio::test]
     async fn a_download_target_is_validated_before_any_socket_is_opened() {
         // Nothing is listening on this port. If the purpose check happened after
