@@ -149,6 +149,7 @@ pub async fn hotkey_set(
     state: State<'_, AppState>,
     action: String,
     accelerators: String,
+    hooks: State<'_, std::sync::Arc<crate::shortcuts::Hooks>>,
 ) -> CmdResult<HotkeyChange> {
     // Fail closed on an unknown action id rather than defaulting to dictation.
     let action = HotkeyAction::from_id(&action)
@@ -169,7 +170,7 @@ pub async fn hotkey_set(
     // `unregister_all` is the only way to drop the previous binding for this
     // action and it drops the others with it.
     let bindings = load_bindings(&state).await?;
-    let reports = crate::shortcuts::register_all(&app, &bindings);
+    let reports = crate::shortcuts::register_all(&app, &bindings, &hooks);
     let live = reports.iter().filter(|r| r.is_live()).count();
     tracing::info!(live, total = reports.len(), "hotkeys re-registered");
 
@@ -864,11 +865,26 @@ mod tests {
             .find(|b| b.action == HotkeyAction::Dictation)
             .unwrap();
 
-        // Upstream's default is Control+Super, which is modifier-only, so it
-        // must come back unusable with an explanation rather than looking fine.
+        // Upstream's default is Control+Super, which is modifier-only. The
+        // cross-platform shortcut register still cannot take it — `is_usable`
+        // is about that register — so it comes back with an explanation rather
+        // than looking fine.
         assert!(!dictation.is_usable());
         assert_eq!(dictation.problems().len(), 1);
-        assert!(dictation.problems()[0].contains("does nothing"));
+
+        // What the explanation *says* now depends on the platform, because the
+        // answer does. Windows has the keyboard hook and the shortcut works;
+        // elsewhere it does nothing and the advice is to add a regular key.
+        let problem = &dictation.problems()[0];
+        if kw_platform::keyhook::support().is_available() {
+            assert!(problem.contains("keyboard hook"), "{problem}");
+            assert!(
+                problem.contains("still works"),
+                "a platform with the hook must not say the shortcut is dead: {problem}"
+            );
+        } else {
+            assert!(problem.contains("does nothing"), "{problem}");
+        }
     }
 
     #[tokio::test]

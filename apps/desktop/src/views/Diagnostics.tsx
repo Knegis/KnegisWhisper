@@ -11,8 +11,37 @@
  */
 
 import { Row } from "../components/Row";
-import { isCaptureExclusionConfirmed, type Diagnostics } from "../lib/ipc";
+import {
+  isCaptureExclusionConfirmed,
+  type Diagnostics,
+  type SystemAudioSupport,
+} from "../lib/ipc";
 import { captureExclusionLabel, nonActivatingLabel } from "../lib/labels";
+
+/** What can be said about system audio, without overclaiming. */
+function systemAudioValue(s: SystemAudioSupport): string {
+  switch (s.state) {
+    case "available":
+      // The unverified case is deliberately not "Available": the mechanism
+      // exists and nobody has heard it produce sound.
+      return s.unverified ? "Available, never tested" : "Available";
+    case "no-device":
+      return "No device offers it";
+    case "unsupported":
+      return "Not supported here";
+  }
+}
+
+function systemAudioDetail(s: SystemAudioSupport): string {
+  switch (s.state) {
+    case "available":
+      return `${s.mechanism} — ${s.device}`;
+    case "no-device":
+      return s.reason;
+    case "unsupported":
+      return s.reason;
+  }
+}
 
 export function DiagnosticsView({ diagnostics }: { diagnostics: Diagnostics }) {
   const capture = captureExclusionLabel(diagnostics.overlay.captureExclusion);
@@ -105,6 +134,36 @@ export function DiagnosticsView({ diagnostics }: { diagnostics: Diagnostics }) {
             report that from inside this process.
           </p>
         )}
+      </section>
+
+      <section>
+        <h2>Input and audio</h2>
+        <Row
+          label="Modifier-only shortcuts"
+          value={
+            diagnostics.modifierOnlyShortcuts.state === "available"
+              ? "Supported"
+              : "Not supported here"
+          }
+          detail={
+            diagnostics.modifierOnlyShortcuts.state === "available"
+              ? `${diagnostics.modifierOnlyShortcuts.mechanism}; the keys still reach other applications`
+              : diagnostics.modifierOnlyShortcuts.reason
+          }
+        />
+        <Row
+          label="System audio"
+          value={systemAudioValue(diagnostics.systemAudio)}
+          detail={systemAudioDetail(diagnostics.systemAudio)}
+        />
+        {diagnostics.systemAudio.state === "available" &&
+        diagnostics.systemAudio.unverified ? (
+          <p className="caveat">
+            The mechanism for this platform is written and nobody has run it on
+            real hardware. Treat a recording made with it as unproven until
+            somebody has listened to one.
+          </p>
+        ) : null}
       </section>
 
       <section>

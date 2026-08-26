@@ -32,12 +32,23 @@ pub enum Registration {
     Registered {
         accelerator: String,
     },
+    /// Live through the keyboard hook rather than the system shortcut register.
+    ///
+    /// A separate state from `Registered` because the two behave differently in
+    /// a way the user can notice: a hooked chord does not take the keystroke
+    /// away from other applications, so `Control+Super` still opens whatever
+    /// Windows opens. Reporting it as plain "registered" would be a small lie
+    /// that surfaces the first time somebody wonders why the Start menu appeared.
+    Hooked {
+        accelerator: String,
+    },
     /// The platform refused it. Usually another application already owns it.
     Rejected {
         accelerator: String,
         reason: String,
     },
-    /// Not registrable in principle — modifier-only, or malformed.
+    /// Not registrable in principle — modifier-only where there is no hook, or
+    /// malformed.
     NotRegistrable {
         accelerator: String,
         reason: String,
@@ -45,9 +56,13 @@ pub enum Registration {
 }
 
 impl Registration {
+    /// Whether this accelerator will actually fire.
+    ///
+    /// Both mechanisms count. The distinction between them is for the user to
+    /// read, not for the "does my hotkey work" question to hinge on.
     #[must_use]
     pub const fn succeeded(&self) -> bool {
-        matches!(self, Self::Registered { .. })
+        matches!(self, Self::Registered { .. } | Self::Hooked { .. })
     }
 }
 
@@ -79,13 +94,22 @@ pub struct HotkeyFired {
 ///
 /// Unregisters everything first, so calling this after a settings change is the
 /// whole update — there is no incremental diff to get wrong.
-pub fn register_all(app: &AppHandle, bindings: &[Binding]) -> Vec<RegistrationReport> {
+pub fn register_all(
+    app: &AppHandle,
+    bindings: &[Binding],
+    hooks: &Hooks,
+) -> Vec<RegistrationReport> {
     let manager = app.global_shortcut();
 
     if let Err(err) = manager.unregister_all() {
         // Not fatal: on first run there is nothing registered.
         tracing::debug!(error = %err, "nothing to unregister");
     }
+
+    // Modifier-only chords go to the keyboard hook, which the system shortcut
+    // register cannot take. Installed once for all of them, because Windows
+    // allows one low-level hook per process.
+    let hooked = hooks.install(app, bindings);
 
     let mut reports = Vec::with_capacity(bindings.len());
 
@@ -97,6 +121,14 @@ pub fn register_all(app: &AppHandle, bindings: &[Binding]) -> Vec<RegistrationRe
         for accelerator in &binding.accelerators {
             match accelerator {
                 kw_platform::hotkey::Accelerator::Standard { .. } => {}
+                // Live through the hook rather than the register.
+                kw_platform::hotkey::Accelerator::ModifierOnly { accelerator, .. }
+                    if hooked.contains(accelerator) =>
+                {
+                    results.push(Registration::Hooked {
+                        accelerator: accelerator.clone(),
+                    });
+                }
                 other => {
                     let (accel, reason) = match other {
                         kw_platform::hotkey::Accelerator::ModifierOnly { accelerator, .. } => {
@@ -136,7 +168,7 @@ pub fn register_all(app: &AppHandle, bindings: &[Binding]) -> Vec<RegistrationRe
             // of them is the user's to make.
             for result in &report.results {
                 match result {
-                    Registration::Registered { .. } => {}
+                    Registration::Registered { .. } | Registration::Hooked { .. } => {}
                     Registration::Rejected {
                         accelerator,
                         reason,
@@ -165,6 +197,97 @@ pub fn register_all(app: &AppHandle, bindings: &[Binding]) -> Vec<RegistrationRe
     }
 
     reports
+}
+
+/// Owns the keyboard hook across re-registrations.
+///
+/// Windows allows one low-level hook per process, so this cannot be a local in
+/// `register_all` — a settings change would try to install a second one and be
+/// refused. Held in application state instead, and replaced rather than added to.
+#[derive(Default)]
+pub struct Hooks {
+    installed: std::sync::Mutex<Option<kw_platform::keyhook::KeyHook>>,
+}
+
+impl std::fmt::Debug for Hooks {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let watching = self
+            .installed
+            .lock()
+            .ok()
+            .and_then(|held| held.as_ref().map(|h| h.watching().to_vec()));
+        f.debug_struct("Hooks")
+            .field("watching", &watching)
+            .finish()
+    }
+}
+
+impl Hooks {
+    /// Install a hook for every modifier-only accelerator in `bindings`.
+    ///
+    /// Returns the accelerators that are now live through it. An accelerator
+    /// that is not in the returned set is not hooked, whatever the reason, so a
+    /// caller cannot report one as working on the strength of having asked.
+    fn install(&self, app: &AppHandle, bindings: &[Binding]) -> std::collections::BTreeSet<String> {
+        use std::collections::BTreeSet;
+
+        // One flat list, paired with the action it belongs to, because the hook
+        // reports an index rather than a name.
+        let mut wanted: Vec<(HotkeyAction, String)> = Vec::new();
+        for binding in bindings {
+            for accelerator in &binding.accelerators {
+                if let kw_platform::hotkey::Accelerator::ModifierOnly { accelerator, .. } =
+                    accelerator
+                {
+                    wanted.push((binding.action, accelerator.clone()));
+                }
+            }
+        }
+
+        // Dropped first, and deliberately before installing: Windows allows one
+        // hook per process, so the old one has to be gone before the new one can
+        // exist.
+        let mut held = self
+            .installed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *held = None;
+
+        if wanted.is_empty() {
+            return BTreeSet::new();
+        }
+
+        let accelerators: Vec<String> = wanted.iter().map(|(_, a)| a.clone()).collect();
+        let app = app.clone();
+        let routes = wanted.clone();
+
+        match kw_platform::keyhook::KeyHook::install(&accelerators, move |index| {
+            // Runs on the hook thread, which is in the input path of every
+            // keystroke on the machine. Emit and return; nothing else.
+            let Some((action, accelerator)) = routes.get(index) else {
+                return;
+            };
+            let payload = HotkeyFired {
+                action: *action,
+                accelerator: accelerator.clone(),
+            };
+            if let Err(err) = app.emit(HOTKEY_EVENT, payload) {
+                tracing::warn!(error = %err, "could not deliver a hooked hotkey");
+            }
+        }) {
+            Ok(hook) => {
+                tracing::info!(?accelerators, "keyboard hook installed");
+                *held = Some(hook);
+                accelerators.into_iter().collect()
+            }
+            Err(err) => {
+                // Reported, and the accelerators stay unhooked, so they come
+                // back as `NotRegistrable` with a reason rather than as working.
+                tracing::warn!(error = %err, ?accelerators, "could not install the keyboard hook");
+                BTreeSet::new()
+            }
+        }
+    }
 }
 
 fn register_one(app: &AppHandle, action: HotkeyAction, accelerator: &str) -> Registration {

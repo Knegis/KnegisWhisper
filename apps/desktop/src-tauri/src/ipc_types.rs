@@ -124,6 +124,8 @@ fn render() -> String {
             crate::overlay::OverlayStatus,
             crate::diagnostics::CredentialStoreStatus,
             crate::diagnostics::ModelCacheStatus,
+            crate::diagnostics::ShortcutHookStatus,
+            kw_audio_core::SystemAudioSupport,
             crate::diagnostics::Diagnostics,
         ],
         "hotkeys" => [

@@ -87,6 +87,38 @@ export type ModelCacheStatus = { path: string,
  */
 fellBack: boolean, };
 
+/**
+ * Whether a low-level keyboard hook is available.
+ *
+ * Mirrors `platform::keyhook::HookSupport`, converted here rather than derived
+ * there: `kw-platform` has no reason to depend on `ts-rs`, and the boundary type
+ * belongs on the side that crosses the boundary.
+ */
+export type ShortcutHookStatus = { "state": "available", mechanism: string, } | { "state": "unsupported", reason: string, };
+
+/**
+ * Whether this platform can capture system audio, and how.
+ *
+ * Four states rather than a boolean, for the same reason
+ * `overlay::CaptureExclusion` has four: "the platform cannot" and "the platform
+ * can and this machine has no such device" are different problems with
+ * different fixes, and neither is "it works".
+ */
+export type SystemAudioSupport = { "state": "available",
+/**
+ * The mechanism, named so the user can recognise it.
+ */
+mechanism: string,
+/**
+ * The device that will be captured.
+ */
+device: string,
+/**
+ * True where the mechanism has never been run on real hardware by
+ * anyone working on this project. Reported, not hidden.
+ */
+unverified: boolean, } | { "state": "no-device", mechanism: string, reason: string, } | { "state": "unsupported", reason: string, };
+
 export type Diagnostics = { appVersion: string, os: string, arch: string, webviewVersion: string | null, credentialStore: CredentialStoreStatus,
 /**
  * The live state of the real overlay window, not a prediction about the
@@ -98,7 +130,23 @@ overlay: OverlayStatus, allowedEgressPurposes: Array<string>,
  * Where the model cache ended up, and whether the per-user location had to
  * be abandoned because the native ASR binaries cannot read it.
  */
-modelCache: ModelCacheStatus, };
+modelCache: ModelCacheStatus,
+/**
+ * Whether a modifier-only shortcut can work here.
+ *
+ * Reported rather than assumed by the UI. The hotkey editor has to say
+ * something about `Control+Super`, and what it should say depends entirely
+ * on whether this build has a keyboard hook — which is a fact about the
+ * platform that only Rust knows.
+ */
+modifierOnlyShortcuts: ShortcutHookStatus,
+/**
+ * Whether what the speakers are playing can be recorded, and how.
+ *
+ * A real device enumeration, not a statement about the platform: it names
+ * the device that would be captured.
+ */
+systemAudio: SystemAudioSupport, };
 
 /* ---------------------------------------------------------------- hotkeys */
 /**
@@ -140,7 +188,7 @@ unusable: Array<HotkeyAction>, };
 /**
  * What happened when we tried to register one accelerator.
  */
-export type Registration = { "state": "registered", accelerator: string, } | { "state": "rejected", accelerator: string, reason: string, } | { "state": "not-registrable", accelerator: string, reason: string, };
+export type Registration = { "state": "registered", accelerator: string, } | { "state": "hooked", accelerator: string, } | { "state": "rejected", accelerator: string, reason: string, } | { "state": "not-registrable", accelerator: string, reason: string, };
 
 /**
  * What changing one action's hotkey actually achieved.

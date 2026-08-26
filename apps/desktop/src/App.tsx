@@ -158,7 +158,9 @@ function Shell() {
 
       <div className="content">
         <ViewBoundary view={view} onReset={() => setView("diagnostics")}>
-          {view === "dictation" ? <DictationView /> : null}
+          {view === "dictation" ? (
+            <DictationView hook={diagnostics.modifierOnlyShortcuts} />
+          ) : null}
           {view === "providers" ? <SettingsProviders /> : null}
           {view === "transcription" ? (
             <SettingsTranscription

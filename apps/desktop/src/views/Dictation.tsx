@@ -31,6 +31,7 @@ import {
   setInputDevice,
   toggleDictation,
   type Binding,
+  type ShortcutHookStatus,
 } from "../lib/ipc";
 import {
   acceleratorLabel,
@@ -40,7 +41,17 @@ import {
 } from "../lib/labels";
 import { useRefresh } from "../lib/useRefresh";
 
-export function DictationView() {
+export function DictationView({
+  hook,
+}: {
+  /**
+   * Whether modifier-only shortcuts work here, from diagnostics.
+   *
+   * A prop rather than a second `getDiagnostics()` call: the shell already has
+   * it, and two reads of the same fact are two chances to disagree.
+   */
+  hook: ShortcutHookStatus;
+}) {
   const load = useCallback(async () => {
     const [hotkeys, session, devices, canInsert, route, history] =
       await Promise.all([
@@ -146,7 +157,7 @@ export function DictationView() {
                 <em className="row-detail">none configured</em>
               ) : (
                 b.accelerators.map((a, i) => {
-                  const label = acceleratorLabel(a);
+                  const label = acceleratorLabel(a, hook);
                   return (
                     <span key={`${b.action}-${i}`}>
                       <code>{label.text}</code>
@@ -199,10 +210,12 @@ export function DictationView() {
         ) : null}
         {lastHotkey ? <Row label="Last fired" value={lastHotkey} /> : null}
         <p className="caveat">
-          A shortcut takes effect as soon as you set it. The dictation default,
-          <code>Control+Super</code>, is two modifiers and no key — no
-          cross-platform shortcut API can register that, so it has to be changed
-          before the hotkey will do anything. Try <code>Control+Shift+D</code>.
+          A shortcut takes effect as soon as you set it. The dictation default,{" "}
+          <code>Control+Super</code>, is two modifiers and no key, which no
+          cross-platform shortcut API can register.{" "}
+          {hook.state === "available"
+            ? `It works here anyway, through ${hook.mechanism} — and unlike a registered shortcut it does not take the keys away from anything else, so Windows still does whatever it does with them.`
+            : "It therefore does nothing here and has to be changed. Try Control+Shift+D."}
         </p>
       </section>
 

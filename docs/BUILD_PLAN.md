@@ -50,7 +50,7 @@ platform work that no amount of UI can substitute for.
 | Phase | Status | The gap |
 | --- | --- | --- |
 | 0 — Audit and contracts | Complete | — |
-| 1 — Tauri foundation | Complete | 2 of 6 window roles exist; Linux/macOS hotkey fallbacks unwritten |
+| 1 — Tauri foundation | Complete | 2 of 6 window roles exist; Linux/macOS hotkey fallbacks unwritten. Modifier-only shortcuts work on Windows through a keyboard hook |
 | — Chunk A (shell, types, Providers) | **Done, unchecked by hand** | Storing a key and passing a connection test has not been done by a person on this machine |
 | 2 — Dictation | **Verified on Windows** | 6 of 7 transcription providers reachable; Tinfoil declined pending enclave attestation. sherpa local ASR blocked — see B4 |
 | 3 — Reasoning | Complete, enterprise unverified | All three enterprise shapes written and tested against vectors and fixtures; no live call. No llama-server sidecar for `ChatRoute::Local`, which already points at `127.0.0.1:8221` |
@@ -300,30 +300,64 @@ Live calls stay unverified: each needs a key this project does not have.
 
 The largest backend chunk, and **the thing that blocks meetings** — not the AEC helper.
 
-### D1. System audio behind a trait
+### D1. System audio behind a trait *(done, and verified on hardware)*
 
-New `crates/audio-core/src/system_audio.rs`. `grep -ri wasapi crates/` is empty today.
+`crates/audio-core/src/{system_audio,mix}.rs`, and **no new dependency**. The plan called for the
+`wasapi` crate replacing upstream's 634-line `windows-system-audio-helper.c`; `cpal` — already a
+dependency — does WASAPI loopback, and says so in its own documentation. The Windows path is: take
+the default *output* device and open an *input* stream on it.
 
-- **Windows:** `wasapi` loopback capture. Replaces upstream's 634-line
-  `windows-system-audio-helper.c`.
-- **macOS:** `cidre` process taps, 14.4+ — written, unverified.
-- **Linux:** PulseAudio monitor source via `libpulse-binding` — written, unverified.
+One thing only a real run could find. `cpal` sets `AUDCLNT_STREAMFLAGS_LOOPBACK` inside
+`build_input_stream` when the device is a render endpoint, but `default_input_config()` *refuses* a
+render endpoint outright — "the requested stream type is not supported by the device". The mix
+format has to come from `default_output_config()`. Reading the documentation had not found that;
+running it found it in one attempt.
 
-Mixing microphone and system audio needs a shared clock and the existing ring-buffer discipline;
-reuse `audio-core::{capture, wav, vad, gate}` and keep the two rules already documented: VAD off
-by default for dictation, and the speech gate **fails open**.
+**Verified on this machine:** 97 920 samples, 2 channels at 48 kHz, peak 1.0, captured from
+`Speakers (Realtek(R) Audio)` while a sound played, then mixed with a microphone track.
+`cargo run -p kw-audio-core --example system_audio_probe` reproduces it.
 
-### D2. The three Windows capabilities, in Rust not as binaries
+- **Windows:** WASAPI loopback through `cpal`. Verified.
+- **Linux:** a PulseAudio or PipeWire `.monitor` source, which `cpal` lists as an ordinary input.
+  Written, and reported as `unverified: true` so a screen cannot present it as tested.
+- **macOS:** `Unsupported`, with the reason — `AudioHardwareCreateProcessTap` (14.4+) or a
+  user-installed virtual device, neither of which `cpal` exposes. Not written, because unbuildable
+  `cidre` code that no toolchain here can even compile is worse than an honest refusal.
 
-Decision already recorded in [PORTING_MATRIX.md](PORTING_MATRIX.md); the code is unwritten.
+`mix.rs` is the pure half and is fully tested: align at the start, pad the shorter track rather
+than truncate the longer, and sum-then-limit rather than divide by the number of sources — because
+dividing halves every passage where only one source is active, which is most of a meeting.
 
-- **Key listener** (`SetWindowsHookExW`/`WH_KEYBOARD_LL`) — the one with reach beyond meetings.
-  `crates/platform/src/hotkey.rs:162` currently tells the user their modifier-only shortcut does
-  nothing, which is honest and fixable. This is what modifier-only, right-side-modifier,
-  Globe/`Fn`, mouse-button and push-to-talk hotkeys need. Upstream ran one process per watched
-  key; an in-process hook replaces all of them.
-- **Text monitor** — UIAutomation focused-element read.
+### D2. The three Windows capabilities, in Rust not as binaries *(the key listener is done)*
+
+- **Key listener** *(done, and verified on hardware)*. `crates/platform/src/keys.rs` is the pure
+  state machine and `keyhook.rs` is the `WH_KEYBOARD_LL` plumbing. One hook on one thread inside
+  the process, replacing upstream's one child process per watched key.
+
+  Four rules, each a test: fire once per press rather than on every repeat; a superset does not
+  match, so `Control+Super` stays quiet during `Control+Shift+Super`; left and right are distinct
+  keys, which is what makes `RightControl+Super` possible at all; and an ordinary key held
+  disqualifies every modifier-only chord, which is what stops the hook firing while somebody types.
+
+  It refuses a chord containing an ordinary key. That is the boundary with the platform's own
+  shortcut register, which arbitrates such chords against other applications — claiming them here
+  as well would mean two mechanisms firing for one keystroke.
+
+  It does not swallow keystrokes and it does not log them. `Control+Super` still reaches the shell.
+  What leaves the module is the index of a chord that matched, never a key.
+
+  **Verified on this machine:** installed, fired exactly twice for two injected presses, uninstalled
+  cleanly. `cargo run -p kw-platform --example keyhook_probe` reproduces it.
+
+  Two consequences worth noting. `Accelerator::explain` no longer asserts that the hook is
+  unimplemented — it asks. And `Registration` gained a `Hooked` state distinct from `Registered`,
+  because a hooked chord does not take the keystroke away from other applications and reporting
+  both as "registered" is the small lie that surfaces when the Start menu appears anyway.
+
+- **Text monitor** — UIAutomation focused-element read. Not written. It serves meetings, which
+  chunk E has not started, so it is behind its own consumer.
 - **Mic listener** — `IAudioSessionManager2`, for "another application is using the microphone".
+  Not written, same reason.
 
 ### D3. Linux and macOS shortcut fallbacks
 
@@ -488,8 +522,11 @@ registry.
 - **A1 is a real gate, not a formality.** If neither `ts-rs` nor `specta` expresses
   `rename_all_fields` on internally-tagged enums, the fallback is a custom emitter — a day, not an
   hour. Everything after A1 depends on the answer, so it goes first and its result is recorded.
-- **Chunk D is the long one** and has no partial payoff: system audio half-written unblocks
-  nothing. Expect it to take longer than B and C combined.
+- **Chunk D turned out shorter than expected, for one reason.** `cpal` already did WASAPI
+  loopback, so the largest single item — replacing a 634-line C helper — became a function that
+  picks the output device. The risk the note was pointing at was real; it just did not land here.
+  What remains of D is the text monitor and the mic listener, both of which serve meetings and are
+  therefore behind chunk E rather than ahead of it.
 - **The registry/manifest credential mismatch (9 vs 15)** must be settled in A3 rather than
   papered over in the screen, or the "declared once" property quietly stops being true.
 - **`id=8` in the bench-check history** — a connection refused to `127.0.0.1:8178` while the

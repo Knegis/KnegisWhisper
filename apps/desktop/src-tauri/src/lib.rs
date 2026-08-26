@@ -220,7 +220,11 @@ pub fn run() -> anyhow::Result<()> {
                 }
             }
 
-            let registrations = shortcuts::register_all(&handle, &bindings);
+            // Held in state so a settings change replaces the hook rather than
+            // trying to install a second one, which Windows refuses.
+            let hooks = std::sync::Arc::new(shortcuts::Hooks::default());
+            let registrations = shortcuts::register_all(&handle, &bindings, &hooks);
+            app.manage(std::sync::Arc::clone(&hooks));
             let live = registrations.iter().filter(|r| r.is_live()).count();
             tracing::info!(live, total = registrations.len(), "hotkeys registered");
 

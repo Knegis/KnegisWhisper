@@ -137,6 +137,21 @@ OS version and report `unsupported` below the floor.
 Linux system audio works through the desktop portal. Without a portal implementation, or on a
 PulseAudio-only system without `pipewire-pulse`, it reports `unsupported`.
 
+## System audio
+
+What the speakers are playing, for meeting transcription. Reported by enumerating real devices, so
+the answer names the device that would be captured rather than describing the platform.
+
+| Platform | Mechanism | State |
+| --- | --- | --- |
+| Windows | WASAPI loopback on the default output device, through `cpal` | **verified** — 97 920 samples at 48 kHz stereo, peak 1.0, captured from a real playback |
+| Linux | a PulseAudio or PipeWire `.monitor` source, which `cpal` lists as an ordinary input | ⚠️ written, **unverified** — reported as `unverified: true` so no screen can present it as tested |
+| macOS | none available | ⚠️ **unsupported**, and it says why: `AudioHardwareCreateProcessTap` (14.4+) or a user-installed virtual device, neither exposed by `cpal` |
+
+`cargo run -p kw-audio-core --example system_audio_probe` is the check. It enumerates, opens a real
+stream, and reports whether the callback fired, whether it produced silence, and what the mixer did
+with it — three different facts that a single "it works" would collapse.
+
 ## Global shortcuts
 
 | Capability | Windows | macOS | Linux X11 | GNOME Wayland | KDE Wayland | Hyprland |
@@ -152,9 +167,26 @@ The default hotkey is `Control+Super`, which is modifier-only and therefore invi
 cross-platform API — hence the native hooks. On X11 and GNOME the effective default is adjusted
 because modifier-only combinations do not work there.
 
+**What is built, as against what the table says is possible:**
+
+| | State |
+| --- | --- |
+| Windows modifier-only | **verified.** One `WH_KEYBOARD_LL` hook on one thread, in-process, not one child per key. `cargo run -p kw-platform --example keyhook_probe` installs it, injects two presses, and asserts it fires exactly twice. |
+| Windows right-side modifiers | Built with the same hook — `RightControl+Super` is a chord the state machine can express, because a low-level hook reports the sided virtual keys and the cross-platform API does not. Unexercised beyond the probe. |
+| Windows mouse buttons, push-to-talk | Not built. Both need a second hook (`WH_MOUSE_LL`) or key-up routing, and neither has a consumer yet. |
+| macOS, Linux | Not built, and the reason is reported rather than the capability being silently absent: macOS needs a `CGEventTap` and the Accessibility permission that goes with it, and Wayland's global-shortcuts portal takes only chords the compositor can register. |
+
+The hook **does not consume** the keystroke. `Control+Super` still reaches the shell and Windows
+still does whatever it does with it. Consuming it is possible and is deliberately not done: an
+application that silently eats a system shortcut is indistinguishable from a broken keyboard.
+`shortcuts::Registration` therefore distinguishes `Hooked` from `Registered`, because the two
+behave differently in a way the user can notice.
+
+The hook sees every keystroke on the machine, including into other applications. **Nothing is
+logged.** What leaves the module is the index of a chord that matched, never a key.
+
 Push-to-talk on Linux needs read access to `/dev/input`; without it the app reports the
-limitation and falls back to toggle mode rather than silently failing. Windows does the same when
-the key-listener helper is missing.
+limitation and falls back to toggle mode rather than silently failing.
 
 ## Text insertion
 

@@ -22,6 +22,7 @@ import type {
   HotkeyChange,
   InstallProgress,
   NonActivating,
+  ShortcutHookStatus,
   VerifiedBy,
 } from "./ipc";
 
@@ -66,7 +67,24 @@ export function nonActivatingLabel(n: NonActivating): Stated {
   }
 }
 
-export function acceleratorLabel(a: Accelerator): {
+/**
+ * What one accelerator reads as, and what is wrong with it if anything.
+ *
+ * `hook` is the platform's answer about modifier-only chords, from
+ * `Diagnostics.modifierOnlyShortcuts`. It is a parameter rather than a hardcoded
+ * sentence because the honest text differs by platform: this file said
+ * "not implemented yet, so this shortcut does nothing" on every platform, and
+ * that became false on Windows the moment the keyboard hook landed. A frontend
+ * string asserting a platform fact is the same defect as a frontend type
+ * asserting a Rust one.
+ *
+ * `undefined` means the answer is not known yet — diagnostics has not loaded —
+ * and the caveat says that rather than guessing either way.
+ */
+export function acceleratorLabel(
+  a: Accelerator,
+  hook?: ShortcutHookStatus,
+): {
   text: string;
   problem: string | null;
 } {
@@ -77,7 +95,11 @@ export function acceleratorLabel(a: Accelerator): {
       return {
         text: a.accelerator,
         problem:
-          "Uses only modifier keys. That needs a low-level keyboard hook, which is not implemented yet, so this shortcut does nothing.",
+          hook === undefined
+            ? "Uses only modifier keys. Whether that works here is still being checked."
+            : hook.state === "available"
+              ? `Uses only modifier keys, so it runs through ${hook.mechanism} rather than the system shortcut register. It works, and other applications still see the same keys.`
+              : `Uses only modifier keys, which does nothing here. ${hook.reason}`,
       };
     case "invalid":
       return { text: a.input, problem: a.reason };
@@ -98,11 +120,22 @@ export function acceleratorText(b: Binding): string {
  */
 export function changeLabel(change: HotkeyChange): string {
   if (change.live) {
+    // Two mechanisms can make a shortcut live, and the difference is one the
+    // user can notice: a hooked chord does not take the keystroke away from
+    // other applications, so `Control+Super` still opens the Start menu.
+    // Reporting both as plain "live" is the small lie that surfaces the first
+    // time somebody wonders why.
+    const hooked = change.registrations.find((r) => r.state === "hooked");
+    if (hooked) {
+      return `${hooked.accelerator} is live through a keyboard hook. Other applications still see the same keys.`;
+    }
     const taken = change.registrations.find((r) => r.state === "registered");
     return `${taken?.accelerator ?? acceleratorText(change.binding)} is live.`;
   }
-  // Narrowed to the two refusal variants, both of which carry a reason.
-  const refused = change.registrations.find((r) => r.state !== "registered");
+  // Narrowed to the refusal variants, which are the ones carrying a reason.
+  const refused = change.registrations.find(
+    (r) => r.state === "rejected" || r.state === "not-registrable",
+  );
   return refused
     ? `Saved, but not working: ${refused.reason}`
     : "Saved, but nothing was registered.";
