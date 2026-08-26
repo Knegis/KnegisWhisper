@@ -2,18 +2,23 @@
 //!
 //! ## What is here, and what is not
 //!
-//! This crate is the *contract*: the trait a streaming client implements, the
-//! capability model that says what each provider honours, and the allowlist
-//! derived from it. Those are the parts that are new work rather than a port —
-//! upstream has no capability object at all — and they are the parts that decide
-//! whether the calling code can be written correctly.
+//! This crate holds the *contract* — the trait a streaming client implements and
+//! the capability model that says what each provider honours — and the clients
+//! that exist. The capability model is new work rather than a port: upstream has
+//! no capability object at all, and it is what lets calling code ask a question
+//! like "will this provider honour my keyterms?" instead of having to know.
 //!
-//! The five WebSocket clients themselves are **not implemented yet**. That is a
-//! deliberate stopping point rather than an oversight: each needs real
-//! credentials against a live service to verify, none of which can be done from
-//! the development machine this was written on, and a client that compiles
-//! without ever having connected is worth very little. [`is_allowed`] returns
-//! true only for a provider with a client, so nothing here claims otherwise.
+//! **[`is_allowed`] is derived from [`client`], not from [`PROVIDERS`].** That
+//! sentence is the correction of a real defect: it used to read
+//! `capabilities(id).is_some()`, so all six described providers were permitted
+//! while no client existed for any of them — under a module doc that claimed
+//! exactly the opposite. Describing a provider and being able to use it are two
+//! different facts and the code now keeps them apart, which is also what lets
+//! the settings screen list a provider it cannot offer and say why.
+//!
+//! Of the six, `local` has a client. Four of the cloud providers need real
+//! credentials against a live service to verify, and `tinfoil-realtime` is
+//! [`declined`] rather than pending — see [`availability`].
 //!
 //! See `docs/PORTING_MATRIX.md` for the per-provider wire details each client
 //! will need.
@@ -21,7 +26,8 @@
 pub mod capabilities;
 
 pub use capabilities::{
-    capabilities, is_allowed, KeytermSupport, KeytermWire, MeetingProviderCapabilities, PROVIDERS,
+    availability, capabilities, client, declined, is_allowed, listing, Availability, Client,
+    KeytermSupport, KeytermWire, MeetingProviderCapabilities, MeetingProviderSummary, PROVIDERS,
 };
 
 use kw_security::KeyRef;
