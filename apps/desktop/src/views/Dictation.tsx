@@ -322,7 +322,9 @@ export function DictationView({
           <p className="muted">Nothing dictated yet.</p>
         ) : (
           <>
-            <ul className="purposes">
+            {/* `list`, not `purposes`: a history entry is a status, the text
+                that was dictated and where it went -- a row, not a pill. */}
+            <ul className="list">
               {history.map((h) => (
                 <li key={h.id}>
                   <code>{h.status}</code> {h.text || h.errorMessage || "(empty)"}

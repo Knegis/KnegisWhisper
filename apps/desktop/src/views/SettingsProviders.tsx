@@ -163,7 +163,15 @@ export function SettingsProviders() {
         <span className="row-value">
           {state.value}
           {state.detail ? <em className="row-detail">{state.detail}</em> : null}
-          <span className="controls">
+        </span>
+        {/*
+          A direct child of the row, not of the value, so the grid gives it a
+          row of its own spanning both columns. The field then starts level with
+          the label because it genuinely begins there -- pulling it left with a
+          margin instead put it on top of any label long enough to wrap, which
+          "Self-hosted cleanup endpoint key" is.
+        */}
+        <span className="controls">
             <input
               type="password"
               autoComplete="off"
@@ -186,16 +194,15 @@ export function SettingsProviders() {
                 Clear
               </button>
             ) : null}
-          </span>
-          <em className="row-detail">
-            slot <code>{slot.slot}</code>
-            {slot.usedFor.length > 0 ? ` · used for ${slot.usedFor.join(" and ")}` : ""}
-            {slot.feature ? ` · ${slot.feature}` : ""}
-          </em>
-          {results[slot.slot] ? (
-            <em className="row-detail">{results[slot.slot]}</em>
-          ) : null}
         </span>
+        <em className="row-detail">
+          slot <code>{slot.slot}</code>
+          {slot.usedFor.length > 0 ? ` · used for ${slot.usedFor.join(" and ")}` : ""}
+          {slot.feature ? ` · ${slot.feature}` : ""}
+        </em>
+        {results[slot.slot] ? (
+          <em className="row-detail">{results[slot.slot]}</em>
+        ) : null}
       </div>
     );
   };
@@ -256,7 +263,9 @@ export function SettingsProviders() {
                 Every test was skipped, so nothing was proven either way.
               </p>
             ) : null}
-            <ul className="purposes">
+            {/* `list`, not `purposes`: each result is a pill, a verdict and a
+                sentence, which is a row rather than a pill. */}
+            <ul className="list">
               {probe.results
                 .filter((r) => r.outcome.outcome !== "skipped")
                 .map((r, i) => (

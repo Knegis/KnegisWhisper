@@ -1,31 +1,223 @@
+/*
+ * The design language is knegis.com's, carried over rather than reinvented.
+ *
+ * Three things define it, and all three are departures from what this file did
+ * before:
+ *
+ *   1. Nothing is boxed. The site declares `border` exactly twice, both times
+ *      `border: 0`, and `border-radius` not once. Separation is whitespace and
+ *      fill, never an outline drawn around a thing.
+ *   2. What is marked is filled, not outlined. The site's one interaction is
+ *      `a.line:hover { background: var(--band); color: var(--band-ink) }` -- a
+ *      fill swap. `--band` here is the site's blue, the colour it reserves for
+ *      a filled region rather than for text, so a hovered or current element is
+ *      a blue bar with paper text on it and nothing is drawn around anything.
+ *   3. Two typefaces with a job each. Switzer sets prose. ProFontWindows sets
+ *      anything the machine is saying about itself -- headings, navigation,
+ *      identifiers, file bytes -- at the site's exact spec: 13px/16px, 0.5px
+ *      tracking, uppercase where the string is a label rather than data.
+ *
+ * # Why the fonts are files in this repository
+ *
+ * The production CSP is `font-src 'self'` (`src-tauri/tauri.conf.json`). A CDN
+ * link would work in `npm run dev` and fail silently in the packaged build,
+ * falling back to a system sans, which is the worst of both: it looks fine
+ * where it is tested and wrong where it ships. So the two faces are committed
+ * and served from the bundle. Attribution is in `NOTICE`.
+ */
+
+/*
+ * Switzer 400 only. The site publishes exactly one weight -- `switzer-500` and
+ * `switzer-600` are 404s -- and that is a decision rather than an omission:
+ * emphasis there comes from case and typeface, not from weight. This file
+ * follows it, so nothing asks for a bold Switzer the browser would have to
+ * counterfeit by smearing the 400.
+ */
+@font-face {
+  font-family: Switzer;
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("./fonts/switzer-400.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: ProFontWindows;
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("./fonts/ProFontWindows.ttf") format("truetype");
+}
+
 :root {
-  --bg: #1c1c2e;
-  --surface: #24243a;
-  --text: #e8e8f0;
-  --muted: #9a9ab4;
-  --border: #33334f;
-  --accent: #7c9cff;
-  --warn: #ffb86b;
+  /*
+   * The dark theme, and the default -- unchanged from this application's own
+   * default, because which theme opens first is not something the restyle
+   * should quietly decide.
+   *
+   * Values are knegis.com's `[data-theme=dark]` set, with two deliberate
+   * departures noted where they occur.
+   */
+  --bg: #181818;
+  /*
+   * The same value as `--bg`, deliberately. A section is no longer a panel
+   * sitting on the page; it is a region of the page, and what separates it from
+   * its neighbour is space and a rule. The token stays rather than being
+   * inlined, so putting the panels back is one value in each theme.
+   */
+  --surface: #181818;
+  /*
+   * Neutral greys, not the warm ones. knegis.com's ink is `#e6e4dc` and its
+   * muted `#78766e` -- both carry a brown cast that reads as intentional beside
+   * a sand-coloured panel and reads as dirt once the panel is white. The whole
+   * axis is neutralised together: warming only some of the greys is what makes
+   * the rest look wrong.
+   */
+  --text: #e4e4e7;
+  --muted: #8e8e96;
+  --faint: #35353a;
+  /*
+   * The marked state is the site's blue -- `--footer-bg`, which is where
+   * knegis.com uses blue as a fill rather than as text.
+   *
+   * Lightened here, and only here. `#0015ff` against this theme's `--surface`
+   * is 1.96:1: on paper that blue is a hole punched in the page, but on
+   * `#212121` it is a dark rectangle on a dark rectangle, separated by hue
+   * alone. `#3d55ff` is the least-lightened value that clears 3:1 against the
+   * surface while still carrying `--band-ink` at 5.24:1, so the gesture stays
+   * white-on-blue in both themes rather than inverting in one of them.
+   */
+  --band: #3d55ff;
+  --band-ink: #fdfdfd;
+  --accent: #fde800;
+  /*
+   * There is no `--warn`. It was `#9a5b00` in light, which is the brown that
+   * had to go: an amber dark enough to be read on white *is* brown, so there is
+   * no version of that token that survives a white page. What used it now says
+   * the same thing structurally instead -- a caveat keeps its rule in the
+   * margin, and a genuine problem is `--error`, which is what those three call
+   * sites were describing anyway.
+   */
   --error: #ff7b7b;
 
-  color-scheme: dark;
-  font-family:
-    system-ui,
-    -apple-system,
-    "Segoe UI",
-    sans-serif;
+  /*
+   * Fills that stand in for the boxes that used to be here. A wash of the ink
+   * colour rather than of the accent: these mark a region as set apart, and
+   * tinting them with the accent would imply a relationship to the accent that
+   * does not exist.
+   */
+  --wash: rgb(228 228 231 / 6%);
+  /*
+   * A control has to read as pressable while at rest, which a 6% wash does not
+   * do -- that weight is right for a pill nobody can click and wrong for a
+   * button. Separate token rather than a stronger `--wash`, so making buttons
+   * findable does not also make every static region louder.
+   */
+  --control: rgb(228 228 231 / 13%);
+
+  /*
+   * The row grid, as tokens because two other rules have to agree with it
+   * exactly: a control that spans the whole row does so by cancelling the label
+   * track with a negative margin, and a margin that disagrees with the track by
+   * a pixel is visible as a misalignment.
+   */
+  --label-col: 14rem;
+  --row-gap: 1.5rem;
+
+  --font-sans: Switzer, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ProFontWindows, ui-monospace, "SF Mono", Menlo, Consolas,
+    monospace;
+
+  color-scheme: light dark;
+  font-family: var(--font-sans);
   font-size: 14px;
   line-height: 1.5;
+}
+
+/*
+ * The light theme: knegis.com's `:root` set, which is its light one.
+ *
+ * The accents are the site's two, assigned to the theme each is legible in
+ * rather than to the one it appears in there. The site's nav sits over inverted
+ * artwork, so its light-mode yellow has a dark backdrop; here there is no such
+ * backdrop, and `#fde800` on paper is 1.2:1. So blue marks light and yellow
+ * marks dark, at 8.27:1 and 14.14:1.
+ */
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #fdfdfd;
+    --surface: #fdfdfd;
+    --text: #1f2023;
+    --muted: #62636a;
+    /*
+     * Heavier than the dark theme's rule relative to its ground, because with
+     * no panel behind a section these rules are the only structure left on the
+     * page. They are doing the job the beige used to do.
+     */
+    --faint: #c4c4cb;
+    /* The site's own `--footer-bg`, unmodified. 8.09:1 against paper, and
+     * 8.09:1 for the text sitting on it. */
+    --band: #0015ff;
+    --band-ink: #fdfdfd;
+    --accent: #1803ff;
+    --error: #c02626;
+
+    --wash: rgb(31 32 35 / 5%);
+    --control: rgb(31 32 35 / 10%);
+  }
 }
 
 * {
   box-sizing: border-box;
 }
 
+/*
+ * Reserve the scrollbar's gutter for the whole session.
+ *
+ * Without this the layout slides sideways on most navigations, and it is the
+ * centring that moves rather than anything in the view: `.shell` is a 60rem
+ * column held in the middle by `margin: 0 auto` inside a 1000px window, so the
+ * ~15px a Windows scrollbar occupies comes out of the two margins evenly.
+ * Diagnostics is four sections and scrolls; Local API is one and does not.
+ * Switching between them moves every element on the page about 7px, which is
+ * too small to read as a scrollbar arriving and too large not to notice.
+ *
+ * `scrollbar-gutter` rather than `overflow-y: scroll`, which would also fix it:
+ * this reserves the space without painting a permanently dead scrollbar down
+ * views that fit. Windows is the platform with the problem, and its webview is
+ * WebView2 -- Chromium, where this has been supported since 94. macOS and Linux
+ * use overlay scrollbars that take no layout width, so there is no jump to fix
+ * and this costs them nothing.
+ */
+html {
+  scrollbar-gutter: stable;
+}
+
 body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
+}
+
+/*
+ * The machine voice.
+ *
+ * ProFontWindows at the site's caption spec. Uppercase belongs only on strings
+ * that are labels -- a heading, a nav item, an identifier the application chose
+ * itself. It is kept off anything the user or the filesystem authored, because
+ * `text-transform` is not reversible by eye: an uppercased path or error string
+ * reads as shouting and hides its own casing.
+ */
+h2,
+.sidebar button,
+.purposes code,
+.list code,
+.overlay {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 16px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
 }
 
 /*
@@ -53,6 +245,26 @@ body {
     grid-template-columns: minmax(0, 1fr);
     gap: 1rem;
   }
+
+  /*
+   * Rows collapse too. A fixed 14rem label track leaves the value under 200px
+   * here, and the row-spanning control has no label track left to cancel --
+   * its negative margin would hang off the left edge of the page.
+   */
+  .row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.25rem;
+  }
+
+  .row > .row-value,
+  .row > .row-value:only-child {
+    grid-column: auto;
+  }
+
+  .row > .row-value > .controls {
+    margin-left: 0;
+    width: 100%;
+  }
 }
 
 .sidebar {
@@ -66,41 +278,53 @@ body {
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 0.125rem;
+  gap: 0;
 }
 
 /*
- * Nav items are buttons, not links: there is nothing to navigate to. Styled flat
- * so they read as a list rather than six controls competing with the ones inside
- * the view.
+ * Nav items are buttons, not links: there is nothing to navigate to. Flat, and
+ * now genuinely flat -- the outline that used to mark the current item is gone,
+ * replaced by the fill below.
  */
 .sidebar button {
   width: 100%;
   text-align: left;
   background: none;
-  border: 1px solid transparent;
+  border: 0;
   color: var(--muted);
   padding: 0.4rem 0.6rem;
-  border-radius: 6px;
-  font: inherit;
+  font-family: var(--font-mono);
   cursor: pointer;
 }
 
-.sidebar button:hover {
+/*
+ * `:not(:disabled)` for specificity, as on the notification panel. Without it
+ * this selector and the generic `button:hover` below both score (0,2,1), and
+ * being the earlier of the two it lost: hovering any nav item painted it the
+ * full marked blue, so hover and "this is the screen you are on" looked
+ * identical.
+ */
+.sidebar button:hover:not(:disabled) {
   color: var(--text);
-  background: var(--surface);
+  background: var(--wash);
 }
 
-.sidebar button.nav-current {
-  color: var(--text);
-  background: var(--surface);
-  border-color: var(--border);
+/*
+ * The marked state, and the pattern every other one in this file follows: the
+ * fill inverts and the text inverts with it. Nothing is drawn around it.
+ */
+.sidebar button.nav-current,
+.sidebar button.nav-current:hover:not(:disabled) {
+  color: var(--band-ink);
+  background: var(--band);
 }
 
-/* Visible focus, because the whole nav is keyboard-reachable. */
+/* Visible focus, because the whole nav is keyboard-reachable. An outline is not
+ * a border -- it is drawn outside the box and only while focused, and removing
+ * it would cost the keyboard user the only cue they have. */
 .sidebar button:focus-visible {
   outline: 2px solid var(--accent);
-  outline-offset: 1px;
+  outline-offset: 2px;
 }
 
 .content {
@@ -116,24 +340,32 @@ body {
 h1 {
   margin: 0;
   font-size: 1.5rem;
+  font-weight: 400;
   letter-spacing: -0.01em;
 }
 
 h2 {
   margin: 0 0 0.75rem;
-  font-size: 0.75rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+  font-weight: 400;
   color: var(--muted);
 }
 
+/*
+ * A section is a region, not a card. The fill is what separates it from the
+ * page; the padding is what separates it from its neighbour.
+ */
+/*
+ * A region of the page, not a card on it.
+ *
+ * The horizontal padding is gone with the fill it used to sit inside: 1.5rem of
+ * inset against an invisible edge is an indent with nothing to indent from, and
+ * it pushed every section out of line with the `h1` and the sidebar above it.
+ * The separation is the margin now, which is why the margin grew.
+ */
 section {
-  margin-top: 2rem;
-  padding: 1rem 1.25rem;
+  margin-top: 2.75rem;
+  padding: 0;
   background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 10px;
 }
 
 .muted {
@@ -145,17 +377,48 @@ section {
   color: var(--error);
 }
 
+/*
+ * A rule between rows, which is a different thing from a box around one: it
+ * separates two pieces of data from each other rather than fencing the pair off
+ * from the page. `--faint` is the site's own value for exactly this weight of
+ * mark.
+ */
+/*
+ * A grid, not `justify-content: space-between`.
+ *
+ * Space-between sized the value column to whatever that particular row's text
+ * happened to be, so every row put its controls at a different x and a column
+ * of API-key fields came out as a staircase. A fixed second track makes the
+ * value column the same width on every row of every screen, which is what makes
+ * the inputs and the buttons line up down the page.
+ */
 .row {
-  display: flex;
-  gap: 1rem;
-  justify-content: space-between;
+  display: grid;
+  /*
+   * A fixed first track, not `minmax(0, 14rem)`. The minmax form resolves
+   * against each row's own content, so the label column was only incidentally
+   * the same width on every row -- and the breakout below has to cancel a track
+   * whose width it can predict.
+   */
+  grid-template-columns: var(--label-col) minmax(0, 1fr);
+  gap: var(--row-gap);
   align-items: baseline;
-  padding: 0.4rem 0;
-  border-top: 1px solid var(--border);
+  padding: 0.55rem 0;
+  border-top: 1px solid var(--faint);
 }
 
 .row:first-of-type {
   border-top: none;
+}
+
+/*
+ * A row whose only child is the value -- a lone control with nothing to label
+ * it, like the Start recording button on Meetings -- still belongs in the value
+ * column. Without this it falls into track 1 and starts at the page edge, a
+ * couple of hundred pixels left of every other control on the screen.
+ */
+.row > .row-value:only-child {
+  grid-column: 2;
 }
 
 .row-label {
@@ -163,24 +426,77 @@ section {
   flex: 0 0 auto;
 }
 
+/*
+ * Left-aligned, where this used to be `text-align: right`.
+ *
+ * Right-alignment is a fine way to show a short value and a bad way to show a
+ * paragraph. `.row-detail` is frequently a paragraph -- "the per-user location
+ * contains a space or a non-ASCII character, which the native speech binaries
+ * cannot read" is four wrapped lines -- and right-aligning it left every one of
+ * those lines starting at a different x, in a monospace face, which is close to
+ * the least readable thing a settings screen can do. Aligning the column left
+ * also closes the gap that had a label at one edge of the window and its value
+ * at the other with 700px of nothing between them.
+ */
 .row-value {
-  text-align: right;
+  text-align: left;
   display: flex;
   flex-direction: column;
+  align-items: flex-start;
   gap: 0.15rem;
 }
 
+/*
+ * Machine voice, but not uppercase: this carries paths, reasons and error
+ * strings, and their casing is information.
+ */
 .row-detail {
+  font-family: var(--font-mono);
   color: var(--muted);
-  font-size: 0.8125rem;
+  font-size: 13px;
+  line-height: 16px;
+  letter-spacing: 0.5px;
   font-style: normal;
 }
 
+/*
+ * A slot for the outcome of the last press, which holds its height whether or
+ * not it has anything to hold.
+ *
+ * Rendering that message conditionally is what made the section jump: the
+ * element appeared, the row containing it grew, and every control below moved
+ * out from under the pointer at the moment the pointer was over them. Two lines
+ * is what the longest of these sentences wraps to at the default 1000px window.
+ * A window dragged near the 720px minimum can still push it to three, which
+ * moves the section below by one line -- but never the buttons above it, which
+ * is where the hand is.
+ */
+.status-slot {
+  /* Two lines of `.row-detail`, whose line-height is 16px. */
+  min-height: 32px;
+  margin: 0.75rem 0 0;
+}
+
+/*
+ * Every string that reaches this class is a failure -- an action nothing
+ * handles, a route that will not resolve, a connector missing a field. It was
+ * amber because it was called `warn`; it is red because of what it says.
+ */
+.row-detail.warn {
+  color: var(--error);
+}
+
+/*
+ * The one mark that stays. A caveat has to read as set apart from the prose
+ * around it, and on paper an 8% wash alone does not carry that; the bar is a
+ * mark in the margin rather than an outline around the block, so it keeps the
+ * distinction this file is otherwise removing.
+ */
 .caveat {
   margin: 0.75rem 0 0;
   padding: 0.6rem 0.75rem;
-  border-left: 2px solid var(--warn);
-  background: rgb(255 184 107 / 8%);
+  border-left: 2px solid var(--accent);
+  background: var(--wash);
   color: var(--text);
   font-size: 0.8125rem;
 }
@@ -191,17 +507,17 @@ section {
   list-style: none;
   display: flex;
   flex-wrap: wrap;
-  gap: 0.4rem;
+  gap: 0.35rem;
 }
 
-.purposes code {
+/* Identifiers the application chose, so: machine voice, and filled rather than
+ * outlined. */
+.purposes code,
+.list code {
   display: inline-block;
-  padding: 0.15rem 0.45rem;
-  background: rgb(124 156 255 / 12%);
-  border: 1px solid rgb(124 156 255 / 25%);
-  border-radius: 5px;
-  color: var(--accent);
-  font-size: 0.75rem;
+  padding: 0.2rem 0.5rem;
+  background: var(--wash);
+  color: var(--text);
 }
 
 /* -------------------------------------------------------------------- notes */
@@ -221,12 +537,50 @@ section {
   align-items: baseline;
   flex-wrap: wrap;
   gap: 0.4rem;
-  padding: 0.4rem 0;
-  border-bottom: 1px solid var(--border);
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--faint);
 }
 
 .list li:last-child {
   border-bottom: none;
+}
+
+/*
+ * A detail is a sentence, so it gets its own line.
+ *
+ * These rows are an identifier, a name, an explanation and sometimes a button.
+ * Left to flow inline they collided -- "1530 MB" ran straight into "not
+ * installed" with no space between them, because they are separate elements and
+ * JSX drops the whitespace between elements that sit on separate source lines.
+ * Breaking the sentence onto its own row is what separates them; a gap would
+ * only have hidden it.
+ *
+ * `order` puts the button back on the first line. Without it the button follows
+ * the details in source order and lands alone at the bottom of the row.
+ */
+.list li .row-detail,
+.list li .muted {
+  order: 1;
+  flex: 1 0 100%;
+  margin: 0;
+}
+
+/*
+ * The first button takes the slack; the rest sit against it.
+ *
+ * `margin-left: auto` on every button pushed each one away from the one before
+ * it, so a Notes row with three of them came out scattered across the line and
+ * wrapping mid-group -- Preview at 797, Export at 516 on the line below, Delete
+ * at 825. Applied to the first only, the three travel right together and their
+ * trailing edge lines up down the list.
+ */
+.list li button {
+  order: 0;
+  margin-left: 0;
+}
+
+.list li button:first-of-type {
+  margin-left: auto;
 }
 
 /*
@@ -239,28 +593,160 @@ section {
   margin-top: 0;
 }
 
-/* Several controls on one settings row lay out across, not down. */
+/*
+ * Several controls on one settings row lay out across, not down.
+ *
+ * `display: flex` is the repair to a rule that was half-inert. It sets
+ * `flex-direction`, `flex-wrap`, `align-items` and `gap`, and every one of them
+ * needs a flex container that nothing here was declaring. Written as
+ * `row-value controls` the class inherited `display: flex` from `.row-value`
+ * and worked, which is why this went unnoticed; written alone -- the credential
+ * fields on Providers, the endpoint fields on Intelligence and Transcription --
+ * it was a plain block, the gap did nothing, and the input sat flush against
+ * its own Save button.
+ */
 .controls {
+  display: flex;
   flex-direction: row;
   flex-wrap: wrap;
-  align-items: baseline;
-  gap: 0.4rem;
+  align-items: center;
+  /* Left, with the rest of the value column. The field's own width is what
+   * makes the buttons line up, not the column's right edge. */
+  justify-content: flex-start;
+  width: 100%;
+  gap: 0.5rem;
+}
+
+/*
+ * A control that sits *under* its row's value spans the whole row.
+ *
+ * The field then starts level with the label -- "OpenAI API key" and the box
+ * you type the key into share a left edge -- and the whole row's width is
+ * available, so Save and Clear sit beside the field instead of wrapping
+ * underneath it.
+ *
+ * Deliberately scoped to a `.controls` nested inside `.row-value`. Where the
+ * class is written as `row-value controls` the control *is* the value -- the
+ * Folder select on Notes, the export format -- and a label paired with its
+ * control on one line is already right; those keep the value column.
+ */
+/*
+ * `:not(.row-value)` matters. Nine rows are written `row-value controls`, where
+ * the control *is* the value -- the Folder select on Notes, the export format.
+ * Those are direct children of the row too, so without the exclusion this rule
+ * caught them as well and threw each one onto a line below its own label.
+ */
+.row > .controls:not(.row-value),
+.row > .row-detail {
+  grid-column: 1 / -1;
+}
+
+/*
+ * The same result for the rows still shaped the old way, by cancelling the
+ * label track rather than by occupying a grid row of its own.
+ *
+ * This is the weaker of the two mechanisms and exists only where the markup has
+ * not been turned inside out yet. It cannot reserve vertical space against the
+ * label -- the control and the label are in the same grid row, so a label long
+ * enough to wrap gets drawn on. That is survivable here because every label on
+ * these two screens is a provider or connector name that fits on one line, and
+ * it is why Providers, whose "Self-hosted cleanup endpoint key" does not, moved
+ * its control out of the value instead.
+ */
+.row > .row-value > .controls {
+  margin-left: calc(-1 * (var(--label-col) + var(--row-gap)));
+  width: calc(100% + var(--label-col) + var(--row-gap));
+}
+
+/*
+ * One field width for every row, so the buttons after them line up too.
+ *
+ * Capped rather than left to fill: the value column is wide enough that an
+ * unconstrained field would run most of the width of the window to hold an API
+ * key, and put its Save button somewhere different on each screen. `min-width:
+ * 0` because an input's intrinsic minimum is its `size` attribute -- 20
+ * characters -- and it will refuse to shrink below that inside a grid track.
+ */
+/*
+ * Every field is one column wide, and the buttons wrap underneath it.
+ *
+ * Three narrower schemes were tried and each traded one misalignment for
+ * another. A field sized to the slack left over by its buttons made its width a
+ * function of how many buttons a row happened to have -- 276px beside Save and
+ * Clear, 320px beside Save alone -- so the Save buttons, which are what the eye
+ * tracks down a column, sat 44px apart. A fixed 16rem fixed that and then
+ * truncated its own placeholders mid-word, "Session token — only for tempora".
+ * Widening only the fields that had no buttons beside them fixed *that* and
+ * left Notes with a 385px Search directly above a 224px Folder.
+ *
+ * Filling the column has none of those failure modes: the width does not depend
+ * on the row's contents, so every field on every screen starts and ends at the
+ * same x, and at 385px the longest placeholder this application has fits with
+ * room to spare. The cost is that a row with buttons is one line taller.
+ */
+.controls input:not([type="checkbox"]):not([type="radio"]),
+.controls select {
+  /*
+   * A fixed basis now that the row-spanning controls above have the width to
+   * afford one. `100%` was what forced the buttons onto their own line when the
+   * field was confined to the value column; with the full row to work in, 28rem
+   * leaves room for Save and Clear beside it and still gives every field the
+   * same width and every Save the same x. `0 1` so a window at its 720px
+   * minimum shrinks the field rather than overflowing the row.
+   */
+  /*
+   * Grow into whatever the buttons leave, capped.
+   *
+   * A fixed 28rem basis was right for the rows that span the full width and
+   * wrong for the ones confined to the value column: 28rem is wider than that
+   * column, so the field claimed all of it and pushed its own button onto the
+   * next line -- Notes' "New folder" sat orphaned below the Folder select. A
+   * 14rem basis rather than 0, though. At zero the field yields the whole line
+   * to whatever sits beside it, and Meetings' Provider select -- which shares
+   * its row with a checkbox labelled "Record what the other participants say"
+   * -- collapsed to 109px, too narrow to show the provider it had selected. A
+   * basis wide enough to be a control means a long neighbour wraps instead.
+   *
+   * The cap still makes every field in the wide rows the same 28rem whether one
+   * button follows it or two, which is what keeps their Save buttons on a
+   * single x.
+   */
+  flex: 1 1 14rem;
+  max-width: 28rem;
+  min-width: 0;
+}
+
+/*
+ * A checkbox and its words.
+ *
+ * The label is one flex item, so `.controls`'s own gap stops at its edge and
+ * the box ended up welded to the text: "☑Record what the other participants
+ * say". The label needs to be a flex container itself for anything to separate
+ * them.
+ */
+.controls label,
+label:has(> input[type="checkbox"]) {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
 }
 
 /*
  * The export preview is the file's exact bytes, so it must not be reflowed:
  * SRT and VTT are line-oriented formats and a wrapped preview would not be a
- * preview of what gets written.
+ * preview of what gets written. Machine voice, and not uppercase -- these are
+ * the bytes.
  */
 .preview {
   margin: 0.75rem 0 0;
-  padding: 0.6rem 0.75rem;
+  padding: 0.75rem 0.9rem;
   max-height: 18rem;
   overflow: auto;
-  background: rgb(124 156 255 / 6%);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  font-size: 0.75rem;
+  background: var(--wash);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 16px;
+  letter-spacing: 0.5px;
   white-space: pre;
   tab-size: 2;
 }
@@ -269,7 +755,11 @@ section {
 /*
  * The overlay window is transparent, so the panel paints its own background.
  * It must stay legible over anything behind it -- a dark editor or a white
- * document -- so it carries its own contrast rather than inheriting.
+ * document -- so it carries its own contrast rather than inheriting. That is
+ * why it is absent from the theme blocks above and keeps its own colours here.
+ *
+ * The square corners are the site's; the typeface is the one it uses for a
+ * wordmark, which is what this is.
  */
 
 .overlay {
@@ -278,10 +768,8 @@ section {
   gap: 0.6rem;
   height: 100%;
   padding: 0 1rem;
-  border-radius: 12px;
   background: rgba(18, 18, 22, 0.92);
   color: #f4f4f5;
-  font: 500 0.95rem/1 system-ui, sans-serif;
   /* The overlay must never intercept a click meant for the window beneath. */
   user-select: none;
 }
@@ -289,6 +777,7 @@ section {
 .indicator {
   width: 0.7rem;
   height: 0.7rem;
+  /* A dot, not a rounded box -- the one radius the restyle keeps. */
   border-radius: 50%;
   flex: none;
   background: #6b7280;
@@ -333,10 +822,13 @@ section {
   gap: 0.7rem;
   height: 100%;
   padding: 0 0.9rem;
-  border-radius: 12px;
   background: rgba(18, 18, 22, 0.94);
   color: #f4f4f5;
-  font: 500 0.9rem/1.25 system-ui, sans-serif;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 16px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
   user-select: none;
 }
 
@@ -356,7 +848,9 @@ section {
 
 .notify-detail {
   color: #a1a1aa;
-  font-size: 0.8rem;
+  /* A process name or an error, so its casing is information -- the panel's
+   * uppercase is switched back off here. */
+  text-transform: none;
   /* A process name or an error can be long; the panel cannot grow. */
   overflow: hidden;
   text-overflow: ellipsis;
@@ -366,36 +860,275 @@ section {
 .notify button {
   flex: none;
   padding: 0.35rem 0.7rem;
-  border: 1px solid #3f3f46;
-  border-radius: 8px;
-  background: #27272a;
+  border: 0;
+  background: #3f3f46;
   color: #f4f4f5;
   font: inherit;
   cursor: pointer;
 }
 
-.notify button:hover {
-  background: #3f3f46;
+/*
+ * The same fill swap as everything else marked. Hardcoded rather than
+ * `var(--band)` because this panel does not follow the theme -- it floats over
+ * a video call and keeps its own dark palette -- but it is the dark theme's
+ * blue, so the gesture is the one the rest of the application uses.
+ */
+/*
+ * `:not(:disabled)` is here for specificity as much as for behaviour. Without
+ * it this selector is (0,2,1) -- exactly what the generic `button:hover` below
+ * scores -- and being the earlier of the two, it lost every time. The panel
+ * then took `var(--band)` and followed the theme, which is the one thing it
+ * must not do.
+ */
+.notify button:hover:not(:disabled) {
+  background: #3d55ff;
+  color: #fdfdfd;
 }
 
 .notify-recording {
-  /* A red edge, so "recording" reads at a glance and not only in words. */
+  /* A red edge, so "recording" reads at a glance and not only in words. An
+   * inset shadow rather than a border: the panel is 92px of fixed height and a
+   * border would take two of them from the content. */
   box-shadow: inset 0 0 0 1.5px rgba(239, 68, 68, 0.75);
 }
 
-.row-detail.warn {
-  color: #b45309;
+/*
+ * Text inputs and selects, which had never been styled at all: they kept the
+ * platform's own chrome, and once everything else lost its outline that 1px
+ * inset border was the last box left in the interface. Filled to match the
+ * buttons they sit beside, and padded to the same height so a row of controls
+ * shares one baseline.
+ *
+ * Excluded by type rather than listed by it. The allowlist this replaced --
+ * text, password, search, url -- silently missed the two Corti fields on
+ * Transcription, which declare no `type` at all: `input[type="text"]` does not
+ * match an input whose type is text only by default. They kept the platform
+ * border and their own width while every field around them lost both, and the
+ * inconsistency read as a rendering glitch rather than as a missing selector.
+ * Naming what is *not* a text field cannot go stale the same way.
+ */
+input:not([type="checkbox"]):not([type="radio"]),
+select {
+  padding: 0.45rem 0.6rem;
+  border: 0;
+  color: var(--text);
+  font: inherit;
 }
 
+/*
+ * A select is a button that happens to remember its answer, so it is chromed
+ * like one: nothing at rest, the fill under the pointer. Its own value and
+ * chevron are enough to find it, which is the test a control has to pass before
+ * its box can be taken away.
+ *
+ * The list it drops down is drawn by the platform, not by this file. It follows
+ * `color-scheme` and little else, so it stays grey in light mode whatever is
+ * set here.
+ */
+select {
+  background: transparent;
+}
+
+select:hover {
+  background: var(--control);
+}
+
+/*
+ * Text fields keep theirs.
+ *
+ * The same argument does not carry: a select always shows its current value, so
+ * an unfilled one is still visibly a control, whereas an empty text field with
+ * no fill and no border is nothing at all until you find it by guessing. The
+ * placeholder covers the empty case and not the filled one -- a stored Corti
+ * tenant would render as bare text indistinguishable from the label beside it.
+ */
+input:not([type="checkbox"]):not([type="radio"]) {
+  background: var(--control);
+}
+
+/* Firefox ships a placeholder at less than full opacity, which lands under
+ * `--muted` rather than on it. */
+::placeholder {
+  color: var(--muted);
+  opacity: 1;
+}
+
+input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/*
+ * A select shows focus by filling, not by a ring.
+ *
+ * `:focus-visible` is normally the "reached by keyboard" heuristic, and for
+ * most controls a mouse click does not match it. A `<select>` is the exception:
+ * browsers match it on click too, because clicking one opens a menu. So the
+ * accent ring fired every time the list was opened with the mouse, which is the
+ * one moment nobody needs telling where the focus is.
+ *
+ * `outline: none` alone would be an accessibility regression -- a keyboard user
+ * would have nothing to follow -- so the fill takes over the job. It is the
+ * same `--control` the hover state uses, which is the point: a select under the
+ * pointer and a select holding focus are the same amount of "this one".
+ */
+select:focus,
+select:focus-visible {
+  outline: none;
+  background: var(--control);
+}
+
+/*
+ * Outside the `@supports` below on purpose.
+ *
+ * Where the picker is still the platform's, Chromium on Windows honours an
+ * option's own colours inside it even though it honours nothing else. So the
+ * rows come out the page colour rather than the OS grey on engines too old for
+ * the block below. The popup's frame stays theirs -- this cannot reach it --
+ * but the inside of the list stops being grey.
+ */
+option {
+  background-color: var(--bg);
+  color: var(--text);
+}
+
+option:hover {
+  background-color: var(--control);
+}
+
+/*
+ * The selected row keeps the band whether the pointer is on it or not.
+ *
+ * `option:hover` alone would have taken it: same specificity as `option:checked`
+ * and written after it, so passing over the current choice turned it grey and
+ * lost the one piece of information the open list is for. Stated as
+ * `:checked:hover` it outranks both.
+ */
+option:checked,
+option:checked:hover {
+  background-color: var(--band);
+  color: var(--band-ink);
+}
+
+/*
+ * The list that drops down, which until now was not ours to style.
+ *
+ * A `<select>`'s popup is normally drawn by the platform: it followed
+ * `color-scheme` and ignored everything else in this file, which is why it kept
+ * a grey slab and a border after both had been removed from every other
+ * surface. `appearance: base-select` opts the control out of native rendering
+ * and into the page, at which point `::picker(select)` is a real box with a
+ * real border to remove.
+ *
+ * Behind `@supports` deliberately. This is recent -- Chromium 135 -- and the
+ * application ships in whatever WebView2 runtime the machine has, which is not
+ * necessarily the version of Edge installed beside it. Where it is missing the
+ * select simply stays native: unchanged, still working, still ugly. That is the
+ * right failure, and it is why nothing outside this block depends on it.
+ */
+@supports (appearance: base-select) {
+  select {
+    appearance: base-select;
+    /* The base appearance brings its own border and radius back. */
+    border: 0;
+    border-radius: 0;
+  }
+
+  select::picker(select) {
+    border: 0;
+    border-radius: 0;
+    padding: 0.25rem 0;
+    background: var(--bg);
+    /*
+     * A shadow, not a border, and not decoration either: with no edge of any
+     * kind a white list over a white page is not visibly a separate surface.
+     * This is the one place in the interface that genuinely floats above
+     * something else, so it is the one place that says so.
+     */
+    box-shadow: 0 8px 28px rgb(0 0 0 / 22%);
+  }
+
+  select::picker-icon {
+    color: var(--muted);
+  }
+
+  /*
+   * The button keeps its fill while the list is down.
+   *
+   * An earlier version cleared it here on the grounds that the open menu
+   * already says the control is active. It does, but the fill is doing a second
+   * job: it marks *which* of several selects the list belongs to. A menu
+   * floating over a row of them, with nothing behind the one it came from, does
+   * not say where it came from.
+   */
+  select:open {
+    background: var(--control);
+  }
+
+  option {
+    padding: 0.4rem 0.75rem;
+    background: var(--bg);
+    color: var(--text);
+    /*
+     * Bordered in the page colour rather than not bordered at all. It draws
+     * nothing, and it means the rows are already the right shape if a visible
+     * edge is ever wanted -- changing one value rather than adding a box.
+     */
+    border: 1px solid var(--bg);
+  }
+
+  /* The fill already says which one is selected; the tick would say it twice
+   * and indent every other row to make room for saying nothing. */
+  option::checkmark {
+    display: none;
+  }
+}
+
+/*
+ * Unfilled at rest; the fill arrives under the pointer.
+ *
+ * This is the site's own gesture rather than a departure from it: knegis.com
+ * gives its links no resting chrome at all and paints them only on hover. A
+ * screen of settings is mostly things you are reading, and a grey box drawn
+ * around every button competed with the values they act on.
+ *
+ * The blue is not gone, it is just no longer spent on hover. It marks the one
+ * thing that is currently true -- the screen you are on -- and a hover state
+ * painted the same colour made "you are here" and "your pointer is here"
+ * indistinguishable.
+ */
 button {
   margin-top: 0.75rem;
   padding: 0.45rem 0.9rem;
-  border: 1px solid currentColor;
-  border-radius: 6px;
+  border: 0;
   background: transparent;
-  color: inherit;
+  color: var(--text);
   font: inherit;
   cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  background: var(--control);
+  color: var(--text);
+}
+
+/*
+ * A button standing on its own lines its label up with the text above it.
+ *
+ * The padding is what the hover fill needs in order to have room around the
+ * words, but with no fill at rest it read as an indent: "Open Providers" began
+ * 0.9rem to the right of the heading above it and looked like a nested item.
+ * Cancelling it in the margin keeps the position honest and the fill intact.
+ * Only for a button that is a section's own child -- one sitting in a row of
+ * controls or at the end of a list row is positioned by its neighbours.
+ */
+section > button {
+  margin-left: -0.9rem;
+}
+
+button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 button:disabled {
