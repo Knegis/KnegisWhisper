@@ -120,9 +120,9 @@ const CREDENTIAL_SLOTS = {
   azure: { name: "Azure OpenAI", kind: "enterprise", feature: "azure" },
   vertex: { name: "GCP Vertex AI", kind: "enterprise", feature: "vertex" },
   // Meeting-streaming providers whose upstream client minted a realtime token
-  // from api.openwhispr.com rather than asking the user for a key -- see
-  // OWN_CREDENTIAL_SLOTS below. A plain BYOK slot each, same shape as any
-  // other `provider` credential.
+  // from the vendor's hosted token-broker rather than asking the user for a
+  // key -- see OWN_CREDENTIAL_SLOTS below. A plain BYOK slot each, same shape
+  // as any other `provider` credential.
   assemblyai: { name: "AssemblyAI", kind: "provider" },
   deepgram: { name: "Deepgram", kind: "provider" },
 };
@@ -141,12 +141,11 @@ const CREDENTIAL_SLOTS = {
  *   reassembled wrongly.
  *
  * - `assemblyai`/`deepgram` — upstream's meeting client never asked the user
- *   for either key. It minted a short-lived realtime token by calling
- *   `api.openwhispr.com`, the vendor's hosted broker (recorded as
- *   `vendor:openwhispr-realtime-token-broker`, `removed-vendor-service`, in
- *   the integration manifest), so `baseline.secretKeys` has no entry for
- *   either provider. A direct client needs its own key, and this is where it
- *   is stored.
+ *   for either key. It minted a short-lived realtime token from the vendor's
+ *   hosted token-broker (recorded as `vendor:openwhispr-realtime-token-broker`,
+ *   `removed-vendor-service`, in the integration manifest), so
+ *   `baseline.secretKeys` has no entry for either provider. A direct client
+ *   needs its own key, and this is where it is stored.
  *
  * Listed separately from `CREDENTIAL_SLOTS` so the distinction stays visible:
  * everything above came from upstream, everything here is ours.

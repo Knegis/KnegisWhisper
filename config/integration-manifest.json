@@ -873,6 +873,24 @@
       "reachable": true,
       "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10. Reachable: Settings > Providers stores every slot the registry declares. A custom-endpoint slot stores its key here and still needs the base URL that lives with the feature using it, which the screen says rather than implying otherwise."
     },
+    "credential:assemblyai": {
+      "status": "rewired-to-direct-byok",
+      "env": "ASSEMBLYAI_API_KEY",
+      "phase": 4,
+      "backend": "crates/security",
+      "ui": "Settings > Providers",
+      "reachable": true,
+      "note": "New relative to upstream: baseline.secretKeys has no entry for AssemblyAI. meeting-stream:assemblyai-realtime minted its realtime token from api.openwhispr.com, a removed vendor service (vendor:openwhispr-realtime-token-broker), rather than asking the user for a key. This slot exists so a direct client can authenticate itself instead. Reachable: Settings > Providers lists every provider-kind slot the registry declares, including this one, with no frontend change needed. No AssemblyAI meeting client exists yet -- see meeting-stream:assemblyai-realtime -- so nothing consumes the stored key today."
+    },
+    "credential:deepgram": {
+      "status": "rewired-to-direct-byok",
+      "env": "DEEPGRAM_API_KEY",
+      "phase": 4,
+      "backend": "crates/security",
+      "ui": "Settings > Providers",
+      "reachable": true,
+      "note": "New relative to upstream: baseline.secretKeys has no entry for Deepgram. meeting-stream:deepgram-realtime minted its realtime token from api.openwhispr.com, a removed vendor service (vendor:openwhispr-realtime-token-broker), rather than asking the user for a key. This slot exists so a direct client can authenticate itself instead. Reachable: Settings > Providers lists every provider-kind slot the registry declares, including this one, with no frontend change needed. No Deepgram meeting client exists yet -- see meeting-stream:deepgram-realtime -- so nothing consumes the stored key today."
+    },
     "diarization-model:3dspeaker-campplus-en": {
       "status": "temporarily-deferred",
       "name": "CAM++ Speaker Embedding (English)",

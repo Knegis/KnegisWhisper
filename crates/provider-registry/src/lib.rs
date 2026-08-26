@@ -571,8 +571,8 @@ mod tests {
 
     /// New relative to upstream, for the same reason the three enterprise
     /// slots are: `baseline.secretKeys` has neither, because upstream's
-    /// meeting client minted a short-lived realtime token from
-    /// `api.openwhispr.com` rather than asking the user for a key. `usedFor`
+    /// meeting client minted a short-lived realtime token from the vendor's
+    /// hosted token-broker rather than asking the user for a key. `usedFor`
     /// is empty rather than `["meeting-stream"]` -- that string is not a value
     /// `generate-provider-registry.mjs` derives, and widening its vocabulary
     /// to fit a label was rejected on purpose. The purpose lives in
