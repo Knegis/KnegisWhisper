@@ -147,13 +147,19 @@ impl LocalApiRuntime {
         let permissions =
             discovery::write(&self.discovery_path, port, &token).map_err(|err| err.to_string())?;
 
-        if !permissions.is_as_expected() {
+        // Deliberately not `!permissions.is_as_expected()`: that helper also
+        // accepts `InheritedFromProfile`, which is merely this platform's
+        // profile-directory default and was never verified as a restriction.
+        // A log line that stays silent on it is the same defect this file's
+        // user-facing report exists to avoid -- see `DiscoveryPermissions`'s
+        // doc comment and docs/BENCH_CHECK.md, 2026-08-26 finding 2.
+        if !DiscoveryPermissions::from(&permissions).is_confirmed() {
             // Worth a warning: the token is the whole access control, so a file
-            // more readable than intended is a real weakening rather than a
-            // cosmetic detail.
+            // that is not a verified restriction is a real weakening rather
+            // than a cosmetic detail.
             tracing::warn!(
                 permissions = %permissions.explain(),
-                "the local API discovery file is not as restricted as intended"
+                "the local API discovery file's permissions are not a verified restriction"
             );
         }
 
@@ -254,6 +260,22 @@ impl From<&Permissions> for DiscoveryPermissions {
     }
 }
 
+impl DiscoveryPermissions {
+    /// Whether this is a *verified* restriction, not merely "the best this
+    /// platform's default gives you". Only [`Self::OwnerOnly`] qualifies:
+    /// [`Self::InheritedFromProfile`] is deliberately excluded even though
+    /// `kw_local_api::Permissions::is_as_expected()` accepts it, because
+    /// nothing here confirmed what that inherited ACL actually grants. Both
+    /// the user-facing report (`local_api_status`) and the startup warning
+    /// (`LocalApiRuntime::start`) go through this one decision, so there is
+    /// exactly one place that draws the line rather than two that could
+    /// drift apart. See docs/BENCH_CHECK.md, 2026-08-26 finding 2.
+    #[must_use]
+    pub const fn is_confirmed(&self) -> bool {
+        matches!(self, Self::OwnerOnly)
+    }
+}
+
 /// What the settings screen shows about the local API.
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -265,11 +287,21 @@ pub struct LocalApiStatus {
     pub port: Option<u16>,
     /// Where a client looks for the port and token.
     pub discovery_path: Option<String>,
-    /// What the discovery file's permissions actually are, in plain words.
-    /// `None` when it is not running, because there is no file to describe.
-    pub discovery_permissions: Option<String>,
-    /// True when the permissions are the best this platform offers.
-    pub discovery_permissions_as_expected: Option<bool>,
+    /// The discovery file's real permission state, evidence and all -- the
+    /// same [`DiscoveryPermissions`] `Integrations > CLI` renders, so the two
+    /// screens agree on one vocabulary rather than each describing this file
+    /// in its own words. `None` when it is not running, because there is no
+    /// file to describe.
+    ///
+    /// This used to carry a second field, `discovery_permissions_as_expected:
+    /// Option<bool>`, derived from `Permissions::is_as_expected()`. That
+    /// boolean is `true` for `InheritedFromProfile`, so the settings screen
+    /// warned only when it was `false` and stayed silent on an inherited ACL
+    /// -- reassuring where nothing had been verified. Removed rather than
+    /// redefined: a screen that reads the real state has no use for a second,
+    /// looser summary of the same fact. See docs/BENCH_CHECK.md, 2026-08-26
+    /// finding 2.
+    pub discovery_permissions: Option<DiscoveryPermissions>,
 }
 
 /// Report the local API's state.
@@ -289,8 +321,7 @@ pub async fn local_api_status(
         running: port.is_some(),
         port,
         discovery_path: port.map(|_| api.discovery_path.display().to_string()),
-        discovery_permissions: permissions.as_ref().map(Permissions::explain),
-        discovery_permissions_as_expected: permissions.as_ref().map(Permissions::is_as_expected),
+        discovery_permissions: permissions.as_ref().map(DiscoveryPermissions::from),
     })
 }
 
@@ -503,5 +534,24 @@ mod tests {
                 reason: "no chmod on this filesystem".to_owned()
             }
         );
+    }
+
+    #[test]
+    fn only_owner_only_is_a_confirmed_restriction() {
+        // The decision both the startup warning and the user-facing status
+        // now share. `InheritedFromProfile` must land on the "not confirmed"
+        // side even though `Permissions::is_as_expected()` treats it as
+        // acceptable -- that is the whole point of this method existing
+        // separately from that helper.
+        assert!(DiscoveryPermissions::OwnerOnly.is_confirmed());
+        assert!(!DiscoveryPermissions::InheritedFromProfile.is_confirmed());
+        assert!(!DiscoveryPermissions::Wider {
+            mode: "644".to_owned()
+        }
+        .is_confirmed());
+        assert!(!DiscoveryPermissions::Unknown {
+            reason: "no chmod on this filesystem".to_owned()
+        }
+        .is_confirmed());
     }
 }

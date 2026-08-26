@@ -1046,14 +1046,22 @@ running: boolean, port: number | null,
  */
 discoveryPath: string | null,
 /**
- * What the discovery file's permissions actually are, in plain words.
- * `None` when it is not running, because there is no file to describe.
+ * The discovery file's real permission state, evidence and all -- the
+ * same [`DiscoveryPermissions`] `Integrations > CLI` renders, so the two
+ * screens agree on one vocabulary rather than each describing this file
+ * in its own words. `None` when it is not running, because there is no
+ * file to describe.
+ *
+ * This used to carry a second field, `discovery_permissions_as_expected:
+ * Option<bool>`, derived from `Permissions::is_as_expected()`. That
+ * boolean is `true` for `InheritedFromProfile`, so the settings screen
+ * warned only when it was `false` and stayed silent on an inherited ACL
+ * -- reassuring where nothing had been verified. Removed rather than
+ * redefined: a screen that reads the real state has no use for a second,
+ * looser summary of the same fact. See docs/BENCH_CHECK.md, 2026-08-26
+ * finding 2.
  */
-discoveryPermissions: string | null,
-/**
- * True when the permissions are the best this platform offers.
- */
-discoveryPermissionsAsExpected: boolean | null, };
+discoveryPermissions: DiscoveryPermissions | null, };
 
 /* -------------------------------------------------------- developer tools */
 /**
