@@ -138,15 +138,31 @@ impl Target {
 
 /// How a downloaded asset is packed.
 ///
-/// Only the two forms the pinned assets actually use. A variant for `tar.bz2`
-/// (which sherpa-onnx uses) is deliberately absent rather than present and
-/// unimplemented: an enum arm that fails at runtime is a promise the type made
-/// and the code did not keep. It gets added by the commit that can extract one.
+/// Only the forms some pinned or soon-to-be-pinned asset actually uses. A
+/// variant for `tar.bz2` (which sherpa-onnx uses) is deliberately absent
+/// rather than present and unimplemented: an enum arm that fails at runtime is
+/// a promise the type made and the code did not keep. It gets added by the
+/// commit that can extract one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ArchiveKind {
     Zip,
     TarGz,
+    /// A `.tar.xz` archive: decompressed with `lzma-rs` (pure Rust,
+    /// decode-only) and then read as a tar with the same `tar` crate the
+    /// other variants use. ffmpeg ships this shape on Linux.
+    TarXz,
+    /// No archive at all: the downloaded file *is* the executable, verbatim.
+    /// yt-dlp ships this shape on every platform.
+    ///
+    /// This is the strongest row in the pinning table, not a weaker one.
+    /// [`Asset::sha256`] is mandatory for every variant, but for the other
+    /// three it pins a container that is then partially extracted, so it
+    /// proves the container matched without, on its own, saying that
+    /// extraction produced exactly what upstream built. Here there is no
+    /// container: the pinned digest is the digest of the exact bytes that
+    /// will be copied into place and executed.
+    Bare,
 }
 
 /// Whether a sidecar can be installed on a given target at all.
@@ -553,6 +569,16 @@ mod tests {
         }
     }
 
+    fn bare_asset(exe: &str) -> Asset {
+        Asset {
+            url: "https://example.invalid/yt-dlp".to_owned(),
+            archive: ArchiveKind::Bare,
+            sha256: Sha256Digest::parse(REAL).unwrap(),
+            size_bytes: 10,
+            executable_in_archive: exe.to_owned(),
+        }
+    }
+
     #[test]
     fn the_payload_directory_is_the_executables_parent() {
         // Real layouts from the two archives this was built against.
@@ -577,6 +603,41 @@ mod tests {
         let asset = asset("Release\\whisper-server.exe");
         assert_eq!(asset.payload_dir(), "Release");
         assert_eq!(asset.executable_name(), "whisper-server.exe");
+    }
+
+    #[test]
+    fn a_bare_asset_with_no_directory_part_has_an_empty_payload_directory() {
+        // yt-dlp's shape on every platform: there is no archive around the
+        // download at all, so `executableInArchive` is just a file name with
+        // no directory part -- `payload_dir` and `executable_name` have to
+        // keep behaving the same way they do for an archive-root entry.
+        let windows = bare_asset("yt-dlp.exe");
+        assert_eq!(windows.payload_dir(), "");
+        assert_eq!(windows.executable_name(), "yt-dlp.exe");
+
+        let unix = bare_asset("yt-dlp");
+        assert_eq!(unix.payload_dir(), "");
+        assert_eq!(unix.executable_name(), "yt-dlp");
+    }
+
+    #[test]
+    fn tar_xz_and_bare_serialize_as_kebab_case() {
+        assert_eq!(
+            serde_json::to_string(&ArchiveKind::TarXz).unwrap(),
+            "\"tar-xz\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ArchiveKind::Bare).unwrap(),
+            "\"bare\""
+        );
+        assert_eq!(
+            serde_json::from_str::<ArchiveKind>("\"tar-xz\"").unwrap(),
+            ArchiveKind::TarXz
+        );
+        assert_eq!(
+            serde_json::from_str::<ArchiveKind>("\"bare\"").unwrap(),
+            ArchiveKind::Bare
+        );
     }
 
     fn spec() -> SidecarSpec {
