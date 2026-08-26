@@ -143,8 +143,9 @@ download.
 So they are followed *visibly*. Every hop is validated against the same purpose before it is
 requested, the chain is bounded at five, and the hops taken are returned so a report can say
 where the bytes actually came from rather than implying they came from the URL that was asked
-for. A redirect to plaintext, to a blocked vendor host, or to a scheme the purpose does not allow
-is an error naming both ends.
+for. A redirect to plaintext, to a blocked vendor host, to a private or link-local address (over
+either scheme, since the fix described under "Plaintext HTTP, and HTTPS to a private address"),
+or to a scheme the purpose does not allow is an error naming both ends.
 
 ## What `user-triggered-model-download` covers
 
@@ -160,18 +161,21 @@ are held to a weaker check — size, with a tolerance, unless a digest happens t
 which check applied is reported to the caller rather than implied, because wrong weights produce
 bad transcripts while wrong code produces a compromised machine.
 
-## Plaintext HTTP
+## Plaintext HTTP, and HTTPS to a private address
 
-HTTPS always, with one exemption: `explicitly-configured-self-hosted-endpoint` may use plain
-HTTP **to a private address**. Loopback, the RFC 1918 ranges, link-local, `.local`, `.internal`,
-`.home.arpa`, and single-label hostnames all count as private; everything else does not, and no
-other purpose gets the exemption at all. A test asserts both halves of that.
+Only one purpose may reach a private, loopback or link-local host at all:
+`explicitly-configured-self-hosted-endpoint`. Loopback, the RFC 1918 ranges, IPv6 loopback
+(`::1`), unique-local (`fc00::/7`), link-local (`fe80::/10`) including the IPv4-mapped form of
+any of those (`::ffff:127.0.0.1` is `127.0.0.1`), `.local`, `.internal`, `.home.arpa`, and
+single-label hostnames all count as private; everything else does not, and no other purpose
+gets the exemption at all. That purpose may reach one over plain HTTP **or** over HTTPS; every
+other purpose is refused a private target under either scheme. Tests assert all of that.
 
 The exemption covers the whole private range rather than only loopback because a model server on
 another machine on the user's own network is an ordinary setup, and refusing it would mean the
 only way to use one is to put a certificate on it. That is a real trade — audio and any
-configured credential cross the local network in the clear — and it belongs to the user, for an
-endpoint they typed in themselves.
+configured credential cross the local network in the clear when the endpoint is plain HTTP — and
+it belongs to the user, for an endpoint they typed in themselves.
 
 **The purpose is a property of the destination, not the feature.** A self-hosted whisper server
 is reached with `explicitly-configured-self-hosted-endpoint`, not
@@ -184,6 +188,32 @@ sending, and the error blamed the scheme rather than the configuration.
 security layer and the routing layer cannot disagree about what counts as private. They did
 disagree once — route resolution accepted the private range while the policy layer accepted only
 loopback — which meant an endpoint the settings screen accepted was refused at send time.
+
+### The HTTPS gap this document did not previously mention
+
+Until this was fixed, the rule above was not what the code did. `validate`'s `https` arm ran no
+host check whatsoever, for any purpose: `https://127.0.0.1/`, `https://169.254.169.254/` (the
+cloud-metadata address most SSRF exploits target) and `https://[::1]/` were all accepted for
+every one of the seven purposes, and because redirects are re-validated through that same
+function (see below), a redirect to one of those addresses was *followed*, not refused. A valid
+TLS certificate says nothing about whether a host sits on the public internet or on loopback, and
+the code was treating "https" as proof of the latter. `wss` had the identical gap in
+`validate_websocket`.
+
+Both arms now run the same `is_private_host` check the `http`/`ws` arms already ran, gated by the
+same one purpose. This closes the gap without widening or narrowing what a self-hosted endpoint
+may do: it could already reach a private host in the clear, so allowing it to do the same over
+TLS is not a new exposure, and every other purpose loses only a capability nothing legitimate was
+using — every call site that reaches a private address at all already does so under
+`explicitly-configured-self-hosted-endpoint`.
+
+**What this still does not stop.** The check runs against the literal host in the URL at
+validation time, before any connection is attempted. It has no view of DNS. A hostname that
+resolves to a public address when validated and to `127.0.0.1` or a link-local address when
+`reqwest` actually connects — "DNS rebinding" — passes this check and is not caught by anything
+else in this crate. Closing that would need a check against the address actually dialled, at
+connect time, which is a materially different and harder problem than the one this fix addresses,
+and is not implemented here.
 
 ## Self-hosted and no-auth endpoints
 
