@@ -312,6 +312,18 @@ mod tests {
     }
 
     #[test]
+    fn the_local_provider_does_not_require_a_language_either() {
+        // `WhisperServer::transcribe` sends "auto" whenever no language is
+        // given (crates/transcription-core/src/local.rs), which is real
+        // per-request detection. The one provider that needs no credentials
+        // and no network must not start refusing to run the moment something
+        // finally calls `validate` before connecting it.
+        let mut cfg = config("local", 16_000, 0);
+        cfg.language = None;
+        assert!(!validate(&cfg).unwrap().language_required);
+    }
+
+    #[test]
     fn the_session_limit_is_surfaced_so_a_caller_can_plan_a_reconnect() {
         let review = validate(&config("openai-realtime", 24_000, 0)).unwrap();
         assert_eq!(review.session_limit_seconds, Some(3_600));

@@ -412,7 +412,8 @@ static FALLBACK: MeetingProviderCapabilities = MeetingProviderCapabilities {
     sample_rates: &[16_000],
     speaker_labels: false,
     partials: true,
-    language_detection: false,
+    // Mirrors the real entry in `PROVIDERS` -- see the comment there.
+    language_detection: true,
     reconnect: true,
     batch_fallback: true,
 };
@@ -826,5 +827,13 @@ mod tests {
         assert!(caps.partials, "a window is a partial");
         assert_eq!(caps.sample_rates, &[16_000]);
         assert!(!caps.keyterms.is_supported(), "whisper takes no keyterms");
+        // `transcribe` above sends "auto" whenever `self.language` is `None`,
+        // via `WhisperServer::transcribe`. Declaring this `false` would make
+        // `validate` refuse to start the one provider that needs no
+        // credentials and no network just because nobody typed a language.
+        assert!(
+            caps.language_detection,
+            "whisper is asked for \"auto\" when no language is given"
+        );
     }
 }

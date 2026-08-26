@@ -291,7 +291,14 @@ pub const PROVIDERS: &[MeetingProviderCapabilities] = &[
         sample_rates: &[16_000],
         speaker_labels: false,
         partials: true,
-        language_detection: false,
+        // `WhisperServer::transcribe` sends `"auto"` whenever no language is
+        // given (crates/transcription-core/src/local.rs), which is real
+        // per-request detection, not a guess dressed up as one. Declaring this
+        // `false` would make `validate` refuse to start a local meeting with no
+        // language configured -- this task is what first calls `validate` from
+        // `start`, which is what makes this a live bug rather than an inert
+        // field.
+        language_detection: true,
         reconnect: true,
         batch_fallback: true,
     },
