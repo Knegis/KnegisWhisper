@@ -19,6 +19,7 @@ use kw_security::LocalApiToken;
 use kw_storage::Db;
 use serde::Serialize;
 use tauri::State;
+use ts_rs::TS;
 
 /// The settings key that switches the API on.
 pub const ENABLED_KEY: &str = "localApi.enabled";
@@ -186,7 +187,7 @@ impl LocalApiRuntime {
 }
 
 /// What the settings screen shows about the local API.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct LocalApiStatus {
     /// Whether the user has switched it on.

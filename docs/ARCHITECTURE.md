@@ -55,7 +55,14 @@ unrestricted shell, filesystem, HTTP, process-spawning, database, or credential 
 ## Single source of truth for providers
 
 `config/provider-registry.json` is derived once from the frozen upstream baseline and is
-thereafter authoritative. **23 providers, 96 models, 9 credential slots, declared once.**
+thereafter authoritative. **23 providers, 96 models, 15 credential slots, declared once.**
+
+The slot count was 9 until the Providers screen was written, because the set was derived from the
+provider lists. Six slots belong to no provider — `openrouter`, which upstream pinned no model
+list for, and five per-feature custom endpoints — so `config/integration-manifest.json` declared
+fifteen while the registry knew nine. A screen offering all fifteen would have had to name those
+six itself, which is the duplication this section exists to rule out. They now come from the
+baseline's `secretKeys`, and `every_slot_upstream_had_is_declared_here` asserts the two agree.
 
 Both languages read that one file:
 

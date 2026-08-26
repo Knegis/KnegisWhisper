@@ -5,38 +5,38 @@
     "Settings > Providers": {
       "surfaceId": "settings.providers",
       "component": "apps/desktop/src/views/SettingsProviders.tsx",
-      "built": false,
-      "note": "There is no way to enter an API key anywhere in the application. `setProviderCredential` exists in apps/desktop/src/lib/ipc.ts and nothing calls it. Until this is built, every credential slot is unreachable and so is every provider that needs one."
+      "built": true,
+      "note": "Stores a key for every one of the fifteen credential slots the registry declares, and runs the real connection test. Write-only: no command returns a credential value, so the field replaces or removes and never displays. A stored key is reported as stored, never as connected."
     },
     "Settings > Transcription": {
       "surfaceId": "settings.transcription",
-      "component": "apps/desktop/src/App.tsx",
+      "component": "apps/desktop/src/views/SettingsTranscription.tsx",
       "built": true,
-      "note": "Built, but nothing here is reachable yet. The section lists each provider, says whether a key is stored, and runs a real connection test -- but it cannot store the key, so a user cannot get a provider working from it. That is why `built` and `reachable` are separate fields."
+      "note": "Chooses the cloud provider and model for dictation, from the registry. Six of the seven providers can be selected: three over HttpBatch and three through their own client in crates/transcription-core/src/clients.rs. Corti also takes an environment and a tenant here, because the router refuses to guess either. Tinfoil is listed with the reason it is refused -- an unattested request would present as Tinfoil while providing none of what the name means. Keys are stored on Settings > Providers."
     },
     "Settings > Transcription > Local": {
       "surfaceId": "settings.transcription.local",
-      "component": "apps/desktop/src/App.tsx",
+      "component": "apps/desktop/src/views/SettingsTranscription.tsx",
       "built": true,
       "note": "Offers whisper models only. Parakeet and Nemotron need the sherpa-onnx sidecar, which does not exist, so those four entries stay unreachable while the surface itself is built."
     },
     "Settings > Intelligence": {
       "surfaceId": "settings.intelligence",
       "component": "apps/desktop/src/views/SettingsIntelligence.tsx",
-      "built": false,
-      "note": "Cleanup and chat dispatch work in crates/reasoning-core with no screen to configure a route or a model."
+      "built": true,
+      "note": "Configures the reasoning provider and model that tidy a dictation, and switches cleanup on. The three enterprise connectors and the local route are listed with the reason they cannot be used, rather than being left out -- so this surface is built while Settings > Intelligence > Enterprise and > Local are not."
     },
     "Settings > Intelligence > Local": {
       "surfaceId": "settings.intelligence.local",
       "component": "apps/desktop/src/views/SettingsIntelligenceLocal.tsx",
-      "built": false,
-      "note": "llama-server is pinned in the porting matrix and has no install or lifecycle code, let alone a screen."
+      "built": true,
+      "note": "Installs and runs the pinned llama.cpp CPU build and any of the registry's GGUF models. Sizes are shown before the install button because the recommended model is 5.9 GB, and the five-minute idle shutdown is stated rather than being a surprise later."
     },
     "Settings > Intelligence > Enterprise": {
       "surfaceId": "settings.intelligence.enterprise",
-      "component": "apps/desktop/src/views/SettingsIntelligenceEnterprise.tsx",
-      "built": false,
-      "note": "Bedrock, Azure and Vertex return ShapeNotImplemented today. Chunk 2 of the completion plan writes the request shapes; the screen comes with them."
+      "component": "apps/desktop/src/views/SettingsIntelligence.tsx",
+      "built": true,
+      "note": "A form per connector on the Intelligence screen. The request signing and body shapes are written and tested against AWS's published SigV4 vectors and recorded fixtures; no live call has been made, and the section says so on screen as well as in PLATFORM_SUPPORT.md."
     },
     "Settings > Meetings": {
       "surfaceId": "settings.meetings",
@@ -52,7 +52,7 @@
     },
     "Integrations > API": {
       "surfaceId": "integrations.api",
-      "component": "apps/desktop/src/App.tsx",
+      "component": "apps/desktop/src/views/IntegrationsApi.tsx",
       "built": true
     },
     "Integrations > CLI": {
@@ -69,7 +69,7 @@
     },
     "Notes > Export": {
       "surfaceId": "notes.export",
-      "component": "apps/desktop/src/App.tsx",
+      "component": "apps/desktop/src/views/Notes.tsx",
       "built": true
     },
     "Notes > Upload": {

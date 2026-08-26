@@ -24,6 +24,33 @@ EventKit calendar access, and CoreAudio process taps — is written behind trait
 compile-checked in CI, but **nothing has run it**. It stays marked unverified here until someone
 runs it on hardware. Treat any claim to the contrary in this table as a bug in the table.
 
+## Providers verified against a live service
+
+Platform support is one axis; whether a provider has ever actually answered is another, and it is
+just as easy to claim falsely. Same rule: a row says "verified" only where a real request came back.
+
+| Provider group | Request shape | Live call |
+| --- | --- | --- |
+| Transcription — OpenAI, Groq, Berget | `HttpBatch`, tested against recorded fixtures | ⚠️ needs a key; unverified |
+| Transcription — Mistral, xAI, Corti | their own clients, tested against fixtures | ⚠️ needs a key; unverified |
+| Transcription — Tinfoil | **declined, not unimplemented** — an unattested request would claim Tinfoil's confidentiality without providing it | — |
+| Reasoning — the seven cloud providers | OpenAI-compatible, tested against fixtures | ⚠️ needs a key; unverified |
+| **Enterprise — AWS Bedrock** | Converse body + **SigV4 signing verified against AWS's own published vectors** | ⚠️ **unverified — no AWS organisation credentials** |
+| **Enterprise — Azure OpenAI** | deployment path, `api-version` query parameter, `api-key` header | ⚠️ **unverified — no Azure organisation credentials** |
+| **Enterprise — GCP Vertex AI** | service-account JWT → OAuth2 exchange, OpenAI-compatible endpoint | ⚠️ **unverified — no GCP organisation credentials** |
+
+The Bedrock row is the strongest claim of the three and still not a verified one. AWS publishes
+signing test vectors — a request, its canonical form, its string-to-sign, its derived key, and the
+expected signature — and `crates/reasoning-core/src/sigv4.rs` reproduces all five, including
+through the public `sign` entry point. That establishes the *signature* is right. It does not
+establish that Bedrock accepts the request, that the Converse body is shaped the way a particular
+model wants it, or that the endpoint is reachable from here. Those need an account.
+
+`crates/reasoning-core/src/sigv4.rs` deliberately omits `x-amz-content-sha256`, which S3 requires
+and Bedrock does not, so that `sign` itself can be checked against AWS's vector rather than only
+its internals. A signing routine nobody can check against an outside answer is one you have to
+take on trust.
+
 ## Capture exclusion
 
 Reported as one of four states, never a boolean:
@@ -110,6 +137,21 @@ OS version and report `unsupported` below the floor.
 Linux system audio works through the desktop portal. Without a portal implementation, or on a
 PulseAudio-only system without `pipewire-pulse`, it reports `unsupported`.
 
+## System audio
+
+What the speakers are playing, for meeting transcription. Reported by enumerating real devices, so
+the answer names the device that would be captured rather than describing the platform.
+
+| Platform | Mechanism | State |
+| --- | --- | --- |
+| Windows | WASAPI loopback on the default output device, through `cpal` | **verified** — 97 920 samples at 48 kHz stereo, peak 1.0, captured from a real playback |
+| Linux | a PulseAudio or PipeWire `.monitor` source, which `cpal` lists as an ordinary input | ⚠️ written, **unverified** — reported as `unverified: true` so no screen can present it as tested |
+| macOS | none available | ⚠️ **unsupported**, and it says why: `AudioHardwareCreateProcessTap` (14.4+) or a user-installed virtual device, neither exposed by `cpal` |
+
+`cargo run -p kw-audio-core --example system_audio_probe` is the check. It enumerates, opens a real
+stream, and reports whether the callback fired, whether it produced silence, and what the mixer did
+with it — three different facts that a single "it works" would collapse.
+
 ## Global shortcuts
 
 | Capability | Windows | macOS | Linux X11 | GNOME Wayland | KDE Wayland | Hyprland |
@@ -125,9 +167,47 @@ The default hotkey is `Control+Super`, which is modifier-only and therefore invi
 cross-platform API — hence the native hooks. On X11 and GNOME the effective default is adjusted
 because modifier-only combinations do not work there.
 
+**What is built, as against what the table says is possible:**
+
+| | State |
+| --- | --- |
+| Windows modifier-only | **verified.** One `WH_KEYBOARD_LL` hook on one thread, in-process, not one child per key. `cargo run -p kw-platform --example keyhook_probe` installs it, injects two presses, and asserts it fires exactly twice. |
+| Windows right-side modifiers | **Built and unreachable.** `keys.rs` expresses `RightControl+Super`, because a low-level hook reports the sided virtual keys and the cross-platform API does not — but no accelerator a user can type gets there. `hotkey::MODIFIERS` has no sided spellings, so `classify` reads `RightControl` as *the key* and hands `RightControl+Super` to the system register, the one mechanism that cannot tell the sides apart; and `RightControl+RightShift` comes back `Invalid` — "it names 2 non-modifier keys" — which blames the user's spelling for a missing alias. See [BENCH_CHECK.md](BENCH_CHECK.md). |
+| Windows mouse buttons, push-to-talk | Not built. Both need a second hook (`WH_MOUSE_LL`) or key-up routing, and neither has a consumer yet. |
+| macOS, Linux | Not built, and the reason is reported rather than the capability being silently absent: macOS needs a `CGEventTap` and the Accessibility permission that goes with it, and Wayland's global-shortcuts portal takes only chords the compositor can register. |
+
+**An accelerator being live is only half of a working hotkey.** Of the five actions
+`HotkeyAction` declares, exactly one — dictation — has anything behind it. The other four used to
+register a genuine system shortcut, take the chord away from every other application, and do
+nothing at all when pressed; the settings screen showed the accelerator with no problem beside it,
+which is the interface agreeing that it worked. They are now not registered and not hooked, and the
+screen names the action and says which feature is missing. `shortcuts::unhandled_reason` is the one
+place that knows, and both the registration path and the dispatch path read it.
+
+The same half-a-path fault reached the hook itself: it delivered the `hotkey` event and stopped, so
+`Control+Super` — the default — announced itself in the interface and started no dictation. The
+probe that verified the hook had verified that it *fires*, which is not the same claim. Both paths
+now run one dispatch table.
+
+The hook **does not consume** the keystroke. `Control+Super` still reaches the shell and Windows
+still does whatever it does with it. Consuming it is possible and is deliberately not done: an
+application that silently eats a system shortcut is indistinguishable from a broken keyboard.
+`shortcuts::Registration` therefore distinguishes `Hooked` from `Registered`, because the two
+behave differently in a way the user can notice.
+
+The hook sees every keystroke on the machine, including into other applications. **Nothing is
+logged.** What leaves the module is the index of a chord that matched, never a key.
+
+**A modifier-only chord fires on the second modifier going down**, which is what makes it feel
+immediate and also means a key pressed *afterwards* cannot call it back. The documented rule that an
+ordinary key disqualifies a modifier-only chord catches a key already held — somebody mid-word — not
+one pressed a moment later. The consequence measured on 2026-08-26: on a layout where AltGr is
+left-Control plus right-Alt (Nordic, German, and others), binding `Control+Alt` starts a dictation
+every time the user types `@`. The shipped default, `Control+Super`, is unaffected, and nothing
+warns anyone who chooses `Control+Alt`.
+
 Push-to-talk on Linux needs read access to `/dev/input`; without it the app reports the
-limitation and falls back to toggle mode rather than silently failing. Windows does the same when
-the key-listener helper is missing.
+limitation and falls back to toggle mode rather than silently failing.
 
 ## Text insertion
 

@@ -19,11 +19,18 @@
 //! silently, and leave the user pressing a dead key, [`classify`] reports
 //! modifier-only accelerators as [`Accelerator::ModifierOnly`] so the UI can say
 //! what is actually happening.
+//!
+//! **Since then:** [`crate::keyhook`] provides that hook on Windows, in-process
+//! and as one hook rather than one child per key. `ModifierOnly` is still the
+//! right classification — it says *which mechanism handles this* — and
+//! [`Accelerator::explain`] now asks the hook whether it exists here rather than
+//! asserting it does not.
 
 use std::collections::BTreeSet;
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 /// The separator used in stored hotkey lists.
 const LIST_SEPARATOR: char = ',';
@@ -32,7 +39,7 @@ const LIST_SEPARATOR: char = ',';
 ///
 /// Upstream names these `DICTATION_KEY`, `CHAT_AGENT_KEY`, `VOICE_AGENT_KEY`,
 /// `TRANSLATION_KEY`, and `MEETING_KEY`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, TS)]
 #[serde(rename_all = "kebab-case")]
 pub enum HotkeyAction {
     Dictation,
@@ -120,7 +127,7 @@ const MODIFIERS: [&str; 9] = [
 ];
 
 /// What an accelerator string can be registered as.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[serde(
     tag = "kind",
     rename_all = "kebab-case",
@@ -130,11 +137,12 @@ pub enum Accelerator {
     /// Has at least one non-modifier key, so the cross-platform API can take it.
     Standard { accelerator: String },
 
-    /// Only modifiers. Registrable only through a low-level keyboard hook, which
-    /// this application does not yet have on any platform.
+    /// Only modifiers. Live only through a low-level keyboard hook, which exists
+    /// on Windows ([`crate::keyhook`]) and nowhere else yet.
     ///
-    /// Reported rather than swallowed: a hotkey that cannot be registered must
-    /// not look configured.
+    /// Reported rather than swallowed: a hotkey the cross-platform API cannot
+    /// take must not look registered. Whether the hook picks it up is a separate
+    /// question, and [`Accelerator::explain`] asks rather than assuming.
     ModifierOnly {
         accelerator: String,
         modifiers: Vec<String>,
@@ -151,17 +159,43 @@ impl Accelerator {
         matches!(self, Self::Standard { .. })
     }
 
+    /// The accelerator as text, whatever the classification.
+    ///
+    /// `Invalid` yields the raw input rather than a canonical form: the thing
+    /// worth showing beside "that is not a key" is what was actually typed.
+    #[must_use]
+    pub fn text(&self) -> &str {
+        match self {
+            Self::Standard { accelerator } | Self::ModifierOnly { accelerator, .. } => accelerator,
+            Self::Invalid { input, .. } => input,
+        }
+    }
+
     /// A short phrase for the settings UI. Never claims a modifier-only hotkey
     /// works.
     #[must_use]
     pub fn explain(&self) -> String {
         match self {
             Self::Standard { accelerator } => format!("{accelerator} is registered"),
-            Self::ModifierOnly { accelerator, .. } => format!(
-                "{accelerator} uses only modifier keys. That needs a low-level keyboard \
-                 hook, which is not implemented yet, so this shortcut does nothing. \
-                 Add a regular key, for example {accelerator}+Space."
-            ),
+            // The advice depends on the platform, because the answer does. A
+            // Windows build has the hook; the others do not, and telling a
+            // Windows user to add a regular key would be telling them to work
+            // around something that works.
+            Self::ModifierOnly { accelerator, .. } => {
+                if crate::keyhook::support().is_available() {
+                    format!(
+                        "{accelerator} uses only modifier keys, so it is handled by a keyboard \
+                         hook rather than the system shortcut register. It still works, and it \
+                         does not stop the same keys reaching other applications."
+                    )
+                } else {
+                    format!(
+                        "{accelerator} uses only modifier keys. That needs a low-level keyboard \
+                         hook, which this platform does not have in this build, so the shortcut \
+                         does nothing. Add a regular key, for example {accelerator}+Space."
+                    )
+                }
+            }
             Self::Invalid { input, reason } => {
                 format!("{input:?} is not a valid shortcut: {reason}")
             }
@@ -275,7 +309,7 @@ pub fn serialize_list(hotkeys: &[String]) -> String {
 }
 
 /// One action's configured hotkeys, classified.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 pub struct Binding {
     pub action: HotkeyAction,
     pub accelerators: Vec<Accelerator>,
@@ -321,7 +355,7 @@ impl Binding {
 }
 
 /// A conflict between two actions bound to the same accelerator.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 pub struct Conflict {
     pub accelerator: String,
     pub actions: Vec<HotkeyAction>,
@@ -366,6 +400,16 @@ mod tests {
     use super::*;
 
     /* -------------------------------------------------------------- the list format */
+
+    #[test]
+    fn every_classification_can_state_its_own_text() {
+        assert_eq!(classify("Control+Shift+D").text(), "Control+Shift+D");
+        assert_eq!(classify("Control+Super").text(), "Control+Super");
+        // `Invalid` keeps what was typed rather than a canonical form: the thing
+        // worth showing beside "a shortcut may have one key" is the input that
+        // had two.
+        assert_eq!(classify("Control+A+B").text(), "Control+A+B");
+    }
 
     #[test]
     fn parses_a_single_accelerator() {
@@ -462,11 +506,23 @@ mod tests {
         }
         assert!(!c.is_registrable());
 
-        // And the explanation says what is wrong and how to fix it, rather than
-        // going quiet.
+        // The explanation names the mechanism either way, and then says
+        // something true about *this* platform: on Windows the keyboard hook
+        // exists and the shortcut works, elsewhere it does not and the advice is
+        // to add a regular key. Asserting one wording on every platform would
+        // have made this test outlive the fact it was checking.
         let explanation = c.explain();
-        assert!(explanation.contains("does nothing"), "{explanation}");
         assert!(explanation.contains("keyboard hook"), "{explanation}");
+
+        if crate::keyhook::support().is_available() {
+            assert!(explanation.contains("still works"), "{explanation}");
+            assert!(
+                !explanation.contains("does nothing"),
+                "a platform with the hook must not report the shortcut as dead: {explanation}"
+            );
+        } else {
+            assert!(explanation.contains("does nothing"), "{explanation}");
+        }
     }
 
     #[test]

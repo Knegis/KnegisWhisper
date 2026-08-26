@@ -22,6 +22,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use ts_rs::TS;
 
 /// One piece of transcribed speech.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -78,7 +79,7 @@ pub struct NoteMeta {
 }
 
 /// Which format to emit.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "lowercase")]
 pub enum Format {
     Txt,

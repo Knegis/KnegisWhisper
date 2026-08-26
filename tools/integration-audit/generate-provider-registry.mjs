@@ -50,6 +50,96 @@ const UPLOAD_CAPS = {
   tinfoil: BYOK_UPLOAD_CAP,
 };
 
+/**
+ * Every credential slot, with what it is for.
+ *
+ * `baseline.secretKeys` lists fifteen; deriving the set from the provider lists
+ * instead yields nine, because six slots belong to no single provider:
+ * `openrouter` (a model aggregator upstream pinned no model list for) and five
+ * per-feature custom endpoints. `config/integration-manifest.json` has always
+ * listed all fifteen, so the registry was quietly the smaller of two sources of
+ * truth for the same thing — and a Providers screen would have had to invent the
+ * missing six, which is exactly the duplicated provider list the registry
+ * exists to prevent.
+ *
+ * `kind` is the distinction that matters to a UI:
+ *
+ * - `provider`        — a named service. A key on its own is enough to try it.
+ * - `custom-endpoint` — a user-supplied OpenAI-compatible endpoint for one
+ *                       feature. A key on its own configures nothing; the base
+ *                       URL lives with that feature's own settings, so the
+ *                       screen must say so rather than implying the key is all
+ *                       that is needed.
+ *
+ * A slot in the baseline and absent here is a hard error, following
+ * `UPLOAD_CAPS`: defaulting would let a new upstream key appear in the UI with
+ * no one having decided what it is.
+ */
+const CREDENTIAL_SLOTS = {
+  openai: { name: "OpenAI", kind: "provider" },
+  anthropic: { name: "Anthropic", kind: "provider" },
+  gemini: { name: "Google Gemini", kind: "provider" },
+  groq: { name: "Groq", kind: "provider" },
+  berget: { name: "Berget AI", kind: "provider" },
+  xai: { name: "xAI", kind: "provider" },
+  mistral: { name: "Mistral", kind: "provider" },
+  tinfoil: { name: "Tinfoil", kind: "provider" },
+  corti: { name: "Corti", kind: "provider" },
+  // No models are pinned for OpenRouter — upstream treated it as a pass-through
+  // aggregator — so it appears in no provider list while still needing a key.
+  openrouter: { name: "OpenRouter", kind: "provider" },
+  "note-formatting-custom": {
+    name: "Note formatting",
+    kind: "custom-endpoint",
+    feature: "note-formatting",
+  },
+  "translation-custom": {
+    name: "Translation",
+    kind: "custom-endpoint",
+    feature: "translation",
+  },
+  "dictation-agent-custom": {
+    name: "Dictation agent",
+    kind: "custom-endpoint",
+    feature: "dictation-agent",
+  },
+  "dictation-agent-vision-custom": {
+    name: "Dictation agent (vision)",
+    kind: "custom-endpoint",
+    feature: "dictation-agent-vision",
+  },
+  "chat-agent-custom": {
+    name: "Chat agent",
+    kind: "custom-endpoint",
+    feature: "chat-agent",
+  },
+  // One slot each, holding the whole multi-field configuration as JSON. Not on
+  // the Providers screen, which stores a single secret per slot -- these are
+  // configured on Settings > Intelligence > Enterprise, which has the fields.
+  bedrock: { name: "AWS Bedrock", kind: "enterprise", feature: "bedrock" },
+  azure: { name: "Azure OpenAI", kind: "enterprise", feature: "azure" },
+  vertex: { name: "GCP Vertex AI", kind: "enterprise", feature: "vertex" },
+};
+
+/**
+ * Slots this project needs that upstream's `secretKeys` does not have.
+ *
+ * Upstream stored enterprise credentials as loose settings fields — an AWS
+ * secret access key in the same store as a window position. Here each connector
+ * gets one credential-store slot holding its whole configuration as JSON,
+ * because splitting it would put the secret half in the keychain and the region
+ * and deployment half in SQLite, and a struct reassembled from two stores is a
+ * struct that gets reassembled wrongly.
+ *
+ * Listed separately from `CREDENTIAL_SLOTS` so the distinction stays visible:
+ * everything above came from upstream, everything here is ours.
+ */
+const OWN_CREDENTIAL_SLOTS = [
+  { base: "bedrock", env: "AWS_BEDROCK_CONFIG" },
+  { base: "azure", env: "AZURE_OPENAI_CONFIG" },
+  { base: "vertex", env: "GCP_VERTEX_CONFIG" },
+];
+
 /** Which credential slot each provider authenticates with. */
 const AUTH_SCHEMES = {
   // Providers reached over an attested or proxied client rather than a plain
@@ -171,6 +261,55 @@ const sherpa = Object.entries(R.parakeetModels).map(([id, m]) => ({
   streaming: m.runtime === "online",
 }));
 
+// --- credentials -------------------------------------------------------------
+// Built last, because `usedFor` is derived from the lists above rather than
+// restated: a provider that gains transcription support does not also need its
+// credential entry edited.
+const credentials = [...baseline.secretKeys, ...OWN_CREDENTIAL_SLOTS].map((k) => {
+  const declared = CREDENTIAL_SLOTS[k.base];
+  if (!declared) {
+    die(
+      `credential slot "${k.base}" is in the baseline's secretKeys and not in ` +
+        `CREDENTIAL_SLOTS. Add it deliberately, with its kind -- defaulting ` +
+        `would put a slot in front of the user that nobody decided about.`
+    );
+  }
+
+  const usedFor = [];
+  if (transcription.some((p) => p.credentialSlot === k.base)) {
+    usedFor.push("transcription");
+  }
+  if (reasoning.some((p) => p.credentialSlot === k.base)) {
+    usedFor.push("reasoning");
+  }
+
+  return {
+    slot: k.base,
+    name: declared.name,
+    kind: declared.kind,
+    // Upstream's environment-variable name. Kept because the OpenWhispr
+    // importer needs to recognise a key it finds under the old name, not
+    // because this application reads the environment.
+    env: k.env,
+    usedFor,
+    ...(declared.feature !== undefined ? { feature: declared.feature } : {}),
+  };
+});
+
+// Every slot a provider names must be declared. The reverse does not hold --
+// six slots belong to no provider on purpose -- but a provider pointing at a
+// slot that is not in the list would be unreachable with no way to notice.
+for (const p of [...transcription, ...reasoning]) {
+  if (!credentials.some((c) => c.slot === p.credentialSlot)) {
+    die(
+      `provider "${p.id}" authenticates with slot "${p.credentialSlot}", which ` +
+        `is not in the credential list. The baseline's secretKeys is the source ` +
+        `of that list, so either the slot is missing upstream or the provider ` +
+        `id is wrong.`
+    );
+  }
+}
+
 const registry = {
   $comment:
     "GENERATED by tools/integration-audit/generate-provider-registry.mjs from " +
@@ -183,8 +322,11 @@ const registry = {
     normalisations: [
       "every transcription provider declares an explicit maxUploadBytes",
       "openwhisprCloudModels dropped as removed-vendor-service",
+      "credential slots come from secretKeys, not from the provider lists, so all fifteen are declared",
+      "three enterprise slots are added on top: upstream kept those credentials in loose settings fields",
     ],
   },
+  credentials,
   transcription,
   reasoning,
   enterprise,
@@ -211,6 +353,7 @@ if (process.argv.includes("--check")) {
 writeFileSync(OUT, rendered, "utf8");
 
 const counts = {
+  credentials: `${credentials.length} slots (${credentials.filter((c) => c.kind === "provider").length} provider, ${credentials.filter((c) => c.kind === "custom-endpoint").length} custom endpoint, ${credentials.filter((c) => c.kind === "enterprise").length} enterprise)`,
   transcription: `${transcription.length} providers / ${transcription.reduce((n, p) => n + p.models.length, 0)} models`,
   reasoning: `${reasoning.length} providers / ${reasoning.reduce((n, p) => n + p.models.length, 0)} models`,
   enterprise: `${enterprise.length} providers / ${enterprise.reduce((n, p) => n + p.models.length, 0)} models`,

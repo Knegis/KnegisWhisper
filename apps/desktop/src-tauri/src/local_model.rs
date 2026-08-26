@@ -25,6 +25,7 @@ use kw_transcription_core::local::{self, ServerOptions};
 use kw_transcription_core::models;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter as _, State};
+use ts_rs::TS;
 
 /// The sidecar this module manages.
 const SIDECAR: &str = "whisper";
@@ -139,7 +140,7 @@ pub struct SharedLocal {
 }
 
 /// What can be said about the local model server without touching the network.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct LocalStatus {
     /// Whether this platform has a published server binary at all, and why not.
@@ -157,7 +158,7 @@ pub struct LocalStatus {
 }
 
 /// Whether the local server can be installed here.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(
     tag = "state",
     rename_all = "kebab-case",
@@ -174,8 +175,79 @@ pub enum Availability {
     Unknown,
 }
 
+impl Availability {
+    /// What the catalogue says about one sidecar on the platform we are on.
+    ///
+    /// Shared by both local runtimes rather than written twice. The `Unknown`
+    /// arms matter: an unrecognised target and a target the manifest does not
+    /// mention are both "we do not know", and answering `Installable` for
+    /// either would be a claim about a binary nobody has looked for.
+    #[must_use]
+    pub fn of(catalog: &kw_sidecar::catalog::Catalog, sidecar: &str) -> Self {
+        let Some(target) = kw_sidecar::Target::current() else {
+            return Self::Unknown;
+        };
+        match catalog.get(sidecar).map(|s| s.availability(target)) {
+            Some(kw_sidecar::TargetState::Installable(_)) => Self::Installable,
+            Some(kw_sidecar::TargetState::Unsupported { reason, tracking }) => Self::NotPublished {
+                reason: reason.to_owned(),
+                tracking: tracking.to_owned(),
+            },
+            _ => Self::Unknown,
+        }
+    }
+}
+
+/// How firmly a model's identity can be established.
+///
+/// Three states rather than a boolean, and an enum rather than a string. It was
+/// a `&'static str` whose three values the frontend re-declared by hand as a
+/// union; nothing held the two in step, so a fourth state added here would have
+/// reached a UI that did not know about it. Now it cannot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "kebab-case")]
+pub enum VerifiedBy {
+    /// A measured SHA-256 is pinned for this model and the file matched it.
+    Digest,
+    /// Only a declared size is known. The file is the right length; it has not
+    /// been proven to be the file the publisher built.
+    Size,
+    /// Neither is known. Reported, never silent.
+    Nothing,
+}
+
+impl VerifiedBy {
+    /// What the registry can hold this model to, before it is downloaded.
+    fn declared_for(model: &kw_provider_registry::WhisperModel) -> Self {
+        match models::integrity_for(model) {
+            models::Integrity::Pinned { .. } => Self::Digest,
+            models::Integrity::Size { .. } => Self::Size,
+            models::Integrity::Unknown => Self::Nothing,
+        }
+    }
+
+    /// What was actually checked once the file was on disk.
+    const fn measured(verification: &models::Verification) -> Self {
+        match verification {
+            models::Verification::DigestMatched => Self::Digest,
+            models::Verification::SizeOnly { .. } => Self::Size,
+            models::Verification::Unchecked { .. } => Self::Nothing,
+        }
+    }
+
+    /// The wire spelling, for the command that returns it as a bare string.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Digest => "digest",
+            Self::Size => "size",
+            Self::Nothing => "nothing",
+        }
+    }
+}
+
 /// One model on offer.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelStatus {
     pub id: String,
@@ -183,10 +255,9 @@ pub struct ModelStatus {
     pub size_mb: Option<f64>,
     pub recommended: bool,
     pub installed: bool,
-    /// `digest` when a measured SHA-256 is known for this model, `size` when only
-    /// a declared size is. Shown to the user rather than implied, because they
-    /// are different guarantees.
-    pub verified_by: &'static str,
+    /// What integrity check this model can be held to. Shown to the user rather
+    /// than implied, because the three are different guarantees.
+    pub verified_by: VerifiedBy,
 }
 
 /// Everything the settings screen needs, with no network access.
@@ -197,19 +268,7 @@ pub async fn local_model_status(
     let cache = paths::sidecar_dir();
     let models_dir = paths::model_cache_dir();
 
-    let availability = match kw_sidecar::Target::current() {
-        None => Availability::Unknown,
-        Some(target) => match local.catalog.get(SIDECAR).map(|s| s.availability(target)) {
-            Some(kw_sidecar::TargetState::Installable(_)) => Availability::Installable,
-            Some(kw_sidecar::TargetState::Unsupported { reason, tracking }) => {
-                Availability::NotPublished {
-                    reason: reason.to_owned(),
-                    tracking: tracking.to_owned(),
-                }
-            }
-            _ => Availability::Unknown,
-        },
-    };
+    let availability = Availability::of(&local.catalog, SIDECAR);
 
     let server_installed = local
         .catalog
@@ -239,11 +298,7 @@ pub async fn local_model_status(
             size_mb: model.size_mb,
             recommended: model.recommended,
             installed: models::is_installed(&models_dir.path, model),
-            verified_by: match models::integrity_for(model) {
-                models::Integrity::Pinned { .. } => "digest",
-                models::Integrity::Size { .. } => "size",
-                models::Integrity::Unknown => "nothing",
-            },
+            verified_by: VerifiedBy::declared_for(model),
         })
         .collect();
 
@@ -258,7 +313,7 @@ pub async fn local_model_status(
 }
 
 /// Progress of an install, as reported to the frontend.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(
     tag = "stage",
     rename_all = "kebab-case",
@@ -277,9 +332,8 @@ pub enum InstallProgress {
     Verifying,
     Extracting,
     Done {
-        /// Whether the model was checked against a measured digest or only its
-        /// declared size.
-        verified_by: &'static str,
+        /// What the model on disk was actually checked against.
+        verified_by: VerifiedBy,
     },
 }
 
@@ -342,14 +396,10 @@ pub async fn local_model_install(
     .await
     .map_err(|err| err.to_string())?;
 
-    let verified_by = match installed.verification {
-        models::Verification::DigestMatched => "digest",
-        models::Verification::SizeOnly { .. } => "size",
-        models::Verification::Unchecked { .. } => "nothing",
-    };
+    let verified_by = VerifiedBy::measured(&installed.verification);
     emit(InstallProgress::Done { verified_by });
 
-    Ok(verified_by.to_owned())
+    Ok(verified_by.as_str().to_owned())
 }
 
 /// Start the local server with an installed model.

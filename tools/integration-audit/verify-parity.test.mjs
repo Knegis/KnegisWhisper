@@ -125,15 +125,26 @@ test("a surface whose component exists but carries no marker is caught", () => {
 });
 
 test("removing a marker from a built surface is caught", () => {
-  // The direction that matters in practice: someone refactors App.tsx, the
-  // marker goes with the section, and the manifest keeps claiming the screen.
+  // The direction that matters in practice: someone moves a section between
+  // files, the marker goes with it, and the manifest keeps claiming the screen.
+  //
+  // The file and the marker are read out of the surface registry rather than
+  // written here. They were hardcoded to `App.tsx` and `notes.export` until the
+  // 1037-line App.tsx was split into one component per surface, at which point
+  // stripping a marker from App.tsx stopped proving anything and this test went
+  // green while testing nothing -- the exact failure mode the file's own header
+  // warns about.
+  const surfaces = read("config/ui-surfaces.json").surfaces;
+  const [, victim] = Object.entries(surfaces).find(([, s]) => s.built) ?? [];
+  assert.ok(victim, "no surface is marked built, so there is nothing to strip");
+
   const found = newViolations((input) => {
-    const stripped = readComponent("apps/desktop/src/App.tsx").replaceAll(
-      'data-surface="notes.export"',
+    const stripped = readComponent(victim.component).replaceAll(
+      `data-surface="${victim.surfaceId}"`,
       ""
     );
     input.readComponent = (p) =>
-      p === "apps/desktop/src/App.tsx" ? stripped : readComponent(p);
+      p === victim.component ? stripped : readComponent(p);
   });
 
   assert.deepEqual(rulesOf(found), new Set(["phantom-surface"]));

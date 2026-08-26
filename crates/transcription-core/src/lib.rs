@@ -12,6 +12,7 @@
 //! The seam is what makes the important properties testable. See
 //! `docs/PORTING_MATRIX.md` for the divergences from the upstream router.
 
+pub mod clients;
 pub mod executor;
 pub mod local;
 pub mod models;

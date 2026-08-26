@@ -1,5 +1,5 @@
 {
-  "$comment": "Sidecar binaries this application will download and run. Compiled into the binary by crates/sidecar/src/catalog.rs with include_str!, deliberately: a digest pinned in a file the user can edit is not a pin. Every digest below was computed from the actual downloaded asset, not copied from a release note. Re-pinning is a source change, a diff, and a release. To add or move a pin, run tools/sidecar-pin rather than editing by hand.",
+  "$comment": "Sidecar binaries this application will download and run. Compiled into the binary by crates/sidecar/src/catalog.rs with include_str!, deliberately: a digest pinned in a file the user can edit is not a pin. Every digest below was computed from the actual downloaded asset, not copied from a release note. Re-pinning is a source change, a diff, and a release. To add or move a pin, run tools/sidecar-pin/pin.mjs rather than editing by hand; `--verify` re-measures every published target against what is committed here, which is the only thing that notices a release retagged in place.",
   "schemaVersion": 1,
   "sidecars": [
     {
@@ -12,9 +12,14 @@
       },
       "transport": {
         "kind": "loopback",
-        "portRange": { "first": 8178, "last": 8199 }
+        "portRange": {
+          "first": 8178,
+          "last": 8199
+        }
       },
-      "commandFragments": ["whisper-server"],
+      "commandFragments": [
+        "whisper-server"
+      ],
       "targets": {
         "windows-x86_64": {
           "availability": "published",
@@ -49,6 +54,67 @@
           "availability": "not-published",
           "reason": "Upstream publishes only whisper-<tag>-xcframework.zip for Apple platforms, which is a library for embedding in an Xcode project rather than a whisper-server executable. There is nothing here to download and run.",
           "tracking": "docs/ENGINEERING_LOG.md -- carry-forward. Needs a macOS CI job building whisper.cpp from source and publishing under this project's own releases, the same treatment docs/PORTING_MATRIX.md already records for the AEC and Windows helpers."
+        }
+      }
+    },
+    {
+      "name": "llama",
+      "description": "Local text generation. Runs entirely on this machine; no prompt or transcript leaves the device.",
+      "source": {
+        "repo": "ggml-org/llama.cpp",
+        "release": "b9763",
+        "pinnedBecause": "Same reason as whisper: tracking the newest release would let an upstream change alter generated text between our releases with no diff to review. The CPU builds are pinned rather than the CUDA, Vulkan, ROCm or SYCL ones -- an accelerated build is 15 to 25 times the download, needs a matching driver, and fails at launch in a way that reads as a broken install rather than a missing runtime. Choosing one is a decision for whoever has the hardware to test it."
+      },
+      "transport": {
+        "kind": "loopback",
+        "portRange": {
+          "first": 8221,
+          "last": 8240
+        }
+      },
+      "commandFragments": [
+        "llama-server"
+      ],
+      "targets": {
+        "windows-x86_64": {
+          "availability": "published",
+          "url": "https://github.com/ggml-org/llama.cpp/releases/download/b9763/llama-b9763-bin-win-cpu-x64.zip",
+          "archive": "zip",
+          "sha256": "05144ee4d885a778ebaef619f79ca0b8a4edb7f017eaf70086a8781ff003815f",
+          "sizeBytes": 17287711,
+          "executableInArchive": "llama-server.exe"
+        },
+        "linux-x86_64": {
+          "availability": "published",
+          "url": "https://github.com/ggml-org/llama.cpp/releases/download/b9763/llama-b9763-bin-ubuntu-x64.tar.gz",
+          "archive": "tar-gz",
+          "sha256": "4bd11fe0cea35223b240496062900ed9493b46f20a08747d431bfdc2252af2d8",
+          "sizeBytes": 15646315,
+          "executableInArchive": "llama-b9763/llama-server"
+        },
+        "linux-aarch64": {
+          "availability": "published",
+          "url": "https://github.com/ggml-org/llama.cpp/releases/download/b9763/llama-b9763-bin-ubuntu-arm64.tar.gz",
+          "archive": "tar-gz",
+          "sha256": "95abc7cb2805a37ff259fdebfc10dab35057f2bbbf6c8a703fe2246c7f89c78d",
+          "sizeBytes": 12665261,
+          "executableInArchive": "llama-b9763/llama-server"
+        },
+        "macos-x86_64": {
+          "availability": "published",
+          "url": "https://github.com/ggml-org/llama.cpp/releases/download/b9763/llama-b9763-bin-macos-x64.tar.gz",
+          "archive": "tar-gz",
+          "sha256": "8ce3ef62326d1359958352e56c4926d57ef4345b87b44b16fba263a4f66ef4e3",
+          "sizeBytes": 11280969,
+          "executableInArchive": "llama-b9763/llama-server"
+        },
+        "macos-aarch64": {
+          "availability": "published",
+          "url": "https://github.com/ggml-org/llama.cpp/releases/download/b9763/llama-b9763-bin-macos-arm64.tar.gz",
+          "archive": "tar-gz",
+          "sha256": "7706d1a7630218a3665d8c2d680bb54ab7f101896e9c45caaf5676ef4ce2e2d0",
+          "sizeBytes": 10978734,
+          "executableInArchive": "llama-b9763/llama-server"
         }
       }
     }

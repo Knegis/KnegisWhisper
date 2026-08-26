@@ -156,6 +156,14 @@ pub enum RouteError {
     #[error("the self-hosted transcription URL is not configured")]
     SelfHostedNotConfigured,
 
+    #[error(
+        "Corti has no {field} configured, and there is no safe default for one. The environment is \
+         part of the hostname and the tenant scopes the request to an account, so guessing \
+         either would send your audio to a real endpoint under a tenancy you did not choose. \
+         Nothing was sent."
+    )]
+    CortiUnconfigured { field: &'static str },
+
     #[error("the self-hosted transcription URL is invalid or unsupported: {reason}")]
     SelfHostedInvalid { reason: String },
 
@@ -222,6 +230,15 @@ pub struct RouteRequest {
     pub model: Option<String>,
     /// Translation-aware language; wins over `preferred_language`.
     pub effective_language: Option<String>,
+}
+
+/// One of Corti's two scoping values, or a refusal naming which is missing.
+fn required(value: Option<&str>, field: &'static str) -> Result<String, RouteError> {
+    value
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(str::to_owned)
+        .ok_or(RouteError::CortiUnconfigured { field })
 }
 
 /// Resolve the language to send, or `None` for automatic detection.
@@ -465,20 +482,14 @@ pub fn resolve(
             language: Some(language.unwrap_or_else(|| "en".to_owned())),
             max_upload_bytes: max_upload_bytes(registry, provider)?,
             corti: Some(CortiConfig {
-                environment: settings
-                    .corti_environment
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|s| !s.is_empty())
-                    .unwrap_or("us")
-                    .to_owned(),
-                tenant: settings
-                    .corti_tenant
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|s| !s.is_empty())
-                    .unwrap_or("base")
-                    .to_owned(),
+                // Neither value is defaulted, and both were. The environment is
+                // part of the hostname and the tenant scopes the account, so
+                // `unwrap_or("us")` and `unwrap_or("base")` sent an
+                // unconfigured Corti request to a real endpoint under a tenancy
+                // nobody chose — a silent substitution of exactly the kind the
+                // brief rules out. Refused instead.
+                environment: required(settings.corti_environment.as_deref(), "environment")?,
+                tenant: required(settings.corti_tenant.as_deref(), "tenant")?,
             }),
         }),
 
@@ -843,14 +854,53 @@ mod tests {
         assert_eq!(unique.len(), 25, "the set should have no duplicates");
     }
 
+    /// An unconfigured Corti is refused, and the refusal names the field.
+    ///
+    /// It used to default to `us` / `base`, which is a real endpoint under a
+    /// tenancy nobody chose. A wrong-tenant request is worse than an error: it
+    /// reaches a live service with the user's audio and their credential.
     #[test]
-    fn corti_gets_a_concrete_language_and_its_defaults() {
-        match resolve_with(&providers("corti")).unwrap() {
+    fn corti_refuses_to_guess_its_environment_or_tenant() {
+        match resolve_with(&providers("corti")) {
+            Err(RouteError::CortiUnconfigured { field }) => assert_eq!(field, "environment"),
+            other => panic!("expected a refusal, got {other:?}"),
+        }
+
+        // With an environment and no tenant, the other half is named.
+        let half = RouteSettings {
+            corti_environment: Some("eu".to_owned()),
+            ..providers("corti")
+        };
+        match resolve_with(&half) {
+            Err(RouteError::CortiUnconfigured { field }) => assert_eq!(field, "tenant"),
+            other => panic!("expected a refusal, got {other:?}"),
+        }
+
+        // Blank is not configured.
+        let blank = RouteSettings {
+            corti_environment: Some("  ".to_owned()),
+            corti_tenant: Some("acme".to_owned()),
+            ..providers("corti")
+        };
+        assert!(matches!(
+            resolve_with(&blank),
+            Err(RouteError::CortiUnconfigured {
+                field: "environment"
+            })
+        ));
+    }
+
+    /// Fully configured, Corti still gets a concrete language.
+    #[test]
+    fn a_configured_corti_gets_a_concrete_language() {
+        let settings = RouteSettings {
+            corti_environment: Some("eu".to_owned()),
+            corti_tenant: Some("acme".to_owned()),
+            ..providers("corti")
+        };
+        match resolve_with(&settings).unwrap() {
             Transport::ProviderClient {
-                language,
-                corti,
-                model,
-                ..
+                language, model, ..
             } => {
                 assert_eq!(
                     language.as_deref(),
@@ -858,9 +908,6 @@ mod tests {
                     "corti needs a concrete language"
                 );
                 assert_eq!(model.as_deref(), Some("corti-transcribe"));
-                let corti = corti.expect("corti config should be present");
-                assert_eq!(corti.environment, "us");
-                assert_eq!(corti.tenant, "base");
             }
             other => panic!("{other:?}"),
         }
@@ -995,6 +1042,21 @@ mod tests {
 
     /* ============================================================== secrecy */
 
+    /// Settings for one provider, with the extras that provider requires.
+    ///
+    /// Corti needs an environment and a tenant and the router refuses to guess
+    /// either, so a test sweeping every registry provider has to supply them —
+    /// otherwise it is asserting something about the defaults rather than about
+    /// the routing, which is how those defaults survived as long as they did.
+    fn configured(provider: &str) -> RouteSettings {
+        let mut settings = providers(provider);
+        if provider == "corti" {
+            settings.corti_environment = Some("eu".to_owned());
+            settings.corti_tenant = Some("acme".to_owned());
+        }
+        settings
+    }
+
     #[test]
     fn a_resolved_route_contains_a_slot_name_and_never_a_credential() {
         // The property the whole design rests on. Serialise every branch and
@@ -1003,7 +1065,7 @@ mod tests {
             providers("openai"),
             providers("groq"),
             providers("berget"),
-            providers("corti"),
+            configured("corti"),
             providers("tinfoil"),
             RouteSettings {
                 transcription_mode: Some("self-hosted".to_owned()),
@@ -1024,7 +1086,7 @@ mod tests {
         // Guards against a registry entry the router cannot route -- which would
         // be a provider the settings UI offers and dictation then refuses.
         for provider in &registry().transcription {
-            let settings = providers(&provider.id);
+            let settings = configured(&provider.id);
             let result = resolve_with(&settings);
             assert!(
                 result.is_ok(),
@@ -1038,7 +1100,7 @@ mod tests {
     fn every_resolved_key_ref_names_a_slot_the_registry_declares() {
         let slots = registry().credential_slots();
         for provider in &registry().transcription {
-            let route = resolve_with(&providers(&provider.id)).unwrap();
+            let route = resolve_with(&configured(&provider.id)).unwrap();
             if let Transport::HttpBatch {
                 auth: Auth {
                     key_ref: Some(k), ..

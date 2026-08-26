@@ -14,9 +14,15 @@
 mod commands;
 mod diagnostics;
 mod dictation;
+// Test-only: it renders `apps/desktop/src/generated/ipc-types.ts` and asserts
+// the committed copy still matches the Rust types. Nothing at runtime calls it.
+#[cfg(test)]
+mod ipc_types;
 mod local_api;
+mod local_llm;
 mod local_model;
 mod overlay;
+mod reasoning;
 mod shortcuts;
 mod state;
 mod tray;
@@ -153,18 +159,39 @@ pub fn run() -> anyhow::Result<()> {
 
             app.manage(std::sync::Arc::clone(&local));
 
+            // Local text generation. Same lifecycle, one more sidecar. Nothing
+            // starts here: the model is gigabytes and starting it uninvited
+            // would be several of them resident before anyone asked.
+            let llm = std::sync::Arc::new(
+                local_llm::LocalLlm::new(policy.clone())
+                    .map_err(|e| anyhow::anyhow!(e))
+                    .context("could not prepare the local text-generation server")?,
+            );
+            tauri::async_runtime::block_on(llm.reap_stale());
+            let llm_endpoint = llm.endpoint();
+            app.manage(std::sync::Arc::clone(&llm));
+
             let session = std::sync::Arc::new(dictation::DictationRuntime::build(
                 handle.clone(),
                 db.clone(),
                 credentials,
                 policy,
-                shared.port,
-                shared.model,
-                // Cleanup is off until the settings screen configures a route.
-                // The raw transcript is a correct answer; a half-configured
-                // cleanup that silently does nothing is not.
+                dictation::LocalTargets {
+                    transcription_port: shared.port,
+                    transcription_model: shared.model,
+                    generation: llm_endpoint,
+                },
+                // Off until `reasoning::apply_at_startup` fills it, and off
+                // for good if the user has never switched cleanup on. The raw
+                // transcript is a correct answer; a half-configured cleanup
+                // that silently does nothing is not.
                 std::sync::Arc::new(std::sync::RwLock::new(None)),
             ));
+
+            // The route survives a restart. Bring it back, in the background:
+            // the window should not wait on a settings read.
+            reasoning::apply_at_startup(&session, &db);
+
             app.manage(session);
 
             // Off unless the user has switched it on. See local_api.rs.
@@ -193,7 +220,11 @@ pub fn run() -> anyhow::Result<()> {
                 }
             }
 
-            let registrations = shortcuts::register_all(&handle, &bindings);
+            // Held in state so a settings change replaces the hook rather than
+            // trying to install a second one, which Windows refuses.
+            let hooks = std::sync::Arc::new(shortcuts::Hooks::default());
+            let registrations = shortcuts::register_all(&handle, &bindings, &hooks);
+            app.manage(std::sync::Arc::clone(&hooks));
             let live = registrations.iter().filter(|r| r.is_live()).count();
             tracing::info!(live, total = registrations.len(), "hotkeys registered");
 
@@ -222,9 +253,14 @@ pub fn run() -> anyhow::Result<()> {
             commands::history_delete,
             commands::history_clear,
             commands::providers,
+            commands::credential_slots,
             commands::provider_credential_set,
             commands::provider_credential_present,
             commands::probe_providers,
+            reasoning::reasoning_status,
+            reasoning::reasoning_set_cleanup,
+            reasoning::enterprise_config_set,
+            reasoning::enterprise_config_clear,
             commands::import_openwhispr,
             commands::notes_list,
             commands::notes_search,
@@ -240,6 +276,7 @@ pub fn run() -> anyhow::Result<()> {
             dictation::dictation_state,
             dictation::dictation_route,
             dictation::dictation_use_local,
+            dictation::dictation_set_cloud_provider,
             dictation::dictation_toggle,
             dictation::dictation_cancel,
             dictation::dictation_set_device,
@@ -252,6 +289,10 @@ pub fn run() -> anyhow::Result<()> {
             local_api::local_api_status,
             local_api::local_api_start,
             local_api::local_api_stop,
+            local_llm::local_llm_status,
+            local_llm::local_llm_install,
+            local_llm::local_llm_start,
+            local_llm::local_llm_stop,
         ])
         .run(tauri::generate_context!())
         .context("the application exited with an error")

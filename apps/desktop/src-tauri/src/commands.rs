@@ -16,6 +16,7 @@ use kw_provider_probe::{ProbeAudio, ProbeReport};
 use kw_storage::{settings, transcriptions};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
+use ts_rs::TS;
 
 use crate::state::AppState;
 
@@ -68,15 +69,33 @@ pub async fn settings_keys(state: State<'_, AppState>) -> CmdResult<Vec<String>>
 
 /* -------------------------------------------------------------------- hotkeys */
 
+/// An action nothing in the application handles, and the sentence saying so.
+///
+/// Reported per action rather than per accelerator because that is the shape of
+/// the fact. Nothing about the accelerator is wrong; there is no handler behind
+/// it, and typing a different chord would not change that.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct UnhandledAction {
+    pub action: HotkeyAction,
+    pub reason: String,
+}
+
 /// One action's hotkeys, classified, with any problems spelled out.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct HotkeyReport {
     pub bindings: Vec<Binding>,
     /// Accelerators claimed by more than one action.
     pub conflicts: Vec<hotkey::Conflict>,
-    /// Actions with no working hotkey at all.
+    /// Actions with no working hotkey at all, for any reason — a bad accelerator
+    /// or a missing handler. The union, so a caller asking "is this action
+    /// dead?" gets one answer.
     pub unusable: Vec<HotkeyAction>,
+    /// The subset of `unusable` that is dead because nothing handles it, with
+    /// the reason. Separate because the two need different words: one is the
+    /// user's to fix and the other is not.
+    pub unhandled: Vec<UnhandledAction>,
 }
 
 /// Read the configured hotkeys and say what will actually work.
@@ -87,19 +106,44 @@ pub struct HotkeyReport {
 /// key, so it comes back as a problem with an explanation.
 #[tauri::command]
 pub async fn hotkeys(state: State<'_, AppState>) -> CmdResult<HotkeyReport> {
-    let bindings = load_bindings(&state).await?;
+    Ok(report_for(load_bindings(&state).await?))
+}
+
+/// Build the report from bindings that have already been loaded.
+///
+/// Split from the command so a test can reach it. The command takes Tauri state;
+/// the interesting part — which actions are dead, and whether the reason is the
+/// user's to fix — has nothing to do with Tauri, and leaving it inside the
+/// command is what made it untested.
+fn report_for(bindings: Vec<Binding>) -> HotkeyReport {
     let conflicts = hotkey::conflicts(&bindings);
+
+    // Asked of the registration module rather than recomputed, because that is
+    // the module that decides. `Binding::is_usable` can only speak about the
+    // accelerator: it called chat agent's `Control+Shift+Space` usable, and it
+    // was right about the accelerator and wrong about the hotkey.
+    let unhandled: Vec<UnhandledAction> = hotkey::ALL_ACTIONS
+        .into_iter()
+        .filter_map(|action| {
+            crate::shortcuts::unhandled_reason(action).map(|reason| UnhandledAction {
+                action,
+                reason: reason.to_owned(),
+            })
+        })
+        .collect();
+
     let unusable = bindings
         .iter()
-        .filter(|b| !b.is_usable())
+        .filter(|b| !b.is_usable() || unhandled.iter().any(|u| u.action == b.action))
         .map(|b| b.action)
         .collect();
 
-    Ok(HotkeyReport {
+    HotkeyReport {
         bindings,
         conflicts,
         unusable,
-    })
+        unhandled,
+    }
 }
 
 /// Load every action's binding from settings, falling back to the default.
@@ -128,7 +172,7 @@ pub async fn load_bindings(state: &AppState) -> CmdResult<Vec<Binding>> {
 /// independently: a well-formed accelerator can still be refused because another
 /// application owns it, and reporting "saved" for that is the kind of confident
 /// success this project treats as a defect.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct HotkeyChange {
     pub binding: Binding,
@@ -148,6 +192,7 @@ pub async fn hotkey_set(
     state: State<'_, AppState>,
     action: String,
     accelerators: String,
+    hooks: State<'_, std::sync::Arc<crate::shortcuts::Hooks>>,
 ) -> CmdResult<HotkeyChange> {
     // Fail closed on an unknown action id rather than defaulting to dictation.
     let action = HotkeyAction::from_id(&action)
@@ -168,7 +213,7 @@ pub async fn hotkey_set(
     // `unregister_all` is the only way to drop the previous binding for this
     // action and it drops the others with it.
     let bindings = load_bindings(&state).await?;
-    let reports = crate::shortcuts::register_all(&app, &bindings);
+    let reports = crate::shortcuts::register_all(&app, &bindings, &hooks);
     let live = reports.iter().filter(|r| r.is_live()).count();
     tracing::info!(live, total = reports.len(), "hotkeys re-registered");
 
@@ -217,12 +262,43 @@ pub async fn history_clear(state: State<'_, AppState>) -> CmdResult<u64> {
 
 /* ------------------------------------------------------------------ providers */
 
+/// What would happen if dictation were pointed at this provider right now.
+///
+/// Three states rather than a boolean, because "we have not written the client"
+/// and "you have not filled in the settings this provider needs" are different
+/// problems with different fixes, and neither is "it works".
+///
+/// Derived by asking `route::resolve` rather than by listing provider ids here.
+/// A hand-written list of which providers dispatch would be a second copy of the
+/// match in `crates/transcription-core/src/route.rs`, and the two would part
+/// company the first time a client was written.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(
+    tag = "state",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
+pub enum Dispatch {
+    /// A transport exists. Dictation would make a real request.
+    Ready,
+    /// A provider this build will not send to, with the reason.
+    ///
+    /// Not always "unwritten": Tinfoil is refused *deliberately*, because an
+    /// unattested request would present as Tinfoil while providing none of the
+    /// confidentiality the name means. The reason comes from the client rather
+    /// than being composed here, so it says which case this is.
+    NeedsClient { reason: String },
+    /// The route cannot be resolved at all with what is configured.
+    Unresolvable { reason: String },
+}
+
 /// A provider and whether it has a credential stored — *not* whether it works.
 ///
 /// The distinction is the point. `configured` means a key is present;
 /// `connected` requires a passing connection test, which only
-/// [`probe_providers`] can establish.
-#[derive(Debug, Clone, Serialize)]
+/// [`probe_providers`] can establish; and `dispatch` is a third thing again —
+/// whether this build can even send the request.
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderSummary {
     pub id: String,
@@ -230,6 +306,52 @@ pub struct ProviderSummary {
     pub credential_slot: String,
     pub configured: bool,
     pub model_count: usize,
+    /// The models on offer, so a picker never writes a model id by hand.
+    pub models: Vec<String>,
+    pub dispatch: Dispatch,
+}
+
+/// Ask the real router what it would do with this provider.
+fn dispatch_for(registry: &kw_provider_registry::Registry, provider_id: &str) -> Dispatch {
+    let settings = kw_transcription_core::RouteSettings {
+        transcription_mode: Some("providers".to_owned()),
+        cloud_transcription_provider: Some(provider_id.to_owned()),
+        ..Default::default()
+    };
+
+    match kw_transcription_core::route::resolve(
+        registry,
+        &settings,
+        &kw_transcription_core::RouteRequest::default(),
+    ) {
+        Ok(kw_transcription_core::Transport::ProviderClient {
+            provider,
+            model,
+            language,
+            corti,
+            ..
+        }) => {
+            // Asked, not listed. Three of the four have clients now, and a
+            // hand-written set of which would have been a second copy of the
+            // match in `clients::shape` — parting company the first time one
+            // was added, which is exactly what just happened.
+            match kw_transcription_core::clients::shape(
+                provider,
+                model.as_deref(),
+                language.as_deref(),
+                corti.as_ref(),
+            ) {
+                Ok(_) => Dispatch::Ready,
+                Err(err) => Dispatch::NeedsClient {
+                    reason: err.to_string(),
+                },
+            }
+        }
+        Ok(_) => Dispatch::Ready,
+        Err(err) => Dispatch::Unresolvable {
+            reason: err.to_string(),
+        },
+    }
 }
 
 /// List transcription providers and whether each has a credential.
@@ -249,7 +371,52 @@ pub fn providers(state: State<'_, AppState>) -> CmdResult<Vec<ProviderSummary>> 
                 credential_slot: p.credential_slot.clone(),
                 configured,
                 model_count: p.models.len(),
+                models: p.models.iter().map(|m| m.id.clone()).collect(),
+                dispatch: dispatch_for(registry, &p.id),
             }
+        })
+        .collect())
+}
+
+/// One credential slot and whether a secret is stored in it.
+///
+/// `stored` is deliberately the only thing said about the value. There is no
+/// command that reads a credential back, so a screen cannot display one and a
+/// compromised renderer cannot exfiltrate one.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct CredentialSlotStatus {
+    pub slot: String,
+    pub name: String,
+    pub kind: kw_provider_registry::CredentialKind,
+    /// Which parts of the application use this key, from the registry.
+    pub used_for: Vec<String>,
+    /// Which feature a custom endpoint belongs to; `None` for a provider.
+    pub feature: Option<String>,
+    /// A secret is present. This is NOT the same as the provider working.
+    pub stored: bool,
+}
+
+/// Every credential slot, in registry order, with whether each is filled.
+///
+/// One call rather than one `provider_credential_present` per slot: there are
+/// fifteen, the screen re-reads after every save, and the list itself has to
+/// come from the registry anyway so that no screen writes provider ids by hand.
+#[tauri::command]
+pub fn credential_slots(state: State<'_, AppState>) -> CmdResult<Vec<CredentialSlotStatus>> {
+    let registry = kw_provider_registry::registry().map_err(|e| fail("provider registry", e))?;
+
+    Ok(registry
+        .credentials
+        .iter()
+        .map(|c| CredentialSlotStatus {
+            slot: c.slot.clone(),
+            name: c.name.clone(),
+            kind: c.kind,
+            used_for: c.used_for.clone(),
+            feature: c.feature.clone(),
+            stored: kw_security::KeyRef::new(&c.slot)
+                .is_some_and(|key| state.credentials().contains(&key)),
         })
         .collect())
 }
@@ -380,8 +547,11 @@ fn positive_id(value: Option<i64>, field: &str) -> CmdResult<Option<i64>> {
 /// `deny_unknown_fields` is deliberate. A mistyped field name would otherwise be
 /// dropped in silence and the note saved without it — the same shape of defect
 /// as a frontend type declaring a field the backend never sends.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+// serde defaults an absent `Option<T>` to `None`, so these keys may be omitted
+// as well as sent as null. The declaration says both rather than only one.
+#[ts(optional_fields = nullable)]
 pub struct NewNoteRequest {
     pub title: String,
     pub content: String,
@@ -395,8 +565,11 @@ pub struct NewNoteRequest {
 }
 
 /// The fields of a note to change. Absent means leave it alone.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+// serde defaults an absent `Option<T>` to `None`, so these keys may be omitted
+// as well as sent as null. The declaration says both rather than only one.
+#[ts(optional_fields = nullable)]
 pub struct NoteUpdateRequest {
     pub title: Option<String>,
     pub content: Option<String>,
@@ -556,7 +729,7 @@ pub async fn folder_delete(state: State<'_, AppState>, id: i64) -> CmdResult<boo
 /* ------------------------------------------------------------ transcript export */
 
 /// A rendered transcript, ready to preview or write.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ExportedTranscript {
     pub format: transcript::Format,
@@ -735,11 +908,74 @@ mod tests {
             .find(|b| b.action == HotkeyAction::Dictation)
             .unwrap();
 
-        // Upstream's default is Control+Super, which is modifier-only, so it
-        // must come back unusable with an explanation rather than looking fine.
+        // Upstream's default is Control+Super, which is modifier-only. The
+        // cross-platform shortcut register still cannot take it — `is_usable`
+        // is about that register — so it comes back with an explanation rather
+        // than looking fine.
         assert!(!dictation.is_usable());
         assert_eq!(dictation.problems().len(), 1);
-        assert!(dictation.problems()[0].contains("does nothing"));
+
+        // What the explanation *says* now depends on the platform, because the
+        // answer does. Windows has the keyboard hook and the shortcut works;
+        // elsewhere it does nothing and the advice is to add a regular key.
+        let problem = &dictation.problems()[0];
+        if kw_platform::keyhook::support().is_available() {
+            assert!(problem.contains("keyboard hook"), "{problem}");
+            assert!(
+                problem.contains("still works"),
+                "a platform with the hook must not say the shortcut is dead: {problem}"
+            );
+        } else {
+            assert!(problem.contains("does nothing"), "{problem}");
+        }
+    }
+
+    #[tokio::test]
+    async fn an_action_nothing_handles_is_reported_dead_with_the_reason() {
+        let s = state().await;
+        // A faultless accelerator for an action with no handler. Before this,
+        // `Control+Shift+Space` registered with the platform, reported success,
+        // took the chord away from every other application, and did nothing.
+        settings::set(
+            s.db().pool(),
+            &HotkeyAction::ChatAgent.settings_key(),
+            &"Control+Shift+Space",
+        )
+        .await
+        .unwrap();
+
+        let report = report_for(load_bindings(&s).await.unwrap());
+
+        let chat = report
+            .bindings
+            .iter()
+            .find(|b| b.action == HotkeyAction::ChatAgent)
+            .unwrap();
+        // The accelerator itself is still fine, and the report still says so.
+        // The two facts are separate and both are reported.
+        assert!(chat.is_usable(), "the accelerator is not the problem");
+        assert!(chat.problems().is_empty());
+
+        let reason = report
+            .unhandled
+            .iter()
+            .find(|u| u.action == HotkeyAction::ChatAgent)
+            .map(|u| u.reason.clone())
+            .expect("chat agent has no handler, so it must appear here");
+        assert!(reason.contains("not built yet"), "{reason}");
+
+        // And it counts as unusable, which is the question the interface asks.
+        assert!(report.unusable.contains(&HotkeyAction::ChatAgent));
+    }
+
+    #[tokio::test]
+    async fn only_dictation_is_missing_from_the_unhandled_list() {
+        let s = state().await;
+        let report = report_for(load_bindings(&s).await.unwrap());
+
+        let unhandled: Vec<HotkeyAction> = report.unhandled.iter().map(|u| u.action).collect();
+        assert!(!unhandled.contains(&HotkeyAction::Dictation));
+        assert_eq!(unhandled.len(), hotkey::ALL_ACTIONS.len() - 1);
     }
 
     #[tokio::test]
@@ -824,6 +1060,88 @@ mod tests {
     async fn an_unknown_hotkey_action_id_is_rejected() {
         // The fail-closed rule at the command boundary.
         assert_eq!(HotkeyAction::from_id("not-an-action"), None);
+    }
+
+    /// Four of the seven transcription providers cannot be dispatched.
+    ///
+    /// Derived by asking the real router rather than by listing ids, so this
+    /// test also fails if a provider silently starts resolving to something —
+    /// which is what a fallback to OpenAI would look like from here.
+    #[test]
+    fn a_provider_without_a_client_says_so_rather_than_reading_as_available() {
+        let registry = kw_provider_registry::registry().expect("registry");
+
+        for id in ["openai", "groq", "berget"] {
+            assert!(
+                matches!(dispatch_for(registry, id), Dispatch::Ready),
+                "{id} has an HttpBatch transport and should be usable"
+            );
+        }
+
+        // Three of the four have clients now, so they dispatch — even though
+        // they still need a key, which `configured` says separately.
+        for id in ["xai", "mistral"] {
+            assert!(
+                matches!(dispatch_for(registry, id), Dispatch::Ready),
+                "{id} has a client and should dispatch"
+            );
+        }
+
+        // Corti has a client, and an unconfigured Corti does not resolve at all:
+        // the route refuses to guess an environment or a tenant. `Unresolvable`
+        // rather than `NeedsClient`, because the gap is configuration.
+        match dispatch_for(registry, "corti") {
+            Dispatch::Unresolvable { reason } => {
+                assert!(reason.contains("environment"), "{reason}");
+                assert!(reason.contains("Nothing was sent"), "{reason}");
+            }
+            other => panic!("unconfigured corti should not be ready, got {other:?}"),
+        }
+
+        // Tinfoil is refused on purpose, and the reason says so rather than
+        // reading as an unfinished feature.
+        match dispatch_for(registry, "tinfoil") {
+            Dispatch::NeedsClient { reason } => {
+                assert!(reason.contains("attestation"), "{reason}");
+            }
+            other => panic!("tinfoil should be refused, got {other:?}"),
+        }
+    }
+
+    /// An id the registry does not know is refused, never defaulted.
+    ///
+    /// Upstream's terminal fallback returned OpenAI for anything unrecognised,
+    /// which meant a typo sent the user's audio to a provider they never chose.
+    /// The refusal here does mention OpenAI — to say what it is *not* doing —
+    /// so what this asserts is the state, and that the message says nothing was
+    /// sent rather than leaving that to be assumed.
+    #[test]
+    fn an_unknown_provider_is_unresolvable_rather_than_openai() {
+        let registry = kw_provider_registry::registry().expect("registry");
+        match dispatch_for(registry, "not-a-provider") {
+            Dispatch::Unresolvable { reason } => {
+                assert!(
+                    reason.contains("Nothing was sent"),
+                    "a refusal has to say the audio stayed here: {reason}"
+                );
+            }
+            other => panic!("expected a refusal, got {other:?}"),
+        }
+    }
+
+    /// The dispatch state crosses the boundary as a discriminant a UI can
+    /// switch on, with its fields in the same camelCase as everything else.
+    #[test]
+    fn dispatch_crosses_the_boundary_tagged() {
+        let json = serde_json::to_value(Dispatch::NeedsClient {
+            reason: "no client".to_owned(),
+        })
+        .expect("serialize");
+        assert_eq!(json["state"], "needs-client");
+        assert_eq!(json["reason"], "no client");
+
+        let ready = serde_json::to_value(Dispatch::Ready).expect("serialize");
+        assert_eq!(ready["state"], "ready");
     }
 
     #[test]

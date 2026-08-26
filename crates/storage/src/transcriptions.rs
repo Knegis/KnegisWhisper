@@ -24,6 +24,7 @@
 
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, SqlitePool};
+use ts_rs::TS;
 
 use crate::StorageError;
 
@@ -77,7 +78,7 @@ pub struct NewTranscription {
 /// declares. They disagreed once — the struct had no `rename_all`, so it sent
 /// `error_message` where the UI read `errorMessage`, and a failed dictation
 /// rendered as "(empty)" instead of its reason.
-#[derive(Clone, FromRow, Serialize, PartialEq, Eq)]
+#[derive(Clone, FromRow, Serialize, PartialEq, Eq, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct Transcription {
     pub id: i64,

@@ -17,8 +17,10 @@
 //! tidying dictated text is an improvement, not a requirement.
 
 pub mod chat;
+pub mod enterprise;
 pub mod params;
 pub mod route;
+pub mod sigv4;
 
 pub use chat::{Chat, ChatError, CLEANUP_SYSTEM_PROMPT};
 pub use params::{shape_for, Intent, ModelShape, RequestOptions};

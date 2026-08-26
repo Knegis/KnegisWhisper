@@ -18,12 +18,13 @@ use kw_overlay::CaptureExclusion;
 use kw_platform::window::{self, NativeWindow};
 use serde::Serialize;
 use tauri::{AppHandle, Manager as _, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use ts_rs::TS;
 
 /// The overlay window's label.
 pub const LABEL: &str = "overlay";
 
 /// What the overlay is actually doing, as reported to the settings screen.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct OverlayStatus {
     /// Whether the window exists.
@@ -45,7 +46,7 @@ pub struct OverlayStatus {
 }
 
 /// Whether the window declines activation.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(
     tag = "state",
     rename_all = "kebab-case",

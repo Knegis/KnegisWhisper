@@ -31,7 +31,8 @@
       ],
       "backend": "crates/transcription-core",
       "ui": "Settings > Transcription",
-      "reachable": false
+      "reachable": true,
+      "note": "Reachable: a key is stored on Settings > Providers and the provider and model are chosen on Settings > Transcription, both from the registry. HttpBatch, so the executor has a transport for it."
     },
     "transcription:groq": {
       "status": "rewired-to-direct-byok",
@@ -47,7 +48,8 @@
       ],
       "backend": "crates/transcription-core",
       "ui": "Settings > Transcription",
-      "reachable": false
+      "reachable": true,
+      "note": "Reachable: a key is stored on Settings > Providers and the provider and model are chosen on Settings > Transcription, both from the registry. HttpBatch, so the executor has a transport for it."
     },
     "transcription:berget": {
       "status": "rewired-to-direct-byok",
@@ -64,7 +66,8 @@
       ],
       "backend": "crates/transcription-core",
       "ui": "Settings > Transcription",
-      "reachable": false
+      "reachable": true,
+      "note": "Reachable: a key is stored on Settings > Providers and the provider and model are chosen on Settings > Transcription, both from the registry. HttpBatch, so the executor has a transport for it."
     },
     "transcription:xai": {
       "status": "rewired-to-direct-byok",
@@ -79,7 +82,8 @@
       ],
       "backend": "crates/transcription-core",
       "ui": "Settings > Transcription",
-      "reachable": false
+      "reachable": true,
+      "note": "Reachable: crates/transcription-core/src/clients.rs shapes its request and reads its response, tested against recorded fixtures. No live call -- that needs a key this project does not have; see docs/PLATFORM_SUPPORT.md."
     },
     "transcription:mistral": {
       "status": "rewired-to-direct-byok",
@@ -94,7 +98,8 @@
       ],
       "backend": "crates/transcription-core",
       "ui": "Settings > Transcription",
-      "reachable": false
+      "reachable": true,
+      "note": "Reachable: crates/transcription-core/src/clients.rs shapes its request and reads its response, tested against recorded fixtures. No live call -- that needs a key this project does not have; see docs/PLATFORM_SUPPORT.md."
     },
     "transcription:corti": {
       "status": "rewired-to-direct-byok",
@@ -109,7 +114,8 @@
       ],
       "backend": "crates/transcription-core",
       "ui": "Settings > Transcription",
-      "reachable": false
+      "reachable": true,
+      "note": "Reachable: crates/transcription-core/src/clients.rs shapes its request and reads its response, tested against recorded fixtures. No live call -- that needs a key this project does not have; see docs/PLATFORM_SUPPORT.md. Corti also takes an environment and a tenant on Settings > Transcription, because neither has a safe default: the environment is in the hostname and the tenant scopes the account."
     },
     "transcription:tinfoil": {
       "status": "rewired-to-direct-byok",
@@ -124,7 +130,8 @@
       ],
       "backend": "crates/transcription-core",
       "ui": "Settings > Transcription",
-      "reachable": false
+      "reachable": false,
+      "note": "Deliberately unreachable, not unfinished. Tinfoil's proposition is an attested enclave: the client verifies an attestation document against a hardware root of trust before sending anything. A plain HTTPS POST to the same host would transcribe correctly and provide none of that, while appearing in the UI as Tinfoil -- a confidentiality claim the request did not earn. route.rs already refuses a Tinfoil host configured as a custom endpoint for this reason; implementing the client as an unattested POST would defeat that from the inside."
     },
     "reasoning:openai": {
       "status": "rewired-to-direct-byok",
@@ -148,7 +155,8 @@
       ],
       "backend": "crates/reasoning-core",
       "ui": "Settings > Intelligence",
-      "reachable": false
+      "reachable": true,
+      "note": "Reachable: a key is stored on Settings > Providers and the provider and model are chosen on Settings > Intelligence, both from the registry. OpenAI-compatible, so reasoning-core has a request shape for it."
     },
     "reasoning:anthropic": {
       "status": "rewired-to-direct-byok",
@@ -172,7 +180,8 @@
       ],
       "backend": "crates/reasoning-core",
       "ui": "Settings > Intelligence",
-      "reachable": false
+      "reachable": true,
+      "note": "Reachable: a key is stored on Settings > Providers and the provider and model are chosen on Settings > Intelligence, both from the registry. OpenAI-compatible, so reasoning-core has a request shape for it."
     },
     "reasoning:gemini": {
       "status": "rewired-to-direct-byok",
@@ -194,7 +203,8 @@
       ],
       "backend": "crates/reasoning-core",
       "ui": "Settings > Intelligence",
-      "reachable": false
+      "reachable": true,
+      "note": "Reachable: a key is stored on Settings > Providers and the provider and model are chosen on Settings > Intelligence, both from the registry. OpenAI-compatible, so reasoning-core has a request shape for it."
     },
     "reasoning:groq": {
       "status": "rewired-to-direct-byok",
@@ -212,7 +222,8 @@
       ],
       "backend": "crates/reasoning-core",
       "ui": "Settings > Intelligence",
-      "reachable": false
+      "reachable": true,
+      "note": "Reachable: a key is stored on Settings > Providers and the provider and model are chosen on Settings > Intelligence, both from the registry. OpenAI-compatible, so reasoning-core has a request shape for it."
     },
     "reasoning:tinfoil": {
       "status": "rewired-to-direct-byok",
@@ -229,7 +240,8 @@
       ],
       "backend": "crates/reasoning-core",
       "ui": "Settings > Intelligence",
-      "reachable": false
+      "reachable": true,
+      "note": "Reachable: a key is stored on Settings > Providers and the provider and model are chosen on Settings > Intelligence, both from the registry. OpenAI-compatible, so reasoning-core has a request shape for it."
     },
     "reasoning:berget": {
       "status": "rewired-to-direct-byok",
@@ -244,7 +256,8 @@
       ],
       "backend": "crates/reasoning-core",
       "ui": "Settings > Intelligence",
-      "reachable": false
+      "reachable": true,
+      "note": "Reachable: a key is stored on Settings > Providers and the provider and model are chosen on Settings > Intelligence, both from the registry. OpenAI-compatible, so reasoning-core has a request shape for it."
     },
     "reasoning:corti": {
       "status": "rewired-to-direct-byok",
@@ -262,7 +275,8 @@
       ],
       "backend": "crates/reasoning-core",
       "ui": "Settings > Intelligence",
-      "reachable": false
+      "reachable": true,
+      "note": "Reachable: a key is stored on Settings > Providers and the provider and model are chosen on Settings > Intelligence, both from the registry. OpenAI-compatible, so reasoning-core has a request shape for it."
     },
     "enterprise:bedrock": {
       "status": "rewired-to-direct-byok",
@@ -283,8 +297,8 @@
       ],
       "backend": "crates/reasoning-core",
       "ui": "Settings > Intelligence > Enterprise",
-      "reachable": false,
-      "note": "Org credentials supplied by the user or organization. No OpenWhispr org account, policy server, or SSO."
+      "reachable": true,
+      "note": "Reachable: organisation credentials are entered on Settings > Intelligence > Enterprise and stored as one JSON document in the OS credential store. The request shape and signing are implemented and tested -- SigV4 against AWS's published vectors -- but no live call has been made to any of the three, which needs org credentials this project does not have. Recorded as unverified in docs/PLATFORM_SUPPORT.md."
     },
     "enterprise:azure": {
       "status": "rewired-to-direct-byok",
@@ -297,8 +311,8 @@
       ],
       "backend": "crates/reasoning-core",
       "ui": "Settings > Intelligence > Enterprise",
-      "reachable": false,
-      "note": "Deployment-name driven; upstream ships an empty models array."
+      "reachable": true,
+      "note": "Reachable: organisation credentials are entered on Settings > Intelligence > Enterprise and stored as one JSON document in the OS credential store. The request shape and signing are implemented and tested -- SigV4 against AWS's published vectors -- but no live call has been made to any of the three, which needs org credentials this project does not have. Recorded as unverified in docs/PLATFORM_SUPPORT.md."
     },
     "enterprise:vertex": {
       "status": "rewired-to-direct-byok",
@@ -314,8 +328,8 @@
       ],
       "backend": "crates/reasoning-core",
       "ui": "Settings > Intelligence > Enterprise",
-      "reachable": false,
-      "note": "Org credentials supplied by the user or organization. No OpenWhispr org account, policy server, or SSO."
+      "reachable": true,
+      "note": "Reachable: organisation credentials are entered on Settings > Intelligence > Enterprise and stored as one JSON document in the OS credential store. The request shape and signing are implemented and tested -- SigV4 against AWS's published vectors -- but no live call has been made to any of the three, which needs org credentials this project does not have. Recorded as unverified in docs/PLATFORM_SUPPORT.md."
     },
     "local-llm:qwen": {
       "status": "ported-with-new-rust-implementation",
@@ -342,7 +356,8 @@
       ],
       "backend": "crates/reasoning-core",
       "ui": "Settings > Intelligence > Local",
-      "reachable": false
+      "reachable": true,
+      "note": "Reachable: the llama.cpp server is pinned in config/sidecars.json with digests measured by tools/sidecar-pin, and Settings > Intelligence > Local installs it along with the family's GGUF models. GGUF files are checked by size, not digest -- the registry carries no SHA-256 for them and inventing one from a download would pin whatever arrived."
     },
     "local-llm:mistral": {
       "status": "ported-with-new-rust-implementation",
@@ -360,7 +375,8 @@
       ],
       "backend": "crates/reasoning-core",
       "ui": "Settings > Intelligence > Local",
-      "reachable": false
+      "reachable": true,
+      "note": "Reachable: the llama.cpp server is pinned in config/sidecars.json with digests measured by tools/sidecar-pin, and Settings > Intelligence > Local installs it along with the family's GGUF models. GGUF files are checked by size, not digest -- the registry carries no SHA-256 for them and inventing one from a download would pin whatever arrived."
     },
     "local-llm:llama": {
       "status": "ported-with-new-rust-implementation",
@@ -378,7 +394,8 @@
       ],
       "backend": "crates/reasoning-core",
       "ui": "Settings > Intelligence > Local",
-      "reachable": false
+      "reachable": true,
+      "note": "Reachable: the llama.cpp server is pinned in config/sidecars.json with digests measured by tools/sidecar-pin, and Settings > Intelligence > Local installs it along with the family's GGUF models. GGUF files are checked by size, not digest -- the registry carries no SHA-256 for them and inventing one from a download would pin whatever arrived."
     },
     "local-llm:openai-oss": {
       "status": "ported-with-new-rust-implementation",
@@ -394,7 +411,8 @@
       ],
       "backend": "crates/reasoning-core",
       "ui": "Settings > Intelligence > Local",
-      "reachable": false
+      "reachable": true,
+      "note": "Reachable: the llama.cpp server is pinned in config/sidecars.json with digests measured by tools/sidecar-pin, and Settings > Intelligence > Local installs it along with the family's GGUF models. GGUF files are checked by size, not digest -- the registry carries no SHA-256 for them and inventing one from a download would pin whatever arrived."
     },
     "local-llm:gemma": {
       "status": "ported-with-new-rust-implementation",
@@ -420,7 +438,8 @@
       ],
       "backend": "crates/reasoning-core",
       "ui": "Settings > Intelligence > Local",
-      "reachable": false
+      "reachable": true,
+      "note": "Reachable: the llama.cpp server is pinned in config/sidecars.json with digests measured by tools/sidecar-pin, and Settings > Intelligence > Local installs it along with the family's GGUF models. GGUF files are checked by size, not digest -- the registry carries no SHA-256 for them and inventing one from a download would pin whatever arrived."
     },
     "local-llm:liquidai": {
       "status": "ported-with-new-rust-implementation",
@@ -440,7 +459,8 @@
       ],
       "backend": "crates/reasoning-core",
       "ui": "Settings > Intelligence > Local",
-      "reachable": false
+      "reachable": true,
+      "note": "Reachable: the llama.cpp server is pinned in config/sidecars.json with digests measured by tools/sidecar-pin, and Settings > Intelligence > Local installs it along with the family's GGUF models. GGUF files are checked by size, not digest -- the registry carries no SHA-256 for them and inventing one from a download would pin whatever arrived."
     },
     "local-asr:whisper-base": {
       "status": "ported-with-new-rust-implementation",
@@ -526,7 +546,8 @@
       "backend": "crates/transcription-core",
       "ui": "Settings > Transcription > Local",
       "reachable": false,
-      "runtime": "online"
+      "runtime": "online",
+      "note": "Unreachable, and the reason is specific rather than 'no sidecar'. sherpa-onnx publishes desktop binaries only as .tar.bz2, which install::extract cannot open; it ships a one-shot CLI and a WebSocket server rather than an HTTP endpoint, so neither Transport::Loopback nor HttpHealth applies; and the per-model file layout and flags differ between the Parakeet and Nemotron families. See docs/BUILD_PLAN.md, chunk B4."
     },
     "local-asr:nemotron-speech-streaming-en-0.6b": {
       "status": "ported-with-new-rust-implementation",
@@ -540,7 +561,8 @@
       "backend": "crates/transcription-core",
       "ui": "Settings > Transcription > Local",
       "reachable": false,
-      "runtime": "online"
+      "runtime": "online",
+      "note": "Unreachable, and the reason is specific rather than 'no sidecar'. sherpa-onnx publishes desktop binaries only as .tar.bz2, which install::extract cannot open; it ships a one-shot CLI and a WebSocket server rather than an HTTP endpoint, so neither Transport::Loopback nor HttpHealth applies; and the per-model file layout and flags differ between the Parakeet and Nemotron families. See docs/BUILD_PLAN.md, chunk B4."
     },
     "local-asr:parakeet-tdt-0.6b-v3": {
       "status": "ported-with-new-rust-implementation",
@@ -554,7 +576,8 @@
       "backend": "crates/transcription-core",
       "ui": "Settings > Transcription > Local",
       "reachable": false,
-      "runtime": null
+      "runtime": null,
+      "note": "Unreachable, and the reason is specific rather than 'no sidecar'. sherpa-onnx publishes desktop binaries only as .tar.bz2, which install::extract cannot open; it ships a one-shot CLI and a WebSocket server rather than an HTTP endpoint, so neither Transport::Loopback nor HttpHealth applies; and the per-model file layout and flags differ between the Parakeet and Nemotron families. See docs/BUILD_PLAN.md, chunk B4."
     },
     "local-asr:parakeet-unified-en-0.6b": {
       "status": "ported-with-new-rust-implementation",
@@ -568,7 +591,8 @@
       "backend": "crates/transcription-core",
       "ui": "Settings > Transcription > Local",
       "reachable": false,
-      "runtime": null
+      "runtime": null,
+      "note": "Unreachable, and the reason is specific rather than 'no sidecar'. sherpa-onnx publishes desktop binaries only as .tar.bz2, which install::extract cannot open; it ships a one-shot CLI and a WebSocket server rather than an HTTP endpoint, so neither Transport::Loopback nor HttpHealth applies; and the per-model file layout and flags differ between the Parakeet and Nemotron families. See docs/BUILD_PLAN.md, chunk B4."
     },
     "meeting-stream:assemblyai-realtime": {
       "status": "rewired-to-direct-byok",
@@ -646,8 +670,8 @@
       ],
       "backend": "crates/security",
       "ui": "Settings > Providers",
-      "reachable": false,
-      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10."
+      "reachable": true,
+      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10. Reachable: Settings > Providers stores every slot the registry declares. A custom-endpoint slot stores its key here and still needs the base URL that lives with the feature using it, which the screen says rather than implying otherwise."
     },
     "credential:anthropic": {
       "status": "ported-with-new-rust-implementation",
@@ -660,8 +684,8 @@
       ],
       "backend": "crates/security",
       "ui": "Settings > Providers",
-      "reachable": false,
-      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10."
+      "reachable": true,
+      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10. Reachable: Settings > Providers stores every slot the registry declares. A custom-endpoint slot stores its key here and still needs the base URL that lives with the feature using it, which the screen says rather than implying otherwise."
     },
     "credential:gemini": {
       "status": "ported-with-new-rust-implementation",
@@ -674,8 +698,8 @@
       ],
       "backend": "crates/security",
       "ui": "Settings > Providers",
-      "reachable": false,
-      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10."
+      "reachable": true,
+      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10. Reachable: Settings > Providers stores every slot the registry declares. A custom-endpoint slot stores its key here and still needs the base URL that lives with the feature using it, which the screen says rather than implying otherwise."
     },
     "credential:groq": {
       "status": "ported-with-new-rust-implementation",
@@ -688,8 +712,8 @@
       ],
       "backend": "crates/security",
       "ui": "Settings > Providers",
-      "reachable": false,
-      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10."
+      "reachable": true,
+      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10. Reachable: Settings > Providers stores every slot the registry declares. A custom-endpoint slot stores its key here and still needs the base URL that lives with the feature using it, which the screen says rather than implying otherwise."
     },
     "credential:berget": {
       "status": "ported-with-new-rust-implementation",
@@ -702,8 +726,8 @@
       ],
       "backend": "crates/security",
       "ui": "Settings > Providers",
-      "reachable": false,
-      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10."
+      "reachable": true,
+      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10. Reachable: Settings > Providers stores every slot the registry declares. A custom-endpoint slot stores its key here and still needs the base URL that lives with the feature using it, which the screen says rather than implying otherwise."
     },
     "credential:xai": {
       "status": "ported-with-new-rust-implementation",
@@ -716,8 +740,8 @@
       ],
       "backend": "crates/security",
       "ui": "Settings > Providers",
-      "reachable": false,
-      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10."
+      "reachable": true,
+      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10. Reachable: Settings > Providers stores every slot the registry declares. A custom-endpoint slot stores its key here and still needs the base URL that lives with the feature using it, which the screen says rather than implying otherwise."
     },
     "credential:mistral": {
       "status": "ported-with-new-rust-implementation",
@@ -730,8 +754,8 @@
       ],
       "backend": "crates/security",
       "ui": "Settings > Providers",
-      "reachable": false,
-      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10."
+      "reachable": true,
+      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10. Reachable: Settings > Providers stores every slot the registry declares. A custom-endpoint slot stores its key here and still needs the base URL that lives with the feature using it, which the screen says rather than implying otherwise."
     },
     "credential:openrouter": {
       "status": "ported-with-new-rust-implementation",
@@ -744,8 +768,8 @@
       ],
       "backend": "crates/security",
       "ui": "Settings > Providers",
-      "reachable": false,
-      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10."
+      "reachable": true,
+      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10. Reachable: Settings > Providers stores every slot the registry declares. A custom-endpoint slot stores its key here and still needs the base URL that lives with the feature using it, which the screen says rather than implying otherwise."
     },
     "credential:tinfoil": {
       "status": "ported-with-new-rust-implementation",
@@ -758,8 +782,8 @@
       ],
       "backend": "crates/security",
       "ui": "Settings > Providers",
-      "reachable": false,
-      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10."
+      "reachable": true,
+      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10. Reachable: Settings > Providers stores every slot the registry declares. A custom-endpoint slot stores its key here and still needs the base URL that lives with the feature using it, which the screen says rather than implying otherwise."
     },
     "credential:corti": {
       "status": "ported-with-new-rust-implementation",
@@ -772,8 +796,8 @@
       ],
       "backend": "crates/security",
       "ui": "Settings > Providers",
-      "reachable": false,
-      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10."
+      "reachable": true,
+      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10. Reachable: Settings > Providers stores every slot the registry declares. A custom-endpoint slot stores its key here and still needs the base URL that lives with the feature using it, which the screen says rather than implying otherwise."
     },
     "credential:note-formatting-custom": {
       "status": "ported-with-new-rust-implementation",
@@ -786,8 +810,8 @@
       ],
       "backend": "crates/security",
       "ui": "Settings > Providers",
-      "reachable": false,
-      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10."
+      "reachable": true,
+      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10. Reachable: Settings > Providers stores every slot the registry declares. A custom-endpoint slot stores its key here and still needs the base URL that lives with the feature using it, which the screen says rather than implying otherwise."
     },
     "credential:translation-custom": {
       "status": "ported-with-new-rust-implementation",
@@ -800,8 +824,8 @@
       ],
       "backend": "crates/security",
       "ui": "Settings > Providers",
-      "reachable": false,
-      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10."
+      "reachable": true,
+      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10. Reachable: Settings > Providers stores every slot the registry declares. A custom-endpoint slot stores its key here and still needs the base URL that lives with the feature using it, which the screen says rather than implying otherwise."
     },
     "credential:dictation-agent-custom": {
       "status": "ported-with-new-rust-implementation",
@@ -814,8 +838,8 @@
       ],
       "backend": "crates/security",
       "ui": "Settings > Providers",
-      "reachable": false,
-      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10."
+      "reachable": true,
+      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10. Reachable: Settings > Providers stores every slot the registry declares. A custom-endpoint slot stores its key here and still needs the base URL that lives with the feature using it, which the screen says rather than implying otherwise."
     },
     "credential:dictation-agent-vision-custom": {
       "status": "ported-with-new-rust-implementation",
@@ -828,8 +852,8 @@
       ],
       "backend": "crates/security",
       "ui": "Settings > Providers",
-      "reachable": false,
-      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10."
+      "reachable": true,
+      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10. Reachable: Settings > Providers stores every slot the registry declares. A custom-endpoint slot stores its key here and still needs the base URL that lives with the feature using it, which the screen says rather than implying otherwise."
     },
     "credential:chat-agent-custom": {
       "status": "ported-with-new-rust-implementation",
@@ -842,8 +866,8 @@
       ],
       "backend": "crates/security",
       "ui": "Settings > Providers",
-      "reachable": false,
-      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10."
+      "reachable": true,
+      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10. Reachable: Settings > Providers stores every slot the registry declares. A custom-endpoint slot stores its key here and still needs the base URL that lives with the feature using it, which the screen says rather than implying otherwise."
     },
     "diarization-model:3dspeaker-campplus-en": {
       "status": "temporarily-deferred",

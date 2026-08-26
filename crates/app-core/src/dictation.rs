@@ -29,9 +29,10 @@ use std::sync::Arc;
 use kw_audio_core::{GateDecision, GateReason};
 use kw_transcription_core::{RouteError, Transport};
 use serde::Serialize;
+use ts_rs::TS;
 
 /// What the session is doing. Drives the overlay.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "kebab-case")]
 pub enum SessionState {
     Idle,
@@ -57,7 +58,7 @@ impl SessionState {
 }
 
 /// How a dictation ended, as reported to the UI.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
 #[serde(
     tag = "outcome",
     rename_all = "kebab-case",

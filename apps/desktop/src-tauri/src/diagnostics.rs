@@ -8,11 +8,12 @@
 use kw_security::{CredentialError, CredentialStore, KeyRef, OsCredentialStore};
 use serde::Serialize;
 use tauri::{AppHandle, Manager as _};
+use ts_rs::TS;
 
 use crate::overlay::{self, OverlayStatus};
 
 /// Whether the OS credential store is usable.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(
     tag = "state",
     rename_all = "kebab-case",
@@ -23,7 +24,7 @@ pub enum CredentialStoreStatus {
     Unavailable { reason: String },
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct Diagnostics {
     pub app_version: &'static str,
@@ -39,10 +40,53 @@ pub struct Diagnostics {
     /// Where the model cache ended up, and whether the per-user location had to
     /// be abandoned because the native ASR binaries cannot read it.
     pub model_cache: ModelCacheStatus,
+    /// Whether a modifier-only shortcut can work here.
+    ///
+    /// Reported rather than assumed by the UI. The hotkey editor has to say
+    /// something about `Control+Super`, and what it should say depends entirely
+    /// on whether this build has a keyboard hook — which is a fact about the
+    /// platform that only Rust knows.
+    pub modifier_only_shortcuts: ShortcutHookStatus,
+    /// Whether what the speakers are playing can be recorded, and how.
+    ///
+    /// A real device enumeration, not a statement about the platform: it names
+    /// the device that would be captured.
+    pub system_audio: kw_audio_core::SystemAudioSupport,
+}
+
+/// Whether a low-level keyboard hook is available.
+///
+/// Mirrors `platform::keyhook::HookSupport`, converted here rather than derived
+/// there: `kw-platform` has no reason to depend on `ts-rs`, and the boundary type
+/// belongs on the side that crosses the boundary.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(
+    tag = "state",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
+pub enum ShortcutHookStatus {
+    /// Modifier-only chords work, through this mechanism.
+    Available { mechanism: String },
+    /// They do not work here, and this is why.
+    Unsupported { reason: String },
+}
+
+impl From<kw_platform::keyhook::HookSupport> for ShortcutHookStatus {
+    fn from(support: kw_platform::keyhook::HookSupport) -> Self {
+        match support {
+            kw_platform::keyhook::HookSupport::Available { mechanism } => Self::Available {
+                mechanism: mechanism.to_owned(),
+            },
+            kw_platform::keyhook::HookSupport::Unsupported { reason } => {
+                Self::Unsupported { reason }
+            }
+        }
+    }
 }
 
 /// Where downloaded models live.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelCacheStatus {
     pub path: String,
@@ -116,6 +160,10 @@ pub fn diagnostics(app: AppHandle) -> Diagnostics {
             .iter()
             .map(|p| p.as_str())
             .collect(),
+        modifier_only_shortcuts: kw_platform::keyhook::support().into(),
+        // Enumerates devices, which is the point: "this platform can" and "this
+        // machine has one" are different claims and only the second is useful.
+        system_audio: kw_audio_core::system_audio::support(),
         model_cache: ModelCacheStatus {
             path: cache.path.display().to_string(),
             fell_back: cache.fell_back,

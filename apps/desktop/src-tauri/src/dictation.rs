@@ -19,6 +19,7 @@
 //! what a dictation is.
 
 use std::sync::{mpsc, Arc, RwLock};
+use ts_rs::TS;
 
 use kw_app_core::dictation::{
     Capture, Cleanup, DictationError, History, HistoryEntry, Inserter, InsertionResult, Recorder,
@@ -269,6 +270,12 @@ pub struct ModelCleanup {
     credentials: Arc<dyn CredentialStore>,
     /// Set while cleanup is switched on; holds the route and model to use.
     configured: Arc<RwLock<Option<(kw_reasoning_core::ChatRoute, String)>>>,
+    /// Where a local model is listening, if one is.
+    ///
+    /// Reading it is also what tells the idle timer the server is wanted, so
+    /// cleanup running every minute keeps it alive and cleanup switched off
+    /// lets it stop.
+    local: crate::local_llm::LocalEndpoint,
 }
 
 impl std::fmt::Debug for ModelCleanup {
@@ -283,11 +290,13 @@ impl ModelCleanup {
         policy: NetworkPolicy,
         credentials: Arc<dyn CredentialStore>,
         configured: Arc<RwLock<Option<(kw_reasoning_core::ChatRoute, String)>>>,
+        local: crate::local_llm::LocalEndpoint,
     ) -> Self {
         Self {
             policy,
             credentials,
             configured,
+            local,
         }
     }
 }
@@ -308,6 +317,7 @@ impl Cleanup for ModelCleanup {
         // original on any failure, because a cleanup that errors must not lose
         // the transcript.
         kw_reasoning_core::Chat::new(&self.policy, self.credentials.as_ref())
+            .with_local_port(self.local.port())
             .cleanup(registry, &route, &model, text)
             .await
     }
@@ -490,11 +500,33 @@ impl StateSink for EventSink {
 /// struct to drift apart.
 pub const ROUTE_SETTINGS_KEY: &str = "transcription.route";
 
+/// The three places local work can go, gathered.
+///
+/// They travel together and always have: a dictation either goes to the whisper
+/// server on this machine or to a provider, and its cleanup either goes to the
+/// llama server on this machine or to a provider. Passing them as three
+/// parameters made `build` an eight-argument function, which is a shape that
+/// invites the next one — and the next one is the sherpa server.
+#[derive(Debug, Clone)]
+pub struct LocalTargets {
+    /// Where the whisper server is listening, if it is.
+    pub transcription_port: LocalPort,
+    /// Which model that server loaded.
+    pub transcription_model: Arc<RwLock<Option<String>>>,
+    /// Where the llama server is listening, if it is.
+    pub generation: crate::local_llm::LocalEndpoint,
+}
+
 /// The dictation session, assembled.
 pub struct DictationRuntime {
     session: Arc<kw_app_core::dictation::Dictation>,
     recorder: Arc<MicRecorder>,
     db: Db,
+    /// The live cleanup destination, shared with the `ModelCleanup` inside
+    /// `session`. Held here so `reasoning::reasoning_set_cleanup` can change it
+    /// without a restart — a setting that only takes effect after a relaunch is
+    /// not what "Save" means.
+    cleanup: crate::reasoning::CleanupSlot,
 }
 
 impl std::fmt::Debug for DictationRuntime {
@@ -516,10 +548,15 @@ impl DictationRuntime {
         db: Db,
         credentials: Arc<dyn CredentialStore>,
         policy: NetworkPolicy,
-        local_port: LocalPort,
-        local_model: Arc<RwLock<Option<String>>>,
+        local: LocalTargets,
         cleanup: Arc<RwLock<Option<(kw_reasoning_core::ChatRoute, String)>>>,
     ) -> Self {
+        let LocalTargets {
+            transcription_port: local_port,
+            transcription_model: local_model,
+            generation: local_llm,
+        } = local;
+
         let recorder = Arc::new(MicRecorder::spawn());
         let state = Arc::new(RwLock::new(SessionState::Idle));
 
@@ -531,7 +568,12 @@ impl DictationRuntime {
                 local_port,
                 local_model,
             )),
-            Arc::new(ModelCleanup::new(policy, credentials, cleanup)),
+            Arc::new(ModelCleanup::new(
+                policy,
+                credentials,
+                Arc::clone(&cleanup),
+                local_llm,
+            )),
             Arc::new(ClipboardInserter::new()),
             Arc::new(DbHistory::new(db.clone())),
             Arc::new(EventSink::new(app, state)),
@@ -544,7 +586,14 @@ impl DictationRuntime {
             session: Arc::new(session),
             recorder,
             db,
+            cleanup,
         }
+    }
+
+    /// The shared cleanup destination, for the command that changes it.
+    #[must_use]
+    pub fn cleanup_slot(&self) -> &crate::reasoning::CleanupSlot {
+        &self.cleanup
     }
 
     /// What the session is doing.
@@ -627,7 +676,7 @@ impl DictationRuntime {
 /// the same thing: a mode of "local" with no server running, or a provider with
 /// no credential, resolves differently from what the setting says. Showing the
 /// setting would be showing an intention.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct RouteReport {
     /// A short phrase for the UI: `local model`, `openai`, and so on.
@@ -698,6 +747,65 @@ pub async fn dictation_use_local(
     let mut settings = runtime.route_settings().await;
     settings.use_local_whisper = use_local;
     settings.transcription_mode = Some(if use_local { "local" } else { "providers" }.to_owned());
+
+    kw_storage::settings::set(runtime.db.pool(), ROUTE_SETTINGS_KEY, &settings)
+        .await
+        .map_err(|err| err.to_string())
+}
+
+/// Point dictation at a cloud provider and model.
+///
+/// Both together, never one at a time. A provider change that left the previous
+/// provider's model behind would resolve to a model the new provider does not
+/// offer, and `resolve_model` would refuse — correctly, but for a reason the
+/// user never chose. The frontend picks the model from the registry's list for
+/// that provider, so an id is never typed.
+///
+/// Switching here also switches the mode off local, because choosing a cloud
+/// provider while dictation is routed to a local model would change a setting
+/// that has no effect.
+#[tauri::command]
+pub async fn dictation_set_cloud_provider(
+    runtime: tauri::State<'_, Arc<DictationRuntime>>,
+    provider: String,
+    model: String,
+    // Corti only, and ignored for every other provider.
+    corti_environment: Option<String>,
+    corti_tenant: Option<String>,
+) -> Result<(), String> {
+    let registry = kw_provider_registry::registry().map_err(|err| err.to_string())?;
+
+    // Fail closed on an unknown id rather than storing it and discovering the
+    // problem at the end of someone's next dictation.
+    let resolved = registry
+        .resolve_transcription_model(&provider, &model)
+        .map_err(|err| err.to_string())?;
+
+    let mut settings = runtime.route_settings().await;
+    settings.cloud_transcription_provider = Some(provider.clone());
+    settings.cloud_transcription_model = Some(resolved);
+    settings.use_local_whisper = false;
+    settings.transcription_mode = Some("providers".to_owned());
+
+    // Corti alone needs two more values, and neither has a safe default: the
+    // environment is in the hostname and the tenant scopes the account, so a
+    // guess reaches a real endpoint under somebody else's tenancy. Refused here
+    // rather than stored and discovered at the end of a dictation.
+    if provider == "corti" {
+        let environment = corti_environment
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .ok_or("Corti needs an environment, for example \"eu\".")?;
+        let tenant = corti_tenant
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .ok_or("Corti needs a tenant name; it scopes the request to your account.")?;
+
+        settings.corti_environment = Some(environment.to_owned());
+        settings.corti_tenant = Some(tenant.to_owned());
+    }
 
     kw_storage::settings::set(runtime.db.pool(), ROUTE_SETTINGS_KEY, &settings)
         .await
@@ -918,7 +1026,12 @@ mod tests {
         let policy = NetworkPolicy::new().unwrap();
         let credentials: Arc<dyn CredentialStore> =
             Arc::new(kw_security::MemoryCredentialStore::new());
-        let cleanup = ModelCleanup::new(policy, credentials, Arc::new(RwLock::new(None)));
+        let cleanup = ModelCleanup::new(
+            policy,
+            credentials,
+            Arc::new(RwLock::new(None)),
+            crate::local_llm::LocalEndpoint::default(),
+        );
 
         assert_eq!(cleanup.clean("um, hello there").await, "um, hello there");
     }

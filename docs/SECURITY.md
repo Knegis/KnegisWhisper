@@ -54,8 +54,19 @@ Loopback only — never `0.0.0.0`, and not on the LAN by default. A 32-byte rand
 per start, compared with a constant-time comparison after a length check. Non-loopback peer
 addresses are rejected even if the token matches. Request bodies are capped.
 
-The discovery file carries the port and token and is written with owner-only permissions
-(`0600`). It is deleted on shutdown.
+The discovery file carries the port and token and is deleted on shutdown. Its permissions differ
+by platform, and this document used to claim `0600` everywhere, which was false:
+
+- **Unix:** `0600`, set and then **read back** — some filesystems ignore mode bits, and a token in
+  a world-readable file is worth knowing about before it is used. The containing directory is
+  `0700`.
+- **Windows:** *nothing is applied.* The file inherits whatever ACL the profile directory carries,
+  and `Permissions::InheritedFromProfile` reports that rather than claiming owner-only. **That is
+  an honest report of an unmet requirement, not a mechanism.** Measured on one real machine
+  (2026-08-26) the inherited ACL granted Modify to a local group that was neither the user nor the
+  administrators — see [BENCH_CHECK.md](BENCH_CHECK.md) — so on Windows, treat the token as
+  readable by anyone the profile directory lets in. Closing it means an explicit owner-only DACL
+  through `SetNamedSecurityInfo`, with the same read-back discipline the Unix path already uses.
 
 The MCP server talks to the desktop application through this authenticated local API. Streamable
 HTTP is available but disabled by default; stdio is the normal transport. Destructive MCP tools

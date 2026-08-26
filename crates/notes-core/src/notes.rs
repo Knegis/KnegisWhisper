@@ -10,9 +10,10 @@
 use kw_storage::StorageError;
 use serde::Serialize;
 use sqlx::{FromRow, SqlitePool};
+use ts_rs::TS;
 
 /// A note, as listed.
-#[derive(Debug, Clone, FromRow, Serialize, PartialEq)]
+#[derive(Debug, Clone, FromRow, Serialize, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct Note {
     pub id: i64,
@@ -29,7 +30,7 @@ pub struct Note {
 }
 
 /// A folder.
-#[derive(Debug, Clone, FromRow, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, FromRow, Serialize, PartialEq, Eq, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct Folder {
     pub id: i64,
@@ -237,7 +238,7 @@ pub fn escape_query(input: &str) -> Option<String> {
 }
 
 /// A search hit.
-#[derive(Debug, Clone, FromRow, Serialize, PartialEq)]
+#[derive(Debug, Clone, FromRow, Serialize, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchHit {
     pub id: i64,
