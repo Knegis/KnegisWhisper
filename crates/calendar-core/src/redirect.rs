@@ -125,31 +125,41 @@ impl LoopbackReceiver {
 
     /// Accept exactly one connection, answer it, and return what it carried.
     ///
-    /// `wait` bounds how long this waits for the browser to show up at all --
-    /// a user who closes the tab instead of finishing consent must not hang
-    /// the application forever.
+    /// `wait` is a single deadline over the *whole* operation -- accepting the
+    /// connection, reading the request line, and answering it -- not just the
+    /// wait for a connection to arrive. A connection that is accepted and then
+    /// stalls (a hung browser, or any other local process that wins the race
+    /// to this port and sends nothing) is exactly as much of a hang as nobody
+    /// connecting at all: the listener is one-shot, its single connection slot
+    /// is already spent, and there is no recovery short of restarting the
+    /// application. Two independent timeouts -- one for `accept`, a separate
+    /// one for the read -- would still let a stalled read consume its own full
+    /// allowance on top of whatever the accept wait already used, so this is
+    /// one `timeout` around the entire body instead.
     pub async fn receive(self, wait: Duration) -> Result<CallbackParams, RedirectError> {
-        let (mut stream, _) = timeout(wait, self.listener.accept())
-            .await
-            .map_err(|_elapsed| RedirectError::TimedOut)?
-            .map_err(RedirectError::Accept)?;
+        let listener = self.listener;
+        timeout(wait, async move {
+            let (mut stream, _) = listener.accept().await.map_err(RedirectError::Accept)?;
 
-        let line = read_request_line(&mut stream).await?;
-        let params = parse_callback(&line)?;
+            let line = read_request_line(&mut stream).await?;
+            let params = parse_callback(&line)?;
 
-        let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-            RESPONSE_BODY.len(),
-            RESPONSE_BODY
-        );
-        stream
-            .write_all(response.as_bytes())
-            .await
-            .map_err(RedirectError::Write)?;
-        stream.flush().await.map_err(RedirectError::Write)?;
-        let _ = stream.shutdown().await;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                RESPONSE_BODY.len(),
+                RESPONSE_BODY
+            );
+            stream
+                .write_all(response.as_bytes())
+                .await
+                .map_err(RedirectError::Write)?;
+            stream.flush().await.map_err(RedirectError::Write)?;
+            let _ = stream.shutdown().await;
 
-        Ok(params)
+            Ok(params)
+        })
+        .await
+        .map_err(|_elapsed| RedirectError::TimedOut)?
     }
 }
 
@@ -311,5 +321,40 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, RedirectError::TimedOut));
+    }
+
+    #[tokio::test]
+    async fn a_connection_that_stalls_after_accepting_times_out_too() {
+        // The case a deadline on `accept` alone does not cover: something
+        // wins the race to the loopback port, connects, and then never sends
+        // a byte. The listener's single connection slot is already spent at
+        // that point, so if the read had no deadline of its own this would
+        // hang forever rather than time out.
+        let receiver = LoopbackReceiver::bind().await.unwrap();
+        let port = receiver.port();
+
+        // Holds the connection open, sending nothing, for well longer than
+        // the receiver's deadline below.
+        let stalled_client = tokio::spawn(async move {
+            let stream = tokio::net::TcpStream::connect(format!("127.0.0.1:{port}"))
+                .await
+                .unwrap();
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            drop(stream);
+        });
+
+        let started = std::time::Instant::now();
+        let err = receiver
+            .receive(Duration::from_millis(50))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, RedirectError::TimedOut));
+        assert!(
+            started.elapsed() < Duration::from_millis(250),
+            "the deadline must bound the stalled read, not just the wait for a connection: took {:?}",
+            started.elapsed()
+        );
+
+        stalled_client.await.unwrap();
     }
 }
