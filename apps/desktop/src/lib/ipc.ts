@@ -29,6 +29,7 @@ import type {
   AppleCalendarSupport,
   AudioSource,
   Availability,
+  BinaryLocation,
   Binding,
   CalendarProvider,
   CalendarStatus,
@@ -37,6 +38,7 @@ import type {
   CleanupRoute,
   CleanupSettings,
   ClientAvailability,
+  CliStatus,
   ConfigReview,
   Conflict,
   ConnectOutcome,
@@ -46,6 +48,7 @@ import type {
   Detected,
   Diagnostics,
   Dispatch,
+  DiscoveryPermissions,
   DraftStatus,
   EnterpriseConfig,
   EnterpriseField,
@@ -68,6 +71,7 @@ import type {
   LocalLlmProgress,
   LocalLlmStatus,
   LocalStatus,
+  McpStatus,
   MeetingOutcome,
   MeetingProviderSummary,
   MeetingState,
@@ -121,6 +125,7 @@ export type {
   AccountStatus,
   AppleCalendarSupport,
   AudioSource,
+  BinaryLocation,
   Binding,
   CalendarProvider,
   CalendarStatus,
@@ -129,6 +134,7 @@ export type {
   CleanupRoute,
   CleanupSettings,
   ClientAvailability,
+  CliStatus,
   ConfigReview,
   Conflict,
   ConnectOutcome,
@@ -138,6 +144,7 @@ export type {
   Detected,
   Diagnostics,
   Dispatch,
+  DiscoveryPermissions,
   DraftStatus,
   EnterpriseConfig,
   EnterpriseField,
@@ -159,6 +166,7 @@ export type {
   LocalLlmProgress,
   LocalLlmStatus,
   LocalStatus,
+  McpStatus,
   MeetingOutcome,
   MeetingProviderSummary,
   MeetingState,
@@ -767,6 +775,16 @@ export async function startLocalApi(): Promise<number> {
 
 export async function stopLocalApi(): Promise<void> {
   return invoke<void>("local_api_stop");
+}
+
+/* ---------------------------------------------------------------- CLI, MCP */
+
+export async function getCliStatus(): Promise<CliStatus> {
+  return invoke<CliStatus>("cli_status");
+}
+
+export async function getMcpStatus(): Promise<McpStatus> {
+  return invoke<McpStatus>("mcp_status");
 }
 
 /* ------------------------------------------------------------------- route */

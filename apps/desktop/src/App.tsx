@@ -35,6 +35,8 @@ import { DiagnosticsView } from "./views/Diagnostics";
 import { DictationView } from "./views/Dictation";
 import { IntegrationsApi } from "./views/IntegrationsApi";
 import { IntegrationsCalendar } from "./views/IntegrationsCalendar";
+import { IntegrationsCli } from "./views/IntegrationsCli";
+import { IntegrationsMcp } from "./views/IntegrationsMcp";
 import { Notes } from "./views/Notes";
 import { SettingsMeetings } from "./views/SettingsMeetings";
 import { SettingsIntelligence } from "./views/SettingsIntelligence";
@@ -60,6 +62,8 @@ const VIEWS = [
   { id: "notes", label: "Notes" },
   { id: "calendar", label: "Calendar" },
   { id: "api", label: "Local API" },
+  { id: "cli", label: "CLI" },
+  { id: "mcp", label: "MCP" },
   { id: "diagnostics", label: "Diagnostics" },
 ] as const;
 
@@ -182,6 +186,8 @@ function Shell() {
           {view === "notes" ? <Notes /> : null}
           {view === "calendar" ? <IntegrationsCalendar /> : null}
           {view === "api" ? <IntegrationsApi /> : null}
+          {view === "cli" ? <IntegrationsCli /> : null}
+          {view === "mcp" ? <IntegrationsMcp /> : null}
           {view === "diagnostics" ? (
             <DiagnosticsView diagnostics={diagnostics} />
           ) : null}

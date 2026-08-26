@@ -995,8 +995,8 @@
       ],
       "backend": "tools/knegiswhisper",
       "ui": "Integrations > CLI",
-      "reachable": false,
-      "note": "NOT a port. The CLI is a separate npm package absent from the repo; only its documented noun-verb surface and exit codes 0-4 survive as a spec."
+      "reachable": true,
+      "note": "NOT a port. The CLI is a separate npm package absent from the repo; only its documented noun-verb surface and exit codes 0-4 survive as a spec. Integrations > CLI now tells a user it exists, where the compiled binary was actually found (or that it was not), and the discovery file's real permission state."
     },
     "developer:mcp": {
       "status": "ported-with-new-rust-implementation",
@@ -1006,8 +1006,8 @@
       ],
       "backend": "tools/knegiswhisper-mcp",
       "ui": "Integrations > MCP",
-      "reachable": false,
-      "note": "NOT a port. Upstream MCP is a hosted Streamable-HTTP service; no local or stdio implementation exists in the checkout. Entirely new work."
+      "reachable": true,
+      "note": "NOT a port. Upstream MCP is a hosted Streamable-HTTP service; no local or stdio implementation exists in the checkout. Entirely new work: tools/knegiswhisper-mcp is a stdio server reusing the CLI's own client and discovery-file reader over the local API, and Integrations > MCP shows the exact command line to configure in a client plus whether the binary was actually found."
     },
     "developer:agent-skills": {
       "status": "ported",

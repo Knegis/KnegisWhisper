@@ -57,14 +57,14 @@
     "Integrations > CLI": {
       "surfaceId": "integrations.cli",
       "component": "apps/desktop/src/views/IntegrationsCli.tsx",
-      "built": false,
-      "note": "The CLI is complete and tested against the running API as a compiled binary, but nothing in the application tells a user it exists or where the discovery file is."
+      "built": true,
+      "note": "Shows the compiled knegiswhisper binary's location (a real check next to this running application and on PATH, never assumed), the discovery file's path, and the discovery file's real permission state as a tagged union with evidence -- InheritedFromProfile renders its own honest sentence rather than the boolean is_as_expected() would collapse it to. See docs/BENCH_CHECK.md, 2026-08-26 finding 2."
     },
     "Integrations > MCP": {
       "surfaceId": "integrations.mcp",
       "component": "apps/desktop/src/views/IntegrationsMcp.tsx",
-      "built": false,
-      "note": "Phase 7. tools/knegiswhisper-mcp does not exist."
+      "built": true,
+      "note": "Shows the exact stdio command line for tools/knegiswhisper-mcp (binary path plus empty args) to paste into an MCP client's config, and states plainly that the local API must be running -- the server has no backend of its own. The binary's presence is a real check next to this running application and on PATH, never assumed."
     },
     "Notes > Export": {
       "surfaceId": "notes.export",

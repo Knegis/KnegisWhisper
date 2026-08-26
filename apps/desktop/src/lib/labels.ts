@@ -17,6 +17,7 @@
 import type {
   Accelerator,
   AppleCalendarSupport,
+  BinaryLocation,
   Binding,
   CaptureExclusion,
   ClientAvailability,
@@ -24,6 +25,7 @@ import type {
   ConnectOutcome,
   Detected,
   DictationOutcome,
+  DiscoveryPermissions,
   HotkeyChange,
   InstallProgress,
   KeytermSupport,
@@ -499,4 +501,69 @@ export function syncOutcomeLabel(outcome: SyncOutcome): string {
  */
 export function appleCalendarSupportLabel(support: AppleCalendarSupport): Stated {
   return { text: "Not supported in this build", detail: support.reason };
+}
+
+/* ------------------------------------------------------------ developer tools */
+
+/**
+ * The discovery file's real permission state, said plainly.
+ *
+ * The one rule this exists to enforce: `inherited-from-profile` never reads as
+ * a pass. It is the platform's default, not a restriction anything here
+ * verified, and a bench check found exactly that gap — the backend's own
+ * `is_as_expected()` returns `true` for it, which is correct as "the best
+ * this build currently achieves" and wrong read as "checked and confirmed".
+ * Every other case names its evidence too, the same discipline
+ * `captureExclusionLabel` already follows for `unknown`.
+ */
+export function discoveryPermissionsLabel(p: DiscoveryPermissions): Stated {
+  switch (p.state) {
+    case "owner-only":
+      return {
+        text: "Restricted to your user account",
+        detail: "verified by reading the file's mode back: 0600",
+      };
+    case "inherited-from-profile":
+      return {
+        text: "Not independently restricted",
+        detail:
+          "it inherits your profile directory's permissions, which normally allow your account and administrators. Nothing here verified that inheritance, and it is not the same as this file having been locked down on its own",
+      };
+    case "wider":
+      return {
+        text: "More readable than intended",
+        detail: `mode ${p.mode} — anything that can read it can use the local API`,
+      };
+    case "unknown":
+      return {
+        text: "Permissions could not be determined",
+        detail: `${p.reason} — treat the local API as reachable by anything running as you`,
+      };
+  }
+}
+
+/**
+ * Where a companion binary (the CLI, or the MCP server) was actually found,
+ * or the plain admission that it was not found anywhere this checked.
+ *
+ * Never "not installed": this only ever checked next to the running
+ * application and on `PATH`, and says exactly that rather than a broader
+ * claim neither check supports.
+ */
+export function binaryLocationLabel(b: BinaryLocation): Stated {
+  switch (b.state) {
+    case "sibling":
+      return {
+        text: "Found",
+        detail: `${b.path} — built alongside this application`,
+      };
+    case "on-path":
+      return { text: "Found on PATH", detail: b.path };
+    case "not-found":
+      return {
+        text: "Not found",
+        detail:
+          "not next to this application and not on PATH. Build it with cargo and either place it alongside this application's own binary or put it on PATH",
+      };
+  }
 }
