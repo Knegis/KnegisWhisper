@@ -223,6 +223,13 @@ fn render() -> String {
             crate::integrations::CliStatus,
             crate::integrations::McpStatus,
         ],
+        "media import" => [
+            crate::media::MediaSidecar,
+            crate::media::SidecarStatus,
+            crate::media::MediaImportSource,
+            crate::media::MediaImportResult,
+            crate::media::MediaImportProgress,
+        ],
         "updater" => [
             crate::updater::UpdateCheckResult,
         ],

@@ -1,0 +1,1172 @@
+//! Media import: turning a local audio/video file, or a URL, into a
+//! transcript. The backend half of `Notes > Upload` -- the screen itself, and
+//! the claims in `config/integration-manifest.json` and
+//! `config/ui-surfaces.json`, belong to a later change.
+//!
+//! Three entry points, one pipeline underneath:
+//!
+//! * **Audio** and **video** import both hand the source file to the pinned
+//!   `ffmpeg` sidecar, which strips it to 16 kHz mono WAV
+//!   ([`kw_audio_core::wav::TARGET_SAMPLE_RATE`]) regardless of whether the
+//!   source had a video track. There is nothing else to tell them apart, so
+//!   [`MediaImportRuntime::import_local_file`] serves both.
+//! * **URL** import hands the URL to the pinned `yt-dlp` sidecar, which
+//!   fetches it, and then joins the same ffmpeg conversion step.
+//!
+//! Every import then goes through **the existing transcription route** --
+//! [`kw_transcription_core::route::resolve`] against the same
+//! `transcription.route` setting dictation uses, executed by the same
+//! [`kw_transcription_core::Executor`] dictation uses. An import is
+//! transcribed by whatever provider the user already has configured. It does
+//! not get a provider of its own, and if the route cannot be resolved (no
+//! provider configured, a stale setting, a missing credential) that is
+//! reported honestly rather than guessed at.
+//!
+//! # The network boundary, precisely
+//!
+//! URL import is the only place in this application where a user-typed URL
+//! reaches the network, and this module makes exactly one direct use of
+//! [`kw_network_policy`]: [`validate_import_url`] checks the URL -- scheme,
+//! the vendor blocklist, and (going further than the generic policy does) a
+//! literal private or link-local host -- under
+//! [`RequestPurpose::UserTriggeredMediaImport`] and no other purpose, before
+//! the URL is ever handed to anything that would fetch it. That check makes
+//! no network request of its own.
+//!
+//! **What that check does not cover: yt-dlp's own fetch.** Once a URL passes
+//! validation, fetching it is yt-dlp's job, running as a separate process.
+//! yt-dlp has its own HTTP stack, its own DNS resolution, its own redirect
+//! handling, and its own per-site extraction logic (some of which fetches
+//! several other URLs it discovers along the way) -- none of it observed,
+//! validated, or routed through `kw_network_policy`. In particular:
+//!
+//! * A hostname that resolves to a private address only at the moment yt-dlp
+//!   connects (DNS rebinding) is not caught by the up-front literal-host
+//!   check, because that check runs before any resolution happens.
+//! * A redirect yt-dlp follows internally is not re-validated the way
+//!   [`kw_network_policy::NetworkPolicy::download_to_file`] re-validates every
+//!   hop for the requests that do go through it (sidecar and model
+//!   downloads). That mechanism is real and is proven, for this exact
+//!   purpose, by a test in `crates/network-policy/src/lib.rs` -- but yt-dlp's
+//!   fetch does not run through it, so that proof does not extend to what
+//!   yt-dlp itself does with the URL.
+//!
+//! Bounding yt-dlp's own traffic is done with flags it enforces itself
+//! ([`ytdlp_download_args`]): a filesize cap, a bounded socket timeout,
+//! playlist expansion turned off, and its own update/config-file checks
+//! turned off. These are best-effort limits on a process this application
+//! does not otherwise control, not a claim that they close every avenue --
+//! see that function's doc comment for what each one does and does not
+//! guarantee.
+//!
+//! # What is never logged
+//!
+//! No full URL (a query string can carry a token) and no imported media
+//! content. Log lines here carry a sidecar name, a byte count, or a bare host
+//! -- never a path with a query string attached, never audio or transcript
+//! bytes.
+
+use std::path::{Path, PathBuf};
+use std::process::Stdio;
+use std::sync::{Arc, RwLock};
+
+use kw_network_policy::{NetworkPolicy, RequestPurpose};
+use kw_security::CredentialStore;
+use kw_sidecar::{Catalog, RealFs, SearchPath};
+use kw_storage::Db;
+use kw_transcription_core::local::WhisperServer;
+use kw_transcription_core::{Executor, Transport};
+use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, Emitter as _, State};
+use ts_rs::TS;
+
+/// The event import and sidecar-install progress is reported on.
+pub const PROGRESS_EVENT: &str = "media-import-progress";
+
+/// How much of a failed sidecar's stderr is kept for diagnostics.
+const STDERR_TAIL_BYTES: usize = 4096;
+
+/// The two sidecars this module drives. Deliberately a closed enum rather than
+/// a catalogue name typed by the frontend: a stringly-typed sidecar id would
+/// let a caller ask this command to install `whisper` or `llama` too, which is
+/// not what "media import" means.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "kebab-case")]
+pub enum MediaSidecar {
+    Ffmpeg,
+    YtDlp,
+}
+
+impl MediaSidecar {
+    /// The name this sidecar is registered under in `config/sidecars.json`.
+    const fn catalog_name(self) -> &'static str {
+        match self {
+            Self::Ffmpeg => "ffmpeg",
+            Self::YtDlp => "yt-dlp",
+        }
+    }
+}
+
+/// What can be said about one media-import sidecar without touching the
+/// network.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SidecarStatus {
+    pub sidecar: MediaSidecar,
+    /// Reused from `local_model` rather than redeclared: the same three
+    /// states (installable / not published for this platform / a gap in the
+    /// manifest) apply to any sidecar, and `local_llm` already reuses it for
+    /// the same reason.
+    pub availability: crate::local_model::Availability,
+    pub installed: bool,
+}
+
+/// Where an imported transcript came from.
+///
+/// Never the full URL: a query string can carry a token, and this value may
+/// end up quoted back into a note. The host is enough to show the user where
+/// it came from.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(
+    tag = "kind",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
+pub enum MediaImportSource {
+    Audio,
+    Video,
+    Url { host: String },
+}
+
+/// What a finished import produced. The frontend turns this into a note; this
+/// module does not write one itself.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct MediaImportResult {
+    pub text: String,
+    pub provider: String,
+    pub model: Option<String>,
+    /// Computed from the converted WAV, not asked of the source file, so it
+    /// reflects what was actually transcribed.
+    pub duration_ms: u64,
+    pub source: MediaImportSource,
+}
+
+/// Progress of installing a media-import sidecar, or of running an import
+/// once both are ready.
+///
+/// Shares the shape of `local_model::InstallProgress` and
+/// `local_llm::LocalLlmProgress` -- a staged, tagged enum reported on one
+/// event -- but is a distinctly named type so it cannot collide with either
+/// in the generated TypeScript. `ipc_types` asserts against exactly that
+/// collision.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(
+    tag = "stage",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
+pub enum MediaImportProgress {
+    /// Installing a sidecar: downloading the pinned archive.
+    Downloading {
+        sidecar: String,
+        written: u64,
+        total: Option<u64>,
+    },
+    /// Installing a sidecar: hashing the download.
+    Verifying,
+    /// Installing a sidecar: unpacking it.
+    Extracting,
+    /// Running an import: yt-dlp is fetching the URL.
+    Fetching,
+    /// Running an import: ffmpeg is converting to 16 kHz mono WAV.
+    Converting,
+    /// Running an import: the configured transcription provider is working.
+    Transcribing,
+    /// The install, or the import, finished.
+    Done,
+}
+
+/// Why an import, or a sidecar install, did not finish.
+///
+/// Kept apart deliberately: a missing sidecar, a URL the boundary refused, a
+/// file ffmpeg could not read, a fetch yt-dlp could not complete, and a
+/// transcription provider that failed are five different problems with five
+/// different fixes, and collapsing them into one message wastes the time of
+/// whoever is trying to fix it.
+#[derive(Debug, thiserror::Error)]
+pub enum MediaImportError {
+    #[error("{sidecar} is not available on this platform: {reason}")]
+    SidecarUnavailable {
+        sidecar: &'static str,
+        reason: String,
+    },
+
+    #[error("{explain} Install it, then try again.")]
+    SidecarNotInstalled { explain: String },
+
+    #[error("could not install {sidecar}: {detail}")]
+    SidecarInstall {
+        sidecar: &'static str,
+        detail: String,
+    },
+
+    #[error("that url was refused: {reason}")]
+    UrlRefused { reason: String },
+
+    #[error("could not read {path}: {source}")]
+    Io {
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("ffmpeg could not convert this file: {detail}")]
+    Conversion { detail: String },
+
+    #[error("yt-dlp could not fetch that url: {detail}")]
+    Fetch { detail: String },
+
+    #[error("no transcription route is configured: {detail}")]
+    RouteUnresolved { detail: String },
+
+    #[error("the configured transcription provider failed: {detail}")]
+    Transcription { detail: String },
+}
+
+impl MediaImportError {
+    fn io(path: &Path, source: std::io::Error) -> Self {
+        Self::Io {
+            path: path.display().to_string(),
+            source,
+        }
+    }
+}
+
+/* -------------------------------------------------------------- pure helpers */
+//
+// Everything below this line takes and returns ordinary types -- no
+// `AppHandle`, no `State`. Naming a Tauri-dependent function as a value in a
+// test kills the whole test binary on Windows, so the parts worth unit
+// testing are kept free of Tauri entirely, the same way `meeting.rs`,
+// `updater.rs` and `calendar.rs` do.
+
+/// Validate a user-typed URL against the network boundary, under
+/// [`RequestPurpose::UserTriggeredMediaImport`] and no other purpose.
+///
+/// Goes one step further than [`kw_network_policy::validate`] on its own:
+/// that function permits any host over `https`, including a private or
+/// link-local one, because most purposes have no reason to special-case a
+/// host string and `https` to an internal address is nobody's SSRF vector
+/// *through this function*. URL import is different -- "fetch whatever is at
+/// this address" is exactly the shape yt-dlp's generic extractor takes, so a
+/// private-looking host is refused outright here rather than left to the
+/// process that is about to fetch it.
+///
+/// This is a string check on the URL as typed, made once, before anything is
+/// spawned. It does not, and cannot, prove anything about where a hostname
+/// resolves at the moment yt-dlp connects to it, or about any redirect yt-dlp
+/// follows on its own -- see the module doc.
+fn validate_import_url(url: &str) -> Result<url::Url, MediaImportError> {
+    let parsed = kw_network_policy::validate(url, RequestPurpose::UserTriggeredMediaImport)
+        .map_err(|err| MediaImportError::UrlRefused {
+            reason: err.to_string(),
+        })?;
+
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| MediaImportError::UrlRefused {
+            reason: "the url has no host".to_owned(),
+        })?;
+
+    if kw_network_policy::is_private_host(host) {
+        return Err(MediaImportError::UrlRefused {
+            reason: format!(
+                "{host} looks like a private or link-local address; URL import only fetches \
+                 addresses on the public internet"
+            ),
+        });
+    }
+
+    Ok(parsed)
+}
+
+/// The ffmpeg arguments that convert any readable audio or video file to 16
+/// kHz mono WAV.
+///
+/// `-vn` drops any video stream. Harmless when there was never one -- a plain
+/// audio file passes through untouched by it -- which is exactly why audio
+/// and video import share one conversion path.
+fn ffmpeg_convert_args(input: &Path, output: &Path) -> Vec<String> {
+    vec![
+        "-hide_banner".to_owned(),
+        "-loglevel".to_owned(),
+        "error".to_owned(),
+        "-y".to_owned(),
+        "-i".to_owned(),
+        input.display().to_string(),
+        "-vn".to_owned(),
+        "-ac".to_owned(),
+        "1".to_owned(),
+        "-ar".to_owned(),
+        kw_audio_core::wav::TARGET_SAMPLE_RATE.to_string(),
+        "-f".to_owned(),
+        "wav".to_owned(),
+        output.display().to_string(),
+    ]
+}
+
+/// The largest file yt-dlp will keep. Best-effort: yt-dlp can only enforce
+/// this against a size the remote server declares in advance, and a server
+/// that does not declare one is not capped by this flag at all.
+const YT_DLP_MAX_FILESIZE: &str = "500M";
+
+/// How long yt-dlp will wait on a stalled connection before giving up.
+const YT_DLP_SOCKET_TIMEOUT_SECS: u32 = 30;
+
+/// The yt-dlp arguments for fetching `url` to `output_template`.
+///
+/// `output_template` should end in a fixed prefix and `.%(ext)s`, so the
+/// caller can find the one file this produces by prefix without trusting
+/// anything yt-dlp printed. Passed as a real argv entry, not through a shell,
+/// so nothing in `url` needs escaping.
+///
+/// What each flag does and does not guarantee:
+/// * `-f bestaudio/best` prefers an audio-only stream, so there is nothing
+///   for yt-dlp to merge and no second ffmpeg (yt-dlp's own, not this
+///   application's pinned one) gets invoked to merge it.
+/// * `--max-filesize` and `--socket-timeout` bound yt-dlp's own transfer.
+///   Real, but best-effort against a server that does not declare a size
+///   upfront.
+/// * `--no-playlist` fetches the one item the URL names, not a whole
+///   playlist it might belong to.
+/// * `--no-update` and `--no-config` stop yt-dlp from checking for its own
+///   updates or reading a config file this application did not write.
+/// * `--restrict-filenames` keeps the produced filename plain ASCII, which
+///   matters because native binaries on this machine (ffmpeg included) can
+///   choke on a path with unusual characters in it.
+///
+/// None of these touch DNS resolution, redirect-following, or certificate
+/// validation inside yt-dlp's own fetch -- see the module doc.
+fn ytdlp_download_args(url: &str, output_template: &Path) -> Vec<String> {
+    vec![
+        "--no-playlist".to_owned(),
+        "--no-update".to_owned(),
+        "--no-config".to_owned(),
+        "--restrict-filenames".to_owned(),
+        "-f".to_owned(),
+        "bestaudio/best".to_owned(),
+        "--max-filesize".to_owned(),
+        YT_DLP_MAX_FILESIZE.to_owned(),
+        "--socket-timeout".to_owned(),
+        YT_DLP_SOCKET_TIMEOUT_SECS.to_string(),
+        "-o".to_owned(),
+        output_template.display().to_string(),
+        url.to_owned(),
+    ]
+}
+
+/// The fixed base name yt-dlp is asked to write its download as, so the
+/// produced file can be found by prefix rather than by parsing anything
+/// yt-dlp printed.
+const DOWNLOAD_PREFIX: &str = "downloaded";
+
+/// The byte length of the canonical WAV header
+/// ([`kw_audio_core::wav`]'s `HEADER_LEN`, not exported, so restated as the
+/// fixed constant it is).
+const WAV_HEADER_LEN: usize = 44;
+
+/// How long a 16 kHz mono 16-bit WAV of `byte_len` bytes plays for.
+fn wav_duration_ms(byte_len: usize) -> u64 {
+    let data_len = byte_len.saturating_sub(WAV_HEADER_LEN) as u64;
+    let samples = data_len / 2;
+    samples.saturating_mul(1000) / u64::from(kw_audio_core::wav::TARGET_SAMPLE_RATE)
+}
+
+/// The last `max` bytes of `bytes`, without indexing directly (this workspace
+/// warns on it, and `-D warnings` makes that an error).
+fn tail_bytes(bytes: &[u8], max: usize) -> &[u8] {
+    let start = bytes.len().saturating_sub(max);
+    bytes.get(start..).unwrap_or(bytes)
+}
+
+/// Whether `path` names a file that can be imported.
+///
+/// Extracted so this check is unit-testable on its own: nothing outside a
+/// running application can construct a real `tauri::AppHandle`, so any
+/// function that needs one -- as [`MediaImportRuntime::import_local_file`]
+/// does, to report progress -- cannot be called from a plain unit test at
+/// all, not even to reach a branch that never uses it.
+fn check_importable_file(path: &str) -> Result<PathBuf, MediaImportError> {
+    let input = PathBuf::from(path);
+    if !input.is_file() {
+        return Err(MediaImportError::io(
+            &input,
+            std::io::Error::new(std::io::ErrorKind::NotFound, "not a file"),
+        ));
+    }
+    Ok(input)
+}
+
+/// yt-dlp's own markers for a download that has not finished yet. A file
+/// bearing one of these must never be mistaken for the finished download,
+/// even if yt-dlp's exit code were somehow misleading -- a partially fetched
+/// file must not be presented as a complete import.
+const INCOMPLETE_DOWNLOAD_SUFFIXES: [&str; 2] = [".part", ".ytdl"];
+
+/// Find the one file a sidecar left behind in `dir` whose name starts with
+/// `prefix`.
+///
+/// Zero matches and more than one are both reported rather than guessed at:
+/// zero means the process did not produce what it claimed to, and more than
+/// one means this function's assumption about the output shape is wrong --
+/// either way, picking one silently would risk transcribing the wrong file.
+/// A file still carrying one of [`INCOMPLETE_DOWNLOAD_SUFFIXES`] is excluded
+/// outright rather than counted as a match.
+fn pick_downloaded_file(dir: &Path, prefix: &str) -> Result<PathBuf, MediaImportError> {
+    let mut matches: Vec<PathBuf> = std::fs::read_dir(dir)
+        .map_err(|source| MediaImportError::io(dir, source))?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| {
+                    name.starts_with(prefix)
+                        && !INCOMPLETE_DOWNLOAD_SUFFIXES
+                            .iter()
+                            .any(|suffix| name.ends_with(suffix))
+                })
+        })
+        .collect();
+
+    match matches.len() {
+        0 => Err(MediaImportError::Fetch {
+            detail: "yt-dlp finished but left no downloaded file behind".to_owned(),
+        }),
+        1 => Ok(matches.remove(0)),
+        found => Err(MediaImportError::Fetch {
+            detail: format!("yt-dlp finished but left {found} files behind, expected exactly one"),
+        }),
+    }
+}
+
+/// What running a one-shot sidecar process produced.
+struct ProcessOutcome {
+    success: bool,
+    /// Bounded to [`STDERR_TAIL_BYTES`]. Never logged wholesale -- surfaced
+    /// only in the error a caller sees when the process failed.
+    stderr_tail: String,
+}
+
+/// Run `executable` to completion and report whether it succeeded.
+///
+/// No health check and no long-lived handle: unlike the loopback servers
+/// `kw_sidecar::process` manages, ffmpeg and yt-dlp are one-shot children that
+/// exit when they are done. Standard input is closed so neither can block
+/// waiting for it; standard output is discarded (yt-dlp writes titles and
+/// filenames there, never logged); standard error is kept, bounded, for when
+/// something needs explaining.
+async fn run_sidecar_process(
+    executable: &Path,
+    args: &[String],
+) -> std::io::Result<ProcessOutcome> {
+    let mut command = tokio::process::Command::new(executable);
+    command.args(args).stdin(Stdio::null());
+
+    #[cfg(windows)]
+    {
+        // CREATE_NO_WINDOW. A console flashing up during an import would be
+        // its own bug report, the same reason `kw_sidecar::process` sets it.
+        command.creation_flags(0x0800_0000);
+    }
+
+    let output = command.output().await?;
+    Ok(ProcessOutcome {
+        success: output.status.success(),
+        stderr_tail: String::from_utf8_lossy(tail_bytes(&output.stderr, STDERR_TAIL_BYTES))
+            .into_owned(),
+    })
+}
+
+/// A fresh, empty scratch directory for one import, under the same
+/// native-binary-safe root ffmpeg's model cache uses.
+fn new_scratch_dir() -> Result<PathBuf, MediaImportError> {
+    let dir = kw_storage::paths::audio_temp_dir()
+        .join("import")
+        .join(uuid::Uuid::new_v4().to_string());
+    std::fs::create_dir_all(&dir).map_err(|source| MediaImportError::io(&dir, source))?;
+    Ok(dir)
+}
+
+/// Turn a [`kw_sidecar::SidecarError`] from resolving a catalogue entry into
+/// the honest reason this sidecar cannot be used here -- not published for
+/// this platform, or a gap in the manifest. Distinct from "not installed",
+/// which means it could be used here and simply has not been downloaded yet.
+fn describe_unavailable(sidecar: MediaSidecar, err: kw_sidecar::SidecarError) -> MediaImportError {
+    MediaImportError::SidecarUnavailable {
+        sidecar: sidecar.catalog_name(),
+        reason: err.to_string(),
+    }
+}
+
+/* --------------------------------------------------------------- the runtime */
+
+/// Where a whisper server's shared handles live -- see `dictation::LocalPort`.
+type LocalPort = Arc<RwLock<Option<u16>>>;
+
+/// Everything media import needs: the sidecar catalogue, the network policy,
+/// and exactly what the existing transcription route needs to run --
+/// deliberately the same four things `dictation::RouteTranscriber` holds, so
+/// an import is transcribed by the same route a dictation would be, not a
+/// second implementation of "send this to a provider".
+pub struct MediaImportRuntime {
+    catalog: Catalog,
+    policy: NetworkPolicy,
+    credentials: Arc<dyn CredentialStore>,
+    local_port: LocalPort,
+    local_model: Arc<RwLock<Option<String>>>,
+    db: Db,
+}
+
+impl std::fmt::Debug for MediaImportRuntime {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MediaImportRuntime").finish_non_exhaustive()
+    }
+}
+
+impl MediaImportRuntime {
+    /// Load the catalogue and hold the handles a transcription needs, without
+    /// touching the network.
+    pub fn new(
+        policy: NetworkPolicy,
+        credentials: Arc<dyn CredentialStore>,
+        local_port: LocalPort,
+        local_model: Arc<RwLock<Option<String>>>,
+        db: Db,
+    ) -> Result<Self, String> {
+        let catalog = Catalog::shipped().map_err(|err| err.to_string())?;
+        Ok(Self {
+            catalog,
+            policy,
+            credentials,
+            local_port,
+            local_model,
+            db,
+        })
+    }
+
+    fn search_path(&self) -> SearchPath {
+        SearchPath {
+            bundled: None,
+            downloaded: kw_storage::paths::sidecar_dir().path,
+        }
+    }
+
+    fn is_installed(&self, sidecar: MediaSidecar) -> bool {
+        let name = sidecar.catalog_name();
+        self.catalog.resolve(name).ok().is_some_and(|(_, asset)| {
+            kw_sidecar::locate(name, asset, &self.search_path(), &RealFs).is_installed()
+        })
+    }
+
+    /// What can be said about one sidecar without a download.
+    #[must_use]
+    pub fn sidecar_status(&self, sidecar: MediaSidecar) -> SidecarStatus {
+        SidecarStatus {
+            sidecar,
+            availability: crate::local_model::Availability::of(
+                &self.catalog,
+                sidecar.catalog_name(),
+            ),
+            installed: self.is_installed(sidecar),
+        }
+    }
+
+    /// Find the installed executable, or explain honestly why there is none:
+    /// not published for this platform, or published but not downloaded.
+    fn locate_executable(&self, sidecar: MediaSidecar) -> Result<PathBuf, MediaImportError> {
+        let name = sidecar.catalog_name();
+        let (_, asset) = self
+            .catalog
+            .resolve(name)
+            .map_err(|err| describe_unavailable(sidecar, err))?;
+
+        let installation = kw_sidecar::locate(name, asset, &self.search_path(), &RealFs);
+        installation
+            .executable()
+            .map(Path::to_path_buf)
+            .ok_or_else(|| MediaImportError::SidecarNotInstalled {
+                explain: installation.explain(name),
+            })
+    }
+
+    /// Download, verify and unpack a media-import sidecar, reporting progress
+    /// on [`PROGRESS_EVENT`].
+    pub async fn install_sidecar(
+        &self,
+        app: &AppHandle,
+        sidecar: MediaSidecar,
+    ) -> Result<(), MediaImportError> {
+        let name = sidecar.catalog_name();
+        let (spec, asset) = self
+            .catalog
+            .resolve(name)
+            .map_err(|err| describe_unavailable(sidecar, err))?;
+
+        let root = kw_storage::paths::sidecar_dir().path;
+
+        kw_sidecar::install(&self.policy, spec, asset, &root, &mut |progress| {
+            emit_progress(
+                app,
+                match progress {
+                    kw_sidecar::Progress::Downloading { written, total } => {
+                        MediaImportProgress::Downloading {
+                            sidecar: name.to_owned(),
+                            written,
+                            total,
+                        }
+                    }
+                    kw_sidecar::Progress::Verifying => MediaImportProgress::Verifying,
+                    kw_sidecar::Progress::Extracting => MediaImportProgress::Extracting,
+                },
+            );
+        })
+        .await
+        .map_err(|err| MediaImportError::SidecarInstall {
+            sidecar: name,
+            detail: err.to_string(),
+        })?;
+
+        emit_progress(app, MediaImportProgress::Done);
+        Ok(())
+    }
+
+    fn local_server(&self) -> Option<WhisperServer> {
+        let port = self.local_port.read().ok().and_then(|held| *held)?;
+        let model = self.local_model.read().ok().and_then(|held| held.clone());
+        Some(WhisperServer::new(self.policy.clone(), port, model))
+    }
+
+    /// Resolve where a transcription would go right now -- the same setting
+    /// and the same resolver dictation uses. Not cached: settings can change
+    /// between imports.
+    async fn route_transport(&self) -> Result<Transport, MediaImportError> {
+        let registry =
+            kw_provider_registry::registry().map_err(|err| MediaImportError::RouteUnresolved {
+                detail: err.to_string(),
+            })?;
+
+        let settings: kw_transcription_core::RouteSettings =
+            kw_storage::settings::get(self.db.pool(), crate::dictation::ROUTE_SETTINGS_KEY)
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or_default();
+
+        kw_transcription_core::route::resolve(
+            registry,
+            &settings,
+            &kw_transcription_core::RouteRequest::default(),
+        )
+        .map_err(|err| MediaImportError::RouteUnresolved {
+            detail: err.to_string(),
+        })
+    }
+
+    /// Send `wav` down the existing transcription route. Not a second path to
+    /// a provider: the same [`Executor`] and the same resolved [`Transport`]
+    /// a dictation would use.
+    async fn transcribe(
+        &self,
+        wav: Vec<u8>,
+    ) -> Result<kw_transcription_core::Transcript, MediaImportError> {
+        let transport = self.route_transport().await?;
+
+        let executor = Executor::new(&self.policy, self.credentials.as_ref());
+        let local = self.local_server();
+        let executor = match &local {
+            Some(server) => executor.with_local(server),
+            None => executor,
+        };
+
+        // Byte count only -- see `Executor::post_multipart`'s own logging,
+        // which this inherits. Never the audio, never the transcript.
+        tracing::info!(bytes = wav.len(), "importing media for transcription");
+
+        executor
+            .transcribe(&transport, wav)
+            .await
+            .map_err(|err| MediaImportError::Transcription {
+                detail: err.to_string(),
+            })
+    }
+
+    /// Convert `input` with ffmpeg, read the result, and transcribe it.
+    ///
+    /// The converted file is read into memory and the scratch directory is
+    /// removed *before* transcription is attempted, so a slow or failing
+    /// provider never leaves a converted file on disk longer than it has to,
+    /// and a failure here or later leaves nothing behind to be mistaken for a
+    /// finished import.
+    async fn convert_and_transcribe(
+        &self,
+        app: &AppHandle,
+        ffmpeg: &Path,
+        input: &Path,
+        scratch: &Path,
+    ) -> Result<(kw_transcription_core::Transcript, u64), MediaImportError> {
+        emit_progress(app, MediaImportProgress::Converting);
+
+        let output = scratch.join("converted.wav");
+        let args = ffmpeg_convert_args(input, &output);
+        let outcome = run_sidecar_process(ffmpeg, &args)
+            .await
+            .map_err(|source| MediaImportError::io(ffmpeg, source))?;
+
+        if !outcome.success || !output.is_file() {
+            return Err(MediaImportError::Conversion {
+                detail: if outcome.stderr_tail.trim().is_empty() {
+                    "ffmpeg exited without producing an output file. The source may not be a \
+                     readable audio or video file."
+                        .to_owned()
+                } else {
+                    outcome.stderr_tail
+                },
+            });
+        }
+
+        let wav = std::fs::read(&output).map_err(|source| MediaImportError::io(&output, source))?;
+        if wav.len() <= WAV_HEADER_LEN {
+            return Err(MediaImportError::Conversion {
+                detail: "the converted file has no audio in it. The source may have no audio \
+                         track."
+                    .to_owned(),
+            });
+        }
+        let duration_ms = wav_duration_ms(wav.len());
+
+        emit_progress(app, MediaImportProgress::Transcribing);
+        let transcript = self.transcribe(wav).await?;
+        Ok((transcript, duration_ms))
+    }
+
+    /// Import an already-local audio or video file.
+    pub async fn import_local_file(
+        &self,
+        app: &AppHandle,
+        path: &str,
+        source: MediaImportSource,
+    ) -> Result<MediaImportResult, MediaImportError> {
+        let input = check_importable_file(path)?;
+
+        let ffmpeg = self.locate_executable(MediaSidecar::Ffmpeg)?;
+        let scratch = new_scratch_dir()?;
+
+        let outcome = self
+            .convert_and_transcribe(app, &ffmpeg, &input, &scratch)
+            .await;
+        let _ = std::fs::remove_dir_all(&scratch);
+
+        let (transcript, duration_ms) = outcome?;
+        emit_progress(app, MediaImportProgress::Done);
+        Ok(MediaImportResult {
+            text: transcript.text,
+            provider: transcript.provider,
+            model: transcript.model,
+            duration_ms,
+            source,
+        })
+    }
+
+    /// Import media fetched from a URL by the yt-dlp sidecar. See the module
+    /// doc for exactly what protection applies to the fetch and what does
+    /// not.
+    pub async fn import_url(
+        &self,
+        app: &AppHandle,
+        url: &str,
+    ) -> Result<MediaImportResult, MediaImportError> {
+        let validated = validate_import_url(url)?;
+        let host = validated.host_str().unwrap_or("").to_owned();
+
+        let ytdlp = self.locate_executable(MediaSidecar::YtDlp)?;
+        let ffmpeg = self.locate_executable(MediaSidecar::Ffmpeg)?;
+
+        let scratch = new_scratch_dir()?;
+
+        let outcome = self
+            .fetch_and_transcribe(app, &ytdlp, &ffmpeg, url, &scratch)
+            .await;
+        let _ = std::fs::remove_dir_all(&scratch);
+
+        let (transcript, duration_ms) = outcome?;
+        emit_progress(app, MediaImportProgress::Done);
+        Ok(MediaImportResult {
+            text: transcript.text,
+            provider: transcript.provider,
+            model: transcript.model,
+            duration_ms,
+            source: MediaImportSource::Url { host },
+        })
+    }
+
+    async fn fetch_and_transcribe(
+        &self,
+        app: &AppHandle,
+        ytdlp: &Path,
+        ffmpeg: &Path,
+        url: &str,
+        scratch: &Path,
+    ) -> Result<(kw_transcription_core::Transcript, u64), MediaImportError> {
+        emit_progress(app, MediaImportProgress::Fetching);
+
+        let template = scratch.join(format!("{DOWNLOAD_PREFIX}.%(ext)s"));
+        let args = ytdlp_download_args(url, &template);
+        let outcome = run_sidecar_process(ytdlp, &args)
+            .await
+            .map_err(|source| MediaImportError::io(ytdlp, source))?;
+
+        if !outcome.success {
+            return Err(MediaImportError::Fetch {
+                detail: if outcome.stderr_tail.trim().is_empty() {
+                    "yt-dlp exited with an error and produced no diagnostics".to_owned()
+                } else {
+                    outcome.stderr_tail
+                },
+            });
+        }
+
+        let downloaded = pick_downloaded_file(scratch, DOWNLOAD_PREFIX)?;
+        self.convert_and_transcribe(app, ffmpeg, &downloaded, scratch)
+            .await
+    }
+}
+
+fn emit_progress(app: &AppHandle, progress: MediaImportProgress) {
+    if let Err(err) = app.emit(PROGRESS_EVENT, progress) {
+        tracing::debug!(error = %err, "could not report media import progress");
+    }
+}
+
+/* --------------------------------------------------------------- commands */
+
+/// Report ffmpeg's and yt-dlp's availability and install state.
+#[tauri::command]
+pub async fn media_import_status(
+    runtime: State<'_, Arc<MediaImportRuntime>>,
+) -> Result<Vec<SidecarStatus>, String> {
+    Ok(vec![
+        runtime.sidecar_status(MediaSidecar::Ffmpeg),
+        runtime.sidecar_status(MediaSidecar::YtDlp),
+    ])
+}
+
+/// Install one media-import sidecar. Explicit: nothing downloads on its own.
+#[tauri::command]
+pub async fn media_import_install_sidecar(
+    app: AppHandle,
+    runtime: State<'_, Arc<MediaImportRuntime>>,
+    sidecar: MediaSidecar,
+) -> Result<(), String> {
+    runtime
+        .install_sidecar(&app, sidecar)
+        .await
+        .map_err(|err| err.to_string())
+}
+
+/// Import a local audio file.
+#[tauri::command]
+pub async fn media_import_audio(
+    app: AppHandle,
+    runtime: State<'_, Arc<MediaImportRuntime>>,
+    path: String,
+) -> Result<MediaImportResult, String> {
+    runtime
+        .import_local_file(&app, &path, MediaImportSource::Audio)
+        .await
+        .map_err(|err| err.to_string())
+}
+
+/// Import a local video file. Only the label differs from audio import --
+/// ffmpeg strips any video track either way.
+#[tauri::command]
+pub async fn media_import_video(
+    app: AppHandle,
+    runtime: State<'_, Arc<MediaImportRuntime>>,
+    path: String,
+) -> Result<MediaImportResult, String> {
+    runtime
+        .import_local_file(&app, &path, MediaImportSource::Video)
+        .await
+        .map_err(|err| err.to_string())
+}
+
+/// Import media fetched from a URL.
+#[tauri::command]
+pub async fn media_import_url(
+    app: AppHandle,
+    runtime: State<'_, Arc<MediaImportRuntime>>,
+    url: String,
+) -> Result<MediaImportResult, String> {
+    runtime
+        .import_url(&app, &url)
+        .await
+        .map_err(|err| err.to_string())
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing
+)]
+mod tests {
+    use super::*;
+
+    async fn runtime() -> MediaImportRuntime {
+        MediaImportRuntime::new(
+            NetworkPolicy::new().unwrap(),
+            Arc::new(kw_security::MemoryCredentialStore::new()),
+            Arc::new(RwLock::new(None)),
+            Arc::new(RwLock::new(None)),
+            Db::open_in_memory().await.unwrap(),
+        )
+        .unwrap()
+    }
+
+    /* ------------------------------------------------------- url validation */
+
+    #[test]
+    fn an_ordinary_https_url_is_accepted() {
+        assert!(validate_import_url("https://cdn.example.com/clip.mp4").is_ok());
+    }
+
+    #[test]
+    fn plaintext_is_refused() {
+        let err = validate_import_url("http://example.com/clip.mp4").unwrap_err();
+        assert!(matches!(err, MediaImportError::UrlRefused { .. }));
+    }
+
+    #[test]
+    fn a_blocked_vendor_host_is_refused() {
+        // domain-scanner:allow-next-line a negative test must name the host it asserts is blocked
+        let err = validate_import_url("https://api.openwhispr.com/x.mp4").unwrap_err();
+        match err {
+            MediaImportError::UrlRefused { reason } => assert!(reason.contains("blocked")),
+            other => panic!("{other}"),
+        }
+    }
+
+    #[test]
+    fn a_private_or_link_local_host_is_refused_even_over_https() {
+        // The gap this function closes beyond `kw_network_policy::validate`:
+        // that function alone permits any host over https, private or not.
+        for url in [
+            "https://169.254.169.254/latest/meta-data/",
+            "https://127.0.0.1/x.mp4",
+            "https://192.168.1.5/video.mp4",
+            "https://localhost/x.mp4",
+            "https://internal-box/x.mp4",
+        ] {
+            let err = validate_import_url(url).unwrap_err();
+            assert!(
+                matches!(err, MediaImportError::UrlRefused { .. }),
+                "{url} should be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn an_ordinary_public_host_is_not_mistaken_for_a_private_one() {
+        for url in [
+            "https://www.youtube.com/watch?v=abc",
+            "https://cdn.example.com/a/b/c.mp4",
+        ] {
+            assert!(validate_import_url(url).is_ok(), "{url} should be accepted");
+        }
+    }
+
+    #[test]
+    fn no_refusal_message_contains_a_query_string() {
+        // The reason the source is reported as a host, never a full url: a
+        // query string can carry a token.
+        let err = validate_import_url("https://192.168.1.5/x?token=secret-value").unwrap_err();
+        assert!(!err.to_string().contains("secret-value"));
+    }
+
+    /* --------------------------------------------------------------- ffmpeg */
+
+    #[test]
+    fn the_ffmpeg_conversion_targets_the_shared_sample_rate() {
+        let args = ffmpeg_convert_args(Path::new("in.mp4"), Path::new("out.wav"));
+        assert!(args.contains(&kw_audio_core::wav::TARGET_SAMPLE_RATE.to_string()));
+        assert!(args.contains(&"-vn".to_owned()), "video is always dropped");
+        assert!(args.contains(&"1".to_owned()), "mono");
+        assert!(args.iter().any(|a| a == "in.mp4"));
+        assert!(args.iter().any(|a| a == "out.wav"));
+    }
+
+    /* --------------------------------------------------------------- yt-dlp */
+
+    #[test]
+    fn the_ytdlp_arguments_carry_the_url_as_one_argv_entry() {
+        // No shell is involved, so nothing in the url needs escaping -- this
+        // is the property that makes that true: the url is the last element,
+        // untouched.
+        let args = ytdlp_download_args(
+            "https://example.com/x?y=1&z=2",
+            Path::new("/tmp/scratch/downloaded.%(ext)s"),
+        );
+        assert_eq!(
+            args.last().map(String::as_str),
+            Some("https://example.com/x?y=1&z=2")
+        );
+        assert!(args.contains(&"--no-playlist".to_owned()));
+        assert!(args.contains(&"--max-filesize".to_owned()));
+        assert!(args.contains(&YT_DLP_MAX_FILESIZE.to_owned()));
+    }
+
+    /* ------------------------------------------------------------ wav bytes */
+
+    #[test]
+    fn duration_is_computed_from_the_converted_wav_length() {
+        let one_second = WAV_HEADER_LEN + (kw_audio_core::wav::TARGET_SAMPLE_RATE as usize) * 2;
+        assert_eq!(wav_duration_ms(one_second), 1000);
+        assert_eq!(wav_duration_ms(WAV_HEADER_LEN), 0);
+        assert_eq!(wav_duration_ms(0), 0, "a header-less length must not panic");
+    }
+
+    #[test]
+    fn tail_bytes_keeps_only_the_end() {
+        let data = b"0123456789";
+        assert_eq!(tail_bytes(data, 4), b"6789");
+        assert_eq!(
+            tail_bytes(data, 100),
+            data,
+            "shorter than the cap is untouched"
+        );
+        assert_eq!(tail_bytes(data, 0), b"");
+    }
+
+    /* --------------------------------------------------- picking a download */
+
+    #[test]
+    fn exactly_one_matching_file_is_found() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("downloaded.webm"), b"x").unwrap();
+        std::fs::write(dir.path().join("unrelated.txt"), b"y").unwrap();
+
+        let found = pick_downloaded_file(dir.path(), "downloaded").unwrap();
+        assert_eq!(
+            found.file_name().and_then(|n| n.to_str()),
+            Some("downloaded.webm")
+        );
+    }
+
+    #[test]
+    fn no_matching_file_is_reported_rather_than_guessed_at() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("unrelated.txt"), b"y").unwrap();
+
+        let err = pick_downloaded_file(dir.path(), "downloaded").unwrap_err();
+        assert!(matches!(err, MediaImportError::Fetch { .. }));
+    }
+
+    #[test]
+    fn an_in_progress_download_is_never_mistaken_for_a_finished_one() {
+        // A partially fetched file must not be presented as a complete
+        // import, even if yt-dlp's exit code were somehow misleading.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("downloaded.mp4.part"), b"partial").unwrap();
+        std::fs::write(dir.path().join("downloaded.f140.m4a.ytdl"), b"metadata").unwrap();
+
+        let err = pick_downloaded_file(dir.path(), "downloaded").unwrap_err();
+        assert!(matches!(err, MediaImportError::Fetch { .. }));
+    }
+
+    #[test]
+    fn more_than_one_matching_file_is_reported_rather_than_the_first_one_chosen() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("downloaded.f251.webm"), b"x").unwrap();
+        std::fs::write(dir.path().join("downloaded.f140.m4a"), b"y").unwrap();
+
+        let err = pick_downloaded_file(dir.path(), "downloaded").unwrap_err();
+        match err {
+            MediaImportError::Fetch { detail } => assert!(detail.contains('2')),
+            other => panic!("{other}"),
+        }
+    }
+
+    /* ------------------------------------------------------- sidecar lookup */
+
+    #[tokio::test]
+    async fn ffmpeg_and_yt_dlp_are_both_in_the_shipped_catalogue() {
+        // If Task 10's pins ever moved or were renamed, this fails here rather
+        // than as a confusing "not installed" from every import.
+        let rt = runtime().await;
+        for sidecar in [MediaSidecar::Ffmpeg, MediaSidecar::YtDlp] {
+            let name = sidecar.catalog_name();
+            match rt.catalog.resolve(name) {
+                Ok(_) | Err(kw_sidecar::SidecarError::NotPublished { .. }) => {}
+                Err(other) => panic!("{name}: {other}"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_sidecar_nobody_downloaded_reports_not_installed_with_an_explanation() {
+        // The honesty requirement this exists for: a missing sidecar must
+        // read as "not installed, here is how to fix it", not as a raw
+        // "could not start process" error.
+        let rt = runtime().await;
+        match rt.locate_executable(MediaSidecar::Ffmpeg) {
+            Err(MediaImportError::SidecarNotInstalled { explain }) => {
+                assert!(explain.to_lowercase().contains("ffmpeg") || explain.contains("Looked in"));
+            }
+            // A platform ffmpeg is not published for at all is a different,
+            // equally honest outcome.
+            Err(MediaImportError::SidecarUnavailable { .. }) => {}
+            other => panic!("expected an honest refusal, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn sidecar_status_never_claims_an_uninstalled_sidecar_is_installed() {
+        let rt = runtime().await;
+        for sidecar in [MediaSidecar::Ffmpeg, MediaSidecar::YtDlp] {
+            let status = rt.sidecar_status(sidecar);
+            assert!(!status.installed, "nothing was downloaded in this test");
+        }
+    }
+
+    /* ------------------------------------------------------ local file guard */
+    //
+    // `import_local_file` itself takes a `&AppHandle`, which nothing outside a
+    // running application can construct -- so it is untestable directly, on
+    // purpose. `check_importable_file` is the pure extraction of its one
+    // decision that does not need one, following the same pattern
+    // `meeting.rs`, `updater.rs` and `calendar.rs` use.
+
+    #[test]
+    fn a_directory_is_not_an_importable_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let err = check_importable_file(dir.path().to_str().unwrap()).unwrap_err();
+        assert!(matches!(err, MediaImportError::Io { .. }));
+    }
+
+    #[test]
+    fn a_path_that_does_not_exist_is_not_an_importable_file() {
+        let err = check_importable_file("Z:/definitely/not/a/real/path.mp3").unwrap_err();
+        assert!(matches!(err, MediaImportError::Io { .. }));
+    }
+
+    #[test]
+    fn an_ordinary_file_is_importable() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("clip.mp3");
+        std::fs::write(&file, b"not really audio, just a file").unwrap();
+        assert_eq!(check_importable_file(file.to_str().unwrap()).unwrap(), file);
+    }
+}
