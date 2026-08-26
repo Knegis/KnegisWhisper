@@ -17,8 +17,16 @@
 use std::time::Duration;
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpListener;
+use tokio::net::{TcpListener, TcpStream};
 use tokio::time::timeout;
+
+/// Bound on the best-effort courtesy-page write, once the callback has
+/// already been parsed. Independent of the caller's own `wait` deadline
+/// (`LoopbackReceiver::receive`) -- see that function's doc for why the two
+/// must not be the same budget. Generous for a page under 200 bytes on
+/// loopback; short enough that a peer holding the connection open without
+/// reading cannot delay returning the already-secured result for long.
+const RESPONSE_WRITE_BUDGET: Duration = Duration::from_secs(2);
 
 /// Upper bound on how much of the request line this will buffer before
 /// giving up. The only client that can reach this listener is the user's own
@@ -123,44 +131,69 @@ impl LoopbackReceiver {
         format!("http://127.0.0.1:{}{path}", self.port)
     }
 
-    /// Accept exactly one connection, answer it, and return what it carried.
+    /// Accept exactly one connection, extract what it carried, and return it.
     ///
-    /// `wait` is a single deadline over the *whole* operation -- accepting the
-    /// connection, reading the request line, and answering it -- not just the
-    /// wait for a connection to arrive. A connection that is accepted and then
-    /// stalls (a hung browser, or any other local process that wins the race
-    /// to this port and sends nothing) is exactly as much of a hang as nobody
-    /// connecting at all: the listener is one-shot, its single connection slot
-    /// is already spent, and there is no recovery short of restarting the
-    /// application. Two independent timeouts -- one for `accept`, a separate
-    /// one for the read -- would still let a stalled read consume its own full
-    /// allowance on top of whatever the accept wait already used, so this is
-    /// one `timeout` around the entire body instead.
+    /// `wait` is a single deadline over accepting the connection, reading the
+    /// request line, and parsing it -- that is where the unbounded hang this
+    /// type exists to avoid actually lived. A connection that is accepted and
+    /// then stalls before sending anything (a hung browser, or any other
+    /// local process that wins the race to this port) is exactly as much of a
+    /// hang as nobody connecting at all: the listener is one-shot, its single
+    /// connection slot is already spent, and there is no recovery short of
+    /// restarting the application. Two independent timeouts here -- one for
+    /// `accept`, a separate one for the read -- would still let a stalled
+    /// read consume its own full allowance on top of whatever the accept wait
+    /// already used, so this is one `timeout` around accept-read-parse.
+    ///
+    /// Once the callback parses, the authorization code (if any) is already
+    /// obtained, and nothing after that point may take it away: the courtesy
+    /// page is written back on a *separate*, best-effort budget
+    /// ([`RESPONSE_WRITE_BUDGET`]), and this returns `Ok` regardless of
+    /// whether that write succeeds, times out, or errors. A browser tab left
+    /// showing a blank page instead of "you can close this window" is
+    /// cosmetic; reporting a completed handshake as a timeout because the
+    /// courtesy page was slow to send is not.
     pub async fn receive(self, wait: Duration) -> Result<CallbackParams, RedirectError> {
         let listener = self.listener;
-        timeout(wait, async move {
-            let (mut stream, _) = listener.accept().await.map_err(RedirectError::Accept)?;
+        let (mut stream, params) = timeout(wait, accept_and_parse(listener))
+            .await
+            .map_err(|_elapsed| RedirectError::TimedOut)??;
 
-            let line = read_request_line(&mut stream).await?;
-            let params = parse_callback(&line)?;
+        let _ = timeout(RESPONSE_WRITE_BUDGET, write_courtesy_page(&mut stream)).await;
 
-            let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                RESPONSE_BODY.len(),
-                RESPONSE_BODY
-            );
-            stream
-                .write_all(response.as_bytes())
-                .await
-                .map_err(RedirectError::Write)?;
-            stream.flush().await.map_err(RedirectError::Write)?;
-            let _ = stream.shutdown().await;
-
-            Ok(params)
-        })
-        .await
-        .map_err(|_elapsed| RedirectError::TimedOut)?
+        Ok(params)
     }
+}
+
+/// Accept one connection, read its request line, and parse the callback --
+/// the part of [`LoopbackReceiver::receive`] that sits under its single
+/// deadline.
+async fn accept_and_parse(
+    listener: TcpListener,
+) -> Result<(TcpStream, CallbackParams), RedirectError> {
+    let (mut stream, _addr) = listener.accept().await.map_err(RedirectError::Accept)?;
+    let line = read_request_line(&mut stream).await?;
+    let params = parse_callback(&line)?;
+    Ok((stream, params))
+}
+
+/// Write the static courtesy page, best-effort. Called only after the
+/// caller's result is already secured, so its own errors are for the caller
+/// of *this* function to decide whether to ignore -- and
+/// [`LoopbackReceiver::receive`] does.
+async fn write_courtesy_page(stream: &mut TcpStream) -> Result<(), RedirectError> {
+    let response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        RESPONSE_BODY.len(),
+        RESPONSE_BODY
+    );
+    stream
+        .write_all(response.as_bytes())
+        .await
+        .map_err(RedirectError::Write)?;
+    stream.flush().await.map_err(RedirectError::Write)?;
+    let _ = stream.shutdown().await;
+    Ok(())
 }
 
 /// Read up to the first `\n`, never buffering more than
@@ -356,5 +389,36 @@ mod tests {
         );
 
         stalled_client.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_valid_callback_is_not_lost_when_the_client_never_reads_the_response() {
+        // The regression this guards against: if returning `Ok(params)` were
+        // gated on the courtesy-page write succeeding, a client that never
+        // reads the response could turn a completed handshake into a
+        // reported timeout, discarding a valid authorization code -- a far
+        // worse outcome than the browser tab showing a blank page.
+        let receiver = LoopbackReceiver::bind().await.unwrap();
+        let port = receiver.port();
+
+        let client = tokio::spawn(async move {
+            let mut stream = tokio::net::TcpStream::connect(format!("127.0.0.1:{port}"))
+                .await
+                .unwrap();
+            stream
+                .write_all(b"GET /callback?code=the-code&state=the-state HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+                .await
+                .unwrap();
+            // Deliberately never reads the response, and holds the
+            // connection open well past when the server has already parsed
+            // the callback and moved on to (or past) the courtesy write.
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        });
+
+        let params = receiver.receive(Duration::from_secs(5)).await.unwrap();
+        assert_eq!(params.code, Some("the-code".to_owned()));
+        assert_eq!(params.state, Some("the-state".to_owned()));
+
+        client.await.unwrap();
     }
 }
