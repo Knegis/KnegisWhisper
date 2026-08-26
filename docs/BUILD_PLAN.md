@@ -489,7 +489,9 @@ location, reusing what `IntegrationsApi` already renders.
    them. [COMPLETION_PLAN.md](COMPLETION_PLAN.md) defines phase 10 as their home; this plan does
    not cover it.
 5. **Each chunk ends with a by-hand check on Windows**, in the shape that found five real defects
-   on 2026-08-25. The bench check in `PHASES_0_6_COMPLETION_PLAN.md` is the template.
+   on 2026-08-25 and three more on 2026-08-26. [BENCH_CHECK.md](BENCH_CHECK.md) is the record and
+   the template, and it opens with the rule that run established: a probe verifies the link it
+   exercised and nothing beyond it, so say which link.
 
 ## Blocked, and what is not blocked by it
 

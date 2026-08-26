@@ -33,11 +33,18 @@ maintained in place rather than appended to, because its purpose is to be curren
 > now not registered, and the screen says why. The same fault was in the day-old keyboard hook,
 > which fired and never reached the dictation handler.
 >
-> **Almost nothing has been checked by hand.** Storing a key, watching a connection test pass,
-> switching cleanup on and seeing tidied text, downloading a 5.9 GB model and holding a chat —
-> none of it has been done by a person on this machine. 826 green tests are not that, and the last
-> by-hand check found five real defects that all of the tests had missed. The two chunk-D probes
-> are the exception, and one of them turned out to have verified less than it appeared to.
+> **[BENCH_CHECK.md](BENCH_CHECK.md) is the record of what has actually been run on hardware.**
+> The 2026-08-26 run covered everything reachable without a person: the hook drives a real dictation
+> 66 ms after the chord, the local model server is resumed and transcribes, both listeners are
+> loopback-only and refuse an unauthenticated caller, and the real OS credential store works. It
+> found three defects — sided modifiers built and unreachable, the local API token file getting no
+> permissions of its own on Windows against a `SECURITY.md` that claimed `0600`, and the CLI hiding
+> failed dictations.
+>
+> **Seven things still need a person**, listed at the end of that file. The first is speaking into
+> the microphone: everything either side of the speech gate is verified and that one leg is not.
+> Storing a provider key, watching a connection test pass, reading cleaned-up text and holding a
+> local chat are chunks A and B's whole claim and no person has exercised any of it.
 
 Maintained in place. If something here becomes false, edit it rather than adding a note.
 
@@ -140,6 +147,146 @@ Unchanged from the Phases 1–4 entry, restated here so they are not buried:
   porting matrix. Upstream pins both by commit and verifies neither.
 - ~~**`nircmd`**~~ — **dropped**, as leaned towards: third-tier Windows paste fallback only, and
   `SendInput` works.
+
+---
+
+## 2026-08-26 (bench check) — three findings, and a probe that had verified less than it looked like
+
+Ran everything that can be checked without a person at the keyboard: the two chunk-D probes again, a
+new credential probe, the CLI against the live application, injected chords driving real dictations,
+and the resumed whisper server handed a synthesised WAV. Full record in
+[BENCH_CHECK.md](BENCH_CHECK.md); this is the reasoning.
+
+### The hook probe had verified less than it appeared to
+
+`keyhook_probe` reported *installed, fired exactly twice for two injected presses, uninstalled
+cleanly*. Every word true, and it was offered — by me, in a commit message — as evidence that
+modifier-only hotkeys worked. They did not: the callback emitted the event and returned, so
+`Control+Super` announced itself in the interface and started no dictation.
+
+The lesson is not "the probe was wrong". It is that a probe verifies the link it exercised, and
+naming that link is part of reporting the result. `BENCH_CHECK.md` now opens with that rule and each
+row says which link it covers, because the alternative is a table of green cells that quietly implies
+the ones between them.
+
+Injecting `Control+Alt` this time started a real microphone capture **66 ms** after the chord, and
+four presses drove four alternations. That is the link that had been missing.
+
+### Finding: sided modifiers are built and unreachable
+
+`keys.rs` expresses `RightControl+Super` — the headline capability of having a low-level hook at
+all, since the cross-platform API cannot see which side a modifier is on. `PLATFORM_SUPPORT.md` said
+"Built with the same hook". Both true, and there is no accelerator a user can type that reaches it:
+
+```
+     RightControl+Super -> Standard { accelerator: "RightControl+Super" }
+RightControl+RightShift -> Invalid { reason: "it names 2 non-modifier keys; a shortcut may have one" }
+```
+
+`hotkey::MODIFIERS` has nine entries and no sided spellings, so `classify` reads `RightControl` as
+*the key*. The first goes to the system shortcut register, which is precisely the mechanism that
+cannot distinguish sides. The second is refused with a message blaming the user's spelling for our
+own missing alias — the third time that exact shape has appeared in this project, after the `Ctrl`
+alias and the four dead hotkeys.
+
+Not fixed here. It is one entry in `MODIFIERS`-adjacent parsing plus a decision about what the
+settings field should accept, and it belongs with whoever next touches the hotkey editor.
+
+### Finding: the local API token file has no permissions of its own on Windows
+
+`discovery::restrict_file` under `cfg(not(unix))` does nothing and returns
+`Permissions::InheritedFromProfile`, with a comment saying the file "inherits the profile
+directory's ACL, which normally grants this user and the administrators group". `icacls` on this
+machine disagrees: every entry inherited, and two of them a local group and an unresolved SID with
+Modify — neither the user nor the administrators.
+
+Two separate things went wrong and they deserve separating.
+
+The **code** is honest. It applies nothing and says it applied nothing, which is the pattern this
+project follows everywhere else, and it is why this is a gap rather than a lie.
+
+`docs/SECURITY.md` was **not** honest. It said the file "is written with owner-only permissions
+(`0600`)", flatly, for every platform. A security document asserting a control that does not exist
+on the platform the application actually runs on is worse than saying nothing, because it stops
+anyone looking. Corrected in place, per platform, with the measurement.
+
+The comment is the more interesting failure. It reasoned about what an inherited ACL "normally"
+grants instead of reading one. That is the same move as `contentProtected` being set and never read
+back — and the fix is the same discipline the Unix branch of this very function already applies:
+set it, read it back, report what you found.
+
+Not fixed here either. An owner-only DACL through `SetNamedSecurityInfo` plus a read-back is real
+`windows-rs` work, and it should land with the read-back rather than without it.
+
+### Finding: the CLI hides failed dictations
+
+`history list` renders `id, when, provider, text`. A failed dictation has neither a provider nor
+text, so it prints two dashes and says nothing — while `/v1/transcriptions/list` returns
+`"status": "failed"` and a precise `errorMessage` that the dashboard does show. The API had it, the
+renderer dropped it, and phase 6 is marked verified.
+
+I nearly logged a fourth finding here: my first query used
+`coalesce(text, error_message, '')` and `text` is `''` rather than `NULL` for a failed row, so it
+looked as though nothing had been stored. The row was fine; the query was wrong. Worth recording
+because the check that saved me was reading the column list rather than believing my own output.
+
+### Judgement calls
+
+#### A credential probe, added because the only implementation in use had no test
+
+Every test of `CredentialStore` runs against `MemoryCredentialStore` — correctly, since a test suite
+must not write to a developer's keychain. The consequence went unnoticed: `OsCredentialStore`, the
+one the application actually uses, was covered by nothing at all.
+
+`crates/security/examples/credential_probe.rs` closes it, in the shape the two chunk-D probes
+established. It uses a slot the provider registry does not declare, stores a value that is not a
+credential, **compares rather than prints** — a probe that echoes what it stored would echo a real
+credential the day somebody pointed it at one — and checks the distinction the application depends
+on: a missing credential must report `NotFound`, not `NoBackend`, or "you have not entered a key"
+becomes "this machine has no keychain".
+
+It passes. Windows Credential Manager works here.
+
+#### Set `transcription.localModel` directly rather than waiting for a button
+
+The resume path (`9f0f29d`, written the day before) reads that setting, and the setting was absent
+because nobody had pressed **Use for dictation** since the feature existed. Writing `"tiny"` into it
+is exactly what `local_server_start` writes. What is under test is the code that reads the setting,
+and how the setting arrived does not change that.
+
+It worked, first try: `sidecar ready sidecar=whisper port=8178 pid=7788` then `resumed the local
+model server`. Left in place, because it is what makes dictation work at the next launch.
+
+#### Handed the whisper server a synthesised WAV when the microphone leg would not cooperate
+
+The speech gate refused synthesised speech played through the speakers
+(`reason=InsufficientSpeech duration_ms=4850`). Almost certainly the AMD microphone array cancelling
+its own speakers, which is what echo cancellation is for — so it is evidence about the room, not
+about the gate.
+
+Rather than conclude anything from that, I posted the same synthesised speech to
+`127.0.0.1:8178/inference` directly: `{"text":" The quick brown fox jumps over the lazy dog.\n"}`.
+That verifies the resumed server and leaves exactly one leg unverified — microphone into the gate —
+which is now the first item on the list for a person. Reporting one unverified leg is worth more
+than a green tick over a path I could not actually drive.
+
+### Observed and not fixed
+
+- **`Control+Alt` is AltGr.** On a Nordic or German layout Windows generates left-Control plus
+  right-Alt for `@ $ € { [`, and `EitherSide` matches both. Injecting exactly that started a
+  dictation. The chord fires on the second modifier going *down*, so the rule that an ordinary key
+  disqualifies a modifier-only chord cannot save it — that rule catches a key already held, not one
+  pressed a moment later. The shipped default is unaffected and nothing warns anyone who picks
+  `Control+Alt`.
+- **WASAPI loopback from an idle output device delivers no callback at all**, not silence. The probe
+  says so honestly, but at the API "capture is broken" and "the far end was quiet" look identical.
+  Chunk E should decide what that means before a meeting recording does.
+
+### What the run left on the machine
+
+`hotkey.dictation` was changed to `Control+Alt` to exercise the hook and **restored** — it must not
+stay that way on this keyboard. `transcription.localModel` was left set. Two failed transcriptions
+are real records of these attempts and were left alone. The database was copied first.
 
 ---
 

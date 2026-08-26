@@ -201,8 +201,10 @@ By hand on Windows, which is the only thing that actually proves any of it:
 - **I** — join a call in Zoom and see detection fire; run `meeting-stream:local` end to end with
   system audio and the microphone both recording.
 
-**Nothing from the finished chunks has been checked by hand.** Storing a key, watching a connection
-test pass, switching cleanup on and reading tidied text, downloading a model and holding a chat —
-all of it is green in tests and none of it has been done by a person. The one by-hand check that
-*has* happened found five real defects that every test had missed, which is the whole argument for
-doing the rest.
+**See [BENCH_CHECK.md](BENCH_CHECK.md) for what has actually been run.** The 2026-08-26 pass
+covered everything reachable without a person and found three more defects. Seven items still need
+somebody at the machine, and the ones that matter most are chunk A's and B's central claims: storing
+a provider key and watching a connection test pass, switching cleanup on and reading the tidied
+text, installing a local model and holding a chat. All green in tests; none of it done by a person.
+The two by-hand passes so far have found eight real defects between them that every test had
+missed.

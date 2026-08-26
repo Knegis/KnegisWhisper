@@ -172,7 +172,7 @@ because modifier-only combinations do not work there.
 | | State |
 | --- | --- |
 | Windows modifier-only | **verified.** One `WH_KEYBOARD_LL` hook on one thread, in-process, not one child per key. `cargo run -p kw-platform --example keyhook_probe` installs it, injects two presses, and asserts it fires exactly twice. |
-| Windows right-side modifiers | Built with the same hook — `RightControl+Super` is a chord the state machine can express, because a low-level hook reports the sided virtual keys and the cross-platform API does not. Unexercised beyond the probe. |
+| Windows right-side modifiers | **Built and unreachable.** `keys.rs` expresses `RightControl+Super`, because a low-level hook reports the sided virtual keys and the cross-platform API does not — but no accelerator a user can type gets there. `hotkey::MODIFIERS` has no sided spellings, so `classify` reads `RightControl` as *the key* and hands `RightControl+Super` to the system register, the one mechanism that cannot tell the sides apart; and `RightControl+RightShift` comes back `Invalid` — "it names 2 non-modifier keys" — which blames the user's spelling for a missing alias. See [BENCH_CHECK.md](BENCH_CHECK.md). |
 | Windows mouse buttons, push-to-talk | Not built. Both need a second hook (`WH_MOUSE_LL`) or key-up routing, and neither has a consumer yet. |
 | macOS, Linux | Not built, and the reason is reported rather than the capability being silently absent: macOS needs a `CGEventTap` and the Accessibility permission that goes with it, and Wayland's global-shortcuts portal takes only chords the compositor can register. |
 
@@ -197,6 +197,14 @@ behave differently in a way the user can notice.
 
 The hook sees every keystroke on the machine, including into other applications. **Nothing is
 logged.** What leaves the module is the index of a chord that matched, never a key.
+
+**A modifier-only chord fires on the second modifier going down**, which is what makes it feel
+immediate and also means a key pressed *afterwards* cannot call it back. The documented rule that an
+ordinary key disqualifies a modifier-only chord catches a key already held — somebody mid-word — not
+one pressed a moment later. The consequence measured on 2026-08-26: on a layout where AltGr is
+left-Control plus right-Alt (Nordic, German, and others), binding `Control+Alt` starts a dictation
+every time the user types `@`. The shipped default, `Control+Super`, is unaffected, and nothing
+warns anyone who chooses `Control+Alt`.
 
 Push-to-talk on Linux needs read access to `/dev/input`; without it the app reports the
 limitation and falls back to toggle mode rather than silently failing.
