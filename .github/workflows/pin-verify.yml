@@ -12,18 +12,18 @@ name: Sidecar pin verification
 # after adding a new pin -- without waiting for the schedule.
 #
 # This workflow is exempt from the "no automatic triggers" pause on ci.yml:
-# `schedule` fires independently of push/pull_request, so it does not touch
-# the Actions-minutes concern that pause exists for, and a pin that nobody
-# re-measures is a pin nobody is actually checking.
+# that pause is about push/pull_request specifically, and `schedule` fires
+# independently of both. A scheduled run still spends real Actions minutes
+# from the same finite budget -- the mitigation here is frequency (weekly,
+# one job, no toolchain) rather than the trigger type being free. A pin that
+# nobody re-measures is a pin nobody is actually checking, so the budget goes
+# here.
 on:
   schedule:
     # 04:00 UTC every Monday. Not tied to any release cadence -- just often
     # enough that a retagged release does not sit unnoticed for long.
     - cron: "0 4 * * 1"
   workflow_dispatch:
-
-env:
-  RUST_BACKTRACE: 1
 
 jobs:
   verify:

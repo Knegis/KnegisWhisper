@@ -17,16 +17,14 @@ on:
         description: "Create the GitHub release as a draft for review before publishing."
         required: false
         type: boolean
+        # JUDGMENT CALL, not specified by the brief: defaults to a draft so
+        # nothing goes fully public from a single dispatch click. A reviewer
+        # who wants dispatch to publish immediately should flip this default.
         default: true
 
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-
-# Needed to create/update a GitHub release and upload assets to it. Nothing
-# else in this workflow needs write access.
-permissions:
-  contents: write
 
 jobs:
   # One job per OS, each producing that OS's bundle targets from
@@ -158,6 +156,12 @@ jobs:
     name: Publish release
     needs: build
     runs-on: ubuntu-latest
+    # Scoped to this job alone: only `publish` creates/updates a GitHub
+    # release and uploads assets to it. `build` only checks out, compiles,
+    # and uploads a workflow artifact -- none of that needs write access to
+    # repository contents, so it keeps the default (read-only) token.
+    permissions:
+      contents: write
     steps:
       - name: Download all bundles
         uses: actions/download-artifact@v4
@@ -168,11 +172,21 @@ jobs:
       # else here creates a GitHub release), pinned the same way as the
       # existing actions: a major-version tag rather than a full SHA, to
       # match house style.
+      #
+      # UNVERIFIED: the GITHUB_TOKEN env var and the `files: bundles/**/*`
+      # glob follow this action's documented usage pattern from memory, but
+      # neither its GITHUB_TOKEN handling nor its glob semantics for this
+      # major version have been exercised -- this workflow has never run.
       - name: Create GitHub release (unsigned)
         uses: softprops/action-gh-release@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
+          # UNVERIFIED: `inputs.<name>` is used here (rather than
+          # `github.event.inputs.<name>`) on the understanding that GitHub
+          # unified the `inputs` context across workflow_dispatch and
+          # workflow_call; not confirmed by an actual dispatch of this
+          # workflow.
           tag_name: ${{ inputs.tag }}
           draft: ${{ inputs.draft }}
           name: ${{ inputs.tag }}
