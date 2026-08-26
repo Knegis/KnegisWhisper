@@ -207,7 +207,11 @@ fn blocked_hosts() -> &'static BTreeSet<String> {
 
 /// True if `host` is, or is a subdomain of, a blocked vendor host.
 fn is_blocked(host: &str) -> bool {
-    let host = host.to_ascii_lowercase();
+    // A trailing "." is the DNS root and resolves identically to the name
+    // without it -- a blocked host with one appended is still that host -- so
+    // it must be stripped before comparison or it silently exits both
+    // branches below.
+    let host = host.strip_suffix('.').unwrap_or(host).to_ascii_lowercase();
     blocked_hosts().iter().any(|blocked| {
         host == *blocked
             || host
@@ -238,11 +242,16 @@ fn is_blocked(host: &str) -> bool {
 pub fn is_private_host(host: &str) -> bool {
     use std::net::IpAddr;
 
-    // Url::host_str keeps IPv6 literals bracketed.
-    let host = host
-        .trim_start_matches('[')
-        .trim_end_matches(']')
-        .to_ascii_lowercase();
+    // Url::host_str keeps IPv6 literals bracketed. A trailing "." is the DNS
+    // root and resolves identically to the name without it -- `localhost.`
+    // and `nas.local.` are `localhost` and `nas.local` as far as any resolver
+    // is concerned -- so it has to come off before any of the checks below,
+    // or a single dot defeats every one of them at once: it is not equal to
+    // "localhost", it does not end in ".local", it is not a valid IP literal,
+    // and it still contains a "." so the single-label fallback does not fire
+    // either.
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    let host = host.strip_suffix('.').unwrap_or(host).to_ascii_lowercase();
 
     if host == "localhost" || host.ends_with(".localhost") {
         return true;
@@ -263,38 +272,68 @@ pub fn is_private_host(host: &str) -> bool {
 
 /// Whether a parsed IP address is on a private network.
 ///
-/// Split out of [`is_private_host`] so an IPv4-mapped IPv6 address
-/// (`::ffff:a.b.c.d`) can be unwrapped to the IPv4 address it actually is and
-/// re-checked against the same IPv4 rules, rather than against a second,
-/// looser notion of "private" that only understands the IPv6 ranges.
-/// `::ffff:169.254.169.254` is exactly `169.254.169.254` wearing an IPv6
-/// costume, and the policy must see through it.
+/// Split out of [`is_private_host`] so an IPv4-embedded IPv6 address can be
+/// unwrapped to the IPv4 address it actually is and re-checked against the
+/// same IPv4 rules, rather than against a second, looser notion of "private"
+/// that only understands the IPv6 ranges. `::ffff:169.254.169.254` is exactly
+/// `169.254.169.254` wearing an IPv6 costume, and the policy must see through
+/// it.
 fn is_private_ip(ip: std::net::IpAddr) -> bool {
     use std::net::IpAddr;
 
     match ip {
         IpAddr::V4(v4) => is_private_ipv4(v4),
         IpAddr::V6(v6) => {
-            if let Some(mapped) = v6.to_ipv4_mapped() {
-                return is_private_ipv4(mapped);
+            // `is_loopback` and `is_unspecified` are checked before `to_ipv4`
+            // on purpose. `to_ipv4` recognises two embeddings: the IPv4-mapped
+            // form (`::ffff:a.b.c.d`) and the deprecated IPv4-compatible form
+            // (`::a.b.c.d`, a 96-bit zero prefix with the IPv4 address in the
+            // low 32 bits). `::` and `::1` both have a 96-bit zero prefix, so
+            // read as IPv4-compatible they would decode to `0.0.0.0` and
+            // `0.0.0.1` -- an IPv4 reading of addresses that are natively IPv6
+            // loopback and unspecified, not an IPv4 host wearing IPv6
+            // notation. Resolving the unambiguous IPv6 meaning first avoids
+            // that reinterpretation; every other 96-bit-zero-prefixed address
+            // is genuinely someone's IPv4 host and `to_ipv4` is exactly right
+            // for it.
+            if v6.is_loopback() || v6.is_unspecified() {
+                return true;
             }
+
+            if let Some(v4) = v6.to_ipv4() {
+                return is_private_ipv4(v4);
+            }
+
             let first = v6.segments().first().copied().unwrap_or(0);
-            v6.is_loopback()
-                || v6.is_unspecified()
-                // fc00::/7 unique-local, fe80::/10 link-local.
-                || first & 0xfe00 == 0xfc00
-                || first & 0xffc0 == 0xfe80
+            // fc00::/7 unique-local, fe80::/10 link-local. Native IPv6
+            // ranges, not IPv4 embeddings, so there is no "mapped form" of
+            // these to also account for.
+            first & 0xfe00 == 0xfc00 || first & 0xffc0 == 0xfe80
         }
     }
 }
 
 /// The IPv4 half of [`is_private_ip`], shared by a plain IPv4 address and an
-/// IPv4-mapped IPv6 one. `is_link_local` alone already covers
-/// `169.254.169.254`, the cloud-metadata address most SSRF exploits target --
-/// it falls inside `169.254.0.0/16` like every other link-local address, with
-/// nothing metadata-specific about it.
+/// IPv4-embedded IPv6 one.
+///
+/// `is_link_local` alone already covers `169.254.169.254`, the cloud-metadata
+/// address most SSRF exploits target -- it falls inside `169.254.0.0/16` like
+/// every other link-local address, with nothing metadata-specific about it.
+///
+/// Two ranges the standard-library predicates do not cover, by design or by
+/// age, are added explicitly: `0.0.0.0/8` ("this network", not just the single
+/// unspecified address `is_unspecified` checks), and `100.64.0.0/10`, the
+/// shared address space carrier-grade NAT uses -- a standard SSRF target and
+/// one the self-hosted purpose remains free to reach deliberately, so refusing
+/// it elsewhere costs nothing real.
 fn is_private_ipv4(v4: std::net::Ipv4Addr) -> bool {
-    v4.is_loopback() || v4.is_private() || v4.is_link_local() || v4.is_unspecified()
+    let octets = v4.octets();
+    v4.is_loopback()
+        || v4.is_private()
+        || v4.is_link_local()
+        || v4.is_unspecified()
+        || octets[0] == 0
+        || (octets[0] == 100 && octets[1] & 0xc0 == 0x40)
 }
 
 /// Validate a URL against the network boundary without sending anything.
@@ -1020,25 +1059,58 @@ mod tests {
     }
 
     #[test]
-    fn ipv4_mapped_ipv6_addresses_are_recognised_as_private() {
-        // `::ffff:a.b.c.d` is `a.b.c.d` wearing an IPv6 costume. `is_loopback`,
-        // `is_unspecified` and the unique-local/link-local bitmasks all miss
-        // it -- none of them look at the embedded IPv4 address -- so this is a
-        // distinct check, not a stronger version of the existing ones.
+    fn a_trailing_dns_root_dot_does_not_evade_the_private_or_public_classification() {
+        // `example.com.` and `example.com` resolve identically -- the trailing
+        // dot is the DNS root, not part of the name -- so it must not change
+        // the answer. Before this was fixed, a trailing dot defeated every
+        // branch in `is_private_host` at once: not equal to "localhost", not
+        // ending in ".local", not a valid IP literal, and still containing a
+        // "." so the single-label fallback never fired either. That made
+        // `https://localhost./` (and `https://nas.local./`, `https://
+        // whisper-box./`) read as a public host under every purpose.
+        for private in ["localhost.", "nas.local.", "whisper-box.", "db.internal."] {
+            assert!(is_private_host(private), "{private} should be private");
+        }
+
+        for public in ["api.openai.com.", "example.com."] {
+            assert!(!is_private_host(public), "{public} should not be private");
+        }
+    }
+
+    #[test]
+    fn ipv4_embedded_ipv6_addresses_are_recognised_as_private() {
+        // `::ffff:a.b.c.d` (IPv4-mapped) and `::a.b.c.d` (IPv4-compatible,
+        // deprecated but still a valid embedding) are both `a.b.c.d` wearing
+        // an IPv6 costume. `is_loopback`, `is_unspecified` and the
+        // unique-local/link-local bitmasks all miss both forms -- none of
+        // them look at the embedded IPv4 address -- so this is a distinct
+        // check, not a stronger version of the existing ones.
         for private in [
-            "::ffff:127.0.0.1",       // loopback
+            "::ffff:127.0.0.1",       // mapped, loopback
             "[::ffff:127.0.0.1]",     // bracketed, as `Url::host_str` returns it
-            "::ffff:169.254.169.254", // the cloud-metadata address specifically
-            "::ffff:10.0.0.5",        // RFC 1918
-            "::ffff:192.168.1.1",     // RFC 1918
-            "::ffff:0.0.0.0",         // unspecified
+            "::ffff:169.254.169.254", // mapped, the cloud-metadata address specifically
+            "::ffff:10.0.0.5",        // mapped, RFC 1918
+            "::ffff:192.168.1.1",     // mapped, RFC 1918
+            "::ffff:0.0.0.0",         // mapped, unspecified
+            "::127.0.0.1",            // compatible, loopback
+            "::169.254.169.254",      // compatible, the cloud-metadata address
+            "::10.0.0.5",             // compatible, RFC 1918
         ] {
             assert!(is_private_host(private), "{private} should be private");
         }
 
-        for public in ["::ffff:8.8.8.8", "::ffff:1.1.1.1"] {
+        for public in ["::ffff:8.8.8.8", "::ffff:1.1.1.1", "::8.8.8.8"] {
             assert!(!is_private_host(public), "{public} should not be private");
         }
+
+        // `::` and `::1` both have the 96-bit zero prefix `to_ipv4` looks for,
+        // which would read them as `0.0.0.0` and `0.0.0.1` under the
+        // IPv4-compatible interpretation -- but they are natively IPv6
+        // unspecified and loopback, and must resolve as such, not be
+        // reinterpreted as IPv4 hosts. Both are private either way, so this
+        // pins the *reason*, not just the outcome.
+        assert!(is_private_host("::"));
+        assert!(is_private_host("::1"));
     }
 
     #[test]
@@ -1060,6 +1132,33 @@ mod tests {
     }
 
     #[test]
+    fn cgnat_and_the_whole_this_network_range_are_private() {
+        // Both are standard SSRF targets that the standard-library predicates
+        // do not cover: `is_unspecified` only matches the single address
+        // `0.0.0.0`, not the rest of the reserved `0.0.0.0/8` block, and
+        // nothing in `std` knows about `100.64.0.0/10` at all -- it postdates
+        // the RFC 1918 ranges `is_private` checks. The self-hosted purpose
+        // stays exempt, so a deliberately configured CGNAT address still
+        // works; refusing it for every other purpose costs nothing real.
+        for private in [
+            "0.0.0.1",
+            "0.1.2.3",
+            "0.255.255.255",
+            "100.64.0.0",
+            "100.64.0.1",
+            "100.100.100.100",
+            "100.127.255.255",
+        ] {
+            assert!(is_private_host(private), "{private} should be private");
+        }
+
+        // Just outside the CGNAT range on either side.
+        for public in ["100.63.255.255", "100.128.0.0", "99.64.0.1", "101.64.0.1"] {
+            assert!(!is_private_host(public), "{public} should not be private");
+        }
+    }
+
+    #[test]
     fn https_to_a_private_host_is_refused_except_for_self_hosted() {
         // This is the gap Task 20 exists to close: the "https" arm used to run
         // no host check at all, so every one of these reached every purpose,
@@ -1076,14 +1175,22 @@ mod tests {
             "https://0.0.0.0/",
             "https://whisper-box/",
             "https://nas.local/",
+            // A trailing DNS-root dot, which used to defeat every branch of
+            // `is_private_host` at once.
+            "https://localhost./",
+            "https://nas.local./",
             // Decimal, octal and hex IPv4 -- normalised to dotted-quad by URL
             // parsing before `is_private_host` ever runs.
             "https://2130706433/", // 127.0.0.1 as a 32-bit integer
             "https://0177.0.0.1/", // 127 in octal
             "https://0x7f.0.0.1/", // 127 in hex
-            // IPv4-mapped IPv6.
+            // IPv4-mapped and IPv4-compatible IPv6.
             "https://[::ffff:127.0.0.1]/",
             "https://[::ffff:169.254.169.254]/",
+            "https://[::127.0.0.1]/",
+            // CGNAT and the rest of 0.0.0.0/8.
+            "https://100.64.0.1/",
+            "https://0.0.0.1/",
         ] {
             for purpose in ALL_PURPOSES {
                 if purpose == SELF_HOSTED {
@@ -1273,17 +1380,34 @@ mod tests {
         // Mirrors the https fix in `validate`: the "wss" arm used to run no
         // host check either, so meeting audio over a websocket could be
         // pointed at loopback or link-local space under any purpose.
+        //
+        // Looped across every purpose, exactly like
+        // `https_to_a_private_host_is_refused_except_for_self_hosted`, rather
+        // than pinned against one. The "wss" arm is a hand-written copy of the
+        // "https" arm's guard rather than shared code, so the two can diverge
+        // silently; a loop across `ALL_PURPOSES` is what would catch that
+        // divergence if a future edit touched one arm and not the other.
         for private in [
             "wss://127.0.0.1/stream",
             "wss://[::1]/stream",
             "wss://169.254.169.254/stream",
             "wss://[::ffff:127.0.0.1]/stream",
+            "wss://[::127.0.0.1]/stream",
+            "wss://localhost./stream",
+            "wss://100.64.0.1/stream",
         ] {
-            let err = validate_websocket(private, TRANSCRIPTION).unwrap_err();
-            assert!(
-                matches!(err, PolicyError::PrivateHttpsTarget { .. }),
-                "{private}: {err:?}"
-            );
+            for purpose in ALL_PURPOSES {
+                if purpose == SELF_HOSTED {
+                    continue;
+                }
+                assert!(
+                    matches!(
+                        validate_websocket(private, purpose),
+                        Err(PolicyError::PrivateHttpsTarget { .. })
+                    ),
+                    "{private} should be refused over wss for {purpose:?}"
+                );
+            }
         }
 
         // The self-hosted purpose keeps working over wss, exactly as it does
