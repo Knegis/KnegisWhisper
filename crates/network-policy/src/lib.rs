@@ -210,8 +210,10 @@ fn is_blocked(host: &str) -> bool {
     // A trailing "." is the DNS root and resolves identically to the name
     // without it -- a blocked host with one appended is still that host -- so
     // it must be stripped before comparison or it silently exits both
-    // branches below.
-    let host = host.strip_suffix('.').unwrap_or(host).to_ascii_lowercase();
+    // branches below. `trim_end_matches` rather than a single `strip_suffix`,
+    // for the same reason as the bracket-trimming in `is_private_host`: an
+    // extra dot must not be a second, narrower bypass of the same kind.
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
     blocked_hosts().iter().any(|blocked| {
         host == *blocked
             || host
@@ -249,9 +251,11 @@ pub fn is_private_host(host: &str) -> bool {
     // or a single dot defeats every one of them at once: it is not equal to
     // "localhost", it does not end in ".local", it is not a valid IP literal,
     // and it still contains a "." so the single-label fallback does not fire
-    // either.
+    // either. `trim_end_matches` rather than a single `strip_suffix`, so that
+    // `localhost..` is not left classified as public just because it carries
+    // one dot more than a single strip removes.
     let host = host.trim_start_matches('[').trim_end_matches(']');
-    let host = host.strip_suffix('.').unwrap_or(host).to_ascii_lowercase();
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
 
     if host == "localhost" || host.ends_with(".localhost") {
         return true;
@@ -1010,6 +1014,21 @@ mod tests {
     }
 
     #[test]
+    fn cgnat_and_this_network_widen_what_self_hosted_may_reach_in_cleartext_too() {
+        // Adding CGNAT and the rest of 0.0.0.0/8 to `is_private_host` does not
+        // only restrict every other purpose over https/wss -- it also widens
+        // what the self-hosted purpose may reach over plain HTTP. Before that
+        // addition, both of these came back `PlaintextNonPrivate`, because
+        // neither address was private under the old, narrower predicate; now
+        // that they are private, the self-hosted purpose's existing plaintext
+        // exemption covers them too. That is the intended shape of the
+        // ruling, and this pins it as a stated property of the change rather
+        // than a side effect nobody wrote down.
+        assert!(validate("http://100.64.0.1/v1", SELF_HOSTED).is_ok());
+        assert!(validate("http://0.1.2.3/v1", SELF_HOSTED).is_ok());
+    }
+
+    #[test]
     fn no_other_purpose_gets_the_plaintext_exemption() {
         // Widening the exemption to the whole private range makes it more
         // important, not less, that only one purpose has it.
@@ -1068,7 +1087,18 @@ mod tests {
         // "." so the single-label fallback never fired either. That made
         // `https://localhost./` (and `https://nas.local./`, `https://
         // whisper-box./`) read as a public host under every purpose.
-        for private in ["localhost.", "nas.local.", "whisper-box.", "db.internal."] {
+        for private in [
+            "localhost.",
+            "nas.local.",
+            "whisper-box.",
+            "db.internal.",
+            // More than one trailing dot is not valid DNS syntax and such a
+            // name is unresolvable, but the strip has to remove the whole
+            // run rather than exactly one -- a single `strip_suffix` would
+            // leave "localhost." un-stripped here and misclassify it public.
+            "localhost..",
+            "whisper-box..",
+        ] {
             assert!(is_private_host(private), "{private} should be private");
         }
 

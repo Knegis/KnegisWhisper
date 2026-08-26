@@ -87,6 +87,11 @@ fn case_and_trailing_dot_do_not_evade_the_blocklist() {
         "https://API.OpenWhispr.COM./v1",
         // domain-scanner:allow-next-line a negative test must name the host it asserts is blocked
         "https://mcp.openwhispr.com./stream",
+        // More than one trailing dot is not valid DNS syntax, but the strip
+        // has to remove the whole run rather than exactly one -- a single
+        // `strip_suffix` would leave one dot behind and miss this.
+        // domain-scanner:allow-next-line a negative test must name the host it asserts is blocked
+        "https://openwhispr.com../v1",
     ] {
         assert!(
             matches!(
