@@ -187,7 +187,11 @@ only way to use one is to put a certificate on it. That is a real trade — audi
 configured credential cross the local network in the clear when the endpoint is plain HTTP — and
 it belongs to the user, for an endpoint they typed in themselves. The same reasoning is why CGNAT
 was added to the private set rather than left alone: the self-hosted purpose stays free to reach
-one deliberately, so widening what every other purpose is refused costs nothing real.
+one deliberately, so widening what every other purpose is refused costs nothing real. That
+addition cuts both ways, deliberately: `100.64.0.0/10` and the rest of `0.0.0.0/8` are now also
+private for the *plaintext* check, so `http://100.64.0.1/` and `http://0.1.2.3/`, previously
+refused for every purpose including the self-hosted one, are now reachable in the clear by the
+self-hosted purpose exactly as the rest of the private range already was.
 
 **The purpose is a property of the destination, not the feature.** A self-hosted whisper server
 is reached with `explicitly-configured-self-hosted-endpoint`, not
@@ -246,6 +250,29 @@ resolves to a public address when validated and to `127.0.0.1` or a link-local a
 else in this crate. Closing that would need a check against the address actually dialled, at
 connect time, which is a materially different and harder problem than the ones the corrections
 above address, and is not implemented here.
+
+### Known, accepted residue in `is_private_host`
+
+Three narrower gaps were raised and deliberately left as they are, rather than fixed silently or
+forgotten. Recorded here so each is a decision, not an oversight:
+
+- **`::ffff:0:a.b.c.d` (the "IPv4-translated" form, RFC 8215) still classifies as public.**
+  `to_ipv4` unwraps `::ffff:a.b.c.d` and `::a.b.c.d`; it does not unwrap `::ffff:0:a.b.c.d`, which
+  embeds the IPv4 address one group further in. `::ffff:0:0/96` is the SIIT source prefix, is not
+  routed on an ordinary host, and a `connect()` to it fails rather than reaching loopback — unlike
+  `::ffff:a.b.c.d`, which a dual-stack kernel genuinely delivers to the embedded IPv4 address.
+  Accepted; the cost if this reasoning is wrong is that a host with an unusual SIIT configuration
+  could reach private space through it.
+- **NAT64 (`64:ff9b::/96`) and 6to4 (`2002::/16`) are not unwrapped either**, and are more common
+  in real networks than the IPv4-translated form above. Same reasoning, same acceptance, recorded
+  together deliberately: if this family of embeddings is ever closed, it should be closed as a
+  family — auditing every RFC-defined way to fold an IPv4 address into 128 bits — rather than one
+  prefix at a time as each is separately noticed.
+- **`blocked_hosts()` lowercases the vendor hosts read from `config/forbidden-domains.json` but
+  does not strip trailing dots from them.** The asymmetry with `is_blocked`'s now-normalised input
+  is real. It has no live consumer: every entry in that file is written by this project, without a
+  trailing dot, so there is nothing for the asymmetry to bite on today. It would matter only if a
+  future entry were added with one.
 
 ## Self-hosted and no-auth endpoints
 
