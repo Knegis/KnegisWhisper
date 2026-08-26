@@ -3,11 +3,17 @@
  * `tools/knegiswhisper-mcp`, and the one fact that matters most about it:
  * this server has no backend of its own. It is a second front end over the
  * same local HTTP API `Integrations > API` starts and `Integrations > CLI`
- * talks to — thirteen tools, one per route, using the CLI's own client and
+ * talks to — one tool per route, using the CLI's own client and
  * discovery-file reader rather than a second implementation of either. So it
  * can only do anything while this application is running, and the screen
  * says that plainly rather than leaving it to be discovered as a stream of
  * tool-call failures in whatever client it is configured into.
+ *
+ * Deliberately no tool count anywhere on this screen: a specific number
+ * ("thirteen tools") is a claim nothing here verifies, and it silently rots
+ * the moment `tools/knegiswhisper-mcp/src/tools.rs` grows a fourteenth. "One
+ * tool per route" is true for as long as that remains this server's design,
+ * with nothing to keep in sync.
  *
  * The binary's location is a real filesystem check, next to this running
  * application and then on `PATH` — reported as not found rather than assumed
@@ -49,10 +55,10 @@ export function IntegrationsMcp() {
         <h2>MCP</h2>
         <p className="muted">
           <code>{status.binaryName}</code> is a stdio MCP server exposing this
-          application's notes, transcripts and dictionary as thirteen tools —
-          one per local API route, with no backend of its own. It must be run
-          by an MCP client, and it does nothing at all unless this application
-          is running: every tool call is a request to the same local API that{" "}
+          application's notes, transcripts and dictionary — one tool per local
+          API route, with no backend of its own. It must be run by an MCP
+          client, and it does nothing at all unless this application is
+          running: every tool call is a request to the same local API that{" "}
           <code>Integrations &gt; API</code> starts.
         </p>
 

@@ -79,12 +79,8 @@ export function IntegrationsCli() {
             not exist while the local API is not running.
           </p>
         )}
-        {status.discoveryPermissions?.state === "inherited-from-profile" ? (
-          <p className="caveat">
-            This is not the same as the file having been locked down on its
-            own. Anything that can read files your profile can read — which,
-            on this platform, includes administrators — can use the local API.
-          </p>
+        {permissions?.caveat ? (
+          <p className="caveat">{permissions.caveat}</p>
         ) : null}
       </section>
     </div>

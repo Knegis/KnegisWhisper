@@ -40,8 +40,15 @@ import type {
   VerifiedBy,
 } from "./ipc";
 
-/** A state and, where there is one, what backs it up. */
-export type Stated = { text: string; detail: string };
+/**
+ * A state and, where there is one, what backs it up.
+ *
+ * `caveat` is rarer: a sentence worth its own paragraph rather than a `Row`'s
+ * detail line, for a state that needs more room to explain than "the reason
+ * next to the value" affords. Optional, and absent for most states — most of
+ * this file's callers never set it.
+ */
+export type Stated = { text: string; detail: string; caveat?: string };
 
 /**
  * Render a capture-exclusion state without overclaiming.
@@ -515,6 +522,14 @@ export function appleCalendarSupportLabel(support: AppleCalendarSupport): Stated
  * this build currently achieves" and wrong read as "checked and confirmed".
  * Every other case names its evidence too, the same discipline
  * `captureExclusionLabel` already follows for `unknown`.
+ *
+ * `inherited-from-profile`'s `caveat` used to be a paragraph of JSX,
+ * hand-written identically in both `Integrations > API` and
+ * `Integrations > CLI`. Two copies of the same sentence is the exact
+ * "definitions that can drift apart" shape this task was about, one layer
+ * up — an edit to one screen would silently leave the other telling the user
+ * something different about the same file. It lives here once; both screens
+ * render whatever this function says.
  */
 export function discoveryPermissionsLabel(p: DiscoveryPermissions): Stated {
   switch (p.state) {
@@ -528,6 +543,8 @@ export function discoveryPermissionsLabel(p: DiscoveryPermissions): Stated {
         text: "Not independently restricted",
         detail:
           "it inherits your profile directory's permissions, which normally allow your account and administrators. Nothing here verified that inheritance, and it is not the same as this file having been locked down on its own",
+        caveat:
+          "This is not the same as the file having been locked down on its own. Anything that can read files your profile can read — which, on this platform, includes administrators — can use the local API.",
       };
     case "wider":
       return {
