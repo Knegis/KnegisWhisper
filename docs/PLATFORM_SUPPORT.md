@@ -159,7 +159,7 @@ with it — three different facts that a single "it works" would collapse.
 | Local windowed model | repeated `/inference` passes over the local `whisper-server` | ⚠️ built, never run by a person |
 | OpenAI Realtime | two WebSockets, one per capture | ⚠️ request shaping and the event grammar against fixtures. **No live call.** A key exists on this machine and has not been used |
 | AssemblyAI Realtime | two WebSockets, one per capture | ⚠️ request shaping and the event grammar against fixtures, and most of the wire shape **believed rather than confirmed** -- see below. **No live call and no key for this provider exists on any machine this project has touched.** |
-| Deepgram Realtime | — | not written |
+| Deepgram Realtime | two WebSockets, one per capture | ⚠️ request shaping and the event grammar against fixtures, and most of the wire shape **believed rather than confirmed** -- see below. **No live call and no Deepgram key exists on any machine this project has touched.** |
 | Corti Realtime | — | not written |
 | Tinfoil Realtime | — | **declined.** An unattested socket would present as Tinfoil while providing none of the confidentiality the name means. Same reason as the batch client |
 
@@ -204,6 +204,49 @@ because it bears on a capability claim rather than only on plumbing:
 Two sockets, one per capture, for the same reason as OpenAI Realtime: this
 provider's speaker labels say who *within* a stream, never *which* stream, so
 `AudioSource` still needs two connections to stay a fact rather than a guess.
+
+The Deepgram client is a clean-room build in the same position as AssemblyAI's:
+no vendor source for this wire exists anywhere in this repository, so most of it
+is **believed from public documentation, not confirmed**.
+`crates/meeting-core/src/deepgram.rs`'s module documentation carries the full
+list; the items that bear on a capability claim rather than only on plumbing are
+repeated here:
+
+- **`token_rotation: true` describes upstream's minted temporary tokens, not
+  this client.** Deepgram's own hosted service issues short-lived tokens that
+  must be refreshed mid-session; this application never mints one, so the
+  header carries the user's own stored API key and nothing here schedules a
+  refresh. `crates/meeting-core/src/deepgram.rs` and `deepgram_socket.rs` both
+  carry a test proving no rotation clock exists, with a comment saying why.
+  Implementing a refresh loop that re-reads an unchanging key would be
+  ceremony that looks like a safeguard and is not one.
+- **Whether a `Results` message carries a per-word `speaker` field at all**, and
+  whether reading the *first* word's speaker as representative of the whole
+  message is a safe simplification. The capability table declares
+  `speaker_labels: true`; if the wire does not carry the field, or splits it
+  across the message differently than believed, every event from this provider
+  degrades to `speaker: None` — the same safe degradation AssemblyAI and
+  OpenAI Realtime already report, and `AudioSource` still attributes the
+  transcript correctly either way.
+- **Whether omitting a language and sending `detect_language=true` is in fact
+  how this provider auto-detects**, as opposed to defaulting to a fixed
+  language when neither is sent. `language_detection: true` is declared, and
+  this client actively asks for detection rather than silently sending
+  nothing and hoping the server's default matches the room.
+- The endpoint path, the query parameter names (`encoding`, `sample_rate`,
+  `channels`, `language`, `detect_language`, `diarize`, `interim_results`, and
+  the repeated `keyterm` parameter itself), the `Authorization: Token <key>`
+  header (a scheme prefix different from AssemblyAI's bare key and OpenAI's
+  `Bearer`), and the `Results`/`Metadata`/`Error` message envelope are all
+  likewise unverified against a live socket.
+- Audio leaving as raw binary WebSocket frames, not JSON-plus-base64, is
+  believed with more confidence than the rest, matching both AssemblyAI's
+  assumed convention and Deepgram's documented one for raw linear PCM.
+
+Two sockets, one per capture, for the same reason as AssemblyAI and OpenAI
+Realtime: Deepgram's diarization says who *within* a stream, never *which*
+stream, so `AudioSource` still needs two connections to stay a fact rather
+than a guess.
 
 ## Meeting detection
 
