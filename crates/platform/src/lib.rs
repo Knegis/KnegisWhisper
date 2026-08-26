@@ -14,6 +14,7 @@ pub mod hotkey;
 pub mod insertion;
 pub mod keyhook;
 pub mod keys;
+pub mod meeting_detect;
 pub mod window;
 
 /// Failures from talking to the operating system.
