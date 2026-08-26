@@ -217,6 +217,9 @@ fn render() -> String {
         "local api" => [
             crate::local_api::LocalApiStatus,
         ],
+        "updater" => [
+            crate::updater::UpdateCheckResult,
+        ],
     }
 
     // `ts-rs` leaves a space before the newline it inserts ahead of a field's

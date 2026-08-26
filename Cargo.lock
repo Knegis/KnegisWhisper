@@ -2689,6 +2689,7 @@ dependencies = [
  "kw-sidecar",
  "kw-storage",
  "kw-transcription-core",
+ "semver",
  "serde",
  "serde_json",
  "tauri",

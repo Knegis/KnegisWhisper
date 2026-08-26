@@ -97,6 +97,7 @@ import type {
   TranscriptEvent,
   Transcription,
   UnhandledAction,
+  UpdateCheckResult,
   VerifiedBy,
 } from "../generated/ipc-types";
 
@@ -173,6 +174,7 @@ export type {
   TranscriptEvent,
   Transcription,
   UnhandledAction,
+  UpdateCheckResult,
   VerifiedBy,
 };
 
@@ -779,4 +781,36 @@ export async function setCloudProvider(
     cortiEnvironment: corti?.environment ?? null,
     cortiTenant: corti?.tenant ?? null,
   });
+}
+
+/* -------------------------------------------------------------- updater */
+
+/**
+ * Check this project's own GitHub releases for a newer version.
+ *
+ * Never called except by an explicit click — nothing subscribes to this on a
+ * timer or on load, which is what "opt-in, never at startup" means from the
+ * frontend's side of the boundary. See `updater.rs`.
+ */
+export async function checkForUpdate(): Promise<UpdateCheckResult> {
+  return invoke<UpdateCheckResult>("update_check");
+}
+
+/** What the last check found, without starting a new one. `null` if nobody has ever checked. */
+export async function getLastUpdateCheck(): Promise<UpdateCheckResult | null> {
+  return invoke<UpdateCheckResult | null>("update_check_last");
+}
+
+/** Hide the update notification window without forgetting what it found. */
+export async function dismissUpdateNotification(): Promise<void> {
+  return invoke("update_dismiss");
+}
+
+/** Fired whenever a check completes, whatever it found. */
+export async function onUpdateCheckResult(
+  handler: (result: UpdateCheckResult) => void,
+): Promise<UnlistenFn> {
+  return listen<UpdateCheckResult>("update-check-result", (event) =>
+    handler(event.payload),
+  );
 }

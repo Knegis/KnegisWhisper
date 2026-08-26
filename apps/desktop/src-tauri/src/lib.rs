@@ -28,6 +28,8 @@ mod reasoning;
 mod shortcuts;
 mod state;
 mod tray;
+mod update_window;
+mod updater;
 
 use anyhow::Context as _;
 use tauri::Manager as _;
@@ -222,6 +224,28 @@ pub fn run() -> anyhow::Result<()> {
                 ),
             }
 
+            // The update notification, hidden. Created here for the same
+            // reason as the meeting window: one built at the moment a check
+            // found something would appear a beat late and could steal focus
+            // while its webview initialised. Nothing here reaches the
+            // network -- see updater.rs's module doc for why creating this
+            // window is not a startup check.
+            match update_window::create(&handle) {
+                Ok(window) => {
+                    let status = update_window::apply_treatments(&window);
+                    tracing::info!(
+                        capture_exclusion = ?status.capture_exclusion,
+                        non_activating = ?status.non_activating,
+                        "update notification window ready"
+                    );
+                }
+                Err(err) => tracing::error!(
+                    error = %err,
+                    "could not create the update notification window"
+                ),
+            }
+            app.manage(updater::LastCheck::default());
+
             let meetings = std::sync::Arc::new(meeting::MeetingRuntime::new(
                 handle.clone(),
                 db.clone(),
@@ -347,6 +371,9 @@ pub fn run() -> anyhow::Result<()> {
             meeting::meeting_keyterms,
             meeting::meeting_set_keyterms,
             meeting::meeting_review_config,
+            updater::update_check,
+            updater::update_check_last,
+            updater::update_dismiss,
         ])
         .run(tauri::generate_context!())
         .context("the application exited with an error")

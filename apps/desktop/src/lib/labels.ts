@@ -30,6 +30,7 @@ import type {
   ShortcutHookStatus,
   Sources,
   SystemAudioSupport,
+  UpdateCheckResult,
   VerifiedBy,
 } from "./ipc";
 
@@ -373,4 +374,44 @@ export function detectedLabel(d: Detected): string {
   return d.inCall
     ? `in a call — detected as ${d.evidence}`
     : `open, but not detectably in a call, so recording is not offered for it — detected as ${d.evidence}`;
+}
+
+/* ------------------------------------------------------------------ updater */
+
+/**
+ * What a check for an update found, honestly.
+ *
+ * `no-public-key-configured` gets its own sentence rather than being folded
+ * into "up to date" or left silent: this build has no updater public key set,
+ * so a downloaded update's authenticity could never be checked, and that is a
+ * different fact from "nothing new was published". See `docs/SECURITY.md`.
+ */
+export function updateCheckLabel(result: UpdateCheckResult): Stated {
+  switch (result.state) {
+    case "no-public-key-configured":
+      return {
+        text: "Update checking is not securely configured",
+        detail:
+          "no updater public key is set, so a downloaded update's authenticity could never be checked. See docs/SECURITY.md for how to generate one.",
+      };
+    case "check-failed":
+      return { text: "Could not check for an update", detail: result.error };
+    case "current-version-unparseable":
+      return {
+        text: "This build's own version could not be read",
+        detail: `unparseable version: ${result.version}`,
+      };
+    case "latest-version-unparseable":
+      return {
+        text: "The published release could not be read",
+        detail: `unparseable tag: ${result.tag}`,
+      };
+    case "up-to-date":
+      return { text: "Up to date", detail: `version ${result.current}` };
+    case "update-available":
+      return {
+        text: `Update available: v${result.latest}`,
+        detail: `you have v${result.current} — ${result.url}`,
+      };
+  }
 }

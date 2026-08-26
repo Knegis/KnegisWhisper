@@ -1029,3 +1029,9 @@ discoveryPermissions: string | null,
  * True when the permissions are the best this platform offers.
  */
 discoveryPermissionsAsExpected: boolean | null, };
+
+/* ---------------------------------------------------------------- updater */
+/**
+ * What checking for an update found.
+ */
+export type UpdateCheckResult = { "state": "no-public-key-configured" } | { "state": "check-failed", error: string, } | { "state": "current-version-unparseable", version: string, } | { "state": "latest-version-unparseable", tag: string, } | { "state": "up-to-date", current: string, latest: string, } | { "state": "update-available", current: string, latest: string, url: string, };

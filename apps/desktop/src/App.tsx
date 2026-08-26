@@ -10,8 +10,9 @@
  * # Navigation
  *
  * A `view` state and a switch, not a router. The URL fragment is already claimed
- * — `#overlay` selects the overlay window out of the same bundle — and a router
- * would be a dependency that makes one `switch` look like a different `switch`.
+ * — `#overlay`, `#meeting`, and `#update` each select a window out of the same
+ * bundle — and a router would be a dependency that makes one `switch` look
+ * like a different `switch`.
  * There is nothing to link to from outside and no history worth preserving: this
  * is a settings window, not a site.
  *
@@ -29,6 +30,7 @@ import { getDiagnostics } from "./lib/ipc";
 import { useRefresh } from "./lib/useRefresh";
 import { MeetingNotification } from "./MeetingNotification";
 import { Overlay } from "./Overlay";
+import { UpdateNotification } from "./UpdateNotification";
 import { DiagnosticsView } from "./views/Diagnostics";
 import { DictationView } from "./views/Dictation";
 import { IntegrationsApi } from "./views/IntegrationsApi";
@@ -191,13 +193,15 @@ function Shell() {
  * means one CSP and one build.
  */
 export default function App() {
-  // One bundle, three surfaces, routed on the fragment. A `switch` rather than
-  // a chain of ternaries so a fourth window is a compile-visible addition.
+  // One bundle, four surfaces, routed on the fragment. A `switch` rather than
+  // a chain of ternaries so a fifth window is a compile-visible addition.
   switch (window.location.hash) {
     case "#overlay":
       return <Overlay />;
     case "#meeting":
       return <MeetingNotification />;
+    case "#update":
+      return <UpdateNotification />;
     default:
       return <Shell />;
   }
