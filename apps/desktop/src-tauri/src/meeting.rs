@@ -594,6 +594,27 @@ fn resolve_client(provider_id: &str) -> Result<Client, String> {
     })
 }
 
+/// Corti's environment and tenant, from the same settings the batch
+/// transcription client reads -- reused rather than duplicated, because they
+/// are properties of the Corti tenancy, not of the meeting feature. Refuses
+/// by name when either is missing; see
+/// [`kw_meeting_core::corti::scope`]'s doc comment for why this mirrors
+/// `route.rs`'s `required` rather than defaulting.
+///
+/// A free function taking `&RouteSettings` rather than reading the database
+/// itself, for the same reason `resolve_key_ref` and `resolve_client` are
+/// free functions: the refusal can then be tested with no `AppHandle` and no
+/// database in sight.
+fn resolve_corti_scope(
+    settings: &kw_transcription_core::RouteSettings,
+) -> Result<(String, String), String> {
+    kw_meeting_core::corti::scope(
+        settings.corti_environment.as_deref().unwrap_or(""),
+        settings.corti_tenant.as_deref().unwrap_or(""),
+    )
+    .map_err(|e| e.to_string())
+}
+
 /// A language setting normalised to what [`MeetingProviderConfig`] wants: a
 /// blank field becomes `None` rather than the literal empty string, so
 /// [`kw_meeting_core::validate`] reads it the same way whether the setting was
@@ -845,6 +866,31 @@ impl MeetingRuntime {
                 ))
                 .with_live_events(events),
             )),
+            Client::CortiRealtime => {
+                // Read from the same settings the batch Corti client uses,
+                // not a second pair of meeting-only ones -- see
+                // `kw_meeting_core::corti`'s module documentation.
+                // `resolve_corti_scope` refuses by name when either is
+                // missing, exactly like `route.rs`'s `required` does for the
+                // same reason.
+                let settings: kw_transcription_core::RouteSettings =
+                    kw_storage::settings::get(self.db.pool(), crate::dictation::ROUTE_SETTINGS_KEY)
+                        .await
+                        .ok()
+                        .flatten()
+                        .unwrap_or_default();
+                let (environment, tenant) = resolve_corti_scope(&settings)?;
+
+                Ok(Box::new(
+                    kw_meeting_core::corti_socket::CortiRealtime::new(
+                        Arc::clone(&self.credentials),
+                        self.policy.clone(),
+                        environment,
+                        tenant,
+                    )
+                    .with_live_events(events),
+                ))
+            }
         }
     }
 
@@ -1475,6 +1521,7 @@ mod tests {
             resolve_client("deepgram-realtime"),
             Ok(Client::DeepgramRealtime)
         );
+        assert_eq!(resolve_client("corti-realtime"), Ok(Client::CortiRealtime));
     }
 
     #[test]
@@ -1587,6 +1634,57 @@ mod tests {
     }
 
     #[test]
+    fn corti_realtime_refuses_to_start_naming_the_settings_screen_when_nothing_is_stored() {
+        let store = kw_security::MemoryCredentialStore::new();
+        let err = resolve_key_ref("corti-realtime", Client::CortiRealtime, &store).unwrap_err();
+        assert!(err.contains("Settings > Providers"), "{err}");
+    }
+
+    #[test]
+    fn corti_realtime_gets_past_the_check_once_a_key_is_stored() {
+        let store = kw_security::MemoryCredentialStore::new();
+        store
+            .set(
+                &kw_security::KeyRef::new("corti").unwrap(),
+                &kw_security::Secret::new("corti-test".to_owned()),
+            )
+            .unwrap();
+
+        let key_ref = resolve_key_ref("corti-realtime", Client::CortiRealtime, &store).unwrap();
+        assert_eq!(key_ref, kw_security::KeyRef::new("corti"));
+    }
+
+    #[test]
+    fn corti_realtime_refuses_to_build_naming_which_of_environment_or_tenant_is_missing() {
+        // `resolve_corti_scope` is what `provider`'s `Client::CortiRealtime`
+        // arm calls before it ever constructs a socket -- this is the same
+        // refusal `route.rs::required` fires for batch transcription, reached
+        // from a second caller rather than duplicated.
+        let settings = kw_transcription_core::RouteSettings::default();
+        let err = resolve_corti_scope(&settings).unwrap_err();
+        assert!(err.contains("environment"), "{err}");
+
+        let settings = kw_transcription_core::RouteSettings {
+            corti_environment: Some("eu".to_owned()),
+            ..Default::default()
+        };
+        let err = resolve_corti_scope(&settings).unwrap_err();
+        assert!(err.contains("tenant"), "{err}");
+    }
+
+    #[test]
+    fn corti_realtime_scope_resolves_once_both_are_set() {
+        let settings = kw_transcription_core::RouteSettings {
+            corti_environment: Some(" eu ".to_owned()),
+            corti_tenant: Some(" acme ".to_owned()),
+            ..Default::default()
+        };
+        let (environment, tenant) = resolve_corti_scope(&settings).unwrap();
+        assert_eq!(environment, "eu");
+        assert_eq!(tenant, "acme");
+    }
+
+    #[test]
     fn every_clients_credential_slot_is_a_valid_key_ref() {
         // `resolve_key_ref`'s `KeyRef::new(slot).ok_or_else(...)` branch stayed
         // unreachable and untested while only two `Client` variants existed --
@@ -1601,6 +1699,7 @@ mod tests {
             Client::OpenAiRealtime,
             Client::AssemblyAi,
             Client::DeepgramRealtime,
+            Client::CortiRealtime,
         ] {
             if let Some(slot) = kw_meeting_core::credential_slot(client) {
                 assert!(
