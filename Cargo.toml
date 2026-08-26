@@ -4,6 +4,7 @@ members = [
     "apps/desktop/src-tauri",
     "crates/app-core",
     "crates/audio-core",
+    "crates/calendar-core",
     "crates/local-api",
     "crates/meeting-core",
     "crates/network-policy",
@@ -40,6 +41,7 @@ repository = "https://github.com/axelalbertkarlsson/KnegisWhisper"
 [workspace.dependencies]
 kw-app-core = { path = "crates/app-core" }
 kw-audio-core = { path = "crates/audio-core" }
+kw-calendar-core = { path = "crates/calendar-core" }
 kw-local-api = { path = "crates/local-api" }
 kw-meeting-core = { path = "crates/meeting-core" }
 kw-network-policy = { path = "crates/network-policy" }
