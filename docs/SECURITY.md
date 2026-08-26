@@ -65,8 +65,11 @@ by platform, and this document used to claim `0600` everywhere, which was false:
   an honest report of an unmet requirement, not a mechanism.** Measured on one real machine
   (2026-08-26) the inherited ACL granted Modify to a local group that was neither the user nor the
   administrators — see [BENCH_CHECK.md](BENCH_CHECK.md) — so on Windows, treat the token as
-  readable by anyone the profile directory lets in. Closing it means an explicit owner-only DACL
-  through `SetNamedSecurityInfo`, with the same read-back discipline the Unix path already uses.
+  readable by anyone the profile directory lets in. Worse, `Permissions::is_as_expected` currently
+  returns `true` for that state, so `Integrations > Local API` shows no warning and a sentence
+  naming trustees nothing ever read. Closing it means an explicit owner-only DACL through
+  `SetNamedSecurityInfoW` with `PROTECTED_DACL_SECURITY_INFORMATION`, then reading the DACL back
+  and reporting `OwnerOnly` only if it matches — the discipline the Unix path already uses.
 
 The MCP server talks to the desktop application through this authenticated local API. Streamable
 HTTP is available but disabled by default; stdio is the normal transport. Destructive MCP tools

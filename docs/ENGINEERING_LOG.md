@@ -200,20 +200,25 @@ directory's ACL, which normally grants this user and the administrators group". 
 machine disagrees: every entry inherited, and two of them a local group and an unresolved SID with
 Modify — neither the user nor the administrators.
 
-Two separate things went wrong and they deserve separating.
+My first reading was that the code was honest and only the documentation overclaimed. That was
+wrong, and reading `Permissions` rather than just `restrict_file` is what showed it. Three places
+state what the permissions are and not one of them looked:
 
-The **code** is honest. It applies nothing and says it applied nothing, which is the pattern this
-project follows everywhere else, and it is why this is a gap rather than a lie.
+- The code comment reasons about what an inherited ACL "normally" grants.
+- `Permissions::is_as_expected` returns **`true`** for `InheritedFromProfile`, under a doc comment
+  defining that as "as restrictive as the platform allows". Windows allows an explicit owner-only
+  DACL, so it is not. `Integrations > Local API` warns only when that flag is `false`, so it stays
+  silent — under the sentence *"readable by your user account and by administrators, which is what
+  your profile directory allows"*, naming two trustees that are neither.
+- `docs/SECURITY.md` said the file "is written with owner-only permissions (`0600`)", flatly, for
+  every platform. A security document asserting a control that does not exist on the platform the
+  application runs on is worse than saying nothing, because it stops anyone looking. Corrected in
+  place, per platform, with the measurement.
 
-`docs/SECURITY.md` was **not** honest. It said the file "is written with owner-only permissions
-(`0600`)", flatly, for every platform. A security document asserting a control that does not exist
-on the platform the application actually runs on is worse than saying nothing, because it stops
-anyone looking. Corrected in place, per platform, with the measurement.
-
-The comment is the more interesting failure. It reasoned about what an inherited ACL "normally"
-grants instead of reading one. That is the same move as `contentProtected` being set and never read
-back — and the fix is the same discipline the Unix branch of this very function already applies:
-set it, read it back, report what you found.
+This is the `contentProtected` pattern with a different name: a control that is not applied,
+described by a string that assumes what applying it would have achieved. The fix is the discipline
+the Unix branch of this very function already uses — set it, read it back, report what came back —
+and until that lands `is_as_expected` should be returning `false` here.
 
 Not fixed here either. An owner-only DACL through `SetNamedSecurityInfo` plus a read-back is real
 `windows-rs` work, and it should land with the read-back rather than without it.
