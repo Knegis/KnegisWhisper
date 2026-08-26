@@ -155,8 +155,22 @@ export function SettingsMeetings() {
   const current = state ?? status.state;
   const recording = current === "recording";
   const selectedProvider = providers.find((p) => p.id === selected) ?? null;
-  const keytermReview = review ? keytermReviewLabel(review) : null;
+  const keytermReview =
+    review && selectedProvider
+      ? keytermReviewLabel(review, selectedProvider.keyterms)
+      : null;
   const languageWarning = review ? languageRequiredWarning(review) : null;
+
+  // Persist exactly the values the review above just described, so a saved
+  // setting can never lag behind what the screen showed. Awaited before
+  // `startMeeting`, and not left to an on-blur save that a click straight
+  // from the keyterms field might outrun — `MeetingRuntime::start` reads
+  // these from the database, and a preview describing a configuration it
+  // will not use is the defect this task exists to close.
+  const persistLanguageAndKeyterms = async () => {
+    await setMeetingLanguage(effectiveLanguage.trim());
+    await setMeetingKeyterms(parseKeyterms(effectiveKeytermsText));
+  };
 
   return (
     <div className="view">
@@ -245,6 +259,9 @@ export function SettingsMeetings() {
                   value={effectiveLanguage}
                   disabled={recording}
                   onChange={(e) => setLanguageDraft(e.target.value)}
+                  onBlur={() => {
+                    void guard(persistLanguageAndKeyterms);
+                  }}
                 />
               </span>
             </div>
@@ -258,31 +275,18 @@ export function SettingsMeetings() {
                   value={effectiveKeytermsText}
                   disabled={recording}
                   onChange={(e) => setKeytermsDraft(e.target.value)}
-                />
-              </span>
-            </div>
-            <div className="row">
-              <span className="row-value controls">
-                <button
-                  type="button"
-                  disabled={recording}
-                  onClick={() => {
-                    void guard(async () => {
-                      await setMeetingLanguage(effectiveLanguage.trim());
-                      await setMeetingKeyterms(parseKeyterms(effectiveKeytermsText));
-                    });
+                  onBlur={() => {
+                    void guard(persistLanguageAndKeyterms);
                   }}
-                >
-                  Save language and keyterms
-                </button>
+                />
               </span>
             </div>
             {/*
              * `validate` computed this, not a re-implementation here — see
-             * `kw_meeting_core::validate`. Shown for the draft above, before
-             * it is saved or a meeting is started, so a truncated keyterm
-             * list or a missing language is never discovered only after the
-             * click.
+             * `kw_meeting_core::validate`. Shown for the fields above as
+             * they are edited. Saved when a field is left, and saved again
+             * right before "Start recording" runs, so what is displayed can
+             * never lag behind what gets persisted.
              */}
             {keytermReview ? (
               <Row
@@ -325,6 +329,11 @@ export function SettingsMeetings() {
                 onClick={() => {
                   if (selected === null) return;
                   void guard(async () => {
+                    // Saved here rather than trusted to an on-blur that a
+                    // click straight out of the keyterms field would outrun:
+                    // this is what the review just above was describing, so
+                    // it is what `start` must read.
+                    await persistLanguageAndKeyterms();
                     setOutcome(null);
                     setSources(await startMeeting(selected, wantSystem));
                   });

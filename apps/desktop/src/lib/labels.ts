@@ -273,17 +273,29 @@ export function keytermLabel(k: KeytermSupport): string {
  * seeing before it is ever exceeded, and a screen that only speaks up once
  * something goes wrong is a screen that computed the truncation and dropped
  * it right back on the floor.
+ *
+ * `support` distinguishes *why* terms were dropped, because `ConfigReview`
+ * cannot: `KeytermSupport::effective_count` returns 0 for every requested
+ * term when a provider is `Unsupported` (OpenAI Realtime, Tinfoil, and the
+ * local model all ignore keyterms entirely), which is not the same fact as a
+ * numeric cap being exceeded. Saying "over this provider's cap" in the first
+ * case would be a false statement about why the user's input did nothing.
  */
-export function keytermReviewLabel(review: ConfigReview): {
+export function keytermReviewLabel(
+  review: ConfigReview,
+  support: KeytermSupport,
+): {
   value: string;
   detail: string | undefined;
 } {
   return {
     value: `${review.keytermsUsed} of ${review.keytermsRequested} used`,
     detail:
-      review.keytermsDropped > 0
-        ? `${review.keytermsDropped} dropped — over this provider's cap`
-        : undefined,
+      review.keytermsDropped === 0
+        ? undefined
+        : support.state === "unsupported"
+          ? "dropped — this provider ignores keyterms entirely"
+          : `${review.keytermsDropped} dropped — over this provider's cap`,
   };
 }
 
