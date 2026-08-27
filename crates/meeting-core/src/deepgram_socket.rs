@@ -226,9 +226,11 @@ impl DeepgramRealtime {
             );
         }
 
-        let mut websocket_config = WebSocketConfig::default();
-        websocket_config.max_frame_size = Some(MAX_MESSAGE_BYTES);
-        websocket_config.max_message_size = Some(MAX_MESSAGE_BYTES);
+        let websocket_config = WebSocketConfig {
+            max_frame_size: Some(MAX_MESSAGE_BYTES),
+            max_message_size: Some(MAX_MESSAGE_BYTES),
+            ..Default::default()
+        };
         let (socket, _) =
             tokio_tungstenite::connect_async_with_config(request, Some(websocket_config), false)
                 .await

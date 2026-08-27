@@ -3,7 +3,8 @@
 //! the claims in `config/integration-manifest.json` and
 //! `config/ui-surfaces.json`, belong to a later change.
 //!
-//! Three entry points, one pipeline underneath:
+//! Three entry points, one pipeline underneath -- though only two of them are
+//! reachable today; see **URL IMPORT, DORMANT** below:
 //!
 //! * **Audio** and **video** import both hand the source file to the pinned
 //!   `ffmpeg` sidecar, which strips it to 16 kHz mono WAV
@@ -58,6 +59,24 @@
 //! does not otherwise control, not a claim that they close every avenue --
 //! see that function's doc comment for what each one does and does not
 //! guarantee.
+//!
+//! # URL IMPORT, DORMANT
+//!
+//! Everything above about yt-dlp's own fetch describes a path that is **not
+//! currently reachable**. `media_import_url` was withdrawn as a Tauri command
+//! and `Notes > Upload` no longer offers a URL field, because the boundary
+//! this module can enforce stops at the URL as typed: the up-front check
+//! cannot see where a hostname resolves at connect time, nor any redirect or
+//! extractor-generated request yt-dlp makes on its own. Until each of those
+//! can be checked against the network policy, the entry point stays closed
+//! and `media:url-import` is `reachable: false` in
+//! `config/integration-manifest.json`, which carries the same reason.
+//!
+//! The implementation below is kept rather than deleted, so that re-enabling
+//! it is a decision about the fetch boundary rather than a rewrite. Each
+//! dormant item carries `#[allow(dead_code)]` pointing back at this section;
+//! its tests still run. Nothing here is dead in the sense of abandoned --
+//! only unregistered.
 //!
 //! # What is never logged
 //!
@@ -135,7 +154,10 @@ pub struct SidecarStatus {
 pub enum MediaImportSource {
     Audio,
     Video,
-    Url { host: String },
+    #[allow(dead_code)] // dormant: see URL IMPORT, DORMANT in the module doc.
+    Url {
+        host: String,
+    },
 }
 
 /// What a finished import produced. The frontend turns this into a note; this
@@ -178,6 +200,7 @@ pub enum MediaImportProgress {
     /// Installing a sidecar: unpacking it.
     Extracting,
     /// Running an import: yt-dlp is fetching the URL.
+    #[allow(dead_code)] // dormant: see URL IMPORT, DORMANT in the module doc.
     Fetching,
     /// Running an import: ffmpeg is converting to 16 kHz mono WAV.
     Converting,
@@ -212,6 +235,7 @@ pub enum MediaImportError {
     },
 
     #[error("that url was refused: {reason}")]
+    #[allow(dead_code)] // dormant: see URL IMPORT, DORMANT in the module doc.
     UrlRefused { reason: String },
 
     #[error("could not read {path}: {source}")]
@@ -225,6 +249,7 @@ pub enum MediaImportError {
     Conversion { detail: String },
 
     #[error("yt-dlp could not fetch that url: {detail}")]
+    #[allow(dead_code)] // dormant: see URL IMPORT, DORMANT in the module doc.
     Fetch { detail: String },
 
     #[error("no transcription route is configured: {detail}")]
@@ -267,6 +292,7 @@ impl MediaImportError {
 /// spawned. It does not, and cannot, prove anything about where a hostname
 /// resolves at the moment yt-dlp connects to it, or about any redirect yt-dlp
 /// follows on its own -- see the module doc.
+#[allow(dead_code)] // dormant: see URL IMPORT, DORMANT in the module doc.
 fn validate_import_url(url: &str) -> Result<url::Url, MediaImportError> {
     let parsed = kw_network_policy::validate(url, RequestPurpose::UserTriggeredMediaImport)
         .map_err(|err| MediaImportError::UrlRefused {
@@ -319,9 +345,11 @@ fn ffmpeg_convert_args(input: &Path, output: &Path) -> Vec<String> {
 /// The largest file yt-dlp will keep. Best-effort: yt-dlp can only enforce
 /// this against a size the remote server declares in advance, and a server
 /// that does not declare one is not capped by this flag at all.
+#[allow(dead_code)] // dormant: see URL IMPORT, DORMANT in the module doc.
 const YT_DLP_MAX_FILESIZE: &str = "500M";
 
 /// How long yt-dlp will wait on a stalled connection before giving up.
+#[allow(dead_code)] // dormant: see URL IMPORT, DORMANT in the module doc.
 const YT_DLP_SOCKET_TIMEOUT_SECS: u32 = 30;
 
 /// The yt-dlp arguments for fetching `url` to `output_template`.
@@ -348,6 +376,7 @@ const YT_DLP_SOCKET_TIMEOUT_SECS: u32 = 30;
 ///
 /// None of these touch DNS resolution, redirect-following, or certificate
 /// validation inside yt-dlp's own fetch -- see the module doc.
+#[allow(dead_code)] // dormant: see URL IMPORT, DORMANT in the module doc.
 fn ytdlp_download_args(url: &str, output_template: &Path) -> Vec<String> {
     vec![
         "--no-playlist".to_owned(),
@@ -369,6 +398,7 @@ fn ytdlp_download_args(url: &str, output_template: &Path) -> Vec<String> {
 /// The fixed base name yt-dlp is asked to write its download as, so the
 /// produced file can be found by prefix rather than by parsing anything
 /// yt-dlp printed.
+#[allow(dead_code)] // dormant: see URL IMPORT, DORMANT in the module doc.
 const DOWNLOAD_PREFIX: &str = "downloaded";
 
 /// The byte length of the canonical WAV header
@@ -412,6 +442,7 @@ fn check_importable_file(path: &str) -> Result<PathBuf, MediaImportError> {
 /// bearing one of these must never be mistaken for the finished download,
 /// even if yt-dlp's exit code were somehow misleading -- a partially fetched
 /// file must not be presented as a complete import.
+#[allow(dead_code)] // dormant: see URL IMPORT, DORMANT in the module doc.
 const INCOMPLETE_DOWNLOAD_SUFFIXES: [&str; 2] = [".part", ".ytdl"];
 
 /// Find the one file a sidecar left behind in `dir` whose name starts with
@@ -423,6 +454,7 @@ const INCOMPLETE_DOWNLOAD_SUFFIXES: [&str; 2] = [".part", ".ytdl"];
 /// either way, picking one silently would risk transcribing the wrong file.
 /// A file still carrying one of [`INCOMPLETE_DOWNLOAD_SUFFIXES`] is excluded
 /// outright rather than counted as a match.
+#[allow(dead_code)] // dormant: see URL IMPORT, DORMANT in the module doc.
 fn pick_downloaded_file(dir: &Path, prefix: &str) -> Result<PathBuf, MediaImportError> {
     let mut matches: Vec<PathBuf> = std::fs::read_dir(dir)
         .map_err(|source| MediaImportError::io(dir, source))?
@@ -782,6 +814,7 @@ impl MediaImportRuntime {
     /// Import media fetched from a URL by the yt-dlp sidecar. See the module
     /// doc for exactly what protection applies to the fetch and what does
     /// not.
+    #[allow(dead_code)] // dormant: see URL IMPORT, DORMANT in the module doc.
     pub async fn import_url(
         &self,
         app: &AppHandle,
@@ -811,6 +844,7 @@ impl MediaImportRuntime {
         })
     }
 
+    #[allow(dead_code)] // dormant: see URL IMPORT, DORMANT in the module doc.
     async fn fetch_and_transcribe(
         &self,
         app: &AppHandle,

@@ -40,12 +40,10 @@
 use kw_network_policy::{NetworkPolicy, RequestPurpose};
 use kw_security::Secret;
 use serde::Deserialize;
-use url::Url;
 
 use crate::sync_support::{percent_encode_path_segment, StoredAttendee, SyncError, MAX_PAGES};
 
 const CALENDARS_URL: &str = "https://graph.microsoft.com/v1.0/me/calendars";
-const GRAPH_HOST: &str = "graph.microsoft.com";
 
 fn events_delta_url(calendar_id: &str) -> String {
     format!(
