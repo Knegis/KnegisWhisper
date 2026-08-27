@@ -1308,9 +1308,19 @@ fn segment(
 /* ------------------------------------------------------------------ commands */
 
 /// Every meeting provider, with whether it can be used.
+///
+/// Credential-aware: a provider whose client exists but whose key is not stored
+/// comes back as `NeedsCredential` rather than `Available`, so the screen offers
+/// exactly what [`MeetingRuntime::start`] would accept. `contains` is asked, not
+/// `get` -- knowing whether a key is there does not require reading it.
 #[tauri::command]
-pub async fn meeting_providers() -> Vec<kw_meeting_core::MeetingProviderSummary> {
-    kw_meeting_core::listing()
+pub async fn meeting_providers(
+    runtime: State<'_, Arc<MeetingRuntime>>,
+) -> Result<Vec<kw_meeting_core::MeetingProviderSummary>, String> {
+    let credentials = Arc::clone(&runtime.credentials);
+    Ok(kw_meeting_core::listing_with_credentials(&|slot| {
+        kw_security::KeyRef::new(slot).is_some_and(|key| credentials.contains(&key))
+    }))
 }
 
 #[tauri::command]

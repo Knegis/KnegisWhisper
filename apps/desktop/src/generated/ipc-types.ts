@@ -531,15 +531,21 @@ max: number | null, wire: KeytermWire, };
 /**
  * Whether a provider can be used, and if not, why not.
  *
- * Three states rather than a boolean, because the three need different words on
- * the screen and lead to different actions.
+ * Four states rather than a boolean, because each needs different words on the
+ * screen and leads to a different action.
+ *
+ * [`Self::NeedsCredential`] was added after a bench run on 2026-08-27 found
+ * `Settings > Meetings` reading *ready to use* beside AssemblyAI and Corti with
+ * no key stored for either, while `MeetingRuntime::start` refused them by
+ * design. The screen and the command disagreed and the screen was the
+ * optimistic one, which is the shape of claim this project keeps removing.
  *
  * Named `Client…` rather than plain `Availability` because `local_model` already
  * exports one — whether a *server binary* is published for this platform — and
  * two Rust types cannot share a TypeScript name. `ipc_types.rs` asserts on that,
  * and caught this.
  */
-export type ClientAvailability = { "state": "available" } | { "state": "no-client", reason: string, } | { "state": "declined", reason: string, };
+export type ClientAvailability = { "state": "available" } | { "state": "no-client", reason: string, } | { "state": "declined", reason: string, } | { "state": "needs-credential", slot: string, };
 
 /**
  * One provider as the settings screen needs it.

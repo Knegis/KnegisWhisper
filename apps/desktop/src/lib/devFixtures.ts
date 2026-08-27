@@ -515,11 +515,11 @@ const MEETING_PROVIDERS: MeetingProviderSummary[] = [
     languageDetection: false,
     reconnect: false,
     batchFallback: false,
-    availability: {
-      state: "no-client",
-      reason: "the AssemblyAI streaming client is not built yet",
-    },
-    summary: "Not available in this build.",
+    // Was `no-client` with "not built yet", which stopped being true when the
+    // client landed in chunk E. Now the fixture for the state added after the
+    // 2026-08-27 bench run: a client exists and no key is stored.
+    availability: { state: "needs-credential", slot: "assemblyai" },
+    summary: "Streams audio to AssemblyAI. Speaker labels and live partials.",
   },
   {
     id: "meeting:local",

@@ -454,14 +454,22 @@ Fixed by installing a fixed red banner and a `FIXTURES — ` title prefix from i
 `installDevFixtures()` itself, so there is no arrangement of that module which mocks the IPC
 without also marking the screen.
 
-**3. `Settings > Meetings` says "ready to use" for a provider with no stored credential.** Open.
+**3. `Settings > Meetings` said "ready to use" for a provider with no stored credential.** Fixed.
 `kw_meeting_core::capabilities::availability()` asks only whether a *client* exists for the wire
 shape; it never consults the credential store. So AssemblyAI Realtime and Corti Realtime both read
 `ready to use` with no key stored for either, while `start` would refuse them by design — Task 1
 made it refuse with a message naming `Settings > Providers`. The screen and the command disagree,
 and the screen is the optimistic one. The data needed to fix it already exists
 (`credential_slot()`, and the `credentialSlots` command the Providers screen uses); what is missing
-is `credential_slot` on `MeetingProviderSummary` so the screen can cross-reference.
+was for anything to ask the question.
+
+`ClientAvailability` gained a fourth state, `NeedsCredential { slot }`, and
+`listing_with_credentials` narrows `Available` to it for any provider whose slot the caller says is
+empty. The caller is the `meeting_providers` command, which asks `CredentialStore::contains` -- the
+same question `start` asks, now asked before the provider is offered rather than after the click.
+`contains`, never `get`: knowing a key is there does not require reading it. The listing stays pure
+and the rule is testable without a credential store, which is how three new tests cover it,
+including one asserting no slot is looked up for a provider that could not be offered anyway.
 
 **4. The Deepgram row described a refresh this application does not perform.** It read *"its token
 has to be refreshed mid-session"*, which describes an application that mints short-lived tokens.

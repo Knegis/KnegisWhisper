@@ -366,6 +366,11 @@ export function availabilityLabel(a: ClientAvailability): string {
       return a.reason;
     case "declined":
       return `refused: ${a.reason}`;
+    // Named as something the reader can act on, and naming the screen to act
+    // on it -- the same sentence `MeetingRuntime::start` refuses with, so the
+    // list and the click cannot say different things.
+    case "needs-credential":
+      return `no key stored for ${a.slot}. Add one under Settings > Providers.`;
   }
 }
 
