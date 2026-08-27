@@ -72,37 +72,58 @@ in the application could store an API key**. `setProviderCredential` was exporte
 reachable through it, and collapsing the two fields would have had to lie about one or the other.
 
 `Settings > Providers` closed that, and the same screen immediately produced the next instance of
-the split: a key can now be stored for all fifteen slots, and four of the seven transcription
-providers are still unreachable because their route resolves to `Transport::ProviderClient` and
-the executor refuses it. Built, configurable, and honestly unusable — three separate facts.
+the split: a key can now be stored for all seventeen slots (grew from fifteen once
+`credential:assemblyai` and `credential:deepgram` were added for meeting streaming), and one of the
+seven transcription providers is still unreachable — Tinfoil, declined rather than unfinished; the
+other six all resolve to a real client now. Built, configurable, and — for the six — honestly
+usable; Tinfoil is built, configurable-through-the-screen-as-a-refusal, and deliberately not
+usable. Three separate facts, still not collapsed into one.
 
 ## The backlog
 
-On success the gate prints what is declared unreachable, grouped by surface. That list is the
-frontend backlog, sized in integrations rather than in adjectives:
+On success the gate prints what is declared unreachable, grouped by surface — quoted here as it
+actually printed at the close of this plan, not restated by hand:
 
-| Surface | Entries | Surface built |
-| --- | --- | --- |
-| `Settings > Meetings` | 6 | no |
-| `Settings > Transcription > Local` | 4 | yes — whisper only; sherpa is blocked, see BUILD_PLAN.md B4 |
-| `Settings > Transcription` | 1 | yes — Tinfoil, declined pending enclave attestation |
-| `Integrations > Calendar` | 3 | no |
-| `Notes > Upload` | 3 | no |
-| `Integrations > CLI` | 1 | no |
-| `Integrations > MCP` | 1 | no |
+```
+7 integrations are declared unreachable:
+  Settings > Transcription > Local      4  (surface built)
+  Settings > Transcription              1  (surface built)
+  Settings > Meetings                   1  (surface built)
+  Integrations > Calendar               1  (surface built)
+```
 
-**45 integrations are reachable today**, up from 8: the fifteen credential slots, six
-transcription providers, seven reasoning providers, three enterprise connectors, six local LLM
-families, the six whisper models, the local REST API, and transcript export.
+Down from 19 unreachable and 5 unbuilt surfaces when this section was last written, to 7 unreachable
+and **zero** unbuilt surfaces — no "surface not built" entry remains anywhere in the manifest. Every
+one of the seven is unreachable for a specific, named reason rather than "not done yet":
 
-*Reachable* is still not *verified*. The three enterprise connectors can be configured and their
-request shapes are tested against AWS's published signing vectors and recorded fixtures, and no
-live call has been made to any of them. `docs/PLATFORM_SUPPORT.md` keeps that distinction per
-provider.
+- **4 — the sherpa/Parakeet local-ASR models.** The runtime is real, measured, and proven: a probe
+  installed the pinned CLI and both pinned model archives and transcribed the same fixture whisper's
+  `tiny` model does, correctly. What is missing is a `Settings > Transcription > Local` selector,
+  deliberately not built as part of the measurement task that proved the runtime — see
+  `docs/BUILD_PLAN.md` chunk B4.
+- **1 — `transcription:tinfoil`.** Declined, not unfinished: an unattested HTTPS request would
+  transcribe correctly while presenting as Tinfoil, a confidentiality claim it did not earn.
+- **1 — `meeting-stream:tinfoil-realtime`.** The identical refusal, for the streaming client.
+- **1 — `calendar:apple`.** EventKit is described in `kw_calendar_core::apple` and implemented
+  nowhere, on any platform, for lack of a macOS machine to write or verify a binding against.
 
-The jump came from two screens and no new subsystem. Every one of those fifteen slots had working
-Rust behind it and nowhere to type a key; every one of those seven reasoning providers had a
-resolved route and no way to select it.
+**60 integrations are reachable today**, up from 8 when this plan was written and 45 when this
+section was last written mid-run: the seventeen credential slots, six of seven transcription
+providers, seven reasoning providers, three enterprise connectors, six local LLM families, the six
+whisper models, five of six meeting-stream entries, two of three calendar providers, the local REST
+API, the CLI and MCP screens, transcript export, and audio/video/URL/OpenWhispr import.
+
+*Reachable* is still not *verified*. The three enterprise connectors, the six meeting/calendar/media
+wire shapes and the newly-added meeting-stream clients can all be configured, and every one of them
+still needs a live call nobody has made — no key, no client ID, or no organisational credential
+exists on any machine this project has touched. `docs/PLATFORM_SUPPORT.md` and
+`docs/BENCH_CHECK.md` keep that distinction per provider and per capability; **none of chunks E
+onward has been exercised by a person at all**, only by tests and code review.
+
+The jump from 45 came from five chunks and no shared subsystem: three new meeting clients plus the
+one that already existed, a calendar crate, two new sidecars for media import, an MCP server, and
+two settings screens for developer tooling — each closing a specific "built, tested backend with no
+way in" the same way chunks A–C already had for reasoning and transcription.
 
 ## Status vocabulary
 
@@ -119,26 +140,65 @@ resolved route and no way to select it.
 
 ## Current state
 
-99 entries against baseline `c4000db9`:
+Quoted from the gate's own output, not recomputed by hand — **102 entries** against baseline
+`c4000db9802d`:
 
 | Status | Count |
 | --- | --- |
 | `ported-with-new-rust-implementation` | 52 |
-| `rewired-to-direct-byok` | 20 |
+| `rewired-to-direct-byok` | 21 |
 | `removed-vendor-service` | 18 |
-| `ported` | 4 |
-| `temporarily-deferred` | 3 |
-| `platform-specific` | 2 |
+| `temporarily-deferred` | 8 |
+| `ported` | 2 |
+| `platform-specific` | 1 |
+
+This was 99 entries and different counts when this section was last written. Three entries were
+added in between — `credential:assemblyai` and `credential:deepgram` (new BYOK slots for meeting
+streaming), and `media:openwhispr-import` (an importer that existed and was tested from early in
+the build but was deliberately kept out of the manifest until it had a screen, per the
+"backend-without-ui" rule this document describes above; both landed together in chunk G). Four
+status corrections made during Task 19's audit of every `ACTIVE`-vocabulary entry account for the
+rest of the movement in the table below.
+
+### The `ACTIVE`-status audit
+
+`verify-parity.mjs` defines `ACTIVE` — `ported`, `ported-with-new-rust-implementation`,
+`rewired-to-direct-byok`, `replaced-with-local-equivalent`, `platform-specific` — as "statuses that
+assert a working implementation exists." Mid-run, `platform:aec` was corrected from
+`ported-with-new-rust-implementation` to `temporarily-deferred` because nothing implementing it
+exists at all. Task 19 audited every other `ACTIVE` entry against the same test and found three more
+instances of the identical overclaim, plus one adjacent case outside the `ACTIVE` set entirely:
+
+| Entry | Carried | Reality |
+| --- | --- | --- |
+| `meeting-stream:tinfoil-realtime` | `ported` | No Tinfoil meeting client exists anywhere in the codebase |
+| `transcription:tinfoil` | `rewired-to-direct-byok` | `clients::shape()` returns `ClientNotImplemented`; nothing else implements it |
+| `calendar:apple` | `platform-specific` | `AppleCalendarSource` is "deliberately unimplemented by anything in this crate," on every platform |
+| `developer:agent-skills` (`kind: "documentation"`, outside `ACTIVE`) | `ported`, target `docs/agent-skills/` | That directory does not exist; the rewrite was never done |
+
+All four now carry `temporarily-deferred`. For the two Tinfoil entries this is a disclosed
+compromise, not a fit: this manifest's `statusVocabulary` has no "declined on principle" term, and
+each entry's `deferral.why` says so rather than letting the status imply a resource-blocked,
+resumable wait. `calendar:apple` and `developer:agent-skills` fit the term's ordinary meaning —
+a macOS machine and a person to write documentation, respectively, are named dependencies rather
+than open questions.
 
 ## Deferred integrations
 
-Three, each with dependencies and a named interface in the manifest.
+Eight, each with dependencies and a named interface in the manifest — up from three when this
+section was last written, once the four corrections above joined the four that were already
+deferred for a genuine resource or scope reason.
 
 | Integration | Phase | Why | Degradation |
 | --- | --- | --- | --- |
 | `search:semantic` | 8 | Qdrant + MiniLM + ONNX Runtime is a large dependency for a feature the app must work without anyway. | FTS5 keyword search stays fully functional; the UI hides semantic ranking rather than failing. |
 | `diarization-model:sherpa-onnx-pyannote-segmentation-3-0` | 8 | Needs ONNX Runtime and three models; dictation and meetings must be reliable first. | Transcripts have no speaker labels. |
 | `diarization-model:3dspeaker-campplus-en` | 8 | As above. | As above. |
+| `platform:aec` | 4 | No Rust equivalent to WebRTC's audio processing module exists that is not itself a C++ binding, and there is no C++ toolchain on this development machine. | Meetings still record and transcribe correctly; on speakers the far-end voice is transcribed twice instead of once, and on headphones there is nothing to cancel. |
+| `meeting-stream:tinfoil-realtime` | 4 | Declined on principle, not resource-blocked — see "the `ACTIVE`-status audit" above. | Every other meeting-stream provider is unaffected; this one is refused rather than approximated. |
+| `transcription:tinfoil` | 3 | Same principled refusal as above, for the batch client. | The other six transcription providers are unaffected. |
+| `calendar:apple` | 5 | EventKit has no Rust binding anywhere in this project and there is no macOS machine to write or verify one against. | Google and Microsoft calendar sync are unaffected; Apple reports `Unsupported` with the reason rather than an empty calendar list. |
+| `developer:agent-skills` | 7 | The rewritten `docs/agent-skills/` was never written; nothing blocks it beyond someone doing it. | None — documentation only, with no backend or UI surface of its own. |
 
 ## Things worth knowing about the data
 
