@@ -35,10 +35,17 @@ import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import type {
   Accelerator,
   Binding,
+  CalendarStatus,
   CleanupRoute,
   CleanupSettings,
+  CliStatus,
   ConfigReview,
+  ConnectOutcome,
   CredentialSlotStatus,
+  McpStatus,
+  MediaImportResult,
+  SidecarStatus,
+  SyncOutcome,
   Diagnostics,
   ExportedTranscript,
   Folder,
@@ -689,8 +696,103 @@ const LOCAL_API: LocalApiStatus = {
   port: 8749,
   discoveryPath:
     "C:\\Users\\dev\\AppData\\Roaming\\KnegisWhisper\\local-api.json",
-  discoveryPermissions: "readable only by you",
-  discoveryPermissionsAsExpected: true,
+  discoveryPermissions: { state: "owner-only" },
+};
+
+/* ------------------------------------------------------ cli, mcp and import */
+
+const CLI: CliStatus = {
+  binaryName: "knegiswhisper.exe",
+  binaryLocation: {
+    state: "sibling",
+    path: "C:\\Program Files\\KnegisWhisper\\knegiswhisper.exe",
+  },
+  discoveryPath:
+    "C:\\Users\\dev\\AppData\\Roaming\\KnegisWhisper\\local-api.json",
+  localApiRunning: true,
+  discoveryPermissions: { state: "owner-only" },
+};
+
+const MCP: McpStatus = {
+  binaryName: "knegiswhisper-mcp.exe",
+  /* Not found on purpose: the screen has a sentence for a binary it cannot
+   * locate, and a fixture that always finds one never shows it. */
+  binaryLocation: { state: "not-found" },
+  command: "knegiswhisper-mcp --stdio",
+  localApiRunning: true,
+};
+
+const SIDECARS: SidecarStatus[] = [
+  {
+    sidecar: "ffmpeg",
+    availability: { state: "installable" },
+    installed: true,
+  },
+  {
+    sidecar: "yt-dlp",
+    availability: {
+      state: "not-published",
+      reason: "no yt-dlp build is published for windows-aarch64",
+      tracking: "https://github.com/yt-dlp/yt-dlp/releases",
+    },
+    installed: false,
+  },
+];
+
+/* ---------------------------------------------------------------- calendars */
+
+const CALENDAR: CalendarStatus = {
+  google: {
+    clientIdConfigured: true,
+    clientId: "918273645-abcdef.apps.googleusercontent.com",
+    account: {
+      email: "axel@example.com",
+      token: { state: "active" },
+      calendars: [
+        {
+          id: "primary",
+          summary: "axel@example.com",
+          isPrimary: true,
+          isSelected: true,
+          eventCount: 42,
+        },
+        {
+          id: "team",
+          summary: "Platform team",
+          isPrimary: false,
+          isSelected: true,
+          eventCount: 17,
+        },
+        {
+          id: "holidays",
+          summary: "Holidays in Sweden",
+          isPrimary: false,
+          isSelected: false,
+          eventCount: 0,
+        },
+      ],
+      lastSync: {
+        at: "2026-08-27T07:12:00Z",
+        outcome: {
+          state: "completed",
+          eventsUpserted: 59,
+          eventsRemoved: 3,
+          /* One calendar failing while the sync as a whole "completed" is the
+           * case the screen has to be able to say out loud. */
+          calendarErrors: ["Platform team: 403 from the Calendar API"],
+        },
+      },
+    },
+  },
+  microsoft: {
+    clientIdConfigured: false,
+    clientId: null,
+    account: null,
+  },
+  apple: {
+    state: "unsupported",
+    reason: "the Apple calendar connector is a stub; EventKit is not wired up",
+  },
 };
 
 /* ------------------------------------------------------- history and notes */
@@ -1201,6 +1303,67 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
       languageRequired: false,
       sessionLimitSeconds: 1800,
     }) satisfies ConfigReview,
+
+  /* cli and mcp */
+  cli_status: () => CLI,
+  mcp_status: () => MCP,
+
+  /* media import */
+  media_import_status: () => SIDECARS,
+  media_import_install_sidecar: () => null,
+  pick_import_file: () => "C:\\Users\\dev\\Music\\interview.m4a",
+  media_import_audio: () =>
+    ({
+      text: "So the localisation pass is the blocker, and Anna owns it.",
+      provider: "openai",
+      model: "gpt-4o-transcribe",
+      durationMs: 184_000,
+      source: { kind: "audio" },
+    }) satisfies MediaImportResult,
+  media_import_video: () =>
+    ({
+      text: "Recorded walkthrough of the meeting detector.",
+      provider: "local",
+      model: "whisper-large-v3-turbo-q5",
+      durationMs: 921_000,
+      source: { kind: "video" },
+    }) satisfies MediaImportResult,
+  media_import_url: (a) =>
+    ({
+      text: "Transcript of the linked recording.",
+      provider: "openai",
+      model: "gpt-4o-transcribe",
+      durationMs: 512_000,
+      source: {
+        kind: "url",
+        host: (() => {
+          try {
+            return new URL(arg<string>(a, "url") ?? "").host;
+          } catch {
+            return "example.com";
+          }
+        })(),
+      },
+    }) satisfies MediaImportResult,
+
+  /* calendars */
+  calendar_status: () => CALENDAR,
+  calendar_set_client_id: () => null,
+  calendar_set_selected: () => null,
+  calendar_disconnect: () => null,
+  calendar_connect: () =>
+    ({
+      state: "connected",
+      accountEmail: "axel@example.com",
+      calendars: 3,
+    }) satisfies ConnectOutcome,
+  calendar_sync: () =>
+    ({
+      state: "completed",
+      eventsUpserted: 12,
+      eventsRemoved: 1,
+      calendarErrors: [],
+    }) satisfies SyncOutcome,
 
   /* updates */
   update_check: () =>
