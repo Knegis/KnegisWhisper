@@ -933,7 +933,8 @@
         ],
         "interface": "meeting_core::diarization::Diarizer",
         "expectedPhase": 8
-      }
+      },
+      "note": "Note added 2026-08-27, in the whole-branch review's fix wave: this entry has carried `temporarily-deferred` with a `deferral` block since before this plan began, but no top-level `note` explaining why -- unlike every other deferred entry in this file. The reason is docs/BUILD_PLAN.md's chunk I: none of diarization's work (the `ort` crate, the sherpa-onnx-diarize sidecar, silero_vad.onnx, or a port of diarizationPolicy.js) was attempted across the 19 tasks in this plan or the one added mid-run. This entry sits outside both the ACTIVE-status audit's scope (it never claimed a working implementation, so there was nothing to overclaim) and the parity gate's `USER_CONFIGURABLE` set, so no gate would ever have caught the missing note on its own."
     },
     "diarization-model:sherpa-onnx-pyannote-segmentation-3-0": {
       "status": "temporarily-deferred",
@@ -952,7 +953,8 @@
         ],
         "interface": "meeting_core::diarization::Diarizer",
         "expectedPhase": 8
-      }
+      },
+      "note": "Note added 2026-08-27, in the whole-branch review's fix wave: this entry has carried `temporarily-deferred` with a `deferral` block since before this plan began, but no top-level `note` explaining why -- unlike every other deferred entry in this file. The reason is docs/BUILD_PLAN.md's chunk I: none of diarization's work (the `ort` crate, the sherpa-onnx-diarize sidecar, silero_vad.onnx, or a port of diarizationPolicy.js) was attempted across the 19 tasks in this plan or the one added mid-run. This entry sits outside both the ACTIVE-status audit's scope (it never claimed a working implementation, so there was nothing to overclaim) and the parity gate's `USER_CONFIGURABLE` set, so no gate would ever have caught the missing note on its own."
     },
     "calendar:google": {
       "status": "ported-with-new-rust-implementation",
@@ -1200,7 +1202,8 @@
         "interface": "notes_core::search::SemanticIndex",
         "expectedPhase": 8,
         "degradation": "FTS5 keyword search remains fully functional; the UI hides semantic ranking rather than failing."
-      }
+      },
+      "note": "Note added 2026-08-27, in the whole-branch review's fix wave: this entry has carried `temporarily-deferred` with a `deferral` block since before this plan began, but no top-level `note` explaining why -- unlike every other deferred entry in this file. The reason is docs/BUILD_PLAN.md's chunk I: the Qdrant sidecar, MiniLM embeddings and `ort` crate this needs were not attempted across the 19 tasks in this plan or the one added mid-run; `search:sqlite-fts` is fully functional and is what the UI falls back to in the meantime. This entry sits outside both the ACTIVE-status audit's scope (it never claimed a working implementation, so there was nothing to overclaim) and the parity gate's `USER_CONFIGURABLE` set, so no gate would ever have caught the missing note on its own."
     },
     "platform:text-insertion": {
       "status": "ported-with-new-rust-implementation",
