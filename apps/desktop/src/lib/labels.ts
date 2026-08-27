@@ -467,9 +467,17 @@ export function meetingOutcomeLabel(outcome: MeetingOutcome): string {
       return parts.join(" ");
     }
     case "nothing-transcribed":
-      // Not a failure. Saying "failed" would send somebody looking for a fault
-      // when the room was simply quiet.
-      return `Nothing was transcribed — no speech was recognised. The recording is at ${outcome.recordingPath}.`;
+      // Not a failure, and not attributed to a cause this build cannot tell
+      // apart from another. A quiet room reads identically, from here, to a
+      // cloud provider that rejected the session-config frame and kept
+      // going: every socket client logs that rejection with `tracing::warn!`
+      // and continues rather than returning an `Err` (see
+      // docs/BENCH_CHECK.md item 13, and docs/PLATFORM_SUPPORT.md on which
+      // wires are unconfirmed against a live service). Saying "failed" would
+      // send somebody looking for a fault; naming "quiet room" as the sole
+      // cause would be asserting one guess this build has no way to confirm
+      // over an equally likely other one.
+      return `Nothing was transcribed — no speech was recognised, or the provider returned nothing. The recording is at ${outcome.recordingPath}.`;
     case "cancelled":
       return "Discarded. The recording was deleted.";
     case "failed":

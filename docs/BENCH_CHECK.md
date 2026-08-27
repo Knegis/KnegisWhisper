@@ -208,6 +208,17 @@ says "seen to match". Everything else about chunk E is green tests.
     it but that one background log line nobody in the room can see. Confirm the
     UI itself surfaces this, not just the log.
 
+    **Sharpened 2026-08-27 — the actionable half of this item.** The user-visible
+    shape a swallowed provider error produces is `MeetingOutcome::NothingTranscribed`,
+    the same outcome a genuinely quiet room produces, and `labels.ts` now says so
+    plainly ("no speech was recognised, or the provider returned nothing") rather
+    than naming one cause it cannot verify. That wording change is not the fix:
+    the actual gap is that nothing upstream of the label distinguishes the two
+    cases at all, for any of the four cloud clients. Closing it means one of
+    `connect`, `send_audio` or `finish` returning an `Err` for a provider-reported
+    error frame instead of only logging it, so a rejected handshake stops being
+    indistinguishable from silence by the time it reaches this screen.
+
 ### Still unchecked, and needs a person at the machine
 
 Nothing here needs a developer. All of it is buttons, one sentence spoken aloud, and a restart.
