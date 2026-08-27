@@ -359,6 +359,7 @@ pub fn run() -> anyhow::Result<()> {
             reasoning::enterprise_config_set,
             reasoning::enterprise_config_clear,
             commands::import_openwhispr,
+            commands::pick_import_file,
             commands::notes_list,
             commands::notes_search,
             commands::notes_get,

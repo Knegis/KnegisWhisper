@@ -840,6 +840,15 @@ absentTables: Array<string>,
  */
 ftsRows: number, };
 
+/**
+ * Which file `pick_import_file` is being asked to find.
+ *
+ * A closed enum rather than a filter typed by the frontend, the same
+ * reasoning as `media::MediaSidecar`: the title and extension list are fixed
+ * by this command, not invented by whoever calls it.
+ */
+export type ImportPickKind = "audio" | "video" | "open-whispr-database";
+
 /* -------------------------------------------------------------- dictation */
 /**
  * What the session is doing. Drives the overlay.

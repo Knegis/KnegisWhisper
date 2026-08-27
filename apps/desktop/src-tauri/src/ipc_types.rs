@@ -193,6 +193,7 @@ fn render() -> String {
             kw_storage::import::TableReport,
             kw_storage::import::RelocatedCredential,
             kw_storage::import::ImportReport,
+            crate::commands::ImportPickKind,
         ],
         "dictation" => [
             kw_app_core::dictation::SessionState,
