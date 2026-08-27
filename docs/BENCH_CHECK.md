@@ -244,12 +244,17 @@ person at the machine.
    either freezing, doing nothing visible, or claiming an update check that did not happen. Confirm
    the sentence appears and the button re-enables afterward.
 2. **Generate a real keypair** (`docs/SECURITY.md`), paste the public half into
-   `plugins.updater.pubkey`, and press the button again with a real repository that has no releases
-   yet. `GET /repos/{owner}/{repo}/releases/latest` should now attempt a real request rather than
-   short-circuiting, and — for a repository with zero releases — come back 404, surfaced as
-   `CheckFailed` rather than a silent "up to date". This is the first real exercise of
-   `NetworkPolicy::get_text` outside its own unit tests, which use a hand-rolled local server rather
-   than GitHub's actual API.
+   `plugins.updater.pubkey`, **and rebuild the application before pressing the button again** —
+   corrected by Task 19, which found this item unfollowable as written. `plugins.updater.pubkey` is
+   baked into the binary at compile time by Tauri's `generate_context!`; editing the file and
+   pressing "Check for updates" on a build that is already running, or re-launching a debug build
+   without a fresh `cargo build`/`npm run tauri:dev` restart that regenerates the context, changes
+   nothing the button can see. Once rebuilt with the key present, press the button again with a real
+   repository that has no releases yet. `GET /repos/{owner}/{repo}/releases/latest` should now
+   attempt a real request rather than short-circuiting, and — for a repository with zero releases —
+   come back 404, surfaced as `CheckFailed` rather than a silent "up to date". This is the first real
+   exercise of `NetworkPolicy::get_text` outside its own unit tests, which use a hand-rolled local
+   server rather than GitHub's actual API.
 3. **Publish one real release** (dispatching `.github/workflows/release.yml` for the first time,
    which nobody has done) and press the button again. This is the only way to learn whether
    GitHub's actual response shape matches the `tag_name`/`html_url` fields `updater.rs` assumes, and
@@ -263,6 +268,85 @@ person at the machine.
    Confirms two things nobody has checked: that `createUpdaterArtifacts: true` does not make
    `tauri build` fail outright when the key is absent and the workflow's own `--config` override is
    in effect, and that a `.sig` file actually appears next to a bundle when the key is present.
+
+### Added by chunk F (calendars), and unchecked
+
+Added by Task 19: this file previously had no entries at all for calendars, media import, the MCP
+and CLI screens, or the Task 20 boundary fix — an omission this run is what found and closes. All
+of chunk F is green tests and code review; none of it has touched real hardware or a real account.
+
+1. **Connect a real Google account** through `Integrations > Calendar`, using a PKCE client ID
+   registered by hand. Confirm the loopback redirect actually completes in a real browser, that the
+   calendar list that comes back matches the account, and that the refresh token lands in the OS
+   credential store rather than anywhere in SQLite — `assert_no_credential_columns` proves the
+   schema cannot hold one, not that the runtime code obeys it end to end with a real token.
+2. **The same, for a Microsoft 365 account.** The wire shape (`/me/calendars`, `events/delta`) is
+   modelled on public documentation and has never answered a real request.
+3. **Disconnect an account and reconnect a different one.** Confirms the fix for the settings-read
+   failure that could leave a live, working refresh token in the credential store the app could no
+   longer see or revoke — the automated test proves the code path; only a real reconnect proves the
+   credential store agrees.
+4. **Let a sync fail partway through** (revoke access mid-sync, if the provider's console allows
+   it, or disconnect network partway) and confirm the screen reports `RefreshFailed` or a partial
+   failure rather than `SyncOutcome::Completed`. The `let _ =` that used to discard this is fixed and
+   tested; nobody has watched it happen on a real account.
+5. **Look at `Integrations > Calendar`'s Apple row.** Confirms it reads "Unsupported" with the
+   EventKit reason rather than an empty calendar list or a hidden row — the one thing about Apple
+   Calendar that *is* checkable without a Mac.
+
+### Added by chunk G (media import), and unchecked
+
+1. **Import a local audio file and a local video file** through `Notes > Upload`. Confirms ffmpeg
+   actually strips both to 16 kHz mono WAV on this machine, that the resulting note is transcribed
+   by whatever provider is configured, and that a file with spaces or non-ASCII characters in its
+   path does not crash the pipeline the way whisper's own binary is known to on such paths.
+2. **Paste a URL and import it.** Confirms yt-dlp actually runs, respects its own filesize cap and
+   socket timeout, and that the resulting audio reaches the same transcription path as a local file.
+   Also the first real exercise of `validate_import_url`'s literal-host check outside its own unit
+   tests — try a private-looking host (e.g. an internal hostname on this network) and confirm it is
+   refused before yt-dlp is ever invoked, with a message that names the reason.
+3. **Import an OpenWhispr `transcriptions.db`** through the same screen and confirm the source file
+   is unmodified afterward, the report names what was copied and what was dropped per table, and no
+   credential value appears anywhere in the report.
+4. **Kill the application mid-import** (local file or URL) and restart it. Confirms whether an
+   orphaned per-import scratch directory is left behind — a known, disclosed gap with no startup
+   sweep — and that a half-downloaded `.part`/`.ytdl` file is never picked up as a finished import.
+
+### Added by chunk H (MCP and CLI screens), and unchecked
+
+1. **Drive `tools/knegiswhisper-mcp` from a real MCP client** (an editor or agent that speaks the
+   protocol over stdio), not the protocol-test harness this task wrote for itself. Confirm
+   `initialize` negotiates a version correctly against a client that asks for one this server does
+   not support, and that at least one tool call against a real running application (list notes,
+   read history) returns real data with no secret in it.
+2. **Look at `Integrations > CLI` and `Integrations > MCP` side by side** and confirm the
+   permissions caveat reads identically on both — the fix for the two screens drifting apart is
+   tested at the unit level; nobody has looked at both screens open at once.
+3. **Run `knegiswhisper` against a machine where the local API is off**, and confirm the CLI's
+   error is the one the screen would predict rather than a generic connection failure.
+
+### Added by Task 20 (the SSRF boundary fix), and unchecked
+
+The most significant change of this whole run, verified so far only by unit tests and by re-running
+the parity and gate suite — never by a person driving real traffic through it.
+
+1. **Point a self-hosted transcription or inference endpoint at a plain-HTTP server on the local
+   network** (not loopback) and confirm it still works — the exemption this fix was careful not to
+   narrow. This is the one thing that would be a regression nobody wants: a legitimate self-hosted
+   setup silently refused.
+2. **Point the same self-hosted setting at `https://<a private LAN address>/`** and confirm it also
+   works — the new capability this fix intentionally added (HTTPS to a private host, for the
+   self-hosted purpose only).
+3. **Configure a cloud provider's custom-endpoint field to a private or loopback address**
+   (`http://127.0.0.1/`, `https://169.254.169.254/`, `https://localhost./` with the trailing dot)
+   and confirm each is refused with a message naming the host, for every purpose that is not
+   self-hosted. The unit tests exercise `is_private_host` directly; nobody has driven a real
+   `reqwest` call at a real listening address on this specific machine to confirm the refusal
+   happens before any byte leaves the process.
+4. **Confirm CGNAT and `0.0.0.0/8` addresses behave as documented**: refused for a cloud provider,
+   reachable in the clear for the self-hosted purpose. Low-probability in ordinary use, but this is
+   the one place the fix deliberately *widened* what a purpose may reach, and a widening deserves a
+   real check as much as a narrowing does.
 
 ### What this run changed on the machine
 
