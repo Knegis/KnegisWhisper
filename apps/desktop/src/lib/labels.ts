@@ -27,10 +27,15 @@ import type {
   DictationOutcome,
   DiscoveryPermissions,
   HotkeyChange,
+  ImportReport,
   InstallProgress,
   KeytermSupport,
+  LocalAvailability,
+  MediaImportProgress,
+  MediaImportSource,
   MeetingOutcome,
   NonActivating,
+  RelocatedCredential,
   ShortcutHookStatus,
   Sources,
   SyncOutcome,
@@ -223,6 +228,105 @@ export function progressLabel(progress: InstallProgress): string {
     case "done":
       return `Installed (${verificationLabel(progress.verifiedBy)})`;
   }
+}
+
+/* ------------------------------------------------------------ media import */
+
+/**
+ * Progress of installing a media-import sidecar, or of a running import, as
+ * one line.
+ *
+ * Shares `bytes()` with `progressLabel` above, but is a separate function
+ * because `MediaImportProgress` is a distinct Rust type from
+ * `InstallProgress` — see that type's own doc on why: `ipc_types` asserts the
+ * two cannot collide in the generated TypeScript, and merging their labels
+ * here would quietly assume they always agree.
+ */
+export function mediaImportProgressLabel(progress: MediaImportProgress): string {
+  switch (progress.stage) {
+    case "downloading":
+      return `Downloading ${progress.sidecar} — ${bytes(progress.written, progress.total)}`;
+    case "verifying":
+      return "Verifying…";
+    case "extracting":
+      return "Unpacking…";
+    case "fetching":
+      return "Fetching the url…";
+    case "converting":
+      return "Converting…";
+    case "transcribing":
+      return "Transcribing…";
+    case "done":
+      return "Done.";
+  }
+}
+
+/**
+ * Why a media-import sidecar cannot be installed here, or `null` when it can
+ * be. `unknown` gets its own honest sentence rather than being folded into
+ * "not published": nothing here is being claimed about the platform, only
+ * that this build could not tell.
+ */
+export function sidecarUnavailableReason(a: LocalAvailability): string | null {
+  switch (a.state) {
+    case "installable":
+      return null;
+    case "not-published":
+      return a.reason;
+    case "unknown":
+      return "this platform could not be determined, so installing has not been offered";
+  }
+}
+
+/** Where an imported transcript came from, in a few words. */
+export function mediaImportSourceLabel(source: MediaImportSource): string {
+  switch (source.kind) {
+    case "audio":
+      return "an imported audio file";
+    case "video":
+      return "an imported video file";
+    case "url":
+      return `imported from ${source.host}`;
+  }
+}
+
+/**
+ * What an OpenWhispr database import copied and skipped, in one line.
+ *
+ * Never silent about a skip: a count with no acknowledgement that some rows
+ * did not make it across would be exactly the "quietly discarded rows" defect
+ * this screen exists to rule out.
+ */
+export function importReportSummary(report: ImportReport): string {
+  const copied = report.tables.reduce((n, t) => n + t.copied, 0);
+  const skipped = report.tables.reduce((n, t) => n + t.skipped, 0);
+  return skipped === 0
+    ? `${copied} row${copied === 1 ? "" : "s"} copied.`
+    : `${copied} row${copied === 1 ? "" : "s"} copied, ${skipped} skipped.`;
+}
+
+/**
+ * Which columns were dropped from which table, for the rows worth showing —
+ * a table that lost no columns is left out rather than listed with nothing
+ * next to it.
+ *
+ * Mirrors `storage::import::dropped_by_table`'s grouping. Computed here
+ * rather than by a second command: the fields it groups
+ * (`ImportReport.tables[].droppedColumns`) already crossed the wire in the
+ * report the import itself returned, so a round trip to reshape them would
+ * ask Rust for a fact the frontend already has.
+ */
+export function droppedColumnsByTable(
+  report: ImportReport,
+): { table: string; columns: string[] }[] {
+  return report.tables
+    .filter((t) => t.droppedColumns.length > 0)
+    .map((t) => ({ table: t.table, columns: t.droppedColumns }));
+}
+
+/** A relocated credential, without ever naming its value. */
+export function relocatedCredentialLabel(c: RelocatedCredential): string {
+  return `${c.account} — moved from ${c.sourceTable} into credential slot ${c.slot}`;
 }
 
 /* ----------------------------------------------------------------- meetings */

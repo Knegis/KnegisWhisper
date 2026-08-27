@@ -74,8 +74,8 @@
     "Notes > Upload": {
       "surfaceId": "notes.upload",
       "component": "apps/desktop/src/views/NotesUpload.tsx",
-      "built": false,
-      "note": "Phase 8. Audio, video and URL import need the ffmpeg and yt-dlp sidecars, neither of which is in config/sidecars.json."
+      "built": true,
+      "note": "Audio, video and URL import (Task 11's media.rs, driving the ffmpeg and yt-dlp sidecars already pinned in config/sidecars.json), plus the OpenWhispr database importer (storage::import::from_openwhispr), which existed and was tested since early in the build but had no screen until now. The screen renders the full ImportReport -- what copied, what was dropped per table, and which credentials moved into the OS credential store -- not just a success message, and states plainly that yt-dlp's own fetch is not policed by kw_network_policy."
     }
   }
 }

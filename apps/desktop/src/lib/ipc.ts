@@ -61,6 +61,7 @@ import type {
   HotkeyAction,
   HotkeyChange,
   HotkeyReport,
+  ImportPickKind,
   ImportReport,
   InputDevice,
   InstallProgress,
@@ -72,6 +73,10 @@ import type {
   LocalLlmStatus,
   LocalStatus,
   McpStatus,
+  MediaImportProgress,
+  MediaImportResult,
+  MediaImportSource,
+  MediaSidecar,
   MeetingOutcome,
   MeetingProviderSummary,
   MeetingState,
@@ -101,6 +106,7 @@ import type {
   SearchHit,
   SessionState,
   ShortcutHookStatus,
+  SidecarStatus,
   SkipReason,
   Sources,
   SyncOutcome,
@@ -156,6 +162,7 @@ export type {
   HotkeyAction,
   HotkeyChange,
   HotkeyReport,
+  ImportPickKind,
   ImportReport,
   InputDevice,
   InstallProgress,
@@ -167,6 +174,10 @@ export type {
   LocalLlmStatus,
   LocalStatus,
   McpStatus,
+  MediaImportProgress,
+  MediaImportResult,
+  MediaImportSource,
+  MediaSidecar,
   MeetingOutcome,
   MeetingProviderSummary,
   MeetingState,
@@ -193,6 +204,7 @@ export type {
   SearchHit,
   SessionState,
   ShortcutHookStatus,
+  SidecarStatus,
   Sources,
   SyncOutcome,
   SyncRecord,
@@ -649,6 +661,19 @@ export async function importOpenWhispr(path: string): Promise<ImportReport> {
   return invoke<ImportReport>("import_openwhispr", { request: { path } });
 }
 
+/**
+ * Open a native "choose a file" dialog for one of the files `Notes > Upload`
+ * needs, and return the path picked, or `null` if the user cancelled.
+ *
+ * Opened from Rust, the same as `exportNoteToFile`'s save dialog: no path is
+ * typed here, and this is the only way the screen ever obtains one.
+ */
+export async function pickImportFile(
+  kind: ImportPickKind,
+): Promise<string | null> {
+  return invoke<string | null>("pick_import_file", { kind });
+}
+
 /* ---------------------------------------------------------------- dictation */
 
 export async function getDictationState(): Promise<SessionState> {
@@ -785,6 +810,57 @@ export async function getCliStatus(): Promise<CliStatus> {
 
 export async function getMcpStatus(): Promise<McpStatus> {
   return invoke<McpStatus>("mcp_status");
+}
+
+/* ------------------------------------------------------------ media import */
+
+/** ffmpeg's and yt-dlp's availability and install state, for `Notes > Upload`. */
+export async function getMediaImportStatus(): Promise<SidecarStatus[]> {
+  return invoke<SidecarStatus[]>("media_import_status");
+}
+
+/** Download, verify and unpack one media-import sidecar. Nothing installs on its own. */
+export async function installMediaImportSidecar(
+  sidecar: MediaSidecar,
+): Promise<void> {
+  return invoke<void>("media_import_install_sidecar", { sidecar });
+}
+
+/** Convert a local audio file with ffmpeg, then transcribe it. */
+export async function importAudioFile(
+  path: string,
+): Promise<MediaImportResult> {
+  return invoke<MediaImportResult>("media_import_audio", { path });
+}
+
+/** Convert a local video file with ffmpeg (which drops the video track), then transcribe it. */
+export async function importVideoFile(
+  path: string,
+): Promise<MediaImportResult> {
+  return invoke<MediaImportResult>("media_import_video", { path });
+}
+
+/**
+ * Fetch `url` with yt-dlp, convert the result with ffmpeg, then transcribe it.
+ *
+ * Only the url itself is checked against the network boundary before yt-dlp
+ * ever sees it. yt-dlp's own fetch -- its DNS resolution, any redirect it
+ * follows, and its own per-site extraction -- runs in a separate process and
+ * is not observed by `kw_network_policy`. See `media.rs`'s module doc.
+ */
+export async function importMediaFromUrl(
+  url: string,
+): Promise<MediaImportResult> {
+  return invoke<MediaImportResult>("media_import_url", { url });
+}
+
+/** Progress of installing a media-import sidecar, or of a running import. */
+export async function onMediaImportProgress(
+  handler: (progress: MediaImportProgress) => void,
+): Promise<UnlistenFn> {
+  return listen<MediaImportProgress>("media-import-progress", (event) =>
+    handler(event.payload),
+  );
 }
 
 /* ------------------------------------------------------------------- route */

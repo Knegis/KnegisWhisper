@@ -38,6 +38,7 @@ import { IntegrationsCalendar } from "./views/IntegrationsCalendar";
 import { IntegrationsCli } from "./views/IntegrationsCli";
 import { IntegrationsMcp } from "./views/IntegrationsMcp";
 import { Notes } from "./views/Notes";
+import { NotesUpload } from "./views/NotesUpload";
 import { SettingsMeetings } from "./views/SettingsMeetings";
 import { SettingsIntelligence } from "./views/SettingsIntelligence";
 import { SettingsIntelligenceLocal } from "./views/SettingsIntelligenceLocal";
@@ -60,6 +61,7 @@ const VIEWS = [
   { id: "local-llm", label: "Local models" },
   { id: "meetings", label: "Meetings" },
   { id: "notes", label: "Notes" },
+  { id: "notes-upload", label: "Upload" },
   { id: "calendar", label: "Calendar" },
   { id: "api", label: "Local API" },
   { id: "cli", label: "CLI" },
@@ -184,6 +186,7 @@ function Shell() {
           {view === "local-llm" ? <SettingsIntelligenceLocal /> : null}
           {view === "meetings" ? <SettingsMeetings /> : null}
           {view === "notes" ? <Notes /> : null}
+          {view === "notes-upload" ? <NotesUpload /> : null}
           {view === "calendar" ? <IntegrationsCalendar /> : null}
           {view === "api" ? <IntegrationsApi /> : null}
           {view === "cli" ? <IntegrationsCli /> : null}
