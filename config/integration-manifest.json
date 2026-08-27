@@ -118,7 +118,7 @@
       "note": "Reachable: crates/transcription-core/src/clients.rs shapes its request and reads its response, tested against recorded fixtures. No live call -- that needs a key this project does not have; see docs/PLATFORM_SUPPORT.md. Corti also takes an environment and a tenant on Settings > Transcription, because neither has a safe default: the environment is in the hostname and the tenant scopes the account."
     },
     "transcription:tinfoil": {
-      "status": "rewired-to-direct-byok",
+      "status": "temporarily-deferred",
       "name": "Tinfoil",
       "phase": 3,
       "models": [
@@ -128,10 +128,19 @@
         "src/models/modelRegistryData.json#transcriptionProviders",
         "src/helpers/transcriptionRoute.ts"
       ],
+      "deferral": {
+        "why": "Not resource-blocked and not a matter of finishing incomplete work -- implementing this client as a plain HTTPS POST would defeat Tinfoil's entire proposition, which is an attested enclave verified before any audio is sent. This manifest's statusVocabulary has no 'declined on principle' term; temporarily-deferred is used only because it is the closest status that does not assert a working implementation exists (which the previous status, rewired-to-direct-byok, did). 'Temporarily' should not be read literally: nothing here is scheduled to change absent a decision to build an attestation-verifying client, which has not been made.",
+        "dependencies": [
+          "an attestation-verifying HTTP client that fetches and checks Tinfoil's attestation document against a hardware root of trust before any request is sent -- a distinct verification step, not a REST client feature",
+          "a decision that this project wants to build one, which has not been made"
+        ],
+        "interface": "crates/transcription-core::route::ProviderClientKind::Tinfoil is the enum member every match must cover; clients::why_tinfoil_is_refused() names the reason and clients::shape() returns TranscriptionError::ClientNotImplemented for it. No attested-client module exists.",
+        "expectedPhase": null
+      },
       "backend": "crates/transcription-core",
       "ui": "Settings > Transcription",
       "reachable": false,
-      "note": "Deliberately unreachable, not unfinished. Tinfoil's proposition is an attested enclave: the client verifies an attestation document against a hardware root of trust before sending anything. A plain HTTPS POST to the same host would transcribe correctly and provide none of that, while appearing in the UI as Tinfoil -- a confidentiality claim the request did not earn. route.rs already refuses a Tinfoil host configured as a custom endpoint for this reason; implementing the client as an unattested POST would defeat that from the inside."
+      "note": "Status corrected by Task 19's audit of every ACTIVE-vocabulary entry: this previously carried rewired-to-direct-byok, which verify-parity.mjs treats as asserting a working implementation, while clients.rs returns TranscriptionError::ClientNotImplemented for Tinfoil and nothing else implements it -- the same pattern platform:aec was already corrected for. Deliberately unreachable, not unfinished, for the reason in `deferral.why`: Tinfoil's proposition is an attested enclave, and a plain HTTPS POST to the same host would transcribe correctly and provide none of that while appearing in the UI as Tinfoil -- a confidentiality claim the request did not earn. route.rs already refuses a Tinfoil host configured as a custom endpoint for this reason."
     },
     "reasoning:openai": {
       "status": "rewired-to-direct-byok",
@@ -644,19 +653,28 @@
       "ui": "Settings > Meetings",
       "reachable": true,
       "frontend": "apps/desktop/src/views/SettingsMeetings.tsx",
-      "notes": "Two WebSockets, one per capture, because this provider labels no speakers and one socket would make AudioSource on every event a guess. 24 kHz only, which is why the meeting pipeline resamples per session. Sixty-minute server cap, so a longer meeting reconnects and MeetingTranscript::reconnects says how often. Keyterms are accepted and ignored upstream, so none are sent. Request shaping and the event grammar are covered by fixtures; no live call has been made -- see docs/PLATFORM_SUPPORT.md."
+      "note": "Two WebSockets, one per capture, because this provider labels no speakers and one socket would make AudioSource on every event a guess. 24 kHz only, which is why the meeting pipeline resamples per session. Sixty-minute server cap, so a longer meeting reconnects and MeetingTranscript::reconnects says how often. Keyterms are accepted and ignored upstream, so none are sent. Request shaping and the event grammar are covered by fixtures; no live call has been made -- see docs/PLATFORM_SUPPORT.md."
     },
     "meeting-stream:tinfoil-realtime": {
-      "status": "ported",
+      "status": "temporarily-deferred",
       "phase": 4,
       "upstream": [
         "src/helpers/meetingStreamingProviders.js",
         "src/helpers/realtimeTokenProviders.js"
       ],
+      "deferral": {
+        "why": "The identical principled refusal and the identical vocabulary gap as transcription:tinfoil. This is not deferred in the sense the other entries carrying this status are -- blocked on a toolchain or a dependency this project intends to add -- it is declined, and temporarily-deferred is used only because statusVocabulary has no term for a permanent, principled refusal and this is the closest status that stops asserting a working client exists.",
+        "dependencies": [
+          "an attestation-verifying WebSocket client -- a plain unattested socket to the same host would stream audio correctly while presenting as Tinfoil in the UI, which is the outcome being refused, not merely unbuilt",
+          "a decision that this project wants to build one, which has not been made"
+        ],
+        "interface": "crates/meeting-core has no Tinfoil-specific client module. capabilities.rs declares the provider's capabilities and its refusal reason; nothing implements a Tinfoil MeetingTranscriptionProvider.",
+        "expectedPhase": null
+      },
       "backend": "crates/meeting-core",
       "ui": "Settings > Meetings",
       "reachable": false,
-      "note": "Deliberately unreachable, not unfinished -- same reason as transcription:tinfoil. Tinfoil's proposition is an attested enclave: the client verifies an attestation document against a hardware root of trust before sending anything. An unattested socket to the same host would stream audio correctly and provide none of that, while appearing in the UI as Tinfoil -- a confidentiality claim the connection did not earn. No client exists for this provider and none is planned until attestation is implemented."
+      "note": "Status corrected by Task 19's audit of every ACTIVE-vocabulary entry: this previously carried status \"ported\" with backend \"crates/meeting-core\" naming a directory rather than a client file, while no Tinfoil meeting client exists anywhere in this codebase and none is planned -- the identical pattern platform:aec was already corrected for, in the same file, one commit before this one. Deliberately unreachable, not unfinished, for the same reason as transcription:tinfoil (see its `deferral.why`): Tinfoil's proposition is an attested enclave, and an unattested socket to the same host would stream audio correctly and provide none of that while appearing in the UI as Tinfoil -- a confidentiality claim the connection did not earn."
     },
     "meeting-stream:local": {
       "status": "ported-with-new-rust-implementation",
@@ -668,7 +686,7 @@
       "ui": "Settings > Meetings",
       "reachable": true,
       "frontend": "apps/desktop/src/views/SettingsMeetings.tsx",
-      "notes": "Repeated short passes over the local whisper-server, not the sherpa-onnx WebSocket server upstream used -- that runtime is blocked, see chunk B4. Named 'Local windowed model' so it is not mistaken for word-by-word streaming."
+      "note": "Repeated short passes over the local whisper-server, not the sherpa-onnx WebSocket server upstream used -- that runtime is blocked, see chunk B4. Named 'Local windowed model' so it is not mistaken for word-by-word streaming."
     },
     "credential:openai": {
       "status": "ported-with-new-rust-implementation",
@@ -962,7 +980,7 @@
       "note": "Reachable: same path as calendar:google, direct to login.microsoftonline.com and graph.microsoft.com, with the delta-query event sync this task adds. No client ID exists on this machine, so the /me/calendars and events/delta wire shapes are covered by fixtures modelled on Microsoft's public docs rather than a live call -- see the task report."
     },
     "calendar:apple": {
-      "status": "platform-specific",
+      "status": "temporarily-deferred",
       "phase": 5,
       "platforms": [
         "macos"
@@ -971,10 +989,20 @@
         "src/helpers/appleCalendarManager.js",
         "resources/macos-calendar-listener.swift"
       ],
+      "deferral": {
+        "why": "EventKit is native macOS API with no Rust binding anywhere in this project, on any platform including macOS. There is no macOS machine in this development environment to write or verify that binding against. kw_calendar_core::apple describes the shape a future implementation would fill in (AppleCalendarSource) but implements none of it -- unlike the two Tinfoil entries, this is a genuine resource gap, not a principled refusal: nothing here says Apple Calendar should not be supported, only that it cannot be built or verified on this machine.",
+        "dependencies": [
+          "a macOS build of this application, which does not exist",
+          "EventKit Rust bindings, which do not exist anywhere in this project",
+          "a macOS machine to write and verify the binding against, which is not available in this development environment"
+        ],
+        "interface": "kw_calendar_core::apple::AppleCalendarSource, declared and deliberately unimplemented -- see the module doc.",
+        "expectedPhase": 5
+      },
       "backend": "crates/calendar-core",
       "ui": "Integrations > Calendar",
       "reachable": false,
-      "note": "Unreachable, not merely unfinished-looking: EventKit is macOS-only native API, and kw_calendar_core::apple describes the shape a future implementation would fill in but implements none of it, on any platform including macOS. Integrations > Calendar reports it as Unsupported with that reason rather than hiding the row or showing an empty calendar list, which is honest UI -- but honest UI about an absent capability is not the same claim as reachable, the same distinction transcription:tinfoil already draws. Implementing it needs a macOS build of this application and EventKit bindings, neither of which exists; unverifiable on this development machine even once written."
+      "note": "Status corrected by Task 19's audit of every ACTIVE-vocabulary entry: this previously carried status \"platform-specific\", which verify-parity.mjs treats as asserting a working implementation exists for the platforms it names, while apple.rs's own module doc says AppleCalendarSource is deliberately unimplemented by anything in this crate, on every platform including macOS -- the identical pattern platform:aec was already corrected for. Integrations > Calendar reports it as Unsupported with that reason rather than hiding the row or showing an empty calendar list, which is honest UI -- but honest UI about an absent capability is not the same claim as reachable, the same distinction transcription:tinfoil draws. Implementing it needs a macOS build of this application and EventKit bindings, neither of which exists; unverifiable on this development machine even once written."
     },
     "developer:local-rest-api": {
       "status": "ported-with-new-rust-implementation",
@@ -1010,7 +1038,7 @@
       "note": "NOT a port. Upstream MCP is a hosted Streamable-HTTP service; no local or stdio implementation exists in the checkout. Entirely new work: tools/knegiswhisper-mcp is a stdio server reusing the CLI's own client and discovery-file reader over the local API, and Integrations > MCP shows the exact command line to configure in a client plus whether the binary was actually found."
     },
     "developer:agent-skills": {
-      "status": "ported",
+      "status": "temporarily-deferred",
       "phase": 7,
       "kind": "documentation",
       "upstream": [
@@ -1018,7 +1046,15 @@
         "agent-skills/openwhispr-cli/SKILL.md"
       ],
       "target": "docs/agent-skills/",
-      "note": "Rewrite to reference knegiswhisper / knegiswhisper-mcp and the local API only. Upstream text still points at api.openwhispr.com and mcp.openwhispr.com. Documentation only -- no backend or UI surface of its own."
+      "deferral": {
+        "why": "Found by Task 19, not carried forward by any earlier task: this entry claimed status \"ported\" with target \"docs/agent-skills/\", and neither that directory nor any rewritten SKILL.md exists anywhere in this repository -- the rewrite was never done. verify-parity.mjs's incomplete-documentation rule only checks that a documentation entry names a target path, not that the path exists on disk, so nothing caught this. Corrected to the status that matches what is actually there: nothing.",
+        "dependencies": [
+          "someone to write docs/agent-skills/ rewriting the two upstream SKILL.md files to reference knegiswhisper / knegiswhisper-mcp and the local API only, in place of api.openwhispr.com and mcp.openwhispr.com"
+        ],
+        "interface": "none -- documentation only, no backend or UI surface of its own",
+        "expectedPhase": 7
+      },
+      "note": "Status corrected by Task 19: this previously claimed \"ported\" and named docs/agent-skills/ as where the rewritten docs live, but that directory does not exist. Documentation only -- no backend or UI surface of its own -- so this is not part of the ACTIVE-status audit's implementation-overclaim pattern; it is the same honesty defect one step earlier, a claim that specific work was done when it was not."
     },
     "meeting-detect:zoom": {
       "status": "ported-with-new-rust-implementation",
@@ -1080,9 +1116,10 @@
         "src/helpers/ffmpegUtils.js",
         "src/services/fileTranscription.ts"
       ],
-      "backend": "crates/notes-core",
+      "backend": "apps/desktop/src-tauri/src/media.rs",
       "ui": "Notes > Upload",
-      "reachable": true
+      "reachable": true,
+      "note": "Backend corrected by Task 19: this named crates/notes-core, which holds no import code; the real implementation is MediaImportRuntime::import_local_file in media.rs."
     },
     "media:video-import": {
       "status": "ported-with-new-rust-implementation",
@@ -1090,9 +1127,10 @@
       "upstream": [
         "src/helpers/ffmpegUtils.js"
       ],
-      "backend": "crates/notes-core",
+      "backend": "apps/desktop/src-tauri/src/media.rs",
       "ui": "Notes > Upload",
-      "reachable": true
+      "reachable": true,
+      "note": "Backend corrected by Task 19, same as media:audio-import: MediaImportRuntime::import_local_file serves both audio and video, since ffmpeg strips both to 16 kHz mono WAV and there is nothing else to tell them apart."
     },
     "media:url-import": {
       "status": "ported-with-new-rust-implementation",
@@ -1100,10 +1138,10 @@
       "upstream": [
         "src/helpers/urlAudioDownloader.js"
       ],
-      "backend": "crates/notes-core",
+      "backend": "apps/desktop/src-tauri/src/media.rs",
       "ui": "Notes > Upload",
       "reachable": true,
-      "note": "yt-dlp sidecar. Preserve the SSRF guards: HTTPS-only, private-address rejection after DNS, 500 MB cap, 3 redirects, 6 h duration cap, 30 s stall timeout."
+      "note": "Backend corrected by Task 19: this named crates/notes-core; the real implementation is import_url in media.rs. The guard description is also corrected: media.rs's own module doc states plainly that this crate performs no DNS resolution. What runs, under RequestPurpose::UserTriggeredMediaImport, is a literal-host check (scheme, the vendor blocklist, and a literal private/link-local host) before the URL is ever handed to yt-dlp -- yt-dlp then does its own fetch, with its own DNS resolution and its own redirect handling, none of it observed or routed through kw_network_policy. Bounded instead by flags yt-dlp enforces on itself: a 500 MB filesize cap, a bounded socket timeout, playlist expansion off, and update/config-file checks off. DNS rebinding is not caught by the literal-host check, which runs before any resolution happens; see docs/NETWORK_BOUNDARY.md's \"What none of this stops: DNS rebinding\" section."
     },
     "media:openwhispr-import": {
       "status": "ported-with-new-rust-implementation",
