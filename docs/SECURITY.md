@@ -44,9 +44,13 @@ and no permission to reach arbitrary hosts. There is no startup request, no tele
 hidden fallback: a provider failure fails the operation rather than quietly trying somewhere else.
 See `NETWORK_BOUNDARY.md`.
 
-URL import keeps upstream's SSRF guards: HTTPS only, DNS resolution followed by private and
-link-local address rejection, a 500 MB cap, at most 3 redirects, a 6-hour duration cap, and a
-30-second stall timeout.
+URL import checks the pasted URL once, before yt-dlp ever runs: scheme, the vendor blocklist, and a
+literal private-or-link-local host, under its own purpose. Corrected by Task 19 — the previous
+sentence here ("DNS resolution followed by private and link-local address rejection") described
+upstream's design, not this crate's, which resolves no names at all. Fetching the URL is yt-dlp's
+own job as a separate process, bounded by a 500 MB filesize cap and a bounded socket timeout it
+enforces on itself, not by `kw_network_policy`. See `docs/NETWORK_BOUNDARY.md`'s "SSRF guards for
+URL import" section for the full accounting, including what this does not stop (DNS rebinding).
 
 ## Updates
 

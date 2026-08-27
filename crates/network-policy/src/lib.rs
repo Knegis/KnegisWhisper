@@ -4,9 +4,28 @@
 //! unlabelled path: a call site that cannot name why it is reaching the network
 //! does not compile.
 //!
-//! This crate owns the only [`reqwest::Client`] in the workspace. No other crate
-//! declares `reqwest` as a dependency, and no React component has any HTTP
-//! capability at all — the frontend asks Rust, and Rust decides.
+//! This crate owns the only [`reqwest::Client`] that any part of the desktop
+//! application's own egress path constructs. That claim is narrower than "no
+//! other crate declares `reqwest`" — several do (`calendar-core`,
+//! `local-api`, `reasoning-core`, `sidecar`, `transcription-core`,
+//! `provider-probe`, and both `tools/knegiswhisper*` binaries), but only to
+//! chain onto the [`reqwest::RequestBuilder`] that [`NetworkPolicy::post`],
+//! [`NetworkPolicy::get`] and [`NetworkPolicy::loopback`] hand back (headers,
+//! multipart bodies, methods, response and error types) — none of them
+//! construct a `Client` of their own to reach the network with. Corrected by
+//! Task 19: this doc comment previously claimed no other crate declared the
+//! dependency at all, which was already false before this run and stayed
+//! false afterwards. Two real exceptions exist and both are outside this
+//! egress path rather than gaps in it: `crates/calendar-core/tests/oauth_flow.rs`
+//! and `crates/local-api/tests/api.rs` each build a bare client as a test
+//! double confined to their own test binary, and `tools/knegiswhisper`, a
+//! separate CLI process, builds one to talk to the local API over loopback —
+//! which `docs/NETWORK_BOUNDARY.md`'s "Loopback is not egress" section holds
+//! is not one of the seven purposes in the first place, because nothing
+//! leaves the machine.
+//!
+//! No React component has any HTTP capability at all — the frontend asks
+//! Rust, and Rust decides.
 //!
 //! See `docs/NETWORK_BOUNDARY.md`.
 

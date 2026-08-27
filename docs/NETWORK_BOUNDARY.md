@@ -88,9 +88,35 @@ below.
 
 ## SSRF guards for URL import
 
-Ported from `urlAudioDownloader.js` and non-negotiable: HTTPS only; DNS resolution followed by
-rejection of private and link-local addresses; a 500 MB download cap; at most 3 redirects; a
-6-hour duration cap; and a 30-second stall timeout.
+**Corrected by Task 19: the paragraph this replaced described a planned path, not the one that
+ships.** It said "DNS resolution followed by rejection of private and link-local addresses", ported
+from `urlAudioDownloader.js`'s design. `apps/desktop/src-tauri/src/media.rs` performs no DNS
+resolution at all, and the document was answering the same question two ways — this section's old
+text, and the "What none of this stops: DNS rebinding" section below, added when the SSRF fix
+landed. That section is the accurate one; this one is now brought into line with it rather than
+left to contradict it.
+
+What actually runs: before a user-pasted URL is ever handed to anything that would fetch it,
+`media::validate_import_url` checks it once — scheme, the vendor blocklist, and a **literal**
+private-or-link-local host, exactly as `is_private_host` sees any other purpose's target — under
+`RequestPurpose::UserTriggeredMediaImport`, and this is the only direct use this module makes of
+`kw_network_policy`. That check makes no network request of its own and resolves no name.
+
+Fetching the URL itself is the pinned `yt-dlp` sidecar's job, running as a separate process with
+its own HTTP stack, its own DNS resolution, its own redirect handling and its own per-site
+extraction logic — none of it observed, validated, or routed through `kw_network_policy`. It is
+bounded instead by flags it enforces on itself: a 500 MB `--max-filesize` cap, a bounded
+`--socket-timeout`, playlist expansion off, and its own update and config-file checks off. These
+are best-effort limits on a process this application does not otherwise control, not a claim that
+they close every avenue a general-purpose fetcher could be pointed down.
+
+A hostname that resolves to a private address only at the moment yt-dlp connects — DNS rebinding —
+is not caught by the literal-host check, because that check runs before any resolution happens; see
+"What none of this stops: DNS rebinding" below, which states the same limit for the crate's other
+entry points. Nor is a redirect yt-dlp follows internally re-validated the way
+`NetworkPolicy::download_to_file` re-validates every hop for the requests that do go through it
+(sidecar and model downloads) — that mechanism is real and proven for its own purposes, but yt-dlp's
+fetch does not run through it, so the proof does not extend to what yt-dlp itself does with the URL.
 
 ## The local API is inbound, and not egress either
 
