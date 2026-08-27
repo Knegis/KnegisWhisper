@@ -26,6 +26,9 @@ pub enum SyncError {
     #[error("the calendar endpoint's response could not be parsed")]
     MalformedResponse,
 
+    #[error("the calendar provider returned a URL outside its trusted origin")]
+    UntrustedProviderUrl,
+
     /// Google's documented behaviour for an incremental sync whose
     /// `syncToken` has expired: a 410 Gone, after which the client must clear
     /// its cursor and perform a full resync. Believed from
