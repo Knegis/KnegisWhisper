@@ -665,8 +665,17 @@ export async function importOpenWhispr(path: string): Promise<ImportReport> {
  * Open a native "choose a file" dialog for one of the files `Notes > Upload`
  * needs, and return the path picked, or `null` if the user cancelled.
  *
- * Opened from Rust, the same as `exportNoteToFile`'s save dialog: no path is
- * typed here, and this is the only way the screen ever obtains one.
+ * The renderer has no independent way to obtain a path here -- there is no
+ * filesystem or dialog capability, so the only path this screen can ever
+ * hold is one a real OS dialog returned from this call. **That is not the
+ * same guarantee `exportNoteToFile` gets from its save dialog.** That command
+ * fuses picking and writing into one atomic call on the Rust side, so the
+ * frontend never sees or supplies a path at all. This one hands the chosen
+ * path back, and the screen passes it on to a later, separate import call --
+ * see `pick_import_file`'s doc comment in `commands.rs` for the gap that
+ * leaves open and the hardening options being weighed (also
+ * `docs/SECURITY.md`'s Webview section and `docs/BENCH_CHECK.md`'s Task 12
+ * entry).
  */
 export async function pickImportFile(
   kind: ImportPickKind,
