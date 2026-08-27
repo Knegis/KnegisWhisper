@@ -116,6 +116,11 @@ no translation if this project adopts the plugin later.
 
 ### Window roles
 
+**4 of 6 built.** Dictation panel and Control panel existed before this run; Meeting notification
+and Update notification were built during it (chunks E3 and J respectively) and are marked below.
+Agent overlay and Transcription preview remain — the former is phase 10 scope
+([COMPLETION_PLAN.md](COMPLETION_PLAN.md)), the latter has no task in this plan.
+
 All `frame: false`.
 
 | Role | Size | Key flags |
