@@ -316,17 +316,21 @@ of chunk F is green tests and code review; none of it has touched real hardware 
    actually strips both to 16 kHz mono WAV on this machine, that the resulting note is transcribed
    by whatever provider is configured, and that a file with spaces or non-ASCII characters in its
    path does not crash the pipeline the way whisper's own binary is known to on such paths.
-2. **Paste a URL and import it.** Confirms yt-dlp actually runs, respects its own filesize cap and
-   socket timeout, and that the resulting audio reaches the same transcription path as a local file.
-   Also the first real exercise of `validate_import_url`'s literal-host check outside its own unit
-   tests — try a private-looking host (e.g. an internal hostname on this network) and confirm it is
-   refused before yt-dlp is ever invoked, with a message that names the reason.
+2. ~~**Paste a URL and import it.**~~ **Withdrawn on 2026-08-27, not performed.** URL import was
+   disabled before anyone ran this check: `media_import_url` is no longer a registered command and
+   `Notes > Upload` has no URL field, so there is nothing to paste into. Struck rather than deleted,
+   because "nobody checked it" and "it cannot be checked" are different states and this file exists
+   to tell them apart. If the entry point is ever re-opened, this item comes back — and it should
+   then also confirm what the withdrawal was about, which the original wording did not reach: that
+   a hostname resolving to a private address only at connect time is refused, and that a redirect
+   into a private address is refused.  See `docs/NETWORK_BOUNDARY.md`'s "SSRF guards for URL
+   import".
 3. **Import an OpenWhispr `transcriptions.db`** through the same screen and confirm the source file
    is unmodified afterward, the report names what was copied and what was dropped per table, and no
    credential value appears anywhere in the report.
-4. **Kill the application mid-import** (local file or URL) and restart it. Confirms whether an
-   orphaned per-import scratch directory is left behind — a known, disclosed gap with no startup
-   sweep — and that a half-downloaded `.part`/`.ytdl` file is never picked up as a finished import.
+4. **Kill the application mid-import** (a local file — the URL half of this item went with item 2)
+   and restart it. Confirms whether an orphaned per-import scratch directory is left behind — a
+   known, disclosed gap with no startup sweep.
 
 ### Added by Task 12 (`Notes > Upload`'s file pickers), and unchecked
 

@@ -31,18 +31,20 @@ integration parity OK — 102 entries against baseline c4000db9802d
   ported                                 2
   platform-specific                      1
 
-7 integrations are declared unreachable:
+8 integrations are declared unreachable:
   Settings > Transcription > Local      4  (surface built)
   Settings > Transcription              1  (surface built)
   Settings > Meetings                   1  (surface built)
   Integrations > Calendar               1  (surface built)
+  Notes > Upload                        1  (surface built)
 ```
 
-- **60 of 102 integrations are reachable**, up from 8 when this plan was written and 45 when this
-  section was last written mid-run. Only **7** are implemented-or-declared and unreachable, down
-  from 19 — and every one of them names a *built* surface, which was not true when this section was
-  first drafted; the other 35 are removed vendor services and internal platform capabilities with no
-  surface by design.
+- **59 of 102 integrations are reachable**, up from 8 when this plan was written and 45 when this
+  section was last written mid-run. **8** are implemented-or-declared and unreachable, down from 19
+  — and every one of them names a *built* surface, which was not true when this section was first
+  drafted; the other 35 are removed vendor services and internal platform capabilities with no
+  surface by design. The count was 7 at the close of this plan and became 8 afterwards, when URL
+  import was withdrawn as an SSRF surface the application could not police; see chunk G.
 - **0 of 13 UI surfaces do not exist.** All 13 are built, one component each; `App.tsx` is the
   shell. `Notes > Upload`, `Integrations > CLI` and `Integrations > MCP` — the last three that did
   not exist — were built in chunks G and H below.
@@ -52,13 +54,16 @@ integration parity OK — 102 entries against baseline c4000db9802d
   were added for meeting streaming in chunk E). Before chunk A, `provider_credential_set` existed in
   Rust and `setProviderCredential` was exported from `ipc.ts` and **nothing called either**, so
   every cloud provider was unreachable regardless of backend state.
-- **The seven that remain unreachable, each for a specific, named reason rather than "not done
+- **The eight that remain unreachable, each for a specific, named reason rather than "not done
   yet":** four local-ASR models (sherpa/Parakeet — the runtime is real, measured, and proven by a
   probe re-run cold by the controller; the only gap is a Settings selector, deliberately not built
   as part of that measurement task), two Tinfoil entries (batch transcription and meeting-stream,
   both declined on principle — an unattested client would present as Tinfoil while providing none of
-  the confidentiality the name means), and Apple Calendar (EventKit — described in
-  `kw_calendar_core::apple`, implemented nowhere, on any platform, for lack of a macOS machine).
+  the confidentiality the name means), Apple Calendar (EventKit — described in
+  `kw_calendar_core::apple`, implemented nowhere, on any platform, for lack of a macOS machine), and
+  URL import (withdrawn as a command: the up-front literal-host check cannot see where a hostname
+  resolves at connect time, nor any redirect or extractor-generated request `yt-dlp` makes on its
+  own — the backend is dormant, not deleted).
 
 So this plan front-loaded the screens, then closed genuine backend gaps behind them, then did the
 platform work that no amount of UI could substitute for — meetings, calendars, media import, MCP,
@@ -90,7 +95,7 @@ state chunk I and chunk E4 describe below.
 | 5 — Calendars | **Complete** | Google and Microsoft: loopback PKCE, calendar list and incremental sync, all reachable — no client ID on this machine, so no live call has been made. Apple Calendar: `temporarily-deferred`, described in `kw_calendar_core::apple` and implemented nowhere, for lack of a macOS machine |
 | 6 — Local API and CLI | **Verified on Windows** | `Integrations > CLI` is now built. (Chunk H built its screen and phase 7's `Integrations > MCP` screen together, in one task, since both render the same discovery-permissions state) |
 | 7 — MCP | **Complete** | `tools/knegiswhisper-mcp`, a stdio server (~1573 lines incl. tests), reusing the local API's tool surface and token comparison. 28 crate tests plus protocol tests. Unverified by a person driving a real MCP client — see `BENCH_CHECK.md` |
-| 8 — Media import, diarization, semantic search | Media import complete; diarization and search deferred | `media:{audio,video,url}-import` and `media:openwhispr-import` are all reachable through `Notes > Upload`. The two diarization models and `search:semantic` stay `temporarily-deferred` — Qdrant sidecar, ONNX Runtime, embeddings, none attempted this run |
+| 8 — Media import, diarization, semantic search | Local media import complete; URL import withdrawn; diarization and search deferred | `media:{audio,video}-import` and `media:openwhispr-import` are reachable through `Notes > Upload`. `media:url-import` was reachable at the close of this plan and is not now: the command was unregistered because the fetch belongs to `yt-dlp` and cannot be policed — see chunk G. The two diarization models and `search:semantic` stay `temporarily-deferred` — Qdrant sidecar, ONNX Runtime, embeddings, none attempted this run |
 | 9 — Packaging | Written, unrun | `createUpdaterArtifacts: true` now (chunk J), release/CI workflows exist and pass locally, but no signing identity exists, no release has ever been published, and **CI triggers remain commented out by design** — chunk J's own value is deferred until someone uncomments them, so every gate in this document runs only when a person runs it |
 
 ## The unlock arithmetic
@@ -105,7 +110,7 @@ Why the order below is what it is. Each chunk's integrations-made-reachable:
 | D — system audio + natives *(done)* | large | 0 directly; unblocked E entirely, which is exactly what happened |
 | E — meetings *(done)* | 3 new clients (AssemblyAI, Deepgram, Corti) + 5 detectors | **5 of 6** streams reachable (`openai-realtime` predates this plan; `local` needs no key; Tinfoil stays declined) + 5 detectors, all built |
 | F — calendars *(done)* | new crate | **2 of 3** (Google, Microsoft; Apple `temporarily-deferred` for lack of a macOS machine) |
-| G — media import *(done)* | ffmpeg, yt-dlp sidecars | **4**: audio/video/url import on the two new sidecars, plus `media:openwhispr-import` — already written and tested, newly given the screen that made it reachable |
+| G — media import *(done)* | ffmpeg, yt-dlp sidecars | **4 at the time, 3 now**: audio/video/url import on the two new sidecars, plus `media:openwhispr-import` — already written and tested, newly given the screen that made it reachable. URL import was withdrawn after this plan closed; see the chunk G section |
 | H — MCP + CLI screens *(done)* | MCP server | **2** |
 | I — diarization + search *(not attempted this run)* | sherpa + Qdrant | **0**. Neither `ort`, Qdrant, nor the diarization/semantic-search work was started; both entries stay `temporarily-deferred`, unchanged since before this plan. (The 2 Parakeet local-ASR models Task 18 measured and proved are chunk B4's local-ASR work, not this chunk — they stay `reachable: false` for want of a Settings selector, deliberately not built as part of that measurement task) |
 
@@ -559,7 +564,9 @@ the new `RefreshFailed` status is actually produced, not merely defined.
 - `ffmpeg` and `yt-dlp` (`2026.08.19`) as `Transport::Stdio` sidecars → `Notes > Upload`
   (`media:audio-import`, `media:video-import`, `media:url-import`). The backend for all three is
   `apps/desktop/src-tauri/src/media.rs` (`MediaImportRuntime`) — the manifest said
-  `crates/notes-core` until Task 19 corrected it; that crate holds no import code.
+  `crates/notes-core` until Task 19 corrected it; that crate holds no import code. **URL import was
+  withdrawn after this plan closed**; see the last bullet in this section. `yt-dlp` stays pinned and
+  installable, because the dormant backend still locates it.
 - **`storage::import::from_openwhispr` got its screen.** It attaches read-only, introspects with
   `pragma table_info`, drops every cloud column, rebuilds FTS, and relocates secrets. Was
   deliberately absent from the manifest until it had a screen; both landed together, as planned.
@@ -571,6 +578,15 @@ the new `RefreshFailed` status is actually produced, not merely defined.
   handling, none of it observed or routed through the policy layer — bounded instead by flags yt-dlp
   enforces on itself (a 500 MB filesize cap, a bounded socket timeout). See
   `docs/NETWORK_BOUNDARY.md`'s "SSRF guards for URL import" section, corrected by Task 19 to say so.
+- **And then URL import was withdrawn, after this plan closed** (`cf965ce`, merged through PR #9
+  with five other security fixes). The gap above is not one a stricter up-front check can close: DNS
+  rebinding beats a literal-host check by construction, because the check runs before any name is
+  resolved, and yt-dlp's extractors generate requests this application never sees. So
+  `media_import_url` is no longer a registered command, `Notes > Upload` has no URL field, and
+  `media:url-import` is `reachable: false`. The backend is kept dormant rather than deleted — each
+  item carries `#[allow(dead_code)]` pointing at `media.rs`'s `URL IMPORT, DORMANT` section, and its
+  tests still run — so that re-opening it is a decision about the fetch boundary rather than a
+  rewrite. **Audio and video import are unaffected**: they take a local path and fetch nothing.
 
 **This is where Task 20 started.** Reviewing this chunk's guard, an implementer noticed
 `kw_network_policy::validate`'s `https` arm ran no host check at all, for any purpose — a gap far
@@ -675,10 +691,10 @@ declined, and this is the one piece that is simply not-yet-begun.
    `tsc --noEmit`, `vite build`, the domain scanner **and its 15 self-tests**, the parity gate
    **and its 10 self-tests**, `verify-binaries`, `generate-ts-types --check`,
    `generate-provider-registry --check`, `generate-baseline --check`, and the IPC-type check from
-   A1. Quoted at the close of this plan, not restated: `cargo test --workspace` reports **1290
-   passing, 0 failed** (941 when this plan was written); the domain scanner reports **374 files
-   scanned against 22 patterns**; the parity gate reports **102 entries**, as the Context section
-   above shows in full.
+   A1. Quoted from the last run, not restated: `cargo test --workspace` reports **1296 passing, 0
+   failed** (941 when this plan was written, 1290 at its close); the domain scanner reports **214
+   files scanned against 22 patterns**; the parity gate reports **102 entries**, as the Context
+   section above shows in full.
 2. **Flip `reachable` and `built` in the same commit as the screen.** An entry claiming a surface
    that does not render `data-surface` fails rule 7 — that gate exists because 64 entries once
    named screens nobody had written.

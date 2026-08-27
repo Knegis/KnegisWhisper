@@ -82,19 +82,22 @@ usable. Three separate facts, still not collapsed into one.
 ## The backlog
 
 On success the gate prints what is declared unreachable, grouped by surface — quoted here as it
-actually printed at the close of this plan, not restated by hand:
+actually printed, not restated by hand:
 
 ```
-7 integrations are declared unreachable:
+8 integrations are declared unreachable:
   Settings > Transcription > Local      4  (surface built)
   Settings > Transcription              1  (surface built)
   Settings > Meetings                   1  (surface built)
   Integrations > Calendar               1  (surface built)
+  Notes > Upload                        1  (surface built)
 ```
 
-Down from 19 unreachable and 5 unbuilt surfaces when this section was last written, to 7 unreachable
-and **zero** unbuilt surfaces — no "surface not built" entry remains anywhere in the manifest. Every
-one of the seven is unreachable for a specific, named reason rather than "not done yet":
+Down from 19 unreachable and 5 unbuilt surfaces when this section was last written, to 8 unreachable
+and **zero** unbuilt surfaces — no "surface not built" entry remains anywhere in the manifest. It
+read 7 at the close of the plan and went back up by one when URL import was withdrawn, which makes
+it the only entry on this list that regressed rather than never having been built. Every one of the
+eight is unreachable for a specific, named reason rather than "not done yet":
 
 - **4 — the sherpa/Parakeet local-ASR models.** The runtime is real, measured, and proven: a probe
   installed the pinned CLI and both pinned model archives and transcribed the same fixture whisper's
@@ -106,12 +109,17 @@ one of the seven is unreachable for a specific, named reason rather than "not do
 - **1 — `meeting-stream:tinfoil-realtime`.** The identical refusal, for the streaming client.
 - **1 — `calendar:apple`.** EventKit is described in `kw_calendar_core::apple` and implemented
   nowhere, on any platform, for lack of a macOS machine to write or verify a binding against.
+- **1 — `media:url-import`.** Withdrawn, not unfinished. It was reachable, and the command was
+  unregistered because the guard this application can run — a literal-host check on the URL as
+  typed — cannot see where a hostname resolves at connect time, nor any redirect or
+  extractor-generated request `yt-dlp` makes inside its own process. The backend is dormant rather
+  than deleted; see `docs/NETWORK_BOUNDARY.md`'s "SSRF guards for URL import".
 
-**60 integrations are reachable today**, up from 8 when this plan was written and 45 when this
+**59 integrations are reachable today**, up from 8 when this plan was written and 45 when this
 section was last written mid-run: the seventeen credential slots, six of seven transcription
 providers, seven reasoning providers, three enterprise connectors, six local LLM families, the six
 whisper models, five of six meeting-stream entries, two of three calendar providers, the local REST
-API, the CLI and MCP screens, transcript export, and audio/video/URL/OpenWhispr import.
+API, the CLI and MCP screens, transcript export, and audio/video/OpenWhispr import.
 
 *Reachable* is still not *verified*. The three enterprise connectors, the six meeting/calendar/media
 wire shapes and the newly-added meeting-stream clients can all be configured, and every one of them

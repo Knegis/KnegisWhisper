@@ -9,8 +9,10 @@
  * existing `transcriptions.db` that this project has had since early in the
  * build and, until this screen, nobody could reach.
  *
- * Three things this screen refuses to do, because getting any of them wrong
- * would be worse than not building the screen at all.
+ * Two things this screen refuses to do, because getting either of them wrong
+ * would be worse than not building the screen at all. (There were three; the
+ * third was about not overstating what protects yt-dlp's own fetch, and it
+ * went when URL import did.)
  *
  * It does not show a successful-looking result for a failed import. Every
  * failure is the actual message Rust returned — `ffmpeg could not convert

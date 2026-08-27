@@ -17,10 +17,12 @@ choices lives in [ENGINEERING_LOG.md](ENGINEERING_LOG.md); this file is about wh
 
 ## Where this actually stands
 
-**60 of 102 integrations are reachable**, up from 8 when this file was written and 45 when this
+**59 of 102 integrations are reachable**, up from 8 when this file was written and 45 when this
 section was last written. `node tools/integration-audit/verify-parity.mjs` prints the remaining
-**7** on every successful run, grouped by surface — down from 19, and every one of those 7 now
-names a *built* surface, which was not true when this section was first drafted.
+**8** on every successful run, grouped by surface — down from 19, and every one of those 8 now
+names a *built* surface, which was not true when this section was first drafted. It read 7 until
+URL import was withdrawn on 2026-08-27, the only entry on that list that regressed rather than
+never having been built.
 
 The framing this file opened with — *"the dominant problem is not missing subsystems; it is built,
 tested backend with no way in"* — was right, and that problem is now closed everywhere except the
@@ -136,10 +138,14 @@ an unrelated task.
   different, still-unstarted gap: they need a streaming client for
   `sherpa-onnx-online-websocket-server`'s own protocol, which nobody has written. See
   [BUILD_PLAN.md](BUILD_PLAN.md) chunk B4.
-- Audio, video and URL import via ffmpeg and yt-dlp — **done.** `Notes > Upload` is built and all
-  four media entries (`media:{audio,video,url}-import`, `media:openwhispr-import`) are reachable.
-  Its guard is a literal-host check before yt-dlp runs, not the "DNS resolution" this document once
-  said upstream's design specified — see `docs/SECURITY.md`'s Network section.
+- Audio and video import via ffmpeg — **done.** `Notes > Upload` is built and three of the four
+  media entries (`media:{audio,video}-import`, `media:openwhispr-import`) are reachable.
+- **URL import is disabled**, and is one of the eight entries the parity gate reports as
+  unreachable. The up-front literal-host check cannot see where a hostname resolves at connect
+  time, nor any redirect or extractor-generated request `yt-dlp` makes on its own, so
+  `media_import_url` was unregistered as a command rather than shipped with a guard that does not
+  cover the fetch. The backend is dormant, not deleted. See `docs/SECURITY.md`'s Network section
+  and `docs/NETWORK_BOUNDARY.md`'s "SSRF guards for URL import".
 - Diarization and semantic search, still the three `temporarily-deferred` entries, unattempted this
   run and already carrying dependencies and named interfaces.
 
@@ -181,7 +187,8 @@ closed.
   mid-run, touched phase 10.
 - **`storage::import::from_openwhispr` has its manifest entry and its screen — closed.**
   `media:openwhispr-import` is `reachable: true` through `Notes > Upload`, landed together with the
-  audio/video/URL importers exactly as planned.
+  audio and video importers exactly as planned. The URL importer landed with them and was
+  withdrawn afterwards; see the media-import entry above.
 
 ---
 
@@ -205,7 +212,7 @@ closed.
 
 ## Verification
 
-Every chunk keeps all of it green: `cargo test --workspace` (**1290 passing, 0 failed**, quoted
+Every chunk keeps all of it green: `cargo test --workspace` (**1296 passing, 0 failed**, quoted
 from the actual run rather than restated),
 `cargo clippy --workspace --all-targets -- -D warnings`, `cargo fmt --all --check`, `tsc --noEmit`,
 `vite build`, the domain scanner and its self-tests, `verify-binaries`, and the parity gate with its
