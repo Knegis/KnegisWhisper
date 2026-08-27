@@ -849,20 +849,6 @@ export async function importVideoFile(
   return invoke<MediaImportResult>("media_import_video", { path });
 }
 
-/**
- * Fetch `url` with yt-dlp, convert the result with ffmpeg, then transcribe it.
- *
- * Only the url itself is checked against the network boundary before yt-dlp
- * ever sees it. yt-dlp's own fetch -- its DNS resolution, any redirect it
- * follows, and its own per-site extraction -- runs in a separate process and
- * is not observed by `kw_network_policy`. See `media.rs`'s module doc.
- */
-export async function importMediaFromUrl(
-  url: string,
-): Promise<MediaImportResult> {
-  return invoke<MediaImportResult>("media_import_url", { url });
-}
-
 /** Progress of installing a media-import sidecar, or of a running import. */
 export async function onMediaImportProgress(
   handler: (progress: MediaImportProgress) => void,

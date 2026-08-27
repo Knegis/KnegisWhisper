@@ -30,6 +30,7 @@
 //! third field for a rotation deadline, and the test at the bottom of this file
 //! checks that this struct's own description of itself does not mention one.
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -37,6 +38,7 @@ use futures::{SinkExt as _, StreamExt as _};
 use kw_security::CredentialStore;
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
+use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::capabilities::MeetingProviderCapabilities;
@@ -49,6 +51,46 @@ use crate::{
 type Socket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 type Sink = futures::stream::SplitSink<Socket, Message>;
+
+// Provider responses are outside the application's trust boundary. Keep both
+// individual allocations and session-long retention predictably bounded.
+const MAX_MESSAGE_BYTES: usize = 1024 * 1024;
+const MAX_TRANSCRIPT_BYTES: usize = 16 * 1024 * 1024;
+const MAX_TRANSCRIPT_EVENTS: usize = 10_000;
+
+#[derive(Default)]
+struct TranscriptBudget {
+    bytes: AtomicUsize,
+    events: AtomicUsize,
+}
+
+impl TranscriptBudget {
+    fn reserve(&self, bytes: usize) -> bool {
+        if self
+            .bytes
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |used| {
+                used.checked_add(bytes)
+                    .filter(|total| *total <= MAX_TRANSCRIPT_BYTES)
+            })
+            .is_err()
+        {
+            return false;
+        }
+
+        if self
+            .events
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |used| {
+                used.checked_add(1)
+                    .filter(|total| *total <= MAX_TRANSCRIPT_EVENTS)
+            })
+            .is_err()
+        {
+            self.bytes.fetch_sub(bytes, Ordering::Relaxed);
+            return false;
+        }
+        true
+    }
+}
 
 /// One provider session: two sockets, and everything read from them.
 pub struct DeepgramRealtime {
@@ -63,6 +105,7 @@ pub struct DeepgramRealtime {
     system: Option<Connection>,
     /// Everything both sockets have said, in arrival order.
     events: Arc<std::sync::Mutex<Vec<TranscriptEvent>>>,
+    budget: Arc<TranscriptBudget>,
     live: Option<mpsc::UnboundedSender<TranscriptEvent>>,
     started: Option<Instant>,
     paused: bool,
@@ -109,6 +152,7 @@ impl DeepgramRealtime {
             mic: None,
             system: None,
             events: Arc::new(std::sync::Mutex::new(Vec::new())),
+            budget: Arc::new(TranscriptBudget::default()),
             live: None,
             started: None,
             paused: false,
@@ -182,15 +226,19 @@ impl DeepgramRealtime {
             );
         }
 
-        let (socket, _) = tokio_tungstenite::connect_async(request)
-            .await
-            .map_err(|err| MeetingError::Rejected {
-                provider: PROVIDER_ID.to_owned(),
-                // The handshake failure, which for a bad key is worth
-                // repeating verbatim -- it is the difference between "your
-                // key is wrong" and "the network is down".
-                detail: err.to_string(),
-            })?;
+        let mut websocket_config = WebSocketConfig::default();
+        websocket_config.max_frame_size = Some(MAX_MESSAGE_BYTES);
+        websocket_config.max_message_size = Some(MAX_MESSAGE_BYTES);
+        let (socket, _) =
+            tokio_tungstenite::connect_async_with_config(request, Some(websocket_config), false)
+                .await
+                .map_err(|err| MeetingError::Rejected {
+                    provider: PROVIDER_ID.to_owned(),
+                    // The handshake failure, which for a bad key is worth
+                    // repeating verbatim -- it is the difference between "your
+                    // key is wrong" and "the network is down".
+                    detail: err.to_string(),
+                })?;
 
         let (sink, stream) = socket.split();
 
@@ -201,6 +249,7 @@ impl DeepgramRealtime {
             stream,
             source,
             Arc::clone(&self.events),
+            Arc::clone(&self.budget),
             self.live.clone(),
             self.started.unwrap_or_else(Instant::now),
         ));
@@ -221,6 +270,7 @@ async fn read(
     mut stream: futures::stream::SplitStream<Socket>,
     source: AudioSource,
     events: Arc<std::sync::Mutex<Vec<TranscriptEvent>>>,
+    budget: Arc<TranscriptBudget>,
     live: Option<mpsc::UnboundedSender<TranscriptEvent>>,
     started: Instant,
 ) {
@@ -245,6 +295,13 @@ async fn read(
                 is_final,
                 speaker,
             } if !text.trim().is_empty() => {
+                if !budget.reserve(text.len()) {
+                    tracing::warn!(
+                        ?source,
+                        "the provider exceeded the transcript session budget"
+                    );
+                    return;
+                }
                 let event = deepgram::event(
                     text,
                     is_final,
@@ -284,6 +341,7 @@ impl MeetingTranscriptionProvider for DeepgramRealtime {
         self.caps = Some(caps);
         self.config = Some(config);
         self.started = Some(Instant::now());
+        self.budget = Arc::new(TranscriptBudget::default());
 
         // Both, before returning. A session with only the microphone open
         // would transcribe half the meeting and report success.
@@ -515,6 +573,7 @@ mod tests {
             mic,
             system,
             events: _,
+            budget: _,
             live,
             started,
             paused,
@@ -529,5 +588,25 @@ mod tests {
             "session-start bookkeeping, not a rotation deadline -- see the comment above"
         );
         assert!(!paused);
+    }
+
+    #[test]
+    fn transcript_budget_limits_bytes_across_both_sockets() {
+        let budget = TranscriptBudget::default();
+        assert!(budget.reserve(MAX_TRANSCRIPT_BYTES));
+        assert!(!budget.reserve(1));
+        assert_eq!(budget.bytes.load(Ordering::Relaxed), MAX_TRANSCRIPT_BYTES);
+        assert_eq!(budget.events.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn transcript_budget_limits_event_overhead() {
+        let budget = TranscriptBudget::default();
+        for _ in 0..MAX_TRANSCRIPT_EVENTS {
+            assert!(budget.reserve(1));
+        }
+        assert!(!budget.reserve(1));
+        assert_eq!(budget.bytes.load(Ordering::Relaxed), MAX_TRANSCRIPT_EVENTS);
+        assert_eq!(budget.events.load(Ordering::Relaxed), MAX_TRANSCRIPT_EVENTS);
     }
 }
