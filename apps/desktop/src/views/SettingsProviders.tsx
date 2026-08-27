@@ -11,7 +11,11 @@
  *
  * 1. **The slot list comes from Rust.** `credential_slots` reads
  *    `config/provider-registry.json`, so no provider id or slot name is written
- *    here. Fifteen slots, ten providers and five per-feature custom endpoints.
+ *    here. Seventeen slots, twelve providers and five per-feature custom
+ *    endpoints — up from fifteen and ten once AssemblyAI and Deepgram gained
+ *    their own BYOK slots for meeting streaming. (Three further enterprise
+ *    slots — Bedrock, Azure, Vertex — hold a whole connector configuration
+ *    each and are rendered in their own section below, not counted here.)
  * 2. **A stored key is never called "connected".** Storing a secret proves only
  *    that the credential store worked. Only `probe_providers` — a real request
  *    with the user's own key, run when they press the button — can say more, and
