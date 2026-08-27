@@ -124,11 +124,21 @@ by platform, and this document used to claim `0600` everywhere, which was false:
   an honest report of an unmet requirement, not a mechanism.** Measured on one real machine
   (2026-08-26) the inherited ACL granted Modify to a local group that was neither the user nor the
   administrators — see [BENCH_CHECK.md](BENCH_CHECK.md) — so on Windows, treat the token as
-  readable by anyone the profile directory lets in. Worse, `Permissions::is_as_expected` currently
-  returns `true` for that state, so `Integrations > Local API` shows no warning and a sentence
-  naming trustees nothing ever read. Closing it means an explicit owner-only DACL through
-  `SetNamedSecurityInfoW` with `PROTECTED_DACL_SECURITY_INFORMATION`, then reading the DACL back
-  and reporting `OwnerOnly` only if it matches — the discipline the Unix path already uses.
+  readable by anyone the profile directory lets in. That fact still stands; closing it means an
+  explicit owner-only DACL through `SetNamedSecurityInfoW` with `PROTECTED_DACL_SECURITY_INFORMATION`,
+  then reading the DACL back and reporting `OwnerOnly` only if it matches — the discipline the Unix
+  path already uses. Not done yet: `discovery::restrict_file` is still a no-op on Windows.
+  **Corrected 2026-08-27:** this paragraph used to go on to say that `Permissions::is_as_expected`
+  returned `true` for `InheritedFromProfile` and so `Integrations > Local API` showed no warning and
+  a sentence naming trustees nothing had read — true when written, and fixed by Task 14, which is
+  before this correction. The desktop layer now has its own `DiscoveryPermissions::is_confirmed()`,
+  which — unlike `kw_local_api::Permissions::is_as_expected()`, which still returns `true` for
+  `InheritedFromProfile` and is no longer read by anything user-facing — treats only `OwnerOnly` as
+  confirmed. Both the startup log warning and the two settings screens (`Integrations > Local API`
+  and `Integrations > CLI`) go through that one decision and now warn on `InheritedFromProfile`,
+  rendering "Not independently restricted" with a caveat naming administrators by name. The
+  unmet-requirement fact above is what that warning is about; only the claim that the application
+  hid it was wrong, and only that claim has been removed here.
 
 The MCP server talks to the desktop application through this authenticated local API. Streamable
 HTTP is available but disabled by default; stdio is the normal transport. Destructive MCP tools

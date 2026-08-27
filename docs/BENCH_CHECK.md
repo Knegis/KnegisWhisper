@@ -74,26 +74,31 @@ AzureAD\AxelKarlsson:(I)(F)
 ```
 
 A member of that group can read the bearer token and drive the local API — notes, transcriptions,
-deletions.
+deletions. That fact stands: Windows applies no DACL of its own, so the file is only ever as
+protected as the user profile directory happens to be, and this measurement is real evidence that
+"happens to be" can include trustees nobody chose.
 
-**And the application says this is fine.** `Permissions::is_as_expected` returns `true` for
-`InheritedFromProfile`, and its own doc comment defines that as "as restrictive as the platform
-allows" — which Windows plainly is not, since an explicit owner-only DACL is available and unused.
-`Integrations > Local API` warns only when `discoveryPermissionsAsExpected === false`, so it stays
-silent, under a sentence reading *"readable by your user account and by administrators, which is
-what your profile directory allows"*. Two trustees on this machine are neither. That sentence names
-an ACL nothing ever read.
+**Corrected 2026-08-27 — the rest of this finding described the application hiding that fact from
+the user, and that has since been fixed.** It used to read, present tense, that
+`Permissions::is_as_expected` returned `true` for `InheritedFromProfile` and that
+`Integrations > Local API` therefore warned only when `discoveryPermissionsAsExpected === false` and
+otherwise stayed silent under a sentence naming trustees nothing had read — accurate when this
+finding was written. Task 14 fixed it: the settings screen no longer carries
+`discoveryPermissionsAsExpected` at all, and the desktop layer's own
+`DiscoveryPermissions::is_confirmed()` — deliberately narrower than
+`kw_local_api::Permissions::is_as_expected()`, which still returns `true` for `InheritedFromProfile`
+and is no longer read by anything user-facing — treats only `OwnerOnly` as confirmed. Both the
+startup warning (`LocalApiRuntime::start`) and the two screens that render this state
+(`Integrations > Local API`, `Integrations > CLI`) go through that one decision, and
+`InheritedFromProfile` now renders "Not independently restricted" with a caveat naming
+administrators by name, on both.
 
-So this is not a gap that was honestly reported. It is the `contentProtected` pattern again: a
-control that is not applied, described by a string that assumes what it would have done. Three
-places state it and none of them checked — the code comment, the user-facing sentence, and
-`SECURITY.md`.
-
-The fix is an explicit owner-only DACL through `SetNamedSecurityInfoW` with
-`PROTECTED_DACL_SECURITY_INFORMATION` so the profile's ACL stops being inherited, then reading the
-DACL back and reporting `OwnerOnly` only if what came back is what was asked for — the same
-read-back discipline the Unix branch of this very function already applies. Until that lands,
-`is_as_expected` should return `false` on Windows and the screen should say so.
+What is still open, and untouched by that fix: the DACL itself. The fix for *that* is an explicit
+owner-only DACL through `SetNamedSecurityInfoW` with `PROTECTED_DACL_SECURITY_INFORMATION` so the
+profile's ACL stops being inherited, then reading the DACL back and reporting `OwnerOnly` only if
+what came back is what was asked for — the same read-back discipline the Unix branch of this very
+function already applies. `discovery::restrict_file` is still a no-op under `cfg(not(unix))` today;
+only the *reporting* of the gap was fixed, not the gap.
 
 **3. `knegiswhisper history list` hides failures.** The table renders `id, when, provider, text`.
 A failed dictation has neither a provider nor text, so it prints as two dashes and says nothing —
