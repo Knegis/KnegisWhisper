@@ -27,8 +27,8 @@ integration parity OK — 102 entries against baseline c4000db9802d
   ported-with-new-rust-implementation    52
   rewired-to-direct-byok                 21
   removed-vendor-service                 18
-  temporarily-deferred                   7
-  ported                                 3
+  temporarily-deferred                   8
+  ported                                 2
   platform-specific                      1
 
 7 integrations are declared unreachable:
