@@ -40,10 +40,12 @@
 use kw_network_policy::{NetworkPolicy, RequestPurpose};
 use kw_security::Secret;
 use serde::Deserialize;
+use url::Url;
 
 use crate::sync_support::{percent_encode_path_segment, StoredAttendee, SyncError, MAX_PAGES};
 
 const CALENDARS_URL: &str = "https://graph.microsoft.com/v1.0/me/calendars";
+const GRAPH_HOST: &str = "graph.microsoft.com";
 
 fn events_delta_url(calendar_id: &str) -> String {
     format!(
@@ -121,6 +123,7 @@ async fn get(
     access_token: &Secret,
     url: &str,
 ) -> Result<(u16, String), SyncError> {
+    validate_graph_url(url)?;
     let response = policy
         .get(RequestPurpose::UserConfiguredCalendarProvider, url)?
         .bearer_auth(access_token.expose())
@@ -130,6 +133,24 @@ async fn get(
     let status = response.status().as_u16();
     let body = response.text().await.map_err(SyncError::Http)?;
     Ok((status, body))
+}
+
+/// Microsoft returns absolute pagination and delta URLs. Keep bearer tokens
+/// pinned to the Graph origin even when a URL came from a persisted cursor or
+/// an otherwise valid provider response.
+fn validate_graph_url(url: &str) -> Result<(), SyncError> {
+    let parsed = Url::parse(url).map_err(|_| SyncError::UntrustedProviderUrl)?;
+    let trusted = parsed.scheme() == "https"
+        && parsed.host_str() == Some(GRAPH_HOST)
+        && parsed.port_or_known_default() == Some(443)
+        && parsed.username().is_empty()
+        && parsed.password().is_none();
+
+    if trusted {
+        Ok(())
+    } else {
+        Err(SyncError::UntrustedProviderUrl)
+    }
 }
 
 /// Fetch every calendar in the account, following `@odata.nextLink`.
@@ -430,6 +451,28 @@ mod tests {
             next,
             Some("https://graph.microsoft.com/v1.0/me/calendars?$skip=20".to_owned())
         );
+    }
+
+    #[test]
+    fn graph_urls_are_pinned_to_the_microsoft_origin() {
+        assert!(
+            validate_graph_url("https://graph.microsoft.com/v1.0/me/calendars?$skip=20").is_ok()
+        );
+        assert!(validate_graph_url("https://graph.microsoft.com:443/v1.0/me/calendars").is_ok());
+
+        for untrusted in [
+            "https://attacker.example/collect",
+            "https://graph.microsoft.com.attacker.example/collect",
+            "http://graph.microsoft.com/v1.0/me/calendars",
+            "https://graph.microsoft.com:444/v1.0/me/calendars",
+            "https://attacker.example@graph.microsoft.com/v1.0/me/calendars",
+            "not a URL",
+        ] {
+            assert!(matches!(
+                validate_graph_url(untrusted),
+                Err(SyncError::UntrustedProviderUrl)
+            ));
+        }
     }
 
     /// Modelled on
