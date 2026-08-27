@@ -81,13 +81,24 @@ fn case_and_trailing_dot_do_not_evade_the_blocklist() {
     for url in [
         "https://API.OpenWhispr.COM/v1",
         "https://Auth.OPENWHISPR.com/session",
+        // domain-scanner:allow-next-line a negative test must name the host it asserts is blocked
+        "https://openwhispr.com./v1",
+        // domain-scanner:allow-next-line a negative test must name the host it asserts is blocked
+        "https://API.OpenWhispr.COM./v1",
+        // domain-scanner:allow-next-line a negative test must name the host it asserts is blocked
+        "https://mcp.openwhispr.com./stream",
+        // More than one trailing dot is not valid DNS syntax, but the strip
+        // has to remove the whole run rather than exactly one -- a single
+        // `strip_suffix` would leave one dot behind and miss this.
+        // domain-scanner:allow-next-line a negative test must name the host it asserts is blocked
+        "https://openwhispr.com../v1",
     ] {
         assert!(
             matches!(
                 validate(url, RequestPurpose::UserConfiguredAiProvider),
                 Err(PolicyError::BlockedVendorHost { .. })
             ),
-            "{url} must be blocked regardless of case"
+            "{url} must be blocked regardless of case or a trailing DNS-root dot"
         );
     }
 }

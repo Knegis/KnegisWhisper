@@ -16,18 +16,44 @@
 
 import type {
   Accelerator,
+  AppleCalendarSupport,
+  BinaryLocation,
   Binding,
   CaptureExclusion,
+  ClientAvailability,
+  ConfigReview,
+  ConnectOutcome,
+  Detected,
   DictationOutcome,
+  DiscoveryPermissions,
   HotkeyChange,
+  ImportReport,
   InstallProgress,
+  KeytermSupport,
+  LocalAvailability,
+  MediaImportProgress,
+  MediaImportSource,
+  MeetingOutcome,
   NonActivating,
+  RelocatedCredential,
   ShortcutHookStatus,
+  Sources,
+  SyncOutcome,
+  SystemAudioSupport,
+  TokenStatus,
+  UpdateCheckResult,
   VerifiedBy,
 } from "./ipc";
 
-/** A state and, where there is one, what backs it up. */
-export type Stated = { text: string; detail: string };
+/**
+ * A state and, where there is one, what backs it up.
+ *
+ * `caveat` is rarer: a sentence worth its own paragraph rather than a `Row`'s
+ * detail line, for a state that needs more room to explain than "the reason
+ * next to the value" affords. Optional, and absent for most states — most of
+ * this file's callers never set it.
+ */
+export type Stated = { text: string; detail: string; caveat?: string };
 
 /**
  * Render a capture-exclusion state without overclaiming.
@@ -201,5 +227,472 @@ export function progressLabel(progress: InstallProgress): string {
       return "Unpacking…";
     case "done":
       return `Installed (${verificationLabel(progress.verifiedBy)})`;
+  }
+}
+
+/* ------------------------------------------------------------ media import */
+
+/**
+ * Progress of installing a media-import sidecar, or of a running import, as
+ * one line.
+ *
+ * Shares `bytes()` with `progressLabel` above, but is a separate function
+ * because `MediaImportProgress` is a distinct Rust type from
+ * `InstallProgress` — see that type's own doc on why: `ipc_types` asserts the
+ * two cannot collide in the generated TypeScript, and merging their labels
+ * here would quietly assume they always agree.
+ */
+export function mediaImportProgressLabel(progress: MediaImportProgress): string {
+  switch (progress.stage) {
+    case "downloading":
+      return `Downloading ${progress.sidecar} — ${bytes(progress.written, progress.total)}`;
+    case "verifying":
+      return "Verifying…";
+    case "extracting":
+      return "Unpacking…";
+    case "fetching":
+      return "Fetching the url…";
+    case "converting":
+      return "Converting…";
+    case "transcribing":
+      return "Transcribing…";
+    case "done":
+      return "Done.";
+  }
+}
+
+/**
+ * Why a media-import sidecar cannot be installed here, or `null` when it can
+ * be. `unknown` gets its own honest sentence rather than being folded into
+ * "not published": nothing here is being claimed about the platform, only
+ * that this build could not tell.
+ */
+export function sidecarUnavailableReason(a: LocalAvailability): string | null {
+  switch (a.state) {
+    case "installable":
+      return null;
+    case "not-published":
+      return a.reason;
+    case "unknown":
+      return "this platform could not be determined, so installing has not been offered";
+  }
+}
+
+/** Where an imported transcript came from, in a few words. */
+export function mediaImportSourceLabel(source: MediaImportSource): string {
+  switch (source.kind) {
+    case "audio":
+      return "an imported audio file";
+    case "video":
+      return "an imported video file";
+    case "url":
+      return `imported from ${source.host}`;
+  }
+}
+
+/**
+ * What an OpenWhispr database import copied and skipped, in one line.
+ *
+ * Never silent about a skip: a count with no acknowledgement that some rows
+ * did not make it across would be exactly the "quietly discarded rows" defect
+ * this screen exists to rule out.
+ */
+export function importReportSummary(report: ImportReport): string {
+  const copied = report.tables.reduce((n, t) => n + t.copied, 0);
+  const skipped = report.tables.reduce((n, t) => n + t.skipped, 0);
+  return skipped === 0
+    ? `${copied} row${copied === 1 ? "" : "s"} copied.`
+    : `${copied} row${copied === 1 ? "" : "s"} copied, ${skipped} skipped.`;
+}
+
+/**
+ * Which columns were dropped from which table, for the rows worth showing —
+ * a table that lost no columns is left out rather than listed with nothing
+ * next to it.
+ *
+ * Mirrors `storage::import::dropped_by_table`'s grouping. Computed here
+ * rather than by a second command: the fields it groups
+ * (`ImportReport.tables[].droppedColumns`) already crossed the wire in the
+ * report the import itself returned, so a round trip to reshape them would
+ * ask Rust for a fact the frontend already has.
+ */
+export function droppedColumnsByTable(
+  report: ImportReport,
+): { table: string; columns: string[] }[] {
+  return report.tables
+    .filter((t) => t.droppedColumns.length > 0)
+    .map((t) => ({ table: t.table, columns: t.droppedColumns }));
+}
+
+/** A relocated credential, without ever naming its value. */
+export function relocatedCredentialLabel(c: RelocatedCredential): string {
+  return `${c.account} — moved from ${c.sourceTable} into credential slot ${c.slot}`;
+}
+
+/* ----------------------------------------------------------------- meetings */
+
+/**
+ * What can be said about system audio, without overclaiming.
+ *
+ * Lifted out of `Diagnostics.tsx` because the meetings screen needs the same
+ * answer, and two copies of it would be two chances to describe the same state
+ * differently.
+ */
+export function systemAudioValue(s: SystemAudioSupport): string {
+  switch (s.state) {
+    case "available":
+      // Deliberately not "Available": the mechanism exists and, on Linux,
+      // nobody has heard it produce sound.
+      return s.unverified ? "Available, never tested" : "Available";
+    case "no-device":
+      return "No device offers it";
+    case "unsupported":
+      return "Not supported here";
+  }
+}
+
+/**
+ * Why a meeting provider can or cannot be chosen.
+ *
+ * The three states get three different sentences because they lead to three
+ * different actions, and because "coming soon" over a deliberate refusal is the
+ * quiet dishonesty this project keeps finding upstream.
+ */
+export function availabilityLabel(a: ClientAvailability): string {
+  switch (a.state) {
+    case "available":
+      return "ready to use";
+    case "no-client":
+      return a.reason;
+    case "declined":
+      return `refused: ${a.reason}`;
+  }
+}
+
+/** What a provider does with keyterms, including nothing. */
+export function keytermLabel(k: KeytermSupport): string {
+  switch (k.state) {
+    case "unsupported":
+      // Both providers that do this accept them without complaint, so saying
+      // nothing here would leave a field that does nothing looking like one that
+      // works.
+      return "keyterms are accepted and ignored";
+    case "supported":
+      return k.max === null
+        ? "keyterms are used"
+        : `up to ${k.max} keyterms are used; any more are dropped`;
+  }
+}
+
+/**
+ * How many keyterms will actually reach the provider, from a `ConfigReview`.
+ *
+ * Always rendered, not only once something is dropped — the cap is worth
+ * seeing before it is ever exceeded, and a screen that only speaks up once
+ * something goes wrong is a screen that computed the truncation and dropped
+ * it right back on the floor.
+ *
+ * `support` distinguishes *why* terms were dropped, because `ConfigReview`
+ * cannot: `KeytermSupport::effective_count` returns 0 for every requested
+ * term when a provider is `Unsupported` (OpenAI Realtime, Tinfoil, and the
+ * local model all ignore keyterms entirely), which is not the same fact as a
+ * numeric cap being exceeded. Saying "over this provider's cap" in the first
+ * case would be a false statement about why the user's input did nothing.
+ */
+export function keytermReviewLabel(
+  review: ConfigReview,
+  support: KeytermSupport,
+): {
+  value: string;
+  detail: string | undefined;
+} {
+  return {
+    value: `${review.keytermsUsed} of ${review.keytermsRequested} used`,
+    detail:
+      review.keytermsDropped === 0
+        ? undefined
+        : support.state === "unsupported"
+          ? "dropped — this provider ignores keyterms entirely"
+          : `${review.keytermsDropped} dropped — over this provider's cap`,
+  };
+}
+
+/**
+ * Why starting will be refused, when a provider needs a language and none is
+ * set. `null` when there is nothing to warn about.
+ *
+ * Told before the click rather than only after it: `validate` is checked
+ * here, live, so the warning is visible while there is still time to type a
+ * language in, not just as the text of the error `meeting_start` returns.
+ */
+export function languageRequiredWarning(review: ConfigReview): string | null {
+  return review.languageRequired
+    ? "This provider cannot detect the language on its own. Set one below, or starting will be refused."
+    : null;
+}
+
+/** Which captures a running meeting actually opened. */
+export function sourcesLabel(s: Sources | null): string {
+  if (!s) return "";
+  if (s.microphone && s.systemAudio) {
+    return "your microphone and what the other participants say";
+  }
+  if (s.microphone) {
+    return s.systemAudioReason
+      ? `your microphone only — ${s.systemAudioReason}`
+      : "your microphone only";
+  }
+  return "nothing is being recorded";
+}
+
+/** How a meeting ended, in one line. */
+export function meetingOutcomeLabel(outcome: MeetingOutcome): string {
+  switch (outcome.outcome) {
+    case "saved": {
+      const minutes = Math.round(outcome.durationSeconds / 60);
+      const parts = [`Saved as note ${outcome.noteId} (${minutes} min).`];
+      if (outcome.transcriptIsPartials) {
+        // Said plainly rather than left for the reader to notice repeated
+        // phrases and wonder.
+        parts.push(
+          "The whole-recording pass did not complete, so the saved transcript is the live one and some phrases repeat.",
+        );
+      }
+      if (outcome.gaps > 0) {
+        parts.push(
+          `${outcome.gaps} stretch(es) of audio were never transcribed — the transcriber could not keep up.`,
+        );
+      }
+      parts.push(`The recording is at ${outcome.recordingPath}.`);
+      return parts.join(" ");
+    }
+    case "nothing-transcribed":
+      // Not a failure, and not attributed to a cause this build cannot tell
+      // apart from another. A quiet room reads identically, from here, to a
+      // cloud provider that rejected the session-config frame and kept
+      // going: every socket client logs that rejection with `tracing::warn!`
+      // and continues rather than returning an `Err` (see
+      // docs/BENCH_CHECK.md item 13, and docs/PLATFORM_SUPPORT.md on which
+      // wires are unconfirmed against a live service). Saying "failed" would
+      // send somebody looking for a fault; naming "quiet room" as the sole
+      // cause would be asserting one guess this build has no way to confirm
+      // over an equally likely other one.
+      return `Nothing was transcribed — no speech was recognised, or the provider returned nothing. The recording is at ${outcome.recordingPath}.`;
+    case "cancelled":
+      return "Discarded. The recording was deleted.";
+    case "failed":
+      return outcome.message;
+  }
+}
+
+/**
+ * What a detected meeting application means, and whether it can be offered.
+ *
+ * The distinction is measured, not chosen. `meeting_detect_probe` found
+ * `ms-teams.exe` running with no call in progress, because new Teams runs the
+ * call inside its own process — so there is no separate signal to offer on, and
+ * offering on "the client is open" would prompt on every launch for anyone whose
+ * Teams starts with Windows. Saying so here is what keeps that a known limit
+ * rather than a bug somebody has to work out.
+ */
+export function detectedLabel(d: Detected): string {
+  return d.inCall
+    ? `in a call — detected as ${d.evidence}`
+    : `open, but not detectably in a call, so recording is not offered for it — detected as ${d.evidence}`;
+}
+
+/* ------------------------------------------------------------------ updater */
+
+/**
+ * What a check for an update found, honestly.
+ *
+ * `no-public-key-configured` gets its own sentence rather than being folded
+ * into "up to date" or left silent: this build has no updater public key set,
+ * so a downloaded update's authenticity could never be checked, and that is a
+ * different fact from "nothing new was published". See `docs/SECURITY.md`.
+ */
+export function updateCheckLabel(result: UpdateCheckResult): Stated {
+  switch (result.state) {
+    case "no-public-key-configured":
+      return {
+        text: "Update checking is not securely configured",
+        detail:
+          "no updater public key is set, so a downloaded update's authenticity could never be checked. See docs/SECURITY.md for how to generate one.",
+      };
+    case "check-failed":
+      return { text: "Could not check for an update", detail: result.error };
+    case "current-version-unparseable":
+      return {
+        text: "This build's own version could not be read",
+        detail: `unparseable version: ${result.version}`,
+      };
+    case "latest-version-unparseable":
+      return {
+        text: "The published release could not be read",
+        detail: `unparseable tag: ${result.tag}`,
+      };
+    case "up-to-date":
+      return { text: "Up to date", detail: `version ${result.current}` };
+    case "update-available":
+      return {
+        text: `Update available: v${result.latest}`,
+        detail: `you have v${result.current} — ${result.url}`,
+      };
+  }
+}
+
+/* ----------------------------------------------------------------- calendars */
+
+/**
+ * A connected account's token, without overclaiming.
+ *
+ * `active` means the cached access token has not yet passed its recorded
+ * expiry — a local fact, not a network probe. `needs-refresh` is not shown
+ * as "disconnected": nothing has tried to refresh it yet since it expired,
+ * and the next sync does that automatically, most of the time silently.
+ * `missing` covers both "never connected" and the credential having been
+ * removed while a database row lingers — see `calendar.rs::token_status` —
+ * and both read the same to a person: not connected. `refresh-failed` is the
+ * state `needs-refresh` must never be confused with: it means a sync
+ * already tried to refresh this exact token and recorded that it failed
+ * (`calendar.rs::combine_token_status`), so this reads as not connected
+ * rather than as an automatic retry that is quietly pending.
+ */
+export function tokenStatusLabel(status: TokenStatus): Stated {
+  switch (status.state) {
+    case "active":
+      return { text: "Connected", detail: "the cached access token is still valid" };
+    case "needs-refresh":
+      return {
+        text: "Connected",
+        detail: "the access token has expired; the next sync refreshes it automatically",
+      };
+    case "missing":
+      return { text: "Not connected", detail: "" };
+    case "refresh-failed":
+      return {
+        text: "Not connected",
+        detail: `the last attempt to refresh the access token failed (${status.message}); reconnect the account`,
+      };
+  }
+}
+
+/** What clicking "Connect" produced. */
+export function connectOutcomeLabel(outcome: ConnectOutcome): string {
+  switch (outcome.state) {
+    case "connected":
+      return `Connected as ${outcome.accountEmail} (${outcome.calendars} calendar${outcome.calendars === 1 ? "" : "s"}).`;
+    case "denied":
+      return `Not connected: access was declined (${outcome.reason}).`;
+  }
+}
+
+/**
+ * What one sync attempt found, distinguishing "nothing changed" from
+ * "could not check". An empty count on `completed` is a real fact — nothing
+ * changed since the last sync — never used to paper over `token-unavailable`
+ * or `failed`, which get their own sentences naming what went wrong.
+ */
+export function syncOutcomeLabel(outcome: SyncOutcome): string {
+  switch (outcome.state) {
+    case "completed": {
+      const parts = [
+        `Synced: ${outcome.eventsUpserted} event${outcome.eventsUpserted === 1 ? "" : "s"} updated, ${outcome.eventsRemoved} removed.`,
+      ];
+      if (outcome.calendarErrors.length > 0) {
+        parts.push(
+          `${outcome.calendarErrors.length} calendar(s) could not be synced: ${outcome.calendarErrors.join("; ")}`,
+        );
+      }
+      return parts.join(" ");
+    }
+    case "token-unavailable":
+      return `Could not sync: the token could not be refreshed (${outcome.message}). Reconnect the account.`;
+    case "failed":
+      return `Sync failed: ${outcome.message}`;
+  }
+}
+
+/**
+ * What this build can do about Apple Calendar. Always the reason EventKit is
+ * unimplemented — see `kw_calendar_core::apple`'s module doc — never an
+ * empty calendar list that would read as "you have none".
+ */
+export function appleCalendarSupportLabel(support: AppleCalendarSupport): Stated {
+  return { text: "Not supported in this build", detail: support.reason };
+}
+
+/* ------------------------------------------------------------ developer tools */
+
+/**
+ * The discovery file's real permission state, said plainly.
+ *
+ * The one rule this exists to enforce: `inherited-from-profile` never reads as
+ * a pass. It is the platform's default, not a restriction anything here
+ * verified, and a bench check found exactly that gap — the backend's own
+ * `is_as_expected()` returns `true` for it, which is correct as "the best
+ * this build currently achieves" and wrong read as "checked and confirmed".
+ * Every other case names its evidence too, the same discipline
+ * `captureExclusionLabel` already follows for `unknown`.
+ *
+ * `inherited-from-profile`'s `caveat` used to be a paragraph of JSX,
+ * hand-written identically in both `Integrations > API` and
+ * `Integrations > CLI`. Two copies of the same sentence is the exact
+ * "definitions that can drift apart" shape this task was about, one layer
+ * up — an edit to one screen would silently leave the other telling the user
+ * something different about the same file. It lives here once; both screens
+ * render whatever this function says.
+ */
+export function discoveryPermissionsLabel(p: DiscoveryPermissions): Stated {
+  switch (p.state) {
+    case "owner-only":
+      return {
+        text: "Restricted to your user account",
+        detail: "verified by reading the file's mode back: 0600",
+      };
+    case "inherited-from-profile":
+      return {
+        text: "Not independently restricted",
+        detail:
+          "it inherits your profile directory's permissions, which normally allow your account and administrators. Nothing here verified that inheritance, and it is not the same as this file having been locked down on its own",
+        caveat:
+          "This is not the same as the file having been locked down on its own. Anything that can read files your profile can read — which, on this platform, includes administrators — can use the local API.",
+      };
+    case "wider":
+      return {
+        text: "More readable than intended",
+        detail: `mode ${p.mode} — anything that can read it can use the local API`,
+      };
+    case "unknown":
+      return {
+        text: "Permissions could not be determined",
+        detail: `${p.reason} — treat the local API as reachable by anything running as you`,
+      };
+  }
+}
+
+/**
+ * Where a companion binary (the CLI, or the MCP server) was actually found,
+ * or the plain admission that it was not found anywhere this checked.
+ *
+ * Never "not installed": this only ever checked next to the running
+ * application and on `PATH`, and says exactly that rather than a broader
+ * claim neither check supports.
+ */
+export function binaryLocationLabel(b: BinaryLocation): Stated {
+  switch (b.state) {
+    case "sibling":
+      return {
+        text: "Found",
+        detail: `${b.path} — built alongside this application`,
+      };
+    case "on-path":
+      return { text: "Found on PATH", detail: b.path };
+    case "not-found":
+      return {
+        text: "Not found",
+        detail:
+          "not next to this application and not on PATH. Build it with cargo and either place it alongside this application's own binary or put it on PATH",
+      };
   }
 }

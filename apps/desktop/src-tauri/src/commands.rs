@@ -400,7 +400,7 @@ pub struct CredentialSlotStatus {
 /// Every credential slot, in registry order, with whether each is filled.
 ///
 /// One call rather than one `provider_credential_present` per slot: there are
-/// fifteen, the screen re-reads after every save, and the list itself has to
+/// twenty, the screen re-reads after every save, and the list itself has to
 /// come from the registry anyway so that no screen writes provider ids by hand.
 #[tauri::command]
 pub fn credential_slots(state: State<'_, AppState>) -> CmdResult<Vec<CredentialSlotStatus>> {
@@ -504,6 +504,99 @@ pub async fn import_openwhispr(
     kw_storage::import::from_openwhispr(state.db(), &path, state.credentials())
         .await
         .map_err(|e| fail("import", e))
+}
+
+/// Which file `pick_import_file` is being asked to find.
+///
+/// A closed enum rather than a filter typed by the frontend, the same
+/// reasoning as `media::MediaSidecar`: the title and extension list are fixed
+/// by this command, not invented by whoever calls it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "kebab-case")]
+pub enum ImportPickKind {
+    Audio,
+    Video,
+    OpenWhisprDatabase,
+}
+
+/// The dialog title, filter name and extensions for one [`ImportPickKind`].
+///
+/// Pure, so it is unit-testable without an `AppHandle` — see the module doc's
+/// note on why a Tauri-dependent function cannot be named as a value in a
+/// test.
+fn import_pick_dialog(
+    kind: ImportPickKind,
+) -> (&'static str, &'static str, &'static [&'static str]) {
+    match kind {
+        ImportPickKind::Audio => (
+            "Choose an audio file",
+            "Audio",
+            &[
+                "mp3", "wav", "m4a", "aac", "flac", "ogg", "opus", "wma", "aiff",
+            ],
+        ),
+        ImportPickKind::Video => (
+            "Choose a video file",
+            "Video",
+            &["mp4", "mov", "mkv", "avi", "webm", "m4v"],
+        ),
+        ImportPickKind::OpenWhisprDatabase => (
+            "Choose transcriptions.db",
+            "SQLite database",
+            &["db", "sqlite", "sqlite3"],
+        ),
+    }
+}
+
+/// Open a native "choose a file" dialog and return the path picked, or `None`
+/// if the user cancelled.
+///
+/// **What this guarantees, and what it does not.** The renderer has no
+/// independent way to *obtain* a path: there is no filesystem or dialog
+/// capability in `capabilities/default.json`, so the only path a caller can
+/// ever have seen is one a real OS dialog produced through this command.
+///
+/// **It is not, though, the same guarantee `note_export_to_file` makes.**
+/// That command fuses picking and writing into one atomic call, so the
+/// frontend never sees or supplies a path at all — the property
+/// `docs/SECURITY.md` names as answering path traversal through export. This
+/// command instead hands the chosen path *back* to the renderer, which holds
+/// it in state and passes it as a plain string to a separate command
+/// (`media_import_audio`, `media_import_video`, `import_openwhispr`) on a
+/// later click. Those commands read whatever path they are called with;
+/// nothing confirms it is the one this command returned rather than one a
+/// compromised renderer invented outright. See `docs/SECURITY.md`'s Webview
+/// section and `docs/BENCH_CHECK.md`'s Task 12 entry for the gap this leaves
+/// open and the hardening options being weighed.
+#[tauri::command]
+pub async fn pick_import_file(app: AppHandle, kind: ImportPickKind) -> CmdResult<Option<String>> {
+    use tauri_plugin_dialog::DialogExt as _;
+
+    let (title, filter_name, extensions) = import_pick_dialog(kind);
+
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.dialog()
+        .file()
+        .set_title(title)
+        .add_filter(filter_name, extensions)
+        .pick_file(move |chosen| {
+            // The receiver is dropped only if this command was cancelled, in
+            // which case there is nobody left to tell.
+            let _ = tx.send(chosen);
+        });
+
+    let Some(chosen) = rx
+        .await
+        .map_err(|e| fail("the open dialog closed unexpectedly", e))?
+    else {
+        return Ok(None);
+    };
+
+    let path = chosen
+        .into_path()
+        .map_err(|e| fail("could not resolve the chosen path", e))?;
+
+    Ok(Some(path.display().to_string()))
 }
 
 /* ---------------------------------------------------------------------- notes */
@@ -1351,6 +1444,42 @@ mod tests {
         assert_eq!(
             export_filename("", transcript::Format::Json),
             "transcript.json"
+        );
+    }
+
+    #[test]
+    fn every_import_pick_kind_has_a_title_and_a_nonempty_filter() {
+        // `import_pick_dialog` is the pure decision `pick_import_file` makes
+        // before it ever touches an `AppHandle` -- see the module doc on why a
+        // Tauri-dependent command cannot be named as a value in a test.
+        for kind in [
+            ImportPickKind::Audio,
+            ImportPickKind::Video,
+            ImportPickKind::OpenWhisprDatabase,
+        ] {
+            let (title, filter_name, extensions) = import_pick_dialog(kind);
+            assert!(!title.is_empty(), "{kind:?} has no dialog title");
+            assert!(!filter_name.is_empty(), "{kind:?} has no filter name");
+            assert!(!extensions.is_empty(), "{kind:?} offers no extensions");
+        }
+    }
+
+    #[test]
+    fn import_pick_kind_crosses_the_boundary_in_kebab_case() {
+        // The frontend sends one of these three strings; a rename here without
+        // a matching change in `lib/ipc.ts` would fail silently as an unknown
+        // variant instead of a compile error, so the wire spelling is pinned.
+        assert_eq!(
+            serde_json::to_value(ImportPickKind::Audio).unwrap(),
+            serde_json::json!("audio")
+        );
+        assert_eq!(
+            serde_json::to_value(ImportPickKind::Video).unwrap(),
+            serde_json::json!("video")
+        );
+        assert_eq!(
+            serde_json::to_value(ImportPickKind::OpenWhisprDatabase).unwrap(),
+            serde_json::json!("open-whispr-database")
         );
     }
 

@@ -485,6 +485,11 @@ impl StateSink for EventSink {
         // what the settings screen reports is what actually happened.
         crate::overlay::set_visible(&self.app, state.is_recording());
 
+        // The tray is the only indicator that is always on screen, so it says so
+        // too. Through `dictating` rather than a setter, because a meeting may
+        // also be recording and this runtime knows nothing about that.
+        crate::tray::dictating(&self.app, state.is_recording());
+
         if let Err(err) = self.app.emit(STATE_EVENT, state) {
             tracing::warn!(error = %err, "could not report the dictation state");
         }

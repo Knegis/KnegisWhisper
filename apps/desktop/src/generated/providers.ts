@@ -37,8 +37,8 @@ export type WhisperModelId = (typeof WHISPER_MODEL_IDS)[number];
 export const SHERPA_MODEL_IDS = ["nemotron-3.5-asr-streaming-0.6b", "nemotron-speech-streaming-en-0.6b", "parakeet-tdt-0.6b-v3", "parakeet-unified-en-0.6b"] as const;
 export type SherpaModelId = (typeof SHERPA_MODEL_IDS)[number];
 
-/** OS credential-store slots, in upstream secretKeys order. All fifteen: ten providers and five per-feature custom endpoints. */
-export const CREDENTIAL_SLOTS = ["openai", "anthropic", "gemini", "groq", "berget", "xai", "mistral", "openrouter", "tinfoil", "corti", "note-formatting-custom", "translation-custom", "dictation-agent-custom", "dictation-agent-vision-custom", "chat-agent-custom", "bedrock", "azure", "vertex"] as const;
+/** OS credential-store slots, in registry order. Twenty: twelve providers, five per-feature custom endpoints and three enterprise connectors. */
+export const CREDENTIAL_SLOTS = ["openai", "anthropic", "gemini", "groq", "berget", "xai", "mistral", "openrouter", "tinfoil", "corti", "note-formatting-custom", "translation-custom", "dictation-agent-custom", "dictation-agent-vision-custom", "chat-agent-custom", "bedrock", "azure", "vertex", "assemblyai", "deepgram"] as const;
 export type CredentialSlot = (typeof CREDENTIAL_SLOTS)[number];
 
 export type AuthScheme =
@@ -349,6 +349,20 @@ export const PROVIDER_REGISTRY = {
       "env": "GCP_VERTEX_CONFIG",
       "usedFor": [],
       "feature": "vertex"
+    },
+    {
+      "slot": "assemblyai",
+      "name": "AssemblyAI",
+      "kind": "provider",
+      "env": "ASSEMBLYAI_API_KEY",
+      "usedFor": []
+    },
+    {
+      "slot": "deepgram",
+      "name": "Deepgram",
+      "kind": "provider",
+      "env": "DEEPGRAM_API_KEY",
+      "usedFor": []
     }
   ],
   "transcription": [

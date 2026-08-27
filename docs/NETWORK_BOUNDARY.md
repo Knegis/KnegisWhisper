@@ -76,6 +76,10 @@ AWS Bedrock, and Google Vertex AI.
 
 **Model and binary downloads** — `huggingface.co`, `github.com` release assets.
 
+**Update check** — `api.github.com`, for this project's own release listing
+only, and only when a person explicitly asks (`updater.rs`). Never on
+startup, never on a timer.
+
 **Calendars** — `accounts.google.com`, `oauth2.googleapis.com`, `www.googleapis.com`,
 `login.microsoftonline.com`, `graph.microsoft.com`.
 
@@ -84,9 +88,35 @@ below.
 
 ## SSRF guards for URL import
 
-Ported from `urlAudioDownloader.js` and non-negotiable: HTTPS only; DNS resolution followed by
-rejection of private and link-local addresses; a 500 MB download cap; at most 3 redirects; a
-6-hour duration cap; and a 30-second stall timeout.
+**Corrected by Task 19: the paragraph this replaced described a planned path, not the one that
+ships.** It said "DNS resolution followed by rejection of private and link-local addresses", ported
+from `urlAudioDownloader.js`'s design. `apps/desktop/src-tauri/src/media.rs` performs no DNS
+resolution at all, and the document was answering the same question two ways — this section's old
+text, and the "What none of this stops: DNS rebinding" section below, added when the SSRF fix
+landed. That section is the accurate one; this one is now brought into line with it rather than
+left to contradict it.
+
+What actually runs: before a user-pasted URL is ever handed to anything that would fetch it,
+`media::validate_import_url` checks it once — scheme, the vendor blocklist, and a **literal**
+private-or-link-local host, exactly as `is_private_host` sees any other purpose's target — under
+`RequestPurpose::UserTriggeredMediaImport`, and this is the only direct use this module makes of
+`kw_network_policy`. That check makes no network request of its own and resolves no name.
+
+Fetching the URL itself is the pinned `yt-dlp` sidecar's job, running as a separate process with
+its own HTTP stack, its own DNS resolution, its own redirect handling and its own per-site
+extraction logic — none of it observed, validated, or routed through `kw_network_policy`. It is
+bounded instead by flags it enforces on itself: a 500 MB `--max-filesize` cap, a bounded
+`--socket-timeout`, playlist expansion off, and its own update and config-file checks off. These
+are best-effort limits on a process this application does not otherwise control, not a claim that
+they close every avenue a general-purpose fetcher could be pointed down.
+
+A hostname that resolves to a private address only at the moment yt-dlp connects — DNS rebinding —
+is not caught by the literal-host check, because that check runs before any resolution happens; see
+"What none of this stops: DNS rebinding" below, which states the same limit for the crate's other
+entry points. Nor is a redirect yt-dlp follows internally re-validated the way
+`NetworkPolicy::download_to_file` re-validates every hop for the requests that do go through it
+(sidecar and model downloads) — that mechanism is real and proven for its own purposes, but yt-dlp's
+fetch does not run through it, so the proof does not extend to what yt-dlp itself does with the URL.
 
 ## The local API is inbound, and not egress either
 
@@ -139,8 +169,9 @@ download.
 So they are followed *visibly*. Every hop is validated against the same purpose before it is
 requested, the chain is bounded at five, and the hops taken are returned so a report can say
 where the bytes actually came from rather than implying they came from the URL that was asked
-for. A redirect to plaintext, to a blocked vendor host, or to a scheme the purpose does not allow
-is an error naming both ends.
+for. A redirect to plaintext, to a blocked vendor host, to a private or link-local address (over
+either scheme, since the fix described under "Plaintext HTTP, and HTTPS to a private address"),
+or to a scheme the purpose does not allow is an error naming both ends.
 
 ## What `user-triggered-model-download` covers
 
@@ -156,18 +187,37 @@ are held to a weaker check — size, with a tolerance, unless a digest happens t
 which check applied is reported to the caller rather than implied, because wrong weights produce
 bad transcripts while wrong code produces a compromised machine.
 
-## Plaintext HTTP
+## Plaintext HTTP, and HTTPS to a private address
 
-HTTPS always, with one exemption: `explicitly-configured-self-hosted-endpoint` may use plain
-HTTP **to a private address**. Loopback, the RFC 1918 ranges, link-local, `.local`, `.internal`,
-`.home.arpa`, and single-label hostnames all count as private; everything else does not, and no
-other purpose gets the exemption at all. A test asserts both halves of that.
+Only one purpose may reach a private, loopback or link-local host at all:
+`explicitly-configured-self-hosted-endpoint`. Private means, for an IPv4 address: loopback, the
+RFC 1918 ranges, link-local (`169.254.0.0/16`, which includes the `169.254.169.254` cloud-metadata
+address with nothing metadata-specific required to catch it), `0.0.0.0/8` in full, and
+`100.64.0.0/10` (the shared address space carrier-grade NAT uses, and a standard SSRF target). For
+an IPv6 address: loopback (`::1`), unspecified (`::`), unique-local (`fc00::/7`), and link-local
+(`fe80::/10`) — native IPv6 ranges, with no "mapped" IPv4 form, unlike the next case. And
+separately: any of the IPv4 cases above **embedded in an IPv6 literal**, either as
+`::ffff:a.b.c.d` (IPv4-mapped) or as `::a.b.c.d` (IPv4-compatible, deprecated but still decodable)
+— `::ffff:127.0.0.1` and `::127.0.0.1` are both `127.0.0.1` wearing an IPv6 costume, and this
+predicate looks through the costume rather than treating it as a separate, IPv6-native address.
+`.local`, `.internal`, `.home.arpa`, and single-label hostnames count as private too, and a
+trailing DNS-root dot (`localhost.`, `nas.local.`) is stripped before any of these checks run, so
+it changes none of their answers. Everything else is not private, and no purpose other than the
+self-hosted one gets the exemption at all. That purpose may reach a private host over plain HTTP
+**or** over HTTPS; every other purpose is refused a private target under either scheme. Tests
+assert all of the above, one case per form.
 
 The exemption covers the whole private range rather than only loopback because a model server on
 another machine on the user's own network is an ordinary setup, and refusing it would mean the
 only way to use one is to put a certificate on it. That is a real trade — audio and any
-configured credential cross the local network in the clear — and it belongs to the user, for an
-endpoint they typed in themselves.
+configured credential cross the local network in the clear when the endpoint is plain HTTP — and
+it belongs to the user, for an endpoint they typed in themselves. The same reasoning is why CGNAT
+was added to the private set rather than left alone: the self-hosted purpose stays free to reach
+one deliberately, so widening what every other purpose is refused costs nothing real. That
+addition cuts both ways, deliberately: `100.64.0.0/10` and the rest of `0.0.0.0/8` are now also
+private for the *plaintext* check, so `http://100.64.0.1/` and `http://0.1.2.3/`, previously
+refused for every purpose including the self-hosted one, are now reachable in the clear by the
+self-hosted purpose exactly as the rest of the private range already was.
 
 **The purpose is a property of the destination, not the feature.** A self-hosted whisper server
 is reached with `explicitly-configured-self-hosted-endpoint`, not
@@ -180,6 +230,75 @@ sending, and the error blamed the scheme rather than the configuration.
 security layer and the routing layer cannot disagree about what counts as private. They did
 disagree once — route resolution accepted the private range while the policy layer accepted only
 loopback — which meant an endpoint the settings screen accepted was refused at send time.
+
+### Three corrections this document did not previously mention
+
+**1. The HTTPS and WSS arms ran no host check at all.** Until this was fixed, `validate`'s
+`https` arm ran no host check whatsoever, for any purpose: `https://127.0.0.1/`,
+`https://169.254.169.254/` and `https://[::1]/` were all accepted for every one of the seven
+purposes, and because redirects are re-validated through that same function (see below), a
+redirect to one of those addresses was *followed*, not refused. A valid TLS certificate says
+nothing about whether a host sits on the public internet or on loopback, and the code was
+treating "https" as proof of the latter. `wss` had the identical gap in `validate_websocket`.
+Both arms now run the same `is_private_host` check the `http`/`ws` arms already ran, gated by the
+same one purpose. This closes the gap without widening or narrowing what a self-hosted endpoint
+may do: it could already reach a private host in the clear, so allowing it to do the same over
+TLS is not a new exposure, and every other purpose loses only a capability nothing legitimate was
+using — every call site that reaches a private address at all already does so under
+`explicitly-configured-self-hosted-endpoint`.
+
+**2. `is_private_host` itself missed IPv4-embedded IPv6 and the trailing DNS-root dot.**
+These are bugs in the predicate, independent of finding 1: `is_private_host` is also consulted by
+the plaintext arms and by `transcription-core`'s route-resolution layer, so both misses were live
+before the HTTPS/WSS fix, just reachable only through the plaintext exemption. `::ffff:127.0.0.1`
+and `::127.0.0.1` read as ordinary, non-loopback, non-unique-local, non-link-local IPv6 addresses
+under the old logic, because none of `is_loopback`, `is_unspecified`, or the unique-local/
+link-local bitmasks look at an embedded IPv4 address. And a trailing dot — `localhost.` —
+defeated every branch in the function simultaneously: not equal to `"localhost"`, not ending in
+`.local`, not a valid IP literal, and still containing a `.` so the single-label fallback never
+fired either. The same trailing-dot miss existed in the vendor blocklist check (`is_blocked`):
+`openwhispr.com.` matched neither the exact-match nor the suffix-match branch, so it was not
+blocked. Both are fixed by normalising the trailing dot away before any comparison runs.
+
+**3. Before finding 1, a predicate miss meant fail-closed; after it, the same miss means
+fail-open.** This is why 2 was worth fixing at all, and why any future gap in `is_private_host`
+now matters more than it used to. Before the HTTPS/WSS fix, a false negative in `is_private_host`
+meant a plaintext request to that address was refused (the plaintext arm only *allows* what the
+predicate says is private, so a miss loses permission, not gains it). After the fix, the same
+false negative means an HTTPS or WSS request to that address is *allowed*, because the private
+check is what refuses it. `is_private_host` did not change what it was for; what changed is that
+a gap in it now bypasses a control rather than only breaking a convenience.
+
+**What none of this stops: DNS rebinding.** The check runs against the literal host in the URL at
+validation time, before any connection is attempted. It has no view of DNS. A hostname that
+resolves to a public address when validated and to `127.0.0.1` or a link-local address when
+`reqwest` actually connects — "DNS rebinding" — passes this check and is not caught by anything
+else in this crate. Closing that would need a check against the address actually dialled, at
+connect time, which is a materially different and harder problem than the ones the corrections
+above address, and is not implemented here.
+
+### Known, accepted residue in `is_private_host`
+
+Three narrower gaps were raised and deliberately left as they are, rather than fixed silently or
+forgotten. Recorded here so each is a decision, not an oversight:
+
+- **`::ffff:0:a.b.c.d` (the "IPv4-translated" form, RFC 8215) still classifies as public.**
+  `to_ipv4` unwraps `::ffff:a.b.c.d` and `::a.b.c.d`; it does not unwrap `::ffff:0:a.b.c.d`, which
+  embeds the IPv4 address one group further in. `::ffff:0:0/96` is the SIIT source prefix, is not
+  routed on an ordinary host, and a `connect()` to it fails rather than reaching loopback — unlike
+  `::ffff:a.b.c.d`, which a dual-stack kernel genuinely delivers to the embedded IPv4 address.
+  Accepted; the cost if this reasoning is wrong is that a host with an unusual SIIT configuration
+  could reach private space through it.
+- **NAT64 (`64:ff9b::/96`) and 6to4 (`2002::/16`) are not unwrapped either**, and are more common
+  in real networks than the IPv4-translated form above. Same reasoning, same acceptance, recorded
+  together deliberately: if this family of embeddings is ever closed, it should be closed as a
+  family — auditing every RFC-defined way to fold an IPv4 address into 128 bits — rather than one
+  prefix at a time as each is separately noticed.
+- **`blocked_hosts()` lowercases the vendor hosts read from `config/forbidden-domains.json` but
+  does not strip trailing dots from them.** The asymmetry with `is_blocked`'s now-normalised input
+  is real. It has no live consumer: every entry in that file is written by this project, without a
+  trailing dot, so there is nothing for the asymmetry to bite on today. It would matter only if a
+  future entry were added with one.
 
 ## Self-hosted and no-auth endpoints
 

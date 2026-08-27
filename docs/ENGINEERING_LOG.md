@@ -14,37 +14,77 @@ maintained in place rather than appended to, because its purpose is to be curren
 
 ## Carry-forward — what the next session needs to know
 
-> **The plan for the whole remaining build is [BUILD_PLAN.md](BUILD_PLAN.md)**, covering phases
-> 0–9 as chunks A–J. [PHASES_0_6_COMPLETION_PLAN.md](PHASES_0_6_COMPLETION_PLAN.md) keeps the
-> phases 0–6 detail and the by-hand check that found five real defects. This section stays as the
-> short version.
+> **All 19 tasks in the plan, plus one added mid-run (Task 20, the SSRF boundary fix), are
+> complete.** [BUILD_PLAN.md](BUILD_PLAN.md) covers phases 0–9 as chunks A–J and every chunk is now
+> either done or explicitly, permanently deferred with a named reason — there is no "not started"
+> left in it. [PHASES_0_6_COMPLETION_PLAN.md](PHASES_0_6_COMPLETION_PLAN.md) keeps the phases 0–6
+> detail and the by-hand check that found five real defects; [COMPLETION_PLAN.md](COMPLETION_PLAN.md)
+> keeps the phase 7–10 definitions.
 >
-> **The reachability half of the plan is done.** Chunks A, B and C took reachable integrations
-> from **8 to 45**. What is left is not screens over working backends; it is new platform
-> capability — five WebSocket clients, the last two Windows natives, calendars, MCP, diarization,
-> packaging.
+> **Measured, not asserted, at the close of this run:** `cargo test --workspace` — **1290 passing, 0
+> failed** (941 at the start); parity — **102 entries, 7 declared unreachable** (17 at the start),
+> and **all 13 UI surfaces built**, with no "surface not built" entry remaining anywhere. The seven:
+> four local-ASR models (sherpa/Parakeet — runtime measured and proven by a probe re-run cold by the
+> controller, missing only a Settings selector), two Tinfoil entries (batch transcription and
+> meeting-stream, both declined on principle, not unfinished), and Apple Calendar (EventKit —
+> described in `kw_calendar_core::apple`, implemented nowhere, on any platform).
 >
-> **Chunk D is done and is the only part of it verified on hardware.** System audio needed no new
-> dependency (`cpal` already does WASAPI loopback) and the keyboard hook makes `Control+Super`
-> work. That unblocks meetings, which was the thing actually waiting on it — not the AEC helper.
+> **The reachability rule, settled and applied repeatedly:** `reachable: true` means a user can
+> *configure* the integration through a named, **built** surface — not that the backend code works.
+> `reachable: false` is the honest answer for a working runtime with no UI selector (the two sherpa
+> Parakeet models), for a capability declared and refused on principle (both Tinfoil entries), and
+> for a capability described but implemented nowhere (`calendar:apple`). Four separate times this
+> run, a controller brief's arithmetic or premise collapsed "the code works" into "a person can
+> reach it", and every time an implementer caught it by flagging rather than complying — see the
+> dated entry below, "the reachability rule, stated once and applied four times".
 >
-> **Chunk C from [COMPLETION_PLAN.md](COMPLETION_PLAN.md) is done too:** four of the five hotkey
-> actions had no feature behind them and were registering real system shortcuts anyway. They are
-> now not registered, and the screen says why. The same fault was in the day-old keyboard hook,
-> which fired and never reached the dictation handler.
+> **The most significant finding of the whole run was Task 20's, not a planned task:** the network
+> boundary's `https` and `wss` arms ran **no host check at all**, so `https://169.254.169.254/` and
+> a redirect to it were permitted under every purpose — the classic SSRF target, unblocked, while the
+> documentation called the boundary the control. Fixed centrally in `crates/network-policy`, not
+> patched locally, because the gap was general and every existing call site had to be re-audited for
+> a newly-refused legitimate self-hosted endpoint (none was found). The review of that fix then found
+> a Critical of its own — a trailing dot (`localhost.`) defeated the whole predicate — and the
+> more important structural fact underneath both: **the same kind of gap that used to fail closed
+> now fails open**, because the fix inverted what a miss in `is_private_host` costs. See "Task 20 —
+> the network boundary does not stop SSRF over HTTPS" below.
 >
-> **[BENCH_CHECK.md](BENCH_CHECK.md) is the record of what has actually been run on hardware.**
-> The 2026-08-26 run covered everything reachable without a person: the hook drives a real dictation
-> 66 ms after the chord, the local model server is resumed and transcribes, both listeners are
-> loopback-only and refuse an unauthenticated caller, and the real OS credential store works. It
-> found three defects — sided modifiers built and unreachable, the local API token file getting no
-> permissions of its own on Windows against a `SECURITY.md` that claimed `0600`, and the CLI hiding
-> failed dictations.
+> **Task 19 audited every manifest entry whose `status` asserts a working implementation exists**
+> (`verify-parity.mjs`'s `ACTIVE` set) and found three more instances of the same overclaim
+> `platform:aec` was already corrected for mid-run: `meeting-stream:tinfoil-realtime` (status
+> `"ported"`, no Tinfoil meeting client anywhere), `transcription:tinfoil` (status
+> `"rewired-to-direct-byok"`, the client returns `ClientNotImplemented`), and `calendar:apple` (status
+> `"platform-specific"`, `AppleCalendarSource` implemented by nothing on any platform). All three now
+> carry `temporarily-deferred`, though for the two Tinfoil entries that status is a compromise, not a
+> fit — this manifest's vocabulary has no term for "declined on principle", and each entry's
+> `deferral.why` says so rather than letting the status imply the refusal is resource-blocked and
+> temporary. A fourth, adjacent overclaim was found outside the `ACTIVE` set entirely:
+> `developer:agent-skills` (`kind: "documentation"`) claimed `status: "ported"` naming
+> `docs/agent-skills/` as where the rewritten docs live, and that directory does not exist — the
+> gate's documentation check only requires a target to be *named*, never that it exist. Also
+> corrected to `temporarily-deferred`. See "the ACTIVE-status audit" below.
 >
-> **Seven things still need a person**, listed at the end of that file. The first is speaking into
-> the microphone: everything either side of the speech gate is verified and that one leg is not.
-> Storing a provider key, watching a connection test pass, reading cleaned-up text and holding a
-> local chat are chunks A and B's whole claim and no person has exercised any of it.
+> **[BENCH_CHECK.md](BENCH_CHECK.md) remains, in full, the record of what has actually been run on
+> hardware — and nothing from chunks E onward is in it.** The 2026-08-25/26 runs covered phases 2,
+> 6 and chunks A–D. Everything built since (meetings, calendars, media import, MCP/CLI screens,
+> the updater, sherpa) is green tests and code review only; that file's own by-hand lists for E–K
+> and for Task 20 say so item by item, and none of them should be read as done until someone
+> actually presses the buttons.
+>
+> **A cross-cutting gap, recorded and deliberately not fixed:** all four meeting socket clients
+> (`openai_socket.rs`, `assemblyai_socket.rs`, `deepgram_socket.rs`, `corti_socket.rs`) log a
+> provider-reported error frame with `tracing::warn!` and never turn it into an `Err`. A server that
+> accepts a malformed session-config frame, stays open, and emits nothing would let a meeting
+> "complete successfully" holding an empty transcript, evidenced only by a log line nobody in the
+> room can see. `BENCH_CHECK.md` item 13 under chunk E already carries this; it predates every task
+> in this run and is shared by all four clients equally.
+>
+> **Three smaller items recorded rather than chased**, each detailed in its own entry below: a
+> `kw-storage` test that failed once and passed on re-run during Task 8 (every other full-suite run
+> this session was clean, so intermittent rather than new); `apps/desktop/src-tauri/src/meeting.rs`
+> at ~1600+ lines, noted repeatedly and deliberately not restructured; and `SherpaModel` in the
+> provider registry carrying no SHA-256 for its model archives, unlike `WhisperModel` and unlike the
+> sidecar binaries in `config/sidecars.json`.
 
 Maintained in place. If something here becomes false, edit it rather than adding a note.
 
@@ -128,6 +168,18 @@ Unchanged from the Phases 1–4 entry, restated here so they are not buried:
   tagged `v*` releases carry source only, which is what made this look impossible at first.
   macOS gets an xcframework — a library for embedding in an Xcode project, not a server — so it
   is recorded as `NotPublished` with a reason and needs a macOS CI job of our own.
+- ~~**ffmpeg and yt-dlp sources**~~ — **settled.** `yt-dlp/yt-dlp` at tag `2026.08.19` (GitHub
+  marks the release `immutable` itself) ships a bare executable on Windows, Linux x86_64, Linux
+  aarch64 and — one universal2 binary covering both — macOS, so all five targets are pinned with
+  `archive: "bare"`. `BtbN/FFmpeg-Builds` at `autobuild-2026-07-31-14-10` covers Windows and Linux
+  only; per its own README it never builds macOS at all, under any tag, so that gap is not a
+  missing pin to chase but recorded `NotPublished`, the same shape as whisper-server's macOS gap
+  above. That release was chosen over a more recent daily autobuild deliberately: BtbN prunes
+  daily builds after 14 days and keeps only the last build of each month for two years, so a dated
+  tag alone was not enough here — it also had to be one their own retention policy will not delete
+  out from under the pin. The `lgpl` (not `gpl`) variant is used because this project stays wary
+  of GPL entanglement (see `docs/UPSTREAM_AUDIT.md`'s reasoning about Pluely) and decode-to-WAV
+  transcoding never calls the GPL-only encoders (`libx264`, `libx265`) that variant lacks.
 - ~~**AEC helper and the five Windows native helpers**~~ — **settled**, see
   [PORTING_MATRIX.md](PORTING_MATRIX.md). Two corrections came out of looking properly. First,
   this tree never fetched any of them; the claim that they "still come from OpenWhispr release
@@ -147,6 +199,282 @@ Unchanged from the Phases 1–4 entry, restated here so they are not buried:
   porting matrix. Upstream pins both by commit and verifies neither.
 - ~~**`nircmd`**~~ — **dropped**, as leaned towards: third-tier Windows paste fallback only, and
   `SendInput` works.
+
+---
+
+## 2026-08-27 (Task 19) — reconciling the record, and the ACTIVE-status audit
+
+The last task in the plan, and the only one whose entire job was making claims match reality
+rather than building anything. `docs/BUILD_PLAN.md` opens with its own rule — "when something here
+becomes false, edit it rather than appending a note" — and this entry, plus the edits it describes,
+is that rule applied to the whole run's paper trail: `BUILD_PLAN.md`, `INTEGRATION_PARITY.md`,
+`COMPLETION_PLAN.md`, `PLATFORM_SUPPORT.md`, `PORTING_MATRIX.md`, `BENCH_CHECK.md`, this file, and
+several source doc comments and manifest fields.
+
+### The ACTIVE-status audit
+
+`verify-parity.mjs` defines `ACTIVE` as "statuses that assert a working implementation exists" —
+`ported`, `ported-with-new-rust-implementation`, `rewired-to-direct-byok`,
+`replaced-with-local-equivalent`, `platform-specific`. Mid-run, a reviewer found
+`meeting-stream:tinfoil-realtime` carrying `status: "ported"` while no Tinfoil meeting client exists
+anywhere in the codebase — the identical pattern `platform:aec` had just been corrected for — and
+the controller ruled that Task 19 would audit every `ACTIVE` entry rather than patch that one
+instance by hand.
+
+The audit read all 80 entries whose status was in `ACTIVE` at the start of this task (three text
+passes over the whole manifest for language like "implements none", "declined", "refused",
+"ClientNotImplemented", plus a manual check of every ambiguous case) and found three overclaims,
+including the one already flagged:
+
+| Entry | Was | Reality | Now |
+| --- | --- | --- | --- |
+| `meeting-stream:tinfoil-realtime` | `ported`, backend `crates/meeting-core` (a directory) | No Tinfoil meeting client exists; `capabilities.rs` declares only the refusal reason | `temporarily-deferred` |
+| `transcription:tinfoil` | `rewired-to-direct-byok` | `clients::shape()` returns `TranscriptionError::ClientNotImplemented` for it; nothing else implements it | `temporarily-deferred` |
+| `calendar:apple` | `platform-specific` | `kw_calendar_core::apple`'s own module doc: "deliberately unimplemented by anything in this crate" on every platform including macOS | `temporarily-deferred` |
+
+Two entries that looked like plausible false positives on a text scan turned out not to be, and are
+recorded here so the audit's negative results are visible too: `meeting-detect:facetime` is real,
+`#[cfg(target_os = "macos")]`-gated detection code that runs and is tested when compiled for macOS —
+platform-specific in the sense the status actually means, unlike `calendar:apple`'s "described,
+implemented nowhere on any platform". `reasoning:tinfoil` (as opposed to the two entries above) has
+a genuine OpenAI-compatible client in `reasoning-core` and is reachable; only the two entries whose
+proposition requires an attested socket or an unattested-POST refusal are declined.
+
+**A fourth, adjacent overclaim outside the `ACTIVE` set entirely.** `developer:agent-skills` (`kind:
+"documentation"`) carried `status: "ported"` and `target: "docs/agent-skills/"` — a directory that
+does not exist anywhere in this repository, and neither do any rewritten `SKILL.md` files.
+`verify-parity.mjs`'s `incomplete-documentation` rule checks only that a documentation entry *names*
+a target, never that the path exists on disk, so nothing caught this, and the entry sat outside the
+`ACTIVE` audit too: a `kind: "documentation"` entry `continue`s past the `ACTIVE` check entirely,
+regardless of its status. Same defect, one step earlier than the pattern this whole audit was
+looking for — a claim that specific work was done, when it was not. Not fixed by writing the missing
+docs, which this task's mandate does not extend to and which would risk producing inaccurate
+documentation under time pressure; corrected to `temporarily-deferred` with a `deferral` block
+naming what is actually needed (someone to write the rewrite) and no false claim in the meantime.
+
+**The vocabulary gap.** `calendar:apple`'s move to `temporarily-deferred` fits the term's existing
+meaning exactly — the same shape as `platform:aec`: no macOS machine to write or verify an EventKit
+binding against, a resource gap with named dependencies. The two Tinfoil entries do not fit it at
+all: both are refused on principle, permanently, not blocked on a toolchain or a decision anyone
+expects to reverse. This manifest's `statusVocabulary` has no "declined on principle" term. Rather
+than invent one silently — the brief was explicit that this is not an option — each entry's
+`deferral.why` says plainly that `temporarily-deferred` is a compromise chosen only because it is the
+closest status that stops asserting an implementation exists, and that "temporarily" should not be
+read literally. Both entries needed a `deferral` block to satisfy the gate's `incomplete-deferral`
+rule for the status, which they did not have before (nothing required one under their old, wrong
+status).
+
+Measured effect on the gate's own summary, all four corrections together: `ported-with-new-rust-implementation`
+52 (unchanged), `rewired-to-direct-byok` 22 → 21, `removed-vendor-service` 18 (unchanged), `ported`
+4 → 2, `temporarily-deferred` 4 → 8, `platform-specific` 2 → 1. Total still 102; the 7-unreachable count is
+unaffected, because all three entries already carried `reachable: false` — this audit was entirely
+about the machine-readable `status` field lying underneath an honest `reachable` claim, which is the
+subtler half of the same defect class: a reader who checks only `reachable` was already told the
+truth, but a reader (or a future tool) that trusts `ACTIVE` status as "implementation exists" was not.
+
+### Smaller corrections, same audit pass
+
+- **`media:{audio,video,url}-import`'s `backend` said `"crates/notes-core"`**, which holds no import
+  code. The real implementation is `MediaImportRuntime` in `apps/desktop/src-tauri/src/media.rs`.
+  Same class as `platform:aec`'s corrected `backend` — a location that was simply wrong, independent
+  of the status question. Fixed with a note recording the correction rather than a silent edit.
+- **The manifest mixed `"note"` and `"notes"` field names** — `meeting-stream:openai-realtime` and
+  `meeting-stream:local` used the plural, every other of the 100 entries used the singular. Renamed
+  to `note`; nothing in `tools/integration-audit/*.mjs` reads either field name specifically, so this
+  was a pure rename with no behaviour to preserve.
+- **`docs/NETWORK_BOUNDARY.md`'s "SSRF guards for URL import" section and `docs/SECURITY.md`'s
+  matching sentence both said URL import does "DNS resolution followed by rejection of private and
+  link-local addresses".** `media.rs` resolves no names at all — it does a literal-host check before
+  yt-dlp ever runs, and yt-dlp's own fetch (DNS included) is unobserved. That planned-but-not-built
+  description was flagged during Task 20's review and left for this task, since by then
+  `NETWORK_BOUNDARY.md` already had a correct "What none of this stops: DNS rebinding" section
+  answering the identical question the other way. Both rewritten to describe the real mechanism and
+  point at each other rather than disagree.
+- **`crates/network-policy/src/lib.rs`'s module doc claimed "No other crate declares `reqwest` as a
+  dependency".** False before this run (`calendar-core`, `local-api`, `reasoning-core`, `sidecar`,
+  `transcription-core`, `provider-probe` and both `tools/knegiswhisper*` binaries all did, to chain
+  onto the `RequestBuilder` `NetworkPolicy::{post,get,loopback}` return) and stayed false throughout
+  it. Corrected to the accurate, narrower claim — this crate owns the only `Client` any part of the
+  desktop app's own egress path *constructs* — with the two real exceptions named: two test-only
+  bare clients confined to their own test binaries, and `tools/knegiswhisper`'s CLI client, which
+  talks to the local API over loopback and is therefore not egress under this project's own "loopback
+  is not egress" rule.
+- **`docs/BENCH_CHECK.md` item 2 for the updater told a person to paste a public key into
+  `tauri.conf.json` and press the button again.** `plugins.updater.pubkey` is compiled into the
+  binary by Tauri's `generate_context!`, so that instruction cannot work without a rebuild in
+  between. A by-hand check that cannot be followed as written is worse than most defects, since it
+  is the one document in this project meant to be executed literally by a person at a machine.
+  Corrected to require the rebuild explicitly.
+- **`docs/PLATFORM_SUPPORT.md`'s Calendars table said Apple was "EventKit — unverified"**, the same
+  word used for Google and Microsoft's genuinely-written-but-uncalled code. "Unverified" undersells
+  the actual gap — nothing is implemented, on any platform — so the row and a short note were
+  corrected to say so plainly, distinguishing it from the two rows that really are only unverified.
+- **Stale narrative counts**, none adjusted by arithmetic — each recomputed from the file it
+  describes: `docs/BUILD_PLAN.md`'s "45 of 99 integrations" and "5 of 13 UI surfaces do not exist",
+  `docs/INTEGRATION_PARITY.md`'s matching numbers and backlog table, and
+  `apps/desktop/src/views/SettingsProviders.tsx`'s doc comment ("fifteen slots, ten providers and
+  five per-feature custom endpoints" — the registry now has seventeen: twelve providers, after
+  `credential:assemblyai` and `credential:deepgram` were added, and the same five custom endpoints).
+
+### What was found and recorded, not fixed
+
+- **The flaky `kw-storage` test** the Task 8 implementer reported (failed once, passed on re-run;
+  every other full-suite run this session was clean) — recorded as unresolved rather than hunted, per
+  the brief's own instruction. A test that lies in either direction is a live risk to a project whose
+  whole verification story rests on the gates meaning something, and it deserves a session of its
+  own rather than a guess appended here.
+- **`apps/desktop/src-tauri/src/meeting.rs` at roughly 1600 lines**, noted at least three times during
+  this run (Tasks 1, 2, and again here) and never restructured, because every task that touched it was
+  explicitly told not to. Recorded as a known shape rather than a defect: it grew for a real reason
+  (three cloud clients, keyterm/language plumbing, and the meeting-notification window all needed
+  something to hold their commands), and restructuring it was out of scope for every task that could
+  have.
+- **`SherpaModel` in the provider registry carries no SHA-256** for its model archives, unlike
+  `WhisperModel`'s size check and unlike every sidecar binary's mandatory `sha256` in
+  `config/sidecars.json`. Task 18's layout-verification check (does the extracted archive actually
+  contain the four transducer files it should) is a real and reasonable mitigation for a *truncated*
+  download, but a corrupted-but-layout-compatible archive from a compromised CDN would still install
+  silently. Flagged by that task's reviewer as "worth a future ticket"; there is no future task in
+  this plan to give it to, so it is recorded here instead.
+
+---
+
+## 2026-08-26/27 (Task 20) — the network boundary does not stop SSRF over HTTPS
+
+The most significant finding of the whole run, and it did not come from a planned task — it came
+from an implementer flagging rather than patching. Task 11 (media import) noticed that
+`kw_network_policy::validate`'s `https` arm was `"https" => Ok(parsed)`, with **no host check at
+all**, for any purpose. Verified directly: `https://127.0.0.1/`, `https://169.254.169.254/latest/
+meta-data/`, `https://[::1]/` and `https://10.0.0.5/` were permitted under every one of the seven
+purposes, and because `next_hop` re-validates each redirect through that same `validate`, a redirect
+to a link-local or loopback address over HTTPS was *followed*, not refused. `validate_websocket`'s
+`wss` arm had the identical gap, and its own doc comment claimed the rules were shared with `https` —
+so once one side was fixed, leaving the other would have made that doc comment newly false rather
+than merely incomplete.
+
+An earlier brief in this run had asserted "`NetworkPolicy` already re-validates every redirect hop —
+that is the SSRF guard" for URL import. Half true: it re-validates, and the validation it re-runs did
+not reject a private target sent over TLS. A valid certificate says nothing about whether a host is
+on the public internet or on loopback, and the code was treating "https" as proof of the latter.
+
+**Fixed centrally, as its own task, in a worktree.** `network-policy` is a leaf crate nearly
+everything in the workspace depends on, so a half-written change to it would have broken every other
+task's build if made in the main tree, and the fix's whole value depended on auditing every existing
+call site for a newly-refused legitimate endpoint — the brief named finding such a conflict a
+*valuable* outcome, not an obstacle, and none was found. The policy already existed in the file:
+`allows_plaintext_private()` already restricted private-space access to
+`ExplicitlyConfiguredSelfHostedEndpoint`. The gap was in enforcement, not in policy — the `https` and
+`wss` arms simply never consulted it.
+
+### The review found a Critical the implementation had not
+
+A trailing dot defeats the whole predicate: `https://localhost./` has host `"localhost."`, which
+fails every string rule in `is_private_host` — not equal to `"localhost"`, not ending in `.local`,
+not a valid IP literal, and still containing a `.` so the single-label fallback never fires either —
+and `getaddrinfo` on this machine genuinely resolves `localhost.` to `127.0.0.1`. The identical miss
+existed in the vendor blocklist (`openwhispr.com.` matched neither the exact nor the suffix branch of
+`is_blocked`), sitting under a test *named* `case_and_trailing_dot_do_not_evade_the_blocklist` whose
+body tested only the case variants — a test whose name claimed coverage its body did not have, the
+same defect class this project keeps finding in itself, one level up, on top of a "no vendor
+dependency" constraint. Both fixed by `trim_end_matches('.')` upstream of every comparison in both
+functions, closing the whole `localhost..` class rather than one instance.
+
+### The completeness bar rose the moment this landed — fail-closed became fail-open
+
+Before the fix, a false negative in `is_private_host` meant a plaintext request to that address was
+*refused* — the plaintext arm only allows what the predicate says is private, so a miss loses
+permission rather than gaining it. After the fix, the identical false negative means an HTTPS or WSS
+request to that address is *allowed*, because the private check is now what refuses it there. The
+function did not change what it is for; what changed is that a gap in it now bypasses a control
+rather than only breaking a convenience — which is why the trailing-dot miss, harmless in the old
+fail-closed world, was a Critical in the new one, and why every remaining gap in `is_private_host`
+now matters more than it used to.
+
+### Widened deliberately, in the same fix: CGNAT and the rest of `0.0.0.0/8`
+
+`100.64.0.0/10` (carrier-grade NAT's shared address space, a standard SSRF target) and the rest of
+`0.0.0.0/8` were added to the private set. Both cost nothing real to refuse, since the self-hosted
+purpose stays exempt for whichever endpoint someone deliberately points at one — the same reasoning
+that keeps the private-range exemption itself narrow to one purpose. This widening cuts both ways:
+`http://100.64.0.1/` and `http://0.1.2.3/`, previously refused for every purpose including the
+self-hosted one, became reachable in the clear for that one purpose exactly as the rest of the
+private range already was — recorded plainly in `NETWORK_BOUNDARY.md` rather than only the
+restricting half of the change.
+
+### What was found and deliberately not closed
+
+- **`::ffff:0:a.b.c.d`** (the IPv4-translated form, RFC 8215) still classifies as public — the SIIT
+  source prefix is unrouted on an ordinary host and a `connect()` to it fails rather than reaching
+  loopback, unlike `::ffff:a.b.c.d`, which a dual-stack kernel genuinely delivers.
+- **NAT64 (`64:ff9b::/96`) and 6to4 (`2002::/16`)**, raised unprompted by the re-reviewer as *more*
+  common in real networks than the form above. Same reasoning, same acceptance, recorded together
+  deliberately — if this family of embeddings is ever closed, it should be closed as a family, by
+  auditing every RFC-defined way to fold an IPv4 address into 128 bits, rather than one prefix at a
+  time as each is separately noticed.
+- **`blocked_hosts()` lowercases configured vendor hosts but does not strip trailing dots from
+  them**, an asymmetry with `is_blocked`'s now-normalised input. No live consumer — every entry in
+  `config/forbidden-domains.json` is written by this project without a trailing dot.
+- **DNS rebinding is out of scope, deliberately.** The check runs against the literal host in the URL
+  at validation time, before any connection is attempted; it has no view of DNS. Closing it needs a
+  check against the address actually dialled, at connect time, which is a materially different and
+  harder problem than the ones this fix addresses, and was explicitly not attempted.
+
+All three parked items are recorded in `NETWORK_BOUNDARY.md`'s "Known, accepted residue" section as
+decisions, not oversights — this project's convention throughout the run for a gap it chooses not to
+close: name it, say why, and say what would have to change for that answer to change.
+
+`Task 11`'s companion finding — `is_private_host`'s `V6` arm never called `to_ipv4_mapped()`, so
+`https://[::ffff:127.0.0.1]/` read as an ordinary public address — was folded into this same fix
+rather than given its own round, since both agents were editing the identical function and Task 11's
+own local guard delegates to it.
+
+---
+
+## 2026-08-26 (chunks E–J) — the reachability rule, stated once and applied four times
+
+`reachable: true` means a user can *configure* the integration through a named, **built** surface —
+not that the underlying code runs correctly, and not that a probe proved the runtime works. This was
+settled early (`transcription:tinfoil`, declined rather than pending) but re-litigated, unprompted,
+four separate times across the second half of this run — each time because a controller brief's own
+arithmetic or premise had quietly collapsed "the code works" into "a person can reach it", and each
+time an implementer caught it by flagging the discrepancy rather than complying with the wrong
+instruction.
+
+**1. `calendar:apple` (Task 8).** The brief's own count assumed flipping it to `reachable: true`
+would take parity from 14 to 11. The implementer did as instructed, then flagged that the flip was
+"semantically strained since nothing is implemented" rather than silently accepting the number.
+Overruled: `calendar:apple` → `reachable: false`, and the real count is 12, not 11. Nothing about
+Apple Calendar is configurable — the entry's own note admits `AppleCalendarSource` "implements none
+of it, on any platform" — and naming the reason honestly on screen (which `Integrations > Calendar`
+does) is not the same claim as reachability. The precedent this drew on was already in the manifest:
+`transcription:tinfoil` lists its refusal on screen and stays `reachable: false` too.
+
+**2. The two sherpa Parakeet models (Task 18).** The probe measured a real runtime — the pinned
+`sherpa-onnx-offline` CLI transcribing both pinned Parakeet archives to the same words whisper's
+`tiny` model produces — and a first pass flipped both to `reachable: true` on the strength of that
+result. Caught before the chunk closed: `SettingsTranscription.tsx` told the user directly "the
+sherpa-onnx sidecar, which is not built yet" while the manifest claimed the opposite, and the two
+statements contradicted each other because both were wrong in different directions. No Tauri command
+or Settings selector exists for choosing a Parakeet model, so both entries reverted to
+`reachable: false`, on a narrower and more honest ground than before the measurement: a proven
+runtime with a specifically named missing piece, not "blocked on sherpa" as a whole.
+
+**3. Task 11's SSRF framing.** Not an arithmetic error but the same species of premise error: a
+brief asserted "`NetworkPolicy` already re-validates every redirect hop — that is the SSRF guard"
+for URL import. The implementer's own module doc in `media.rs` states plainly that `import_url` hands
+the URL straight to `yt-dlp` as a subprocess and never calls `download_to_file` in production, so
+that re-validation mechanism — real, and proven for the purposes that do use it — was never on the
+real fetch path for URL import at all. This is the finding that led directly to Task 20.
+
+**4. Task 12's internal contradiction (the fourth instance).** The brief's own text disagreed with
+itself — "11 → 8" in one line, "10 right now" in another — and the implementer flagged the
+inconsistency rather than reconciling it silently in either direction, then measured the real number
+independently with `git stash` against the pre-change tree: parity moved from **10 to 7**, not 11 to
+8.
+
+The pattern across all four: an implementer measuring or reading the actual state, rather than
+trusting a controller's stated arithmetic, is what kept the record honest each time. None of the four
+corrections changed what got built — only what the manifest was allowed to claim about it.
 
 ---
 
@@ -200,20 +528,25 @@ directory's ACL, which normally grants this user and the administrators group". 
 machine disagrees: every entry inherited, and two of them a local group and an unresolved SID with
 Modify — neither the user nor the administrators.
 
-Two separate things went wrong and they deserve separating.
+My first reading was that the code was honest and only the documentation overclaimed. That was
+wrong, and reading `Permissions` rather than just `restrict_file` is what showed it. Three places
+state what the permissions are and not one of them looked:
 
-The **code** is honest. It applies nothing and says it applied nothing, which is the pattern this
-project follows everywhere else, and it is why this is a gap rather than a lie.
+- The code comment reasons about what an inherited ACL "normally" grants.
+- `Permissions::is_as_expected` returns **`true`** for `InheritedFromProfile`, under a doc comment
+  defining that as "as restrictive as the platform allows". Windows allows an explicit owner-only
+  DACL, so it is not. `Integrations > Local API` warns only when that flag is `false`, so it stays
+  silent — under the sentence *"readable by your user account and by administrators, which is what
+  your profile directory allows"*, naming two trustees that are neither.
+- `docs/SECURITY.md` said the file "is written with owner-only permissions (`0600`)", flatly, for
+  every platform. A security document asserting a control that does not exist on the platform the
+  application runs on is worse than saying nothing, because it stops anyone looking. Corrected in
+  place, per platform, with the measurement.
 
-`docs/SECURITY.md` was **not** honest. It said the file "is written with owner-only permissions
-(`0600`)", flatly, for every platform. A security document asserting a control that does not exist
-on the platform the application actually runs on is worse than saying nothing, because it stops
-anyone looking. Corrected in place, per platform, with the measurement.
-
-The comment is the more interesting failure. It reasoned about what an inherited ACL "normally"
-grants instead of reading one. That is the same move as `contentProtected` being set and never read
-back — and the fix is the same discipline the Unix branch of this very function already applies:
-set it, read it back, report what you found.
+This is the `contentProtected` pattern with a different name: a control that is not applied,
+described by a string that assumes what applying it would have achieved. The fix is the discipline
+the Unix branch of this very function already uses — set it, read it back, report what came back —
+and until that lands `is_as_expected` should be returning `false` here.
 
 Not fixed here either. An owner-only DACL through `SetNamedSecurityInfo` plus a read-back is real
 `windows-rs` work, and it should land with the read-back rather than without it.

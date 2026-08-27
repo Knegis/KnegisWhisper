@@ -25,17 +25,31 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 import type {
   Accelerator,
+  AccountStatus,
+  AppleCalendarSupport,
+  AudioSource,
   Availability,
+  BinaryLocation,
   Binding,
+  CalendarProvider,
+  CalendarStatus,
+  CalendarSummary,
   CaptureExclusion,
   CleanupRoute,
   CleanupSettings,
+  ClientAvailability,
+  CliStatus,
+  ConfigReview,
   Conflict,
+  ConnectOutcome,
   CredentialKind,
   CredentialSlotStatus,
   CredentialStoreStatus,
+  Detected,
   Diagnostics,
   Dispatch,
+  DiscoveryPermissions,
+  DraftStatus,
   EnterpriseConfig,
   EnterpriseField,
   EnterpriseStatus,
@@ -47,27 +61,40 @@ import type {
   HotkeyAction,
   HotkeyChange,
   HotkeyReport,
+  ImportPickKind,
   ImportReport,
   InputDevice,
   InstallProgress,
-  DraftStatus,
+  KeytermSupport,
+  Lists,
   LocalApiStatus,
   LocalLlmModelStatus,
   LocalLlmProgress,
   LocalLlmStatus,
   LocalStatus,
+  McpStatus,
+  MediaImportProgress,
+  MediaImportResult,
+  MediaImportSource,
+  MediaSidecar,
+  MeetingOutcome,
+  MeetingProviderSummary,
+  MeetingState,
+  MeetingStatus,
   ModelCacheStatus,
   ModelStatus,
   NewNoteRequest,
   NonActivating,
   Note,
   NoteUpdateRequest,
+  Offer,
   Outcome,
   OverlayStatus,
   ProbeKind,
   ProbeOutcome,
   ProbeReport,
   ProbeResult,
+  ProviderStatus,
   ProviderSummary,
   ReasoningDispatch,
   ReasoningModelSummary,
@@ -79,11 +106,18 @@ import type {
   SearchHit,
   SessionState,
   ShortcutHookStatus,
+  SidecarStatus,
   SkipReason,
+  Sources,
+  SyncOutcome,
+  SyncRecord,
   SystemAudioSupport,
-  UnhandledAction,
   TableReport,
+  TokenStatus,
+  TranscriptEvent,
   Transcription,
+  UnhandledAction,
+  UpdateCheckResult,
   VerifiedBy,
 } from "../generated/ipc-types";
 
@@ -94,16 +128,30 @@ import type {
  */
 export type {
   Accelerator,
+  AccountStatus,
+  AppleCalendarSupport,
+  AudioSource,
+  BinaryLocation,
   Binding,
+  CalendarProvider,
+  CalendarStatus,
+  CalendarSummary,
   CaptureExclusion,
   CleanupRoute,
   CleanupSettings,
+  ClientAvailability,
+  CliStatus,
+  ConfigReview,
   Conflict,
+  ConnectOutcome,
   CredentialKind,
   CredentialSlotStatus,
   CredentialStoreStatus,
+  Detected,
   Diagnostics,
   Dispatch,
+  DiscoveryPermissions,
+  DraftStatus,
   EnterpriseConfig,
   EnterpriseField,
   EnterpriseStatus,
@@ -114,24 +162,37 @@ export type {
   HotkeyAction,
   HotkeyChange,
   HotkeyReport,
+  ImportPickKind,
   ImportReport,
   InputDevice,
   InstallProgress,
-  DraftStatus,
+  KeytermSupport,
+  Lists,
   LocalApiStatus,
   LocalLlmModelStatus,
   LocalLlmProgress,
   LocalLlmStatus,
   LocalStatus,
+  McpStatus,
+  MediaImportProgress,
+  MediaImportResult,
+  MediaImportSource,
+  MediaSidecar,
+  MeetingOutcome,
+  MeetingProviderSummary,
+  MeetingState,
+  MeetingStatus,
   ModelCacheStatus,
   ModelStatus,
   NonActivating,
   Note,
+  Offer,
   OverlayStatus,
   ProbeKind,
   ProbeOutcome,
   ProbeReport,
   ProbeResult,
+  ProviderStatus,
   ProviderSummary,
   ReasoningDispatch,
   ReasoningModelSummary,
@@ -143,10 +204,17 @@ export type {
   SearchHit,
   SessionState,
   ShortcutHookStatus,
+  SidecarStatus,
+  Sources,
+  SyncOutcome,
+  SyncRecord,
   SystemAudioSupport,
-  UnhandledAction,
   TableReport,
+  TokenStatus,
+  TranscriptEvent,
   Transcription,
+  UnhandledAction,
+  UpdateCheckResult,
   VerifiedBy,
 };
 
@@ -199,6 +267,147 @@ export async function onHotkey(
   return listen<HotkeyFired>("hotkey", (event) => handler(event.payload));
 }
 
+/* ----------------------------------------------------------------- meetings */
+
+/**
+ * Every meeting provider, with whether it can be used.
+ *
+ * The list comes from Rust, and so does the reason a provider cannot be chosen.
+ * A screen that decided that for itself would be a second source of truth about
+ * which clients exist — which is exactly the defect that had all six providers
+ * reporting as permitted with no client behind any of them.
+ */
+export async function getMeetingProviders(): Promise<MeetingProviderSummary[]> {
+  return invoke<MeetingProviderSummary[]>("meeting_providers");
+}
+
+export async function getMeetingStatus(): Promise<MeetingStatus> {
+  return invoke<MeetingStatus>("meeting_status");
+}
+
+/**
+ * Start recording a meeting.
+ *
+ * Returns which captures actually started: a meeting works microphone-only, and
+ * the user should be told which one they got rather than left to assume.
+ */
+export async function startMeeting(
+  provider: string,
+  systemAudio: boolean,
+): Promise<Sources> {
+  return invoke<Sources>("meeting_start", { provider, systemAudio });
+}
+
+export async function stopMeeting(): Promise<MeetingOutcome> {
+  return invoke<MeetingOutcome>("meeting_stop");
+}
+
+export async function cancelMeeting(): Promise<void> {
+  return invoke("meeting_cancel");
+}
+
+export async function onMeetingState(
+  handler: (state: MeetingState) => void,
+): Promise<UnlistenFn> {
+  return listen<MeetingState>("meeting-state", (event) => handler(event.payload));
+}
+
+/** Live transcript, a window at a time. Every one is a partial. */
+export async function onMeetingTranscript(
+  handler: (event: TranscriptEvent) => void,
+): Promise<UnlistenFn> {
+  return listen<TranscriptEvent>("meeting-transcript", (event) =>
+    handler(event.payload),
+  );
+}
+
+export async function onMeetingOutcome(
+  handler: (outcome: MeetingOutcome) => void,
+): Promise<UnlistenFn> {
+  return listen<MeetingOutcome>("meeting-outcome", (event) =>
+    handler(event.payload),
+  );
+}
+
+/** `meeting_detect::Lists` — the user's own process names. */
+export type DetectLists = Lists;
+
+/**
+ * Turn away an offer to record.
+ *
+ * The provider stays suppressed until its process goes away, so a dismissed
+ * offer does not come back five seconds later.
+ */
+export async function dismissMeetingOffer(): Promise<void> {
+  return invoke("meeting_dismiss");
+}
+
+export async function setMeetingPrompt(enabled: boolean): Promise<void> {
+  return invoke("meeting_set_prompt", { enabled });
+}
+
+export async function getMeetingDetectLists(): Promise<DetectLists> {
+  return invoke<DetectLists>("meeting_detect_lists");
+}
+
+export async function setMeetingDetectLists(lists: DetectLists): Promise<void> {
+  return invoke("meeting_set_detect_lists", { lists });
+}
+
+/**
+ * The language to give the provider, or the empty string for automatic
+ * detection where the provider supports it.
+ */
+export async function getMeetingLanguage(): Promise<string> {
+  return invoke<string>("meeting_language");
+}
+
+export async function setMeetingLanguage(language: string): Promise<void> {
+  return invoke("meeting_set_language", { language });
+}
+
+/** Terms to bias recognition towards. How many survive depends on the provider. */
+export async function getMeetingKeyterms(): Promise<string[]> {
+  return invoke<string[]>("meeting_keyterms");
+}
+
+export async function setMeetingKeyterms(keyterms: string[]): Promise<void> {
+  return invoke("meeting_set_keyterms", { keyterms });
+}
+
+/**
+ * Preview what `provider` will actually do with `language` and `keyterms`,
+ * without saving anything or starting a meeting.
+ *
+ * `kw_meeting_core::validate` does the arithmetic; this only carries its
+ * answer across the wire, so the screen never has to know a provider's cap or
+ * whether it detects a language on its own.
+ */
+export async function reviewMeetingConfig(
+  provider: string,
+  language: string,
+  keyterms: string[],
+): Promise<ConfigReview> {
+  return invoke<ConfigReview>("meeting_review_config", {
+    provider,
+    language,
+    keyterms,
+  });
+}
+
+/**
+ * A meeting appears to be in progress, or `null` to clear the offer.
+ *
+ * Only fires for a meeting actually in a call. A client merely being open never
+ * produces one — see `meeting.rs` on why, which is a measurement rather than a
+ * preference.
+ */
+export async function onMeetingOffer(
+  handler: (offer: Offer | null) => void,
+): Promise<UnlistenFn> {
+  return listen<Offer | null>("meeting-offer", (event) => handler(event.payload));
+}
+
 /* ---------------------------------------------------------------- providers */
 
 export async function getProviders(): Promise<ProviderSummary[]> {
@@ -209,7 +418,7 @@ export async function getProviders(): Promise<ProviderSummary[]> {
  * Every credential slot, in registry order, with whether each is filled.
  *
  * One call rather than one `isProviderCredentialPresent` per slot: there are
- * fifteen and the screen re-reads after every save. The list comes from
+ * twenty and the screen re-reads after every save. The list comes from
  * `config/provider-registry.json` through Rust, so no screen writes a slot name.
  */
 export async function getCredentialSlots(): Promise<CredentialSlotStatus[]> {
@@ -452,6 +661,28 @@ export async function importOpenWhispr(path: string): Promise<ImportReport> {
   return invoke<ImportReport>("import_openwhispr", { request: { path } });
 }
 
+/**
+ * Open a native "choose a file" dialog for one of the files `Notes > Upload`
+ * needs, and return the path picked, or `null` if the user cancelled.
+ *
+ * The renderer has no independent way to obtain a path here -- there is no
+ * filesystem or dialog capability, so the only path this screen can ever
+ * hold is one a real OS dialog returned from this call. **That is not the
+ * same guarantee `exportNoteToFile` gets from its save dialog.** That command
+ * fuses picking and writing into one atomic call on the Rust side, so the
+ * frontend never sees or supplies a path at all. This one hands the chosen
+ * path back, and the screen passes it on to a later, separate import call --
+ * see `pick_import_file`'s doc comment in `commands.rs` for the gap that
+ * leaves open and the hardening options being weighed (also
+ * `docs/SECURITY.md`'s Webview section and `docs/BENCH_CHECK.md`'s Task 12
+ * entry).
+ */
+export async function pickImportFile(
+  kind: ImportPickKind,
+): Promise<string | null> {
+  return invoke<string | null>("pick_import_file", { kind });
+}
+
 /* ---------------------------------------------------------------- dictation */
 
 export async function getDictationState(): Promise<SessionState> {
@@ -580,6 +811,67 @@ export async function stopLocalApi(): Promise<void> {
   return invoke<void>("local_api_stop");
 }
 
+/* ---------------------------------------------------------------- CLI, MCP */
+
+export async function getCliStatus(): Promise<CliStatus> {
+  return invoke<CliStatus>("cli_status");
+}
+
+export async function getMcpStatus(): Promise<McpStatus> {
+  return invoke<McpStatus>("mcp_status");
+}
+
+/* ------------------------------------------------------------ media import */
+
+/** ffmpeg's and yt-dlp's availability and install state, for `Notes > Upload`. */
+export async function getMediaImportStatus(): Promise<SidecarStatus[]> {
+  return invoke<SidecarStatus[]>("media_import_status");
+}
+
+/** Download, verify and unpack one media-import sidecar. Nothing installs on its own. */
+export async function installMediaImportSidecar(
+  sidecar: MediaSidecar,
+): Promise<void> {
+  return invoke<void>("media_import_install_sidecar", { sidecar });
+}
+
+/** Convert a local audio file with ffmpeg, then transcribe it. */
+export async function importAudioFile(
+  path: string,
+): Promise<MediaImportResult> {
+  return invoke<MediaImportResult>("media_import_audio", { path });
+}
+
+/** Convert a local video file with ffmpeg (which drops the video track), then transcribe it. */
+export async function importVideoFile(
+  path: string,
+): Promise<MediaImportResult> {
+  return invoke<MediaImportResult>("media_import_video", { path });
+}
+
+/**
+ * Fetch `url` with yt-dlp, convert the result with ffmpeg, then transcribe it.
+ *
+ * Only the url itself is checked against the network boundary before yt-dlp
+ * ever sees it. yt-dlp's own fetch -- its DNS resolution, any redirect it
+ * follows, and its own per-site extraction -- runs in a separate process and
+ * is not observed by `kw_network_policy`. See `media.rs`'s module doc.
+ */
+export async function importMediaFromUrl(
+  url: string,
+): Promise<MediaImportResult> {
+  return invoke<MediaImportResult>("media_import_url", { url });
+}
+
+/** Progress of installing a media-import sidecar, or of a running import. */
+export async function onMediaImportProgress(
+  handler: (progress: MediaImportProgress) => void,
+): Promise<UnlistenFn> {
+  return listen<MediaImportProgress>("media-import-progress", (event) =>
+    handler(event.payload),
+  );
+}
+
 /* ------------------------------------------------------------------- route */
 
 export async function getDictationRoute(): Promise<RouteReport> {
@@ -612,4 +904,100 @@ export async function setCloudProvider(
     cortiEnvironment: corti?.environment ?? null,
     cortiTenant: corti?.tenant ?? null,
   });
+}
+
+/* -------------------------------------------------------------- updater */
+
+/**
+ * Check this project's own GitHub releases for a newer version.
+ *
+ * Never called except by an explicit click — nothing subscribes to this on a
+ * timer or on load, which is what "opt-in, never at startup" means from the
+ * frontend's side of the boundary. See `updater.rs`.
+ */
+export async function checkForUpdate(): Promise<UpdateCheckResult> {
+  return invoke<UpdateCheckResult>("update_check");
+}
+
+/** What the last check found, without starting a new one. `null` if nobody has ever checked. */
+export async function getLastUpdateCheck(): Promise<UpdateCheckResult | null> {
+  return invoke<UpdateCheckResult | null>("update_check_last");
+}
+
+/** Hide the update notification window without forgetting what it found. */
+export async function dismissUpdateNotification(): Promise<void> {
+  return invoke("update_dismiss");
+}
+
+/** Fired whenever a check completes, whatever it found. */
+export async function onUpdateCheckResult(
+  handler: (result: UpdateCheckResult) => void,
+): Promise<UnlistenFn> {
+  return listen<UpdateCheckResult>("update-check-result", (event) =>
+    handler(event.payload),
+  );
+}
+
+/* -------------------------------------------------------------- calendars */
+
+/**
+ * The whole calendar picture: both OAuth providers plus Apple's unsupported
+ * state. A pure local read — see `calendar.rs`'s module doc — so calling
+ * this on every mount and after every mutation, the way `useRefresh` does,
+ * never reaches the network on its own.
+ */
+export async function getCalendarStatus(): Promise<CalendarStatus> {
+  return invoke<CalendarStatus>("calendar_status");
+}
+
+/**
+ * Save (or, given a blank string, clear) the OAuth client ID for `provider`.
+ * Never a secret — there is no client secret in this flow at all — so this
+ * is a plain settings write, not a credential-store one.
+ */
+export async function setCalendarClientId(
+  provider: CalendarProvider,
+  clientId: string,
+): Promise<void> {
+  return invoke("calendar_set_client_id", { provider, clientId });
+}
+
+/**
+ * Run the loopback OAuth flow for `provider`: opens the system browser,
+ * waits for it to come back, and identifies the account from its own
+ * calendar list. Takes as long as the person takes at the consent screen —
+ * up to five minutes — so this is only ever an explicit click, never
+ * anything automatic.
+ */
+export async function connectCalendar(
+  provider: CalendarProvider,
+): Promise<ConnectOutcome> {
+  return invoke<ConnectOutcome>("calendar_connect", { provider });
+}
+
+/** Disconnect whichever account is connected for `provider`, if any. */
+export async function disconnectCalendar(
+  provider: CalendarProvider,
+): Promise<void> {
+  return invoke("calendar_disconnect", { provider });
+}
+
+/**
+ * Refresh the calendar list and every selected calendar's events for the
+ * connected account. Also an explicit click — the only two commands that
+ * reach the network on this screen are this one and `connectCalendar`.
+ */
+export async function syncCalendar(
+  provider: CalendarProvider,
+): Promise<SyncOutcome> {
+  return invoke<SyncOutcome>("calendar_sync", { provider });
+}
+
+/** Toggle whether one calendar is synced. */
+export async function setCalendarSelected(
+  provider: CalendarProvider,
+  calendarId: string,
+  selected: boolean,
+): Promise<void> {
+  return invoke("calendar_set_selected", { provider, calendarId, selected });
 }

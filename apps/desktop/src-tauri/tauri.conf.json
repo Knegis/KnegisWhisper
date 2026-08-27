@@ -37,6 +37,12 @@
     },
     "withGlobalTauri": false
   },
+  "plugins": {
+    "updater": {
+      "$comment": "pubkey is the public half of a Tauri updater keypair -- see docs/SECURITY.md for how a maintainer generates one. Empty until that has happened. The private half must never appear in this file or anywhere else in this repository. This project does not depend on the tauri-plugin-updater crate at runtime -- see updater.rs's module doc -- so this key is read directly from this file by that module, in the same place the plugin itself would look.",
+      "pubkey": ""
+    }
+  },
   "bundle": {
     "active": true,
     "targets": [
@@ -52,7 +58,7 @@
       "icons/128x128@2x.png",
       "icons/icon.ico"
     ],
-    "createUpdaterArtifacts": false,
+    "createUpdaterArtifacts": true,
     "shortDescription": "Local-first voice dictation and meeting transcription",
     "longDescription": "Local-first voice dictation and meeting transcription. No account, no subscription, no telemetry, no hosted backend.",
     "copyright": "Copyright (c) 2026 Axel Karlsson",

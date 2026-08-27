@@ -1,0 +1,238 @@
+name: Release
+
+# workflow_dispatch only -- deliberately never on tag push. A tag can be
+# pushed by accident (a typo'd `git push --tags`, a script gone wrong); this
+# workflow builds on three OSes and would spend a real slice of the GitHub
+# Actions budget ci.yml is currently paused to conserve. Publishing a release
+# is a decision, not a side effect of a ref existing, so it stays behind a
+# person clicking "Run workflow".
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag the bundles are published under (e.g. v0.2.0). Must already exist or be creatable by the release step."
+        required: true
+        type: string
+      draft:
+        description: "Create the GitHub release as a draft for review before publishing."
+        required: false
+        type: boolean
+        # JUDGMENT CALL, not specified by the brief: defaults to a draft so
+        # nothing goes fully public from a single dispatch click. A reviewer
+        # who wants dispatch to publish immediately should flip this default.
+        default: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # One job per OS, each producing that OS's bundle targets from
+  # apps/desktop/src-tauri/tauri.conf.json (`nsis` on Windows; `app` + `dmg`
+  # on macOS; `appimage` + `deb` on Linux). `tauri build` only builds the
+  # targets valid for the host it runs on, so listing all five in the config
+  # is safe here.
+  build:
+    name: Build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.os }}
+
+      # Same package list as ci.yml's rust job -- Tauri needs the system
+      # webview and its build dependencies to compile on Linux at all, and
+      # AppImage/deb bundling needs patchelf on top of that.
+      - name: Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libglib2.0-dev \
+            libgtk-3-dev \
+            patchelf
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - run: npm ci
+        working-directory: apps/desktop
+
+      # Code signing: this project holds no Apple Developer ID or Windows
+      # Authenticode certificate today, so the build below is unsigned by
+      # default and that is the intended state, not an oversight. These two
+      # steps exist anyway -- present and skipped, rather than absent -- so
+      # that "we are shipping unsigned" is a visible fact in the job graph
+      # (a skipped step you can click on) instead of something you'd have to
+      # already know to go looking for. Each is gated on the matching secret
+      # existing; add the secret in repo settings and the step stops skipping.
+      #
+      # UNVERIFIED (could not be checked without a macOS/Windows runner and a
+      # real certificate, which this task does not have): whether setting
+      # these env vars is sufficient for `tauri build` to pick up the
+      # identity and actually sign the bundle, or whether
+      # apps/desktop/src-tauri/tauri.conf.json also needs a
+      # `bundle.macOS.signingIdentity` / `bundle.windows.certificateThumbprint`
+      # entry. tauri.conf.json is out of scope for this task, so if config is
+      # also required, these steps import the identity but do not yet cause
+      # anything to be signed with it -- that wiring is future work.
+      - name: Import Apple signing certificate
+        if: matrix.os == 'macos-latest' && secrets.APPLE_CERTIFICATE != ''
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          echo "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security create-keychain -p actions build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p actions build.keychain
+          security import "$RUNNER_TEMP/certificate.p12" -k build.keychain -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k actions build.keychain
+          rm -f "$RUNNER_TEMP/certificate.p12"
+
+      - name: Import Windows signing certificate
+        if: matrix.os == 'windows-latest' && secrets.WINDOWS_CERTIFICATE != ''
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          New-Item -ItemType Directory -Path certificate | Out-Null
+          Set-Content -Path certificate/certificate.b64 -Value $env:WINDOWS_CERTIFICATE
+          certutil -decode certificate/certificate.b64 certificate/certificate.pfx
+          Import-PfxCertificate -FilePath certificate/certificate.pfx -CertStoreLocation Cert:\CurrentUser\My -Password (ConvertTo-SecureString -String $env:WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force) | Out-Null
+          Remove-Item -Path certificate -Recurse -Force
+
+      # `tauri build` runs the frontend's `beforeBuildCommand` (npm run
+      # build: tsc --noEmit && vite build) itself, unlike the CI rust job
+      # which calls `cargo build` directly and so has to build the frontend
+      # as a separate step first.
+      #
+      # Task 16 turned `bundle.createUpdaterArtifacts` on in
+      # apps/desktop/src-tauri/tauri.conf.json, which asks the bundler to
+      # produce a `.sig` file next to each updater-capable bundle, signed
+      # with TAURI_SIGNING_PRIVATE_KEY. No such secret exists in this
+      # repository yet -- see docs/SECURITY.md for how a maintainer
+      # generates one and where it goes -- so this step overrides that
+      # setting back off, via `tauri build`'s own `--config` merge flag,
+      # for exactly the run that has no key to sign with. The alternative --
+      # leaving the flag on and hoping the bundler tolerates a missing key
+      # -- would risk turning Task 15's verified "builds successfully,
+      # unsigned" state into a hard failure the moment this task's flag
+      # change reached a real runner.
+      #
+      # UNVERIFIED: whether `tauri build` would in fact refuse to run at all
+      # with `createUpdaterArtifacts: true` and no signing key present,
+      # rather than simply skipping the `.sig` files, has never been
+      # exercised on any of the three runners below -- this workflow has
+      # never run. `shell: bash` is set explicitly so the same conditional
+      # runs identically on windows-latest, which defaults to PowerShell.
+      - name: tauri build
+        shell: bash
+        run: |
+          if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            npm run tauri:build
+          else
+            npm run tauri:build -- --config '{"bundle":{"createUpdaterArtifacts":false}}'
+          fi
+        working-directory: apps/desktop
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+
+      # UNVERIFIED: this path assumes Cargo's default workspace target
+      # directory. apps/desktop/src-tauri is a member of the workspace
+      # defined by the repo-root Cargo.toml, and nothing in the repo (no
+      # .cargo/config.toml, no CARGO_TARGET_DIR) overrides the target
+      # directory, so bundle output should land at <repo root>/target, not
+      # under apps/desktop/src-tauri/target as a standalone Tauri project's
+      # docs would suggest. Not confirmed by an actual build.
+      - name: Upload bundle artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: bundle-${{ matrix.os }}
+          path: |
+            target/release/bundle/**/*.exe
+            target/release/bundle/**/*.dmg
+            target/release/bundle/**/*.app
+            target/release/bundle/**/*.AppImage
+            target/release/bundle/**/*.deb
+            target/release/bundle/**/*.sig
+          # `*.sig` matches nothing yet -- no TAURI_SIGNING_PRIVATE_KEY secret
+          # exists, so the build step above turns createUpdaterArtifacts back
+          # off for this run -- but it belongs in the same glob list as the
+          # bundles themselves for the day a signing key is added: without
+          # it, the signatures the bundler produced would silently never
+          # leave this job, and "signed" would be true of the build and false
+          # of the release nobody could tell apart from an unsigned one.
+          if-no-files-found: error
+
+  publish:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-latest
+    # Scoped to this job alone: only `publish` creates/updates a GitHub
+    # release and uploads assets to it. `build` only checks out, compiles,
+    # and uploads a workflow artifact -- none of that needs write access to
+    # repository contents, so it keeps the default (read-only) token.
+    permissions:
+      contents: write
+    steps:
+      - name: Download all bundles
+        uses: actions/download-artifact@v4
+        with:
+          path: bundles
+
+      # softprops/action-gh-release is new to this repo's workflows (nothing
+      # else here creates a GitHub release), pinned the same way as the
+      # existing actions: a major-version tag rather than a full SHA, to
+      # match house style.
+      #
+      # UNVERIFIED: the GITHUB_TOKEN env var and the `files: bundles/**/*`
+      # glob follow this action's documented usage pattern from memory, but
+      # neither its GITHUB_TOKEN handling nor its glob semantics for this
+      # major version have been exercised -- this workflow has never run.
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          # UNVERIFIED: `inputs.<name>` is used here (rather than
+          # `github.event.inputs.<name>`) on the understanding that GitHub
+          # unified the `inputs` context across workflow_dispatch and
+          # workflow_call; not confirmed by an actual dispatch of this
+          # workflow.
+          tag_name: ${{ inputs.tag }}
+          draft: ${{ inputs.draft }}
+          name: ${{ inputs.tag }}
+          # The updater-signing sentence is conditional on the same secret
+          # the build job checks, so this body cannot go on claiming
+          # "unsigned updater artifacts" the first release built after a real
+          # TAURI_SIGNING_PRIVATE_KEY is added -- the two would otherwise
+          # drift apart exactly the way an unmaintained status message does.
+          #
+          # UNVERIFIED: `cond && 'a' || 'b'` is the standard way to write a
+          # ternary in GitHub Actions expression syntax, but nothing else in
+          # this repository's workflows has used it before now, and it has
+          # not been exercised by an actual dispatch.
+          body: |
+            Unsigned bundles. No code-signing identity is configured for this
+            project; see the "Import Apple/Windows signing certificate" steps
+            in .github/workflows/release.yml.
+
+            Updater artifacts: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' && 'signed with the configured updater key.' || 'not signed -- no TAURI_SIGNING_PRIVATE_KEY secret is configured yet. See docs/SECURITY.md.' }}
+          files: bundles/**/*

@@ -2,26 +2,46 @@
 //!
 //! ## What is here, and what is not
 //!
-//! This crate is the *contract*: the trait a streaming client implements, the
-//! capability model that says what each provider honours, and the allowlist
-//! derived from it. Those are the parts that are new work rather than a port —
-//! upstream has no capability object at all — and they are the parts that decide
-//! whether the calling code can be written correctly.
+//! This crate holds the *contract* — the trait a streaming client implements and
+//! the capability model that says what each provider honours — and the clients
+//! that exist. The capability model is new work rather than a port: upstream has
+//! no capability object at all, and it is what lets calling code ask a question
+//! like "will this provider honour my keyterms?" instead of having to know.
 //!
-//! The five WebSocket clients themselves are **not implemented yet**. That is a
-//! deliberate stopping point rather than an oversight: each needs real
-//! credentials against a live service to verify, none of which can be done from
-//! the development machine this was written on, and a client that compiles
-//! without ever having connected is worth very little. [`is_allowed`] returns
-//! true only for a provider with a client, so nothing here claims otherwise.
+//! **[`is_allowed`] is derived from [`client`], not from [`PROVIDERS`].** That
+//! sentence is the correction of a real defect: it used to read
+//! `capabilities(id).is_some()`, so all six described providers were permitted
+//! while no client existed for any of them — under a module doc that claimed
+//! exactly the opposite. Describing a provider and being able to use it are two
+//! different facts and the code now keeps them apart, which is also what lets
+//! the settings screen list a provider it cannot offer and say why.
+//!
+//! Of the six, `local`, `openai-realtime`, `assemblyai-realtime`,
+//! `deepgram-realtime` and `corti-realtime` have clients — Corti's is the
+//! most involved of the four cloud ones, because it authenticates with an
+//! OAuth2 exchange before either socket opens. `tinfoil-realtime` is
+//! [`declined`] rather than pending — see [`availability`]. None of the
+//! four cloud clients has been run against a live service; each needs a key
+//! or a tenant this project does not have.
 //!
 //! See `docs/PORTING_MATRIX.md` for the per-provider wire details each client
 //! will need.
 
+pub mod assemblyai;
+pub mod assemblyai_socket;
 pub mod capabilities;
+pub mod corti;
+pub mod corti_socket;
+pub mod deepgram;
+pub mod deepgram_socket;
+pub mod local;
+pub mod openai;
+pub mod openai_socket;
 
 pub use capabilities::{
-    capabilities, is_allowed, KeytermSupport, KeytermWire, MeetingProviderCapabilities, PROVIDERS,
+    availability, capabilities, client, credential_slot, declined, is_allowed, listing, Client,
+    ClientAvailability, KeytermSupport, KeytermWire, MeetingProviderCapabilities,
+    MeetingProviderSummary, PROVIDERS,
 };
 
 use kw_security::KeyRef;
@@ -38,7 +58,7 @@ pub struct AudioChunk {
 }
 
 /// Which capture a chunk came from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ts_rs::TS)]
 #[serde(rename_all = "kebab-case")]
 pub enum AudioSource {
     /// The user's microphone.
@@ -65,7 +85,7 @@ pub struct MeetingProviderConfig {
 }
 
 /// One piece of transcript from a provider.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
 pub struct TranscriptEvent {
     pub text: String,
@@ -86,6 +106,13 @@ pub struct MeetingTranscript {
     /// How many times the session had to reconnect. Surfaced because a
     /// transcript with gaps should not look complete.
     pub reconnects: u32,
+    /// How many stretches of audio were never transcribed at all.
+    ///
+    /// A separate count from `reconnects` because the causes differ and so does
+    /// what a user would do about them: a reconnect is the network, and a gap is
+    /// the transcriber failing to keep up with the meeting. Both leave a hole,
+    /// and a transcript with a hole in it must not look complete.
+    pub gaps: u32,
 }
 
 /// Why a meeting session failed.
@@ -177,7 +204,7 @@ pub fn validate(config: &MeetingProviderConfig) -> Result<ConfigReview, MeetingE
 }
 
 /// What a configuration will actually do, once the provider's limits apply.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ConfigReview {
     pub keyterms_requested: usize,
@@ -295,6 +322,18 @@ mod tests {
     }
 
     #[test]
+    fn the_local_provider_does_not_require_a_language_either() {
+        // `WhisperServer::transcribe` sends "auto" whenever no language is
+        // given (crates/transcription-core/src/local.rs), which is real
+        // per-request detection. The one provider that needs no credentials
+        // and no network must not start refusing to run the moment something
+        // finally calls `validate` before connecting it.
+        let mut cfg = config("local", 16_000, 0);
+        cfg.language = None;
+        assert!(!validate(&cfg).unwrap().language_required);
+    }
+
+    #[test]
     fn the_session_limit_is_surfaced_so_a_caller_can_plan_a_reconnect() {
         let review = validate(&config("openai-realtime", 24_000, 0)).unwrap();
         assert_eq!(review.session_limit_seconds, Some(3_600));
@@ -334,9 +373,14 @@ mod tests {
             }],
             duration_seconds: 12.0,
             reconnects: 2,
+            gaps: 1,
         };
         let json = serde_json::to_value(&transcript).unwrap();
         assert_eq!(json["reconnects"], 2);
+        assert_eq!(
+            json["gaps"], 1,
+            "a gap is not the same failure as a reconnect"
+        );
         assert_eq!(json["events"][0]["isFinal"], true);
         assert_eq!(json["events"][0]["source"], "mic");
     }

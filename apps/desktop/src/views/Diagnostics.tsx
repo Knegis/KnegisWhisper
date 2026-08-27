@@ -10,27 +10,23 @@
  * already reads it for the version line and two calls would be two answers.
  */
 
+import { useEffect, useState } from "react";
+
 import { Row } from "../components/Row";
 import {
+  checkForUpdate,
+  getLastUpdateCheck,
   isCaptureExclusionConfirmed,
   type Diagnostics,
   type SystemAudioSupport,
+  type UpdateCheckResult,
 } from "../lib/ipc";
-import { captureExclusionLabel, nonActivatingLabel } from "../lib/labels";
-
-/** What can be said about system audio, without overclaiming. */
-function systemAudioValue(s: SystemAudioSupport): string {
-  switch (s.state) {
-    case "available":
-      // The unverified case is deliberately not "Available": the mechanism
-      // exists and nobody has heard it produce sound.
-      return s.unverified ? "Available, never tested" : "Available";
-    case "no-device":
-      return "No device offers it";
-    case "unsupported":
-      return "Not supported here";
-  }
-}
+import { systemAudioValue } from "../lib/labels";
+import {
+  captureExclusionLabel,
+  nonActivatingLabel,
+  updateCheckLabel,
+} from "../lib/labels";
 
 function systemAudioDetail(s: SystemAudioSupport): string {
   switch (s.state) {
@@ -49,6 +45,18 @@ export function DiagnosticsView({ diagnostics }: { diagnostics: Diagnostics }) {
     diagnostics.overlay.captureExclusion,
   );
   const focus = nonActivatingLabel(diagnostics.overlay.nonActivating);
+
+  const [updateResult, setUpdateResult] = useState<UpdateCheckResult | null>(
+    null,
+  );
+  const [checkingForUpdate, setCheckingForUpdate] = useState(false);
+
+  useEffect(() => {
+    // Reads what a previous check already found. This itself never triggers
+    // one — "opt-in, and never a check at startup" holds for this screen too;
+    // the only thing that starts a check is the button below.
+    void getLastUpdateCheck().then(setUpdateResult);
+  }, []);
 
   return (
     // No `data-surface` marker: config/ui-surfaces.json declares surfaces that
@@ -167,11 +175,41 @@ export function DiagnosticsView({ diagnostics }: { diagnostics: Diagnostics }) {
       </section>
 
       <section>
+        <h2>Software update</h2>
+        <p className="muted">
+          Checked only when the button below is pressed. Nothing here runs at
+          startup, on a timer, or without this click.
+        </p>
+        <button
+          type="button"
+          disabled={checkingForUpdate}
+          onClick={() => {
+            setCheckingForUpdate(true);
+            void checkForUpdate()
+              .then(setUpdateResult)
+              .finally(() => setCheckingForUpdate(false));
+          }}
+        >
+          {checkingForUpdate ? "Checking…" : "Check for updates"}
+        </button>
+        {updateResult ? (
+          <Row
+            label="Last check"
+            value={updateCheckLabel(updateResult).text}
+            detail={updateCheckLabel(updateResult).detail}
+          />
+        ) : (
+          <p className="muted">Never checked.</p>
+        )}
+      </section>
+
+      <section>
         <h2>Network boundary</h2>
         <p className="muted">
           Outbound requests are permitted only for these purposes. Nothing is
-          sent at startup — a connection test on the Providers screen is
-          explicitly invoked, and no other screen reaches the network at all.
+          sent at startup — a connection test on the Providers screen and an
+          update check on this screen are both explicitly invoked, and no
+          screen reaches the network any other way.
         </p>
         <ul className="purposes">
           {diagnostics.allowedEgressPurposes.map((p) => (

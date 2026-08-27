@@ -118,7 +118,7 @@
       "note": "Reachable: crates/transcription-core/src/clients.rs shapes its request and reads its response, tested against recorded fixtures. No live call -- that needs a key this project does not have; see docs/PLATFORM_SUPPORT.md. Corti also takes an environment and a tenant on Settings > Transcription, because neither has a safe default: the environment is in the hostname and the tenant scopes the account."
     },
     "transcription:tinfoil": {
-      "status": "rewired-to-direct-byok",
+      "status": "temporarily-deferred",
       "name": "Tinfoil",
       "phase": 3,
       "models": [
@@ -128,10 +128,19 @@
         "src/models/modelRegistryData.json#transcriptionProviders",
         "src/helpers/transcriptionRoute.ts"
       ],
+      "deferral": {
+        "why": "Not resource-blocked and not a matter of finishing incomplete work -- implementing this client as a plain HTTPS POST would defeat Tinfoil's entire proposition, which is an attested enclave verified before any audio is sent. This manifest's statusVocabulary has no 'declined on principle' term; temporarily-deferred is used only because it is the closest status that does not assert a working implementation exists (which the previous status, rewired-to-direct-byok, did). 'Temporarily' should not be read literally: nothing here is scheduled to change absent a decision to build an attestation-verifying client, which has not been made.",
+        "dependencies": [
+          "an attestation-verifying HTTP client that fetches and checks Tinfoil's attestation document against a hardware root of trust before any request is sent -- a distinct verification step, not a REST client feature",
+          "a decision that this project wants to build one, which has not been made"
+        ],
+        "interface": "crates/transcription-core::route::ProviderClientKind::Tinfoil is the enum member every match must cover; clients::why_tinfoil_is_refused() names the reason and clients::shape() returns TranscriptionError::ClientNotImplemented for it. No attested-client module exists.",
+        "expectedPhase": null
+      },
       "backend": "crates/transcription-core",
       "ui": "Settings > Transcription",
       "reachable": false,
-      "note": "Deliberately unreachable, not unfinished. Tinfoil's proposition is an attested enclave: the client verifies an attestation document against a hardware root of trust before sending anything. A plain HTTPS POST to the same host would transcribe correctly and provide none of that, while appearing in the UI as Tinfoil -- a confidentiality claim the request did not earn. route.rs already refuses a Tinfoil host configured as a custom endpoint for this reason; implementing the client as an unattested POST would defeat that from the inside."
+      "note": "Status corrected by Task 19's audit of every ACTIVE-vocabulary entry: this previously carried rewired-to-direct-byok, which verify-parity.mjs treats as asserting a working implementation, while clients.rs returns TranscriptionError::ClientNotImplemented for Tinfoil and nothing else implements it -- the same pattern platform:aec was already corrected for. Deliberately unreachable, not unfinished, for the reason in `deferral.why`: Tinfoil's proposition is an attested enclave, and a plain HTTPS POST to the same host would transcribe correctly and provide none of that while appearing in the UI as Tinfoil -- a confidentiality claim the request did not earn. route.rs already refuses a Tinfoil host configured as a custom endpoint for this reason."
     },
     "reasoning:openai": {
       "status": "rewired-to-direct-byok",
@@ -547,7 +556,7 @@
       "ui": "Settings > Transcription > Local",
       "reachable": false,
       "runtime": "online",
-      "note": "Unreachable, and the reason is specific rather than 'no sidecar'. sherpa-onnx publishes desktop binaries only as .tar.bz2, which install::extract cannot open; it ships a one-shot CLI and a WebSocket server rather than an HTTP endpoint, so neither Transport::Loopback nor HttpHealth applies; and the per-model file layout and flags differ between the Parakeet and Nemotron families. See docs/BUILD_PLAN.md, chunk B4."
+      "note": "Still unreachable, but not for the reason previously recorded: Task 17 pinned sherpa-onnx and gave install::extract a tar.bz2 reader, so the archive format is no longer the blocker, and Task 18 measured and implemented the offline CLI contract for the Parakeet family (kw_transcription_core::sherpa, proven end to end against both pinned Parakeet models). This model is not Parakeet, though: it is one of the two Nemotron models, which are streaming over sherpa-onnx-online-websocket-server's own bespoke WebSocket protocol rather than the sherpa-onnx-offline CLI that was measured. Nobody has written or tested a client for that protocol, and the offline path was not attempted against this model -- it is not offline-shaped, so there is no evidence either way about whether it would apply. Deferred with the reason stated, per docs/BUILD_PLAN.md chunk B4 and docs/PLATFORM_SUPPORT.md's 'Local ASR: sherpa-onnx' section."
     },
     "local-asr:nemotron-speech-streaming-en-0.6b": {
       "status": "ported-with-new-rust-implementation",
@@ -562,7 +571,7 @@
       "ui": "Settings > Transcription > Local",
       "reachable": false,
       "runtime": "online",
-      "note": "Unreachable, and the reason is specific rather than 'no sidecar'. sherpa-onnx publishes desktop binaries only as .tar.bz2, which install::extract cannot open; it ships a one-shot CLI and a WebSocket server rather than an HTTP endpoint, so neither Transport::Loopback nor HttpHealth applies; and the per-model file layout and flags differ between the Parakeet and Nemotron families. See docs/BUILD_PLAN.md, chunk B4."
+      "note": "Still unreachable, but not for the reason previously recorded: Task 17 pinned sherpa-onnx and gave install::extract a tar.bz2 reader, so the archive format is no longer the blocker, and Task 18 measured and implemented the offline CLI contract for the Parakeet family (kw_transcription_core::sherpa, proven end to end against both pinned Parakeet models). This model is not Parakeet, though: it is one of the two Nemotron models, which are streaming over sherpa-onnx-online-websocket-server's own bespoke WebSocket protocol rather than the sherpa-onnx-offline CLI that was measured. Nobody has written or tested a client for that protocol, and the offline path was not attempted against this model -- it is not offline-shaped, so there is no evidence either way about whether it would apply. Deferred with the reason stated, per docs/BUILD_PLAN.md chunk B4 and docs/PLATFORM_SUPPORT.md's 'Local ASR: sherpa-onnx' section."
     },
     "local-asr:parakeet-tdt-0.6b-v3": {
       "status": "ported-with-new-rust-implementation",
@@ -577,7 +586,7 @@
       "ui": "Settings > Transcription > Local",
       "reachable": false,
       "runtime": null,
-      "note": "Unreachable, and the reason is specific rather than 'no sidecar'. sherpa-onnx publishes desktop binaries only as .tar.bz2, which install::extract cannot open; it ships a one-shot CLI and a WebSocket server rather than an HTTP endpoint, so neither Transport::Loopback nor HttpHealth applies; and the per-model file layout and flags differ between the Parakeet and Nemotron families. See docs/BUILD_PLAN.md, chunk B4."
+      "note": "Unreachable, but for a much narrower reason than before this measurement. cargo run -p kw-transcription-core --example sherpa_probe installed the pinned sherpa-onnx-offline CLI, downloaded this exact model, and transcribed tests/fixtures/speech-16k-mono.wav with it, producing the same words whisper's tiny model does on the same input (differing only in capitalisation). kw_transcription_core::sherpa::SherpaOffline (a second LocalTranscriber, alongside WhisperServer) and sherpa_models::install are real, tested code, proven end to end by tests/sherpa_dictation.rs (a --ignored test against the production types, not only the throwaway probe). The runtime is implemented and proven. What is missing is purely a UI question: Settings > Transcription > Local has no selector for this model, so no user can reach it through the named surface -- the rule this project settled on for 'reachable' (see calendar:apple) is that a person must be able to configure the integration through the named, built surface, and today they cannot. apps/desktop/src-tauri/src/dictation.rs's own comment on LocalTargets names the Tauri command layer and UI wiring this needs as the anticipated next step ('the next one is the sherpa server'). See docs/PLATFORM_SUPPORT.md's 'Local ASR: sherpa-onnx' section for the measured layout and CLI contract."
     },
     "local-asr:parakeet-unified-en-0.6b": {
       "status": "ported-with-new-rust-implementation",
@@ -592,7 +601,7 @@
       "ui": "Settings > Transcription > Local",
       "reachable": false,
       "runtime": null,
-      "note": "Unreachable, and the reason is specific rather than 'no sidecar'. sherpa-onnx publishes desktop binaries only as .tar.bz2, which install::extract cannot open; it ships a one-shot CLI and a WebSocket server rather than an HTTP endpoint, so neither Transport::Loopback nor HttpHealth applies; and the per-model file layout and flags differ between the Parakeet and Nemotron families. See docs/BUILD_PLAN.md, chunk B4."
+      "note": "Unreachable, but for a much narrower reason than before this measurement. cargo run -p kw-transcription-core --example sherpa_probe installed the pinned sherpa-onnx-offline CLI, downloaded this exact model, and transcribed tests/fixtures/speech-16k-mono.wav with it, producing the same words whisper's tiny model does on the same input (differing only in capitalisation). kw_transcription_core::sherpa::SherpaOffline (a second LocalTranscriber, alongside WhisperServer) and sherpa_models::install are real, tested code, proven end to end by tests/sherpa_dictation.rs (a --ignored test against the production types, not only the throwaway probe). The runtime is implemented and proven. What is missing is purely a UI question: Settings > Transcription > Local has no selector for this model, so no user can reach it through the named surface -- the rule this project settled on for 'reachable' (see calendar:apple) is that a person must be able to configure the integration through the named, built surface, and today they cannot. apps/desktop/src-tauri/src/dictation.rs's own comment on LocalTargets names the Tauri command layer and UI wiring this needs as the anticipated next step ('the next one is the sherpa server'). See docs/PLATFORM_SUPPORT.md's 'Local ASR: sherpa-onnx' section for the measured layout and CLI contract."
     },
     "meeting-stream:assemblyai-realtime": {
       "status": "rewired-to-direct-byok",
@@ -601,9 +610,11 @@
         "src/helpers/meetingStreamingProviders.js",
         "src/helpers/realtimeTokenProviders.js"
       ],
-      "backend": "crates/meeting-core",
+      "backend": "crates/meeting-core/src/{assemblyai,assemblyai_socket}.rs",
       "ui": "Settings > Meetings",
-      "reachable": false
+      "reachable": true,
+      "frontend": "apps/desktop/src/views/SettingsMeetings.tsx",
+      "note": "Reachable: a key is stored on Settings > Providers and the provider is chosen on Settings > Meetings. Keyterms travel as a capped JSON array in the query string (`keyterms_prompt`, KeytermWire::JsonQueryParam). Request shaping and the event grammar are covered by fixtures; no live call has been made -- no AssemblyAI key exists on this machine. See docs/PLATFORM_SUPPORT.md for the full list of wire-shape items believed from public documentation but not confirmed."
     },
     "meeting-stream:corti-realtime": {
       "status": "ported",
@@ -612,9 +623,11 @@
         "src/helpers/meetingStreamingProviders.js",
         "src/helpers/realtimeTokenProviders.js"
       ],
-      "backend": "crates/meeting-core",
+      "backend": "crates/meeting-core/src/{corti,corti_socket}.rs",
       "ui": "Settings > Meetings",
-      "reachable": false
+      "reachable": true,
+      "frontend": "apps/desktop/src/views/SettingsMeetings.tsx",
+      "note": "Reachable: a key is stored on Settings > Providers and the provider itself is chosen on Settings > Meetings. Corrected 2026-08-27: this previously also claimed the environment and tenant were chosen on Settings > Meetings -- false. Neither field appears on that screen at all; both are entered only on Settings > Transcription (`corti_environment`/`corti_tenant`, SettingsTranscription.tsx), and the only command that writes them is `dictation_set_cloud_provider`, behind the \"Use for dictation\" button -- which also sets `cloud_transcription_provider = \"corti\"`, `use_local_whisper = false` and `transcription_mode = \"providers\"`. So configuring Corti's meeting tenancy today means repointing dictation at Corti first; there is no independent path. Keyterms travel inside the session-config message (`configuration.keyterms`, KeytermWire::SessionConfig). Two different confidence levels here, not one: the OAuth2 token exchange reuses kw_transcription_core::clients::corti_token_endpoint/corti_token_request, already implemented and tested for batch Corti transcription -- reused, not believed. The socket wire is a different matter: the endpoint path, the message envelope, and most of the session-config block beyond `configuration.keyterms` have no vendor source anywhere in this repository -- they were invented, not read from documentation, and the implementer said so directly. No live call has been made -- no Corti credential exists on this machine. See docs/PLATFORM_SUPPORT.md for the full breakdown."
     },
     "meeting-stream:deepgram-realtime": {
       "status": "rewired-to-direct-byok",
@@ -623,9 +636,11 @@
         "src/helpers/meetingStreamingProviders.js",
         "src/helpers/realtimeTokenProviders.js"
       ],
-      "backend": "crates/meeting-core",
+      "backend": "crates/meeting-core/src/{deepgram,deepgram_socket}.rs",
       "ui": "Settings > Meetings",
-      "reachable": false
+      "reachable": true,
+      "frontend": "apps/desktop/src/views/SettingsMeetings.tsx",
+      "note": "Reachable: a key is stored on Settings > Providers and the provider is chosen on Settings > Meetings. Keyterms travel as one repeated `keyterm` query parameter each (KeytermWire::RepeatedQueryParam). Request shaping and the event grammar are covered by fixtures; no live call has been made -- no Deepgram key exists on this machine. See docs/PLATFORM_SUPPORT.md for the full list of wire-shape items believed from public documentation but not confirmed."
     },
     "meeting-stream:openai-realtime": {
       "status": "rewired-to-direct-byok",
@@ -634,20 +649,32 @@
         "src/helpers/meetingStreamingProviders.js",
         "src/helpers/realtimeTokenProviders.js"
       ],
-      "backend": "crates/meeting-core",
+      "backend": "crates/meeting-core/src/{openai,openai_socket}.rs",
       "ui": "Settings > Meetings",
-      "reachable": false
+      "reachable": true,
+      "frontend": "apps/desktop/src/views/SettingsMeetings.tsx",
+      "note": "Two WebSockets, one per capture, because this provider labels no speakers and one socket would make AudioSource on every event a guess. 24 kHz only, which is why the meeting pipeline resamples per session. Sixty-minute server cap, so a longer meeting reconnects and MeetingTranscript::reconnects says how often. Keyterms are accepted and ignored upstream, so none are sent. Request shaping and the event grammar are covered by fixtures; no live call has been made -- see docs/PLATFORM_SUPPORT.md."
     },
     "meeting-stream:tinfoil-realtime": {
-      "status": "ported",
+      "status": "temporarily-deferred",
       "phase": 4,
       "upstream": [
         "src/helpers/meetingStreamingProviders.js",
         "src/helpers/realtimeTokenProviders.js"
       ],
+      "deferral": {
+        "why": "The identical principled refusal and the identical vocabulary gap as transcription:tinfoil. This is not deferred in the sense the other entries carrying this status are -- blocked on a toolchain or a dependency this project intends to add -- it is declined, and temporarily-deferred is used only because statusVocabulary has no term for a permanent, principled refusal and this is the closest status that stops asserting a working client exists.",
+        "dependencies": [
+          "an attestation-verifying WebSocket client -- a plain unattested socket to the same host would stream audio correctly while presenting as Tinfoil in the UI, which is the outcome being refused, not merely unbuilt",
+          "a decision that this project wants to build one, which has not been made"
+        ],
+        "interface": "crates/meeting-core has no Tinfoil-specific client module. capabilities.rs declares the provider's capabilities and its refusal reason; nothing implements a Tinfoil MeetingTranscriptionProvider.",
+        "expectedPhase": null
+      },
       "backend": "crates/meeting-core",
       "ui": "Settings > Meetings",
-      "reachable": false
+      "reachable": false,
+      "note": "Status corrected by Task 19's audit of every ACTIVE-vocabulary entry: this previously carried status \"ported\" with backend \"crates/meeting-core\" naming a directory rather than a client file, while no Tinfoil meeting client exists anywhere in this codebase and none is planned -- the identical pattern platform:aec was already corrected for, in the same file, one commit before this one. Deliberately unreachable, not unfinished, for the same reason as transcription:tinfoil (see its `deferral.why`): Tinfoil's proposition is an attested enclave, and an unattested socket to the same host would stream audio correctly and provide none of that while appearing in the UI as Tinfoil -- a confidentiality claim the connection did not earn."
     },
     "meeting-stream:local": {
       "status": "ported-with-new-rust-implementation",
@@ -655,9 +682,11 @@
       "upstream": [
         "src/helpers/parakeetWsServer.js"
       ],
-      "backend": "crates/meeting-core",
+      "backend": "crates/meeting-core/src/local.rs",
       "ui": "Settings > Meetings",
-      "reachable": false
+      "reachable": true,
+      "frontend": "apps/desktop/src/views/SettingsMeetings.tsx",
+      "note": "Repeated short passes over the local whisper-server, not the sherpa-onnx WebSocket server upstream used -- that runtime is blocked, see chunk B4. Named 'Local windowed model' so it is not mistaken for word-by-word streaming."
     },
     "credential:openai": {
       "status": "ported-with-new-rust-implementation",
@@ -869,6 +898,24 @@
       "reachable": true,
       "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10. Reachable: Settings > Providers stores every slot the registry declares. A custom-endpoint slot stores its key here and still needs the base URL that lives with the feature using it, which the screen says rather than implying otherwise."
     },
+    "credential:assemblyai": {
+      "status": "rewired-to-direct-byok",
+      "env": "ASSEMBLYAI_API_KEY",
+      "phase": 4,
+      "backend": "crates/security",
+      "ui": "Settings > Providers",
+      "reachable": true,
+      "note": "New relative to upstream: baseline.secretKeys has no entry for AssemblyAI. meeting-stream:assemblyai-realtime minted its realtime token from api.openwhispr.com, a removed vendor service (vendor:openwhispr-realtime-token-broker), rather than asking the user for a key. This slot exists so a direct client can authenticate itself instead. Reachable: Settings > Providers lists every provider-kind slot the registry declares, including this one, with no frontend change needed. No AssemblyAI meeting client exists yet -- see meeting-stream:assemblyai-realtime -- so nothing consumes the stored key today."
+    },
+    "credential:deepgram": {
+      "status": "rewired-to-direct-byok",
+      "env": "DEEPGRAM_API_KEY",
+      "phase": 4,
+      "backend": "crates/security",
+      "ui": "Settings > Providers",
+      "reachable": true,
+      "note": "New relative to upstream: baseline.secretKeys has no entry for Deepgram. meeting-stream:deepgram-realtime minted its realtime token from api.openwhispr.com, a removed vendor service (vendor:openwhispr-realtime-token-broker), rather than asking the user for a key. This slot exists so a direct client can authenticate itself instead. Reachable: Settings > Providers lists every provider-kind slot the registry declares, including this one, with no frontend change needed. No Deepgram meeting client exists yet -- see meeting-stream:deepgram-realtime -- so nothing consumes the stored key today."
+    },
     "diarization-model:3dspeaker-campplus-en": {
       "status": "temporarily-deferred",
       "name": "CAM++ Speaker Embedding (English)",
@@ -886,7 +933,8 @@
         ],
         "interface": "meeting_core::diarization::Diarizer",
         "expectedPhase": 8
-      }
+      },
+      "note": "Note added 2026-08-27, in the whole-branch review's fix wave: this entry has carried `temporarily-deferred` with a `deferral` block since before this plan began, but no top-level `note` explaining why -- unlike every other deferred entry in this file. The reason is docs/BUILD_PLAN.md's chunk I: none of diarization's work (the `ort` crate, the sherpa-onnx-diarize sidecar, silero_vad.onnx, or a port of diarizationPolicy.js) was attempted across the 19 tasks in this plan or the one added mid-run. This entry sits outside both the ACTIVE-status audit's scope (it never claimed a working implementation, so there was nothing to overclaim) and the parity gate's `USER_CONFIGURABLE` set, so no gate would ever have caught the missing note on its own."
     },
     "diarization-model:sherpa-onnx-pyannote-segmentation-3-0": {
       "status": "temporarily-deferred",
@@ -905,7 +953,8 @@
         ],
         "interface": "meeting_core::diarization::Diarizer",
         "expectedPhase": 8
-      }
+      },
+      "note": "Note added 2026-08-27, in the whole-branch review's fix wave: this entry has carried `temporarily-deferred` with a `deferral` block since before this plan began, but no top-level `note` explaining why -- unlike every other deferred entry in this file. The reason is docs/BUILD_PLAN.md's chunk I: none of diarization's work (the `ort` crate, the sherpa-onnx-diarize sidecar, silero_vad.onnx, or a port of diarizationPolicy.js) was attempted across the 19 tasks in this plan or the one added mid-run. This entry sits outside both the ACTIVE-status audit's scope (it never claimed a working implementation, so there was nothing to overclaim) and the parity gate's `USER_CONFIGURABLE` set, so no gate would ever have caught the missing note on its own."
     },
     "calendar:google": {
       "status": "ported-with-new-rust-implementation",
@@ -915,10 +964,10 @@
         "src/helpers/googleCalendarOAuth.js",
         "src/helpers/oauthLoopbackFlow.js"
       ],
-      "backend": "crates/app-core/calendar",
+      "backend": "crates/calendar-core",
       "ui": "Integrations > Calendar",
-      "reachable": false,
-      "note": "Token exchange already goes direct to Google; no OpenWhispr broker. Must switch from the shipped client_secret to a PKCE-only installed-app client, and move refresh tokens out of plaintext SQLite into the credential store."
+      "reachable": true,
+      "note": "Reachable: the loopback PKCE flow (crates/calendar-core) plus this task's calendar list and incremental event sync are wired into apps/desktop/src-tauri/src/calendar.rs and driven from Integrations > Calendar, which is where the user pastes in the client ID for a PKCE-only installed-app client they registered themselves -- no client_secret anywhere. Refresh tokens live in the OS credential store, never SQLite. The calendarList/events.list wire shapes are covered by fixtures modelled on Google's public docs; no client ID exists on this machine, so no live call has been made -- see the task report for the full list of what that leaves unverified."
     },
     "calendar:microsoft": {
       "status": "ported-with-new-rust-implementation",
@@ -927,13 +976,13 @@
         "src/helpers/microsoftCalendarManager.js",
         "src/helpers/microsoftCalendarOAuth.js"
       ],
-      "backend": "crates/app-core/calendar",
+      "backend": "crates/calendar-core",
       "ui": "Integrations > Calendar",
-      "reachable": false,
-      "note": "Direct to login.microsoftonline.com. Same refresh-token relocation as Google."
+      "reachable": true,
+      "note": "Reachable: same path as calendar:google, direct to login.microsoftonline.com and graph.microsoft.com, with the delta-query event sync this task adds. No client ID exists on this machine, so the /me/calendars and events/delta wire shapes are covered by fixtures modelled on Microsoft's public docs rather than a live call -- see the task report."
     },
     "calendar:apple": {
-      "status": "platform-specific",
+      "status": "temporarily-deferred",
       "phase": 5,
       "platforms": [
         "macos"
@@ -942,10 +991,20 @@
         "src/helpers/appleCalendarManager.js",
         "resources/macos-calendar-listener.swift"
       ],
-      "backend": "crates/platform/macos",
+      "deferral": {
+        "why": "EventKit is native macOS API with no Rust binding anywhere in this project, on any platform including macOS. There is no macOS machine in this development environment to write or verify that binding against. kw_calendar_core::apple describes the shape a future implementation would fill in (AppleCalendarSource) but implements none of it -- unlike the two Tinfoil entries, this is a genuine resource gap, not a principled refusal: nothing here says Apple Calendar should not be supported, only that it cannot be built or verified on this machine.",
+        "dependencies": [
+          "a macOS build of this application, which does not exist",
+          "EventKit Rust bindings, which do not exist anywhere in this project",
+          "a macOS machine to write and verify the binding against, which is not available in this development environment"
+        ],
+        "interface": "kw_calendar_core::apple::AppleCalendarSource, declared and deliberately unimplemented -- see the module doc.",
+        "expectedPhase": 5
+      },
+      "backend": "crates/calendar-core",
       "ui": "Integrations > Calendar",
       "reachable": false,
-      "note": "Native EventKit, macOS only. Unverifiable on the current dev machine."
+      "note": "Status corrected by Task 19's audit of every ACTIVE-vocabulary entry: this previously carried status \"platform-specific\", which verify-parity.mjs treats as asserting a working implementation exists for the platforms it names, while apple.rs's own module doc says AppleCalendarSource is deliberately unimplemented by anything in this crate, on every platform including macOS -- the identical pattern platform:aec was already corrected for. Integrations > Calendar reports it as Unsupported with that reason rather than hiding the row or showing an empty calendar list, which is honest UI -- but honest UI about an absent capability is not the same claim as reachable, the same distinction transcription:tinfoil draws. Implementing it needs a macOS build of this application and EventKit bindings, neither of which exists; unverifiable on this development machine even once written."
     },
     "developer:local-rest-api": {
       "status": "ported-with-new-rust-implementation",
@@ -966,8 +1025,8 @@
       ],
       "backend": "tools/knegiswhisper",
       "ui": "Integrations > CLI",
-      "reachable": false,
-      "note": "NOT a port. The CLI is a separate npm package absent from the repo; only its documented noun-verb surface and exit codes 0-4 survive as a spec."
+      "reachable": true,
+      "note": "NOT a port. The CLI is a separate npm package absent from the repo; only its documented noun-verb surface and exit codes 0-4 survive as a spec. Integrations > CLI now tells a user it exists, where the compiled binary was actually found (or that it was not), and the discovery file's real permission state."
     },
     "developer:mcp": {
       "status": "ported-with-new-rust-implementation",
@@ -977,11 +1036,11 @@
       ],
       "backend": "tools/knegiswhisper-mcp",
       "ui": "Integrations > MCP",
-      "reachable": false,
-      "note": "NOT a port. Upstream MCP is a hosted Streamable-HTTP service; no local or stdio implementation exists in the checkout. Entirely new work."
+      "reachable": true,
+      "note": "NOT a port. Upstream MCP is a hosted Streamable-HTTP service; no local or stdio implementation exists in the checkout. Entirely new work: tools/knegiswhisper-mcp is a stdio server reusing the CLI's own client and discovery-file reader over the local API, and Integrations > MCP shows the exact command line to configure in a client plus whether the binary was actually found."
     },
     "developer:agent-skills": {
-      "status": "ported",
+      "status": "temporarily-deferred",
       "phase": 7,
       "kind": "documentation",
       "upstream": [
@@ -989,7 +1048,15 @@
         "agent-skills/openwhispr-cli/SKILL.md"
       ],
       "target": "docs/agent-skills/",
-      "note": "Rewrite to reference knegiswhisper / knegiswhisper-mcp and the local API only. Upstream text still points at api.openwhispr.com and mcp.openwhispr.com. Documentation only -- no backend or UI surface of its own."
+      "deferral": {
+        "why": "Found by Task 19, not carried forward by any earlier task: this entry claimed status \"ported\" with target \"docs/agent-skills/\", and neither that directory nor any rewritten SKILL.md exists anywhere in this repository -- the rewrite was never done. verify-parity.mjs's incomplete-documentation rule only checks that a documentation entry names a target path, not that the path exists on disk, so nothing caught this. Corrected to the status that matches what is actually there: nothing.",
+        "dependencies": [
+          "someone to write docs/agent-skills/ rewriting the two upstream SKILL.md files to reference knegiswhisper / knegiswhisper-mcp and the local API only, in place of api.openwhispr.com and mcp.openwhispr.com"
+        ],
+        "interface": "none -- documentation only, no backend or UI surface of its own",
+        "expectedPhase": 7
+      },
+      "note": "Status corrected by Task 19: this previously claimed \"ported\" and named docs/agent-skills/ as where the rewritten docs live, but that directory does not exist. Documentation only -- no backend or UI surface of its own -- so this is not part of the ACTIVE-status audit's implementation-overclaim pattern; it is the same honesty defect one step earlier, a claim that specific work was done when it was not."
     },
     "meeting-detect:zoom": {
       "status": "ported-with-new-rust-implementation",
@@ -998,7 +1065,8 @@
         "src/helpers/meetingProcessDetector.js",
         "src/helpers/meetingDetectionEngine.js"
       ],
-      "backend": "crates/platform"
+      "backend": "crates/platform/src/meeting_detect.rs",
+      "note": "Zoom.exe means the client is open; CptHost.exe exists only during a call, and only the latter offers to record. Neither name has been seen to match yet -- see docs/PLATFORM_SUPPORT.md."
     },
     "meeting-detect:teams": {
       "status": "ported-with-new-rust-implementation",
@@ -1007,7 +1075,8 @@
         "src/helpers/meetingProcessDetector.js",
         "src/helpers/meetingDetectionEngine.js"
       ],
-      "backend": "crates/platform"
+      "backend": "crates/platform/src/meeting_detect.rs",
+      "note": "Detected when the client is open. New Teams runs the call inside ms-teams.exe, so there is no separate in-call process to offer on -- measured with meeting_detect_probe on 2026-08-26 -- and offering on 'the client is open' would prompt on every launch for anyone whose Teams starts with Windows. Reported on Settings > Meetings instead."
     },
     "meeting-detect:webex": {
       "status": "ported-with-new-rust-implementation",
@@ -1016,7 +1085,8 @@
         "src/helpers/meetingProcessDetector.js",
         "src/helpers/meetingDetectionEngine.js"
       ],
-      "backend": "crates/platform"
+      "backend": "crates/platform/src/meeting_detect.rs",
+      "note": "webexmta.exe is the in-call process. Not seen to match yet -- see docs/PLATFORM_SUPPORT.md."
     },
     "meeting-detect:facetime": {
       "status": "platform-specific",
@@ -1025,10 +1095,11 @@
         "src/helpers/meetingProcessDetector.js",
         "src/helpers/meetingDetectionEngine.js"
       ],
-      "backend": "crates/platform",
+      "backend": "crates/platform/src/meeting_detect.rs",
       "platforms": [
         "macos"
-      ]
+      ],
+      "note": "macOS only, and compiled out elsewhere rather than silently absent. Like Teams it has no separate in-call process, so it is reported and not offered."
     },
     "meeting-detect:generic": {
       "status": "ported-with-new-rust-implementation",
@@ -1038,7 +1109,7 @@
         "src/helpers/audioActivityDetector.js"
       ],
       "backend": "crates/platform",
-      "note": "Mic activity, system-audio activity, calendar events, process allow/blocklists. Browser meetings such as Google Meet are covered here plus manual capture; no per-tab detector is possible."
+      "note": "Process allow/blocklist only, user-editable. Upstream also covered calendar events, microphone activity and system-audio activity: calendars are chunk F and microphone activity needs the IAudioSessionManager2 listener, which is unwritten. Named rather than left implied, because a half-built detector that looks whole is how somebody comes to trust one that misses half their meetings. Browser meetings such as Google Meet are covered by the allowlist plus manual capture; no per-tab detector is possible."
     },
     "media:audio-import": {
       "status": "ported-with-new-rust-implementation",
@@ -1047,9 +1118,10 @@
         "src/helpers/ffmpegUtils.js",
         "src/services/fileTranscription.ts"
       ],
-      "backend": "crates/notes-core",
+      "backend": "apps/desktop/src-tauri/src/media.rs",
       "ui": "Notes > Upload",
-      "reachable": false
+      "reachable": true,
+      "note": "Backend corrected by Task 19: this named crates/notes-core, which holds no import code; the real implementation is MediaImportRuntime::import_local_file in media.rs."
     },
     "media:video-import": {
       "status": "ported-with-new-rust-implementation",
@@ -1057,9 +1129,10 @@
       "upstream": [
         "src/helpers/ffmpegUtils.js"
       ],
-      "backend": "crates/notes-core",
+      "backend": "apps/desktop/src-tauri/src/media.rs",
       "ui": "Notes > Upload",
-      "reachable": false
+      "reachable": true,
+      "note": "Backend corrected by Task 19, same as media:audio-import: MediaImportRuntime::import_local_file serves both audio and video, since ffmpeg strips both to 16 kHz mono WAV and there is nothing else to tell them apart."
     },
     "media:url-import": {
       "status": "ported-with-new-rust-implementation",
@@ -1067,10 +1140,21 @@
       "upstream": [
         "src/helpers/urlAudioDownloader.js"
       ],
-      "backend": "crates/notes-core",
+      "backend": "apps/desktop/src-tauri/src/media.rs",
       "ui": "Notes > Upload",
-      "reachable": false,
-      "note": "yt-dlp sidecar. Preserve the SSRF guards: HTTPS-only, private-address rejection after DNS, 500 MB cap, 3 redirects, 6 h duration cap, 30 s stall timeout."
+      "reachable": true,
+      "note": "Backend corrected by Task 19: this named crates/notes-core; the real implementation is import_url in media.rs. The guard description is also corrected: media.rs's own module doc states plainly that this crate performs no DNS resolution. What runs, under RequestPurpose::UserTriggeredMediaImport, is a literal-host check (scheme, the vendor blocklist, and a literal private/link-local host) before the URL is ever handed to yt-dlp -- yt-dlp then does its own fetch, with its own DNS resolution and its own redirect handling, none of it observed or routed through kw_network_policy. Bounded instead by flags yt-dlp enforces on itself: a 500 MB filesize cap, a bounded socket timeout, playlist expansion off, and update/config-file checks off. DNS rebinding is not caught by the literal-host check, which runs before any resolution happens; see docs/NETWORK_BOUNDARY.md's \"What none of this stops: DNS rebinding\" section."
+    },
+    "media:openwhispr-import": {
+      "status": "ported-with-new-rust-implementation",
+      "phase": 8,
+      "upstream": [
+        "database.js"
+      ],
+      "backend": "crates/storage",
+      "ui": "Notes > Upload",
+      "reachable": true,
+      "note": "storage::import::from_openwhispr: attaches an existing OpenWhispr transcriptions.db read-only, introspects its columns with pragma table_info rather than assuming upstream's ~70-ALTER-TABLE schema, drops every cloud/sync column and both plaintext token tables (relocating the tokens into the OS credential store instead), and rebuilds notes_fts. Implemented and tested from early in the build; deliberately absent from this manifest until it had a screen, which it now does. The screen renders the full ImportReport -- what copied, what was skipped and why, which columns were dropped per table, and which credentials moved -- never the credential values."
     },
     "media:transcript-export": {
       "status": "ported",
@@ -1118,7 +1202,8 @@
         "interface": "notes_core::search::SemanticIndex",
         "expectedPhase": 8,
         "degradation": "FTS5 keyword search remains fully functional; the UI hides semantic ranking rather than failing."
-      }
+      },
+      "note": "Note added 2026-08-27, in the whole-branch review's fix wave: this entry has carried `temporarily-deferred` with a `deferral` block since before this plan began, but no top-level `note` explaining why -- unlike every other deferred entry in this file. The reason is docs/BUILD_PLAN.md's chunk I: the Qdrant sidecar, MiniLM embeddings and `ort` crate this needs were not attempted across the 19 tasks in this plan or the one added mid-run; `search:sqlite-fts` is fully functional and is what the UI falls back to in the meantime. This entry sits outside both the ACTIVE-status audit's scope (it never claimed a working implementation, so there was nothing to overclaim) and the parity gate's `USER_CONFIGURABLE` set, so no gate would ever have caught the missing note on its own."
     },
     "platform:text-insertion": {
       "status": "ported-with-new-rust-implementation",
@@ -1174,14 +1259,24 @@
       "note": "Must return the four-state diagnostic with evidence. Never report active by assumption; no-op on Linux."
     },
     "platform:aec": {
-      "status": "ported-with-new-rust-implementation",
+      "status": "temporarily-deferred",
       "phase": 4,
       "upstream": [
         "src/helpers/meetingAecManager.js",
         "native/meeting-aec-helper/"
       ],
-      "backend": "crates/audio-core",
-      "note": "WebRTC APM sidecar. Must be rebuilt under this project own releases; upstream downloads it from OpenWhispr/openwhispr release assets."
+      "deferral": {
+        "why": "The WebRTC audio processing module this wraps has no Rust equivalent that is not itself a binding to the same C++, so the sidecar can only be built by compiling upstream C++ sources, and this development machine has no C++ toolchain at all -- which is also why every decompressor in this workspace (zip, bzip2, tar) is pure Rust rather than a C binding, not a stylistic choice.",
+        "dependencies": [
+          "a C++ toolchain (cmake, ninja, clang) -- none installed on this development machine",
+          "a port of upstream's 446-line scripts/lib/meeting-aec-build.js generator, which downloads webrtc-apm and Abseil and drives a Python generator over GN labels across five targets with per-architecture AVX2 handling",
+          "a five-target CI workflow granted contents: write, to publish the built binaries as this project's own release assets rather than fetching OpenWhispr's"
+        ],
+        "interface": "none written yet -- crates/sidecar::manifest::Transport::Stdio is the existing generic child-process transport this helper would use once built, but no AEC-specific trait or module exists in this codebase",
+        "expectedPhase": 4,
+        "degradation": "Meetings still record and transcribe correctly without it. On speakers, the far end's own audio is transcribed twice -- once per capture -- instead of once; on headphones there is nothing to cancel, so the gap does not appear at all. It gates nothing: what actually blocks a meeting from being recorded is system audio capture, which is separate, is Rust, and is already done (platform:system-audio)."
+      },
+      "note": "Declined for now, not unfinished -- no helper, no generator port, and no workflow exist, so `temporarily-deferred` is the honest status rather than claiming a Rust implementation that is not there. docs/PORTING_MATRIX.md records the two measured third-party pins (abseil-cpp and webrtc-apm) this build would consume if attempted; keep them, since the webrtc-apm digest is not byte-stable across downloads and re-measuring it would cost a day for the same answer."
     },
     "platform:tray-autostart": {
       "status": "ported-with-new-rust-implementation",

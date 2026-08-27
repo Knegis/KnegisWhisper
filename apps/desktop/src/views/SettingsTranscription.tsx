@@ -74,8 +74,19 @@ export function SettingsTranscription({
   const [installing, setInstalling] = useState<string | null>(null);
   /** Per-provider model choice, before it is committed. */
   const [selected, setSelected] = useState<Record<string, string>>({});
-  /** Per-provider outcome of the last press, so the control is never silent. */
-  const [chosen, setChosen] = useState<Record<string, string>>({});
+  /**
+   * The outcome of the last press, so the control is never silent.
+   *
+   * One message, not one per provider. The record this replaced had two
+   * problems and the second is the worse of them. It grew the row it belonged
+   * to, so pressing a button pushed every control below it downward at the
+   * moment the pointer was over them. And it never cleared: pressing "use for
+   * dictation" on two providers left two sentences on screen, both describing
+   * where dictation goes, only one of them still true, and nothing saying
+   * which. Dictation resolves to exactly one route, so its feedback is one
+   * line.
+   */
+  const [chosen, setChosen] = useState<string | null>(null);
   /**
    * Corti's two scoping values.
    *
@@ -89,10 +100,7 @@ export function SettingsTranscription({
   const choose = (p: ProviderSummary) => {
     const model = selected[p.id] ?? p.models[0];
     if (!model) {
-      setChosen((prev) => ({
-        ...prev,
-        [p.id]: "The registry lists no model for this provider.",
-      }));
+      setChosen("The registry lists no model for this provider.");
       return;
     }
 
@@ -103,11 +111,9 @@ export function SettingsTranscription({
       const environment = (cortiEnvironment ?? "").trim();
       const tenant = (cortiTenant ?? "").trim();
       if (!environment || !tenant) {
-        setChosen((prev) => ({
-          ...prev,
-          [p.id]:
-            "Corti needs both an environment and a tenant. Neither has a safe default.",
-        }));
+        setChosen(
+          "Corti needs both an environment and a tenant. Neither has a safe default.",
+        );
         return;
       }
     }
@@ -123,12 +129,11 @@ export function SettingsTranscription({
             }
           : undefined,
       );
-      setChosen((prev) => ({
-        ...prev,
-        [p.id]: p.configured
+      setChosen(
+        p.configured
           ? `Dictation now goes to ${p.name} / ${model}.`
           : `Set to ${p.name} / ${model}. It will not work until a key is stored on the Providers screen.`,
-      }));
+      );
     });
   };
 
@@ -238,10 +243,19 @@ export function SettingsTranscription({
                   />
                 </span>
               ) : null}
-              {chosen[p.id] ? <em className="row-detail">{chosen[p.id]}</em> : null}
             </span>
           </div>
         ))}
+        {/*
+          Always rendered, never conditional, and below every control it reports
+          on. The slot holds its height empty, so a press fills it instead of
+          growing the section under the pointer. `role="status"` because the
+          message now sits further from the button that caused it than it did
+          when it was inline, and a screen reader should still hear it.
+        */}
+        <p className="status-slot row-detail" role="status">
+          {chosen}
+        </p>
         <button type="button" onClick={onGoToProviders}>
           Open Providers
         </button>
@@ -277,7 +291,9 @@ export function SettingsTranscription({
               }
             />
             {installing ? <Row label="Progress" value={installing} /> : null}
-            <ul className="purposes">
+            {/* `list`, not `purposes`: these rows carry a button each, and
+                `purposes` is a wrapping row of pills that cannot hold one. */}
+            <ul className="list">
               {local.models.map((m) => (
                 <li key={m.id}>
                   <code>{m.id}</code> {m.name}
@@ -318,8 +334,11 @@ export function SettingsTranscription({
               ))}
             </ul>
             <p className="muted">
-              Only whisper models are offered here. Parakeet and Nemotron need
-              the sherpa-onnx sidecar, which is not built yet.
+              Only whisper models are offered here. Parakeet's sherpa-onnx
+              runtime is implemented and verified, but this screen does not
+              yet offer a way to install or choose a Parakeet model. Nemotron
+              is a streaming model over a different protocol nobody has
+              built a client for.
             </p>
             {local.port ? (
               <button

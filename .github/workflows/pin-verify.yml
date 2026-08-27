@@ -1,0 +1,42 @@
+name: Sidecar pin verification
+
+# Re-measures every pinned sidecar target in config/sidecars.json against the
+# bytes currently published at its URL. This is the only thing that notices a
+# release retagged in place -- the digest would otherwise sit there looking
+# correct forever. See tools/sidecar-pin/pin.mjs for what --verify does.
+#
+# Weekly rather than per-push: it downloads every published target in full
+# (multiple archives, some in the hundreds of megabytes) to hash them, which
+# is too expensive for the contracts job that runs on every commit. It also
+# runs on workflow_dispatch so it can be triggered on demand -- e.g. right
+# after adding a new pin -- without waiting for the schedule.
+#
+# This workflow is exempt from the "no automatic triggers" pause on ci.yml:
+# that pause is about push/pull_request specifically, and `schedule` fires
+# independently of both. A scheduled run still spends real Actions minutes
+# from the same finite budget -- the mitigation here is frequency (weekly,
+# one job, no toolchain) rather than the trigger type being free. A pin that
+# nobody re-measures is a pin nobody is actually checking, so the budget goes
+# here.
+on:
+  schedule:
+    # 04:00 UTC every Monday. Not tied to any release cadence -- just often
+    # enough that a retagged release does not sit unnoticed for long.
+    - cron: "0 4 * * 1"
+  workflow_dispatch:
+
+jobs:
+  verify:
+    name: Verify sidecar pins
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # No npm ci: pin.mjs deliberately depends on nothing but Node's
+      # standard library (see the header of the file), so this workflow never
+      # needs an install step to run it.
+      - name: Verify pinned sidecar targets
+        run: node tools/sidecar-pin/pin.mjs --verify

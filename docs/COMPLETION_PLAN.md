@@ -9,25 +9,37 @@ choices lives in [ENGINEERING_LOG.md](ENGINEERING_LOG.md); this file is about wh
 > letter is ambiguous between them. Where they disagree about what is done, `BUILD_PLAN.md` is the
 > one being kept current against the commits.
 >
-> **Chunks B, C, D, F and G have been removed from this file because they are finished**, along
-> with everything else here that has landed. The letters are not renumbered: a gap where a chunk
-> used to be is more useful than a renumbering that silently invalidates every reference to it.
+> **Chunks B, C, D, E, F, G, I and J have been removed from this file because they are finished**,
+> along with everything else here that has landed. The letters are not renumbered: a gap where a
+> chunk used to be is more useful than a renumbering that silently invalidates every reference to
+> it. (Task 19 removed E, I and J on this pass — CLI screen, meetings, and calendars respectively —
+> following the same convention this file already established for the others.)
 
 ## Where this actually stands
 
-**45 of 99 integrations are reachable**, up from 8 when this file was written.
-`node tools/integration-audit/verify-parity.mjs` prints the remaining 19 on every successful run,
-grouped by surface.
+**60 of 102 integrations are reachable**, up from 8 when this file was written and 45 when this
+section was last written. `node tools/integration-audit/verify-parity.mjs` prints the remaining
+**7** on every successful run, grouped by surface — down from 19, and every one of those 7 now
+names a *built* surface, which was not true when this section was first drafted.
 
 The framing this file opened with — *"the dominant problem is not missing subsystems; it is built,
-tested backend with no way in"* — was right, and that problem is now largely closed. The credential
-screen, the intelligence screen, the enterprise shapes and the local LLM lifecycle all exist. What
-is left is genuinely new capability, plus one thing that belonged to no plan and still does not
-have one:
+tested backend with no way in"* — was right, and that problem is now closed everywhere except the
+two items still open below. The credential screen, the intelligence screen, the enterprise shapes,
+the local LLM lifecycle, the meetings screen and its clients, the calendar screen, the media
+importer, and the MCP and CLI screens all exist. What is left is genuinely new capability that
+either has no consumer yet or has an explicit, permanent reason it stays undone:
 
-1. **CI has not run on push since `afe59b4`.** The triggers are commented out "temporarily" and no
-   reason was recorded. The macOS and Linux jobs are the only runtime evidence this project has for
-   those platforms. Chunk A.
+1. **CI has not run on push since `afe59b4`, and still has not — deliberately.** Three workflow
+   files (`ci.yml`, `release.yml`, `pin-verify.yml`) were written, reviewed character by character
+   for the property that matters most given the Actions budget (none can fire on a push), and
+   dispatched manually. The triggers remain commented out on purpose this run, not by oversight —
+   see `docs/BUILD_PLAN.md` chunk J. The macOS and Linux jobs are still the only runtime evidence
+   this project has for those platforms. Chunk A.
+2. **The two remaining Windows natives — a UIAutomation text monitor and an `IAudioSessionManager2`
+   mic listener — are still not written.** Chunk I (meetings) shipped without needing either; five
+   process-based detectors and the meeting screen itself never called for a focused-element read or
+   a "someone else is using the microphone" signal. Chunk H, still open, with no consumer forcing
+   it.
 
 The other item that used to sit here — *four of five hotkeys register real OS shortcuts and do
 nothing* — was chunk C and is fixed. Those four actions are no longer registered at all, and the
@@ -41,11 +53,11 @@ Ordered by integrations unlocked per unit of work, not by phase number.
 | # | Chunk | Unlocks | New subsystem? |
 | --- | --- | --- | --- |
 | A | CI back on | — | no |
-| E | CLI screen | 1 | no |
 | H | The two remaining Windows natives | — | yes |
-| I | Meetings screen and clients | 6 | yes |
-| J | Calendars | 3 | yes |
-| K | AEC helper | — | yes, blocked |
+| K | AEC helper | — | yes, deferred on purpose |
+
+Everything else this table used to carry — the CLI screen, meetings, and calendars — is done; see
+`docs/BUILD_PLAN.md` chunks E, F and H for what actually landed.
 
 ---
 
@@ -67,13 +79,6 @@ Two additions the tree has grown since this was written, both belonging here:
   release retagged in place, and a pin that is never re-measured is a pin nobody is checking. Weekly
   is enough.
 
-## E — CLI screen
-
-The smallest item here. `tools/knegiswhisper` is complete and verified end to end against the running
-API as a compiled binary, and nothing in the application says it exists or where the discovery file
-is. A short `Integrations > CLI` section beside the Local API one: discovery file path, current
-port, and the noun-verb surface. One integration, and it finishes phase 6.
-
 ## H — The two remaining Windows natives
 
 System audio and the key listener are done and verified on hardware — see
@@ -84,37 +89,27 @@ settled in [PORTING_MATRIX.md](PORTING_MATRIX.md) as Rust rather than inherited 
 - **Text monitor** — a UIAutomation focused-element read.
 - **Mic listener** — `IAudioSessionManager2`, for "another application is using the microphone".
 
-Both serve meetings, so they sit **behind** chunk I rather than ahead of it: neither has a consumer
-until the meetings screen exists, and a capability with no consumer is the scaffolding this
-workspace avoids.
+Both were said to serve meetings and sit **behind** chunk I. Chunk I (meetings) is now done and
+shipped without either — the five process-based detectors, the meeting screen, and the clients
+never called for a focused-element read or a "someone else is using the microphone" signal. So this
+chunk stays open with genuinely no consumer forcing it, not merely a consumer that has not landed
+yet; a capability with no consumer is the scaffolding this workspace avoids building ahead of time.
 
 Also still open, and not Windows: the Linux and macOS shortcut fallbacks. `zbus` against the GNOME,
 KDE and Hyprland portals, with `PLATFORM_SUPPORT.md` continuing to say per compositor what Wayland
 refuses. Unverifiable from this machine.
 
-## I — Meetings
-
-`Settings > Meetings` plus the five WebSocket clients. The capability model and the client-derived
-allowlist are done, and `is_allowed` returns true only for a provider with a client, so the gap is
-visible in the type.
-
-System audio — the thing that actually blocked this — is now built and verified, so what remains is
-the clients, the detectors, and the screen. Blocked on live keys for four of the five providers;
-`meeting-stream:local` needs none and is the one that can be verified here.
-
-## J — Calendars
-
-Loopback PKCE against Google and Microsoft, refresh tokens as `token_ref` into the OS credential
-store — never the plaintext columns upstream used, which `assert_no_credential_columns` already
-guards. Buildable and testable against a stub authorisation server; only the real round trip needs
-client IDs registered as PKCE **public** clients.
-
 ## K — AEC helper
 
-Blocked on a toolchain and a release run. Design and both measured third-party pins are settled in
-[PORTING_MATRIX.md](PORTING_MATRIX.md). A quality chunk, not a gate: without echo cancellation a
-meeting recorded on speakers transcribes the far-end voice twice, and on headphones there is nothing
-to cancel.
+**Declined for now, not unfinished** — corrected mid-run from "blocked on a toolchain and a release
+run" to a stated, permanent-until-reversed decision. Design and both measured third-party pins are
+settled in [PORTING_MATRIX.md](PORTING_MATRIX.md); `config/integration-manifest.json`'s
+`platform:aec` entry carries `temporarily-deferred` with a full `deferral` block, not
+`ported-with-new-rust-implementation` as it once wrongly did — nothing implementing it exists: no
+helper, no generator port, no workflow, and no C++ toolchain on this development machine to build
+one with. A quality chunk, not a gate: without echo cancellation a meeting recorded on speakers
+transcribes the far-end voice twice, and on headphones there is nothing to cancel. What actually
+gates whether a meeting can be recorded at all — system audio capture — is done.
 
 ---
 
@@ -122,26 +117,44 @@ to cancel.
 
 They existed only as "Not started" in the README. This is the scope later work aims at.
 
-**Phase 7 — developer surface.** The `tools/knegiswhisper-mcp` stdio server — entirely new work,
-because upstream's MCP is a hosted service with no local implementation anywhere in the checkout —
-and `docs/agent-skills/` rewritten to reference the local API rather than `api.openwhispr.com`. Two
-manifest entries.
+**Phase 7 — developer surface. Done, except the docs.** The `tools/knegiswhisper-mcp` stdio server
+is built — entirely new work, because upstream's MCP is a hosted service with no local
+implementation anywhere in the checkout — with `Integrations > MCP` and 28 crate tests plus a
+protocol-test suite. `docs/agent-skills/` rewriting the two upstream `SKILL.md` files to reference
+the local API rather than `api.openwhispr.com` **was not done** — `developer:agent-skills` claimed
+`status: "ported"` with that target for the whole run and Task 19 found the directory does not
+exist, corrected to `temporarily-deferred` rather than written under time pressure at the close of
+an unrelated task.
 
-**Phase 8 — the deferred model work.**
+**Phase 8 — the deferred model work. Media import done; the rest deferred.**
 
-- Parakeet and Nemotron via the sherpa-onnx sidecar (4 entries). **Blocked, and the reason is now
-  specific**: every desktop asset is `.tar.bz2`, which `install::extract` cannot open; the binaries
-  are a one-shot CLI and a WebSocket server rather than an HTTP endpoint, so neither
-  `Transport::Loopback` nor `HttpHealth` applies; and the file layout differs per model family. See
+- Parakeet and Nemotron via the sherpa-onnx sidecar (4 entries). **Unblocked technically, blocked
+  narrowly.** bz2 extraction landed with its consumer, and a probe installed the real pinned CLI and
+  both pinned Parakeet archives and drove real transcriptions matching whisper's `tiny` model word
+  for word — the runtime is proven. What remains for those two: a `Settings > Transcription > Local`
+  selector, deliberately not built as part of the measurement task. The two Nemotron models are a
+  different, still-unstarted gap: they need a streaming client for
+  `sherpa-onnx-online-websocket-server`'s own protocol, which nobody has written. See
   [BUILD_PLAN.md](BUILD_PLAN.md) chunk B4.
-- Audio, video and URL import via ffmpeg and yt-dlp, with the SSRF guards already specified in
-  [SECURITY.md](SECURITY.md) (3 entries).
-- Diarization and semantic search, which are the three `temporarily-deferred` entries and already
-  carry dependencies and named interfaces.
+- Audio, video and URL import via ffmpeg and yt-dlp — **done.** `Notes > Upload` is built and all
+  four media entries (`media:{audio,video,url}-import`, `media:openwhispr-import`) are reachable.
+  Its guard is a literal-host check before yt-dlp runs, not the "DNS resolution" this document once
+  said upstream's design specified — see `docs/SECURITY.md`'s Network section.
+- Diarization and semantic search, still the three `temporarily-deferred` entries, unattempted this
+  run and already carrying dependencies and named interfaces.
 
-**Phase 9 — shipping.** `tauri-plugin-updater` against this project's own releases, a bundle job in
-CI, and signing. `tauri.conf.json` already declares nsis/dmg/appimage/deb targets with
-`createUpdaterArtifacts: false`, and no CI job builds any of them.
+**Phase 9 — shipping.** Done except by-hand verification. `.github/workflows/release.yml`
+(`workflow_dispatch` only) builds and publishes unsigned nsis/dmg/appimage/deb bundles on
+all three OSes. `createUpdaterArtifacts` is now `true`, and the update check itself
+(`apps/desktop/src-tauri/src/updater.rs`) is opt-in and user-triggered, against this
+project's own GitHub releases through `kw_network_policy::NetworkPolicy` -- **not**
+`tauri-plugin-updater` as originally planned here, so that crate's "only egress point in
+the workspace" stays a real property rather than a nominal one with a second HTTP client
+sitting beside it. `docs/SECURITY.md` documents the keypair procedure; no keypair exists,
+so a check reports `NoPublicKeyConfigured` rather than checking unsafely or silently. The
+workflow has never been dispatched and no release has ever been published, so every path
+past `git tag` -- including whether the bundler actually needs the signing key present
+when `createUpdaterArtifacts` is on -- stays unverified; see `docs/PLATFORM_SUPPORT.md`.
 
 **Phase 10 — agents.** Chat agent, voice agent and translation: the window role, the dispatch, the
 four `*-custom` credential slots, and the orphan tables. The home for the three actions whose
@@ -153,20 +166,22 @@ phase is what makes them mean something.
 
 ## Loose ends worth closing as they are passed
 
-Not chunks of their own; each belongs to whichever chunk touches it first. All three were still true
-at the last check.
+Not chunks of their own; each belonged to whichever chunk touched it first. Two of the three are now
+closed.
 
-- **Three `RequestPurpose` variants have no caller.** `UserTriggeredMediaImport`,
-  `UserConfiguredCalendarProvider` and `OwnGithubReleasesUpdater` appear only in the allowlist array
-  in `crates/network-policy/src/lib.rs`. They are promises with nothing behind them; phase 8,
-  chunk J and phase 9 respectively make them true.
-- **Five orphan tables.** `snippets`, `actions`, `agent_conversations`, `agent_messages` and
-  `contacts` are created by `0001_initial.sql` and touched only by the importer. No crate owns them
-  and no manifest entry mentions them. Phase 10 claims four; `snippets` needs a decision.
-- **`storage::import::from_openwhispr` still has no manifest entry.** The log says that was
-  deliberate until it was reachable. It has a Tauri command and an `ipc.ts` wrapper and still no
-  screen, so the entry and its surface should be added together — which is phase 8's media-import
-  work, since that is where `Notes > Upload` gets built.
+- **All three `RequestPurpose` variants named here now have callers — closed.**
+  `UserTriggeredMediaImport` is called from `apps/desktop/src-tauri/src/media.rs`;
+  `UserConfiguredCalendarProvider` from `crates/calendar-core`'s exchange and sync code;
+  `OwnGithubReleasesUpdater` from `apps/desktop/src-tauri/src/updater.rs`. None of the seven
+  `RequestPurpose` variants is still a promise with nothing behind it.
+- **Five orphan tables — still open, untouched this run.** `snippets`, `actions`,
+  `agent_conversations`, `agent_messages` and `contacts` are created by `0001_initial.sql` and
+  touched only by the importer. No crate owns them and no manifest entry mentions them. Phase 10
+  claims four; `snippets` still needs a decision. Nothing in this plan's 19 tasks, or the one added
+  mid-run, touched phase 10.
+- **`storage::import::from_openwhispr` has its manifest entry and its screen — closed.**
+  `media:openwhispr-import` is `reachable: true` through `Notes > Upload`, landed together with the
+  audio/video/URL importers exactly as planned.
 
 ---
 
@@ -176,35 +191,43 @@ at the last check.
 | --- | --- | --- |
 | Anything macOS-native | A Mac, or someone with one | It compiles in CI and ships marked unverified |
 | macOS `whisper-server` | A macOS CI job publishing under this project's own releases, which needs Actions release permissions | Windows and Linux install from upstream `ggml-org` today, digest-pinned. `llama-server` publishes real macOS binaries and is already pinned for both |
-| The five meeting WebSocket clients | Live keys for AssemblyAI, Deepgram, OpenAI Realtime, Corti, Tinfoil | The capability model, the allowlist, system audio, meeting detection, and `meeting-stream:local`, which needs no key |
-| Calendars, real round trip | Google and Microsoft OAuth client IDs registered as PKCE **public** clients — upstream ships a client secret in the binary, which in an open-source build is not a secret | The flow, storage, and UI |
-| Tinfoil transcription | Enclave attestation verification against a hardware root of trust | Nothing. It is **declined**, not pending: an unattested request would present as Tinfoil while providing none of the confidentiality the name means |
-| sherpa-onnx local ASR | bz2 extraction, a `Transport::Stdio` executor path, and the binary on a machine to learn its per-model flags | Everything else local — whisper transcription and llama generation both work |
+| A sherpa-onnx local-ASR selector | A Tauri command layer and `Settings > Transcription > Local` UI wiring — not built, deliberately, as a task of its own | The runtime: measured, proven, transcribes correctly |
+| Nemotron streaming local ASR | A client for `sherpa-onnx-online-websocket-server`'s own protocol — unwritten | The offline Parakeet path, which is unrelated |
+| 4 meeting WebSocket clients, live | Keys for AssemblyAI, Deepgram, OpenAI Realtime, Corti | The capability model, the allowlist, system audio, meeting detection, and `meeting-stream:local`, all built |
+| Calendars, real round trip | Google and Microsoft OAuth client IDs registered as PKCE **public** clients — upstream ships a client secret in the binary, which in an open-source build is not a secret | The flow, storage, and UI, all built |
+| Apple Calendar | A macOS machine to write and verify an EventKit binding against, and the binding itself — neither exists | Google and Microsoft calendar sync, unrelated |
+| Tinfoil (transcription and meeting-stream) | Enclave attestation verification against a hardware root of trust | Nothing. Both are **declined**, not pending: an unattested request would present as Tinfoil while providing none of the confidentiality the name means |
+| The rewritten agent-skills docs | Someone to write `docs/agent-skills/` — claimed done, was not; corrected rather than written under time pressure | Nothing else — documentation only |
 | Signed installers | A code-signing identity | Unsigned builds |
-| The AEC helper | cmake, MSVC/clang, and a workflow run with `contents: write` | Meetings themselves |
+| The AEC helper | cmake, MSVC/clang, and a workflow run with `contents: write` | Meetings themselves — system audio, the thing that actually gates recording, is done |
+| CI actually running | Someone uncommenting the triggers in `.github/workflows/ci.yml` — deliberately not done this run | Every gate, which still runs by hand and has, repeatedly |
+| A published release | Someone dispatching `release.yml` for a real tag — never done | The workflow itself, which builds on `workflow_dispatch` today |
 
 ## Verification
 
-Every chunk keeps all of it green: `cargo test --workspace`,
+Every chunk keeps all of it green: `cargo test --workspace` (**1290 passing, 0 failed**, quoted
+from the actual run rather than restated),
 `cargo clippy --workspace --all-targets -- -D warnings`, `cargo fmt --all --check`, `tsc --noEmit`,
 `vite build`, the domain scanner and its self-tests, `verify-binaries`, and the parity gate with its
 self-tests.
 
-**The parity gate is the acceptance test for E and I.** Each ends by flipping entries to
-`reachable: true` and a surface to `built: true`, and the gate refuses the claim unless the component
-exists and renders its `data-surface` marker. The unreachable count it prints on success is the
-progress measure: **19 today.**
+**The parity gate was the acceptance test for every chunk this file used to list as open.** Each
+ended by flipping entries to `reachable: true` and a surface to `built: true`, and the gate refuses
+the claim unless the component exists and renders its `data-surface` marker. The unreachable count
+it prints on success is the progress measure: **7 today**, down from 19 when this section was last
+written, and **all 13 UI surfaces are built** — zero remain unbuilt, where 5 did not exist when this
+plan began.
 
-By hand on Windows, which is the only thing that actually proves any of it:
+By hand on Windows, which is the only thing that actually proves any of it — **and which has not
+happened for anything this file used to track as open**: `knegiswhisper health` against the CLI
+screen's port, joining a real call and watching detection fire, running `meeting-stream:local` end
+to end, and a real calendar round trip all remain undone by a person, exactly as they were when this
+section was last written. See `docs/BUILD_PLAN.md`'s Verification section for the full by-chunk
+breakdown of what has and has not been run.
 
-- **E** — `knegiswhisper health` against the port the screen displays.
-- **I** — join a call in Zoom and see detection fire; run `meeting-stream:local` end to end with
-  system audio and the microphone both recording.
-
-**See [BENCH_CHECK.md](BENCH_CHECK.md) for what has actually been run.** The 2026-08-26 pass
-covered everything reachable without a person and found three more defects. Seven items still need
-somebody at the machine, and the ones that matter most are chunk A's and B's central claims: storing
-a provider key and watching a connection test pass, switching cleanup on and reading the tidied
-text, installing a local model and holding a chat. All green in tests; none of it done by a person.
-The two by-hand passes so far have found eight real defects between them that every test had
-missed.
+**See [BENCH_CHECK.md](BENCH_CHECK.md) for the complete, current record of what has actually been
+run.** The 2026-08-25/26 passes covered phases 2, 6 and chunks A–D on real hardware and found eight
+real defects between them that every test had missed. **Nothing built since — meetings, calendars,
+media import, the MCP and CLI screens, the updater — has been run by a person at all.** That file's
+by-hand lists for chunk E onward and for the updater are the honest record of that, item by item,
+and none of them should be read as done until someone actually presses the buttons.

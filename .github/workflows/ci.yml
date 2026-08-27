@@ -1,7 +1,11 @@
 name: CI
 
-# TEMPORARILY DISABLED. The automatic triggers below are commented out, so CI
-# does not run on push or pull request. Uncomment the two blocks to restore it.
+# DISABLED BY BUDGET, NOT BY DEFAULT. The push and pull_request triggers below
+# are commented out because this project is nearly out of GitHub Actions
+# minutes -- running the full matrix on every push would exhaust them. Axel
+# Karlsson (repo owner) decides when that changes. Restore CI by uncommenting
+# the two blocks below once the Actions budget resets or is increased -- do
+# not leave this "temporary" state undated or unowned.
 on:
   # push:
   #   branches: [main, dev]
@@ -30,6 +34,12 @@ jobs:
 
       - name: Integration parity
         run: node tools/integration-audit/verify-parity.mjs
+
+      # A source-level check, not `cargo metadata`: it runs with no toolchain,
+      # so it belongs here rather than in the rust job. Catches two crates
+      # producing a same-named binary, which cargo lets silently overwrite.
+      - name: Binary name collisions
+        run: node tools/integration-audit/verify-binaries.mjs
 
       - name: Forbidden domains
         run: node tools/domain-scanner/scan.mjs

@@ -44,9 +44,68 @@ and no permission to reach arbitrary hosts. There is no startup request, no tele
 hidden fallback: a provider failure fails the operation rather than quietly trying somewhere else.
 See `NETWORK_BOUNDARY.md`.
 
-URL import keeps upstream's SSRF guards: HTTPS only, DNS resolution followed by private and
-link-local address rejection, a 500 MB cap, at most 3 redirects, a 6-hour duration cap, and a
-30-second stall timeout.
+URL import checks the pasted URL once, before yt-dlp ever runs: scheme, the vendor blocklist, and a
+literal private-or-link-local host, under its own purpose. Corrected by Task 19 — the previous
+sentence here ("DNS resolution followed by private and link-local address rejection") described
+upstream's design, not this crate's, which resolves no names at all. Fetching the URL is yt-dlp's
+own job as a separate process, bounded by a 500 MB filesize cap and a bounded socket timeout it
+enforces on itself, not by `kw_network_policy`. See `docs/NETWORK_BOUNDARY.md`'s "SSRF guards for
+URL import" section for the full accounting, including what this does not stop (DNS rebinding).
+
+## Updates
+
+Optional and user-initiated only. No check runs at startup or on a timer;
+`updater.rs`'s only caller is the "Check for updates" button on
+Settings > Diagnostics. See `docs/NETWORK_BOUNDARY.md`.
+
+The bundler can produce signed update artifacts
+(`bundle.createUpdaterArtifacts` in `apps/desktop/src-tauri/tauri.conf.json`,
+turned on), but this repository ships no keypair and generates none as part
+of its own tooling or CI. A maintainer who wants signed, verifiable updates
+makes one themselves:
+
+1. From `apps/desktop`, run
+   `npx tauri signer generate -w ~/.tauri/knegiswhisper.key` (any path
+   outside this repository; `-p` sets a password instead of an interactive
+   prompt). This writes a private key to that path and prints the matching
+   public key to the terminal.
+2. Paste the printed public key into `plugins.updater.pubkey` in
+   `apps/desktop/src-tauri/tauri.conf.json` and commit that change. The
+   public key is not a secret — it is what a client checks a downloaded
+   update's signature against, the same role a TLS certificate's public half
+   plays.
+3. Add the private key file's contents as the repository secret
+   `TAURI_SIGNING_PRIVATE_KEY` (repository Settings > Secrets and variables >
+   Actions). If step 1 set a password, also add
+   `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. `.github/workflows/release.yml`
+   reads both as environment variables on its `tauri build` step and signs
+   updater artifacts only when they are present; without them, that workflow
+   builds unsigned bundles, which is the state this repository is in today.
+4. **The private key must never be committed, and must never be generated on
+   a machine this project's CI or tooling controls.** It belongs nowhere in
+   this repository, in `Cargo.lock`, or in any workflow file — only in the
+   repository secret and, before that, on whatever machine ran step 1.
+
+Until a keypair exists, `plugins.updater.pubkey` stays empty, and a check
+reports that state explicitly (`UpdateCheckResult::NoPublicKeyConfigured`)
+rather than either extreme: checking anyway would mean trusting a downloaded
+update on the strength of an HTTPS connection to GitHub alone, with nothing
+that verifies the bytes came from this project's own signing key; silently
+reporting nothing would look identical to "no update exists" for a reason
+that has nothing to do with whether one does.
+
+This feature does not depend on the `tauri-plugin-updater` crate. Every
+request it makes stays behind `kw_network_policy::NetworkPolicy`, tagged
+`RequestPurpose::OwnGithubReleasesUpdater` like every other network call in
+this application, rather than through that plugin's own HTTP client — see
+`crates/network-policy/src/lib.rs`'s module doc on why this crate stays the
+only one that builds a `reqwest::Client`. `plugins.updater.pubkey` is still
+read from the conventional location the plugin itself would use, so a
+keypair generated the standard way drops in without translation.
+
+Installing an update is not implemented. A check reports that a newer
+release exists and where; nothing downloads or runs it without a further,
+separate, explicit action, which is not part of this project today.
 
 ## Local API
 
@@ -65,8 +124,21 @@ by platform, and this document used to claim `0600` everywhere, which was false:
   an honest report of an unmet requirement, not a mechanism.** Measured on one real machine
   (2026-08-26) the inherited ACL granted Modify to a local group that was neither the user nor the
   administrators — see [BENCH_CHECK.md](BENCH_CHECK.md) — so on Windows, treat the token as
-  readable by anyone the profile directory lets in. Closing it means an explicit owner-only DACL
-  through `SetNamedSecurityInfo`, with the same read-back discipline the Unix path already uses.
+  readable by anyone the profile directory lets in. That fact still stands; closing it means an
+  explicit owner-only DACL through `SetNamedSecurityInfoW` with `PROTECTED_DACL_SECURITY_INFORMATION`,
+  then reading the DACL back and reporting `OwnerOnly` only if it matches — the discipline the Unix
+  path already uses. Not done yet: `discovery::restrict_file` is still a no-op on Windows.
+  **Corrected 2026-08-27:** this paragraph used to go on to say that `Permissions::is_as_expected`
+  returned `true` for `InheritedFromProfile` and so `Integrations > Local API` showed no warning and
+  a sentence naming trustees nothing had read — true when written, and fixed by Task 14, which is
+  before this correction. The desktop layer now has its own `DiscoveryPermissions::is_confirmed()`,
+  which — unlike `kw_local_api::Permissions::is_as_expected()`, which still returns `true` for
+  `InheritedFromProfile` and is no longer read by anything user-facing — treats only `OwnerOnly` as
+  confirmed. Both the startup log warning and the two settings screens (`Integrations > Local API`
+  and `Integrations > CLI`) go through that one decision and now warn on `InheritedFromProfile`,
+  rendering "Not independently restricted" with a caveat naming administrators by name. The
+  unmet-requirement fact above is what that warning is about; only the claim that the application
+  hid it was wrong, and only that claim has been removed here.
 
 The MCP server talks to the desktop application through this authenticated local API. Streamable
 HTTP is available but disabled by default; stdio is the normal transport. Destructive MCP tools
@@ -78,6 +150,24 @@ Strict CSP, no `unsafe-eval`. Capabilities are per-window and least-privilege: n
 arbitrary filesystem access, no process spawning, no direct database or credential access, no
 HTTP. Command payloads are typed and validated at the boundary; paths and URLs are validated
 before use.
+
+**`Notes > Upload`'s file pickers are a narrower exception, worth naming precisely rather than
+folding into the paragraph above.** `pick_import_file` opens a real OS dialog and returns the
+chosen path *to the renderer*, which holds it in React state and passes it as a plain string to a
+separate command — `media_import_audio`, `media_import_video`, or `import_openwhispr` — on a later
+click. What holds: the renderer has no independent way to *obtain* a path, since there is no
+filesystem or dialog capability in `capabilities/default.json`; only a real dialog produces one.
+What does not hold: unlike `note_export_to_file`, which fuses picking and writing into one atomic
+command specifically so the frontend never sees or supplies a path at all, these three commands
+accept whatever path string they are called with and read it — nothing confirms it is the one
+`pick_import_file` returned rather than one invented outright. **Concretely:** a compromised
+renderer, already in this document's threat model, can call `media_import_audio` directly with an
+arbitrary local path with no dialog involved; with a cloud transcription provider configured, that
+file's contents then leave the machine. Not yet closed. Two hardening directions, neither chosen
+yet: fuse picking and importing into one atomic command the way export already does (in tension
+with `Notes > Upload`'s pick-then-review-then-confirm flow, which export's single-click save does
+not need); or a capability restricting which paths these three commands will accept, independent
+of whatever the renderer claims. See `docs/BENCH_CHECK.md`'s Task 12 entry.
 
 ## Sidecars
 

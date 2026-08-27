@@ -164,6 +164,22 @@ fn render() -> String {
         "history" => [
             kw_storage::transcriptions::Transcription,
         ],
+        "meetings" => [
+            kw_meeting_core::AudioSource,
+            kw_meeting_core::TranscriptEvent,
+            kw_meeting_core::KeytermWire,
+            kw_meeting_core::KeytermSupport,
+            kw_meeting_core::ClientAvailability,
+            kw_meeting_core::MeetingProviderSummary,
+            kw_meeting_core::ConfigReview,
+            crate::meeting::MeetingState,
+            crate::meeting::Sources,
+            crate::meeting::MeetingStatus,
+            crate::meeting::MeetingOutcome,
+            crate::meeting::Offer,
+            kw_platform::meeting_detect::Detected,
+            kw_platform::meeting_detect::Lists,
+        ],
         "notes" => [
             kw_notes_core::notes::Note,
             kw_notes_core::notes::Folder,
@@ -177,6 +193,7 @@ fn render() -> String {
             kw_storage::import::TableReport,
             kw_storage::import::RelocatedCredential,
             kw_storage::import::ImportReport,
+            crate::commands::ImportPickKind,
         ],
         "dictation" => [
             kw_app_core::dictation::SessionState,
@@ -199,7 +216,35 @@ fn render() -> String {
             crate::local_llm::LocalLlmProgress,
         ],
         "local api" => [
+            crate::local_api::DiscoveryPermissions,
             crate::local_api::LocalApiStatus,
+        ],
+        "developer tools" => [
+            crate::binary_locator::BinaryLocation,
+            crate::integrations::CliStatus,
+            crate::integrations::McpStatus,
+        ],
+        "media import" => [
+            crate::media::MediaSidecar,
+            crate::media::SidecarStatus,
+            crate::media::MediaImportSource,
+            crate::media::MediaImportResult,
+            crate::media::MediaImportProgress,
+        ],
+        "updater" => [
+            crate::updater::UpdateCheckResult,
+        ],
+        "calendars" => [
+            crate::calendar::CalendarProvider,
+            crate::calendar::ConnectOutcome,
+            crate::calendar::SyncOutcome,
+            crate::calendar::SyncRecord,
+            crate::calendar::TokenStatus,
+            crate::calendar::CalendarSummary,
+            crate::calendar::AccountStatus,
+            crate::calendar::ProviderStatus,
+            crate::calendar::CalendarStatus,
+            kw_calendar_core::AppleCalendarSupport,
         ],
     }
 

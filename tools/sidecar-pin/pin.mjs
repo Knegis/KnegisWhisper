@@ -19,14 +19,32 @@
  *   4. Prints a JSON fragment ready to paste, or writes it with `--write`.
  *
  * Archives are read with a central-directory reader for zip and a header walk
- * for tar.gz, both about thirty lines, rather than with a dependency. This tool
+ * for tar.gz, tar.xz and tar.bz2, rather than with a dependency. This tool
  * runs in the contracts job, which has no `npm install`.
+ *
+ * Two shapes need no archive reader at all:
+ *   - `--bare`: the release asset has no archive around it -- yt-dlp ships a
+ *     bare executable on every platform. There is no index to read; the
+ *     digest of the download already covers the whole executable.
+ *   - tar.xz (ffmpeg on Linux) and tar.bz2 (sherpa-onnx, almost everywhere):
+ *     Node's `zlib` has no XZ or bzip2 decoder the way it has one for gzip,
+ *     so reading their entries shells out to the system `xz` or `bzip2`
+ *     binary (both present on every CI image this project targets, and
+ *     bundled with Git for Windows) rather than hand-rolling an LZMA2 or
+ *     bzip2 decoder for a tool that never ships inside the application. The
+ *     Rust installer, which does ship, uses `lzma-rs` and `bzip2-rs` instead
+ *     -- see `crates/sidecar/src/install.rs`.
  *
  * Usage:
  *   node tools/sidecar-pin/pin.mjs \
  *     --repo ggml-org/llama.cpp --release b9763 \
  *     --asset llama-b9763-bin-win-cpu-x64.zip \
  *     --target windows-x86_64 --executable llama-server
+ *
+ *   node tools/sidecar-pin/pin.mjs \
+ *     --repo yt-dlp/yt-dlp --release 2024.08.06 \
+ *     --asset yt-dlp.exe --bare \
+ *     --target windows-x86_64 --executable yt-dlp.exe
  *
  *   node tools/sidecar-pin/pin.mjs --verify        # re-measure every pinned target
  *
@@ -35,6 +53,7 @@
  * place is otherwise invisible.
  */
 
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createWriteStream, readFileSync, writeFileSync, rmSync, statSync } from "node:fs";
 import { open } from "node:fs/promises";
@@ -177,9 +196,10 @@ async function zipEntries(path) {
   }
 }
 
-/** Entry names in a tar.gz, by walking 512-byte headers. */
-function tarGzEntries(path) {
-  const tar = gunzipSync(readFileSync(path));
+/** Entry names in a tar, by walking 512-byte headers. Shared by the tar.gz and
+ * tar.xz readers below, which differ only in how they get from a compressed
+ * file on disk to this uncompressed `Buffer`. */
+function tarEntriesFromBuffer(tar) {
   const names = [];
 
   for (let offset = 0; offset + 512 <= tar.length; ) {
@@ -199,6 +219,76 @@ function tarGzEntries(path) {
     offset += 512 + Math.ceil(size / 512) * 512;
   }
   return names;
+}
+
+/** Entry names in a tar.gz, by gunzipping (Node's `zlib` does this natively)
+ * and walking 512-byte headers. */
+function tarGzEntries(path) {
+  return tarEntriesFromBuffer(gunzipSync(readFileSync(path)));
+}
+
+/**
+ * Entry names in a tar.xz, by decompressing with the system `xz` binary and
+ * walking 512-byte headers the same way `tarGzEntries` does.
+ *
+ * Node's `zlib` module decodes gzip natively but has no XZ/LZMA decoder, and
+ * writing one for a tool that only ever runs on a maintainer's machine or in
+ * CI -- never inside the shipped application -- is not worth it: the
+ * application's own installer uses `lzma-rs` (pure Rust) precisely so it does
+ * not need a system binary. This tool is not the application, so shelling out
+ * to `xz` here is the pragmatic choice.
+ */
+function tarXzEntries(path) {
+  const result = spawnSync("xz", ["--decompress", "--stdout", "--keep", path], {
+    maxBuffer: 1024 * 1024 * 1024,
+  });
+  if (result.error) {
+    die(
+      `could not run the system "xz" binary to read ${path}: ${result.error.message}. Install ` +
+        `xz (e.g. "apt install xz-utils", "brew install xz"; it ships with Git for Windows) to ` +
+        "pin a tar.xz asset."
+    );
+  }
+  if (result.status !== 0) {
+    die(`"xz --decompress" exited ${result.status} on ${path}:\n${result.stderr.toString("utf8")}`);
+  }
+  return tarEntriesFromBuffer(result.stdout);
+}
+
+/**
+ * Entry names in a tar.bz2, by decompressing with the system `bzip2` binary
+ * and walking 512-byte headers the same way `tarGzEntries` does.
+ *
+ * Same reasoning as `tarXzEntries` above: Node's `zlib` has no bzip2 decoder,
+ * and this tool never ships inside the application, so shelling out to the
+ * system `bzip2` binary (present on every CI image this project targets, and
+ * bundled with Git for Windows) is the pragmatic choice here too. The Rust
+ * installer uses `bzip2-rs` (pure Rust) instead -- see
+ * `crates/sidecar/src/install.rs`. sherpa-onnx is the reason this exists: 276
+ * of its 303 release assets are `.tar.bz2`, including every desktop binary
+ * bundle and all four model archives the provider registry points at.
+ */
+function tarBz2Entries(path) {
+  // sherpa-onnx's static (self-contained, no separate .so/.dylib) desktop
+  // bundles decompress to more than 1 GiB -- comfortably over the 1 GiB
+  // `tarXzEntries` uses for ffmpeg's much smaller tar.xz -- so this needs a
+  // larger ceiling.
+  const result = spawnSync("bzip2", ["--decompress", "--stdout", "--keep", path], {
+    maxBuffer: 2 * 1024 * 1024 * 1024,
+  });
+  if (result.error) {
+    die(
+      `could not run the system "bzip2" binary to read ${path}: ${result.error.message}. Install ` +
+        `bzip2 (e.g. "apt install bzip2", "brew install bzip2"; it ships with Git for Windows) ` +
+        "to pin a tar.bz2 asset."
+    );
+  }
+  if (result.status !== 0) {
+    die(
+      `"bzip2 --decompress" exited ${result.status} on ${path}:\n${result.stderr.toString("utf8")}`
+    );
+  }
+  return tarEntriesFromBuffer(result.stdout);
 }
 
 /**
@@ -227,15 +317,33 @@ function findExecutable(entries, executable) {
   return matches[0];
 }
 
-/** `zip` or `tar-gz`, from the asset name. */
+/**
+ * `zip`, `tar-gz`, `tar-xz` or `tar-bz2`, from the asset name.
+ *
+ * Never guesses `bare`: an asset with no recognised archive extension is far
+ * more likely a typo than a bare executable, so that shape is only ever
+ * chosen by the explicit `--bare` flag, not inferred here.
+ */
 function archiveKind(asset) {
   if (asset.endsWith(".zip")) return "zip";
   if (asset.endsWith(".tar.gz") || asset.endsWith(".tgz")) return "tar-gz";
-  return die(`${asset} is neither a .zip nor a .tar.gz, so its index cannot be read`);
+  if (asset.endsWith(".tar.xz") || asset.endsWith(".txz")) return "tar-xz";
+  if (asset.endsWith(".tar.bz2") || asset.endsWith(".tbz2")) return "tar-bz2";
+  return die(
+    `${asset} is neither a .zip, .tar.gz, .tar.xz nor .tar.bz2, so its index cannot be read. If ` +
+      "it ships with no archive at all, pass --bare."
+  );
 }
 
 async function entriesOf(path, kind) {
-  const entries = kind === "zip" ? await zipEntries(path) : tarGzEntries(path);
+  const entries =
+    kind === "zip"
+      ? await zipEntries(path)
+      : kind === "tar-gz"
+        ? tarGzEntries(path)
+        : kind === "tar-xz"
+          ? tarXzEntries(path)
+          : tarBz2Entries(path);
   if (entries === null) {
     die("the archive index could not be read (zip64 archives are not supported)");
   }
@@ -244,14 +352,29 @@ async function entriesOf(path, kind) {
 
 /* ---------------------------------------------------------------- measuring */
 
-async function measure({ repo, release, asset, executable }) {
+async function measure({ repo, release, asset, executable, bare }) {
   const url = `https://github.com/${repo}/releases/download/${release}/${asset}`;
-  const kind = archiveKind(asset);
 
-  console.error(`  downloading ${asset} …`);
+  console.error(`  downloading ${asset}${bare ? " (bare, no archive)" : ""} …`);
   const measured = await download(url, asset);
 
   try {
+    if (bare) {
+      // There is no archive to index, so `--executable` is taken as the
+      // on-disk name verbatim rather than searched for. The digest above
+      // already covers the whole file -- the strongest row in the table, not
+      // a weaker one, since there is no container to have extracted wrong.
+      return {
+        availability: "published",
+        url,
+        archive: "bare",
+        sha256: measured.sha256,
+        sizeBytes: measured.sizeBytes,
+        executableInArchive: executable,
+      };
+    }
+
+    const kind = archiveKind(asset);
     const entries = await entriesOf(measured.path, kind);
     const executableInArchive = findExecutable(entries, executable);
 
@@ -298,7 +421,7 @@ async function verify(only) {
           wrong.push(
             `${sidecar.name}/${target}: committed ${spec.sizeBytes} bytes, measured ${measured.sizeBytes}`
           );
-        } else {
+        } else if (spec.archive !== "bare") {
           const entries = await entriesOf(measured.path, spec.archive);
           if (!entries.includes(spec.executableInArchive)) {
             wrong.push(
@@ -306,6 +429,8 @@ async function verify(only) {
             );
           }
         }
+        // `bare` has no archive index to disagree with the pin: the digest
+        // and size checks above already cover the entire file.
       } finally {
         rmSync(measured.path, { force: true });
       }
@@ -340,6 +465,7 @@ if (options.verify) {
     release: options.release,
     asset: options.asset,
     executable,
+    bare: Boolean(options.bare),
   });
 
   console.error(`\n${options.target}:`);

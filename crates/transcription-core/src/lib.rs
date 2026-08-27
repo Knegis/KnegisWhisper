@@ -17,6 +17,8 @@ pub mod executor;
 pub mod local;
 pub mod models;
 pub mod route;
+pub mod sherpa;
+pub mod sherpa_models;
 pub mod url;
 
 pub use executor::{Executor, Transcript, TranscriptionError};
@@ -28,3 +30,4 @@ pub use route::{
     resolve, Auth, AuthScheme, CortiConfig, ProviderClientKind, RouteError, RouteRequest,
     RouteSettings, Transport,
 };
+pub use sherpa::{LayoutError, SherpaOffline, TransducerFiles};

@@ -173,7 +173,8 @@ export function SettingsIntelligenceLocal() {
 
             {progress ? <Row label="Progress" value={progress} /> : null}
 
-            <ul className="purposes">{data.models.map(modelRow)}</ul>
+            {/* `list`, not `purposes`: a model row carries its own button. */}
+            <ul className="list">{data.models.map(modelRow)}</ul>
 
             {running ? (
               <button

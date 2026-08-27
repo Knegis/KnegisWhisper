@@ -1,0 +1,38 @@
+[package]
+name = "kw-mcp"
+description = "A stdio MCP server exposing KnegisWhisper's local API as tools."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[lib]
+name = "kw_mcp"
+path = "src/lib.rs"
+
+[[bin]]
+name = "knegiswhisper-mcp"
+path = "src/main.rs"
+
+[dependencies]
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["io-util", "io-std"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+kw-cli.workspace = true
+
+[dev-dependencies]
+kw-local-api.workspace = true
+kw-notes-core.workspace = true
+kw-security.workspace = true
+kw-storage.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "io-util", "net"] }

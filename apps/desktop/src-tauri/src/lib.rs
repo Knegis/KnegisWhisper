@@ -11,9 +11,12 @@
 //! connection tests are explicitly invoked by the user, never run at startup.
 //! See `docs/NETWORK_BOUNDARY.md`.
 
+mod binary_locator;
+mod calendar;
 mod commands;
 mod diagnostics;
 mod dictation;
+mod integrations;
 // Test-only: it renders `apps/desktop/src/generated/ipc-types.ts` and asserts
 // the committed copy still matches the Rust types. Nothing at runtime calls it.
 #[cfg(test)]
@@ -21,11 +24,16 @@ mod ipc_types;
 mod local_api;
 mod local_llm;
 mod local_model;
+mod media;
+mod meeting;
+mod meeting_window;
 mod overlay;
 mod reasoning;
 mod shortcuts;
 mod state;
 mod tray;
+mod update_window;
+mod updater;
 
 use anyhow::Context as _;
 use tauri::Manager as _;
@@ -134,7 +142,13 @@ pub fn run() -> anyhow::Result<()> {
 
             let db = state.db().clone();
             let credentials = state.credentials_arc();
+            // Cloned before it is moved into the dictation runtime below.
+            let meeting_credentials = std::sync::Arc::clone(&credentials);
+            let calendar_credentials = std::sync::Arc::clone(&credentials);
             let policy = state.policy().clone();
+            // Cloned before `policy` is moved into the dictation runtime below.
+            let meeting_policy = policy.clone();
+            let calendar_policy = policy.clone();
             app.manage(state);
 
             // Local transcription. The catalogue is parsed here so a malformed
@@ -151,6 +165,23 @@ pub fn run() -> anyhow::Result<()> {
             tauri::async_runtime::block_on(local.reap_stale());
 
             let shared = local.shared();
+
+            // Media import: audio, video and url import all end by going
+            // through the existing transcription route, so this needs exactly
+            // the handles that route does. Cloned before `credentials` and
+            // `policy` are moved into the dictation runtime below.
+            let media_import = std::sync::Arc::new(
+                media::MediaImportRuntime::new(
+                    policy.clone(),
+                    std::sync::Arc::clone(&credentials),
+                    std::sync::Arc::clone(&shared.port),
+                    std::sync::Arc::clone(&shared.model),
+                    db.clone(),
+                )
+                .map_err(|e| anyhow::anyhow!(e))
+                .context("could not load config/sidecars.json for media import")?,
+            );
+            app.manage(media_import);
 
             // The route survives a restart; the server process does not. Bring
             // back whichever model the user was last dictating with, in the
@@ -193,6 +224,72 @@ pub fn run() -> anyhow::Result<()> {
             reasoning::apply_at_startup(&session, &db);
 
             app.manage(session);
+
+            // Meetings. Nothing starts here and nothing is scheduled: a meeting
+            // begins only when somebody presses the button, which is what "the
+            // user must know it is recording" means in practice.
+            // The notification window, hidden. Created at startup rather than on
+            // demand: one created at the moment a meeting is detected would
+            // appear a second late and, on Windows, would steal focus while its
+            // webview initialised.
+            match meeting_window::create(&handle) {
+                Ok(window) => {
+                    let status = meeting_window::apply_treatments(&window);
+                    tracing::info!(
+                        capture_exclusion = ?status.capture_exclusion,
+                        non_activating = ?status.non_activating,
+                        "meeting notification window ready"
+                    );
+                }
+                Err(err) => tracing::error!(
+                    error = %err,
+                    "no meeting notification window, so a recording meeting will have no                      indicator of its own"
+                ),
+            }
+
+            // The update notification, hidden. Created here for the same
+            // reason as the meeting window: one built at the moment a check
+            // found something would appear a beat late and could steal focus
+            // while its webview initialised. Nothing here reaches the
+            // network -- see updater.rs's module doc for why creating this
+            // window is not a startup check.
+            match update_window::create(&handle) {
+                Ok(window) => {
+                    let status = update_window::apply_treatments(&window);
+                    tracing::info!(
+                        capture_exclusion = ?status.capture_exclusion,
+                        non_activating = ?status.non_activating,
+                        "update notification window ready"
+                    );
+                }
+                Err(err) => tracing::error!(
+                    error = %err,
+                    "could not create the update notification window"
+                ),
+            }
+            app.manage(updater::LastCheck::default());
+
+            let meetings = std::sync::Arc::new(meeting::MeetingRuntime::new(
+                handle.clone(),
+                db.clone(),
+                meeting_policy,
+                meeting_credentials,
+                local.shared(),
+            ));
+            // Polls the process table while idle and offers to record a meeting
+            // in progress. There is no path from it to `start` without a click.
+            meetings.watch();
+            app.manage(meetings);
+
+            // Calendars. Nothing here reaches the network either: connecting an
+            // account and syncing one are both explicit clicks on
+            // `Integrations > Calendar` -- see calendar.rs's module doc.
+            let calendars = std::sync::Arc::new(calendar::CalendarRuntime::new(
+                db.clone(),
+                calendar_credentials,
+                calendar_policy,
+            ));
+            app.manage(calendars);
 
             // Off unless the user has switched it on. See local_api.rs.
             let api = std::sync::Arc::new(local_api::LocalApiRuntime::new(db));
@@ -262,6 +359,7 @@ pub fn run() -> anyhow::Result<()> {
             reasoning::enterprise_config_set,
             reasoning::enterprise_config_clear,
             commands::import_openwhispr,
+            commands::pick_import_file,
             commands::notes_list,
             commands::notes_search,
             commands::notes_get,
@@ -289,10 +387,40 @@ pub fn run() -> anyhow::Result<()> {
             local_api::local_api_status,
             local_api::local_api_start,
             local_api::local_api_stop,
+            integrations::cli_status,
+            integrations::mcp_status,
             local_llm::local_llm_status,
             local_llm::local_llm_install,
             local_llm::local_llm_start,
             local_llm::local_llm_stop,
+            media::media_import_status,
+            media::media_import_install_sidecar,
+            media::media_import_audio,
+            media::media_import_video,
+            media::media_import_url,
+            meeting::meeting_providers,
+            meeting::meeting_status,
+            meeting::meeting_start,
+            meeting::meeting_stop,
+            meeting::meeting_cancel,
+            meeting::meeting_dismiss,
+            meeting::meeting_set_prompt,
+            meeting::meeting_detect_lists,
+            meeting::meeting_set_detect_lists,
+            meeting::meeting_language,
+            meeting::meeting_set_language,
+            meeting::meeting_keyterms,
+            meeting::meeting_set_keyterms,
+            meeting::meeting_review_config,
+            updater::update_check,
+            updater::update_check_last,
+            updater::update_dismiss,
+            calendar::calendar_status,
+            calendar::calendar_set_client_id,
+            calendar::calendar_connect,
+            calendar::calendar_disconnect,
+            calendar::calendar_sync,
+            calendar::calendar_set_selected,
         ])
         .run(tauri::generate_context!())
         .context("the application exited with an error")

@@ -4,9 +4,28 @@
 //! unlabelled path: a call site that cannot name why it is reaching the network
 //! does not compile.
 //!
-//! This crate owns the only [`reqwest::Client`] in the workspace. No other crate
-//! declares `reqwest` as a dependency, and no React component has any HTTP
-//! capability at all — the frontend asks Rust, and Rust decides.
+//! This crate owns the only [`reqwest::Client`] that any part of the desktop
+//! application's own egress path constructs. That claim is narrower than "no
+//! other crate declares `reqwest`" — several do (`calendar-core`,
+//! `local-api`, `reasoning-core`, `sidecar`, `transcription-core`,
+//! `provider-probe`, and both `tools/knegiswhisper*` binaries), but only to
+//! chain onto the [`reqwest::RequestBuilder`] that [`NetworkPolicy::post`],
+//! [`NetworkPolicy::get`] and [`NetworkPolicy::loopback`] hand back (headers,
+//! multipart bodies, methods, response and error types) — none of them
+//! construct a `Client` of their own to reach the network with. Corrected by
+//! Task 19: this doc comment previously claimed no other crate declared the
+//! dependency at all, which was already false before this run and stayed
+//! false afterwards. Two real exceptions exist and both are outside this
+//! egress path rather than gaps in it: `crates/calendar-core/tests/oauth_flow.rs`
+//! and `crates/local-api/tests/api.rs` each build a bare client as a test
+//! double confined to their own test binary, and `tools/knegiswhisper`, a
+//! separate CLI process, builds one to talk to the local API over loopback —
+//! which `docs/NETWORK_BOUNDARY.md`'s "Loopback is not egress" section holds
+//! is not one of the seven purposes in the first place, because nothing
+//! leaves the machine.
+//!
+//! No React component has any HTTP capability at all — the frontend asks
+//! Rust, and Rust decides.
 //!
 //! See `docs/NETWORK_BOUNDARY.md`.
 
@@ -86,18 +105,26 @@ impl RequestPurpose {
         }
     }
 
-    /// Whether this purpose may target a plain-HTTP endpoint on a private host.
+    /// Whether this purpose may target a private, loopback or link-local host
+    /// at all -- over plain HTTP, or over HTTPS.
     ///
     /// Only a self-hosted endpoint may. A user running whisper.cpp or llama.cpp
     /// on their own machine, or on a box on their own network, should not be
-    /// forced to terminate TLS to use it; nothing else gets an exemption.
+    /// forced to terminate TLS to use it; nothing else gets an exemption. The
+    /// name is about plaintext because that was the only place this used to
+    /// matter -- `validate`'s HTTPS arm did not consult it at all, so every
+    /// purpose could already reach a private host over HTTPS. That was the gap:
+    /// a valid certificate says nothing about whether the host is internal, and
+    /// this predicate is now the one place both the plaintext and the TLS arm
+    /// ask "is this purpose allowed near a private host in the first place."
     ///
     /// The exemption covers the whole private range rather than only loopback,
     /// because a self-hosted model server on another machine on the user's LAN
     /// is an ordinary setup, and refusing it would mean the only way to use one
     /// is to put a certificate on it. That is a real trade -- audio and any
-    /// configured credential cross the local network in the clear -- and it is
-    /// the user's to make, for an endpoint they typed in themselves.
+    /// configured credential cross the local network in the clear when the
+    /// endpoint is plain HTTP -- and it is the user's to make, for an endpoint
+    /// they typed in themselves.
     #[must_use]
     pub const fn allows_plaintext_private(self) -> bool {
         matches!(self, Self::ExplicitlyConfiguredSelfHostedEndpoint)
@@ -125,6 +152,11 @@ pub enum PolicyError {
         "http is only permitted to a private address, and {host:?} is not one.          Use https, or point this at a machine on your own network."
     )]
     PlaintextNonPrivate { host: String },
+
+    #[error(
+        "{host:?} is a private, loopback or link-local address, and https to one is only permitted for an explicitly configured self-hosted endpoint"
+    )]
+    PrivateHttpsTarget { host: String },
 
     #[error("failed to build the http client: {0}")]
     Client(#[from] reqwest::Error),
@@ -194,7 +226,13 @@ fn blocked_hosts() -> &'static BTreeSet<String> {
 
 /// True if `host` is, or is a subdomain of, a blocked vendor host.
 fn is_blocked(host: &str) -> bool {
-    let host = host.to_ascii_lowercase();
+    // A trailing "." is the DNS root and resolves identically to the name
+    // without it -- a blocked host with one appended is still that host -- so
+    // it must be stripped before comparison or it silently exits both
+    // branches below. `trim_end_matches` rather than a single `strip_suffix`,
+    // for the same reason as the bracket-trimming in `is_private_host`: an
+    // extra dot must not be a second, narrower bypass of the same kind.
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
     blocked_hosts().iter().any(|blocked| {
         host == *blocked
             || host
@@ -212,15 +250,31 @@ fn is_blocked(host: &str) -> bool {
 /// route resolution allowed the whole private range while this layer allowed
 /// only loopback -- which meant a self-hosted endpoint the settings screen
 /// accepted was refused at send time.
+///
+/// This is a check on the literal address in the URL, at the time the URL is
+/// validated. It is not a check on where a hostname resolves at connect time,
+/// and it cannot be: `reqwest` resolves DNS itself, after this function has
+/// already returned. A public-looking hostname that a DNS answer later points
+/// at `127.0.0.1` or `169.254.169.254` -- "DNS rebinding" -- is not something
+/// this function, or anything else in this crate, detects. That would need a
+/// check at connect time against the address actually dialled, which this
+/// crate does not implement.
 #[must_use]
 pub fn is_private_host(host: &str) -> bool {
     use std::net::IpAddr;
 
-    // Url::host_str keeps IPv6 literals bracketed.
-    let host = host
-        .trim_start_matches('[')
-        .trim_end_matches(']')
-        .to_ascii_lowercase();
+    // Url::host_str keeps IPv6 literals bracketed. A trailing "." is the DNS
+    // root and resolves identically to the name without it -- `localhost.`
+    // and `nas.local.` are `localhost` and `nas.local` as far as any resolver
+    // is concerned -- so it has to come off before any of the checks below,
+    // or a single dot defeats every one of them at once: it is not equal to
+    // "localhost", it does not end in ".local", it is not a valid IP literal,
+    // and it still contains a "." so the single-label fallback does not fire
+    // either. `trim_end_matches` rather than a single `strip_suffix`, so that
+    // `localhost..` is not left classified as public just because it carries
+    // one dot more than a single strip removes.
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
 
     if host == "localhost" || host.ends_with(".localhost") {
         return true;
@@ -231,24 +285,78 @@ pub fn is_private_host(host: &str) -> bool {
     }
 
     if let Ok(ip) = host.parse::<IpAddr>() {
-        return match ip {
-            IpAddr::V4(v4) => {
-                v4.is_loopback() || v4.is_private() || v4.is_link_local() || v4.is_unspecified()
-            }
-            IpAddr::V6(v6) => {
-                let first = v6.segments().first().copied().unwrap_or(0);
-                v6.is_loopback()
-                    || v6.is_unspecified()
-                    // fc00::/7 unique-local, fe80::/10 link-local.
-                    || first & 0xfe00 == 0xfc00
-                    || first & 0xffc0 == 0xfe80
-            }
-        };
+        return is_private_ip(ip);
     }
 
     // A single-label hostname has no public DNS resolution, so it can only be a
     // machine on the local network.
     !host.contains('.')
+}
+
+/// Whether a parsed IP address is on a private network.
+///
+/// Split out of [`is_private_host`] so an IPv4-embedded IPv6 address can be
+/// unwrapped to the IPv4 address it actually is and re-checked against the
+/// same IPv4 rules, rather than against a second, looser notion of "private"
+/// that only understands the IPv6 ranges. `::ffff:169.254.169.254` is exactly
+/// `169.254.169.254` wearing an IPv6 costume, and the policy must see through
+/// it.
+fn is_private_ip(ip: std::net::IpAddr) -> bool {
+    use std::net::IpAddr;
+
+    match ip {
+        IpAddr::V4(v4) => is_private_ipv4(v4),
+        IpAddr::V6(v6) => {
+            // `is_loopback` and `is_unspecified` are checked before `to_ipv4`
+            // on purpose. `to_ipv4` recognises two embeddings: the IPv4-mapped
+            // form (`::ffff:a.b.c.d`) and the deprecated IPv4-compatible form
+            // (`::a.b.c.d`, a 96-bit zero prefix with the IPv4 address in the
+            // low 32 bits). `::` and `::1` both have a 96-bit zero prefix, so
+            // read as IPv4-compatible they would decode to `0.0.0.0` and
+            // `0.0.0.1` -- an IPv4 reading of addresses that are natively IPv6
+            // loopback and unspecified, not an IPv4 host wearing IPv6
+            // notation. Resolving the unambiguous IPv6 meaning first avoids
+            // that reinterpretation; every other 96-bit-zero-prefixed address
+            // is genuinely someone's IPv4 host and `to_ipv4` is exactly right
+            // for it.
+            if v6.is_loopback() || v6.is_unspecified() {
+                return true;
+            }
+
+            if let Some(v4) = v6.to_ipv4() {
+                return is_private_ipv4(v4);
+            }
+
+            let first = v6.segments().first().copied().unwrap_or(0);
+            // fc00::/7 unique-local, fe80::/10 link-local. Native IPv6
+            // ranges, not IPv4 embeddings, so there is no "mapped form" of
+            // these to also account for.
+            first & 0xfe00 == 0xfc00 || first & 0xffc0 == 0xfe80
+        }
+    }
+}
+
+/// The IPv4 half of [`is_private_ip`], shared by a plain IPv4 address and an
+/// IPv4-embedded IPv6 one.
+///
+/// `is_link_local` alone already covers `169.254.169.254`, the cloud-metadata
+/// address most SSRF exploits target -- it falls inside `169.254.0.0/16` like
+/// every other link-local address, with nothing metadata-specific about it.
+///
+/// Two ranges the standard-library predicates do not cover, by design or by
+/// age, are added explicitly: `0.0.0.0/8` ("this network", not just the single
+/// unspecified address `is_unspecified` checks), and `100.64.0.0/10`, the
+/// shared address space carrier-grade NAT uses -- a standard SSRF target and
+/// one the self-hosted purpose remains free to reach deliberately, so refusing
+/// it elsewhere costs nothing real.
+fn is_private_ipv4(v4: std::net::Ipv4Addr) -> bool {
+    let octets = v4.octets();
+    v4.is_loopback()
+        || v4.is_private()
+        || v4.is_link_local()
+        || v4.is_unspecified()
+        || octets[0] == 0
+        || (octets[0] == 100 && octets[1] & 0xc0 == 0x40)
 }
 
 /// Validate a URL against the network boundary without sending anything.
@@ -266,8 +374,70 @@ pub fn validate(url: &str, purpose: RequestPurpose) -> Result<Url, PolicyError> 
     }
 
     match parsed.scheme() {
+        // HTTPS is permitted to any host that is not on the vendor blocklist --
+        // except a private, loopback or link-local one, which only the
+        // self-hosted purpose may reach. Without this check `https://127.0.0.1/`
+        // and `https://169.254.169.254/` were both reachable under every
+        // purpose: TLS says nothing about where a host sits on the network, and
+        // treating a valid certificate as proof the target is not internal is
+        // exactly the gap SSRF exploits.
+        "https" if is_private_host(host) && !purpose.allows_plaintext_private() => {
+            Err(PolicyError::PrivateHttpsTarget {
+                host: host.to_owned(),
+            })
+        }
         "https" => Ok(parsed),
         "http" if purpose.allows_plaintext_private() => {
+            if is_private_host(host) {
+                Ok(parsed)
+            } else {
+                Err(PolicyError::PlaintextNonPrivate {
+                    host: host.to_owned(),
+                })
+            }
+        }
+        scheme => Err(PolicyError::SchemeNotPermitted {
+            scheme: scheme.to_owned(),
+        }),
+    }
+}
+
+/// Validate a WebSocket URL against the same boundary.
+///
+/// A separate function rather than two more arms in [`validate`], because the two
+/// answer different questions and a caller must not be able to hand a `wss://`
+/// URL to the HTTP client by accident. `validate` stays the HTTP gate and refuses
+/// `wss` exactly as it did.
+///
+/// The rules are the same rules. `wss` is checked as `https` and `ws` as `http`,
+/// so the vendor blocklist, the private-address exemption and the
+/// plaintext refusal all apply unchanged — there is one set of rules about where
+/// audio may go, not one per transport.
+///
+/// Meeting audio travels under [`RequestPurpose::UserConfiguredTranscriptionProvider`].
+/// The brief fixes the number of purposes at seven, and a socket carrying audio
+/// to a provider the user configured is that purpose whatever the scheme.
+pub fn validate_websocket(url: &str, purpose: RequestPurpose) -> Result<Url, PolicyError> {
+    let parsed = Url::parse(url)?;
+    let host = parsed.host_str().ok_or(PolicyError::MissingHost)?;
+
+    if is_blocked(host) {
+        return Err(PolicyError::BlockedVendorHost {
+            host: host.to_owned(),
+        });
+    }
+
+    match parsed.scheme() {
+        // Mirrors the "https" arm of `validate`: the two are one set of rules,
+        // not one per transport, so a socket to a private address is refused
+        // under the same rule a request would be.
+        "wss" if is_private_host(host) && !purpose.allows_plaintext_private() => {
+            Err(PolicyError::PrivateHttpsTarget {
+                host: host.to_owned(),
+            })
+        }
+        "wss" => Ok(parsed),
+        "ws" if purpose.allows_plaintext_private() => {
             if is_private_host(host) {
                 Ok(parsed)
             } else {
@@ -338,6 +508,35 @@ impl NetworkPolicy {
         url: &str,
     ) -> Result<reqwest::RequestBuilder, PolicyError> {
         self.request(purpose, reqwest::Method::POST, url)
+    }
+
+    /// Fetch a small text payload -- a release manifest, not a bundle.
+    ///
+    /// Kept inside this crate, the same way [`Self::download_to_file`] is, so a
+    /// caller checking for an update never needs `reqwest` in scope just to read
+    /// the response. This stays the one crate that names it.
+    ///
+    /// Unlike `download_to_file` this does not follow redirects: a release
+    /// *asset* genuinely gets one (GitHub answers with a 302 to a storage
+    /// host), but a small JSON manifest is not expected to, and a scheme this
+    /// purpose does not allow, or a host the redirect chain wanders onto, would
+    /// be exactly the downgrade this crate exists to refuse. A redirect
+    /// therefore surfaces as an ordinary `HttpStatus` error rather than being
+    /// followed silently or hidden.
+    pub async fn get_text(
+        &self,
+        purpose: RequestPurpose,
+        url: &str,
+    ) -> Result<String, PolicyError> {
+        let response = self.get(purpose, url)?.send().await?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(PolicyError::HttpStatus {
+                url: url.to_owned(),
+                status: status.as_u16(),
+            });
+        }
+        Ok(response.text().await?)
     }
 
     /// Talk to a sidecar this application started, on loopback.
@@ -554,8 +753,10 @@ mod tests {
     use super::*;
 
     const AI: RequestPurpose = RequestPurpose::UserConfiguredAiProvider;
+    const TRANSCRIPTION: RequestPurpose = RequestPurpose::UserConfiguredTranscriptionProvider;
     const SELF_HOSTED: RequestPurpose = RequestPurpose::ExplicitlyConfiguredSelfHostedEndpoint;
     const DOWNLOAD: RequestPurpose = RequestPurpose::UserTriggeredModelDownload;
+    const UPDATER: RequestPurpose = RequestPurpose::OwnGithubReleasesUpdater;
 
     // ---------------------------------------------------------------- loopback
 
@@ -676,6 +877,33 @@ mod tests {
         assert!(next_hop(from, "http://192.168.1.11:8080/v1", DOWNLOAD).is_err());
     }
 
+    #[test]
+    fn a_media_import_redirect_to_a_private_address_is_refused() {
+        // `UserTriggeredMediaImport` (media URL import, task 11) is the
+        // purpose this task introduces real use of. A public host redirecting
+        // to a link-local address is exactly the shape a cloud metadata-service
+        // SSRF takes -- most such services (AWS, GCP, Azure) answer only on
+        // plain HTTP, which is refused here for the same reason a model
+        // download redirecting to plaintext is refused above.
+        //
+        // This proves the mechanism holds for this purpose; it does not, and
+        // is not meant to, say anything about the yt-dlp child process media
+        // import actually fetches through -- that process's own networking
+        // does not run through this crate at all. See
+        // `apps/desktop/src-tauri/src/media.rs`'s module doc.
+        const MEDIA_IMPORT: RequestPurpose = RequestPurpose::UserTriggeredMediaImport;
+        let err = next_hop(
+            "https://cdn.example.com/clip.mp4",
+            "http://169.254.169.254/latest/meta-data/",
+            MEDIA_IMPORT,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, PolicyError::RedirectNotPermitted { .. }),
+            "{err}"
+        );
+    }
+
     #[tokio::test]
     async fn a_download_target_is_validated_before_any_socket_is_opened() {
         // Nothing is listening on this port. If the purpose check happened after
@@ -701,6 +929,88 @@ mod tests {
         assert!(
             !dir.path().join("out.zip").exists(),
             "a refused download must not leave a file behind"
+        );
+    }
+
+    // -------------------------------------------------------------- get_text
+
+    #[tokio::test]
+    async fn a_text_fetch_target_is_validated_before_any_socket_is_opened() {
+        // Nothing is listening on this port, and the updater purpose does not
+        // allow plaintext at all -- so a scheme refusal proves the validation
+        // ran before any connection was attempted.
+        let policy = NetworkPolicy::new().unwrap();
+        let err = policy
+            .get_text(
+                UPDATER,
+                "http://127.0.0.1:9/repos/owner/repo/releases/latest",
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, PolicyError::SchemeNotPermitted { .. }),
+            "expected a policy refusal, got {err}"
+        );
+    }
+
+    /// A minimal HTTP/1.1 server for one request, so `get_text`'s success and
+    /// failure paths can be exercised without a real host. It does not parse
+    /// the request at all -- reading enough bytes to let the client finish
+    /// writing is all a single-request test needs.
+    async fn respond_once(status_line: &'static str, body: &'static [u8]) -> std::net::SocketAddr {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 1024];
+            // Best-effort: enough to drain the request so the client's write
+            // does not block on us, not a real parse.
+            let _ = socket.read(&mut buf).await;
+
+            let response = format!(
+                "{status_line}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = socket.write_all(response.as_bytes()).await;
+            let _ = socket.write_all(body).await;
+            let _ = socket.shutdown().await;
+        });
+
+        addr
+    }
+
+    #[tokio::test]
+    async fn a_small_text_payload_is_fetched_and_returned() {
+        let body = br#"{"tag_name":"v9.9.9","html_url":"https://example.invalid/releases/v9.9.9"}"#;
+        let addr = respond_once("HTTP/1.1 200 OK", body).await;
+
+        let policy = NetworkPolicy::new().unwrap();
+        // Loopback, plaintext: only the self-hosted purpose may reach it, but
+        // the mechanism under test -- reading a small body back as text -- has
+        // nothing to do with which purpose validated the URL.
+        let text = policy
+            .get_text(SELF_HOSTED, &format!("http://{addr}/release.json"))
+            .await
+            .unwrap();
+        assert_eq!(text, String::from_utf8_lossy(body));
+    }
+
+    #[tokio::test]
+    async fn a_non_success_status_is_reported_rather_than_returned_as_text() {
+        let addr = respond_once("HTTP/1.1 404 Not Found", b"not found").await;
+
+        let policy = NetworkPolicy::new().unwrap();
+        let err = policy
+            .get_text(SELF_HOSTED, &format!("http://{addr}/missing"))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, PolicyError::HttpStatus { status: 404, .. }),
+            "expected a 404 to be reported, got {err}"
         );
     }
 
@@ -750,6 +1060,21 @@ mod tests {
     }
 
     #[test]
+    fn cgnat_and_this_network_widen_what_self_hosted_may_reach_in_cleartext_too() {
+        // Adding CGNAT and the rest of 0.0.0.0/8 to `is_private_host` does not
+        // only restrict every other purpose over https/wss -- it also widens
+        // what the self-hosted purpose may reach over plain HTTP. Before that
+        // addition, both of these came back `PlaintextNonPrivate`, because
+        // neither address was private under the old, narrower predicate; now
+        // that they are private, the self-hosted purpose's existing plaintext
+        // exemption covers them too. That is the intended shape of the
+        // ruling, and this pins it as a stated property of the change rather
+        // than a side effect nobody wrote down.
+        assert!(validate("http://100.64.0.1/v1", SELF_HOSTED).is_ok());
+        assert!(validate("http://0.1.2.3/v1", SELF_HOSTED).is_ok());
+    }
+
+    #[test]
     fn no_other_purpose_gets_the_plaintext_exemption() {
         // Widening the exemption to the whole private range makes it more
         // important, not less, that only one purpose has it.
@@ -795,6 +1120,215 @@ mod tests {
             "example.com",
         ] {
             assert!(!is_private_host(public), "{public} should not be private");
+        }
+    }
+
+    #[test]
+    fn a_trailing_dns_root_dot_does_not_evade_the_private_or_public_classification() {
+        // `example.com.` and `example.com` resolve identically -- the trailing
+        // dot is the DNS root, not part of the name -- so it must not change
+        // the answer. Before this was fixed, a trailing dot defeated every
+        // branch in `is_private_host` at once: not equal to "localhost", not
+        // ending in ".local", not a valid IP literal, and still containing a
+        // "." so the single-label fallback never fired either. That made
+        // `https://localhost./` (and `https://nas.local./`, `https://
+        // whisper-box./`) read as a public host under every purpose.
+        for private in [
+            "localhost.",
+            "nas.local.",
+            "whisper-box.",
+            "db.internal.",
+            // More than one trailing dot is not valid DNS syntax and such a
+            // name is unresolvable, but the strip has to remove the whole
+            // run rather than exactly one -- a single `strip_suffix` would
+            // leave "localhost." un-stripped here and misclassify it public.
+            "localhost..",
+            "whisper-box..",
+        ] {
+            assert!(is_private_host(private), "{private} should be private");
+        }
+
+        for public in ["api.openai.com.", "example.com."] {
+            assert!(!is_private_host(public), "{public} should not be private");
+        }
+    }
+
+    #[test]
+    fn ipv4_embedded_ipv6_addresses_are_recognised_as_private() {
+        // `::ffff:a.b.c.d` (IPv4-mapped) and `::a.b.c.d` (IPv4-compatible,
+        // deprecated but still a valid embedding) are both `a.b.c.d` wearing
+        // an IPv6 costume. `is_loopback`, `is_unspecified` and the
+        // unique-local/link-local bitmasks all miss both forms -- none of
+        // them look at the embedded IPv4 address -- so this is a distinct
+        // check, not a stronger version of the existing ones.
+        for private in [
+            "::ffff:127.0.0.1",       // mapped, loopback
+            "[::ffff:127.0.0.1]",     // bracketed, as `Url::host_str` returns it
+            "::ffff:169.254.169.254", // mapped, the cloud-metadata address specifically
+            "::ffff:10.0.0.5",        // mapped, RFC 1918
+            "::ffff:192.168.1.1",     // mapped, RFC 1918
+            "::ffff:0.0.0.0",         // mapped, unspecified
+            "::127.0.0.1",            // compatible, loopback
+            "::169.254.169.254",      // compatible, the cloud-metadata address
+            "::10.0.0.5",             // compatible, RFC 1918
+        ] {
+            assert!(is_private_host(private), "{private} should be private");
+        }
+
+        for public in ["::ffff:8.8.8.8", "::ffff:1.1.1.1", "::8.8.8.8"] {
+            assert!(!is_private_host(public), "{public} should not be private");
+        }
+
+        // `::` and `::1` both have the 96-bit zero prefix `to_ipv4` looks for,
+        // which would read them as `0.0.0.0` and `0.0.0.1` under the
+        // IPv4-compatible interpretation -- but they are natively IPv6
+        // unspecified and loopback, and must resolve as such, not be
+        // reinterpreted as IPv4 hosts. Both are private either way, so this
+        // pins the *reason*, not just the outcome.
+        assert!(is_private_host("::"));
+        assert!(is_private_host("::1"));
+    }
+
+    #[test]
+    fn ipv6_unique_local_and_link_local_ranges_are_private() {
+        for private in [
+            "fc00::1",           // unique-local, fc00::/7
+            "fdff:ffff:ffff::1", // unique-local, top of the range
+            "fe80::1",           // link-local, fe80::/10
+            "febf::1",           // link-local, top of the range
+        ] {
+            assert!(is_private_host(private), "{private} should be private");
+        }
+
+        // Outside both ranges: a documentation-range address, and one just
+        // past the fe80::/10 slice.
+        for public in ["2001:db8::1", "fec0::1"] {
+            assert!(!is_private_host(public), "{public} should not be private");
+        }
+    }
+
+    #[test]
+    fn cgnat_and_the_whole_this_network_range_are_private() {
+        // Both are standard SSRF targets that the standard-library predicates
+        // do not cover: `is_unspecified` only matches the single address
+        // `0.0.0.0`, not the rest of the reserved `0.0.0.0/8` block, and
+        // nothing in `std` knows about `100.64.0.0/10` at all -- it postdates
+        // the RFC 1918 ranges `is_private` checks. The self-hosted purpose
+        // stays exempt, so a deliberately configured CGNAT address still
+        // works; refusing it for every other purpose costs nothing real.
+        for private in [
+            "0.0.0.1",
+            "0.1.2.3",
+            "0.255.255.255",
+            "100.64.0.0",
+            "100.64.0.1",
+            "100.100.100.100",
+            "100.127.255.255",
+        ] {
+            assert!(is_private_host(private), "{private} should be private");
+        }
+
+        // Just outside the CGNAT range on either side.
+        for public in ["100.63.255.255", "100.128.0.0", "99.64.0.1", "101.64.0.1"] {
+            assert!(!is_private_host(public), "{public} should not be private");
+        }
+    }
+
+    #[test]
+    fn https_to_a_private_host_is_refused_except_for_self_hosted() {
+        // This is the gap Task 20 exists to close: the "https" arm used to run
+        // no host check at all, so every one of these reached every purpose,
+        // and a redirect to one (see `next_hop` below) was followed rather
+        // than refused.
+        for private in [
+            "https://127.0.0.1/",
+            "https://[::1]/",
+            // The classic cloud-metadata SSRF target.
+            "https://169.254.169.254/latest/meta-data/",
+            "https://10.0.0.5/",
+            "https://192.168.1.10/",
+            "https://172.16.4.4/",
+            "https://0.0.0.0/",
+            "https://whisper-box/",
+            "https://nas.local/",
+            // A trailing DNS-root dot, which used to defeat every branch of
+            // `is_private_host` at once.
+            "https://localhost./",
+            "https://nas.local./",
+            // Decimal, octal and hex IPv4 -- normalised to dotted-quad by URL
+            // parsing before `is_private_host` ever runs.
+            "https://2130706433/", // 127.0.0.1 as a 32-bit integer
+            "https://0177.0.0.1/", // 127 in octal
+            "https://0x7f.0.0.1/", // 127 in hex
+            // IPv4-mapped and IPv4-compatible IPv6.
+            "https://[::ffff:127.0.0.1]/",
+            "https://[::ffff:169.254.169.254]/",
+            "https://[::127.0.0.1]/",
+            // CGNAT and the rest of 0.0.0.0/8.
+            "https://100.64.0.1/",
+            "https://0.0.0.1/",
+        ] {
+            for purpose in ALL_PURPOSES {
+                if purpose == SELF_HOSTED {
+                    continue;
+                }
+                assert!(
+                    matches!(
+                        validate(private, purpose),
+                        Err(PolicyError::PrivateHttpsTarget { .. })
+                    ),
+                    "{private} should be refused over https for {purpose:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn https_to_a_private_host_is_allowed_for_self_hosted() {
+        // The fix must not make every self-hosted https endpoint stop
+        // working: a user who put a certificate on their own LAN server must
+        // still be able to reach it.
+        for private in [
+            "https://127.0.0.1:8443/v1",
+            "https://192.168.1.10:8443/v1",
+            "https://[::1]:8443/v1",
+        ] {
+            assert!(
+                validate(private, SELF_HOSTED).is_ok(),
+                "{private} should still be reachable for the self-hosted purpose"
+            );
+        }
+    }
+
+    #[test]
+    fn https_to_a_public_host_is_unaffected() {
+        // The common case: nearly every real call is exactly this, and the
+        // fix must leave it alone.
+        for public in [
+            "https://api.openai.com/v1",
+            "https://8.8.8.8/",
+            "https://172.32.0.1/",
+        ] {
+            assert!(validate(public, AI).is_ok(), "{public} should be allowed");
+        }
+    }
+
+    #[test]
+    fn a_redirect_to_a_private_https_host_is_refused_for_a_non_self_hosted_purpose() {
+        // The concrete SSRF this task exists to close: a redirect chain that
+        // starts at an allowed public host and ends at loopback or link-local
+        // metadata, entirely over https, used to be followed -- `next_hop`
+        // re-validates through the same `validate` whose https arm did not
+        // check the host at all.
+        for target in [
+            "https://127.0.0.1/secret",
+            "https://169.254.169.254/latest/meta-data/",
+        ] {
+            let err = next_hop(RELEASE, target, DOWNLOAD).unwrap_err();
+            assert!(
+                matches!(err, PolicyError::RedirectNotPermitted { .. }),
+                "{target}: {err:?}"
+            );
         }
     }
 
@@ -855,5 +1389,169 @@ mod tests {
                 p.as_str()
             );
         }
+    }
+
+    /* -------------------------------------------------------- websockets */
+
+    #[test]
+    fn a_websocket_to_a_provider_is_allowed_over_tls() {
+        assert!(validate_websocket("wss://api.openai.com/v1/realtime", AI).is_ok());
+        assert!(validate_websocket(
+            "wss://api.deepgram.com/v1/listen?model=nova-3",
+            TRANSCRIPTION
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn the_http_gate_still_refuses_a_websocket_url() {
+        // The reason this is a second function and not two more arms. A caller
+        // that hands a wss:// URL to the HTTP client has made a mistake, and the
+        // gate should say so rather than quietly accepting a scheme reqwest
+        // cannot use.
+        let err = validate("wss://api.openai.com/v1/realtime", AI).unwrap_err();
+        match err {
+            PolicyError::SchemeNotPermitted { scheme } => assert_eq!(scheme, "wss"),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_websocket_gate_refuses_an_http_url_for_the_same_reason() {
+        for url in [
+            "https://api.openai.com/v1/realtime",
+            "http://api.openai.com/v1/realtime",
+        ] {
+            let err = validate_websocket(url, AI).unwrap_err();
+            assert!(
+                matches!(err, PolicyError::SchemeNotPermitted { .. }),
+                "{url}: {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn plaintext_websockets_follow_the_same_rule_as_plaintext_http() {
+        // One set of rules about where audio may go, not one per transport.
+        assert!(validate_websocket("ws://127.0.0.1:8221/stream", SELF_HOSTED).is_ok());
+        assert!(validate_websocket("ws://192.168.1.20:9000/stream", SELF_HOSTED).is_ok());
+
+        // A public host in the clear is refused, exactly as over http.
+        let err = validate_websocket("ws://api.deepgram.com/v1/listen", SELF_HOSTED).unwrap_err();
+        assert!(
+            matches!(err, PolicyError::PlaintextNonPrivate { .. }),
+            "{err:?}"
+        );
+
+        // And plaintext is only for the self-hosted purpose.
+        let err = validate_websocket("ws://127.0.0.1:8221/stream", TRANSCRIPTION).unwrap_err();
+        assert!(
+            matches!(err, PolicyError::SchemeNotPermitted { .. }),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn wss_to_a_private_host_is_refused_except_for_self_hosted() {
+        // Mirrors the https fix in `validate`: the "wss" arm used to run no
+        // host check either, so meeting audio over a websocket could be
+        // pointed at loopback or link-local space under any purpose.
+        //
+        // Looped across every purpose, exactly like
+        // `https_to_a_private_host_is_refused_except_for_self_hosted`, rather
+        // than pinned against one. The "wss" arm is a hand-written copy of the
+        // "https" arm's guard rather than shared code, so the two can diverge
+        // silently; a loop across `ALL_PURPOSES` is what would catch that
+        // divergence if a future edit touched one arm and not the other.
+        for private in [
+            "wss://127.0.0.1/stream",
+            "wss://[::1]/stream",
+            "wss://169.254.169.254/stream",
+            "wss://[::ffff:127.0.0.1]/stream",
+            "wss://[::127.0.0.1]/stream",
+            "wss://localhost./stream",
+            "wss://100.64.0.1/stream",
+        ] {
+            for purpose in ALL_PURPOSES {
+                if purpose == SELF_HOSTED {
+                    continue;
+                }
+                assert!(
+                    matches!(
+                        validate_websocket(private, purpose),
+                        Err(PolicyError::PrivateHttpsTarget { .. })
+                    ),
+                    "{private} should be refused over wss for {purpose:?}"
+                );
+            }
+        }
+
+        // The self-hosted purpose keeps working over wss, exactly as it does
+        // over ws and over https.
+        assert!(validate_websocket("wss://127.0.0.1:8221/stream", SELF_HOSTED).is_ok());
+        assert!(validate_websocket("wss://192.168.1.20:9000/stream", SELF_HOSTED).is_ok());
+    }
+
+    #[test]
+    fn a_blocked_vendor_host_is_blocked_over_a_websocket_too() {
+        // The whole point of sharing the rules. A vendor service the brief
+        // removes must not be reachable by changing the scheme.
+        for url in [
+            // domain-scanner:allow-next-line a negative test must name the host it asserts is blocked
+            "wss://api.openwhispr.com/realtime",
+            // domain-scanner:allow-next-line a negative test must name the host it asserts is blocked
+            "wss://mcp.openwhispr.com/stream",
+        ] {
+            let err = validate_websocket(url, TRANSCRIPTION).unwrap_err();
+            assert!(
+                matches!(err, PolicyError::BlockedVendorHost { .. }),
+                "{url}: {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_malformed_websocket_url_is_refused_rather_than_attempted() {
+        for url in ["wss://", "realtime", "not a url", ""] {
+            let err = validate_websocket(url, TRANSCRIPTION).unwrap_err();
+            assert!(
+                matches!(err, PolicyError::InvalidUrl(_) | PolicyError::MissingHost),
+                "{url:?}: {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_empty_authority_makes_the_first_path_segment_the_host() {
+        // Recorded because it surprised me while writing the test above:
+        // `wss:///realtime` does not have an empty host, it has a host called
+        // `realtime`. The `url` crate resolves the authority that way and
+        // `validate` has always behaved the same for `https:///x`.
+        //
+        // A single-label host is exactly what `is_private_host` treats as
+        // private -- it has no public DNS resolution -- so proving the host
+        // resolution quirk now needs a purpose allowed near a private host.
+        let parsed = validate_websocket("wss:///realtime", SELF_HOSTED).unwrap();
+        assert_eq!(parsed.host_str(), Some("realtime"));
+        assert_eq!(parsed.path(), "/");
+
+        // For a purpose not allowed near a private host, that same
+        // single-label host is now refused rather than silently accepted.
+        // Before this task, the obvious-looking `.unwrap()` above would have
+        // succeeded for every purpose, `TRANSCRIPTION` included -- which is
+        // the gap this task closes, showing up in an unexpected corner.
+        let err = validate_websocket("wss:///realtime", TRANSCRIPTION).unwrap_err();
+        assert!(
+            matches!(err, PolicyError::PrivateHttpsTarget { .. }),
+            "{err:?}"
+        );
+
+        // And the blocklist still applies to a host that arrives this way.
+        // domain-scanner:allow-next-line a negative test must name the host it asserts is blocked
+        let err = validate_websocket("wss:///api.openwhispr.com", TRANSCRIPTION).unwrap_err();
+        assert!(
+            matches!(err, PolicyError::BlockedVendorHost { .. }),
+            "{err:?}"
+        );
     }
 }

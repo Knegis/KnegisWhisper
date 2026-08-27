@@ -492,6 +492,229 @@ export type ReasoningStatus = { settings: CleanupSettings, route: CleanupRoute, 
  */
 export type Transcription = { id: number, text: string, rawText: string | null, createdAt: string | null, hasAudio: boolean, audioDurationMs: number | null, provider: string | null, model: string | null, status: string, errorMessage: string | null, errorCode: string | null, routeKind: string | null, };
 
+/* --------------------------------------------------------------- meetings */
+/**
+ * Which capture a chunk came from.
+ */
+export type AudioSource = "mic" | "system";
+
+/**
+ * One piece of transcript from a provider.
+ */
+export type TranscriptEvent = { text: string,
+/**
+ * False while the provider may still revise this text.
+ */
+isFinal: boolean,
+/**
+ * Seconds from the start of the session.
+ */
+timestamp: number, speaker: string | null, source: AudioSource, };
+
+/**
+ * How a provider expects keyterms on the wire.
+ *
+ * The differences are not cosmetic: each needs different serialisation, and one
+ * of them silently truncates.
+ */
+export type KeytermWire = "json-query-param" | "repeated-query-param" | "session-config";
+
+/**
+ * Whether a provider does anything with keyterms.
+ */
+export type KeytermSupport = { "state": "unsupported" } | { "state": "supported",
+/**
+ * `None` means no documented limit.
+ */
+max: number | null, wire: KeytermWire, };
+
+/**
+ * Whether a provider can be used, and if not, why not.
+ *
+ * Three states rather than a boolean, because the three need different words on
+ * the screen and lead to different actions.
+ *
+ * Named `Client…` rather than plain `Availability` because `local_model` already
+ * exports one — whether a *server binary* is published for this platform — and
+ * two Rust types cannot share a TypeScript name. `ipc_types.rs` asserts on that,
+ * and caught this.
+ */
+export type ClientAvailability = { "state": "available" } | { "state": "no-client", reason: string, } | { "state": "declined", reason: string, };
+
+/**
+ * One provider as the settings screen needs it.
+ *
+ * A flattened view rather than [`MeetingProviderCapabilities`] itself: that type
+ * carries a `Duration`, which serialises as `{secs, nanos}` and is not what a
+ * screen wants, and `&'static [u32]`. Named `Meeting…` because
+ * `provider-registry` already exports a `ProviderSummary` and two Rust types
+ * cannot share one TypeScript name — `ipc_types.rs` asserts on exactly that.
+ */
+export type MeetingProviderSummary = { id: string, name: string,
+/**
+ * First, because it is the first thing a privacy-conscious user asks.
+ */
+audioLeavesDevice: boolean, keyterms: KeytermSupport, sessionLimitSeconds: number | null, tokenRotation: boolean, sampleRates: Array<number>, speakerLabels: boolean, partials: boolean, languageDetection: boolean, reconnect: boolean, batchFallback: boolean, availability: ClientAvailability,
+/**
+ * The same honest sentence [`MeetingProviderCapabilities::summary`] builds,
+ * rendered once here rather than reassembled in TypeScript.
+ */
+summary: string, };
+
+/**
+ * What a configuration will actually do, once the provider's limits apply.
+ */
+export type ConfigReview = { keytermsRequested: number, keytermsUsed: number,
+/**
+ * Non-zero when terms will be silently discarded. Worth telling the user.
+ */
+keytermsDropped: number,
+/**
+ * True when the provider cannot detect a language and none was given.
+ */
+languageRequired: boolean, sessionLimitSeconds: number | null, };
+
+/**
+ * What a meeting session is doing.
+ */
+export type MeetingState = "idle" | "recording" | "finishing";
+
+/**
+ * Which captures are actually running.
+ *
+ * Reported rather than assumed, because a meeting works microphone-only and the
+ * user should know which one they got. Zero system-audio samples means nobody
+ * else spoke; *no system capture at all* is a different fact.
+ */
+export type Sources = { microphone: boolean, systemAudio: boolean,
+/**
+ * Why system audio is not being captured, when it is not.
+ */
+systemAudioReason: string | null, };
+
+/**
+ * What can be said about the meeting session.
+ */
+export type MeetingStatus = { state: MeetingState,
+/**
+ * The provider in use, while there is one.
+ */
+provider: string | null, elapsedSeconds: number, sources: Sources | null,
+/**
+ * What this platform can do about system audio, whether or not a meeting is
+ * running.
+ */
+systemAudio: SystemAudioSupport,
+/**
+ * Meeting applications seen running at the last poll.
+ *
+ * Everything found, not only what would prompt: the screen shows "Teams is
+ * open" even though Teams cannot be prompted for, because that is more
+ * useful than silence and it is where the reason lives.
+ */
+detected: Array<Detected>,
+/**
+ * Whether a detected meeting offers to record.
+ */
+promptOnDetect: boolean,
+/**
+ * Whether the notification window is confirmed absent from screen shares.
+ *
+ * Reported rather than assumed. On a platform where exclusion fails the
+ * window still shows: an indicator visible in a screen share is a cost the
+ * user can be told about, and no indicator at all is the thing the brief
+ * forbids.
+ */
+notificationExcluded: CaptureExclusion | null, };
+
+/**
+ * How a meeting ended.
+ */
+export type MeetingOutcome = { "outcome": "saved", noteId: number, durationSeconds: number,
+/**
+ * Where the recording is, so the note is not the only copy.
+ */
+recordingPath: string,
+/**
+ * Non-zero when audio was never transcribed. A transcript with a hole in
+ * it must not look complete.
+ */
+gaps: number,
+/**
+ * True when the whole-file pass failed and the overlapping live
+ * partials were saved instead.
+ */
+transcriptIsPartials: boolean, } | { "outcome": "nothing-transcribed", recordingPath: string, } | { "outcome": "cancelled" } | { "outcome": "failed", message: string, };
+
+/**
+ * An offer to record a meeting that appears to be happening.
+ */
+export type Offer = {
+/**
+ * The `meeting-detect:*` id.
+ */
+provider: string,
+/**
+ * What to call it on screen.
+ */
+name: string,
+/**
+ * The process that gave it away, so the offer can say why it appeared.
+ */
+evidence: string, };
+
+/**
+ * A meeting application that appears to be running.
+ */
+export type Detected = {
+/**
+ * The `meeting-detect:*` id, so a caller can name the integration.
+ */
+provider: string,
+/**
+ * What to call it on screen.
+ */
+name: string,
+/**
+ * The process name that matched.
+ *
+ * Carried so a false positive can be diagnosed rather than argued about: a
+ * prompt that says *why* it appeared can be told it is wrong.
+ */
+evidence: string,
+/**
+ * True when the matched process only exists during a call, rather than
+ * whenever the application is open.
+ *
+ * The difference between "in a meeting" and "has Zoom installed", and the
+ * reason a caller can choose to prompt only on the stronger signal.
+ */
+inCall: boolean, };
+
+/**
+ * The user's own process names.
+ *
+ * `meeting-detect:generic` upstream also covered calendar events, microphone
+ * activity and system-audio activity. Only the lists are built: calendars are
+ * chunk F, and microphone activity needs the `IAudioSessionManager2` listener
+ * that is still unwritten. Named here rather than left implied, because a
+ * half-built detector that looks whole is how a user comes to trust one that
+ * misses half the meetings.
+ */
+export type Lists = {
+/**
+ * Extra process names that count as a meeting.
+ */
+allow: Array<string>,
+/**
+ * Names that never do, whatever else matches.
+ *
+ * Applied after the built-in table as well as after `allow`, so a user can
+ * silence a false positive this crate is wrong about without waiting for a
+ * release.
+ */
+block: Array<string>, };
+
 /* ------------------------------------------------------------------ notes */
 /**
  * A note, as listed.
@@ -616,6 +839,15 @@ absentTables: Array<string>,
  * are inserted, so this is an assertion that they fired, not a rebuild.
  */
 ftsRows: number, };
+
+/**
+ * Which file `pick_import_file` is being asked to find.
+ *
+ * A closed enum rather than a filter typed by the frontend, the same
+ * reasoning as `media::MediaSidecar`: the title and extension list are fixed
+ * by this command, not invented by whoever calls it.
+ */
+export type ImportPickKind = "audio" | "video" | "open-whispr-database";
 
 /* -------------------------------------------------------------- dictation */
 /**
@@ -782,6 +1014,31 @@ export type LocalLlmProgress = { "stage": "server", written: number, total: numb
 
 /* -------------------------------------------------------------- local api */
 /**
+ * The discovery file's permissions, shown as a state and its evidence — not
+ * reduced to a boolean.
+ *
+ * Mirrors `kw_local_api::Permissions` variant for variant, converted here
+ * rather than derived there: `kw-local-api` has no reason to depend on
+ * `ts-rs`, the same reasoning `diagnostics.rs`'s `ShortcutHookStatus` and
+ * `local_model.rs`'s `VerifiedBy` already follow for their own core types.
+ *
+ * This type exists because of one specific defect.
+ * `Permissions::is_as_expected()` returns `true` for `InheritedFromProfile`
+ * — correct as "the best this build currently achieves on this platform",
+ * read by a screen that only has the boolean as "verified restricted", which
+ * it is not: nothing was checked, it is simply what a file under
+ * `%USERPROFILE%` gets by default, and two other trustees turned up in that
+ * default on a real machine. See `docs/BENCH_CHECK.md`, 2026-08-26 finding 2.
+ * `Integrations > CLI` switches on `state` and gives `InheritedFromProfile`
+ * its own honest sentence rather than a green tick that reuses the boolean.
+ */
+export type DiscoveryPermissions = { "state": "owner-only" } | { "state": "inherited-from-profile" } | { "state": "wider",
+/**
+ * Octal, e.g. `"644"`, matching how a person would type it to `chmod`.
+ */
+mode: string, } | { "state": "unknown", reason: string, };
+
+/**
  * What the settings screen shows about the local API.
  */
 export type LocalApiStatus = {
@@ -798,11 +1055,247 @@ running: boolean, port: number | null,
  */
 discoveryPath: string | null,
 /**
- * What the discovery file's permissions actually are, in plain words.
- * `None` when it is not running, because there is no file to describe.
+ * The discovery file's real permission state, evidence and all -- the
+ * same [`DiscoveryPermissions`] `Integrations > CLI` renders, so the two
+ * screens agree on one vocabulary rather than each describing this file
+ * in its own words. `None` when it is not running, because there is no
+ * file to describe.
+ *
+ * This used to carry a second field, `discovery_permissions_as_expected:
+ * Option<bool>`, derived from `Permissions::is_as_expected()`. That
+ * boolean is `true` for `InheritedFromProfile`, so the settings screen
+ * warned only when it was `false` and stayed silent on an inherited ACL
+ * -- reassuring where nothing had been verified. Removed rather than
+ * redefined: a screen that reads the real state has no use for a second,
+ * looser summary of the same fact. See docs/BENCH_CHECK.md, 2026-08-26
+ * finding 2.
  */
-discoveryPermissions: string | null,
+discoveryPermissions: DiscoveryPermissions | null, };
+
+/* -------------------------------------------------------- developer tools */
 /**
- * True when the permissions are the best this platform offers.
+ * Where a companion binary was found, if this checked and found it anywhere.
+ *
+ * Three states rather than a boolean. "Next to this executable" and
+ * "somewhere on PATH" are different facts — the first means the same build
+ * that produced this application also produced the tool; the second means
+ * something else put a same-named file somewhere the shell would run it —
+ * and collapsing either into "not found" would be exactly the
+ * boolean-collapse this project's `Permissions` pattern exists to avoid.
  */
-discoveryPermissionsAsExpected: boolean | null, };
+export type BinaryLocation = { "state": "sibling", path: string, } | { "state": "on-path", path: string, } | { "state": "not-found" };
+
+/**
+ * What `Integrations > CLI` shows.
+ */
+export type CliStatus = {
+/**
+ * The binary's name on this platform, e.g. `knegiswhisper.exe`.
+ */
+binaryName: string,
+/**
+ * Where this actually found it, if anywhere.
+ */
+binaryLocation: BinaryLocation,
+/**
+ * Where the CLI looks for the port and token. Deterministic, so shown
+ * whether or not the local API is running right now.
+ */
+discoveryPath: string,
+/**
+ * Whether the local API is running right now, and so whether the
+ * discovery file exists at all.
+ */
+localApiRunning: boolean,
+/**
+ * The discovery file's real permission state, evidence and all. `None`
+ * exactly when `local_api_running` is `false`: the file goes with the
+ * server, so there is then nothing to describe.
+ */
+discoveryPermissions: DiscoveryPermissions | null, };
+
+/**
+ * What `Integrations > MCP` shows.
+ */
+export type McpStatus = {
+/**
+ * The binary's name on this platform, e.g. `knegiswhisper-mcp.exe`.
+ */
+binaryName: string,
+/**
+ * Where this actually found it, if anywhere.
+ */
+binaryLocation: BinaryLocation,
+/**
+ * The value to put in an MCP client's `command` field: the resolved
+ * path when this found the binary, or the bare name otherwise — legible
+ * either way, but nothing here claims a bare name will actually resolve.
+ */
+command: string,
+/**
+ * Whether the local API is running right now. The server is a second
+ * front end over it and does nothing on its own, so a client configured
+ * with `command` will fail every call until this is `true`.
+ */
+localApiRunning: boolean, };
+
+/* ----------------------------------------------------------- media import */
+/**
+ * The two sidecars this module drives. Deliberately a closed enum rather than
+ * a catalogue name typed by the frontend: a stringly-typed sidecar id would
+ * let a caller ask this command to install `whisper` or `llama` too, which is
+ * not what "media import" means.
+ */
+export type MediaSidecar = "ffmpeg" | "yt-dlp";
+
+/**
+ * What can be said about one media-import sidecar without touching the
+ * network.
+ */
+export type SidecarStatus = { sidecar: MediaSidecar,
+/**
+ * Reused from `local_model` rather than redeclared: the same three
+ * states (installable / not published for this platform / a gap in the
+ * manifest) apply to any sidecar, and `local_llm` already reuses it for
+ * the same reason.
+ */
+availability: Availability, installed: boolean, };
+
+/**
+ * Where an imported transcript came from.
+ *
+ * Never the full URL: a query string can carry a token, and this value may
+ * end up quoted back into a note. The host is enough to show the user where
+ * it came from.
+ */
+export type MediaImportSource = { "kind": "audio" } | { "kind": "video" } | { "kind": "url", host: string, };
+
+/**
+ * What a finished import produced. The frontend turns this into a note; this
+ * module does not write one itself.
+ */
+export type MediaImportResult = { text: string, provider: string, model: string | null,
+/**
+ * Computed from the converted WAV, not asked of the source file, so it
+ * reflects what was actually transcribed.
+ */
+durationMs: number, source: MediaImportSource, };
+
+/**
+ * Progress of installing a media-import sidecar, or of running an import
+ * once both are ready.
+ *
+ * Shares the shape of `local_model::InstallProgress` and
+ * `local_llm::LocalLlmProgress` -- a staged, tagged enum reported on one
+ * event -- but is a distinctly named type so it cannot collide with either
+ * in the generated TypeScript. `ipc_types` asserts against exactly that
+ * collision.
+ */
+export type MediaImportProgress = { "stage": "downloading", sidecar: string, written: number, total: number | null, } | { "stage": "verifying" } | { "stage": "extracting" } | { "stage": "fetching" } | { "stage": "converting" } | { "stage": "transcribing" } | { "stage": "done" };
+
+/* ---------------------------------------------------------------- updater */
+/**
+ * What checking for an update found.
+ */
+export type UpdateCheckResult = { "state": "no-public-key-configured" } | { "state": "check-failed", error: string, } | { "state": "current-version-unparseable", version: string, } | { "state": "latest-version-unparseable", tag: string, } | { "state": "up-to-date", current: string, latest: string, } | { "state": "update-available", current: string, latest: string, url: string, };
+
+/* -------------------------------------------------------------- calendars */
+/**
+ * Which calendar provider a command is about, as it crosses the wire.
+ * Mirrors `kw_calendar_core::CalendarProviderKind`, which has no `Serialize`
+ * of its own -- that crate has no reason to know about JSON at all, so the
+ * wire vocabulary lives here instead.
+ */
+export type CalendarProvider = "google" | "microsoft";
+
+/**
+ * What happened when someone clicked "Connect".
+ *
+ * Only the two outcomes that are not simply a refusal: a plain error (no
+ * client ID configured, the loopback receiver could not bind, the token
+ * exchange itself failed) crosses as `Err` the same as every other command,
+ * because there is nothing more for the frontend to do with those than show
+ * them. Being turned down at the consent screen is different -- an ordinary
+ * outcome, not a bug -- so it gets its own state rather than the same
+ * generic error text.
+ */
+export type ConnectOutcome = { "state": "connected", accountEmail: string, calendars: number, } | { "state": "denied", reason: string, };
+
+/**
+ * What one sync attempt found. Both the command's own return value and
+ * what [`CalendarRuntime::record_sync`] persists to settings -- one shape
+ * for both means the screen can never see a different answer from a sync
+ * it just ran than from the record `calendar_status` reads back later.
+ */
+export type SyncOutcome = { "state": "completed", eventsUpserted: number, eventsRemoved: number,
+/**
+ * Per-calendar failures within an otherwise-completed sync -- a
+ * calendar list refresh can succeed while one calendar's events
+ * fail, and reporting only the aggregate would hide which one.
+ */
+calendarErrors: Array<string>, } | { "state": "token-unavailable", message: string, } | { "state": "failed", message: string, };
+
+/**
+ * A sync outcome together with when it happened, persisted to settings so
+ * [`calendar_status`] can report it without a network call.
+ */
+export type SyncRecord = {
+/**
+ * RFC 3339.
+ */
+at: string, outcome: SyncOutcome, };
+
+/**
+ * Whether a token is on file and, if so, whether it is still within its
+ * recorded expiry.
+ *
+ * A local read, not a network probe -- reaching the network on every status
+ * poll is exactly what `docs/NETWORK_BOUNDARY.md` rules out for a passive
+ * status command. `Missing` covers both "never connected" and "the
+ * credential is gone even though the database row is still there", which is
+ * exactly the state [`CalendarRuntime::disconnect`] leaves behind -- see its
+ * doc comment on why the row itself is not deleted. Checking the credential
+ * store directly, rather than trusting the row's mere existence, is what
+ * keeps that decision from ever reading back as "connected".
+ *
+ * `RefreshFailed` exists because `expires_at` alone cannot distinguish "past
+ * its expiry, never tried since" from "past its expiry, and the most recent
+ * attempt to refresh it already failed" -- see [`combine_token_status`].
+ * Reporting the second case as plain `NeedsRefresh`, the way this type used
+ * to before a token could carry a known, recorded failure, is what let
+ * `calendar_status` say "Connected -- the next sync refreshes it
+ * automatically" in the same payload as a `SyncOutcome::TokenUnavailable`
+ * telling the user to reconnect.
+ */
+export type TokenStatus = { "state": "active" } | { "state": "needs-refresh" } | { "state": "missing" } | { "state": "refresh-failed", message: string, };
+
+export type CalendarSummary = { id: string, summary: string, isPrimary: boolean, isSelected: boolean,
+/**
+ * What sync actually wrote for this calendar, not the provider's own
+ * total -- see `kw_calendar_core::events_repo::count_events`.
+ */
+eventCount: number, };
+
+export type AccountStatus = { email: string, token: TokenStatus, calendars: Array<CalendarSummary>, lastSync: SyncRecord | null, };
+
+export type ProviderStatus = { clientIdConfigured: boolean,
+/**
+ * The client ID itself, shown back rather than only "configured" or
+ * not. It is not a secret -- there is no client secret in this flow at
+ * all, see `kw_calendar_core`'s module doc -- so there is nothing to
+ * protect by hiding it, and showing it is what makes "you supplied
+ * this" a fact on screen rather than a claim in a comment.
+ */
+clientId: string | null, account: AccountStatus | null, };
+
+export type CalendarStatus = { google: ProviderStatus, microsoft: ProviderStatus, apple: AppleCalendarSupport, };
+
+/**
+ * What this build can do about Apple Calendar, checked rather than assumed.
+ *
+ * One variant today because nothing is implemented anywhere -- see the
+ * module doc. Shaped as a tagged enum, like
+ * [`kw_audio_core::SystemAudioSupport`], so a future `Available` variant
+ * slots in without changing how the frontend switches on it.
+ */
+export type AppleCalendarSupport = { "state": "unsupported", reason: string, };

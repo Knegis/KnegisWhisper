@@ -6,7 +6,7 @@
       "surfaceId": "settings.providers",
       "component": "apps/desktop/src/views/SettingsProviders.tsx",
       "built": true,
-      "note": "Stores a key for every one of the fifteen credential slots the registry declares, and runs the real connection test. Write-only: no command returns a credential value, so the field replaces or removes and never displays. A stored key is reported as stored, never as connected."
+      "note": "Stores a key for every one of the seventeen provider and custom-endpoint credential slots the registry declares -- the three enterprise slots are multi-field and configured on Settings > Intelligence > Enterprise instead -- and runs the real connection test. Write-only: no command returns a credential value, so the field replaces or removes and never displays. A stored key is reported as stored, never as connected."
     },
     "Settings > Transcription": {
       "surfaceId": "settings.transcription",
@@ -18,7 +18,7 @@
       "surfaceId": "settings.transcription.local",
       "component": "apps/desktop/src/views/SettingsTranscription.tsx",
       "built": true,
-      "note": "Offers whisper models only. Parakeet and Nemotron need the sherpa-onnx sidecar, which does not exist, so those four entries stay unreachable while the surface itself is built."
+      "note": "Offers whisper models only. The sherpa-onnx sidecar now exists (Task 17) and Task 18 measured and implemented its offline CLI contract for the two Parakeet models -- both transcribe correctly, proven by a real test -- but this screen has not been extended to install or select them, so all four non-whisper local-asr entries stay unreachable: the two Parakeet ones because the runtime is proven but has no selector here yet, and the two Nemotron ones for an unrelated reason -- they are streaming models over sherpa's own WebSocket protocol, which nobody has built a client for. apps/desktop/src-tauri/src/dictation.rs's own comment on LocalTargets names the Parakeet wiring as the anticipated next step."
     },
     "Settings > Intelligence": {
       "surfaceId": "settings.intelligence",
@@ -41,14 +41,13 @@
     "Settings > Meetings": {
       "surfaceId": "settings.meetings",
       "component": "apps/desktop/src/views/SettingsMeetings.tsx",
-      "built": false,
-      "note": "crates/meeting-core holds the trait and the capability model and none of the five WebSocket clients."
+      "built": true
     },
     "Integrations > Calendar": {
       "surfaceId": "integrations.calendar",
       "component": "apps/desktop/src/views/IntegrationsCalendar.tsx",
-      "built": false,
-      "note": "Phase 5. No OAuth flow exists."
+      "built": true,
+      "note": "Google and Microsoft: register your own OAuth client and paste the client ID in on this screen, then connect and sync -- the screen says why there is no embedded client. Apple shows kw_calendar_core::apple::support()'s reason rather than an empty calendar list."
     },
     "Integrations > API": {
       "surfaceId": "integrations.api",
@@ -58,14 +57,14 @@
     "Integrations > CLI": {
       "surfaceId": "integrations.cli",
       "component": "apps/desktop/src/views/IntegrationsCli.tsx",
-      "built": false,
-      "note": "The CLI is complete and tested against the running API as a compiled binary, but nothing in the application tells a user it exists or where the discovery file is."
+      "built": true,
+      "note": "Shows the compiled knegiswhisper binary's location (a real check next to this running application and on PATH, never assumed), the discovery file's path, and the discovery file's real permission state as a tagged union with evidence -- InheritedFromProfile renders its own honest sentence rather than the boolean is_as_expected() would collapse it to. See docs/BENCH_CHECK.md, 2026-08-26 finding 2."
     },
     "Integrations > MCP": {
       "surfaceId": "integrations.mcp",
       "component": "apps/desktop/src/views/IntegrationsMcp.tsx",
-      "built": false,
-      "note": "Phase 7. tools/knegiswhisper-mcp does not exist."
+      "built": true,
+      "note": "Shows the exact stdio command line for tools/knegiswhisper-mcp (binary path plus empty args) to paste into an MCP client's config, and states plainly that the local API must be running -- the server has no backend of its own. The binary's presence is a real check next to this running application and on PATH, never assumed."
     },
     "Notes > Export": {
       "surfaceId": "notes.export",
@@ -75,8 +74,8 @@
     "Notes > Upload": {
       "surfaceId": "notes.upload",
       "component": "apps/desktop/src/views/NotesUpload.tsx",
-      "built": false,
-      "note": "Phase 8. Audio, video and URL import need the ffmpeg and yt-dlp sidecars, neither of which is in config/sidecars.json."
+      "built": true,
+      "note": "Audio, video and URL import (Task 11's media.rs, driving the ffmpeg and yt-dlp sidecars already pinned in config/sidecars.json), plus the OpenWhispr database importer (storage::import::from_openwhispr), which existed and was tested since early in the build but had no screen until now. The screen renders the full ImportReport -- what copied, what was dropped per table, and which credentials moved into the OS credential store -- not just a success message, and states plainly that yt-dlp's own fetch is not policed by kw_network_policy."
     }
   }
 }

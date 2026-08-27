@@ -91,12 +91,35 @@ Two upstream mechanisms to port rather than reinvent:
 | `ps-list` | `sysinfo` | `meetingProcessDetector.js` |
 | `onnxruntime-node` | `ort` | `onnxWorker.js` |
 | `ws` | `tokio-tungstenite` | 5 streaming clients |
-| `electron-updater` | `tauri-plugin-updater` → **our own** releases | `updater.js` |
+| `electron-updater` | **our own** releases, checked via `kw_network_policy::NetworkPolicy` rather than `tauri-plugin-updater` — see below | `updater.js` |
 | `http.createServer` | `axum` on loopback | `cliBridge.js` (429) |
 | `utilityProcess` + `MessageChannelMain` | `tokio` task or sidecar | `onnxWorkerClient.js` |
 | `unzipper` / `unbzip2-stream` / `tar` | `zip`, `bzip2`, `tar` | download scripts |
 
+### The updater does not use `tauri-plugin-updater`
+
+An earlier pass at this table named that plugin as the replacement for
+`electron-updater`, and `docs/COMPLETION_PLAN.md`'s phase 9 said the same. The
+plugin ships its own HTTP client, and using it as intended would mean a
+second piece of code in the workspace opening its own connections outside
+`kw_network_policy::NetworkPolicy` — the crate whose module doc and the
+brief's network-boundary section both say is *the* egress point, not one of
+several. `apps/desktop/src-tauri/src/updater.rs` gets the same outcome
+(checking this project's own GitHub releases, never at startup, never
+without a person asking) by calling `NetworkPolicy::get_text` under
+`RequestPurpose::OwnGithubReleasesUpdater` directly. `bundle.createUpdaterArtifacts`
+in `tauri.conf.json` is still turned on, because producing signed artifacts is
+the bundler's job and has nothing to do with which client later checks for
+them; `plugins.updater.pubkey` is still read from the location that plugin
+would use, so a keypair generated the standard way (`docs/SECURITY.md`) needs
+no translation if this project adopts the plugin later.
+
 ### Window roles
+
+**4 of 6 built.** Dictation panel and Control panel existed before this run; Meeting notification
+and Update notification were built during it (chunks E3 and J respectively) and are marked below.
+Agent overlay and Transcription preview remain — the former is phase 10 scope
+([COMPLETION_PLAN.md](COMPLETION_PLAN.md)), the latter has no task in this plan.
 
 All `frame: false`.
 
@@ -106,8 +129,8 @@ All `frame: false`.
 | Control panel | 1200×800 | opaque, normal, resizable |
 | Agent overlay | 420×300 | `transparent`, **`focusable: true`** |
 | Transcription preview | 460×132 | `focusable: false` |
-| Meeting notification | 392×92 | **content-protected** — "visible to user but out of screen shares" |
-| Update notification | 392×92 | as above |
+| Meeting notification | 392×92 | **content-protected** — "visible to user but out of screen shares". **Built.** `apps/desktop/src-tauri/src/meeting_window.rs`, reusing `overlay::apply_treatments` unchanged so it reports the same read-back evidence. Positioned bottom-right, which the dictation panel still does not do |
+| Update notification | 392×92 | **content-protected** — same rule as the meeting notification. **Built.** `apps/desktop/src-tauri/src/update_window.rs`, the same builder and `overlay::apply_treatments` unchanged, so it reports the same read-back evidence. Shown only once `updater.rs`'s explicit, user-triggered check finds a newer release; never on its own |
 
 Per-platform z-order policy from `setupAlwaysOnTop()`, worth copying exactly: macOS
 `("floating", 1)` plus `setVisibleOnAllWorkspaces({visibleOnFullScreen, skipTransformProcessType})`;
@@ -209,10 +232,20 @@ Two facts were measured before designing the pin, and they decide its shape:
 
 An archive digest on that second URL would fail on every build, which is worse than no pin: it
 would be removed by whoever hit it first. Upstream pins both by commit only and verifies neither.
+Both pins above are the durable part of this work and are kept as measured — re-downloading
+`webrtc-apm` to re-derive its digest would cost a day, for no different an answer.
+
+**Declined for now, not unfinished.** What remains beyond the two pins is vendoring six source
+files, porting the 446-line generator, and a five-target CI workflow granted `contents: write` to
+publish the built binaries as this project's own release assets. All three need a C++ toolchain —
+cmake, ninja, clang — and none is installed on this development machine, which is also why every
+decompressor in this workspace (`zip`, `bzip2`, `tar`) is pure Rust rather than a C binding. See
+`config/integration-manifest.json`'s `platform:aec` entry for the full accounting.
 
 **Echo cancellation is a quality feature, not a gate.** Without it, a meeting recorded on
 speakers picks up the far-end voice through the microphone and transcribes it twice; on headphones
-there is nothing to cancel. What blocks meetings is system audio, which is Rust work in chunk 3.
+there is nothing to cancel. It gates nothing: what actually blocks a meeting from being recorded at
+all is system audio capture, and that is Rust work that is already done (`platform:system-audio`).
 
 **Identity:** appId `com.gizmolabs.openwhispr`, protocol `openwhispr://`, signing identity
 `Gizmo Labs Inc. (T832773L2J)`, Azure Trusted Signing endpoint, and Pluely's

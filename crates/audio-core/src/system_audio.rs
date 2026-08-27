@@ -264,10 +264,34 @@ impl SystemCapture {
         })
     }
 
+    /// Take what has been captured so far without stopping the stream.
+    ///
+    /// The same contract as [`crate::capture::Capture::drain`], and for the same
+    /// reason: this buffer has no cap at all, so a meeting that never drained it
+    /// would grow until the machine gave up.
+    ///
+    /// A partial frame stays behind. Interleaved samples only mean anything a
+    /// frame at a time.
+    #[must_use]
+    pub fn drain(&self) -> Track {
+        let mut guard = self.samples.lock().unwrap_or_else(|e| e.into_inner());
+        let channels = usize::from(self.channels.max(1));
+        let whole = (guard.len() / channels) * channels;
+        let remainder = guard.split_off(whole);
+        let taken = std::mem::replace(&mut *guard, remainder);
+
+        Track {
+            samples: taken,
+            channels: self.channels,
+            sample_rate: self.sample_rate,
+        }
+    }
+
     /// Stop and return what was captured, unmixed.
     ///
     /// A [`Track`] rather than a finished WAV, because mixing has to happen
-    /// before encoding and the caller holds the other track.
+    /// before encoding and the caller holds the other track. Returns what is
+    /// *held*, so after a [`SystemCapture::drain`] that is only the tail.
     #[must_use]
     pub fn finish(self) -> Track {
         if let Err(err) = self.stream.pause() {

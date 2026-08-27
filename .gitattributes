@@ -15,6 +15,8 @@ config/upstream-integration-baseline.json linguist-generated=true
 *.cmd text eol=crlf
 
 # Binary — never convert, never diff as text.
+*.woff2 binary
+*.ttf binary
 *.png binary
 *.jpg binary
 *.ico binary

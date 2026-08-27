@@ -19,6 +19,7 @@ use ts_rs::TS;
 use cpal::traits::{DeviceTrait as _, HostTrait as _, StreamTrait as _};
 
 use crate::gate::{GateDecision, SpeechGate};
+use crate::mix::Track;
 use crate::wav;
 
 /// The longest recording that will be kept, in seconds.
@@ -99,6 +100,11 @@ struct Buffer {
     gate: SpeechGate,
     capacity: usize,
     truncated: bool,
+    /// Samples handed out by [`Buffer::drain`] and no longer held.
+    ///
+    /// Kept so the elapsed-time answer stays about the recording rather than
+    /// about what happens to still be in memory.
+    drained: usize,
 }
 
 impl Buffer {
@@ -112,7 +118,27 @@ impl Buffer {
             gate: SpeechGate::new(),
             capacity,
             truncated: false,
+            drained: 0,
         }
+    }
+
+    /// Take every whole frame captured so far, leaving the stream running.
+    ///
+    /// A partial frame stays behind rather than being returned. Interleaved
+    /// samples only mean anything a frame at a time, and cutting one in half
+    /// would swap the channels for the whole rest of the recording.
+    fn drain(&mut self, channels: u16) -> Vec<f32> {
+        let channels = usize::from(channels.max(1));
+        let whole = (self.samples.len() / channels) * channels;
+        let remainder = self.samples.split_off(whole);
+        let taken = std::mem::replace(&mut self.samples, remainder);
+        self.drained = self.drained.saturating_add(taken.len());
+        taken
+    }
+
+    /// Every sample this recording has seen, held or not.
+    const fn total(&self) -> usize {
+        self.drained.saturating_add(self.samples.len())
     }
 
     /// Append what fits. Once full, stop rather than grow.
@@ -246,7 +272,35 @@ impl Capture {
         stream.map_err(|e| CaptureError::Stream(e.to_string()))
     }
 
+    /// Take what has been captured so far without stopping the stream.
+    ///
+    /// The counterpart to [`Capture::finish`], and a caller uses one or the
+    /// other. `finish` assembles the whole recording in memory, which is right
+    /// for a dictation of a few seconds; a meeting runs for hours, so it drains
+    /// on a tick and writes through to a [`crate::wav::WavWriter`] instead.
+    ///
+    /// A [`Track`] rather than a `Vec<f32>` because interleaved samples are
+    /// meaningless without the channel count and the rate, and because that is
+    /// already what [`crate::system_audio::SystemCapture`] returns — the two
+    /// captures being the same shape is what lets a meeting treat them alike.
+    ///
+    /// The samples are raw: at the device's own rate, still interleaved, and not
+    /// gated. Draining is a transport, not a judgement.
+    #[must_use]
+    pub fn drain(&self) -> Track {
+        let mut guard = self.buffer.lock().unwrap_or_else(|e| e.into_inner());
+        Track {
+            samples: guard.drain(self.channels),
+            channels: self.channels,
+            sample_rate: self.sample_rate,
+        }
+    }
+
     /// Stop recording and return the audio, prepared for transcription.
+    ///
+    /// Returns what is *held*, so after a [`Capture::drain`] that is only the
+    /// tail. The two are alternatives and mixing them is a mistake, which is why
+    /// this says so in the log rather than quietly returning a fragment.
     pub fn finish(self) -> Recording {
         // Pause before reading so no further samples arrive mid-copy.
         if let Err(err) = self.stream.pause() {
@@ -254,6 +308,13 @@ impl Capture {
         }
 
         let guard = self.buffer.lock().unwrap_or_else(|e| e.into_inner());
+        if guard.drained > 0 {
+            tracing::warn!(
+                drained = guard.drained,
+                held = guard.samples.len(),
+                "finish() after drain() returns only what was not drained"
+            );
+        }
         let frames = guard.samples.len() / usize::from(self.channels.max(1));
 
         Recording {
@@ -265,10 +326,13 @@ impl Capture {
     }
 
     /// How long the recording has been running.
+    ///
+    /// Counts drained samples too, so this is about the recording rather than
+    /// about what happens to still be in memory.
     #[must_use]
     pub fn elapsed_ms(&self) -> u64 {
         let guard = self.buffer.lock().unwrap_or_else(|e| e.into_inner());
-        let frames = guard.samples.len() / usize::from(self.channels.max(1));
+        let frames = guard.total() / usize::from(self.channels.max(1));
         wav::duration_ms(frames, self.sample_rate)
     }
 }
@@ -282,6 +346,82 @@ impl Capture {
 )]
 mod tests {
     use super::*;
+
+    #[test]
+    fn draining_returns_every_sample_exactly_once() {
+        let mut buffer = Buffer::new(16_000, 1);
+        buffer.push(&[0.1, 0.2, 0.3]);
+
+        assert_eq!(buffer.drain(1), vec![0.1, 0.2, 0.3]);
+        assert!(
+            buffer.drain(1).is_empty(),
+            "a second drain has nothing left"
+        );
+
+        buffer.push(&[0.4]);
+        assert_eq!(buffer.drain(1), vec![0.4]);
+        assert_eq!(
+            buffer.total(),
+            4,
+            "the recording is still four samples long"
+        );
+    }
+
+    #[test]
+    fn draining_leaves_a_partial_frame_behind() {
+        // Cutting a frame in half would swap the channels for the whole rest of
+        // the recording, which is audible and would be blamed on the microphone.
+        let mut buffer = Buffer::new(16_000, 2);
+        buffer.push(&[0.1, 0.2, 0.3]);
+
+        assert_eq!(buffer.drain(2), vec![0.1, 0.2], "one whole frame");
+        assert_eq!(
+            buffer.samples,
+            vec![0.3],
+            "the half frame waits for its pair"
+        );
+
+        buffer.push(&[0.4]);
+        assert_eq!(buffer.drain(2), vec![0.3, 0.4]);
+    }
+
+    #[test]
+    fn draining_keeps_the_cap_as_a_backstop_rather_than_a_limit() {
+        // The 30-minute cap is what stops a stuck hotkey allocating until the
+        // process dies. A caller that drains never approaches it -- so the cap
+        // does not have to be raised for meetings, and it still protects against
+        // a consumer that has stalled.
+        let mut buffer = Buffer::new(16_000, 1);
+        let ten_minutes = vec![0.1_f32; 16_000 * 600];
+
+        for _ in 0..6 {
+            buffer.push(&ten_minutes);
+            let drained = buffer.drain(1);
+            assert_eq!(drained.len(), ten_minutes.len());
+        }
+
+        assert!(
+            !buffer.truncated,
+            "an hour passed and nothing was truncated"
+        );
+        assert!(buffer.samples.is_empty(), "nothing is held");
+        assert_eq!(buffer.total(), 16_000 * 3_600);
+    }
+
+    #[test]
+    fn the_gate_still_sees_everything_that_was_drained() {
+        // `push` observes samples before they can be drained, so the speech
+        // decision is about the whole recording and not about the last window.
+        let mut buffer = Buffer::new(16_000, 1);
+        let loud: Vec<f32> = (0..16_000)
+            .map(|i| (i as f32 / 16_000.0 * std::f32::consts::TAU).sin() * 0.4)
+            .collect();
+
+        buffer.push(&loud);
+        let after_push = buffer.gate.decide();
+        let _ = buffer.drain(1);
+        assert_eq!(buffer.gate.decide(), after_push);
+    }
 
     #[test]
     fn the_buffer_stops_growing_at_the_cap() {

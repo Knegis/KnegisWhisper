@@ -152,6 +152,220 @@ the answer names the device that would be captured rather than describing the pl
 stream, and reports whether the callback fired, whether it produced silence, and what the mixer did
 with it — three different facts that a single "it works" would collapse.
 
+## Meeting transcription providers
+
+Four cloud providers, one local model, and Tinfoil's deliberate refusal. Three different
+epistemic states sit inside the "unverified" claims below, and they are not interchangeable:
+
+1. **Reused from tested code.** Corti's OAuth2 token exchange reuses
+   `kw_transcription_core::clients::corti_token_endpoint`/`corti_token_request`/`interpret_token`,
+   already implemented and tested for batch Corti transcription. Not believed -- known to work
+   against that shape.
+2. **Read from vendor documentation, unverified against a live call.** AssemblyAI's and Deepgram's
+   wire shapes, and most of OpenAI Realtime's, are clean-room builds against public documentation
+   with no live socket to check them against yet. Wrong only if that documentation is wrong.
+3. **Invented, with no vendor source at all.** Corti's *socket* wire -- the endpoint path, the
+   message envelope, and most of the session-config block -- has no documentation anywhere to be
+   wrong about; its own implementer said so directly. This is a strictly weaker position than (2),
+   and the table and prose below keep it separate rather than folding it into the same "unverified"
+   word.
+
+| Provider | Client | Verified |
+| --- | --- | --- |
+| Local windowed model | repeated `/inference` passes over the local `whisper-server` | ⚠️ built, never run by a person |
+| OpenAI Realtime | two WebSockets, one per capture | ⚠️ request shaping and the event grammar against fixtures. **No live call.** A key exists on this machine and has not been used |
+| AssemblyAI Realtime | two WebSockets, one per capture | ⚠️ request shaping and the event grammar against fixtures, and most of the wire shape **believed rather than confirmed** -- see below. **No live call and no key for this provider exists on any machine this project has touched.** |
+| Deepgram Realtime | two WebSockets, one per capture | ⚠️ request shaping and the event grammar against fixtures, and most of the wire shape **believed rather than confirmed** -- see below. **No live call and no Deepgram key exists on any machine this project has touched.** |
+| Corti Realtime | two WebSockets, one per capture, authenticated by an OAuth2 client-credentials exchange first | ⚠️ request shaping and the event grammar against fixtures. Two different epistemic states, not one: the **token exchange is reused from working, tested code**, not believed -- `kw_transcription_core::clients::corti_token_endpoint`/`corti_token_request`/`interpret_token` already exist and are already tested for batch Corti transcription. The **socket wire, by contrast, was invented with no vendor source at all** -- weaker than "believed," see below. **No live call and no Corti credential exists on any machine this project has touched.** |
+| Tinfoil Realtime | — | **declined.** An unattested socket would present as Tinfoil while providing none of the confidentiality the name means. Same reason as the batch client |
+
+Three things about the OpenAI client are unlike the others and each is a place a
+live call would tell us something a fixture cannot:
+
+- **24 kHz only**, where every other provider takes 16. The meeting pipeline
+  resamples per session because of it; it used to hardcode 16 kHz, so this client
+  could never have connected at all.
+- **A sixty-minute server cap.** A longer meeting rebuilds both sockets two
+  minutes early, so the gap falls where the client chooses rather than
+  mid-sentence, and `MeetingTranscript::reconnects` counts it. This is the only
+  provider where that path is reachable, and nothing but a call over an hour long
+  exercises it.
+- **Two sockets, one per capture.** The provider labels no speakers, so
+  attribution comes from which capture the audio came from. One socket would make
+  `AudioSource` on every event a guess and would hand the server's voice-activity
+  detection two overlapping speakers.
+
+The AssemblyAI client is a clean-room build: no vendor source for this wire exists
+anywhere in this repository to check against, so most of it is **believed from
+public documentation, not confirmed**. `crates/meeting-core/src/assemblyai.rs`'s
+module documentation carries the full list; the highest-risk item is repeated here
+because it bears on a capability claim rather than only on plumbing:
+
+- **Whether a real-time turn carries a per-speaker label at all.** The capability
+  table declares `speaker_labels: true`, and this client reads a `speaker` field
+  from each turn if the wire carries one. If it does not, every event from this
+  provider reports `speaker: None` — the same degradation OpenAI Realtime already
+  reports honestly, and `AudioSource` still attributes the transcript correctly
+  either way. This is a safe failure mode, not a silent one, but it means the
+  `speaker_labels: true` row should be read as "believed" until a live session
+  confirms it.
+- The endpoint path, the query parameter names (`sample_rate`, `encoding`,
+  `language_code`, `keyterms_prompt`), the `Authorization` header carrying the
+  raw key with no `Bearer` prefix, and the `Begin`/`Turn`/`Termination`/`Error`
+  message envelope are all likewise unverified against a live socket.
+- Audio leaving as raw binary WebSocket frames (not JSON-plus-base64, the
+  opposite of OpenAI Realtime's convention) is the one piece believed with more
+  confidence, since it matches AssemblyAI's documented batch-upload convention.
+
+Two sockets, one per capture, for the same reason as OpenAI Realtime: this
+provider's speaker labels say who *within* a stream, never *which* stream, so
+`AudioSource` still needs two connections to stay a fact rather than a guess.
+
+The Deepgram client is a clean-room build in the same position as AssemblyAI's:
+no vendor source for this wire exists anywhere in this repository, so most of it
+is **believed from public documentation, not confirmed**.
+`crates/meeting-core/src/deepgram.rs`'s module documentation carries the full
+list; the items that bear on a capability claim rather than only on plumbing are
+repeated here:
+
+- **`token_rotation: true` describes upstream's minted temporary tokens, not
+  this client.** Deepgram's own hosted service issues short-lived tokens that
+  must be refreshed mid-session; this application never mints one, so the
+  header carries the user's own stored API key and nothing here schedules a
+  refresh. `crates/meeting-core/src/deepgram.rs` and `deepgram_socket.rs` both
+  carry a test proving no rotation clock exists, with a comment saying why.
+  Implementing a refresh loop that re-reads an unchanging key would be
+  ceremony that looks like a safeguard and is not one.
+- **Whether a `Results` message carries a per-word `speaker` field at all**, and
+  whether reading the *first* word's speaker as representative of the whole
+  message is a safe simplification. The capability table declares
+  `speaker_labels: true`; if the wire does not carry the field, or splits it
+  across the message differently than believed, every event from this provider
+  degrades to `speaker: None` — the same safe degradation AssemblyAI and
+  OpenAI Realtime already report, and `AudioSource` still attributes the
+  transcript correctly either way.
+- **Whether omitting a language and sending `detect_language=true` is in fact
+  how this provider auto-detects**, as opposed to defaulting to a fixed
+  language when neither is sent. `language_detection: true` is declared, and
+  this client actively asks for detection rather than silently sending
+  nothing and hoping the server's default matches the room.
+- The endpoint path, the query parameter names (`encoding`, `sample_rate`,
+  `channels`, `language`, `detect_language`, `diarize`, `interim_results`, and
+  the repeated `keyterm` parameter itself), the `Authorization: Token <key>`
+  header (a scheme prefix different from AssemblyAI's bare key and OpenAI's
+  `Bearer`), and the `Results`/`Metadata`/`Error` message envelope are all
+  likewise unverified against a live socket.
+- Audio leaving as raw binary WebSocket frames, not JSON-plus-base64, is
+  believed with more confidence than the rest, matching both AssemblyAI's
+  assumed convention and Deepgram's documented one for raw linear PCM.
+
+Two sockets, one per capture, for the same reason as AssemblyAI and OpenAI
+Realtime: Deepgram's diarization says who *within* a stream, never *which*
+stream, so `AudioSource` still needs two connections to stay a fact rather
+than a guess.
+
+The Corti client is the only one of the five where **two different claims
+deserve two different confidence levels**, because it crosses the network
+twice for two different reasons.
+
+**The OAuth2 token exchange is reused from working, tested code, not
+believed.** `kw_transcription_core::clients::corti_token_endpoint`,
+`corti_token_request` and `interpret_token` already exist and are already
+exercised by `Executor::corti_token` for batch Corti transcription
+(`crates/transcription-core/src/executor.rs`). `crates/meeting-core/src/corti.rs`
+wraps them rather than re-deriving them, and copies the one decision that
+code already makes: the tenant name is the OAuth2 client id, and the secret
+stored under the `corti` credential slot is the client secret. The exchange
+runs once per meeting, before either socket opens, and both sockets carry the
+same access token -- an OAuth2 client-credentials token is meant to be
+presented on more than one request, and nothing in this project's own audit
+of Corti suggests otherwise, unlike Deepgram's documented per-session minted
+tokens.
+
+**The socket wire was invented, which is a weaker claim than "believed" and
+should not be read as the same thing as AssemblyAI's or Deepgram's
+unconfirmed-but-documented wires.** Those two clients are wrong, if they are
+wrong, because public vendor documentation was wrong or was misread -- there
+is a source to check them against. Corti's socket has no such source: no
+vendor documentation for its *streaming* wire exists anywhere in this
+repository or was found while building it, and the person who wrote it said
+so directly and unprompted rather than presenting a guess as a citation.
+Endpoint path, message envelope, and most of the session-config block below
+are this client's own invention, with one exception
+(`configuration.keyterms`) that does have a textual anchor.
+`crates/meeting-core/src/corti.rs`'s module documentation carries the full
+list; repeated here because it bears on capability claims:
+
+- The endpoint path, `wss://api.{environment}.corti.app/audio-bridge/v1/streams`.
+  Only the host template -- `api.{environment}.corti.app` -- is reused from
+  the tested batch endpoint; the path after it is invented.
+- The `Authorization: Bearer <token>` scheme is the one item believed with
+  more confidence than the rest of the socket wire: it is the standard OAuth2
+  bearer convention (RFC 6750), not a Corti-specific guess.
+- That the tenant travels on the socket handshake as a `Tenant-Name` header --
+  the same header name the tested batch request uses, assumed here to apply
+  to a WebSocket handshake, which it has never been tried against.
+- The whole shape of the session configuration message beyond one thing:
+  `configuration.keyterms` as the path for keyterms comes from this project's
+  own audit (`docs/INTEGRATION_PARITY.md`), written before this client and
+  independent of it -- the only piece of the streaming wire with a textual
+  anchor in this repository. `primaryLanguage` (reused from the batch field
+  name), and the `encoding`/`sampleRate`/`channels` fields, are this client's
+  own construction.
+- The incoming message envelope entirely -- a `type` field naming
+  `"ready"`/`"transcript"`/`"error"`, and the fields `text`/`isFinal`/`speaker`
+  -- is the lowest-confidence area in this module, with no textual anchor at
+  all.
+
+`language_detection: false` is declared for Corti, and it is the first
+provider whose client actually reaches `MeetingRuntime::start`'s
+`language_required` refusal in practice: every other client built so far
+declares detection, so the refusal existed but nothing could exercise it end
+to end until a real client existed to be denied a language. Tests in
+`crates/meeting-core/src/capabilities.rs` and
+`apps/desktop/src-tauri/src/meeting.rs` (`corti_refuses_to_start_naming_the_provider_and_the_field_when_no_language_is_set`)
+assert it fires.
+
+Two sockets, one per capture, for the same reason as every client before it:
+a speaker label Corti's wire might carry says who *within* a stream, never
+*which* stream.
+
+## Meeting detection
+
+Noticing that a meeting application is running, so recording can be *offered*.
+Nothing here starts a recording: `crates/platform/src/meeting_detect.rs` cannot,
+and `MeetingRuntime::start` has exactly one caller, the command a button invokes.
+
+**The names were written, not ported.** Upstream's `meetingProcessDetector.js` is
+not in this checkout, so the table is knowledge rather than a port, and each row
+below says whether it has actually been seen to match. `cargo run -p kw-platform
+--example meeting_detect_probe` is how a row moves from one column to the other.
+
+| Application | Open | In a call | State |
+| --- | --- | --- | --- |
+| Microsoft Teams | `ms-teams.exe`, `teams.exe`, `msteams`, `teams` | — | **`ms-teams.exe` seen to match** (2026-08-26, 628 processes). New Teams runs the call inside its own process, so there is no in-call signal |
+| Zoom | `zoom.exe`, `zoom`, `zoom.us` | `cpthost.exe`, `caphost` | ⚠️ written, not seen to match |
+| Webex | `webex.exe`, `webexhost.exe`, `ciscocollabhost.exe` | `webexmta.exe` | ⚠️ written, not seen to match |
+| FaceTime | `facetime` | — | ⚠️ macOS only, compiled out elsewhere, unverified |
+| Anything else | the user's own allowlist | — | works by construction |
+
+**Only an in-call process offers to record**, and that is a measurement rather
+than a preference. Teams was found running with no call in progress, and Teams
+starts with Windows on most corporate machines — so offering on "the client is
+open" would put a window on screen at every launch, and the feature would be
+switched off the same day. Teams and FaceTime are therefore reported on
+`Settings > Meetings` and never prompted for, which is a limit worth stating
+rather than leaving somebody to discover.
+
+Matching is on the **image name and exact**, not the command line and not by
+substring. `kw_sidecar::reap` matches command lines because it must prove a
+process is ours before signalling it; detection has the opposite job, and
+`zoomboard.exe` is not Zoom.
+
+`meeting-detect:generic` is the allow/blocklist and nothing else yet. Calendar
+events need chunk F; microphone activity needs the `IAudioSessionManager2`
+listener that is still unwritten.
+
 ## Global shortcuts
 
 | Capability | Windows | macOS | Linux X11 | GNOME Wayland | KDE Wayland | Hyprland |
@@ -226,11 +440,172 @@ present; where it is not, the app reports `unsupported` rather than appearing to
 
 | Provider | Windows | macOS | Linux |
 | --- | --- | --- | --- |
-| Google | yes | yes | yes |
-| Microsoft 365 | yes | yes | yes |
-| Apple | not applicable | EventKit — unverified | not applicable |
+| Google | yes ⚠️ | yes ⚠️ | yes ⚠️ |
+| Microsoft 365 | yes ⚠️ | yes ⚠️ | yes ⚠️ |
+| Apple | not applicable | not implemented | not applicable |
+
+⚠️ The loopback PKCE flow, calendar listing and incremental event sync run on every platform, but
+the `calendarList`/`events.list` (Google) and `/me/calendars`/`events/delta` (Microsoft) wire shapes
+are covered by fixtures modelled on each vendor's public documentation — no client ID exists on this
+machine, so no live call has been made. See the `calendar:google` and `calendar:microsoft` manifest
+notes for the full accounting.
+
+**Apple is "not implemented", not merely "unverified" — corrected by Task 19.** The two rows above
+are unverified in the ordinary sense: real code, exercised against fixtures, waiting on a live
+credential. Apple Calendar is a different claim entirely. `kw_calendar_core::apple`'s own module doc
+says `AppleCalendarSource` is "deliberately unimplemented by anything in this crate" and that this is
+true "on every platform this builds for today", including macOS — there is no macOS machine in this
+development environment to write or verify an EventKit binding against, so nothing exists to be
+unverified. `config/integration-manifest.json`'s `calendar:apple` entry carries `temporarily-deferred`
+with a `deferral` block naming exactly this, corrected during Task 19's audit of every manifest status
+that asserts a working implementation exists (it previously carried `platform-specific`, the same
+false-implementation pattern `platform:aec` was already corrected for).
 
 Calendar access is optional and is never required for meeting transcription.
+
+## Local ASR: sherpa-onnx
+
+`docs/BUILD_PLAN.md`'s chunk B4 recorded that an extracted sherpa model is a
+directory of encoder/decoder/joiner/tokens files whose layout differs between
+the Parakeet and Nemotron families, and that the CLI flags follow the layout
+-- something that "cannot be written correctly from a release page". This is
+the measurement, not a guess: `cargo run -p kw-transcription-core --example
+sherpa_probe` installed the real pinned `sherpa-onnx-offline` CLI on Windows,
+downloaded each pinned Parakeet archive in turn, and drove a real
+transcription with each. `crates/transcription-core/tests/sherpa_dictation.rs`
+pins the same finding behind a `--ignored` test against the production
+`SherpaOffline` type (`cargo test -p kw-transcription-core --test
+sherpa_dictation -- --ignored --nocapture`), so it stays true as the pinned
+sherpa release moves rather than being true only on the day the probe ran.
+
+**The measured directory layout.** Both pinned Parakeet archives --
+`parakeet-unified-en-0.6b` and `parakeet-tdt-0.6b-v3` -- extract to a flat
+directory, not a nested one:
+
+```
+sherpa-onnx-nemo-parakeet-unified-en-0.6b-int8-non-streaming/
+  encoder.int8.onnx       (654,040,552 bytes)
+  decoder.int8.onnx       (7,257,753 bytes)
+  joiner.int8.onnx        (1,735,860 bytes)
+  tokens.txt              (8,952 bytes)
+  test_wavs/0.wav         (sample audio -- not part of the model)
+  bias.md, explainability.md, privacy.md, safety.md
+```
+
+`parakeet-tdt-0.6b-v3` has the identical shape (`encoder.int8.onnx`,
+`decoder.int8.onnx`, `joiner.int8.onnx`, `tokens.txt` at the top level, a
+`test_wavs/` sample folder, no `.md` files). `kw_transcription_core::sherpa::
+discover_transducer_files` looks for exactly these four files by name pattern,
+directly inside the model directory, and refuses -- rather than guessing --
+if one is missing or if more than one file could be it.
+
+**The measured CLI contract.** `sherpa-onnx-offline --help`'s own usage block
+for "(1) Transducer from icefall" is:
+
+```
+sherpa-onnx-offline \
+  --tokens=/path/to/tokens.txt \
+  --encoder=/path/to/encoder.onnx \
+  --decoder=/path/to/decoder.onnx \
+  --joiner=/path/to/joiner.onnx \
+  --num-threads=1 \
+  --decoding-method=greedy_search \
+  /path/to/foo.wav [bar.wav foobar.wav ...]
+```
+
+which is what both probe runs actually invoked (`--num-threads` only, since
+`kw_transcription_core::sherpa::build_args` omits it -- like whisper's own
+`threads` field -- unless a caller chooses a value). A clean run prints one
+line of JSON to stdout per input file, `{"text": "...", ...}` among fields
+this build does not read (`timestamps`, `tokens`, `ys_log_probs`, `words`);
+`sherpa::interpret` parses that shape the same way `local::interpret` parses
+whisper-server's JSON.
+
+There is **no persistent server**: `sherpa-onnx-offline` is a one-shot CLI
+that reads one WAV path and exits, unlike `whisper-server`'s HTTP endpoint on
+a port. `SherpaOffline::transcribe` writes the audio to a temp file and spawns
+a fresh child per request rather than holding a `port` the way `WhisperServer`
+does.
+
+**A real bug this measurement caught.** `config/provider-registry.json`'s
+`sizeMb` for a sherpa model (631 for Parakeet Unified EN 0.6B) is **the
+extracted model's footprint on disk, not the compressed `.tar.bz2` download**:
+the real download was 501,350,460 bytes (~478 MB) and the real extracted
+total is ~663 MB. An early version of `sherpa_models::install` checked the
+*download* against `sizeMb` with the same 5% tolerance `models.rs` uses for
+whisper models, and it failed every install -- a 25-30% gap does not fit a 5%
+tolerance. The fix does not size-check the download at all; instead, after
+extraction, `discover_transducer_files` has to find the real files, which is
+a stronger and more honest check than a byte-count guess: a truncated or
+corrupted archive either fails to extract (`tar`/`bzip2-rs` notice a
+malformed stream) or extracts without a complete file set, and either way the
+install is refused before the model is treated as ready.
+
+**The transcript, compared to whisper on the same input.**
+`tests/fixtures/speech-16k-mono.wav` (the fixture `local_dictation.rs` already
+used for whisper) was transcribed by all three: whisper's pinned `tiny` model
+said
+
+> The Quick Brown Fox jumps over the lazy dog. This is a test of local transcription.
+
+and **both** pinned Parakeet models said
+
+> The quick brown fox jumps over the lazy dog. This is a test of local transcription.
+
+-- identical words, differing only in whisper's mid-sentence capitalisation.
+Real-time factor was 0.109-0.124 on this development machine (single thread),
+against whisper `tiny`'s comparable speed. Quality was not materially worse
+than whisper's on this input. One fixture is not a benchmark suite, and
+nothing here claims Parakeet is whisper's equal on noisy audio, accents, or
+long-form speech -- only that on the one real input this project has a
+known-good transcript for, it was not worse.
+
+**What is proven, and why that is not the same as reachable.**
+`kw_transcription_core::sherpa::SherpaOffline` (the second `LocalTranscriber`)
+and `sherpa_models::install` are real, tested code, exercised end to end
+against the real pinned binary and both real pinned Parakeet archives. What
+does **not** exist yet is the Tauri command layer and Settings UI wiring that
+would let a user install and select a Parakeet model from Settings >
+Transcription > Local the way they already can for a whisper model --
+`apps/desktop/src-tauri/src/dictation.rs`'s own comment on `LocalTargets`
+already names this as the anticipated next step ("the next one is the
+sherpa server"), and `SettingsTranscription.tsx` names the gap directly to
+the user rather than staying silent about it. So
+`local-asr:parakeet-tdt-0.6b-v3` and `local-asr:parakeet-unified-en-0.6b`
+stay `reachable: false` in `config/integration-manifest.json`: this
+project's settled reading of `reachable` (the same one applied to
+`calendar:apple`) is that a person must be able to configure the integration
+through the named, *built* surface, and today nobody can pick a Parakeet
+model from `Settings > Transcription > Local` no matter how well the
+runtime underneath it works. The note on both entries was rewritten to
+record the real, narrower gap -- a missing selector, not a missing runtime --
+rather than the stale "blocked on the archive format" reason from before
+this task.
+
+**The two Nemotron models stay unreached, on purpose.** Both
+(`nemotron-3.5-asr-streaming-0.6b`, `nemotron-speech-streaming-en-0.6b`) are
+*streaming* models over sherpa's own bespoke WebSocket protocol
+(`sherpa-onnx-online-websocket-server`, confirmed present in the CLI sidecar's
+`bin/` directory -- see below), not the offline CLI this measurement drove.
+Nobody has written or tested a client for that protocol, so
+`config/integration-manifest.json` keeps both `reachable: false`, with the
+note updated to say this specifically rather than repeating the now-false
+claim that the archive format itself was the blocker (Task 17 fixed that).
+
+**Installing the sherpa-onnx CLI extracts the whole `bin/` directory.**
+Confirmed by the probe on Windows: 23 files, not just
+`sherpa-onnx-offline.exe` -- `onnxruntime.dll`, `onnxruntime_providers_shared.dll`,
+and 20 other `sherpa-onnx-*.exe` tools (keyword spotting, audio tagging,
+denoising, TTS, the online and offline WebSocket servers, `sherpa-onnx.exe`
+itself, and more). This is `install::extract`'s existing payload-directory
+model doing what it always does -- installing everything beside the named
+executable, the same as it does for `whisper-server`'s sibling `ggml`
+libraries -- not a defect specific to sherpa. It is also why the Linux and
+macOS archives are 230-385 MB against the Windows CLI's 24 MB: those targets
+ship the "static" build (see `config/sidecars.json`'s `sherpa` entry), which
+statically links `onnxruntime` into every one of those ~23 executables rather
+than sharing one `onnxruntime.dll` beside them the way the Windows "shared"
+build does.
 
 ## GPU acceleration
 
@@ -244,6 +619,43 @@ Calendar access is optional and is never required for meeting transcription.
 GPU packs are downloaded separately with a verified digest. First Vulkan start needs a long
 timeout — shader compilation can take well over a minute. On failure the app falls back to CPU
 and records why.
+
+## Updates
+
+`apps/desktop/src-tauri/src/updater.rs` checks this project's own GitHub
+releases, opt-in and only when a person presses "Check for updates" on
+Settings > Diagnostics -- never at startup, never on a timer. It has never
+been exercised end to end, for one specific reason rather than a general
+disclaimer: **no release has ever been published.**
+`.github/workflows/release.yml` is `workflow_dispatch`-only and nobody has
+run it, so `GET /repos/{owner}/{repo}/releases/latest` has only ever had one
+possible answer, 404, on every platform.
+
+Everything downstream of that fact is unverified in the ordinary sense of the
+word -- believed rather than observed -- and each piece is marked at its
+point of use rather than only here:
+
+- **The response shape `updater.rs` parses** (`tag_name`, `html_url`) is
+  GitHub's documented shape for that endpoint, not one this code has seen.
+- **Whether `tauri build` tolerates `bundle.createUpdaterArtifacts: true`
+  with no `TAURI_SIGNING_PRIVATE_KEY` present**, rather than refusing to run
+  at all, has never been checked on any of the three CI runners. The
+  workflow defends against the worse of the two possibilities by overriding
+  the setting back off when the secret is absent, but which possibility is
+  actually true is unconfirmed either way.
+- **Whether a real GitHub release actually carries the `.sig` files the
+  bundler would produce**, once a signing key exists, in a shape
+  `actions/upload-artifact`'s glob and `softprops/action-gh-release`'s
+  `files: bundles/**/*` both pick up -- untested, because no signing key and
+  no release exist yet.
+- **The version comparison itself** (`semver::Version`, with a published tag's
+  leading `v` stripped) is exercised by unit tests against invented tags, not
+  against a tag this project has actually cut.
+
+None of this bears on whether the application works without an update check;
+it bears only on whether that specific, opt-in feature would behave as
+designed the first time somebody actually uses it. See `docs/SECURITY.md` for
+the keypair procedure and `docs/COMPLETION_PLAN.md` phase 9 for what remains.
 
 ## Known environment constraints
 

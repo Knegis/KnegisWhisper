@@ -13,6 +13,9 @@ workspace = true
 
 [dependencies]
 serde.workspace = true
+# Enumerating processes, to notice a meeting application. The same crate
+# `kw_sidecar::reap` uses to verify a command line before signalling it.
+sysinfo.workspace = true
 ts-rs.workspace = true
 thiserror.workspace = true
 tracing.workspace = true

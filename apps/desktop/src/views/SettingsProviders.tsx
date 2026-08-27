@@ -11,7 +11,11 @@
  *
  * 1. **The slot list comes from Rust.** `credential_slots` reads
  *    `config/provider-registry.json`, so no provider id or slot name is written
- *    here. Fifteen slots, ten providers and five per-feature custom endpoints.
+ *    here. Seventeen slots, twelve providers and five per-feature custom
+ *    endpoints — up from fifteen and ten once AssemblyAI and Deepgram gained
+ *    their own BYOK slots for meeting streaming. (Three further enterprise
+ *    slots — Bedrock, Azure, Vertex — hold a whole connector configuration
+ *    each and are rendered in their own section below, not counted here.)
  * 2. **A stored key is never called "connected".** Storing a secret proves only
  *    that the credential store worked. Only `probe_providers` — a real request
  *    with the user's own key, run when they press the button — can say more, and
@@ -159,7 +163,15 @@ export function SettingsProviders() {
         <span className="row-value">
           {state.value}
           {state.detail ? <em className="row-detail">{state.detail}</em> : null}
-          <span className="controls">
+        </span>
+        {/*
+          A direct child of the row, not of the value, so the grid gives it a
+          row of its own spanning both columns. The field then starts level with
+          the label because it genuinely begins there -- pulling it left with a
+          margin instead put it on top of any label long enough to wrap, which
+          "Self-hosted cleanup endpoint key" is.
+        */}
+        <span className="controls">
             <input
               type="password"
               autoComplete="off"
@@ -182,16 +194,15 @@ export function SettingsProviders() {
                 Clear
               </button>
             ) : null}
-          </span>
-          <em className="row-detail">
-            slot <code>{slot.slot}</code>
-            {slot.usedFor.length > 0 ? ` · used for ${slot.usedFor.join(" and ")}` : ""}
-            {slot.feature ? ` · ${slot.feature}` : ""}
-          </em>
-          {results[slot.slot] ? (
-            <em className="row-detail">{results[slot.slot]}</em>
-          ) : null}
         </span>
+        <em className="row-detail">
+          slot <code>{slot.slot}</code>
+          {slot.usedFor.length > 0 ? ` · used for ${slot.usedFor.join(" and ")}` : ""}
+          {slot.feature ? ` · ${slot.feature}` : ""}
+        </em>
+        {results[slot.slot] ? (
+          <em className="row-detail">{results[slot.slot]}</em>
+        ) : null}
       </div>
     );
   };
@@ -252,7 +263,9 @@ export function SettingsProviders() {
                 Every test was skipped, so nothing was proven either way.
               </p>
             ) : null}
-            <ul className="purposes">
+            {/* `list`, not `purposes`: each result is a pill, a verdict and a
+                sentence, which is a row rather than a pill. */}
+            <ul className="list">
               {probe.results
                 .filter((r) => r.outcome.outcome !== "skipped")
                 .map((r, i) => (

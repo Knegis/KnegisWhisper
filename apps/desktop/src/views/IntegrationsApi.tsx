@@ -1,15 +1,26 @@
 /**
  * Integrations > API — the local HTTP server, off by default.
  *
- * The permissions line is a read of the file, not an assumption about it. On
- * Windows it says administrators can read it, because there is no `chmod` and
- * claiming owner-only would be false.
+ * The permissions line is a read of the file, not an assumption about it, and
+ * it is rendered through the same `DiscoveryPermissions` state and the same
+ * `discoveryPermissionsLabel` in `lib/labels.ts` that `Integrations > CLI`
+ * uses — one vocabulary for one file, on both screens that describe it.
+ *
+ * This screen used to warn only when a boolean `discoveryPermissionsAsExpected`
+ * was `false`, and that boolean was `true` for `InheritedFromProfile` — this
+ * platform's profile-directory default, not a restriction anything here
+ * verified. So the screen reassured on exactly the state a bench check found
+ * two extra trustees able to read on a real machine. The boolean is gone;
+ * `InheritedFromProfile` now gets the same honest sentence and caveat here
+ * that it gets on `Integrations > CLI`. See docs/BENCH_CHECK.md, 2026-08-26
+ * finding 2.
  */
 
 import { useCallback } from "react";
 
 import { Row } from "../components/Row";
 import { getLocalApiStatus, startLocalApi, stopLocalApi } from "../lib/ipc";
+import { discoveryPermissionsLabel } from "../lib/labels";
 import { useRefresh } from "../lib/useRefresh";
 
 export function IntegrationsApi() {
@@ -23,6 +34,10 @@ export function IntegrationsApi() {
       </div>
     );
   }
+
+  const permissions = api.discoveryPermissions
+    ? discoveryPermissionsLabel(api.discoveryPermissions)
+    : null;
 
   return (
     <div className="view">
@@ -47,17 +62,17 @@ export function IntegrationsApi() {
           anything but loopback.
         </p>
         {api.discoveryPath ? (
+          <Row label="Discovery file" value={api.discoveryPath} />
+        ) : null}
+        {permissions ? (
           <Row
-            label="Discovery file"
-            value={api.discoveryPath}
-            detail={api.discoveryPermissions ?? undefined}
+            label="Discovery file permissions"
+            value={permissions.text}
+            detail={permissions.detail}
           />
         ) : null}
-        {api.discoveryPermissionsAsExpected === false ? (
-          <p className="error">
-            The discovery file is more readable than intended. Anything that can
-            read it can use the local API.
-          </p>
+        {permissions?.caveat ? (
+          <p className="caveat">{permissions.caveat}</p>
         ) : null}
         <button
           type="button"

@@ -13,12 +13,32 @@ workspace = true
 
 [dependencies]
 async-trait.workspace = true
+base64.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+tokio = { workspace = true, features = ["sync", "time"] }
+tokio-tungstenite.workspace = true
 tracing.workspace = true
+ts-rs.workspace = true
+# For query-string construction in `assemblyai.rs` -- keyterms and other
+# session settings travel there rather than in a message sent after the
+# handshake, and this is what percent-encodes them correctly.
+url.workspace = true
 
+futures.workspace = true
+
+kw-audio-core.workspace = true
+kw-network-policy.workspace = true
 kw-security.workspace = true
+# For the `LocalTranscriber` trait only. The concrete `WhisperServer` is supplied
+# by the caller, which is what makes the whole window-to-transcript path testable
+# with no server running.
+kw-transcription-core.workspace = true
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
+# Only for the test that checks every cloud client's credential slot against
+# config/provider-registry.json -- the mapping itself is a plain function over
+# `Client` with no registry dependency at runtime.
+kw-provider-registry.workspace = true

@@ -91,11 +91,21 @@ test("an entry that does not say whether it is reachable is caught", () => {
 
 test("claiming to be reachable through a surface that is not built is caught", () => {
   const found = newViolations((input) => {
-    // Settings > Meetings is the real case: six providers named, no screen.
-    const key = Object.keys(input.manifest.entries).find(
-      (k) => input.manifest.entries[k].ui === "Settings > Meetings"
-    );
-    assert.ok(key, "Settings > Meetings should still be claimed by an entry");
+    // It used to name a real surface directly (`Settings > Meetings`, later
+    // `Notes > Upload`), and each time that screen got built the test started
+    // passing vacuously: setting `reachable: true` on an entry behind a
+    // *built* surface is not a violation, so it asserted nothing. Finding an
+    // unbuilt surface fixed it once, but Task 12 built the last one -- there
+    // is now no real surface left unbuilt to find. A synthetic surface this
+    // rule has never seen closes that gap for good: it does not matter which
+    // real surfaces exist or how many of them are built.
+    const key = aUserConfigurableKey(input.manifest);
+    input.surfaces.surfaces["Test > Not Built"] = {
+      surfaceId: "test.not-built",
+      component: "apps/desktop/src/views/NoSuchComponentEverWritten.tsx",
+      built: false,
+    };
+    input.manifest.entries[key].ui = "Test > Not Built";
     input.manifest.entries[key].reachable = true;
   });
 
@@ -104,9 +114,18 @@ test("claiming to be reachable through a surface that is not built is caught", (
 
 test("a surface built out of a component that does not exist is caught", () => {
   const found = newViolations((input) => {
-    input.surfaces.surfaces["Notes > Upload"].built = true;
-    // Its component path is a file nobody has written yet, which is the whole
-    // point: `built: true` must not be assertable by editing one word.
+    // A synthetic surface rather than a real one named by hand: `Notes >
+    // Upload` used to be the one surface still unbuilt, so mutating its
+    // `built` flag alone was enough to make its already-real, marker-less
+    // component path phantom. Task 12 built it, so every real surface's
+    // component now exists and carries its marker -- this rule still needs
+    // exercising, but only a surface invented for the purpose, pointed at a
+    // file nobody has written, still proves it.
+    input.surfaces.surfaces["Test > Phantom"] = {
+      surfaceId: "test.phantom",
+      component: "apps/desktop/src/views/NoSuchComponentEverWritten.tsx",
+      built: true,
+    };
   });
 
   assert.deepEqual(rulesOf(found), new Set(["phantom-surface"]));

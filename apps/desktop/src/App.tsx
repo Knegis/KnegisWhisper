@@ -10,8 +10,9 @@
  * # Navigation
  *
  * A `view` state and a switch, not a router. The URL fragment is already claimed
- * — `#overlay` selects the overlay window out of the same bundle — and a router
- * would be a dependency that makes one `switch` look like a different `switch`.
+ * — `#overlay`, `#meeting`, and `#update` each select a window out of the same
+ * bundle — and a router would be a dependency that makes one `switch` look
+ * like a different `switch`.
  * There is nothing to link to from outside and no history worth preserving: this
  * is a settings window, not a site.
  *
@@ -27,11 +28,18 @@ import { Component, useCallback, useState, type ReactNode } from "react";
 
 import { getDiagnostics } from "./lib/ipc";
 import { useRefresh } from "./lib/useRefresh";
+import { MeetingNotification } from "./MeetingNotification";
 import { Overlay } from "./Overlay";
+import { UpdateNotification } from "./UpdateNotification";
 import { DiagnosticsView } from "./views/Diagnostics";
 import { DictationView } from "./views/Dictation";
 import { IntegrationsApi } from "./views/IntegrationsApi";
+import { IntegrationsCalendar } from "./views/IntegrationsCalendar";
+import { IntegrationsCli } from "./views/IntegrationsCli";
+import { IntegrationsMcp } from "./views/IntegrationsMcp";
 import { Notes } from "./views/Notes";
+import { NotesUpload } from "./views/NotesUpload";
+import { SettingsMeetings } from "./views/SettingsMeetings";
 import { SettingsIntelligence } from "./views/SettingsIntelligence";
 import { SettingsIntelligenceLocal } from "./views/SettingsIntelligenceLocal";
 import { SettingsProviders } from "./views/SettingsProviders";
@@ -51,8 +59,13 @@ const VIEWS = [
   { id: "transcription", label: "Transcription" },
   { id: "intelligence", label: "Intelligence" },
   { id: "local-llm", label: "Local models" },
+  { id: "meetings", label: "Meetings" },
   { id: "notes", label: "Notes" },
+  { id: "notes-upload", label: "Upload" },
+  { id: "calendar", label: "Calendar" },
   { id: "api", label: "Local API" },
+  { id: "cli", label: "CLI" },
+  { id: "mcp", label: "MCP" },
   { id: "diagnostics", label: "Diagnostics" },
 ] as const;
 
@@ -171,8 +184,13 @@ function Shell() {
             <SettingsIntelligence onGoToProviders={() => setView("providers")} />
           ) : null}
           {view === "local-llm" ? <SettingsIntelligenceLocal /> : null}
+          {view === "meetings" ? <SettingsMeetings /> : null}
           {view === "notes" ? <Notes /> : null}
+          {view === "notes-upload" ? <NotesUpload /> : null}
+          {view === "calendar" ? <IntegrationsCalendar /> : null}
           {view === "api" ? <IntegrationsApi /> : null}
+          {view === "cli" ? <IntegrationsCli /> : null}
+          {view === "mcp" ? <IntegrationsMcp /> : null}
           {view === "diagnostics" ? (
             <DiagnosticsView diagnostics={diagnostics} />
           ) : null}
@@ -187,6 +205,16 @@ function Shell() {
  * means one CSP and one build.
  */
 export default function App() {
-  const isOverlay = window.location.hash === "#overlay";
-  return isOverlay ? <Overlay /> : <Shell />;
+  // One bundle, four surfaces, routed on the fragment. A `switch` rather than
+  // a chain of ternaries so a fifth window is a compile-visible addition.
+  switch (window.location.hash) {
+    case "#overlay":
+      return <Overlay />;
+    case "#meeting":
+      return <MeetingNotification />;
+    case "#update":
+      return <UpdateNotification />;
+    default:
+      return <Shell />;
+  }
 }

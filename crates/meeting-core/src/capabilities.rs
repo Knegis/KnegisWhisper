@@ -27,12 +27,13 @@
 use std::time::Duration;
 
 use serde::Serialize;
+use ts_rs::TS;
 
 /// How a provider expects keyterms on the wire.
 ///
 /// The differences are not cosmetic: each needs different serialisation, and one
 /// of them silently truncates.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "kebab-case")]
 pub enum KeytermWire {
     /// A single JSON-encoded array in a query parameter
@@ -45,7 +46,7 @@ pub enum KeytermWire {
 }
 
 /// Whether a provider does anything with keyterms.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
 #[serde(
     tag = "state",
     rename_all = "kebab-case",
@@ -169,12 +170,20 @@ impl MeetingProviderCapabilities {
     }
 }
 
-/// Every provider this application has a client for.
+/// Every provider this application *describes*.
 ///
-/// The allowlist is **derived from this table** — see [`is_allowed`]. Upstream
-/// derives its `ALLOWED_MEETING_PROVIDERS` from its client registry for exactly
-/// this reason, with a comment worth preserving: a provider that is permitted
-/// but has no client must never fall through to the OpenAI default.
+/// Not the allowlist. Being in this table means the wire details are known well
+/// enough to say what the provider would do; it does not mean a client exists.
+/// [`is_allowed`] is derived from [`client`] instead, and this table is what the
+/// settings screen renders so that a provider with no client can be listed and
+/// explained rather than silently missing.
+///
+/// That separation is the whole point, and it was not here at first: `is_allowed`
+/// used to be `capabilities(id).is_some()`, which returned `true` for all six of
+/// these while no client existed for any of them — under a module doc claiming
+/// the opposite. Upstream derives its `ALLOWED_MEETING_PROVIDERS` from its client
+/// registry, with a comment worth preserving: a provider that is permitted but
+/// has no client must never fall through to the OpenAI default.
 pub const PROVIDERS: &[MeetingProviderCapabilities] = &[
     MeetingProviderCapabilities {
         id: "openai-realtime",
@@ -267,7 +276,12 @@ pub const PROVIDERS: &[MeetingProviderCapabilities] = &[
     },
     MeetingProviderCapabilities {
         id: "local",
-        name: "Local streaming model",
+        // Not "streaming": it is repeated short passes over a local
+        // `whisper-server`, about three seconds behind the room. Upstream's local
+        // provider is a sherpa-onnx WebSocket server that does emit words as they
+        // are recognised, and that runtime is blocked -- see chunk B4. Borrowing
+        // its name would be the overclaim this project keeps finding upstream.
+        name: "Local windowed model",
         // The only provider for which this is false, and the reason someone
         // would choose it.
         audio_leaves_device: false,
@@ -277,27 +291,238 @@ pub const PROVIDERS: &[MeetingProviderCapabilities] = &[
         sample_rates: &[16_000],
         speaker_labels: false,
         partials: true,
-        language_detection: false,
+        // `WhisperServer::transcribe` sends `"auto"` whenever no language is
+        // given (crates/transcription-core/src/local.rs), which is real
+        // per-request detection, not a guess dressed up as one. Declaring this
+        // `false` would make `validate` refuse to start a local meeting with no
+        // language configured -- this task is what first calls `validate` from
+        // `start`, which is what makes this a live bug rather than an inert
+        // field.
+        language_detection: true,
         reconnect: true,
         batch_fallback: true,
     },
 ];
 
-/// Capabilities for `id`, or `None` if there is no client for it.
+/// What this provider is described by, whether or not it can be used.
 #[must_use]
 pub fn capabilities(id: &str) -> Option<&'static MeetingProviderCapabilities> {
     PROVIDERS.iter().find(|p| p.id == id)
 }
 
+/// Which client implements a provider.
+///
+/// A name, not a constructor. Two reasons, and both were paid for.
+///
+/// The first is that an exhaustive `match` on this at the point where a session
+/// is built is a coupling the compiler enforces: adding a variant stops every
+/// call site compiling until it says what to do. A `fn` pointer or a
+/// `Box<dyn …>` factory would move that from compile time to whatever the
+/// factory happened to return.
+///
+/// The second is measured. Holding a function pointer to Tauri-dependent code
+/// keeps the Tauri runtime alive in the test binary, and a `cargo test`
+/// executable has no WebView2 beside it — the whole binary then dies at
+/// `STATUS_ENTRYPOINT_NOT_FOUND` before a single test runs. See the 2026-08-26
+/// entry in `docs/ENGINEERING_LOG.md`. Naming the client keeps the decision
+/// testable and leaves the construction at the one site that has the arguments
+/// for it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Client {
+    /// Repeated short passes over a local `whisper-server`. Not word-by-word
+    /// streaming, and named so it cannot be mistaken for it.
+    LocalWindow,
+    /// OpenAI Realtime over two WebSockets, one per capture.
+    OpenAiRealtime,
+    /// AssemblyAI Realtime over two WebSockets, one per capture -- the same
+    /// shape as `OpenAiRealtime` and for the same reason: a speaker label says
+    /// who *within* a stream, never *which* stream.
+    AssemblyAi,
+    /// Deepgram Realtime over two WebSockets, one per capture -- the same
+    /// shape and the same reason as `AssemblyAi`. Deepgram's diarization adds
+    /// a label *within* a stream; it is not a substitute for the two
+    /// connections that say *which* stream.
+    DeepgramRealtime,
+    /// Corti Realtime over two WebSockets, one per capture -- the same shape
+    /// and the same reason as the other cloud clients. Unlike them, it
+    /// authenticates with an OAuth2 client-credentials exchange before either
+    /// socket opens.
+    CortiRealtime,
+}
+
+/// The client for `id`, or `None` when there is none.
+///
+/// This is the allowlist. A provider reaches it by having an implementation
+/// here, so [`is_allowed`] cannot drift from what exists.
+#[must_use]
+pub fn client(id: &str) -> Option<Client> {
+    match id {
+        "local" => Some(Client::LocalWindow),
+        "openai-realtime" => Some(Client::OpenAiRealtime),
+        "assemblyai-realtime" => Some(Client::AssemblyAi),
+        "deepgram-realtime" => Some(Client::DeepgramRealtime),
+        "corti-realtime" => Some(Client::CortiRealtime),
+        _ => None,
+    }
+}
+
+/// The credential slot a client resolves a key from, or `None` for a client
+/// that needs no cloud credential.
+///
+/// Deliberately exhaustive with **no catch-all arm**: adding a `Client`
+/// variant is a compile error here until someone states its slot. That
+/// property is the point of this function existing at all. Before it, nothing
+/// forced the question: `MeetingRuntime::start` built its
+/// `MeetingProviderConfig` with `key_ref: None` unconditionally, so
+/// `OpenAiRealtime` shipped with `openai::token` refusing every connection
+/// attempt while the integration manifest claimed `reachable: true`. A missing
+/// arm here now fails the build instead of failing a socket three seconds
+/// after the user clicked "start".
+///
+/// The returned string is a slot name, not a [`kw_security::KeyRef`] — turning
+/// it into one, and deciding what an absent credential means, is the caller's
+/// job. This function only says which slot a client would use.
+#[must_use]
+pub const fn credential_slot(client: Client) -> Option<&'static str> {
+    match client {
+        Client::LocalWindow => None,
+        Client::OpenAiRealtime => Some("openai"),
+        Client::AssemblyAi => Some("assemblyai"),
+        Client::DeepgramRealtime => Some("deepgram"),
+        Client::CortiRealtime => Some("corti"),
+    }
+}
+
+/// Why a provider is *refused* rather than merely unbuilt.
+///
+/// The distinction matters to the person reading the screen: one of these will
+/// be built and the other will not, and "coming soon" over a deliberate refusal
+/// is the kind of quiet dishonesty this project keeps finding in the upstream it
+/// came from.
+#[must_use]
+pub fn declined(id: &str) -> Option<&'static str> {
+    match id {
+        // The same reason the batch Tinfoil client is refused, deliberately word
+        // for word: a streaming socket carries more audio, not less.
+        "tinfoil-realtime" => Some(
+            "Tinfoil requires verifying an enclave attestation before any audio is sent. An              unattested WebSocket would transcribe and would provide none of the confidentiality              the name implies, so it is refused rather than approximated.",
+        ),
+        _ => None,
+    }
+}
+
 /// Whether `id` may be used.
 ///
-/// Derived from [`PROVIDERS`] rather than kept as a separate list, so a provider
-/// cannot be permitted without a client. That is the property upstream's comment
-/// is protecting: the alternative is a permitted-but-clientless provider falling
-/// through to whatever the default happens to be.
+/// Derived from [`client`], so a provider cannot be permitted without an
+/// implementation. That is the property upstream's comment is protecting: the
+/// alternative is a permitted-but-clientless provider falling through to
+/// whatever the default happens to be.
 #[must_use]
 pub fn is_allowed(id: &str) -> bool {
-    capabilities(id).is_some()
+    client(id).is_some()
+}
+
+/// Whether a provider can be used, and if not, why not.
+///
+/// Three states rather than a boolean, because the three need different words on
+/// the screen and lead to different actions.
+///
+/// Named `Client…` rather than plain `Availability` because `local_model` already
+/// exports one — whether a *server binary* is published for this platform — and
+/// two Rust types cannot share a TypeScript name. `ipc_types.rs` asserts on that,
+/// and caught this.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(
+    tag = "state",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
+pub enum ClientAvailability {
+    /// A client exists. This provider can be selected.
+    Available,
+    /// No client is written yet. Not a promise that one will be.
+    NoClient { reason: &'static str },
+    /// Deliberately refused, and it stays refused until `reason` stops being
+    /// true.
+    Declined { reason: &'static str },
+}
+
+impl ClientAvailability {
+    #[must_use]
+    pub const fn is_available(self) -> bool {
+        matches!(self, Self::Available)
+    }
+}
+
+/// What can be said about `id` today.
+#[must_use]
+pub fn availability(id: &str) -> ClientAvailability {
+    if is_allowed(id) {
+        return ClientAvailability::Available;
+    }
+    match declined(id) {
+        Some(reason) => ClientAvailability::Declined { reason },
+        None => ClientAvailability::NoClient {
+            reason: "No streaming client for this provider has been written yet.",
+        },
+    }
+}
+
+/// One provider as the settings screen needs it.
+///
+/// A flattened view rather than [`MeetingProviderCapabilities`] itself: that type
+/// carries a `Duration`, which serialises as `{secs, nanos}` and is not what a
+/// screen wants, and `&'static [u32]`. Named `Meeting…` because
+/// `provider-registry` already exports a `ProviderSummary` and two Rust types
+/// cannot share one TypeScript name — `ipc_types.rs` asserts on exactly that.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct MeetingProviderSummary {
+    pub id: &'static str,
+    pub name: &'static str,
+    /// First, because it is the first thing a privacy-conscious user asks.
+    pub audio_leaves_device: bool,
+    pub keyterms: KeytermSupport,
+    pub session_limit_seconds: Option<u64>,
+    pub token_rotation: bool,
+    pub sample_rates: Vec<u32>,
+    pub speaker_labels: bool,
+    pub partials: bool,
+    pub language_detection: bool,
+    pub reconnect: bool,
+    pub batch_fallback: bool,
+    pub availability: ClientAvailability,
+    /// The same honest sentence [`MeetingProviderCapabilities::summary`] builds,
+    /// rendered once here rather than reassembled in TypeScript.
+    pub summary: String,
+}
+
+/// Every described provider, with whether it can actually be used.
+///
+/// Order follows [`PROVIDERS`] rather than sorting the usable ones first: the
+/// screen should show the same list every time, and a provider moving position
+/// when a client lands is a worse surprise than one being unavailable.
+#[must_use]
+pub fn listing() -> Vec<MeetingProviderSummary> {
+    PROVIDERS
+        .iter()
+        .map(|p| MeetingProviderSummary {
+            id: p.id,
+            name: p.name,
+            audio_leaves_device: p.audio_leaves_device,
+            keyterms: p.keyterms,
+            session_limit_seconds: p.session_limit.map(|d| d.as_secs()),
+            token_rotation: p.token_rotation,
+            sample_rates: p.sample_rates.to_vec(),
+            speaker_labels: p.speaker_labels,
+            partials: p.partials,
+            language_detection: p.language_detection,
+            reconnect: p.reconnect,
+            batch_fallback: p.batch_fallback,
+            availability: availability(p.id),
+            summary: p.summary(),
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -313,17 +538,200 @@ mod tests {
     #[test]
     fn the_allowlist_is_exactly_the_set_of_providers_with_clients() {
         // The invariant that stops a permitted-but-clientless provider falling
-        // through to a default.
+        // through to a default. It used to be checked against `PROVIDERS`, which
+        // made it vacuous: `is_allowed` *was* `capabilities(id).is_some()`, so
+        // the assertion could not fail and all six providers were permitted with
+        // no client behind any of them.
         for provider in PROVIDERS {
-            assert!(
+            assert_eq!(
                 is_allowed(provider.id),
-                "{} has a client but is not allowed",
+                client(provider.id).is_some(),
+                "{} is allowed iff it has a client",
                 provider.id
             );
         }
-        for bogus in ["openai", "assemblyai", "deepgram", "", "OPENAI-REALTIME"] {
+        for bogus in [
+            "openai",
+            "assemblyai",
+            "deepgram",
+            "",
+            "OPENAI-REALTIME",
+            "LOCAL",
+        ] {
             assert!(!is_allowed(bogus), "{bogus:?} should not be allowed");
         }
+    }
+
+    #[test]
+    fn the_clients_that_exist_are_exactly_these() {
+        // A tripwire, and it has already fired once: it read `vec!["local"]`
+        // until the OpenAI Realtime client landed. Failing is the prompt to flip
+        // that provider's manifest entry and its PLATFORM_SUPPORT.md row in the
+        // same commit, rather than leaving them describing a state that ended.
+        let with_clients: Vec<&str> = PROVIDERS
+            .iter()
+            .map(|p| p.id)
+            .filter(|id| client(id).is_some())
+            .collect();
+        assert_eq!(
+            with_clients,
+            vec![
+                "openai-realtime",
+                "assemblyai-realtime",
+                "deepgram-realtime",
+                "corti-realtime",
+                "local"
+            ]
+        );
+    }
+
+    #[test]
+    fn local_window_needs_no_credential_and_the_cloud_clients_name_their_slots() {
+        assert_eq!(credential_slot(Client::LocalWindow), None);
+        assert_eq!(credential_slot(Client::OpenAiRealtime), Some("openai"));
+        assert_eq!(credential_slot(Client::AssemblyAi), Some("assemblyai"));
+        assert_eq!(credential_slot(Client::DeepgramRealtime), Some("deepgram"));
+        assert_eq!(credential_slot(Client::CortiRealtime), Some("corti"));
+    }
+
+    /// The tripwire the brief asks for, and the one that would have caught the
+    /// `key_ref: None` defect: every client other than the local one must
+    /// resolve a slot the provider registry actually declares. A slot named
+    /// here that the registry does not know about would be unreachable no
+    /// matter what a user stored, which is the silent-failure shape this test
+    /// exists to rule out.
+    ///
+    /// Driven from [`PROVIDERS`] and [`client`] rather than a hard-coded list
+    /// of `Client` variants, so it keeps checking every cloud client as more
+    /// land -- each one arrives with its `credential_slot` arm in the same
+    /// commit as its `Client` variant, and this asserts the registry side of
+    /// that same commit was not forgotten.
+    #[test]
+    fn every_cloud_client_resolves_a_slot_the_registry_declares() {
+        let registry = kw_provider_registry::registry()
+            .unwrap_or_else(|e| panic!("provider registry must parse: {e}"));
+        let slots = registry.credential_slots();
+
+        let mut checked = 0;
+        for provider in PROVIDERS {
+            let Some(client) = client(provider.id) else {
+                continue;
+            };
+            if client == Client::LocalWindow {
+                continue;
+            }
+            let slot = credential_slot(client).unwrap_or_else(|| {
+                panic!(
+                    "{} has a client but credential_slot returns None",
+                    provider.id
+                )
+            });
+            assert!(
+                slots.contains(slot),
+                "{} resolves slot {slot:?}, which config/provider-registry.json does not declare",
+                provider.id
+            );
+            checked += 1;
+        }
+        assert!(
+            checked > 0,
+            "no cloud client was checked -- this test would pass vacuously"
+        );
+    }
+
+    #[test]
+    fn every_described_provider_now_has_a_client_or_a_declared_refusal() {
+        // The reason `PROVIDERS` and the allowlist are separate lists at all: a
+        // provider the screen cannot offer still has to be visible, with a
+        // reason, rather than absent. That state has had a live example ever
+        // since this table grew past its first few clients -- first Deepgram,
+        // then Corti, moved out of it -- and Corti's landing here empties it
+        // for real: every described provider now either has a client or
+        // carries a declared refusal (Tinfoil), so `NoClient` currently
+        // describes nothing in `PROVIDERS`. This is
+        // `the_clients_that_exist_are_exactly_these`'s tripwire firing as
+        // intended, not a gap in coverage -- `availability` itself still
+        // produces `NoClient` for an id this table does not know about at
+        // all, which is what a described-but-unbuilt provider would look
+        // like if one existed again.
+        let listed = listing();
+        assert_eq!(listed.len(), PROVIDERS.len());
+        assert!(
+            listed.iter().all(|p| p.availability.is_available()
+                || matches!(p.availability, ClientAvailability::Declined { .. })),
+            "every provider should now have a client or a declared refusal"
+        );
+
+        match availability("a-provider-nobody-has-described") {
+            ClientAvailability::NoClient { reason } => {
+                assert!(reason.contains("written yet"), "{reason}")
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn tinfoil_is_declined_rather_than_merely_unbuilt() {
+        // Two different futures, so two different words. "Coming soon" over a
+        // deliberate refusal is the quiet dishonesty this project keeps finding
+        // upstream.
+        let listed = listing();
+        let tinfoil = listed.iter().find(|p| p.id == "tinfoil-realtime").unwrap();
+        match tinfoil.availability {
+            ClientAvailability::Declined { reason } => {
+                assert!(reason.contains("attestation"), "{reason}");
+                assert!(reason.contains("refused"), "{reason}");
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(declined("deepgram-realtime").is_none());
+    }
+
+    #[test]
+    fn the_summary_keeps_the_duration_out_of_the_wire() {
+        // `Duration` serialises as {secs, nanos}, which is not something a screen
+        // should have to know.
+        let listed = listing();
+        let openai = listed.iter().find(|p| p.id == "openai-realtime").unwrap();
+        assert_eq!(openai.session_limit_seconds, Some(3_600));
+
+        let json = serde_json::to_value(openai).unwrap();
+        assert_eq!(json["sessionLimitSeconds"], 3_600);
+        assert_eq!(json["audioLeavesDevice"], true);
+        // Availability is asserted on the provider whose state just changed,
+        // not pinned on one that still has none: pinning "no-client" here
+        // made the test fail the day the OpenAI client landed, which was the
+        // tripwire doing its job but the wrong assertion to have written.
+        // Corti was the provider in the no-client state as of the previous
+        // client landing; this client moves it to available.
+        let corti = listed.iter().find(|p| p.id == "corti-realtime").unwrap();
+        let json = serde_json::to_value(corti).unwrap();
+        assert_eq!(json["availability"]["state"], "available");
+    }
+
+    #[test]
+    fn the_local_provider_is_the_only_one_that_keeps_audio_on_the_machine() {
+        let listed = listing();
+        let local: Vec<&str> = listed
+            .iter()
+            .filter(|p| !p.audio_leaves_device)
+            .map(|p| p.id)
+            .collect();
+        assert_eq!(local, vec!["local"]);
+
+        let local = listed.iter().find(|p| p.id == "local").unwrap();
+        assert!(local.availability.is_available());
+    }
+
+    #[test]
+    fn a_cloud_client_being_available_does_not_make_its_audio_local() {
+        // The two facts are independent and the screen shows both. Being able to
+        // use OpenAI Realtime does not make it private, and saying so plainly is
+        // the point of `audio_leaves_device` being the first field.
+        let listed = listing();
+        let openai = listed.iter().find(|p| p.id == "openai-realtime").unwrap();
+        assert!(openai.availability.is_available());
+        assert!(openai.audio_leaves_device);
     }
 
     #[test]
