@@ -141,6 +141,24 @@ arbitrary filesystem access, no process spawning, no direct database or credenti
 HTTP. Command payloads are typed and validated at the boundary; paths and URLs are validated
 before use.
 
+**`Notes > Upload`'s file pickers are a narrower exception, worth naming precisely rather than
+folding into the paragraph above.** `pick_import_file` opens a real OS dialog and returns the
+chosen path *to the renderer*, which holds it in React state and passes it as a plain string to a
+separate command — `media_import_audio`, `media_import_video`, or `import_openwhispr` — on a later
+click. What holds: the renderer has no independent way to *obtain* a path, since there is no
+filesystem or dialog capability in `capabilities/default.json`; only a real dialog produces one.
+What does not hold: unlike `note_export_to_file`, which fuses picking and writing into one atomic
+command specifically so the frontend never sees or supplies a path at all, these three commands
+accept whatever path string they are called with and read it — nothing confirms it is the one
+`pick_import_file` returned rather than one invented outright. **Concretely:** a compromised
+renderer, already in this document's threat model, can call `media_import_audio` directly with an
+arbitrary local path with no dialog involved; with a cloud transcription provider configured, that
+file's contents then leave the machine. Not yet closed. Two hardening directions, neither chosen
+yet: fuse picking and importing into one atomic command the way export already does (in tension
+with `Notes > Upload`'s pick-then-review-then-confirm flow, which export's single-click save does
+not need); or a capability restricting which paths these three commands will accept, independent
+of whatever the renderer claims. See `docs/BENCH_CHECK.md`'s Task 12 entry.
+
 ## Sidecars
 
 Explicitly allowlisted; the frontend cannot spawn a process. Downloads are pinned by version and

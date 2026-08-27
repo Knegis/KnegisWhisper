@@ -312,6 +312,25 @@ of chunk F is green tests and code review; none of it has touched real hardware 
    orphaned per-import scratch directory is left behind — a known, disclosed gap with no startup
    sweep — and that a half-downloaded `.part`/`.ytdl` file is never picked up as a finished import.
 
+### Added by Task 12 (`Notes > Upload`'s file pickers), and unchecked
+
+A code-review finding, not yet exercised on real hardware or decided on: `pick_import_file` opens
+a real dialog and hands the chosen path *back to the renderer*, which passes it as a plain string
+to `media_import_audio`, `media_import_video`, or `import_openwhispr` on a later click. Those three
+commands read whatever path they are called with — nothing confirms it is the one the dialog
+returned. See `docs/SECURITY.md`'s Webview section for the full description.
+
+1. **Decide whether to close the gap, and how.** Two directions, neither chosen: fuse pick and
+   import into one atomic command the way `note_export_to_file` fuses pick and write (in tension
+   with `Notes > Upload`'s pick-then-review-then-confirm flow, which a single-click save does not
+   need); or add a capability that restricts which paths these three commands will read, independent
+   of whatever the renderer supplies.
+2. **If closed by restricting paths, confirm the restriction with a real compromised-renderer
+   simulation** — call the command directly (bypassing the picker) with a path never returned by
+   `pick_import_file`, e.g. a credential file or another user's document, and confirm it is refused
+   rather than read. A unit test can assert the policy; only a real call against the running
+   application proves the policy is actually consulted on this path.
+
 ### Added by chunk H (MCP and CLI screens), and unchecked
 
 1. **Drive `tools/knegiswhisper-mcp` from a real MCP client** (an editor or agent that speaks the

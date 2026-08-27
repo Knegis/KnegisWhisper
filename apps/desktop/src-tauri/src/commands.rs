@@ -551,10 +551,23 @@ fn import_pick_dialog(
 /// Open a native "choose a file" dialog and return the path picked, or `None`
 /// if the user cancelled.
 ///
-/// **Opened from Rust, the same as `note_export_to_file`'s save dialog.** The
-/// frontend has no filesystem or dialog capability in
-/// `capabilities/default.json`, so it never sees or supplies a path — every
-/// path `Notes > Upload` uses came back from a call like this one.
+/// **What this guarantees, and what it does not.** The renderer has no
+/// independent way to *obtain* a path: there is no filesystem or dialog
+/// capability in `capabilities/default.json`, so the only path a caller can
+/// ever have seen is one a real OS dialog produced through this command.
+///
+/// **It is not, though, the same guarantee `note_export_to_file` makes.**
+/// That command fuses picking and writing into one atomic call, so the
+/// frontend never sees or supplies a path at all — the property
+/// `docs/SECURITY.md` names as answering path traversal through export. This
+/// command instead hands the chosen path *back* to the renderer, which holds
+/// it in state and passes it as a plain string to a separate command
+/// (`media_import_audio`, `media_import_video`, `import_openwhispr`) on a
+/// later click. Those commands read whatever path they are called with;
+/// nothing confirms it is the one this command returned rather than one a
+/// compromised renderer invented outright. See `docs/SECURITY.md`'s Webview
+/// section and `docs/BENCH_CHECK.md`'s Task 12 entry for the gap this leaves
+/// open and the hardening options being weighed.
 #[tauri::command]
 pub async fn pick_import_file(app: AppHandle, kind: ImportPickKind) -> CmdResult<Option<String>> {
     use tauri_plugin_dialog::DialogExt as _;
