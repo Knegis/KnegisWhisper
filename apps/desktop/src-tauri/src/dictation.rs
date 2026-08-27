@@ -800,8 +800,8 @@ pub async fn dictation_set_cloud_provider(
         let environment = corti_environment
             .as_deref()
             .map(str::trim)
-            .filter(|v| !v.is_empty())
-            .ok_or("Corti needs an environment, for example \"eu\".")?;
+            .filter(|v| kw_transcription_core::clients::is_valid_corti_environment(v))
+            .ok_or("Corti needs an environment that is one DNS label, for example \"eu\".")?;
         let tenant = corti_tenant
             .as_deref()
             .map(str::trim)
