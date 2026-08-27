@@ -440,9 +440,26 @@ present; where it is not, the app reports `unsupported` rather than appearing to
 
 | Provider | Windows | macOS | Linux |
 | --- | --- | --- | --- |
-| Google | yes | yes | yes |
-| Microsoft 365 | yes | yes | yes |
-| Apple | not applicable | EventKit — unverified | not applicable |
+| Google | yes ⚠️ | yes ⚠️ | yes ⚠️ |
+| Microsoft 365 | yes ⚠️ | yes ⚠️ | yes ⚠️ |
+| Apple | not applicable | not implemented | not applicable |
+
+⚠️ The loopback PKCE flow, calendar listing and incremental event sync run on every platform, but
+the `calendarList`/`events.list` (Google) and `/me/calendars`/`events/delta` (Microsoft) wire shapes
+are covered by fixtures modelled on each vendor's public documentation — no client ID exists on this
+machine, so no live call has been made. See the `calendar:google` and `calendar:microsoft` manifest
+notes for the full accounting.
+
+**Apple is "not implemented", not merely "unverified" — corrected by Task 19.** The two rows above
+are unverified in the ordinary sense: real code, exercised against fixtures, waiting on a live
+credential. Apple Calendar is a different claim entirely. `kw_calendar_core::apple`'s own module doc
+says `AppleCalendarSource` is "deliberately unimplemented by anything in this crate" and that this is
+true "on every platform this builds for today", including macOS — there is no macOS machine in this
+development environment to write or verify an EventKit binding against, so nothing exists to be
+unverified. `config/integration-manifest.json`'s `calendar:apple` entry carries `temporarily-deferred`
+with a `deferral` block naming exactly this, corrected during Task 19's audit of every manifest status
+that asserts a working implementation exists (it previously carried `platform-specific`, the same
+false-implementation pattern `platform:aec` was already corrected for).
 
 Calendar access is optional and is never required for meeting transcription.
 
