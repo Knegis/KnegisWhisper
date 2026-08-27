@@ -16,22 +16,54 @@ with the network off, text landing at the caret in Notepad and VS Code, the clip
 focus never moving, and the compiled CLI reading history out of the running application. That is
 the first thing in this project to earn the word *verified*.
 
-What the same period established is that **the remaining work is mostly reachability, not
-capability**. The parity gate now resolves each manifest entry through `config/ui-surfaces.json`
-and prints what cannot be configured:
+What the same period established is that **the remaining work was mostly reachability, not
+capability** — and by the close of this plan (chunks A–J, plus Task 20's unplanned network-boundary
+fix) that work is done. The parity gate resolves each manifest entry through
+`config/ui-surfaces.json` and prints what cannot be configured; quoting its actual output rather
+than restating a number, run at the end of this plan:
 
-- **45 of 99 integrations are reachable**, up from 8 when this plan was written. 19 are
-  implemented-or-declared and unreachable; the other 35 are removed vendor services and internal
-  platform capabilities with no surface by design.
-- **5 of 13 UI surfaces do not exist.** The 8 that do are one component each; `App.tsx` is the
-  shell.
-- The keystone is closed: `Settings > Providers` stores a key for every one of the fifteen slots
-  the registry declares. Before chunk A, `provider_credential_set` existed in Rust and
-  `setProviderCredential` was exported from `ipc.ts` and **nothing called either**, so every cloud
-  provider was unreachable regardless of backend state.
+```
+integration parity OK — 102 entries against baseline c4000db9802d
+  ported-with-new-rust-implementation    52
+  rewired-to-direct-byok                 21
+  removed-vendor-service                 18
+  temporarily-deferred                   7
+  ported                                 3
+  platform-specific                      1
 
-So this plan front-loads the screens, then closes genuine backend gaps behind them, then does the
-platform work that no amount of UI can substitute for.
+7 integrations are declared unreachable:
+  Settings > Transcription > Local      4  (surface built)
+  Settings > Transcription              1  (surface built)
+  Settings > Meetings                   1  (surface built)
+  Integrations > Calendar               1  (surface built)
+```
+
+- **60 of 102 integrations are reachable**, up from 8 when this plan was written and 45 when this
+  section was last written mid-run. Only **7** are implemented-or-declared and unreachable, down
+  from 19 — and every one of them names a *built* surface, which was not true when this section was
+  first drafted; the other 35 are removed vendor services and internal platform capabilities with no
+  surface by design.
+- **0 of 13 UI surfaces do not exist.** All 13 are built, one component each; `App.tsx` is the
+  shell. `Notes > Upload`, `Integrations > CLI` and `Integrations > MCP` — the last three that did
+  not exist — were built in chunks G and H below.
+- The keystone closed early and stayed closed: `Settings > Providers` stores a key for every one of
+  the **seventeen** slots the registry now declares (twelve providers, five per-feature custom
+  endpoints — up from ten and fifteen total, once `credential:assemblyai` and `credential:deepgram`
+  were added for meeting streaming in chunk E). Before chunk A, `provider_credential_set` existed in
+  Rust and `setProviderCredential` was exported from `ipc.ts` and **nothing called either**, so
+  every cloud provider was unreachable regardless of backend state.
+- **The seven that remain unreachable, each for a specific, named reason rather than "not done
+  yet":** four local-ASR models (sherpa/Parakeet — the runtime is real, measured, and proven by a
+  probe re-run cold by the controller; the only gap is a Settings selector, deliberately not built
+  as part of that measurement task), two Tinfoil entries (batch transcription and meeting-stream,
+  both declined on principle — an unattested client would present as Tinfoil while providing none of
+  the confidentiality the name means), and Apple Calendar (EventKit — described in
+  `kw_calendar_core::apple`, implemented nowhere, on any platform, for lack of a macOS machine).
+
+So this plan front-loaded the screens, then closed genuine backend gaps behind them, then did the
+platform work that no amount of UI could substitute for — meetings, calendars, media import, MCP,
+packaging — leaving only the AEC helper and two diarization/search entries in the deliberately-deferred
+state chunk I and chunk E4 describe below.
 
 ## Decisions taken (2026-08-25)
 
@@ -50,16 +82,16 @@ platform work that no amount of UI can substitute for.
 | Phase | Status | The gap |
 | --- | --- | --- |
 | 0 — Audit and contracts | Complete | — |
-| 1 — Tauri foundation | Complete | 4 of 6 window roles exist; Linux/macOS hotkey fallbacks unwritten. Modifier-only shortcuts work on Windows through a keyboard hook. Four of the five hotkey actions have no feature behind them and are now reported as such rather than registered |
-| — Chunk A (shell, types, Providers) | **Done, unchecked by hand** | Storing a key and passing a connection test has not been done by a person on this machine |
-| 2 — Dictation | **Verified on Windows** | 6 of 7 transcription providers reachable; Tinfoil declined pending enclave attestation. 2 of 4 sherpa local ASR models (Parakeet) proven at the backend level but not yet wired into Settings; the 2 Nemotron models stay blocked, deliberately (streaming protocol) — see B4 |
-| 3 — Reasoning | Complete, enterprise unverified | All three enterprise shapes written and tested against vectors and fixtures; no live call. No llama-server sidecar for `ChatRoute::Local`, which already points at `127.0.0.1:8221` |
-| 4 — Meetings and notes | Notes reachable; meetings contract only | No system audio anywhere; 5 WebSocket clients; 5 process detectors; AEC helper |
-| 5 — Calendars | Not started | No crate, no OAuth flow |
-| 6 — Local API and CLI | **Verified on Windows** | No `Integrations > CLI` screen |
-| 7 — MCP | Not started | `tools/knegiswhisper-mcp` does not exist; upstream's was hosted, so this is new work |
-| 8 — Diarization + semantic search | Not started | 2 diarization models (`temporarily-deferred`), Qdrant sidecar, embeddings |
-| 9 — Packaging | Not started | `createUpdaterArtifacts: false`, no signing identity, **CI triggers are commented out** |
+| 1 — Tauri foundation | Complete | 4 of 6 window roles exist (Dictation panel, Control panel, Meeting notification, Update notification); Agent overlay is phase 10 scope and Transcription preview has no task in this plan. Linux/macOS hotkey fallbacks unwritten. Modifier-only shortcuts work on Windows through a keyboard hook. Four of the five hotkey actions have no feature behind them and are reported as such rather than registered |
+| — Chunk A (shell, types, Providers) | **Done, unchecked by hand** | Storing a key and passing a connection test has not been done by a person on this machine — still true at the close of this plan; see `BENCH_CHECK.md`'s "still unchecked" list, item 3 |
+| 2 — Dictation | **Verified on Windows** | 6 of 7 transcription providers reachable; Tinfoil declined pending enclave attestation. 2 of 4 sherpa local ASR models (Parakeet) proven at the backend level, measured end to end by a probe the controller independently re-ran cold, but not yet wired into Settings — no selector exists, deliberately not built as part of that measurement task; the 2 Nemotron models stay blocked on a streaming protocol nobody has written a client for — see B4 |
+| 3 — Reasoning | Complete, enterprise unverified | All three enterprise shapes written and tested against vectors and fixtures; no live call, no organisational credentials for any of the three. (The `llama-server` sidecar this phase's own chunk B3 built is done and pinned — the earlier version of this row said it was still missing, which stopped being true the same session it was written) |
+| 4 — Meetings and notes | **Complete**, three refusals kept | System audio, the meeting notification window, all five detectors (`zoom`/`teams`/`webex`/`facetime`/`generic`), and 4 of 5 WebSocket clients (`openai-realtime`/`assemblyai-realtime`/`deepgram-realtime`/`corti-realtime`, plus `meeting-stream:local`) are done. `meeting-stream:tinfoil-realtime` stays declined, for the identical reason as the batch client. The AEC helper stays `temporarily-deferred` — no C++ toolchain on this machine, and it gates quality (double-transcribed far-end audio on speakers), not whether a meeting records at all |
+| 5 — Calendars | **Complete** | Google and Microsoft: loopback PKCE, calendar list and incremental sync, all reachable — no client ID on this machine, so no live call has been made. Apple Calendar: `temporarily-deferred`, described in `kw_calendar_core::apple` and implemented nowhere, for lack of a macOS machine |
+| 6 — Local API and CLI | **Verified on Windows** | `Integrations > CLI` is now built. (Chunk H built its screen and phase 7's `Integrations > MCP` screen together, in one task, since both render the same discovery-permissions state) |
+| 7 — MCP | **Complete** | `tools/knegiswhisper-mcp`, a stdio server (~1573 lines incl. tests), reusing the local API's tool surface and token comparison. 28 crate tests plus protocol tests. Unverified by a person driving a real MCP client — see `BENCH_CHECK.md` |
+| 8 — Media import, diarization, semantic search | Media import complete; diarization and search deferred | `media:{audio,video,url}-import` and `media:openwhispr-import` are all reachable through `Notes > Upload`. The two diarization models and `search:semantic` stay `temporarily-deferred` — Qdrant sidecar, ONNX Runtime, embeddings, none attempted this run |
+| 9 — Packaging | Written, unrun | `createUpdaterArtifacts: true` now (chunk J), release/CI workflows exist and pass locally, but no signing identity exists, no release has ever been published, and **CI triggers remain commented out by design** — chunk J's own value is deferred until someone uncomments them, so every gate in this document runs only when a person runs it |
 
 ## The unlock arithmetic
 
@@ -67,15 +99,15 @@ Why the order below is what it is. Each chunk's integrations-made-reachable:
 
 | Chunk | New backend | Integrations unlocked |
 | --- | --- | --- |
-| A — shell + Providers *(done)* | 2 commands | **18**: 15 credential slots + 3 transcription providers |
+| A — shell + Providers *(done)* | 2 commands | **18**: 15 credential slots + 3 transcription providers (the registry grew two more provider slots later, in chunk E, for AssemblyAI and Deepgram — seventeen total by the close of this plan) |
 | B — Intelligence *(done but B4)* | 3 enterprise shapes, llama sidecar | 7 reasoning + 3 enterprise + 6 local LLM = **16**, all reachable |
 | C — transcription clients *(done)* | 3 clients; the fourth declined | **6** of 7 transcription; Tinfoil needs enclave attestation |
-| D — system audio + natives | large | 0 directly; unblocks E entirely |
-| E — meetings | 5 clients + 5 detectors | **6** streams + 5 detectors |
-| F — calendars | new crate | **3** |
-| G — media import | ffmpeg, yt-dlp sidecars | **3** |
-| H — MCP + CLI screens | MCP server | **2** |
-| I — diarization + search | sherpa + Qdrant | **4** (+2 more local ASR once Settings wiring exists for the 2 Parakeet models Task 18 already proved; the 2 Nemotron models need a streaming client first) |
+| D — system audio + natives *(done)* | large | 0 directly; unblocked E entirely, which is exactly what happened |
+| E — meetings *(done)* | 3 new clients (AssemblyAI, Deepgram, Corti) + 5 detectors | **5 of 6** streams reachable (`openai-realtime` predates this plan; `local` needs no key; Tinfoil stays declined) + 5 detectors, all built |
+| F — calendars *(done)* | new crate | **2 of 3** (Google, Microsoft; Apple `temporarily-deferred` for lack of a macOS machine) |
+| G — media import *(done)* | ffmpeg, yt-dlp sidecars | **4**: audio/video/url import on the two new sidecars, plus `media:openwhispr-import` — already written and tested, newly given the screen that made it reachable |
+| H — MCP + CLI screens *(done)* | MCP server | **2** |
+| I — diarization + search *(not attempted this run)* | sherpa + Qdrant | **0**. Neither `ort`, Qdrant, nor the diarization/semantic-search work was started; both entries stay `temporarily-deferred`, unchanged since before this plan. (The 2 Parakeet local-ASR models Task 18 measured and proved are chunk B4's local-ASR work, not this chunk — they stay `reachable: false` for want of a Settings selector, deliberately not built as part of that measurement task) |
 
 ---
 
@@ -394,10 +426,14 @@ dividing halves every passage where only one source is active, which is most of 
   because a hooked chord does not take the keystroke away from other applications and reporting
   both as "registered" is the small lie that surfaces when the Start menu appears anyway.
 
-- **Text monitor** — UIAutomation focused-element read. Not written. It serves meetings, which
-  chunk E has not started, so it is behind its own consumer.
+- **Text monitor** — UIAutomation focused-element read. Still not written. Chunk E (meetings) is
+  now done and did not end up needing it — the meeting screen, the five clients and the notification
+  window none of them read the focused element. Left here rather than deleted, since nothing in
+  this plan built it and no task claimed otherwise.
 - **Mic listener** — `IAudioSessionManager2`, for "another application is using the microphone".
-  Not written, same reason.
+  Still not written, same reason: chunk E shipped without it. `meeting-detect.rs:120`'s own comment
+  still names it as the dependency for microphone-activity detection, which chunk E also did not
+  attempt (the five detectors that did ship are all process-based, not audio-based).
 
 ### D3. Linux and macOS shortcut fallbacks
 
@@ -406,82 +442,178 @@ input, and `PLATFORM_SUPPORT.md` must keep saying so per compositor.
 
 ---
 
-## Chunk E — meetings
+## Chunk E — meetings *(done, except the AEC helper — deferred on purpose)*
 
-### E1. Detection (5 detectors)
+### E1. Detection (5 detectors) *(done)*
 
 `meeting-detect:{zoom,teams,webex,facetime,generic}` via `sysinfo`'s process table — the same
 crate `sidecar::reap` already uses to verify a command line before signalling. Port
-`meetingProcessDetector.js`.
+`meetingProcessDetector.js`. **`meeting_detect_probe` found `ms-teams.exe` on this machine** without
+a bench check being run — the only detector row in `PLATFORM_SUPPORT.md` that says "seen to match"
+rather than "written, unverified".
 
-### E2. The five WebSocket clients
+### E2. Three of the five WebSocket clients *(done; the fourth declined; the fifth predates this plan)*
 
 `tokio-tungstenite`, one per provider, against the existing `MeetingTranscriptionProvider` trait
 and `MeetingProviderCapabilities` (`crates/meeting-core/src/capabilities.rs`, 529 lines and
 already written). The capability model is the specification: AssemblyAI caps keyterms at 100,
 Deepgram uses repeated query params, Corti a JSON config block, and **OpenAI Realtime and Tinfoil
 silently ignore keyterms** — so the client must not pretend otherwise. Honour `session_limit`
-(OpenAI: 60 minutes) and `token_rotation` (Deepgram only).
+(OpenAI: 60 minutes) and `token_rotation` (Deepgram only, and only as a declared capability — with
+BYOK there is nothing to rotate, and a test proves no rotation clock exists so the flag cannot
+quietly grow one).
 
 `is_allowed` stays **derived** from the client registry: a permitted provider with no client must
 be a compile error, never a fall-through to OpenAI. Also `meeting-stream:local`, which needs no
 keys and is the one that can be verified here.
 
-### E3. Settings > Meetings, and two more window roles
+**AssemblyAI, Deepgram and Corti are written and tested against fixtures; none has been called
+live** — no key exists on any machine this project has touched for any of the three, and Corti's
+*socket* wire specifically (endpoint path, message envelope, most of the session-config block) was
+invented outright with no vendor documentation to check it against, a strictly weaker epistemic
+state than AssemblyAI's and Deepgram's "read from public docs, unconfirmed". Each client got **two
+WebSockets, one per capture** — overriding this plan's own "one socket, not two" premise, which was
+wrong: `TranscriptEvent::source` is non-optional and none of these three providers' speaker labels
+say *which stream* an event came from, only who spoke *within* one. A single socket would have made
+`source` a guess for every event, the exact defect OpenAI Realtime's existing two sockets already
+avoid. **Tinfoil stays declined**, for the reason chunk C already gives its batch client: an
+unattested socket would stream audio correctly while presenting as Tinfoil in the UI, a
+confidentiality claim it did not earn.
+
+### E3. Settings > Meetings, and two more window roles *(done)*
 
 The screen, plus the **meeting notification** window — content-protected, "visible to the user but
 out of screen shares" — which is `overlay::apply_treatments` applied to a second window. The
-overlay module already returns evidence rather than a boolean; reuse it unchanged.
+overlay module already returns evidence rather than a boolean; reused unchanged.
 
-### E4. The AEC helper
+### E4. The AEC helper *(temporarily-deferred; not attempted)*
 
-The one binary this project builds. `Transport::Stdio` already exists in
+The one binary this project intended to build for itself. `Transport::Stdio` already exists in
 `sidecar::manifest::Transport`. Both third-party pins are settled and measured: abseil by archive
 sha256, webrtc-apm by a **content digest over its extracted tree** because googlesource generates
-that tarball per request and it is not byte-stable. What remains is vendoring six source files,
-porting the 446-line generator, and a five-target workflow with `contents: write`. Ride the macOS
-`whisper-server` job on the same workflow — same shape, and it is the last `not-published` target
-in `config/sidecars.json`.
+that tarball per request and it is not byte-stable. What remains — vendoring six source files,
+porting the 446-line generator, and a five-target workflow with `contents: write` — needs a C++
+toolchain (cmake, ninja, clang), and none is installed on this development machine, which is also
+why every decompressor this workspace added (`bzip2-rs` for sherpa, `lzma-rs` for the archive
+formats before it) is pure Rust rather than a C binding. **Declined for now, not unfinished** —
+`config/integration-manifest.json`'s `platform:aec` entry was corrected mid-run from
+`ported-with-new-rust-implementation` to `temporarily-deferred`, because nothing implementing it
+exists: no helper, no generator port, no workflow. It gates nothing meetings actually need: system
+audio capture is what determines whether a meeting can be recorded at all, and that is done. Without
+AEC, a meeting recorded on speakers transcribes the far-end voice twice; on headphones there is
+nothing to cancel.
+
+### A cross-cutting gap in all four cloud clients, recorded and not fixed
+
+`openai_socket.rs`, `assemblyai_socket.rs`, `deepgram_socket.rs` and `corti_socket.rs` all treat a
+provider-reported error frame as `tracing::warn!` and never turn it into an `Err` from
+`connect`/`send_audio`/`finish`. A server that accepts a malformed session-config frame, stays open,
+and never emits a transcript would let a meeting "complete successfully" holding an empty
+transcript, evidenced only by a background log line nobody in the room can see. Predates every task
+in this chunk and is shared equally by all four — see `docs/BENCH_CHECK.md` item 13 and
+`docs/ENGINEERING_LOG.md`.
 
 ---
 
-## Chunk F — calendars (phase 5)
+## Chunk F — calendars (phase 5) *(done, Apple deferred on purpose)*
 
 New `crates/calendar-core`. Google and Microsoft via **loopback PKCE public clients** — upstream
-ships a client secret in the binary, which in an open-source build is not a secret. Apple EventKit
-behind a trait, unverified.
+ships a client secret in the binary, which in an open-source build is not a secret. **Apple EventKit
+is not "behind a trait, unverified" — it is described and implemented nowhere, deliberately.**
+`kw_calendar_core::apple`'s own module doc: `AppleCalendarSource` is "deliberately unimplemented by
+anything in this crate," on every platform this builds for today including macOS, because there is
+no macOS machine in this development environment to write or verify an EventKit binding against.
+The manifest's `calendar:apple` status was corrected mid-run (Task 19) from `platform-specific` to
+`temporarily-deferred` for exactly this reason — the same overclaim `platform:aec` was already fixed
+for, applied one file section later.
 
-Refresh tokens become a `token_ref` naming a credential-store slot. `storage`'s
-`assert_no_credential_columns` already fails if a credential-shaped column reappears, and the
-OpenWhispr importer already relocates upstream's plaintext `google_calendar_tokens.refresh_token`
-into the OS store. Testable end to end against a stub authorisation server on loopback; only the
-real round trip needs client IDs.
+Refresh tokens became a `token_ref` naming a credential-store slot, exactly as planned. `storage`'s
+`assert_no_credential_columns` fails if a credential-shaped column reappears, and the OpenWhispr
+importer relocates upstream's plaintext `google_calendar_tokens.refresh_token` into the OS store.
+Tested end to end against a stub authorisation server on loopback; the real round trip still needs
+client IDs this project does not have, so Google and Microsoft are `reachable: true` with **no live
+call ever made** — the wire shapes (`calendarList`/`events.list`, `/me/calendars`/`events/delta`) are
+covered by fixtures modelled on each vendor's public documentation.
+
+**A `TokenSender` trait seam was needed and settled as sound.** The loopback stub server the tests
+need could not be reached through `kw_network_policy`, which correctly refuses plaintext for
+`UserConfiguredCalendarProvider` — so a `PlaintextLoopbackSender` test double exists, confined to
+its own test binary (`crates/calendar-core/tests/oauth_flow.rs`) and never linked into the shipped
+binary. `NetworkPolicySender` is the only implementation the application ships, constructed at
+exactly two sites, with no default and no fallback — stricter than this codebase's own
+`CredentialStore` precedent, where `MemoryCredentialStore` does ship.
+
+Three defects found and fixed during the by-hand and code-review passes: a partially-failed sync
+that discarded a calendar-prune error with `let _ =` and still reported `SyncOutcome::Completed`; a
+settings-read *failure* (not merely a first connect) being treated as "no previous account" and
+skipping the auto-disconnect, which could leave a live, working refresh token in the OS credential
+store the app could no longer see or revoke; and `NeedsRefresh` rendering unconditionally as
+"Connected" even after a sync had recorded `TokenUnavailable` telling the user to reconnect. All
+three fixed in the same task, with new tests proving the fix reached both provider paths and that
+the new `RefreshFailed` status is actually produced, not merely defined.
 
 ---
 
-## Chunk G — media import and the importer UI
+## Chunk G — media import and the importer UI *(done)*
 
-- `ffmpeg` and `yt-dlp` (`2026.07.04`) as `Transport::Stdio` sidecars → `Notes > Upload`
-  (`media:audio-import`, `media:video-import`, `media:url-import`).
-- **`storage::import::from_openwhispr` has no UI.** It attaches read-only, introspects with
-  `pragma table_info`, drops every cloud column, rebuilds FTS, and relocates secrets — and no user
-  can run it. Deliberately absent from the manifest until it has a screen; add both together.
-- URL import is the one place a user-supplied URL reaches the network. It needs its own
-  `RequestPurpose` and must not become a general-purpose fetch.
+- `ffmpeg` and `yt-dlp` (`2026.08.19`) as `Transport::Stdio` sidecars → `Notes > Upload`
+  (`media:audio-import`, `media:video-import`, `media:url-import`). The backend for all three is
+  `apps/desktop/src-tauri/src/media.rs` (`MediaImportRuntime`) — the manifest said
+  `crates/notes-core` until Task 19 corrected it; that crate holds no import code.
+- **`storage::import::from_openwhispr` got its screen.** It attaches read-only, introspects with
+  `pragma table_info`, drops every cloud column, rebuilds FTS, and relocates secrets. Was
+  deliberately absent from the manifest until it had a screen; both landed together, as planned.
+- **URL import got its own purpose, `UserTriggeredMediaImport`, and did not become a general-purpose
+  fetch** — but it also does not reach the network directly the way this line implied. `media.rs`
+  makes exactly one direct use of `kw_network_policy`: a literal-host check (scheme, the vendor
+  blocklist, a private/link-local host) *before* the URL is ever handed to anything that would fetch
+  it. Fetching is yt-dlp's own job as a separate process, with its own DNS resolution and redirect
+  handling, none of it observed or routed through the policy layer — bounded instead by flags yt-dlp
+  enforces on itself (a 500 MB filesize cap, a bounded socket timeout). See
+  `docs/NETWORK_BOUNDARY.md`'s "SSRF guards for URL import" section, corrected by Task 19 to say so.
+
+**This is where Task 20 started.** Reviewing this chunk's guard, an implementer noticed
+`kw_network_policy::validate`'s `https` arm ran no host check at all, for any purpose — a gap far
+larger than media import, closed centrally rather than patched locally. See "the network boundary
+does not stop SSRF over HTTPS" in `docs/ENGINEERING_LOG.md`.
+
+**Two parity self-tests broke when `Notes > Upload` was finally built, and that was the system
+working.** They had been written earlier in the run specifically to *find* an unbuilt surface and
+fail loudly if none remained, and this was the last one. Fixed to use a synthetic surface — the
+gate is pure and injectable precisely so a test can construct its own inputs rather than depending
+on a real surface staying unbuilt, which was always the fragile choice.
 
 ---
 
-## Chunk H — MCP and the last two screens
+## Chunk H — MCP and the last two screens *(done)*
 
 `tools/knegiswhisper-mcp`, a **stdio** MCP server (upstream's was a hosted Streamable-HTTP
-service; there is no local implementation to port). Reuse the local API's tool surface and its
-`LocalApiToken` constant-time comparison. Plus `Integrations > MCP` and `Integrations > CLI` —
-the CLI screen showing the discovery-file path, its **real** permissions, and the binary's
-location, reusing what `IntegrationsApi` already renders.
+service; there is no local implementation to port) — ~1573 lines including 340 lines of protocol
+tests, 28 crate tests. Reused the local API's tool surface (an exact 1:1 match against its route
+table, in both directions) and its `LocalApiToken` constant-time comparison. Built `Integrations >
+MCP` and `Integrations > CLI` together — the CLI screen shows the discovery-file path, its **real**
+permissions, and the binary's location, reusing what `IntegrationsApi` already renders.
+
+**One correction fixed during review, and one scope extension the controller ordered.**
+`initialize` originally echoed any client-supplied `protocolVersion` unchanged — proven by its own
+test asserting a fabricated `"2099-01-01"` came back — which defeats MCP's negotiation contract; a
+server should answer with the version it actually supports so the client can decide. Fixed to gate
+the echo through `SUPPORTED_PROTOCOL_VERSIONS`. Separately, building the CLI screen's honest
+`DiscoveryPermissions` enum exposed that `IntegrationsApi.tsx` and the `LocalApiStatus` payload
+still carried an old collapsed boolean and still soft-passed `InheritedFromProfile` as
+acceptable — the identical caveat needed to live in one place, not two screens that could drift
+apart the moment one was edited and the other was not. Both screens now render through one
+`discoveryPermissionsLabel`, and the startup warning shares the same `is_confirmed()` decision.
+`developer:agent-skills`, the third phase-7 entry, is documentation only and carries no backend or
+UI surface of its own — but **the rewrite itself was never done.** It claimed `status: "ported"`
+naming `docs/agent-skills/` as where the rewritten `SKILL.md` files live, and neither the directory
+nor any rewritten file exists anywhere in this repository. Found by Task 19 (the gate's
+documentation check only requires a target to be *named*, not to exist) and corrected to
+`temporarily-deferred` rather than written under time pressure at the end of an unrelated task.
 
 ---
 
-## Chunk I — diarization and semantic search (phase 8)
+## Chunk I — diarization and semantic search (phase 8) *(not attempted this run)*
 
 - Diarization: `ort` + the 2 `temporarily-deferred` sherpa models, plus a port of
   `diarizationPolicy.js` (63 lines, deliberately Electron-free upstream and therefore testable).
@@ -489,19 +621,50 @@ location, reusing what `IntegrationsApi` already renders.
   is `temporarily-deferred`; `search:sqlite-fts` already works through the FTS5 external-content
   table and its three triggers.
 
+None of this chunk's work was started across the 19 tasks in this plan or the one added mid-run.
+`diarization-model:3dspeaker-campplus-en`, `diarization-model:sherpa-onnx-pyannote-segmentation-3-0`
+and `search:semantic` remain exactly as `temporarily-deferred` as they were before this plan began,
+each still carrying its own `deferral` block with dependencies and a named interface. Recorded here
+rather than left silent, so a future session does not have to rediscover that this chunk is where
+the plan actually stopped: everything else in chunks A–J is either done or explicitly, permanently
+declined, and this is the one piece that is simply not-yet-begun.
+
 ---
 
-## Chunk J — packaging, updater, CI (phase 9)
+## Chunk J — packaging, updater, CI (phase 9) *(written; CI still paused by design)*
 
-- **Unpause CI.** `.github/workflows/ci.yml` has its `push` and `pull_request` triggers commented
-  out. Every gate described here is only as good as the fact that something runs it.
-- **A scheduled `sidecar-pin --verify` job.** It re-downloads every pinned target, so it does not
-  belong in the per-push contracts job — but nothing else notices a release retagged in place, and
-  a pin that is never re-measured is a pin nobody is checking. Weekly is enough.
-- Updater against this project's own releases (`createUpdaterArtifacts: false` today), its own
-  signing key, and the **update notification** window role.
-- NSIS/dmg/AppImage/deb bundles; unsigned until an identity exists.
-- Windows and Linux installs verified; macOS unverified until a Mac exists.
+- **CI stayed paused, deliberately.** `.github/workflows/ci.yml` still has its `push` and
+  `pull_request` triggers commented out. Three workflow files were written and pass every gate
+  they claim to run, dispatched manually and reviewed character by character for the one property
+  that matters most given the Actions budget — none can fire on a push — but nobody uncommented the
+  triggers. **This chunk's whole value is therefore still deferred**: every gate in this document
+  has run only when a person or an agent ran it by hand this session, and every claim of "green"
+  anywhere in this repository's history is a claim about the last run before the pause, not a
+  standing fact CI is checking right now.
+- **A scheduled `sidecar-pin --verify` job exists** (`pin-verify.yml`), for the reason planned: it
+  re-downloads every pinned target, so it does not belong in the per-push contracts job, and nothing
+  else would notice a release retagged in place.
+- **The updater is built, and it checks less than "an update" implies, deliberately.** It only
+  notifies — no download, no install, no signature verification — against this project's own
+  GitHub releases, through `kw_network_policy::NetworkPolicy::get_text` under
+  `RequestPurpose::OwnGithubReleasesUpdater`, **not** `tauri-plugin-updater` as originally planned
+  here: that plugin ships its own HTTP client, and using it as intended would have put a second
+  piece of code in the workspace opening its own connections outside the one crate whose whole
+  claim is being the only egress point. `bundle.createUpdaterArtifacts` is `true` now. With no
+  `plugins.updater.pubkey` configured, `check_now` returns `NoPublicKeyConfigured` **before any
+  network request** — the decisive question ("does it claim authenticity it cannot back") answers
+  no, twice over. Opt-in is structural: no caller, no timer, and deliberately no boolean setting
+  that could be flipped without noticing. The **update notification** window role is built, reusing
+  `overlay::apply_treatments` and `meeting_window.rs`'s shape unchanged.
+- NSIS/dmg/AppImage/deb bundles build in `release.yml`, unsigned — no signing identity exists, and
+  none has been generated. `docs/SECURITY.md` documents the keypair procedure for whenever one is.
+- **No release has ever been published.** The workflow has never been dispatched for a real tag, so
+  `GET /repos/{owner}/{repo}/releases/latest` has only ever had one possible answer (404) on every
+  platform, and whether GitHub's actual response shape matches what `updater.rs` assumes, whether a
+  `.sig` file actually appears next to a bundle, and whether `tauri build` tolerates
+  `createUpdaterArtifacts: true` with no signing key present are all unverified in the ordinary
+  sense — believed, not observed. See `docs/PLATFORM_SUPPORT.md`'s "Updates" section.
+- Windows and Linux installs still unverified by a person; macOS unverified until a Mac exists.
 
 ---
 
@@ -511,7 +674,11 @@ location, reusing what `IntegrationsApi` already renders.
    `cargo clippy --workspace --all-targets -- -D warnings`, `cargo fmt --all --check`,
    `tsc --noEmit`, `vite build`, the domain scanner **and its 15 self-tests**, the parity gate
    **and its 10 self-tests**, `verify-binaries`, `generate-ts-types --check`,
-   `generate-baseline --check`, and the new IPC-type check from A1.
+   `generate-provider-registry --check`, `generate-baseline --check`, and the IPC-type check from
+   A1. Quoted at the close of this plan, not restated: `cargo test --workspace` reports **1290
+   passing, 0 failed** (941 when this plan was written); the domain scanner reports **374 files
+   scanned against 22 patterns**; the parity gate reports **102 entries**, as the Context section
+   above shows in full.
 2. **Flip `reachable` and `built` in the same commit as the screen.** An entry claiming a surface
    that does not render `data-surface` fails rule 7 — that gate exists because 64 entries once
    named screens nobody had written.
@@ -538,15 +705,21 @@ location, reusing what `IntegrationsApi` already renders.
 | Item | Needs | Not blocked |
 | --- | --- | --- |
 | Anything macOS-native | A Mac | Compiles in CI, ships marked unverified |
-| sherpa-onnx local ASR | bz2 extraction, a `Transport::Stdio` executor path, and the binary on a machine to learn its per-model flags | Everything else local: whisper transcription and llama generation both work |
+| sherpa-onnx local ASR selector | A Tauri command layer and `Settings > Transcription > Local` UI wiring to install and pick a Parakeet model — not built, deliberately, as a task of its own | The runtime itself: measured, proven, transcribes correctly. Whisper transcription and llama generation both already work through their own selectors |
+| sherpa-onnx streaming (Nemotron) | A client for `sherpa-onnx-online-websocket-server`'s own protocol — nobody has written or tested one | The offline CLI path the two Parakeet models use, which is unrelated |
 | macOS `whisper-server` | A macOS CI job under this project's releases; upstream ships only an xcframework | Windows and Linux install today, digest-pinned |
-| 5 meeting clients, live | Keys for AssemblyAI, Deepgram, OpenAI Realtime, Corti, Tinfoil | Wire shapes vs fixtures; `meeting-stream:local`; detection; system audio |
+| 4 meeting clients, live | Keys for AssemblyAI, Deepgram, OpenAI Realtime, Corti | Wire shapes vs fixtures; `meeting-stream:local`; detection; system audio — all built |
 | 3 transcription clients, live | Keys for Mistral, xAI, Corti | The clients and their fixtures, both written |
-| Tinfoil | Enclave attestation verification — certificate-chain and measurement checks against a hardware root | Nothing. It is declined rather than pending, because an unattested request would claim Tinfoil's confidentiality without providing it |
+| Tinfoil (transcription **and** meeting-stream) | Enclave attestation verification — certificate-chain and measurement checks against a hardware root | Nothing. Both are declined rather than pending — an unattested request would claim Tinfoil's confidentiality without providing it. Recorded `temporarily-deferred` for want of a better term; see `docs/ENGINEERING_LOG.md`'s "the ACTIVE-status audit" |
 | Enterprise reasoning, live | AWS / Azure / GCP org credentials | SigV4 and body shaping vs published vectors |
-| Calendars, real round trip | Google + Microsoft OAuth client IDs as PKCE public clients | Flow, storage, UI, stub server |
-| AEC helper | cmake + MSVC/clang and a `contents: write` run | Meetings themselves — echo cancellation only matters on speakers |
+| Calendars, real round trip | Google + Microsoft OAuth client IDs as PKCE public clients | Flow, storage, UI, stub server — all built |
+| Apple Calendar | A macOS machine to write and verify an EventKit binding against, which does not exist in this development environment, and the binding itself, which does not exist anywhere in this repository | Google and Microsoft calendar sync, which are unrelated |
+| AEC helper | cmake + MSVC/clang and a `contents: write` run | Meetings themselves — echo cancellation only matters on speakers, and system audio capture (what actually gates recording) is done |
+| Diarization + semantic search (chunk I) | `ort`, the Qdrant sidecar, embeddings — none of it attempted this run | FTS5 keyword search, which is fully functional and is what the UI falls back to |
+| The rewritten agent-skills docs | Someone to write `docs/agent-skills/`, referencing `knegiswhisper`/`knegiswhisper-mcp` instead of the vendor endpoints — the manifest claimed this was done; it was not, and Task 19 corrected the claim rather than writing the docs under time pressure | Nothing else — documentation only |
 | Signed installers | A code-signing identity | Unsigned builds |
+| CI actually running | Someone uncommenting `push`/`pull_request` in `.github/workflows/ci.yml` — deliberately not done this run | Every gate still runs by hand; it has, repeatedly, this session |
+| A published release | Someone dispatching `release.yml` for a real tag — never done | The workflow itself, which builds locally-equivalent bundles on `workflow_dispatch` |
 
 ## Verification
 
@@ -554,21 +727,33 @@ location, reusing what `IntegrationsApi` already renders.
 against recorded fixtures, a sidecar against its readiness poll, a screen against the surface
 registry.
 
-**End to end, by hand on Windows, per chunk:**
+**End to end, by hand on Windows, per chunk — and, per `docs/BENCH_CHECK.md`, none of chunks E
+onward have actually been run this way.** What follows is still the checklist; the honest state of
+each item is in that file, not here.
 
 - **A:** store a key for OpenAI, run the connection test, see it pass; confirm the input never
-  reads a stored secret back; confirm the parity gate's unreachable count drops by 15.
+  reads a stored secret back; confirm the parity gate's unreachable count drops. **Not yet done by
+  a person** — `BENCH_CHECK.md`'s "still unchecked" list, item 3.
 - **B:** dictate with cleanup on and see the tidied text; start llama-server and hold a chat;
-  confirm the 5-minute idle stop.
+  confirm the 5-minute idle stop. **Not yet done by a person** — same list, items 4–5.
 - **C:** one live provider per client, if a key exists; otherwise the honest refusal.
 - **D:** record system audio while a video plays, with the microphone muted, and confirm both
-  streams; set a modifier-only hotkey and have it work.
-- **E:** join a call in Zoom and see detection fire; run `meeting-stream:local` end to end.
-- **F:** the stub PKCE round trip, then a real one if client IDs exist; confirm no token lands in
-  SQLite.
-- **G:** import an OpenWhispr database and confirm the source file is unmodified.
-- **H:** drive the MCP server from a client over stdio.
-- **J:** install the built bundle on a clean Windows machine and dictate.
+  streams; set a modifier-only hotkey and have it work. **Done and verified on hardware** —
+  `BENCH_CHECK.md`'s 2026-08-26 entry.
+- **E:** join a call in Zoom and see detection fire; run `meeting-stream:local` end to end; record
+  through each cloud provider with a real key. **Not run.** `meeting_detect_probe` found
+  `ms-teams.exe` on this machine without a full bench check, which is the only live evidence chunk
+  E has. See `BENCH_CHECK.md`'s "Added by chunk E, and unchecked" list, 13 items.
+- **F:** the stub PKCE round trip passes in tests; a real one needs client IDs this project does
+  not have. **Not run by a person; no client ID exists.**
+- **G:** import an OpenWhispr database and confirm the source file is unmodified; import a local
+  audio/video file and a URL. **Not run by a person.**
+- **H:** drive the MCP server from a client over stdio; use the CLI against a running application.
+  **Not run by a person with a real MCP client** — the CLI itself was exercised on 2026-08-26.
+- **J:** press "Check for updates" with no key configured and confirm the honest refusal message;
+  generate a keypair, rebuild, and confirm a real request; dispatch `release.yml` once for real.
+  **None of it run** — `BENCH_CHECK.md`'s "Added by Task 16" list, 5 items, all deliberately
+  deferred rather than run against a shared development machine mid-session.
 
 ## Risks
 
@@ -580,9 +765,12 @@ registry.
   picks the output device. The risk the note was pointing at was real; it just did not land here.
   What remains of D is the text monitor and the mic listener, both of which serve meetings and are
   therefore behind chunk E rather than ahead of it.
-- **The registry/manifest credential mismatch (9 vs 15)** must be settled in A3 rather than
-  papered over in the screen, or the "declared once" property quietly stops being true.
+- **The registry/manifest credential mismatch (9 vs 15) — settled in A3**, as planned, and grew
+  again since: the registry now declares seventeen slots (twelve providers, five custom endpoints),
+  after `credential:assemblyai` and `credential:deepgram` were added in chunk E. "Declared once"
+  held through both changes — one registry, regenerated, never a hand-written second list.
 - **`id=8` in the bench-check history** — a connection refused to `127.0.0.1:8178` while the
-  application believed a server was live — is not fully explained. The resume path makes it less
-  likely; it has not been proven gone. Watch for it during B3, which adds a second long-lived
-  loopback sidecar and would show the same symptom.
+  application believed a server was live — is still not fully explained. It did not recur in any
+  bench check run this session, including after B3 added `llama-server` as a second long-lived
+  loopback sidecar, which is evidence against it but not an explanation of it. Nobody has gone
+  looking for the root cause; it remains a known, unresolved gap rather than a closed one.
