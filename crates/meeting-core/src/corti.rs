@@ -186,6 +186,7 @@ const ENCODING: &str = "linear16";
 /// one invented wire shape here rather than two.
 pub fn endpoint(environment: &str) -> Result<String, MeetingError> {
     let trimmed = environment.trim();
+    require_environment(trimmed)?;
     let url = format!("wss://api.{trimmed}.corti.app/audio-bridge/v1/streams");
 
     // Round-tripped through `Url` so a malformed environment fails here, as a
@@ -372,6 +373,18 @@ fn require(value: &str, field: &'static str) -> Result<String, MeetingError> {
     Ok(trimmed.to_owned())
 }
 
+fn require_environment(environment: &str) -> Result<(), MeetingError> {
+    if !kw_transcription_core::clients::is_valid_corti_environment(environment) {
+        return Err(MeetingError::Rejected {
+            provider: PROVIDER_ID.to_owned(),
+            detail: "Corti's environment must be a single DNS label (ASCII letters, digits, or \
+                     internal hyphens). Nothing was sent."
+                .to_owned(),
+        });
+    }
+    Ok(())
+}
+
 /// Corti's environment and tenant, trimmed, or a refusal naming which is
 /// missing.
 ///
@@ -379,6 +392,7 @@ fn require(value: &str, field: &'static str) -> Result<String, MeetingError> {
 /// settings rather than a second pair of meeting-only ones.
 pub fn scope(environment: &str, tenant: &str) -> Result<(String, String), MeetingError> {
     let environment = require(environment, "environment")?;
+    require_environment(&environment)?;
     let tenant = require(tenant, "tenant")?;
     Ok((environment, tenant))
 }
@@ -388,8 +402,12 @@ pub fn scope(environment: &str, tenant: &str) -> Result<(String, String), Meetin
 /// A thin wrapper: `kw_transcription_core::clients::corti_token_endpoint`
 /// already does this and is already tested. See the module documentation.
 #[must_use]
-pub fn token_endpoint(environment: &str) -> String {
-    kw_transcription_core::clients::corti_token_endpoint(environment)
+pub fn token_endpoint(environment: &str) -> Result<String, MeetingError> {
+    let environment = require(environment, "environment")?;
+    require_environment(&environment)?;
+    Ok(kw_transcription_core::clients::corti_token_endpoint(
+        &environment,
+    ))
 }
 
 /// The OAuth2 client-credentials form body, with the tenant as the client id.
@@ -761,12 +779,21 @@ mod tests {
         assert_eq!(tenant, "acme");
     }
 
+    #[test]
+    fn environment_host_injection_is_refused() {
+        for environment in ["attacker.example/", "eu@attacker.example", "eu.example"] {
+            assert!(scope(environment, "acme").is_err());
+            assert!(endpoint(environment).is_err());
+            assert!(token_endpoint(environment).is_err());
+        }
+    }
+
     /* ------------------------------------------------------- token exchange */
 
     #[test]
     fn the_token_endpoint_is_scoped_to_the_environment() {
         assert_eq!(
-            token_endpoint("eu"),
+            token_endpoint("eu").unwrap(),
             "https://auth.eu.corti.app/realms/eu/protocol/openid-connect/token"
         );
     }

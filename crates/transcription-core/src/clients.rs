@@ -152,10 +152,11 @@ pub fn shape(
                 reason: CORTI_NEEDS_A_TENANT.to_owned(),
             })?;
 
-            if config.environment.trim().is_empty() || config.tenant.trim().is_empty() {
+            if !is_valid_corti_environment(&config.environment) || config.tenant.trim().is_empty() {
                 return Err(TranscriptionError::ClientNotImplemented {
                     provider: "corti".to_owned(),
-                    reason: "the stored environment or tenant is blank".to_owned(),
+                    reason: "the stored environment is not a DNS label or the tenant is blank"
+                        .to_owned(),
                 });
             }
 
@@ -185,6 +186,20 @@ pub fn shape(
 }
 
 /* ------------------------------------------------------------ corti tokens */
+
+/// Whether a Corti environment is one DNS label safe to interpolate into a
+/// `*.corti.app` hostname.
+#[must_use]
+pub fn is_valid_corti_environment(environment: &str) -> bool {
+    let bytes = environment.trim().as_bytes();
+    !bytes.is_empty()
+        && bytes.len() <= 63
+        && bytes.first().is_some_and(u8::is_ascii_alphanumeric)
+        && bytes.last().is_some_and(u8::is_ascii_alphanumeric)
+        && bytes
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || *byte == b'-')
+}
 
 /// Corti's token endpoint for one environment.
 #[must_use]
@@ -452,6 +467,26 @@ mod tests {
 
         // And with no configuration at all.
         assert!(shape(ProviderClientKind::Corti, None, None, None).is_err());
+    }
+
+    #[test]
+    fn corti_refuses_an_environment_that_can_change_the_endpoint_host() {
+        for environment in [
+            "attacker.example/",
+            "eu@attacker.example",
+            "eu.example",
+            "-eu",
+            "eu-",
+        ] {
+            let config = CortiConfig {
+                environment: environment.to_owned(),
+                tenant: "my-clinic".to_owned(),
+            };
+            assert!(
+                shape(ProviderClientKind::Corti, None, None, Some(&config)).is_err(),
+                "{environment:?} should not resolve"
+            );
+        }
     }
 
     /// A primary language is always sent, because Corti requires one.

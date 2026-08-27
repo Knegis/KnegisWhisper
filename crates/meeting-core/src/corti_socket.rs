@@ -158,10 +158,11 @@ impl CortiRealtime {
         &self,
         config: &MeetingProviderConfig,
     ) -> Result<kw_security::Secret, MeetingError> {
+        // Validate the destination before resolving the credential, so even a
+        // directly constructed client cannot expose it through a crafted host.
+        let endpoint = corti::token_endpoint(&self.environment)?;
         let secret = corti::client_secret(&self.credentials, config.key_ref.as_ref())?;
         let form = corti::token_request(&self.tenant, &secret);
-
-        let endpoint = corti::token_endpoint(&self.environment);
         // The first of this client's two boundary crossings: an HTTPS POST
         // through `NetworkPolicy`, which validates `endpoint` against
         // `PURPOSE` before anything is sent.

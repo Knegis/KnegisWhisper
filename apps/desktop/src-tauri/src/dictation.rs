@@ -802,6 +802,12 @@ pub async fn dictation_set_cloud_provider(
             .map(str::trim)
             .filter(|v| !v.is_empty())
             .ok_or("Corti needs an environment, for example \"eu\".")?;
+        if !kw_transcription_core::clients::is_valid_corti_environment(environment) {
+            return Err(
+                "Corti's environment must be a single DNS label using letters, digits, or internal hyphens."
+                    .to_owned(),
+            );
+        }
         let tenant = corti_tenant
             .as_deref()
             .map(str::trim)
