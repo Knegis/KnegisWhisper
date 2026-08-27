@@ -21,13 +21,15 @@ maintained in place rather than appended to, because its purpose is to be curren
 > detail and the by-hand check that found five real defects; [COMPLETION_PLAN.md](COMPLETION_PLAN.md)
 > keeps the phase 7–10 definitions.
 >
-> **Measured, not asserted, at the close of this run:** `cargo test --workspace` — **1290 passing, 0
-> failed** (941 at the start); parity — **102 entries, 7 declared unreachable** (17 at the start),
-> and **all 13 UI surfaces built**, with no "surface not built" entry remaining anywhere. The seven:
-> four local-ASR models (sherpa/Parakeet — runtime measured and proven by a probe re-run cold by the
-> controller, missing only a Settings selector), two Tinfoil entries (batch transcription and
-> meeting-stream, both declined on principle, not unfinished), and Apple Calendar (EventKit —
-> described in `kw_calendar_core::apple`, implemented nowhere, on any platform).
+> **Measured, not asserted, as of 2026-08-27 after the security fixes merged:** `cargo test
+> --workspace` — **1296 passing, 0 failed** (941 at the start of the run, 1290 at its close);
+> parity — **102 entries, 8 declared unreachable** (17 at the start), and **all 13 UI surfaces
+> built**, with no "surface not built" entry remaining anywhere. The eight: four local-ASR models
+> (sherpa/Parakeet — runtime measured and proven by a probe re-run cold by the controller, missing
+> only a Settings selector), two Tinfoil entries (batch transcription and meeting-stream, both
+> declined on principle, not unfinished), Apple Calendar (EventKit — described in
+> `kw_calendar_core::apple`, implemented nowhere, on any platform), and URL import (withdrawn as a
+> command after the run closed — see the 2026-08-27 entry on the merged security fixes).
 >
 > **The reachability rule, settled and applied repeatedly:** `reachable: true` means a user can
 > *configure* the integration through a named, **built** surface — not that the backend code works.
@@ -201,6 +203,47 @@ Unchanged from the Phases 1–4 entry, restated here so they are not buried:
   `SendInput` works.
 
 ---
+
+## 2026-08-27 (merged security fixes) — six fixes, a stronger merge, and a broken gate
+
+Six fixes landed on `dev` through PRs #7–#14, authored outside this session, after the plan closed:
+a Corti environment forced to one DNS label, a Vertex region forced to one DNS label with the
+service account's `token_uri` pinned rather than trusted from pasted JSON, Microsoft Graph
+pagination URLs constrained and bearer requests pinned, Deepgram transcript memory bounded, and URL
+import disabled. Three things about that are worth keeping.
+
+**The Microsoft merge produced a better check than either branch wrote.** PRs #10 and #11 both
+edited `microsoft.rs` — one constraining pagination URLs, one pinning bearer requests — and the
+merge resolved to a single `validate_graph_url(url, expected_path)` that pins scheme, host, port,
+credentials, fragment *and* the exact path. That is strictly stronger than either branch alone. It
+also orphaned `use url::Url` and `const GRAPH_HOST`, which belonged to the version that lost. Both
+were dropped rather than wired back in: restoring them would have meant restoring the weaker check
+beside the stronger one.
+
+**The merged branch did not pass `cargo clippy --workspace --all-targets -- -D warnings`.** Fourteen
+errors: the two orphans above, one `field_reassign_with_default` in `deepgram_socket.rs`, and eleven
+dead-code errors in `media.rs`. None is a defect in the fixes; all are the residue of removing a
+call site without removing what only that call site used. This is the first concrete cost of the
+CI triggers being commented out — every one of the fourteen would have been caught before merge.
+The pause is deliberate and still stands; the cost is now measured rather than hypothetical. See
+"2026-08-25 (CI paused)" below.
+
+**Dormant, not deleted, and said so in the type system.** Withdrawing `media_import_url` as a Tauri
+command made the entire URL-import path unreachable: two IPC enum variants, two error variants,
+three constants, four functions. The manifest note says the backend is dormant, so deleting it
+would have contradicted the record — and re-opening the entry point would then be a rewrite rather
+than a decision. Each item carries `#[allow(dead_code)]` pointing at a new `URL IMPORT, DORMANT`
+section in `media.rs`'s module doc, which states why the entry point is closed and what re-opening
+requires: every address yt-dlp resolves, every redirect it follows, and every request its
+extractors generate checked against the policy. Their tests still run. The alternative considered
+and rejected was a blanket `#![allow(dead_code)]` on the module, which would have hidden genuinely
+abandoned code alongside the deliberately dormant kind.
+
+**What the withdrawal costs, stated plainly:** `media:url-import` goes `reachable: false`, parity
+goes 7 unreachable to 8, and this is the first entry on that list that regressed rather than never
+having been built. Audio and video import are untouched — they take a local path and fetch nothing.
+Task 20's own finding pointed here: the up-front literal-host check was never the weak part, and no
+amount of strengthening it reaches DNS rebinding or an extractor's own requests.
 
 ## 2026-08-27 (Task 19) — reconciling the record, and the ACTIVE-status audit
 

@@ -44,13 +44,16 @@ and no permission to reach arbitrary hosts. There is no startup request, no tele
 hidden fallback: a provider failure fails the operation rather than quietly trying somewhere else.
 See `NETWORK_BOUNDARY.md`.
 
-URL import checks the pasted URL once, before yt-dlp ever runs: scheme, the vendor blocklist, and a
-literal private-or-link-local host, under its own purpose. Corrected by Task 19 — the previous
-sentence here ("DNS resolution followed by private and link-local address rejection") described
-upstream's design, not this crate's, which resolves no names at all. Fetching the URL is yt-dlp's
-own job as a separate process, bounded by a 500 MB filesize cap and a bounded socket timeout it
-enforces on itself, not by `kw_network_policy`. See `docs/NETWORK_BOUNDARY.md`'s "SSRF guards for
-URL import" section for the full accounting, including what this does not stop (DNS rebinding).
+**URL import is disabled.** It is the one place a user-typed URL would reach the network, and
+the boundary this application can enforce stops at the URL as typed: `validate_import_url` checks
+scheme, the vendor blocklist and a literal private-or-link-local host before anything is spawned,
+but the fetch belongs to the `yt-dlp` sidecar — its own DNS resolution, its own redirects, and its
+own extractor-generated requests, none of them observable here. DNS rebinding defeats an up-front
+literal-host check by construction. Rather than ship an SSRF surface with a guard that cannot cover
+it, `media_import_url` is unregistered as a command, `Notes > Upload` offers no URL field, and
+`media:url-import` is `reachable: false`. Audio and video import, which take a local path and never
+fetch anything, are unaffected. The full accounting, and what re-opening it requires, is in
+`docs/NETWORK_BOUNDARY.md`'s "SSRF guards for URL import" section.
 
 ## Updates
 
