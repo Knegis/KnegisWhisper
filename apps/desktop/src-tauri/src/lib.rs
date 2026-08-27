@@ -397,7 +397,6 @@ pub fn run() -> anyhow::Result<()> {
             media::media_import_install_sidecar,
             media::media_import_audio,
             media::media_import_video,
-            media::media_import_url,
             meeting::meeting_providers,
             meeting::meeting_status,
             meeting::meeting_start,

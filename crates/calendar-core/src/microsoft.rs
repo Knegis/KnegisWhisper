@@ -122,8 +122,9 @@ async fn get(
     policy: &NetworkPolicy,
     access_token: &Secret,
     url: &str,
+    expected_path: &str,
 ) -> Result<(u16, String), SyncError> {
-    validate_graph_url(url)?;
+    validate_graph_url(url, expected_path)?;
     let response = policy
         .get(RequestPurpose::UserConfiguredCalendarProvider, url)?
         .bearer_auth(access_token.expose())
@@ -135,21 +136,22 @@ async fn get(
     Ok((status, body))
 }
 
-/// Microsoft returns absolute pagination and delta URLs. Keep bearer tokens
-/// pinned to the Graph origin even when a URL came from a persisted cursor or
-/// an otherwise valid provider response.
-fn validate_graph_url(url: &str) -> Result<(), SyncError> {
-    let parsed = Url::parse(url).map_err(|_| SyncError::UntrustedProviderUrl)?;
-    let trusted = parsed.scheme() == "https"
-        && parsed.host_str() == Some(GRAPH_HOST)
+/// Graph pagination and delta links are opaque, but they must not be allowed
+/// to change the origin or resource before the access token is attached.
+fn validate_graph_url(url: &str, expected_path: &str) -> Result<(), SyncError> {
+    let parsed = url::Url::parse(url).map_err(|_| SyncError::UnsafePaginationUrl)?;
+    let is_graph_url = parsed.scheme() == "https"
+        && parsed.host_str() == Some("graph.microsoft.com")
         && parsed.port_or_known_default() == Some(443)
         && parsed.username().is_empty()
-        && parsed.password().is_none();
+        && parsed.password().is_none()
+        && parsed.fragment().is_none()
+        && parsed.path() == expected_path;
 
-    if trusted {
+    if is_graph_url {
         Ok(())
     } else {
-        Err(SyncError::UntrustedProviderUrl)
+        Err(SyncError::UnsafePaginationUrl)
     }
 }
 
@@ -163,9 +165,13 @@ pub async fn fetch_calendars(
 ) -> Result<Vec<CalendarListEntry>, SyncError> {
     let mut items = Vec::new();
     let mut url = CALENDARS_URL.to_owned();
+    let expected_path = url::Url::parse(CALENDARS_URL)
+        .map_err(|_| SyncError::UnsafePaginationUrl)?
+        .path()
+        .to_owned();
 
     for _ in 0..MAX_PAGES {
-        let (status, body) = get(policy, access_token, &url).await?;
+        let (status, body) = get(policy, access_token, &url, &expected_path).await?;
         if status != 200 {
             return Err(SyncError::HttpStatus { status });
         }
@@ -362,14 +368,17 @@ pub async fn fetch_events_delta(
     calendar_id: &str,
     delta_cursor: Option<&str>,
 ) -> Result<EventsFetch, SyncError> {
-    let mut url = delta_cursor
-        .map(str::to_owned)
-        .unwrap_or_else(|| events_delta_url(calendar_id));
+    let initial_url = events_delta_url(calendar_id);
+    let expected_path = url::Url::parse(&initial_url)
+        .map_err(|_| SyncError::UnsafePaginationUrl)?
+        .path()
+        .to_owned();
+    let mut url = delta_cursor.map(str::to_owned).unwrap_or(initial_url);
     let mut events = Vec::new();
     let mut delta_link = None;
 
     for _ in 0..MAX_PAGES {
-        let (status, body) = get(policy, access_token, &url).await?;
+        let (status, body) = get(policy, access_token, &url, &expected_path).await?;
         if status == 410 {
             return Err(SyncError::SyncTokenExpired);
         }
@@ -454,23 +463,24 @@ mod tests {
     }
 
     #[test]
-    fn graph_urls_are_pinned_to_the_microsoft_origin() {
-        assert!(
-            validate_graph_url("https://graph.microsoft.com/v1.0/me/calendars?$skip=20").is_ok()
-        );
-        assert!(validate_graph_url("https://graph.microsoft.com:443/v1.0/me/calendars").is_ok());
+    fn graph_urls_are_limited_to_the_expected_origin_and_resource() {
+        let path = "/v1.0/me/calendars/x/events/delta";
+        assert!(validate_graph_url(
+            "https://graph.microsoft.com/v1.0/me/calendars/x/events/delta?$skiptoken=abc",
+            path
+        )
+        .is_ok());
 
-        for untrusted in [
+        for unsafe_url in [
             "https://attacker.example/collect",
-            "https://graph.microsoft.com.attacker.example/collect",
-            "http://graph.microsoft.com/v1.0/me/calendars",
-            "https://graph.microsoft.com:444/v1.0/me/calendars",
-            "https://attacker.example@graph.microsoft.com/v1.0/me/calendars",
-            "not a URL",
+            "https://graph.microsoft.com.attacker.example/v1.0/me/calendars/x/events/delta",
+            "https://graph.microsoft.com:8443/v1.0/me/calendars/x/events/delta",
+            "https://graph.microsoft.com/v1.0/me/messages",
+            "http://graph.microsoft.com/v1.0/me/calendars/x/events/delta",
         ] {
             assert!(matches!(
-                validate_graph_url(untrusted),
-                Err(SyncError::UntrustedProviderUrl)
+                validate_graph_url(unsafe_url, path),
+                Err(SyncError::UnsafePaginationUrl)
             ));
         }
     }

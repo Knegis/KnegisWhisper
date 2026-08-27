@@ -140,13 +140,20 @@ impl EnterpriseConfig {
             } => {
                 blank("project id", project_id)?;
                 blank("region", region)?;
+                vertex_host(region)?;
                 blank("service account JSON", service_account_json)?;
                 // Parsed here rather than at send time: a pasted key that is not
                 // JSON is a mistake the user can fix now.
                 let key: ServiceAccount = serde_json::from_str(service_account_json)
                     .map_err(|e| format!("the service account JSON could not be read: {e}"))?;
                 blank("client_email in the service account", &key.client_email)?;
-                blank("private_key in the service account", &key.private_key)
+                blank("private_key in the service account", &key.private_key)?;
+                if key.token_uri != VERTEX_TOKEN_URI {
+                    return Err(format!(
+                        "the service account token_uri must be {VERTEX_TOKEN_URI}"
+                    ));
+                }
+                Ok(())
             }
         }
     }
@@ -207,7 +214,33 @@ pub struct ServiceAccount {
 }
 
 fn default_token_uri() -> String {
-    "https://oauth2.googleapis.com/token".to_owned()
+    VERTEX_TOKEN_URI.to_owned()
+}
+
+pub const VERTEX_TOKEN_URI: &str = "https://oauth2.googleapis.com/token";
+
+fn vertex_host(region: &str) -> Result<String, String> {
+    if region == "global" {
+        return Ok("aiplatform.googleapis.com".to_owned());
+    }
+
+    let valid = region.len() <= 63
+        && region
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        && region
+            .as_bytes()
+            .first()
+            .is_some_and(u8::is_ascii_alphanumeric)
+        && region
+            .as_bytes()
+            .last()
+            .is_some_and(u8::is_ascii_alphanumeric);
+    if !valid {
+        return Err("region must be a lowercase DNS label".to_owned());
+    }
+
+    Ok(format!("{region}-aiplatform.googleapis.com"))
 }
 
 /// A request ready to send: where, what, and the headers it must carry.
@@ -430,11 +463,9 @@ pub fn shape_vertex(
     };
 
     // `global` is a real Vertex region with its own host, not a placeholder.
-    let host = if region == "global" {
-        "aiplatform.googleapis.com".to_owned()
-    } else {
-        format!("{region}-aiplatform.googleapis.com")
-    };
+    let host = vertex_host(region).map_err(|detail| ChatError::ShapeNotImplemented {
+        provider: format!("invalid Vertex configuration: {detail}"),
+    })?;
 
     let url = format!(
         "https://{host}/v1/projects/{}/locations/{}/endpoints/openapi/chat/completions",
@@ -837,6 +868,26 @@ mod tests {
         );
     }
 
+    #[test]
+    fn vertex_rejects_a_region_that_can_change_the_request_host() {
+        let config = EnterpriseConfig::Vertex {
+            project_id: "p".to_owned(),
+            region: "attacker.example/x?".to_owned(),
+            service_account_json: "{}".to_owned(),
+        };
+
+        let err = shape_vertex(
+            &config,
+            "gemini-2.0-flash",
+            &messages(),
+            &options(),
+            "secret",
+        )
+        .expect_err("an injected authority must be refused");
+        assert!(err.to_string().contains("region"), "{err}");
+        assert!(config.validate().unwrap_err().contains("region"));
+    }
+
     /// Vertex needs the publisher prefix, and does not get it twice.
     #[test]
     fn a_vertex_model_is_qualified_with_its_publisher_exactly_once() {
@@ -917,6 +968,24 @@ mod tests {
         .validate()
         .expect_err("must refuse");
         assert!(err.contains("service account JSON"), "{err}");
+    }
+
+    #[test]
+    fn vertex_pins_the_service_account_token_endpoint() {
+        let service_account_json = serde_json::json!({
+            "client_email": "service@example.invalid",
+            "private_key": "not-a-real-key-but-nonblank",
+            "token_uri": "https://attacker.example/token"
+        })
+        .to_string();
+        let err = EnterpriseConfig::Vertex {
+            project_id: "p".to_owned(),
+            region: "us-central1".to_owned(),
+            service_account_json,
+        }
+        .validate()
+        .expect_err("a non-Google token endpoint must be refused");
+        assert!(err.contains("token_uri"), "{err}");
     }
 
     /// The status view says which fields are filled and never what they are.
