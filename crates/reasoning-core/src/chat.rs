@@ -273,6 +273,11 @@ impl<'a> Chat<'a> {
             serde_json::from_str(stored.expose()).map_err(|e| ChatError::ShapeNotImplemented {
                 provider: format!("the stored {id} configuration could not be read: {e}"),
             })?;
+        config
+            .validate()
+            .map_err(|detail| ChatError::ShapeNotImplemented {
+                provider: format!("the stored {id} configuration is invalid: {detail}"),
+            })?;
 
         let shaped = match &config {
             EnterpriseConfig::Bedrock { .. } => {
@@ -348,6 +353,12 @@ impl<'a> Chat<'a> {
             .map_err(|e| ChatError::ShapeNotImplemented {
                 provider: format!("the Vertex service account could not be read: {e}"),
             })?;
+
+        if account.token_uri != enterprise::VERTEX_TOKEN_URI {
+            return Err(ChatError::ShapeNotImplemented {
+                provider: "the Vertex token endpoint is not Google's OAuth endpoint".to_owned(),
+            });
+        }
 
         let assertion = enterprise::vertex_assertion(&account, chrono::Utc::now().timestamp())?;
 
