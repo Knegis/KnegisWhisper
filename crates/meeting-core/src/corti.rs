@@ -364,7 +364,8 @@ fn require(value: &str, field: &'static str) -> Result<String, MeetingError> {
                 "Corti has no {field} configured, and there is no safe default for one. The \
                  environment is part of the hostname and the tenant scopes the request to an \
                  account, so guessing either would send your audio to a real endpoint under a \
-                 tenancy you did not choose. Nothing was sent."
+                 tenancy you did not choose. Nothing was sent. Add both under Settings > \
+                 Transcription, next to \"Use for dictation\"."
             ),
         });
     }
