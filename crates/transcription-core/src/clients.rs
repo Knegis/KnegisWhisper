@@ -152,10 +152,11 @@ pub fn shape(
                 reason: CORTI_NEEDS_A_TENANT.to_owned(),
             })?;
 
-            if config.environment.trim().is_empty() || config.tenant.trim().is_empty() {
+            if !is_valid_corti_environment(&config.environment) || config.tenant.trim().is_empty() {
                 return Err(TranscriptionError::ClientNotImplemented {
                     provider: "corti".to_owned(),
-                    reason: "the stored environment or tenant is blank".to_owned(),
+                    reason: "the stored environment is not a DNS label or the tenant is blank"
+                        .to_owned(),
                 });
             }
 
@@ -185,6 +186,23 @@ pub fn shape(
 }
 
 /* ------------------------------------------------------------ corti tokens */
+
+/// Whether an environment can safely occupy one DNS label below `corti.app`.
+///
+/// Keeping this deliberately narrower than a URL parser prevents delimiters,
+/// percent-encoding, and subdomains from changing the authority of either
+/// Corti endpoint.
+#[must_use]
+pub fn is_valid_corti_environment(environment: &str) -> bool {
+    let environment = environment.trim();
+    !environment.is_empty()
+        && environment.len() <= 63
+        && !environment.starts_with('-')
+        && !environment.ends_with('-')
+        && environment
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+}
 
 /// Corti's token endpoint for one environment.
 #[must_use]
@@ -452,6 +470,30 @@ mod tests {
 
         // And with no configuration at all.
         assert!(shape(ProviderClientKind::Corti, None, None, None).is_err());
+    }
+
+    #[test]
+    fn corti_refuses_environments_that_can_change_the_url_authority() {
+        for environment in [
+            "x@attacker%2ecom#",
+            "eu.corti.app",
+            "-eu",
+            "eu-",
+            "eu/path",
+            "eu:443",
+        ] {
+            let config = CortiConfig {
+                environment: environment.to_owned(),
+                tenant: "tenant".to_owned(),
+            };
+            assert!(
+                shape(ProviderClientKind::Corti, None, None, Some(&config)).is_err(),
+                "{environment:?} should not resolve"
+            );
+        }
+
+        assert!(is_valid_corti_environment("eu"));
+        assert!(is_valid_corti_environment("us-prod"));
     }
 
     /// A primary language is always sent, because Corti requires one.
