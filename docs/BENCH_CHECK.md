@@ -395,6 +395,45 @@ the parity and gate suite — never by a person driving real traffic through it.
 
 ---
 
+## 2026-08-27 — sherpa/Parakeet local ASR (chunk B4)
+
+**Added by the whole-branch review's fix wave, retroactively.** This file describes itself as the
+record of what has been exercised on real hardware, maintained in place — and until this section
+was added, it had none at all for sherpa, while the sherpa probe and the ignored
+`sherpa_dictation` integration test are the only hardware-verified events in the entire twenty-task
+run. Nothing below is new measurement; `docs/PLATFORM_SUPPORT.md`'s "Local ASR: sherpa-onnx" section
+and `docs/BUILD_PLAN.md`'s chunk B4 already recorded it, so nothing was falsely claimed — but a
+reader of this file alone had no way to know any of it happened.
+
+### Verified
+
+| What | Evidence |
+| --- | --- |
+| **The pinned `sherpa-onnx-offline` CLI installs and runs on Windows** | `cargo run -p kw-transcription-core --example sherpa_probe` (Task 18) downloaded the real pinned CLI archive (24,378,225 bytes) and both pinned Parakeet model archives, extracted them, and drove a real transcription with each |
+| **The extracted model layout is flat and identical between the two Parakeet models** | `encoder.int8.onnx`, `decoder.int8.onnx`, `joiner.int8.onnx`, `tokens.txt` directly in the model directory, plus a `test_wavs/` sample folder |
+| **Both Parakeet models transcribe correctly** | `tests/fixtures/speech-16k-mono.wav` came back "The quick brown fox jumps over the lazy dog. This is a test of local transcription." from both — identical words to whisper's pinned `tiny` model on the same fixture, differing only in mid-sentence capitalisation |
+| **The production `SherpaOffline` type reproduces this, not just the probe** | `crates/transcription-core/tests/sherpa_dictation.rs`, a real `--ignored` integration test against `kw_transcription_core::sherpa::SherpaOffline` — the type dictation actually calls, not a standalone example. Task 18 ran it once after fixing the `sizeMb` bug below. The whole-branch reviewer independently re-ran it cold (`cargo test -p kw-transcription-core --test sherpa_dictation -- --ignored`): 501,350,460 bytes downloaded, the same correct transcript, exit code 0, 58 s |
+| **A real bug this measurement caught** | `config/provider-registry.json`'s `sizeMb` for a sherpa model is the extracted footprint (~663 MB), not the compressed download (501,350,460 real bytes, ~478 MB). An early `sherpa_models::install` checked the *download* against `sizeMb` with the 5% tolerance `models.rs` uses for whisper and failed every install. Fixed by dropping that check and relying on `discover_transducer_files` finding the real files after extraction instead — a stronger check than a byte count, since a truncated archive fails to produce a complete file set either way |
+| **Installing the CLI extracts the whole `bin/` directory, not just the one binary** | Confirmed on Windows: 23 files — `onnxruntime.dll`, `onnxruntime_providers_shared.dll`, `sherpa-onnx-offline.exe`, and 20 other `sherpa-onnx-*.exe` tools this application never calls (keyword spotting, audio tagging, denoising, TTS, the online and offline WebSocket servers, and more) |
+
+### Still unchecked, and needs a person at the machine
+
+1. **The two Nemotron models** (`nemotron-3.5-asr-streaming-0.6b`, `nemotron-speech-streaming-en-0.6b`).
+   Both are streaming, over `sherpa-onnx-online-websocket-server`'s own bespoke protocol — confirmed
+   present in the CLI sidecar's `bin/` directory, but nobody has written or tested a client for it.
+   The offline-CLI measurement above says nothing about whether that protocol works; both stay
+   `reachable: false` in `config/integration-manifest.json` for exactly this reason.
+2. **The install footprint on Linux and macOS.** Windows was measured file-by-file (23 files,
+   above). Linux and macOS ship the larger "static" `sherpa` build instead (230-385 MB against
+   Windows' 24 MB, per `config/sidecars.json`'s `sherpa` entry, because `onnxruntime` is statically
+   linked into each executable rather than shared from one `.dll`) — nobody has extracted either and
+   counted what actually lands on disk the way Windows was.
+3. **A non-ASCII model path.** `docs/PLATFORM_SUPPORT.md`'s "Known environment constraints" section
+   records that a non-ASCII or space character in the user data path crashes the native whisper *and*
+   parakeet binaries, worked around by relocating the model cache to `%ProgramData%`. That workaround
+   predates this run and was carried forward, not exercised here against a real non-ASCII Windows
+   account with a Parakeet model actually installed.
+
 ## 2026-08-25 — phases 2 and 6
 
 Seven local transcriptions in three minutes with the network off, text landing at the caret in
