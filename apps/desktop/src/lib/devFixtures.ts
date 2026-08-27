@@ -44,6 +44,7 @@ import type {
   CredentialSlotStatus,
   McpStatus,
   MediaImportResult,
+  SherpaStatus,
   SidecarStatus,
   SyncOutcome,
   Diagnostics,
@@ -641,6 +642,43 @@ const LOCAL_MODELS: LocalStatus = {
   installDirFellBack: true,
 };
 
+const SHERPA: SherpaStatus = {
+  availability: { state: "installable" },
+  cliInstalled: true,
+  // One installed and selected, one installable, and the two streaming models
+  // carrying the reason they cannot be picked -- the three states this list has,
+  // so the screen is worked on against all of them rather than the easy one.
+  models: [
+    {
+      id: "parakeet-unified-en-0.6b",
+      name: "Parakeet Unified EN 0.6B",
+      sizeMb: 630,
+      language: "en",
+      installed: true,
+      notOffered: null,
+    },
+    {
+      id: "parakeet-tdt-0.6b-v3",
+      name: "Parakeet TDT 0.6B v3",
+      sizeMb: 660,
+      language: null,
+      installed: false,
+      notOffered: null,
+    },
+    {
+      id: "nemotron-streaming-en",
+      name: "Nemotron Streaming EN",
+      sizeMb: 480,
+      language: "en",
+      installed: false,
+      notOffered:
+        "streaming model — it is served over sherpa-onnx's own WebSocket protocol, and no client for that protocol has been written",
+    },
+  ],
+  selected: "parakeet-unified-en-0.6b",
+  modelsDir: "C:\\ProgramData\\KnegisWhisper\\models\\sherpa",
+};
+
 const LOCAL_LLM: LocalLlmStatus = {
   availability: {
     state: "not-published",
@@ -1213,6 +1251,9 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
   dictation_set_cloud_provider: () => null,
 
   /* local transcription */
+  sherpa_status: () => SHERPA,
+  sherpa_install_model: () => null,
+  sherpa_use_model: () => null,
   local_model_status: () => LOCAL_MODELS,
   local_model_install: () => "whisper-large-v3-turbo-q5",
   local_server_start: () => 8178,

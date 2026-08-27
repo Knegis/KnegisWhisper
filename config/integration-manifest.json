@@ -584,9 +584,9 @@
       ],
       "backend": "crates/transcription-core",
       "ui": "Settings > Transcription > Local",
-      "reachable": false,
+      "reachable": true,
       "runtime": null,
-      "note": "Unreachable, but for a much narrower reason than before this measurement. cargo run -p kw-transcription-core --example sherpa_probe installed the pinned sherpa-onnx-offline CLI, downloaded this exact model, and transcribed tests/fixtures/speech-16k-mono.wav with it, producing the same words whisper's tiny model does on the same input (differing only in capitalisation). kw_transcription_core::sherpa::SherpaOffline (a second LocalTranscriber, alongside WhisperServer) and sherpa_models::install are real, tested code, proven end to end by tests/sherpa_dictation.rs (a --ignored test against the production types, not only the throwaway probe). The runtime is implemented and proven. What is missing is purely a UI question: Settings > Transcription > Local has no selector for this model, so no user can reach it through the named surface -- the rule this project settled on for 'reachable' (see calendar:apple) is that a person must be able to configure the integration through the named, built surface, and today they cannot. apps/desktop/src-tauri/src/dictation.rs's own comment on LocalTargets names the Tauri command layer and UI wiring this needs as the anticipated next step ('the next one is the sherpa server'). See docs/PLATFORM_SUPPORT.md's 'Local ASR: sherpa-onnx' section for the measured layout and CLI contract."
+      "note": "Reachable through Settings > Transcription > Local, on the same offline transducer path as parakeet-unified-en-0.6b. Not verified: this model has never been downloaded or run. It is offered because it is the same model family with the same measured directory layout, and install-time discovery (sherpa::discover_transducer_files) refuses a directory that does not match rather than transcribing from a wrong one -- so a layout surprise is a refusal naming the model, not a silent failure."
     },
     "local-asr:parakeet-unified-en-0.6b": {
       "status": "ported-with-new-rust-implementation",
@@ -599,9 +599,9 @@
       ],
       "backend": "crates/transcription-core",
       "ui": "Settings > Transcription > Local",
-      "reachable": false,
+      "reachable": true,
       "runtime": null,
-      "note": "Unreachable, but for a much narrower reason than before this measurement. cargo run -p kw-transcription-core --example sherpa_probe installed the pinned sherpa-onnx-offline CLI, downloaded this exact model, and transcribed tests/fixtures/speech-16k-mono.wav with it, producing the same words whisper's tiny model does on the same input (differing only in capitalisation). kw_transcription_core::sherpa::SherpaOffline (a second LocalTranscriber, alongside WhisperServer) and sherpa_models::install are real, tested code, proven end to end by tests/sherpa_dictation.rs (a --ignored test against the production types, not only the throwaway probe). The runtime is implemented and proven. What is missing is purely a UI question: Settings > Transcription > Local has no selector for this model, so no user can reach it through the named surface -- the rule this project settled on for 'reachable' (see calendar:apple) is that a person must be able to configure the integration through the named, built surface, and today they cannot. apps/desktop/src-tauri/src/dictation.rs's own comment on LocalTargets names the Tauri command layer and UI wiring this needs as the anticipated next step ('the next one is the sherpa server'). See docs/PLATFORM_SUPPORT.md's 'Local ASR: sherpa-onnx' section for the measured layout and CLI contract."
+      "note": "Reachable through Settings > Transcription > Local, which can now install the pinned sherpa-onnx-offline CLI and this model and select it for dictation. This is the model the runtime was proven with end to end: tests/sherpa_dictation.rs downloaded 501,350,460 bytes, transcribed speech-16k-mono.wav correctly and exited 0 in 58.23s, re-run cold by the controller on 2026-08-27. The per-model argument contract came from crates/platform/examples/sherpa_probe.rs against the real --help, not from a release page."
     },
     "meeting-stream:assemblyai-realtime": {
       "status": "rewired-to-direct-byok",

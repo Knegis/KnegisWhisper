@@ -491,6 +491,12 @@ what it means here. Fixed.
    from one that worked. Dictating the same sentence with cleanup off and on is the only way to
    tell from the UI as it stands.
 4. **`Notes > Upload`** — step 5, not attempted.
+5. **The Parakeet selector, added 2026-08-27 after this run.** `Settings > Transcription > Local`
+   can now install the sherpa-onnx CLI and a Parakeet model and select it for dictation. Nothing
+   about the *screen* has been exercised: install one model, confirm the button turns blue, dictate
+   through it, and confirm the whisper row then says dictation is going elsewhere. Only
+   `parakeet-unified-en-0.6b` has ever been run at all, by `tests/sherpa_dictation.rs`;
+   `parakeet-tdt-0.6b-v3` is offered on the same measured layout and has never been downloaded.
 5. **Meeting detection firing on a real call.** Teams was open but not in a call, so the
    offer-to-record window has still never appeared.
 

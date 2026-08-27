@@ -31,20 +31,21 @@ integration parity OK — 102 entries against baseline c4000db9802d
   ported                                 2
   platform-specific                      1
 
-8 integrations are declared unreachable:
-  Settings > Transcription > Local      4  (surface built)
+6 integrations are declared unreachable:
+  Settings > Transcription > Local      2  (surface built)
   Settings > Transcription              1  (surface built)
   Settings > Meetings                   1  (surface built)
   Integrations > Calendar               1  (surface built)
   Notes > Upload                        1  (surface built)
 ```
 
-- **59 of 102 integrations are reachable**, up from 8 when this plan was written and 45 when this
-  section was last written mid-run. **8** are implemented-or-declared and unreachable, down from 19
+- **61 of 102 integrations are reachable**, up from 8 when this plan was written and 45 when this
+  section was last written mid-run. **6** are implemented-or-declared and unreachable, down from 19
   — and every one of them names a *built* surface, which was not true when this section was first
   drafted; the other 35 are removed vendor services and internal platform capabilities with no
-  surface by design. The count was 7 at the close of this plan and became 8 afterwards, when URL
-  import was withdrawn as an SSRF surface the application could not police; see chunk G.
+  surface by design. The count was 7 at the close of this plan, became 8 when URL import was
+  withdrawn as an SSRF surface the application could not police (chunk G), and then 6 when the two
+  Parakeet models got the selector B4 had left unbuilt.
 - **0 of 13 UI surfaces do not exist.** All 13 are built, one component each; `App.tsx` is the
   shell. `Notes > Upload`, `Integrations > CLI` and `Integrations > MCP` — the last three that did
   not exist — were built in chunks G and H below.
@@ -54,10 +55,10 @@ integration parity OK — 102 entries against baseline c4000db9802d
   were added for meeting streaming in chunk E). Before chunk A, `provider_credential_set` existed in
   Rust and `setProviderCredential` was exported from `ipc.ts` and **nothing called either**, so
   every cloud provider was unreachable regardless of backend state.
-- **The eight that remain unreachable, each for a specific, named reason rather than "not done
-  yet":** four local-ASR models (sherpa/Parakeet — the runtime is real, measured, and proven by a
-  probe re-run cold by the controller; the only gap is a Settings selector, deliberately not built
-  as part of that measurement task), two Tinfoil entries (batch transcription and meeting-stream,
+- **The six that remain unreachable, each for a specific, named reason rather than "not done
+  yet":** two local-ASR models (Nemotron — streaming, over `sherpa-onnx-online-websocket-server`'s
+  own protocol, for which nobody has written a client; listed on the screen with that reason rather
+  than hidden), two Tinfoil entries (batch transcription and meeting-stream,
   both declined on principle — an unattested client would present as Tinfoil while providing none of
   the confidentiality the name means), Apple Calendar (EventKit — described in
   `kw_calendar_core::apple`, implemented nowhere, on any platform, for lack of a macOS machine), and
@@ -89,7 +90,7 @@ state chunk I and chunk E4 describe below.
 | 0 — Audit and contracts | Complete | — |
 | 1 — Tauri foundation | Complete | 4 of 6 window roles exist (Dictation panel, Control panel, Meeting notification, Update notification); Agent overlay is phase 10 scope and Transcription preview has no task in this plan. Linux/macOS hotkey fallbacks unwritten. Modifier-only shortcuts work on Windows through a keyboard hook. Four of the five hotkey actions have no feature behind them and are reported as such rather than registered |
 | — Chunk A (shell, types, Providers) | **Done, unchecked by hand** | Storing a key and passing a connection test has not been done by a person on this machine — still true at the close of this plan; see `BENCH_CHECK.md`'s "still unchecked" list, item 3 |
-| 2 — Dictation | **Verified on Windows** | 6 of 7 transcription providers reachable; Tinfoil declined pending enclave attestation. 2 of 4 sherpa local ASR models (Parakeet) proven at the backend level, measured end to end by a probe the controller independently re-ran cold, but not yet wired into Settings — no selector exists, deliberately not built as part of that measurement task; the 2 Nemotron models stay blocked on a streaming protocol nobody has written a client for — see B4 |
+| 2 — Dictation | **Verified on Windows** | 6 of 7 transcription providers reachable; Tinfoil declined pending enclave attestation. Both Parakeet local-ASR models are now reachable: `Settings > Transcription > Local` installs the pinned sherpa-onnx CLI and a model and selects it, and dictation resolves to exactly one local engine. `parakeet-unified-en-0.6b` is the one proven end to end; `parakeet-tdt-0.6b-v3` is offered on the same measured layout and has never been run. The 2 Nemotron models stay blocked on a streaming protocol nobody has written a client for — see B4 |
 | 3 — Reasoning | Complete, enterprise unverified | All three enterprise shapes written and tested against vectors and fixtures; no live call, no organisational credentials for any of the three. (The `llama-server` sidecar this phase's own chunk B3 built is done and pinned — the earlier version of this row said it was still missing, which stopped being true the same session it was written) |
 | 4 — Meetings and notes | **Complete**, three refusals kept | System audio, the meeting notification window, all five detectors (`zoom`/`teams`/`webex`/`facetime`/`generic`), and 4 of 5 WebSocket clients (`openai-realtime`/`assemblyai-realtime`/`deepgram-realtime`/`corti-realtime`, plus `meeting-stream:local`) are done. `meeting-stream:tinfoil-realtime` stays declined, for the identical reason as the batch client. The AEC helper stays `temporarily-deferred` — no C++ toolchain on this machine, and it gates quality (double-transcribed far-end audio on speakers), not whether a meeting records at all |
 | 5 — Calendars | **Complete** | Google and Microsoft: loopback PKCE, calendar list and incremental sync, all reachable — no client ID on this machine, so no live call has been made. Apple Calendar: `temporarily-deferred`, described in `kw_calendar_core::apple` and implemented nowhere, for lack of a macOS machine |
@@ -721,7 +722,7 @@ declined, and this is the one piece that is simply not-yet-begun.
 | Item | Needs | Not blocked |
 | --- | --- | --- |
 | Anything macOS-native | A Mac | Compiles in CI, ships marked unverified |
-| sherpa-onnx local ASR selector | A Tauri command layer and `Settings > Transcription > Local` UI wiring to install and pick a Parakeet model — not built, deliberately, as a task of its own | The runtime itself: measured, proven, transcribes correctly. Whisper transcription and llama generation both already work through their own selectors |
+| ~~sherpa-onnx local ASR selector~~ | **Built on 2026-08-27.** `apps/desktop/src-tauri/src/local_asr.rs` plus a second list on `Settings > Transcription > Local`: three commands, a remembered selection, and one local engine at a time. `parakeet-unified-en-0.6b` was already proven end to end; `parakeet-tdt-0.6b-v3` is offered unrun on the same measured layout | — |
 | sherpa-onnx streaming (Nemotron) | A client for `sherpa-onnx-online-websocket-server`'s own protocol — nobody has written or tested one | The offline CLI path the two Parakeet models use, which is unrelated |
 | macOS `whisper-server` | A macOS CI job under this project's releases; upstream ships only an xcframework | Windows and Linux install today, digest-pinned |
 | 4 meeting clients, live | Keys for AssemblyAI, Deepgram, OpenAI Realtime, Corti | Wire shapes vs fixtures; `meeting-stream:local`; detection; system audio — all built |

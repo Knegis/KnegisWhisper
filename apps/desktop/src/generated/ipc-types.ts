@@ -980,6 +980,53 @@ export type InstallProgress = { "stage": "server", written: number, total: numbe
  */
 verifiedBy: VerifiedBy, };
 
+/**
+ * Why a model this build knows about is not on offer.
+ *
+ * A reason rather than absence, for the same purpose
+ * `ClientAvailability::NoClient` serves: someone who read that this
+ * application supports Nemotron should find out here why they cannot pick it,
+ * rather than wonder whether the list is broken.
+ */
+export type SherpaModelStatus = { id: string, name: string, sizeMb: number | null, language: string | null,
+/**
+ * Whether the extracted directory has the measured transducer layout.
+ *
+ * Checked by running the same discovery `transcribe` will use, so a
+ * half-extracted directory does not count as installed.
+ */
+installed: boolean,
+/**
+ * `None` when the model can be installed and used.
+ */
+notOffered: string | null, };
+
+/**
+ * Everything the sherpa half of the screen needs, with no network access.
+ */
+export type SherpaStatus = {
+/**
+ * Whether the pinned CLI is published for this platform at all, and why
+ * not. The same three-state answer `local_model` gives for
+ * `whisper-server`, and for the same reason: "not published here" and "not
+ * installed yet" are different facts.
+ */
+availability: Availability,
+/**
+ * Whether the offline CLI itself is installed.
+ */
+cliInstalled: boolean, models: Array<SherpaModelStatus>,
+/**
+ * Which model dictation is set to use, if any.
+ */
+selected: string | null,
+/**
+ * Where models are kept. Shown because the native binaries cannot load
+ * from a path with a space or a non-ASCII character in it, so this is
+ * sometimes not where a person would expect.
+ */
+modelsDir: string, };
+
 /* -------------------------------------------------- local text generation */
 /**
  * A drafter alongside the main model.

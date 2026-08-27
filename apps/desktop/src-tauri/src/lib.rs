@@ -22,6 +22,7 @@ mod integrations;
 #[cfg(test)]
 mod ipc_types;
 mod local_api;
+mod local_asr;
 mod local_llm;
 mod local_model;
 mod media;
@@ -166,6 +167,18 @@ pub fn run() -> anyhow::Result<()> {
 
             let shared = local.shared();
 
+            // The other local engine. No process and no port -- a selection and
+            // a one-shot CLI -- so there is nothing to reap and nothing to
+            // start, only a remembered choice to read back. See `local_asr`'s
+            // module doc on why only one of the two is ever selected.
+            let asr = std::sync::Arc::new(
+                local_asr::LocalAsr::new(policy.clone())
+                    .context("could not load config/sidecars.json for local ASR")?,
+            );
+            tauri::async_runtime::block_on(asr.restore(&db));
+            let sherpa_selection = asr.selection();
+            app.manage(std::sync::Arc::clone(&asr));
+
             // Media import: audio, video and url import all end by going
             // through the existing transcription route, so this needs exactly
             // the handles that route does. Cloned before `credentials` and
@@ -176,6 +189,7 @@ pub fn run() -> anyhow::Result<()> {
                     std::sync::Arc::clone(&credentials),
                     std::sync::Arc::clone(&shared.port),
                     std::sync::Arc::clone(&shared.model),
+                    asr.selection(),
                     db.clone(),
                 )
                 .map_err(|e| anyhow::anyhow!(e))
@@ -210,6 +224,7 @@ pub fn run() -> anyhow::Result<()> {
                 dictation::LocalTargets {
                     transcription_port: shared.port,
                     transcription_model: shared.model,
+                    transcription_sherpa: sherpa_selection,
                     generation: llm_endpoint,
                 },
                 // Off until `reasoning::apply_at_startup` fills it, and off
@@ -384,6 +399,9 @@ pub fn run() -> anyhow::Result<()> {
             local_model::local_model_install,
             local_model::local_server_start,
             local_model::local_server_stop,
+            local_asr::sherpa_status,
+            local_asr::sherpa_install_model,
+            local_asr::sherpa_use_model,
             local_api::local_api_status,
             local_api::local_api_start,
             local_api::local_api_stop,

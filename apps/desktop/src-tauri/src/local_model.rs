@@ -415,9 +415,15 @@ pub async fn local_model_install(
 pub async fn local_server_start(
     state: State<'_, crate::state::AppState>,
     local: State<'_, Arc<LocalTranscription>>,
+    asr: State<'_, Arc<crate::local_asr::LocalAsr>>,
     model_id: String,
 ) -> Result<u16, String> {
     let port = local.start_model(&model_id).await?;
+
+    // One local engine at a time. Choosing a whisper model releases a sherpa
+    // selection, because otherwise the sherpa one would keep winning and this
+    // button would appear to do nothing -- see `local_asr`'s module doc.
+    crate::local_asr::clear_selection(state.db(), &asr.selection()).await;
 
     // Remembered only after it actually came up, so a model that fails to start
     // is not the one resumed at the next launch.

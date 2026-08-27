@@ -20,12 +20,15 @@ import {
   getDictationRoute,
   getLocalStatus,
   getProviders,
+  getSherpaStatus,
   installLocalModel,
+  installSherpaModel,
   onInstallProgress,
   setCloudProvider,
   startLocalServer,
   stopLocalServer,
   useLocalModel,
+  useSherpaModel,
   type Dispatch,
   type ProviderSummary,
 } from "../lib/ipc";
@@ -62,12 +65,13 @@ export function SettingsTranscription({
   onGoToProviders: () => void;
 }) {
   const load = useCallback(async () => {
-    const [providers, local, route] = await Promise.all([
+    const [providers, local, sherpa, route] = await Promise.all([
       getProviders(),
       getLocalStatus(),
+      getSherpaStatus(),
       getDictationRoute(),
     ]);
-    return { providers, local, route };
+    return { providers, local, sherpa, route };
   }, []);
 
   const { data, error, reload, guard } = useRefresh(load);
@@ -156,7 +160,7 @@ export function SettingsTranscription({
     );
   }
 
-  const { providers, local, route } = data;
+  const { providers, local, sherpa, route } = data;
   const withKeys = providers.filter((p) => p.configured);
 
   return (
@@ -305,7 +309,11 @@ export function SettingsTranscription({
                   disagree rather than left to look like the same thing.
                 */
                 const loaded = local.runningModel === m.id;
-                const inUse = loaded && route.isLocal;
+                // A selected sherpa model outranks a running whisper server --
+                // see `local_asr`'s module doc -- so the whisper row must not
+                // claim to be in use while one is selected, even though its
+                // server is up and the route is local.
+                const inUse = loaded && route.isLocal && sherpa.selected === null;
                 return (
                 <li key={m.id}>
                   <code>{m.id}</code> {m.name}
@@ -316,10 +324,13 @@ export function SettingsTranscription({
                       ? `installed, ${verificationLabel(m.verifiedBy)}`
                       : `not installed — will be ${verificationLabel(m.verifiedBy)}`}
                   </em>
-                  {loaded && !route.isLocal ? (
+                  {loaded && !inUse ? (
                     <em className="row-detail warn">
                       the server is running with this model, but dictation goes
-                      to {route.destination}
+                      to{" "}
+                      {sherpa.selected !== null && route.isLocal
+                        ? `the local model ${sherpa.selected}`
+                        : route.destination}
                     </em>
                   ) : null}
                   {m.installed ? (
@@ -354,13 +365,80 @@ export function SettingsTranscription({
                 );
               })}
             </ul>
+            <h3>Parakeet, on the sherpa-onnx runtime</h3>
             <p className="muted">
-              Only whisper models are offered here. Parakeet's sherpa-onnx
-              runtime is implemented and verified, but this screen does not
-              yet offer a way to install or choose a Parakeet model. Nemotron
-              is a streaming model over a different protocol nobody has
-              built a client for.
+              A second local engine. Nothing here reaches the network until you
+              press Install, and dictation uses exactly one local engine at a
+              time — choosing a Parakeet model releases the whisper server, and
+              choosing a whisper model above releases this one.
             </p>
+            {sherpa.availability.state === "not-published" ? (
+              <>
+                <Row
+                  label="Availability"
+                  value="No sherpa-onnx runtime is published for this platform"
+                />
+                <p className="muted">{sherpa.availability.reason}</p>
+                <p className="muted">{sherpa.availability.tracking}</p>
+              </>
+            ) : (
+              <>
+                <Row
+                  label="Runtime"
+                  value={sherpa.cliInstalled ? "Installed" : "Not installed"}
+                  detail={
+                    sherpa.cliInstalled
+                      ? undefined
+                      : "installed automatically with the first model"
+                  }
+                />
+                <Row label="Models kept in" value={sherpa.modelsDir} />
+                <ul className="list">
+                  {sherpa.models.map((m) => {
+                    const inUse = sherpa.selected === m.id && route.isLocal;
+                    return (
+                      <li key={m.id}>
+                        <code>{m.id}</code> {m.name}
+                        {m.sizeMb ? ` · ${m.sizeMb} MB` : ""}
+                        {m.language ? ` · ${m.language}` : ""}
+                        {m.notOffered ? (
+                          <em className="row-detail warn">{m.notOffered}</em>
+                        ) : (
+                          <em className="row-detail">
+                            {m.installed ? "installed" : "not installed"}
+                          </em>
+                        )}
+                        {m.notOffered ? null : m.installed ? (
+                          <button
+                            type="button"
+                            className={inUse ? "marked" : undefined}
+                            aria-pressed={inUse}
+                            onClick={() => {
+                              void guard(async () => {
+                                await useSherpaModel(m.id);
+                                await useLocalModel(true);
+                              });
+                            }}
+                          >
+                            {inUse ? "In use for dictation" : "Use for dictation"}
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setInstalling("Starting…");
+                              void guard(() => installSherpaModel(m.id));
+                            }}
+                          >
+                            Install
+                          </button>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              </>
+            )}
             {local.port ? (
               <button
                 type="button"

@@ -558,6 +558,11 @@ pub struct MediaImportRuntime {
     credentials: Arc<dyn CredentialStore>,
     local_port: LocalPort,
     local_model: Arc<RwLock<Option<String>>>,
+    /// Which sherpa model is selected. Held for the same reason `local_port` is
+    /// -- an import goes through the *same* route dictation does, so it must
+    /// reach the same local engine. Resolving one of them to whisper and the
+    /// other to sherpa would make `Transport::Local` mean two things.
+    local_sherpa: crate::local_asr::Selection,
     db: Db,
 }
 
@@ -575,6 +580,7 @@ impl MediaImportRuntime {
         credentials: Arc<dyn CredentialStore>,
         local_port: LocalPort,
         local_model: Arc<RwLock<Option<String>>>,
+        local_sherpa: crate::local_asr::Selection,
         db: Db,
     ) -> Result<Self, String> {
         let catalog = Catalog::shipped().map_err(|err| err.to_string())?;
@@ -584,6 +590,7 @@ impl MediaImportRuntime {
             credentials,
             local_port,
             local_model,
+            local_sherpa,
             db,
         })
     }
@@ -680,6 +687,20 @@ impl MediaImportRuntime {
         Some(WhisperServer::new(self.policy.clone(), port, model))
     }
 
+    /// The local engine for an import: the same one dictation would use.
+    fn local_engine(
+        &self,
+    ) -> Result<Option<Box<dyn kw_transcription_core::local::LocalTranscriber>>, MediaImportError>
+    {
+        match crate::local_asr::resolve(&self.local_sherpa) {
+            Some(Ok(offline)) => Ok(Some(Box::new(offline))),
+            Some(Err(detail)) => Err(MediaImportError::RouteUnresolved { detail }),
+            None => Ok(self
+                .local_server()
+                .map(|w| Box::new(w) as Box<dyn kw_transcription_core::local::LocalTranscriber>)),
+        }
+    }
+
     /// Resolve where a transcription would go right now -- the same setting
     /// and the same resolver dictation uses. Not cached: settings can change
     /// between imports.
@@ -716,9 +737,9 @@ impl MediaImportRuntime {
         let transport = self.route_transport().await?;
 
         let executor = Executor::new(&self.policy, self.credentials.as_ref());
-        let local = self.local_server();
+        let local = self.local_engine()?;
         let executor = match &local {
-            Some(server) => executor.with_local(server),
+            Some(engine) => executor.with_local(engine.as_ref()),
             None => executor,
         };
 
@@ -951,6 +972,9 @@ mod tests {
             NetworkPolicy::new().unwrap(),
             Arc::new(kw_security::MemoryCredentialStore::new()),
             Arc::new(RwLock::new(None)),
+            Arc::new(RwLock::new(None)),
+            // No sherpa model selected: these tests are about import, not about
+            // which local engine an import lands on.
             Arc::new(RwLock::new(None)),
             Db::open_in_memory().await.unwrap(),
         )
