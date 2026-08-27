@@ -902,19 +902,6 @@ pub async fn media_import_video(
         .map_err(|err| err.to_string())
 }
 
-/// Import media fetched from a URL.
-#[tauri::command]
-pub async fn media_import_url(
-    app: AppHandle,
-    runtime: State<'_, Arc<MediaImportRuntime>>,
-    url: String,
-) -> Result<MediaImportResult, String> {
-    runtime
-        .import_url(&app, &url)
-        .await
-        .map_err(|err| err.to_string())
-}
-
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,

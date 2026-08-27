@@ -1328,24 +1328,6 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
       durationMs: 921_000,
       source: { kind: "video" },
     }) satisfies MediaImportResult,
-  media_import_url: (a) =>
-    ({
-      text: "Transcript of the linked recording.",
-      provider: "openai",
-      model: "gpt-4o-transcribe",
-      durationMs: 512_000,
-      source: {
-        kind: "url",
-        host: (() => {
-          try {
-            return new URL(arg<string>(a, "url") ?? "").host;
-          } catch {
-            return "example.com";
-          }
-        })(),
-      },
-    }) satisfies MediaImportResult,
-
   /* calendars */
   calendar_status: () => CALENDAR,
   calendar_set_client_id: () => null,

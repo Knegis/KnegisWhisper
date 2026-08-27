@@ -1142,8 +1142,8 @@
       ],
       "backend": "apps/desktop/src-tauri/src/media.rs",
       "ui": "Notes > Upload",
-      "reachable": true,
-      "note": "Backend corrected by Task 19: this named crates/notes-core; the real implementation is import_url in media.rs. The guard description is also corrected: media.rs's own module doc states plainly that this crate performs no DNS resolution. What runs, under RequestPurpose::UserTriggeredMediaImport, is a literal-host check (scheme, the vendor blocklist, and a literal private/link-local host) before the URL is ever handed to yt-dlp -- yt-dlp then does its own fetch, with its own DNS resolution and its own redirect handling, none of it observed or routed through kw_network_policy. Bounded instead by flags yt-dlp enforces on itself: a 500 MB filesize cap, a bounded socket timeout, playlist expansion off, and update/config-file checks off. DNS rebinding is not caught by the literal-host check, which runs before any resolution happens; see docs/NETWORK_BOUNDARY.md's \"What none of this stops: DNS rebinding\" section."
+      "reachable": false,
+      "note": "Disabled until every resolved address, redirect, and extractor-generated request made by yt-dlp can be checked against the network policy. The dormant backend is not registered as a Tauri command."
     },
     "media:openwhispr-import": {
       "status": "ported-with-new-rust-implementation",
