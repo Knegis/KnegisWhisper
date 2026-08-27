@@ -431,9 +431,19 @@ export function SettingsMeetings() {
                   minutes, so a longer meeting has to reconnect
                 </em>
               ) : null}
+              {/*
+                `tokenRotation` records what the *provider* documents, and this
+                row used to read "its token has to be refreshed mid-session" --
+                which describes an application that mints short-lived tokens.
+                This one does not: the header carries the key the user stored,
+                so there is nothing to refresh and no refresh is scheduled. The
+                capability is kept because it is true of the provider; the
+                sentence now says what it means here.
+              */}
               {p.tokenRotation ? (
                 <em className="row-detail">
-                  its token has to be refreshed mid-session
+                  this provider also issues short-lived tokens that need
+                  refreshing; your own key does not, and none is scheduled
                 </em>
               ) : null}
             </span>

@@ -794,9 +794,16 @@ impl MeetingRuntime {
     /// Spawned once at startup and runs for the life of the process. The interval
     /// ticks regardless of how long a poll took, and a poll that overran simply
     /// makes the next one immediate rather than accumulating.
+    ///
+    /// `tauri::async_runtime::spawn`, not `tokio::spawn`. This is called from
+    /// the `setup` hook, which runs on the main thread with no Tokio runtime
+    /// entered, and bare `tokio::spawn` panics there -- taking the whole
+    /// process down before the first window is usable. Every other background
+    /// task in this crate already spawns this way; this one did not, and no
+    /// test caught it because the panic needs a real Tauri app to happen in.
     pub fn watch(self: &Arc<Self>) {
         let runtime = Arc::clone(self);
-        tokio::spawn(async move {
+        tauri::async_runtime::spawn(async move {
             let mut ticker = tokio::time::interval(DETECT_INTERVAL);
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             loop {

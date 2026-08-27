@@ -399,6 +399,95 @@ the parity and gate suite — never by a person driving real traffic through it.
 
 ---
 
+## 2026-08-27 — first bench run of chunks E–J, partial
+
+Windows 11 Pro 26200, `Headphones (Bose QC45)` as the default output. Debug build via
+`npm run tauri:dev`, `KNEGISWHISPER_LOG=info,knegiswhisper_lib=debug`.
+
+**Partial by design and partial by accident.** Two of the five planned steps were performed
+against a browser tab at `127.0.0.1:5183` rather than the application window, so they measured
+dev fixtures and are recorded below as not run rather than as passes. See finding 2.
+
+### Verified
+
+| What | Evidence |
+| --- | --- |
+| **The application starts and reaches a usable window** | Only after finding 1 was fixed. Before that it panicked in `setup` every time |
+| **`meeting-stream:local` records, transcribes and saves, end to end** | Started from `Settings > Meetings` with the local provider and system audio on; stopped with *Stop and transcribe*; **saved as note 1 (1 min)** with the recording at `…\Roaming\KnegisWhisper\meetings\20260827-140423.wav`. The first genuine end-to-end pass anywhere in chunk E, and the highest-value item on the run's list |
+| **System audio resolves the real default output** | `WASAPI loopback on the default output device — Headphones (Bose QC45)`, a device that appears in no fixture |
+| **Meeting detection distinguishes running from in-a-call** | Microsoft Teams reported as *"open, but not detectably in a call, so recording is not offered for it — detected as ms-teams.exe"*. The distinction the five process-based detectors exist to make, holding on real hardware |
+| **The recording window is capture-excluded** | `verified via GetWindowDisplayAffinity = WDA_EXCLUDEFROMCAPTURE`, read back from the real window |
+
+### Findings
+
+**1. The application panicked at startup, every time, and no test could see it.**
+`apps/desktop/src-tauri/src/meeting.rs:799` started the meeting-detection timer with bare
+`tokio::spawn`. That runs from Tauri's `setup` hook, which is on the main thread with no Tokio
+runtime entered, so it panicked and took the process down just after the two overlay windows were
+created — `there is no reactor running, must be called from the context of a Tokio 1.x runtime`,
+exit code 101.
+
+It was the odd one out: `dictation.rs:885`, `local_llm.rs:324`, `local_model.rs:440` and
+`reasoning.rs:593` all use `tauri::async_runtime::spawn`, which needs no entered context. Only this
+one did not. Introduced in `3089442` (chunk E2), which predates the whole chunk E–J run.
+
+**1296 tests passed and the application did not start.** No unit test could have caught it: the
+panic needs a real Tauri app to happen in, and a test in this workspace may not even hold a
+reference to Tauri-dependent code without dying at load (`STATUS_ENTRYPOINT_NOT_FOUND`). This is
+the clearest example yet of what this file is for.
+
+**2. Dev fixtures were invisible on screen, and got recorded as passes.**
+`main.tsx` installs `devFixtures.ts` when `import.meta.env.DEV && !("__TAURI_INTERNALS__" in
+window)` — that is, whenever the Vite URL is opened in an ordinary browser. The fixtures then
+answer every command with invented data, including outcomes that read as passes:
+`openai/voice pass — transcribed the tone clip as "one two three"` and
+`deepgram/voice fail — 401 Unauthorized` are both string literals in that file, as are
+`0.1.0-dev`, `webview 121.0.2277.128`, and a four-item egress-purpose list containing
+`provider-catalog`, which is not one of the seven purposes at all.
+
+Two steps of this run were written down as **verified** on that basis. Nothing on the page
+contradicted them; the only notice was a `console.info` nobody reads while testing. For a project
+whose brief says *do not fake integration success*, a mode that is visually indistinguishable from
+reality is the defect, not the tester's mistake.
+
+Fixed by installing a fixed red banner and a `FIXTURES — ` title prefix from inside
+`installDevFixtures()` itself, so there is no arrangement of that module which mocks the IPC
+without also marking the screen.
+
+**3. `Settings > Meetings` says "ready to use" for a provider with no stored credential.** Open.
+`kw_meeting_core::capabilities::availability()` asks only whether a *client* exists for the wire
+shape; it never consults the credential store. So AssemblyAI Realtime and Corti Realtime both read
+`ready to use` with no key stored for either, while `start` would refuse them by design — Task 1
+made it refuse with a message naming `Settings > Providers`. The screen and the command disagree,
+and the screen is the optimistic one. The data needed to fix it already exists
+(`credential_slot()`, and the `credentialSlots` command the Providers screen uses); what is missing
+is `credential_slot` on `MeetingProviderSummary` so the screen can cross-reference.
+
+**4. The Deepgram row described a refresh this application does not perform.** It read *"its token
+has to be refreshed mid-session"*, which describes an application that mints short-lived tokens.
+Task 4 decided deliberately not to: the header carries the key the user stored, nothing is
+scheduled, and implementing a refresh loop over an unchanging key would be ceremony that looks like
+a safeguard. `token_rotation` is kept because it is true of the provider; the sentence now says
+what it means here. Fixed.
+
+### Still unchecked, and needs a person at the machine
+
+1. **Steps 1, 2 and 3 of the run, repeated in the application window.** Everything recorded for
+   them came from the browser tab. Specifically still unproven: that thirteen screens render, that
+   a stored key passes a real connection test, and that dictation types at the caret.
+2. **That the updater reports its honest refusal.** The real path returns
+   `NoPublicKeyConfigured` → *"Update checking is not securely configured"*; the fixture said
+   *"Up to date"*. Which of those appears is now the check.
+3. **Whether dictation cleanup actually changed the text.** Reported as working, but the screen
+   shows only the final transcript, so a cleanup that silently did nothing is indistinguishable
+   from one that worked. Dictating the same sentence with cleanup off and on is the only way to
+   tell from the UI as it stands.
+4. **`Notes > Upload`** — step 5, not attempted.
+5. **Meeting detection firing on a real call.** Teams was open but not in a call, so the
+   offer-to-record window has still never appeared.
+
+---
+
 ## 2026-08-27 — sherpa/Parakeet local ASR (chunk B4)
 
 **Added by the whole-branch review's fix wave, retroactively.** This file describes itself as the

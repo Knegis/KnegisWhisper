@@ -888,6 +888,14 @@ export type RouteReport = {
  */
 destination: string,
 /**
+ * Whether the resolved route is the local model server.
+ *
+ * A boolean rather than leaving the screen to match `destination` against
+ * the string `"local model"`: that phrase exists to be read by a person
+ * and rewording it must not silently change what a control does.
+ */
+isLocal: boolean,
+/**
  * Whether audio leaves this machine on this route.
  */
 leavesDevice: boolean,
@@ -942,6 +950,15 @@ models: Array<ModelStatus>,
  * The port the server is listening on, if it is running.
  */
 port: number | null,
+/**
+ * Which model the running server loaded, if one is running.
+ *
+ * Separate from `port` because "a server is up" and "*this* model is the
+ * one it loaded" are different claims, and the screen shows a row per
+ * model. The runtime has always tracked this for the history row; it was
+ * simply never reported, so no row could say which of them was live.
+ */
+runningModel: string | null,
 /**
  * Where installs are kept, and whether the per-user location had to be
  * abandoned because the native binaries cannot cope with the path.

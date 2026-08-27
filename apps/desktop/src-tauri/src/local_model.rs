@@ -151,6 +151,13 @@ pub struct LocalStatus {
     pub models: Vec<ModelStatus>,
     /// The port the server is listening on, if it is running.
     pub port: Option<u16>,
+    /// Which model the running server loaded, if one is running.
+    ///
+    /// Separate from `port` because "a server is up" and "*this* model is the
+    /// one it loaded" are different claims, and the screen shows a row per
+    /// model. The runtime has always tracked this for the history row; it was
+    /// simply never reported, so no row could say which of them was live.
+    pub running_model: Option<String>,
     /// Where installs are kept, and whether the per-user location had to be
     /// abandoned because the native binaries cannot cope with the path.
     pub install_dir: String,
@@ -307,6 +314,7 @@ pub async fn local_model_status(
         server_installed,
         models,
         port: local.port.read().ok().and_then(|p| *p),
+        running_model: local.model.read().ok().and_then(|m| m.clone()),
         install_dir: cache.path.display().to_string(),
         install_dir_fell_back: cache.fell_back || models_dir.fell_back,
     })

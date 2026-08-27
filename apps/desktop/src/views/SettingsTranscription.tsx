@@ -294,7 +294,19 @@ export function SettingsTranscription({
             {/* `list`, not `purposes`: these rows carry a button each, and
                 `purposes` is a wrapping row of pills that cannot hold one. */}
             <ul className="list">
-              {local.models.map((m) => (
+              {local.models.map((m) => {
+                /*
+                  Two facts, kept apart on purpose. `loaded` is which model the
+                  running server has; `inUse` also requires the dictation route
+                  to resolve to it. A server that is up is not the same as a
+                  route pointing at it -- the sentence this file has carried
+                  since the button was written -- so only the second earns the
+                  marked state, and the first gets said out loud when they
+                  disagree rather than left to look like the same thing.
+                */
+                const loaded = local.runningModel === m.id;
+                const inUse = loaded && route.isLocal;
+                return (
                 <li key={m.id}>
                   <code>{m.id}</code> {m.name}
                   {m.sizeMb ? ` · ${m.sizeMb} MB` : ""}
@@ -304,9 +316,17 @@ export function SettingsTranscription({
                       ? `installed, ${verificationLabel(m.verifiedBy)}`
                       : `not installed — will be ${verificationLabel(m.verifiedBy)}`}
                   </em>
+                  {loaded && !route.isLocal ? (
+                    <em className="row-detail warn">
+                      the server is running with this model, but dictation goes
+                      to {route.destination}
+                    </em>
+                  ) : null}
                   {m.installed ? (
                     <button
                       type="button"
+                      className={inUse ? "marked" : undefined}
+                      aria-pressed={inUse}
                       onClick={() => {
                         void guard(async () => {
                           await startLocalServer(m.id);
@@ -317,7 +337,7 @@ export function SettingsTranscription({
                         });
                       }}
                     >
-                      Use for dictation
+                      {inUse ? "In use for dictation" : "Use for dictation"}
                     </button>
                   ) : (
                     <button
@@ -331,7 +351,8 @@ export function SettingsTranscription({
                     </button>
                   )}
                 </li>
-              ))}
+                );
+              })}
             </ul>
             <p className="muted">
               Only whisper models are offered here. Parakeet's sherpa-onnx

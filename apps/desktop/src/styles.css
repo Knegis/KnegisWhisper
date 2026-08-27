@@ -584,6 +584,26 @@ section {
 }
 
 /*
+ * The marked button: this is the one currently in effect.
+ *
+ * Same gesture as `.sidebar button.nav-current` and for the same reason -- the
+ * fill inverts, the text inverts with it, nothing is drawn around it -- so
+ * "this is the current one" reads identically wherever it appears. `--band` is
+ * the site's blue and is already contrast-checked in both themes, which a new
+ * colour picked for one row would not be.
+ *
+ * It marks state, not availability. The control stays pressable: re-asserting a
+ * route that is already in effect is harmless, and a button that greys out the
+ * moment it succeeds leaves nothing to press when the state drifts underneath
+ * it.
+ */
+button.marked,
+button.marked:hover:not(:disabled) {
+  color: var(--band-ink);
+  background: var(--band);
+}
+
+/*
  * `button` carries a top margin for the standalone buttons that end a section.
  * Inline in a list row or beside a select, that margin drops the control below
  * its own baseline.

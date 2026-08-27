@@ -587,6 +587,7 @@ const INPUT_DEVICES: InputDevice[] = [
 
 const ROUTE: RouteReport = {
   destination: "openai",
+  isLocal: false,
   leavesDevice: true,
   problem: null,
 };
@@ -631,6 +632,11 @@ const LOCAL_MODELS: LocalStatus = {
     },
   ],
   port: 8178,
+  // Deliberately disagreeing with ROUTE, which resolves to openai: the local
+  // server is up with a model loaded and dictation is not using it. That is the
+  // state the marked button must *not* claim, so the fixtures show it rather
+  // than the easy case.
+  runningModel: "whisper-small-q5",
   installDir: "C:\\ProgramData\\KnegisWhisper\\whisper-server",
   installDirFellBack: true,
 };
@@ -1432,7 +1438,58 @@ declare global {
 
 /* ------------------------------------------------------------------ install */
 
+/**
+ * Say on the page, not just in the console, that nothing here is real.
+ *
+ * Installed by `installDevFixtures` itself so the two cannot drift: there is no
+ * arrangement of this module that mocks the IPC without also marking the
+ * screen. The console notice below is not enough on its own -- a bench run on
+ * 2026-08-27 recorded two steps as *verified* from this browser tab, against
+ * invented pass results that looked exactly like real ones, and nothing on
+ * screen contradicted them. Written inline rather than as a class in
+ * `styles.css` because it must survive a stylesheet that has not loaded, a
+ * theme that inverts, and any rule a view might add later.
+ *
+ * The title prefix matters as much as the bar: with the Tauri window and this
+ * tab both open, the taskbar is where the two get confused.
+ */
+function markThePageAsInvented(): void {
+  document.title = `FIXTURES — ${document.title}`;
+
+  const bar = document.createElement("div");
+  bar.dataset.devFixtures = "banner";
+  bar.textContent =
+    "DEV FIXTURES — no Rust behind this page. Every value is invented, " +
+    "including anything that reads as a pass. Use the KnegisWhisper " +
+    "application window, not this browser tab.";
+  bar.style.cssText = [
+    "position:fixed",
+    "inset:0 0 auto 0",
+    "z-index:2147483647",
+    "padding:0.55rem 1rem",
+    "background:#7f1d1d",
+    "color:#fff",
+    "font:600 13px/1.45 ui-sans-serif,system-ui,sans-serif",
+    "text-align:center",
+    "letter-spacing:0.01em",
+    "border-bottom:2px solid #fca5a5",
+    "pointer-events:none",
+  ].join(";");
+
+  const show = () => {
+    document.body.style.paddingTop = "2.6rem";
+    document.body.appendChild(bar);
+  };
+
+  if (document.body) {
+    show();
+  } else {
+    document.addEventListener("DOMContentLoaded", show, { once: true });
+  }
+}
+
 export function installDevFixtures(): void {
+  markThePageAsInvented();
   mockWindows("main");
   mockIPC(
     (cmd, payload) => {

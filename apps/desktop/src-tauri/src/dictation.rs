@@ -686,6 +686,12 @@ impl DictationRuntime {
 pub struct RouteReport {
     /// A short phrase for the UI: `local model`, `openai`, and so on.
     pub destination: String,
+    /// Whether the resolved route is the local model server.
+    ///
+    /// A boolean rather than leaving the screen to match `destination` against
+    /// the string `"local model"`: that phrase exists to be read by a person
+    /// and rewording it must not silently change what a control does.
+    pub is_local: bool,
     /// Whether audio leaves this machine on this route.
     pub leaves_device: bool,
     /// Present when the route cannot be resolved at all.
@@ -707,11 +713,13 @@ pub async fn dictation_route(
     ) {
         Ok(Transport::Local) => Ok(RouteReport {
             destination: "local model".to_owned(),
+            is_local: true,
             leaves_device: false,
             problem: None,
         }),
         Ok(Transport::ProviderClient { provider, .. }) => Ok(RouteReport {
             destination: format!("{provider:?}").to_lowercase(),
+            is_local: false,
             leaves_device: true,
             problem: None,
         }),
@@ -729,10 +737,12 @@ pub async fn dictation_route(
                     .as_str(),
             ),
             destination: provider,
+            is_local: false,
             problem: None,
         }),
         Err(err) => Ok(RouteReport {
             destination: "nowhere".to_owned(),
+            is_local: false,
             leaves_device: false,
             problem: Some(err.to_string()),
         }),
