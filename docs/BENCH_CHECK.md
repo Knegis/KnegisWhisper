@@ -507,8 +507,20 @@ sample rate now comes from the session config, already checked against the capab
 than a constant that could disagree with the audio being sent. **Inferred as a group and not
 verified.**
 
+**It works.** The sixth attempt transcribed a real meeting through `openai-realtime`, microphone
+and system audio, live. The `audio.input` shape inferred as a group was right. This is the first
+cloud meeting client in this project to meet a real server, and `meeting-stream:openai-realtime`
+moves from *written against fixtures* to verified in the manifest and in
+`docs/PLATFORM_SUPPORT.md`.
+
 Five round trips, each about two minutes, each ending in the server naming the next thing. None of
 it would have been possible before the close reason was kept.
+
+**What this says about the other three.** AssemblyAI, Deepgram and Corti are in exactly the state
+this client was in yesterday: written from documentation, covered by fixtures, marked *no live
+call*. Every single one of the five faults here was a shape that had been correct when written and
+had since changed or been misread — not one was a coding mistake, and not one was catchable by any
+test in this repository. The fixtures still pass. They passed the whole way through.
 
 **The honest-failure message works at Stop.** The fourth attempt ended with *"Nothing was
 transcribed — no speech was recognised, or the provider returned nothing. The recording is at
