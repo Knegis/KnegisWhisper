@@ -424,8 +424,14 @@ pub fn is_allowed(id: &str) -> bool {
 
 /// Whether a provider can be used, and if not, why not.
 ///
-/// Three states rather than a boolean, because the three need different words on
-/// the screen and lead to different actions.
+/// Four states rather than a boolean, because each needs different words on the
+/// screen and leads to a different action.
+///
+/// [`Self::NeedsCredential`] was added after a bench run on 2026-08-27 found
+/// `Settings > Meetings` reading *ready to use* beside AssemblyAI and Corti with
+/// no key stored for either, while `MeetingRuntime::start` refused them by
+/// design. The screen and the command disagreed and the screen was the
+/// optimistic one, which is the shape of claim this project keeps removing.
 ///
 /// Named `Client…` rather than plain `Availability` because `local_model` already
 /// exports one — whether a *server binary* is published for this platform — and
@@ -445,6 +451,11 @@ pub enum ClientAvailability {
     /// Deliberately refused, and it stays refused until `reason` stops being
     /// true.
     Declined { reason: &'static str },
+    /// A client exists, but the credential it needs has not been stored.
+    ///
+    /// Distinct from [`Self::NoClient`]: nothing needs writing, and the person
+    /// reading the screen can fix this one themselves.
+    NeedsCredential { slot: &'static str },
 }
 
 impl ClientAvailability {
@@ -497,11 +508,42 @@ pub struct MeetingProviderSummary {
     pub summary: String,
 }
 
+/// [`listing`], with `Available` narrowed to what a credential store confirms.
+///
+/// `stored` is asked only about providers that got as far as `Available` and
+/// that name a slot, so a declined provider keeps its refusal and the local one
+/// -- which needs no credential -- is untouched.
+///
+/// Separate from [`listing`] rather than replacing it because this crate has no
+/// business reading a credential store: the caller supplies the answer, which
+/// also makes the rule testable without one. It is the same question
+/// `MeetingRuntime::start` asks through `CredentialStore::contains`, asked
+/// before the screen offers the provider rather than after the click.
+#[must_use]
+pub fn listing_with_credentials(stored: &dyn Fn(&str) -> bool) -> Vec<MeetingProviderSummary> {
+    let mut items = listing();
+    for item in &mut items {
+        if !item.availability.is_available() {
+            continue;
+        }
+        let Some(slot) = client(item.id).and_then(credential_slot) else {
+            continue;
+        };
+        if !stored(slot) {
+            item.availability = ClientAvailability::NeedsCredential { slot };
+        }
+    }
+    items
+}
+
 /// Every described provider, with whether it can actually be used.
 ///
 /// Order follows [`PROVIDERS`] rather than sorting the usable ones first: the
 /// screen should show the same list every time, and a provider moving position
 /// when a client lands is a worse surprise than one being unavailable.
+///
+/// Says nothing about credentials -- see [`listing_with_credentials`], which is
+/// what the screen calls.
 #[must_use]
 pub fn listing() -> Vec<MeetingProviderSummary> {
     PROVIDERS
@@ -707,6 +749,77 @@ mod tests {
         let corti = listed.iter().find(|p| p.id == "corti-realtime").unwrap();
         let json = serde_json::to_value(corti).unwrap();
         assert_eq!(json["availability"]["state"], "available");
+    }
+
+    #[test]
+    fn a_provider_with_no_stored_key_is_not_offered_as_ready() {
+        // The defect this exists for: `Settings > Meetings` read "ready to use"
+        // beside AssemblyAI and Corti with no key stored for either, while
+        // `MeetingRuntime::start` refused them. Found by hand on 2026-08-27,
+        // because nothing here asked the question.
+        let nothing_stored = listing_with_credentials(&|_| false);
+
+        for p in &nothing_stored {
+            let Some(slot) = client(p.id).and_then(credential_slot) else {
+                continue;
+            };
+            assert_eq!(
+                p.availability,
+                ClientAvailability::NeedsCredential { slot },
+                "{} names slot {slot} and no key is stored, so it must not read as available",
+                p.id
+            );
+        }
+
+        // And the converse, so this cannot pass by downgrading everything.
+        let all_stored = listing_with_credentials(&|_| true);
+        assert_eq!(all_stored, listing());
+    }
+
+    #[test]
+    fn the_credential_check_does_not_touch_providers_it_does_not_apply_to() {
+        let listed = listing_with_credentials(&|_| false);
+
+        // `local` needs no credential, so an empty store says nothing about it.
+        let local = listed.iter().find(|p| p.id == "local").unwrap();
+        assert!(local.availability.is_available());
+
+        // A refusal outranks a missing key: Tinfoil would still be refused with
+        // a key stored, and reporting "no key" would invite someone to add one
+        // and expect it to work.
+        let tinfoil = listed.iter().find(|p| p.id == "tinfoil-realtime").unwrap();
+        assert!(matches!(
+            tinfoil.availability,
+            ClientAvailability::Declined { .. }
+        ));
+    }
+
+    #[test]
+    fn only_the_slots_that_are_needed_are_asked_about() {
+        // A store lookup is a keychain read on some platforms, so the listing
+        // must not probe slots for providers it already knows it cannot offer.
+        let asked = std::cell::RefCell::new(Vec::new());
+        let _ = listing_with_credentials(&|slot| {
+            asked.borrow_mut().push(slot.to_owned());
+            false
+        });
+
+        let asked = asked.into_inner();
+        let mut sorted = asked.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), asked.len(), "a slot was asked about twice");
+
+        for slot in &asked {
+            assert!(
+                PROVIDERS
+                    .iter()
+                    .filter(|p| availability(p.id).is_available())
+                    .filter_map(|p| client(p.id).and_then(credential_slot))
+                    .any(|s| s == slot),
+                "{slot} was looked up but belongs to no offerable provider"
+            );
+        }
     }
 
     #[test]

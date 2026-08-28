@@ -39,9 +39,9 @@ pub mod openai;
 pub mod openai_socket;
 
 pub use capabilities::{
-    availability, capabilities, client, credential_slot, declined, is_allowed, listing, Client,
-    ClientAvailability, KeytermSupport, KeytermWire, MeetingProviderCapabilities,
-    MeetingProviderSummary, PROVIDERS,
+    availability, capabilities, client, credential_slot, declined, is_allowed, listing,
+    listing_with_credentials, Client, ClientAvailability, KeytermSupport, KeytermWire,
+    MeetingProviderCapabilities, MeetingProviderSummary, PROVIDERS,
 };
 
 use kw_security::KeyRef;

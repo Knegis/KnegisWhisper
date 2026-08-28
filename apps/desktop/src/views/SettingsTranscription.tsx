@@ -20,12 +20,15 @@ import {
   getDictationRoute,
   getLocalStatus,
   getProviders,
+  getSherpaStatus,
   installLocalModel,
+  installSherpaModel,
   onInstallProgress,
   setCloudProvider,
   startLocalServer,
   stopLocalServer,
   useLocalModel,
+  useSherpaModel,
   type Dispatch,
   type ProviderSummary,
 } from "../lib/ipc";
@@ -62,16 +65,28 @@ export function SettingsTranscription({
   onGoToProviders: () => void;
 }) {
   const load = useCallback(async () => {
-    const [providers, local, route] = await Promise.all([
+    const [providers, local, sherpa, route] = await Promise.all([
       getProviders(),
       getLocalStatus(),
+      getSherpaStatus(),
       getDictationRoute(),
     ]);
-    return { providers, local, route };
+    return { providers, local, sherpa, route };
   }, []);
 
   const { data, error, reload, guard } = useRefresh(load);
   const [installing, setInstalling] = useState<string | null>(null);
+  /**
+   * Which model's Install button started the run in progress.
+   *
+   * The progress line used to render once, near the top of the whisper block.
+   * Pressing Install on a Parakeet model further down the page therefore
+   * produced no visible change at all -- a bench check on 2026-08-28 pressed it
+   * and could not tell whether a 631 MB download had begun. A control that
+   * appears to do nothing is the defect this file keeps correcting; the fix is
+   * to put the line on the row whose button was pressed.
+   */
+  const [installingId, setInstallingId] = useState<string | null>(null);
   /** Per-provider model choice, before it is committed. */
   const [selected, setSelected] = useState<Record<string, string>>({});
   /**
@@ -141,7 +156,10 @@ export function SettingsTranscription({
     let unlisten: (() => void) | undefined;
     void onInstallProgress((progress) => {
       setInstalling(progressLabel(progress));
-      if (progress.stage === "done") void reload();
+      if (progress.stage === "done") {
+        setInstallingId(null);
+        void reload();
+      }
     }).then((fn) => {
       unlisten = fn;
     });
@@ -156,7 +174,7 @@ export function SettingsTranscription({
     );
   }
 
-  const { providers, local, route } = data;
+  const { providers, local, sherpa, route } = data;
   const withKeys = providers.filter((p) => p.configured);
 
   return (
@@ -294,7 +312,23 @@ export function SettingsTranscription({
             {/* `list`, not `purposes`: these rows carry a button each, and
                 `purposes` is a wrapping row of pills that cannot hold one. */}
             <ul className="list">
-              {local.models.map((m) => (
+              {local.models.map((m) => {
+                /*
+                  Two facts, kept apart on purpose. `loaded` is which model the
+                  running server has; `inUse` also requires the dictation route
+                  to resolve to it. A server that is up is not the same as a
+                  route pointing at it -- the sentence this file has carried
+                  since the button was written -- so only the second earns the
+                  marked state, and the first gets said out loud when they
+                  disagree rather than left to look like the same thing.
+                */
+                const loaded = local.runningModel === m.id;
+                // A selected sherpa model outranks a running whisper server --
+                // see `local_asr`'s module doc -- so the whisper row must not
+                // claim to be in use while one is selected, even though its
+                // server is up and the route is local.
+                const inUse = loaded && route.isLocal && sherpa.selected === null;
+                return (
                 <li key={m.id}>
                   <code>{m.id}</code> {m.name}
                   {m.sizeMb ? ` · ${m.sizeMb} MB` : ""}
@@ -304,9 +338,20 @@ export function SettingsTranscription({
                       ? `installed, ${verificationLabel(m.verifiedBy)}`
                       : `not installed — will be ${verificationLabel(m.verifiedBy)}`}
                   </em>
+                  {loaded && !inUse ? (
+                    <em className="row-detail warn">
+                      the server is running with this model, but dictation goes
+                      to{" "}
+                      {sherpa.selected !== null && route.isLocal
+                        ? `the local model ${sherpa.selected}`
+                        : route.destination}
+                    </em>
+                  ) : null}
                   {m.installed ? (
                     <button
                       type="button"
+                      className={inUse ? "marked" : undefined}
+                      aria-pressed={inUse}
                       onClick={() => {
                         void guard(async () => {
                           await startLocalServer(m.id);
@@ -317,29 +362,105 @@ export function SettingsTranscription({
                         });
                       }}
                     >
-                      Use for dictation
+                      {inUse ? "In use for dictation" : "Use for dictation"}
                     </button>
                   ) : (
                     <button
                       type="button"
                       onClick={() => {
                         setInstalling("Starting…");
+                        setInstallingId(m.id);
                         void guard(() => installLocalModel(m.id));
                       }}
                     >
                       Install
                     </button>
                   )}
+                  {installingId === m.id && installing ? (
+                    <em className="row-detail">{installing}</em>
+                  ) : null}
                 </li>
-              ))}
+                );
+              })}
             </ul>
+            <h3>Parakeet, on the sherpa-onnx runtime</h3>
             <p className="muted">
-              Only whisper models are offered here. Parakeet's sherpa-onnx
-              runtime is implemented and verified, but this screen does not
-              yet offer a way to install or choose a Parakeet model. Nemotron
-              is a streaming model over a different protocol nobody has
-              built a client for.
+              A second local engine. Nothing here reaches the network until you
+              press Install, and dictation uses exactly one local engine at a
+              time — choosing a Parakeet model releases the whisper server, and
+              choosing a whisper model above releases this one.
             </p>
+            {sherpa.availability.state === "not-published" ? (
+              <>
+                <Row
+                  label="Availability"
+                  value="No sherpa-onnx runtime is published for this platform"
+                />
+                <p className="muted">{sherpa.availability.reason}</p>
+                <p className="muted">{sherpa.availability.tracking}</p>
+              </>
+            ) : (
+              <>
+                <Row
+                  label="Runtime"
+                  value={sherpa.cliInstalled ? "Installed" : "Not installed"}
+                  detail={
+                    sherpa.cliInstalled
+                      ? undefined
+                      : "installed automatically with the first model"
+                  }
+                />
+                <Row label="Models kept in" value={sherpa.modelsDir} />
+                <ul className="list">
+                  {sherpa.models.map((m) => {
+                    const inUse = sherpa.selected === m.id && route.isLocal;
+                    return (
+                      <li key={m.id}>
+                        <code>{m.id}</code> {m.name}
+                        {m.sizeMb ? ` · ${m.sizeMb} MB` : ""}
+                        {m.language ? ` · ${m.language}` : ""}
+                        {m.notOffered ? (
+                          <em className="row-detail warn">{m.notOffered}</em>
+                        ) : (
+                          <em className="row-detail">
+                            {m.installed ? "installed" : "not installed"}
+                          </em>
+                        )}
+                        {m.notOffered ? null : m.installed ? (
+                          <button
+                            type="button"
+                            className={inUse ? "marked" : undefined}
+                            aria-pressed={inUse}
+                            onClick={() => {
+                              void guard(async () => {
+                                await useSherpaModel(m.id);
+                                await useLocalModel(true);
+                              });
+                            }}
+                          >
+                            {inUse ? "In use for dictation" : "Use for dictation"}
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setInstalling("Starting…");
+                              setInstallingId(m.id);
+                              void guard(() => installSherpaModel(m.id));
+                            }}
+                          >
+                            Install
+                          </button>
+                        )}
+                        {installingId === m.id && installing ? (
+                          <em className="row-detail">{installing}</em>
+                        ) : null}
+                      </li>
+                    );
+                  })}
+                </ul>
+              </>
+            )}
             {local.port ? (
               <button
                 type="button"

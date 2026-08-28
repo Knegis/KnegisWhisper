@@ -29,7 +29,7 @@ use kw_network_policy::NetworkPolicy;
 use kw_platform::insertion::{SystemClipboard, TextInserter};
 use kw_security::CredentialStore;
 use kw_storage::{transcriptions, Db};
-use kw_transcription_core::local::WhisperServer;
+use kw_transcription_core::local::{LocalTranscriber, WhisperServer};
 use kw_transcription_core::{Executor, Transport};
 use tauri::{AppHandle, Emitter as _, Manager as _};
 
@@ -196,6 +196,7 @@ pub struct RouteTranscriber {
     credentials: Arc<dyn CredentialStore>,
     local_port: LocalPort,
     local_model: Arc<RwLock<Option<String>>>,
+    local_sherpa: crate::local_asr::Selection,
 }
 
 impl std::fmt::Debug for RouteTranscriber {
@@ -211,12 +212,14 @@ impl RouteTranscriber {
         credentials: Arc<dyn CredentialStore>,
         local_port: LocalPort,
         local_model: Arc<RwLock<Option<String>>>,
+        local_sherpa: crate::local_asr::Selection,
     ) -> Self {
         Self {
             policy,
             credentials,
             local_port,
             local_model,
+            local_sherpa,
         }
     }
 
@@ -224,6 +227,24 @@ impl RouteTranscriber {
         let port = self.local_port.read().ok().and_then(|held| *held)?;
         let model = self.local_model.read().ok().and_then(|held| held.clone());
         Some(WhisperServer::new(self.policy.clone(), port, model))
+    }
+}
+
+/// Which local engine a `Transport::Local` request should go to.
+///
+/// One engine, chosen by one rule: a selected sherpa model wins, otherwise the
+/// whisper server if it is running, otherwise nothing. A sherpa model that is
+/// selected but cannot be built is an error rather than a quiet fall through to
+/// whisper -- audio going somewhere the screen did not name is the failure this
+/// ordering exists to prevent.
+fn local_engine(
+    sherpa: &crate::local_asr::Selection,
+    whisper: Option<WhisperServer>,
+) -> Result<Option<Box<dyn LocalTranscriber>>, String> {
+    match crate::local_asr::resolve(sherpa) {
+        Some(Ok(offline)) => Ok(Some(Box::new(offline))),
+        Some(Err(reason)) => Err(reason),
+        None => Ok(whisper.map(|w| Box::new(w) as Box<dyn LocalTranscriber>)),
     }
 }
 
@@ -236,12 +257,13 @@ impl Transcriber for RouteTranscriber {
     ) -> Result<Transcribed, DictationError> {
         let executor = Executor::new(&self.policy, self.credentials.as_ref());
 
-        // Attached only when a server is actually running. Without this the
+        // Attached only when an engine is actually available. Without this the
         // executor answers `LocalNotAvailable`, which is the honest state — a
         // local route with no server is not something to paper over.
-        let local = self.local_server();
+        let local = local_engine(&self.local_sherpa, self.local_server())
+            .map_err(DictationError::Transcription)?;
         let executor = match &local {
-            Some(server) => executor.with_local(server),
+            Some(engine) => executor.with_local(engine.as_ref()),
             None => executor,
         };
 
@@ -518,6 +540,9 @@ pub struct LocalTargets {
     pub transcription_port: LocalPort,
     /// Which model that server loaded.
     pub transcription_model: Arc<RwLock<Option<String>>>,
+    /// Which sherpa model is selected, if any. Outranks the whisper server --
+    /// see `local_asr`'s module doc on why there is only ever one local engine.
+    pub transcription_sherpa: crate::local_asr::Selection,
     /// Where the llama server is listening, if it is.
     pub generation: crate::local_llm::LocalEndpoint,
 }
@@ -559,6 +584,7 @@ impl DictationRuntime {
         let LocalTargets {
             transcription_port: local_port,
             transcription_model: local_model,
+            transcription_sherpa: local_sherpa,
             generation: local_llm,
         } = local;
 
@@ -572,6 +598,7 @@ impl DictationRuntime {
                 Arc::clone(&credentials),
                 local_port,
                 local_model,
+                local_sherpa,
             )),
             Arc::new(ModelCleanup::new(
                 policy,
@@ -686,6 +713,12 @@ impl DictationRuntime {
 pub struct RouteReport {
     /// A short phrase for the UI: `local model`, `openai`, and so on.
     pub destination: String,
+    /// Whether the resolved route is the local model server.
+    ///
+    /// A boolean rather than leaving the screen to match `destination` against
+    /// the string `"local model"`: that phrase exists to be read by a person
+    /// and rewording it must not silently change what a control does.
+    pub is_local: bool,
     /// Whether audio leaves this machine on this route.
     pub leaves_device: bool,
     /// Present when the route cannot be resolved at all.
@@ -707,11 +740,13 @@ pub async fn dictation_route(
     ) {
         Ok(Transport::Local) => Ok(RouteReport {
             destination: "local model".to_owned(),
+            is_local: true,
             leaves_device: false,
             problem: None,
         }),
         Ok(Transport::ProviderClient { provider, .. }) => Ok(RouteReport {
             destination: format!("{provider:?}").to_lowercase(),
+            is_local: false,
             leaves_device: true,
             problem: None,
         }),
@@ -729,10 +764,12 @@ pub async fn dictation_route(
                     .as_str(),
             ),
             destination: provider,
+            is_local: false,
             problem: None,
         }),
         Err(err) => Ok(RouteReport {
             destination: "nowhere".to_owned(),
+            is_local: false,
             leaves_device: false,
             problem: Some(err.to_string()),
         }),

@@ -531,15 +531,21 @@ max: number | null, wire: KeytermWire, };
 /**
  * Whether a provider can be used, and if not, why not.
  *
- * Three states rather than a boolean, because the three need different words on
- * the screen and lead to different actions.
+ * Four states rather than a boolean, because each needs different words on the
+ * screen and leads to a different action.
+ *
+ * [`Self::NeedsCredential`] was added after a bench run on 2026-08-27 found
+ * `Settings > Meetings` reading *ready to use* beside AssemblyAI and Corti with
+ * no key stored for either, while `MeetingRuntime::start` refused them by
+ * design. The screen and the command disagreed and the screen was the
+ * optimistic one, which is the shape of claim this project keeps removing.
  *
  * Named `Client…` rather than plain `Availability` because `local_model` already
  * exports one — whether a *server binary* is published for this platform — and
  * two Rust types cannot share a TypeScript name. `ipc_types.rs` asserts on that,
  * and caught this.
  */
-export type ClientAvailability = { "state": "available" } | { "state": "no-client", reason: string, } | { "state": "declined", reason: string, };
+export type ClientAvailability = { "state": "available" } | { "state": "no-client", reason: string, } | { "state": "declined", reason: string, } | { "state": "needs-credential", slot: string, };
 
 /**
  * One provider as the settings screen needs it.
@@ -888,6 +894,14 @@ export type RouteReport = {
  */
 destination: string,
 /**
+ * Whether the resolved route is the local model server.
+ *
+ * A boolean rather than leaving the screen to match `destination` against
+ * the string `"local model"`: that phrase exists to be read by a person
+ * and rewording it must not silently change what a control does.
+ */
+isLocal: boolean,
+/**
  * Whether audio leaves this machine on this route.
  */
 leavesDevice: boolean,
@@ -943,6 +957,15 @@ models: Array<ModelStatus>,
  */
 port: number | null,
 /**
+ * Which model the running server loaded, if one is running.
+ *
+ * Separate from `port` because "a server is up" and "*this* model is the
+ * one it loaded" are different claims, and the screen shows a row per
+ * model. The runtime has always tracked this for the history row; it was
+ * simply never reported, so no row could say which of them was live.
+ */
+runningModel: string | null,
+/**
  * Where installs are kept, and whether the per-user location had to be
  * abandoned because the native binaries cannot cope with the path.
  */
@@ -956,6 +979,53 @@ export type InstallProgress = { "stage": "server", written: number, total: numbe
  * What the model on disk was actually checked against.
  */
 verifiedBy: VerifiedBy, };
+
+/**
+ * Why a model this build knows about is not on offer.
+ *
+ * A reason rather than absence, for the same purpose
+ * `ClientAvailability::NoClient` serves: someone who read that this
+ * application supports Nemotron should find out here why they cannot pick it,
+ * rather than wonder whether the list is broken.
+ */
+export type SherpaModelStatus = { id: string, name: string, sizeMb: number | null, language: string | null,
+/**
+ * Whether the extracted directory has the measured transducer layout.
+ *
+ * Checked by running the same discovery `transcribe` will use, so a
+ * half-extracted directory does not count as installed.
+ */
+installed: boolean,
+/**
+ * `None` when the model can be installed and used.
+ */
+notOffered: string | null, };
+
+/**
+ * Everything the sherpa half of the screen needs, with no network access.
+ */
+export type SherpaStatus = {
+/**
+ * Whether the pinned CLI is published for this platform at all, and why
+ * not. The same three-state answer `local_model` gives for
+ * `whisper-server`, and for the same reason: "not published here" and "not
+ * installed yet" are different facts.
+ */
+availability: Availability,
+/**
+ * Whether the offline CLI itself is installed.
+ */
+cliInstalled: boolean, models: Array<SherpaModelStatus>,
+/**
+ * Which model dictation is set to use, if any.
+ */
+selected: string | null,
+/**
+ * Where models are kept. Shown because the native binaries cannot load
+ * from a path with a space or a non-ASCII character in it, so this is
+ * sometimes not where a person would expect.
+ */
+modelsDir: string, };
 
 /* -------------------------------------------------- local text generation */
 /**

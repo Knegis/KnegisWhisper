@@ -44,6 +44,7 @@ import type {
   CredentialSlotStatus,
   McpStatus,
   MediaImportResult,
+  SherpaStatus,
   SidecarStatus,
   SyncOutcome,
   Diagnostics,
@@ -515,11 +516,11 @@ const MEETING_PROVIDERS: MeetingProviderSummary[] = [
     languageDetection: false,
     reconnect: false,
     batchFallback: false,
-    availability: {
-      state: "no-client",
-      reason: "the AssemblyAI streaming client is not built yet",
-    },
-    summary: "Not available in this build.",
+    // Was `no-client` with "not built yet", which stopped being true when the
+    // client landed in chunk E. Now the fixture for the state added after the
+    // 2026-08-27 bench run: a client exists and no key is stored.
+    availability: { state: "needs-credential", slot: "assemblyai" },
+    summary: "Streams audio to AssemblyAI. Speaker labels and live partials.",
   },
   {
     id: "meeting:local",
@@ -587,6 +588,7 @@ const INPUT_DEVICES: InputDevice[] = [
 
 const ROUTE: RouteReport = {
   destination: "openai",
+  isLocal: false,
   leavesDevice: true,
   problem: null,
 };
@@ -631,8 +633,50 @@ const LOCAL_MODELS: LocalStatus = {
     },
   ],
   port: 8178,
+  // Deliberately disagreeing with ROUTE, which resolves to openai: the local
+  // server is up with a model loaded and dictation is not using it. That is the
+  // state the marked button must *not* claim, so the fixtures show it rather
+  // than the easy case.
+  runningModel: "whisper-small-q5",
   installDir: "C:\\ProgramData\\KnegisWhisper\\whisper-server",
   installDirFellBack: true,
+};
+
+const SHERPA: SherpaStatus = {
+  availability: { state: "installable" },
+  cliInstalled: true,
+  // One installed and selected, one installable, and the two streaming models
+  // carrying the reason they cannot be picked -- the three states this list has,
+  // so the screen is worked on against all of them rather than the easy one.
+  models: [
+    {
+      id: "parakeet-unified-en-0.6b",
+      name: "Parakeet Unified EN 0.6B",
+      sizeMb: 630,
+      language: "en",
+      installed: true,
+      notOffered: null,
+    },
+    {
+      id: "parakeet-tdt-0.6b-v3",
+      name: "Parakeet TDT 0.6B v3",
+      sizeMb: 660,
+      language: null,
+      installed: false,
+      notOffered: null,
+    },
+    {
+      id: "nemotron-streaming-en",
+      name: "Nemotron Streaming EN",
+      sizeMb: 480,
+      language: "en",
+      installed: false,
+      notOffered:
+        "streaming model — it is served over sherpa-onnx's own WebSocket protocol, and no client for that protocol has been written",
+    },
+  ],
+  selected: "parakeet-unified-en-0.6b",
+  modelsDir: "C:\\ProgramData\\KnegisWhisper\\models\\sherpa",
 };
 
 const LOCAL_LLM: LocalLlmStatus = {
@@ -1207,6 +1251,9 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
   dictation_set_cloud_provider: () => null,
 
   /* local transcription */
+  sherpa_status: () => SHERPA,
+  sherpa_install_model: () => null,
+  sherpa_use_model: () => null,
   local_model_status: () => LOCAL_MODELS,
   local_model_install: () => "whisper-large-v3-turbo-q5",
   local_server_start: () => 8178,
@@ -1432,7 +1479,58 @@ declare global {
 
 /* ------------------------------------------------------------------ install */
 
+/**
+ * Say on the page, not just in the console, that nothing here is real.
+ *
+ * Installed by `installDevFixtures` itself so the two cannot drift: there is no
+ * arrangement of this module that mocks the IPC without also marking the
+ * screen. The console notice below is not enough on its own -- a bench run on
+ * 2026-08-27 recorded two steps as *verified* from this browser tab, against
+ * invented pass results that looked exactly like real ones, and nothing on
+ * screen contradicted them. Written inline rather than as a class in
+ * `styles.css` because it must survive a stylesheet that has not loaded, a
+ * theme that inverts, and any rule a view might add later.
+ *
+ * The title prefix matters as much as the bar: with the Tauri window and this
+ * tab both open, the taskbar is where the two get confused.
+ */
+function markThePageAsInvented(): void {
+  document.title = `FIXTURES — ${document.title}`;
+
+  const bar = document.createElement("div");
+  bar.dataset.devFixtures = "banner";
+  bar.textContent =
+    "DEV FIXTURES — no Rust behind this page. Every value is invented, " +
+    "including anything that reads as a pass. Use the KnegisWhisper " +
+    "application window, not this browser tab.";
+  bar.style.cssText = [
+    "position:fixed",
+    "inset:0 0 auto 0",
+    "z-index:2147483647",
+    "padding:0.55rem 1rem",
+    "background:#7f1d1d",
+    "color:#fff",
+    "font:600 13px/1.45 ui-sans-serif,system-ui,sans-serif",
+    "text-align:center",
+    "letter-spacing:0.01em",
+    "border-bottom:2px solid #fca5a5",
+    "pointer-events:none",
+  ].join(";");
+
+  const show = () => {
+    document.body.style.paddingTop = "2.6rem";
+    document.body.appendChild(bar);
+  };
+
+  if (document.body) {
+    show();
+  } else {
+    document.addEventListener("DOMContentLoaded", show, { once: true });
+  }
+}
+
 export function installDevFixtures(): void {
+  markThePageAsInvented();
   mockWindows("main");
   mockIPC(
     (cmd, payload) => {

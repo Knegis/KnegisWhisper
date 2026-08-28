@@ -35,9 +35,7 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::capabilities::MeetingProviderCapabilities;
-use crate::openai::{
-    self, Incoming, SessionClock, BETA_HEADER, DEFAULT_MODEL, ENDPOINT, PROVIDER_ID, PURPOSE,
-};
+use crate::openai::{self, Incoming, SessionClock, DEFAULT_MODEL, ENDPOINT, PROVIDER_ID, PURPOSE};
 use crate::{
     AudioChunk, AudioSource, MeetingError, MeetingProviderConfig, MeetingTranscript,
     MeetingTranscriptionProvider, TranscriptEvent,
@@ -62,10 +60,23 @@ pub struct OpenAiRealtime {
     paused: bool,
 }
 
+/// Why a socket stopped, as the provider said it, shared with the writer.
+///
+/// The reader and the writer are two halves of a split socket in different
+/// tasks, so a provider-initiated close reaches the reader and the writer finds
+/// out only by failing. Without this it fails with tungstenite's own words --
+/// `Sending after closing is not allowed` -- which describes our call, not the
+/// reason, and is what a real meeting produced on 2026-08-28. The provider's
+/// close frame carries a code and usually a sentence saying what was wrong;
+/// this keeps it so the failure can be reported in those terms instead.
+type Closed = Arc<std::sync::Mutex<Option<String>>>;
+
 /// One open socket and the task reading it.
 struct Connection {
     sink: Sink,
     reader: tokio::task::JoinHandle<()>,
+    /// Set by the reader if the provider closed the socket first.
+    closed: Closed,
 }
 
 impl Connection {
@@ -155,13 +166,6 @@ impl OpenAiRealtime {
                     detail: "the stored credential is not a valid header value".to_owned(),
                 })?,
             );
-            headers.insert(
-                BETA_HEADER.0,
-                BETA_HEADER.1.parse().map_err(|_| MeetingError::Rejected {
-                    provider: PROVIDER_ID.to_owned(),
-                    detail: "the beta header could not be built".to_owned(),
-                })?,
-            );
         }
 
         let (socket, _) = tokio_tungstenite::connect_async(request)
@@ -185,15 +189,21 @@ impl OpenAiRealtime {
                 detail: err.to_string(),
             })?;
 
+        let closed: Closed = Arc::new(std::sync::Mutex::new(None));
         let reader = tokio::spawn(read(
             stream,
             source,
             Arc::clone(&self.events),
             self.live.clone(),
             self.started.unwrap_or_else(Instant::now),
+            Arc::clone(&closed),
         ));
 
-        Ok(Connection { sink, reader })
+        Ok(Connection {
+            sink,
+            reader,
+            closed,
+        })
     }
 
     /// Rebuild both sockets, keeping everything transcribed so far.
@@ -234,18 +244,42 @@ async fn read(
     events: Arc<std::sync::Mutex<Vec<TranscriptEvent>>>,
     live: Option<mpsc::UnboundedSender<TranscriptEvent>>,
     started: Instant,
+    closed: Closed,
 ) {
     while let Some(frame) = stream.next().await {
         let text = match frame {
             Ok(Message::Text(text)) => text,
-            Ok(Message::Close(_)) => {
-                tracing::debug!(?source, "the provider closed the socket");
+            Ok(Message::Close(frame)) => {
+                // The code and reason are the useful part and used to be
+                // discarded. `warn`, not `debug`: the provider ending a session
+                // we did not end is worth seeing without turning logging up.
+                let said = frame.map_or_else(
+                    || "the provider closed the connection without saying why".to_owned(),
+                    |f| {
+                        let reason = f.reason.trim();
+                        if reason.is_empty() {
+                            format!("the provider closed the connection (code {})", f.code)
+                        } else {
+                            format!(
+                                "the provider closed the connection: {reason} (code {})",
+                                f.code
+                            )
+                        }
+                    },
+                );
+                tracing::warn!(?source, %said, "the transcription socket was closed");
+                if let Ok(mut held) = closed.lock() {
+                    *held = Some(said);
+                }
                 return;
             }
             // Ping, pong and binary. tungstenite answers pings itself.
             Ok(_) => continue,
             Err(err) => {
                 tracing::warn!(error = %err, ?source, "the transcription socket failed");
+                if let Ok(mut held) = closed.lock() {
+                    *held = Some(err.to_string());
+                }
                 return;
             }
         };
@@ -319,13 +353,19 @@ impl MeetingTranscriptionProvider for OpenAiRealtime {
                     detail: "the session is not open".to_owned(),
                 })?;
 
+        let recorded = connection.closed.lock().ok().and_then(|held| held.clone());
+
         connection
             .sink
             .send(Message::Text(frame.to_string()))
             .await
             .map_err(|err| MeetingError::Disconnected {
                 provider: PROVIDER_ID.to_owned(),
-                detail: err.to_string(),
+                // What the provider said, if it said anything. A send that
+                // fails because the socket is already closed reports our own
+                // call (`Sending after closing is not allowed`) and tells
+                // nobody why the session ended; the reader has the reason.
+                detail: recorded.unwrap_or_else(|| err.to_string()),
             })
     }
 

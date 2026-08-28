@@ -27,7 +27,7 @@
 //! # The wire, briefly
 //!
 //! Connect to `wss://api.openai.com/v1/realtime?intent=transcription` with a
-//! bearer token and the `realtime=v1` beta header. Send a
+//! bearer token and no beta header -- see [`BETA_HEADER`]. Send a
 //! `transcription_session.update` naming the model and the audio format, then
 //! `input_audio_buffer.append` frames carrying base64 PCM16. Transcript arrives
 //! as `conversation.item.input_audio_transcription.delta` (partial) and
@@ -66,11 +66,30 @@ pub const DEFAULT_MODEL: &str = "gpt-4o-transcribe";
 /// purposes at seven, and a socket does not make this a different reason.
 pub const PURPOSE: RequestPurpose = RequestPurpose::UserConfiguredTranscriptionProvider;
 
-/// Headers the handshake needs beyond the bearer token.
+/// The beta opt-in header this client used to send, kept only to say why it
+/// does not any more.
 ///
-/// The beta header is required; without it the server closes the socket with a
-/// 400 and no useful body, which is a confusing failure to debug from the
-/// outside.
+/// Written from documentation that said the header was required and that
+/// omitting it produced a 400 with no useful body. That stopped being true.
+/// The first live use of this client, on a real meeting on 2026-08-28, was
+/// closed by the server immediately on both sockets:
+///
+/// ```text
+/// The Realtime Beta API is no longer supported. Please use /v1/realtime for
+/// the GA API.
+/// invalid_request_error.beta_api_shape_disabled (code 4000)
+/// ```
+///
+/// The endpoint was already `/v1/realtime`, so the header was the thing
+/// selecting the retired shape. It is no longer sent.
+///
+/// **Believed, not verified.** Removing the header is what the server's own
+/// message asks for, and it is the smallest change that can be right. Whether
+/// the GA shape also renames `transcription_session.update` or alters the frame
+/// grammar is not something this build has been told, and no live call has
+/// confirmed the client works without the header -- only that it fails with it.
+/// A further mismatch will now arrive as the provider's own close reason rather
+/// than as a send error, which is what made this diagnosable at all.
 pub const BETA_HEADER: (&str, &str) = ("OpenAI-Beta", "realtime=v1");
 
 /// How long before the server's cap to reconnect on purpose.

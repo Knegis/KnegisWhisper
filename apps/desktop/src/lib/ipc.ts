@@ -106,6 +106,8 @@ import type {
   SearchHit,
   SessionState,
   ShortcutHookStatus,
+  SherpaModelStatus,
+  SherpaStatus,
   SidecarStatus,
   SkipReason,
   Sources,
@@ -204,6 +206,8 @@ export type {
   SearchHit,
   SessionState,
   ShortcutHookStatus,
+  SherpaModelStatus,
+  SherpaStatus,
   SidecarStatus,
   Sources,
   SyncOutcome,
@@ -749,6 +753,29 @@ export async function startLocalServer(modelId: string): Promise<number> {
 
 export async function stopLocalServer(): Promise<void> {
   return invoke<void>("local_server_stop");
+}
+
+/* ---------------------------------------------------- local ASR (sherpa) */
+
+/** The sherpa models, what is installed, and which one is selected. */
+export async function getSherpaStatus(): Promise<SherpaStatus> {
+  return invoke<SherpaStatus>("sherpa_status");
+}
+
+/**
+ * Install one model, and the offline CLI if it is not already there.
+ *
+ * Reports through the same `InstallProgress` event the whisper installer
+ * uses -- one install at a time either way, and two progress channels for one
+ * progress bar would be a way for them to disagree.
+ */
+export async function installSherpaModel(modelId: string): Promise<void> {
+  return invoke<void>("sherpa_install_model", { modelId });
+}
+
+/** Send dictation to one installed sherpa model. */
+export async function useSherpaModel(modelId: string): Promise<void> {
+  return invoke<void>("sherpa_use_model", { modelId });
 }
 
 export async function onInstallProgress(

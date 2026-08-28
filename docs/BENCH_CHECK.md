@@ -399,6 +399,284 @@ the parity and gate suite — never by a person driving real traffic through it.
 
 ---
 
+## 2026-08-28 (later) — round two: cleanup proven, Parakeet proven, two defects
+
+Same machine and build. Four items were outstanding; all four were exercised.
+
+### Verified
+
+| What | Evidence |
+| --- | --- |
+| **A dead local server now repairs itself** | The four failing dictations were a port held for a process that had gone. After the fix, *Use for dictation* started a real server and dictation worked |
+| **The chat connection test passes** | `openai/chat pass — replied "OK"`, with the same key that produced `400 Unsupported parameter: 'max_tokens'` before the probe was taught to ask `params::shape_for` |
+| **Dictation cleanup genuinely changes the text** | Proven with Parakeet, below. The first attempt could not tell, and the reason is worth keeping |
+| **The Parakeet selector works end to end** | Installed the CLI and `parakeet-unified-en-0.6b` through the screen, selected it, and dictated through it. The runtime had been proven by a test; the screen, the commands and the engine switch had never been used by anyone until now |
+| **Parakeet transcribes better than `tiny` on this hardware** | Same sentence, four takes. `tiny`: *"the lace dome"*, *"the quick brow fox"*, *"the quick plan forks"*. Parakeet: the sentence, correctly, every time |
+
+**How cleanup was finally settled, and why the first attempt failed.** The A/B this file
+prescribed — dictate a sentence with filler words, cleanup off then on — could not work on
+`whisper-tiny`, because **whisper strips fillers itself**. All four `tiny` takes came back with no
+"um" and no "you know" whether cleanup was on or off, so the comparison measured nothing. The test
+was designed without accounting for the transcriber, which is the same mistake as trusting a probe
+that verifies less than it looks like.
+
+Parakeet does not strip them, which turned the same experiment into a clean one:
+
+```
+spoken:   "um, so the quick brown fox, you know, jumps over the lazy dog"
+
+Parakeet, cleanup off:  "So the quick brown fox, you know, jumps over the lazy dog."
+                        "So, you know, the quick brown fox jumps over the lazy dog."
+Parakeet, cleanup on:   "So the quick brown fox jumps over the lazy dog."
+                        "So the quick brown fox jumps over the lazy dog."
+```
+
+The filler survives with cleanup off and is gone with it on, twice each. **Cleanup works.** The
+lesson is the more useful part: an A/B is only a test of the thing you changed if nothing else in
+the pipeline is doing the same job.
+
+### Findings
+
+**1. Install reported no progress, so a 631 MB download looked like a dead button.** Pressing
+*Install* on a Parakeet model produced no visible change. The progress line existed but rendered
+once, near the top of the whisper block — far above the control that started it, and off screen.
+`InstallProgress::Model` already carries the model id, so the line now renders on the row whose
+button was pressed, for both engines. Fixed.
+
+**2. `keep_raw_text` is opt-in with nothing to opt in with.** Open.
+`kw_app_core::dictation` stores the pre-cleanup transcript as `Transcription.raw_text`, but only
+when `keep_raw_text` is true and only when it differs from the cleaned text — which would answer
+"did cleanup change anything" exactly, and permanently. It is hardcoded `false` at
+`apps/desktop/src-tauri/src/dictation.rs`, under a comment calling it opt-in. There is no setting,
+no command and no UI, and nothing renders `rawText`, which is already in the IPC type and in
+history. Had it been reachable, this run would not have needed a second transcriber to answer the
+question. Same class as the four hotkeys that registered and dispatched nowhere: a capability that
+exists, is described, and has no way in.
+
+### Added by the live Teams meeting, same day
+
+**Verified:** `meeting-stream:local` produces a **live** transcript during recording, not only a
+final one. Detection reported Teams as open-but-not-in-a-call *during an actual call*, which is the
+honest answer and also the whole capability for that client -- Teams runs the call inside
+`ms-teams.exe`, so no child process appears for the process-table detector to see. Filed as
+**KNEG-94** (mic listener over `IAudioSessionManager2`), with a calendar cross-check noted as the
+possibly cheaper half.
+
+**`openai-realtime` cannot connect at all: the beta API shape was retired.** Its first live use
+was closed on both sockets within milliseconds:
+
+```
+The Realtime Beta API is no longer supported. Please use /v1/realtime for the GA API.
+invalid_request_error.beta_api_shape_disabled (code 4000)
+```
+
+The endpoint was already `/v1/realtime`, so the `OpenAI-Beta: realtime=v1` header was what selected
+the retired shape. It is no longer sent. **Believed, not verified**: no live call has confirmed the
+client works without it, only that it fails with it, and whether the GA shape also renames
+`transcription_session.update` is unknown to this build. A further mismatch will now arrive as the
+provider's own close reason.
+
+Worth noting what this cost: the client was written against documentation, marked *written against
+fixtures, no live call* in the manifest, and shipped correct-for-its-time. The failure was not a
+coding mistake. It is what "unverified" means, and it took ten minutes of a real meeting to find.
+
+**And the more serious defect it exposed: a meeting whose provider dies at second zero looks
+exactly like one that works.** Both sockets closed immediately; the application reported
+**Recording**, kept the indicator up, captured both streams for as long as it was left running, and
+said nothing. One `DEBUG nothing is consuming the meeting audio` per second was the only trace.
+`Incoming::Failed` is logged and never surfaced -- the cross-cutting gap `BUILD_PLAN.md` already
+records for all four cloud clients -- and `pump`'s error sits in a `JoinHandle` nobody awaits until
+Stop. Filed as **KNEG-95**, High, and deliberately not patched: it needs a decision about whether a
+dead provider stops the recording, falls back immediately, or carries on with a fourth
+`MeetingState` saying so.
+
+### Still unchecked, and needs a person at the machine
+
+1. **`Settings > Meetings`, re-read** — still carried over from an earlier paste. AssemblyAI and
+   Corti should now name the missing key rather than reading "ready to use".
+2. **Whether a long import is transcribed in full.** The Swedish import produced one segment at
+   `00:00:00`; `media.rs` chunks nothing.
+3. **`parakeet-tdt-0.6b-v3`** — offered on the same measured layout, still never downloaded.
+4. **Meeting detection firing on a real call.**
+
+---
+
+## 2026-08-28 — the bench run repeated in the application window
+
+Windows 11 Pro 26200, WebView2 151.0.4129.107. Debug build via `npm run tauri:dev`,
+`KNEGISWHISPER_LOG=info,knegiswhisper_lib=debug`.
+
+**This one was real.** Every fixture tell from the day before came back correct: version `0.1.0`
+rather than `0.1.0-dev`, the seven egress purposes under their real names rather than four
+including `provider-catalog`, and the updater's honest refusal rather than "Up to date". The
+banner added after that run did its job by being absent.
+
+### Verified
+
+| What | Evidence |
+| --- | --- |
+| **The application boots and all thirteen screens render** | Diagnostics reports the real machine: Windows Credential Manager, models under the per-user Roaming path with no fallback needed, `WASAPI loopback — Speakers (Realtek(R) Audio)`, `WH_KEYBOARD_LL hook on a dedicated thread` |
+| **Capture exclusion and non-activation, read back from the real window** | `GetWindowDisplayAffinity = WDA_EXCLUDEFROMCAPTURE`; `GetWindowLongPtrW(GWL_EXSTYLE) & WS_EX_NOACTIVATE`. The screen says plainly that this confirms the flag, not that a given recorder honours it |
+| **The updater refuses honestly rather than claiming to be current** | *"Update checking is not securely configured — no updater public key is set, so a downloaded update's authenticity could never be checked."* The path Task 16 wrote and nobody had pressed |
+| **The egress list is the enum, not a copy of it** | All seven purposes, under the names `RequestPurpose` uses |
+| **A stored OpenAI key reaches OpenAI** | `openai/catalog pass — 130 models live; all 3 pinned ids present`. Chunk A's keystone claim, unchecked since it was written, is now checked |
+| **Audio import transcribes end to end** | A Swedish radio recording imported through `Notes > Upload` and came back with a transcript and a note; a second import ("Hello") also landed. Chunk G's first genuine pass |
+
+### Findings
+
+**1. The connection test reported a working provider as broken.**
+`openai/chat` failed with
+`400 Unsupported parameter: 'max_tokens' is not supported with this model. Use
+'max_completion_tokens' instead.`
+
+The provider was fine. `provider-probe::chat_probe_body` hardcoded `"max_tokens": 16`, under a
+comment claiming that avoided parameters a provider might reject — it did the opposite.
+`reasoning-core::params::shape_for` already exists precisely for this disagreement, reads
+`token_param` per model from the registry, and its own module doc says it is *the* place that turns
+registry facts into parameters. The probe was the one call site that went around it, and the
+registry says OpenAI's first model, `gpt-5.6-sol`, takes `max_completion_tokens`.
+
+Worth naming the shape of this: it is the project's usual failure mode inverted. Every other claim
+defect found so far was a screen saying something worked when it did not. This one said a healthy
+integration was broken. Both are false, and a false negative here would have sent someone hunting a
+credential problem that did not exist. Fixed, with a test that walks every reasoning provider in the
+registry and asserts the probe body carries that provider's parameter and not the other one.
+
+**2. The test suite only passed on a machine where nobody had used the application.** Installing
+ffmpeg through `Notes > Upload` — step 5 of this very run — broke two tests in `media.rs` that
+asserted "nothing was downloaded in this test" while reading the real sidecar directory. They were
+tests about the machine, not about the code. `MediaImportRuntime::rooted` now takes the sidecar
+directory as a parameter, for the same reason `binary_locator::locate` takes its search inputs as
+parameters, and the tests point it at an empty temporary directory.
+
+**3. Dictation cleanup is still not verified.** Reported as "Works", but the A/B was not run and the
+screen cannot show the difference: it displays the final transcript only, so a cleanup that did
+nothing is indistinguishable from one that worked. Finding 1 makes this worth repeating rather than
+assuming — until the probe was fixed there was no way to tell whether the reasoning path was
+reachable at all.
+
+### Still unchecked, and needs a person at the machine
+
+1. **The cleanup A/B.** Dictate one sentence with a filler word, cleanup off; dictate it again with
+   cleanup on; compare. Nothing else distinguishes the two states from the UI as it stands.
+2. **`Test connections` re-run after finding 1.** The chat probe should now pass with the same key.
+3. **Whether a long import is transcribed in full.** The Swedish import produced a single segment
+   at `00:00:00`. If the source was a full radio programme rather than a clip, that is a truncation
+   defect and not a transcription-quality one — `media.rs` hands the whole WAV to the executor in
+   one call and chunks nothing.
+4. **The Parakeet selector.** Built on 2026-08-27, never opened. Install a model, confirm the button
+   turns blue, dictate through it, and confirm the whisper row above then says dictation is going
+   elsewhere.
+5. **`Settings > Meetings`, re-read.** The screen text quoted in this run's notes was copied from
+   the day before: it still shows AssemblyAI and Corti as "ready to use" and Deepgram as needing a
+   mid-session refresh, both of which were corrected in `be22bd0` after that text was captured.
+6. **Meeting detection firing on a real call.** Teams was open but not in a call again.
+
+---
+
+## 2026-08-27 — first bench run of chunks E–J, partial
+
+Windows 11 Pro 26200, `Headphones (Bose QC45)` as the default output. Debug build via
+`npm run tauri:dev`, `KNEGISWHISPER_LOG=info,knegiswhisper_lib=debug`.
+
+**Partial by design and partial by accident.** Two of the five planned steps were performed
+against a browser tab at `127.0.0.1:5183` rather than the application window, so they measured
+dev fixtures and are recorded below as not run rather than as passes. See finding 2.
+
+### Verified
+
+| What | Evidence |
+| --- | --- |
+| **The application starts and reaches a usable window** | Only after finding 1 was fixed. Before that it panicked in `setup` every time |
+| **`meeting-stream:local` records, transcribes and saves, end to end** | Started from `Settings > Meetings` with the local provider and system audio on; stopped with *Stop and transcribe*; **saved as note 1 (1 min)** with the recording at `…\Roaming\KnegisWhisper\meetings\20260827-140423.wav`. The first genuine end-to-end pass anywhere in chunk E, and the highest-value item on the run's list |
+| **System audio resolves the real default output** | `WASAPI loopback on the default output device — Headphones (Bose QC45)`, a device that appears in no fixture |
+| **Meeting detection distinguishes running from in-a-call** | Microsoft Teams reported as *"open, but not detectably in a call, so recording is not offered for it — detected as ms-teams.exe"*. The distinction the five process-based detectors exist to make, holding on real hardware |
+| **The recording window is capture-excluded** | `verified via GetWindowDisplayAffinity = WDA_EXCLUDEFROMCAPTURE`, read back from the real window |
+
+### Findings
+
+**1. The application panicked at startup, every time, and no test could see it.**
+`apps/desktop/src-tauri/src/meeting.rs:799` started the meeting-detection timer with bare
+`tokio::spawn`. That runs from Tauri's `setup` hook, which is on the main thread with no Tokio
+runtime entered, so it panicked and took the process down just after the two overlay windows were
+created — `there is no reactor running, must be called from the context of a Tokio 1.x runtime`,
+exit code 101.
+
+It was the odd one out: `dictation.rs:885`, `local_llm.rs:324`, `local_model.rs:440` and
+`reasoning.rs:593` all use `tauri::async_runtime::spawn`, which needs no entered context. Only this
+one did not. Introduced in `3089442` (chunk E2), which predates the whole chunk E–J run.
+
+**1296 tests passed and the application did not start.** No unit test could have caught it: the
+panic needs a real Tauri app to happen in, and a test in this workspace may not even hold a
+reference to Tauri-dependent code without dying at load (`STATUS_ENTRYPOINT_NOT_FOUND`). This is
+the clearest example yet of what this file is for.
+
+**2. Dev fixtures were invisible on screen, and got recorded as passes.**
+`main.tsx` installs `devFixtures.ts` when `import.meta.env.DEV && !("__TAURI_INTERNALS__" in
+window)` — that is, whenever the Vite URL is opened in an ordinary browser. The fixtures then
+answer every command with invented data, including outcomes that read as passes:
+`openai/voice pass — transcribed the tone clip as "one two three"` and
+`deepgram/voice fail — 401 Unauthorized` are both string literals in that file, as are
+`0.1.0-dev`, `webview 121.0.2277.128`, and a four-item egress-purpose list containing
+`provider-catalog`, which is not one of the seven purposes at all.
+
+Two steps of this run were written down as **verified** on that basis. Nothing on the page
+contradicted them; the only notice was a `console.info` nobody reads while testing. For a project
+whose brief says *do not fake integration success*, a mode that is visually indistinguishable from
+reality is the defect, not the tester's mistake.
+
+Fixed by installing a fixed red banner and a `FIXTURES — ` title prefix from inside
+`installDevFixtures()` itself, so there is no arrangement of that module which mocks the IPC
+without also marking the screen.
+
+**3. `Settings > Meetings` said "ready to use" for a provider with no stored credential.** Fixed.
+`kw_meeting_core::capabilities::availability()` asks only whether a *client* exists for the wire
+shape; it never consults the credential store. So AssemblyAI Realtime and Corti Realtime both read
+`ready to use` with no key stored for either, while `start` would refuse them by design — Task 1
+made it refuse with a message naming `Settings > Providers`. The screen and the command disagree,
+and the screen is the optimistic one. The data needed to fix it already exists
+(`credential_slot()`, and the `credentialSlots` command the Providers screen uses); what is missing
+was for anything to ask the question.
+
+`ClientAvailability` gained a fourth state, `NeedsCredential { slot }`, and
+`listing_with_credentials` narrows `Available` to it for any provider whose slot the caller says is
+empty. The caller is the `meeting_providers` command, which asks `CredentialStore::contains` -- the
+same question `start` asks, now asked before the provider is offered rather than after the click.
+`contains`, never `get`: knowing a key is there does not require reading it. The listing stays pure
+and the rule is testable without a credential store, which is how three new tests cover it,
+including one asserting no slot is looked up for a provider that could not be offered anyway.
+
+**4. The Deepgram row described a refresh this application does not perform.** It read *"its token
+has to be refreshed mid-session"*, which describes an application that mints short-lived tokens.
+Task 4 decided deliberately not to: the header carries the key the user stored, nothing is
+scheduled, and implementing a refresh loop over an unchanging key would be ceremony that looks like
+a safeguard. `token_rotation` is kept because it is true of the provider; the sentence now says
+what it means here. Fixed.
+
+### Still unchecked, and needs a person at the machine
+
+1. **Steps 1, 2 and 3 of the run, repeated in the application window.** Everything recorded for
+   them came from the browser tab. Specifically still unproven: that thirteen screens render, that
+   a stored key passes a real connection test, and that dictation types at the caret.
+2. **That the updater reports its honest refusal.** The real path returns
+   `NoPublicKeyConfigured` → *"Update checking is not securely configured"*; the fixture said
+   *"Up to date"*. Which of those appears is now the check.
+3. **Whether dictation cleanup actually changed the text.** Reported as working, but the screen
+   shows only the final transcript, so a cleanup that silently did nothing is indistinguishable
+   from one that worked. Dictating the same sentence with cleanup off and on is the only way to
+   tell from the UI as it stands.
+4. **`Notes > Upload`** — step 5, not attempted.
+5. **The Parakeet selector, added 2026-08-27 after this run.** `Settings > Transcription > Local`
+   can now install the sherpa-onnx CLI and a Parakeet model and select it for dictation. Nothing
+   about the *screen* has been exercised: install one model, confirm the button turns blue, dictate
+   through it, and confirm the whisper row then says dictation is going elsewhere. Only
+   `parakeet-unified-en-0.6b` has ever been run at all, by `tests/sherpa_dictation.rs`;
+   `parakeet-tdt-0.6b-v3` is offered on the same measured layout and has never been downloaded.
+5. **Meeting detection firing on a real call.** Teams was open but not in a call, so the
+   offer-to-record window has still never appeared.
+
+---
+
 ## 2026-08-27 — sherpa/Parakeet local ASR (chunk B4)
 
 **Added by the whole-branch review's fix wave, retroactively.** This file describes itself as the

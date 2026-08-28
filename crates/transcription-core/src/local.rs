@@ -303,7 +303,7 @@ impl LocalTranscriber for WhisperServer {
             .multipart(form)
             .send()
             .await
-            .map_err(|err| err.to_string())?;
+            .map_err(|err| describe_send_failure(self.port, &err))?;
 
         let status = response.status().as_u16();
         let body = response.text().await.map_err(|err| err.to_string())?;
@@ -313,6 +313,27 @@ impl LocalTranscriber for WhisperServer {
     fn model_name(&self) -> Option<String> {
         self.model.clone()
     }
+}
+
+/// Say which failure this was, because the two need different fixes.
+///
+/// A connect error means nothing was listening -- the server exited, or never
+/// came up -- and the person needs to start it. Anything else means something
+/// answered and went wrong, and the detail is the useful part. Reporting both
+/// as "the local model server refused the request" sent a bench check on
+/// 2026-08-28 looking for a server that was refusing when there was no server
+/// at all: nothing on the port, no process, and the application still holding
+/// the port from one that had gone.
+fn describe_send_failure(port: u16, err: &reqwest::Error) -> String {
+    if err.is_connect() {
+        return format!(
+            "nothing is listening on 127.0.0.1:{port}. The local model server is not running --              start it again under Settings > Transcription > Local."
+        );
+    }
+    if err.is_timeout() {
+        return format!("the local model server on 127.0.0.1:{port} did not answer in time");
+    }
+    err.to_string()
 }
 
 #[cfg(test)]
