@@ -453,6 +453,43 @@ history. Had it been reachable, this run would not have needed a second transcri
 question. Same class as the four hotkeys that registered and dispatched nowhere: a capability that
 exists, is described, and has no way in.
 
+### Added by the live Teams meeting, same day
+
+**Verified:** `meeting-stream:local` produces a **live** transcript during recording, not only a
+final one. Detection reported Teams as open-but-not-in-a-call *during an actual call*, which is the
+honest answer and also the whole capability for that client -- Teams runs the call inside
+`ms-teams.exe`, so no child process appears for the process-table detector to see. Filed as
+**KNEG-94** (mic listener over `IAudioSessionManager2`), with a calendar cross-check noted as the
+possibly cheaper half.
+
+**`openai-realtime` cannot connect at all: the beta API shape was retired.** Its first live use
+was closed on both sockets within milliseconds:
+
+```
+The Realtime Beta API is no longer supported. Please use /v1/realtime for the GA API.
+invalid_request_error.beta_api_shape_disabled (code 4000)
+```
+
+The endpoint was already `/v1/realtime`, so the `OpenAI-Beta: realtime=v1` header was what selected
+the retired shape. It is no longer sent. **Believed, not verified**: no live call has confirmed the
+client works without it, only that it fails with it, and whether the GA shape also renames
+`transcription_session.update` is unknown to this build. A further mismatch will now arrive as the
+provider's own close reason.
+
+Worth noting what this cost: the client was written against documentation, marked *written against
+fixtures, no live call* in the manifest, and shipped correct-for-its-time. The failure was not a
+coding mistake. It is what "unverified" means, and it took ten minutes of a real meeting to find.
+
+**And the more serious defect it exposed: a meeting whose provider dies at second zero looks
+exactly like one that works.** Both sockets closed immediately; the application reported
+**Recording**, kept the indicator up, captured both streams for as long as it was left running, and
+said nothing. One `DEBUG nothing is consuming the meeting audio` per second was the only trace.
+`Incoming::Failed` is logged and never surfaced -- the cross-cutting gap `BUILD_PLAN.md` already
+records for all four cloud clients -- and `pump`'s error sits in a `JoinHandle` nobody awaits until
+Stop. Filed as **KNEG-95**, High, and deliberately not patched: it needs a decision about whether a
+dead provider stops the recording, falls back immediately, or carries on with a fourth
+`MeetingState` saying so.
+
 ### Still unchecked, and needs a person at the machine
 
 1. **`Settings > Meetings`, re-read** — still carried over from an earlier paste. AssemblyAI and

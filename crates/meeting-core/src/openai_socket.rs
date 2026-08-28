@@ -35,9 +35,7 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::capabilities::MeetingProviderCapabilities;
-use crate::openai::{
-    self, Incoming, SessionClock, BETA_HEADER, DEFAULT_MODEL, ENDPOINT, PROVIDER_ID, PURPOSE,
-};
+use crate::openai::{self, Incoming, SessionClock, DEFAULT_MODEL, ENDPOINT, PROVIDER_ID, PURPOSE};
 use crate::{
     AudioChunk, AudioSource, MeetingError, MeetingProviderConfig, MeetingTranscript,
     MeetingTranscriptionProvider, TranscriptEvent,
@@ -166,13 +164,6 @@ impl OpenAiRealtime {
                 bearer.parse().map_err(|_| MeetingError::Rejected {
                     provider: PROVIDER_ID.to_owned(),
                     detail: "the stored credential is not a valid header value".to_owned(),
-                })?,
-            );
-            headers.insert(
-                BETA_HEADER.0,
-                BETA_HEADER.1.parse().map_err(|_| MeetingError::Rejected {
-                    provider: PROVIDER_ID.to_owned(),
-                    detail: "the beta header could not be built".to_owned(),
                 })?,
             );
         }
