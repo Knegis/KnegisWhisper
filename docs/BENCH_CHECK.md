@@ -399,6 +399,71 @@ the parity and gate suite — never by a person driving real traffic through it.
 
 ---
 
+## 2026-08-28 (later) — round two: cleanup proven, Parakeet proven, two defects
+
+Same machine and build. Four items were outstanding; all four were exercised.
+
+### Verified
+
+| What | Evidence |
+| --- | --- |
+| **A dead local server now repairs itself** | The four failing dictations were a port held for a process that had gone. After the fix, *Use for dictation* started a real server and dictation worked |
+| **The chat connection test passes** | `openai/chat pass — replied "OK"`, with the same key that produced `400 Unsupported parameter: 'max_tokens'` before the probe was taught to ask `params::shape_for` |
+| **Dictation cleanup genuinely changes the text** | Proven with Parakeet, below. The first attempt could not tell, and the reason is worth keeping |
+| **The Parakeet selector works end to end** | Installed the CLI and `parakeet-unified-en-0.6b` through the screen, selected it, and dictated through it. The runtime had been proven by a test; the screen, the commands and the engine switch had never been used by anyone until now |
+| **Parakeet transcribes better than `tiny` on this hardware** | Same sentence, four takes. `tiny`: *"the lace dome"*, *"the quick brow fox"*, *"the quick plan forks"*. Parakeet: the sentence, correctly, every time |
+
+**How cleanup was finally settled, and why the first attempt failed.** The A/B this file
+prescribed — dictate a sentence with filler words, cleanup off then on — could not work on
+`whisper-tiny`, because **whisper strips fillers itself**. All four `tiny` takes came back with no
+"um" and no "you know" whether cleanup was on or off, so the comparison measured nothing. The test
+was designed without accounting for the transcriber, which is the same mistake as trusting a probe
+that verifies less than it looks like.
+
+Parakeet does not strip them, which turned the same experiment into a clean one:
+
+```
+spoken:   "um, so the quick brown fox, you know, jumps over the lazy dog"
+
+Parakeet, cleanup off:  "So the quick brown fox, you know, jumps over the lazy dog."
+                        "So, you know, the quick brown fox jumps over the lazy dog."
+Parakeet, cleanup on:   "So the quick brown fox jumps over the lazy dog."
+                        "So the quick brown fox jumps over the lazy dog."
+```
+
+The filler survives with cleanup off and is gone with it on, twice each. **Cleanup works.** The
+lesson is the more useful part: an A/B is only a test of the thing you changed if nothing else in
+the pipeline is doing the same job.
+
+### Findings
+
+**1. Install reported no progress, so a 631 MB download looked like a dead button.** Pressing
+*Install* on a Parakeet model produced no visible change. The progress line existed but rendered
+once, near the top of the whisper block — far above the control that started it, and off screen.
+`InstallProgress::Model` already carries the model id, so the line now renders on the row whose
+button was pressed, for both engines. Fixed.
+
+**2. `keep_raw_text` is opt-in with nothing to opt in with.** Open.
+`kw_app_core::dictation` stores the pre-cleanup transcript as `Transcription.raw_text`, but only
+when `keep_raw_text` is true and only when it differs from the cleaned text — which would answer
+"did cleanup change anything" exactly, and permanently. It is hardcoded `false` at
+`apps/desktop/src-tauri/src/dictation.rs`, under a comment calling it opt-in. There is no setting,
+no command and no UI, and nothing renders `rawText`, which is already in the IPC type and in
+history. Had it been reachable, this run would not have needed a second transcriber to answer the
+question. Same class as the four hotkeys that registered and dispatched nowhere: a capability that
+exists, is described, and has no way in.
+
+### Still unchecked, and needs a person at the machine
+
+1. **`Settings > Meetings`, re-read** — still carried over from an earlier paste. AssemblyAI and
+   Corti should now name the missing key rather than reading "ready to use".
+2. **Whether a long import is transcribed in full.** The Swedish import produced one segment at
+   `00:00:00`; `media.rs` chunks nothing.
+3. **`parakeet-tdt-0.6b-v3`** — offered on the same measured layout, still never downloaded.
+4. **Meeting detection firing on a real call.**
+
+---
+
 ## 2026-08-28 — the bench run repeated in the application window
 
 Windows 11 Pro 26200, WebView2 151.0.4129.107. Debug build via `npm run tauri:dev`,

@@ -76,6 +76,17 @@ export function SettingsTranscription({
 
   const { data, error, reload, guard } = useRefresh(load);
   const [installing, setInstalling] = useState<string | null>(null);
+  /**
+   * Which model's Install button started the run in progress.
+   *
+   * The progress line used to render once, near the top of the whisper block.
+   * Pressing Install on a Parakeet model further down the page therefore
+   * produced no visible change at all -- a bench check on 2026-08-28 pressed it
+   * and could not tell whether a 631 MB download had begun. A control that
+   * appears to do nothing is the defect this file keeps correcting; the fix is
+   * to put the line on the row whose button was pressed.
+   */
+  const [installingId, setInstallingId] = useState<string | null>(null);
   /** Per-provider model choice, before it is committed. */
   const [selected, setSelected] = useState<Record<string, string>>({});
   /**
@@ -145,7 +156,10 @@ export function SettingsTranscription({
     let unlisten: (() => void) | undefined;
     void onInstallProgress((progress) => {
       setInstalling(progressLabel(progress));
-      if (progress.stage === "done") void reload();
+      if (progress.stage === "done") {
+        setInstallingId(null);
+        void reload();
+      }
     }).then((fn) => {
       unlisten = fn;
     });
@@ -355,12 +369,16 @@ export function SettingsTranscription({
                       type="button"
                       onClick={() => {
                         setInstalling("Starting…");
+                        setInstallingId(m.id);
                         void guard(() => installLocalModel(m.id));
                       }}
                     >
                       Install
                     </button>
                   )}
+                  {installingId === m.id && installing ? (
+                    <em className="row-detail">{installing}</em>
+                  ) : null}
                 </li>
                 );
               })}
@@ -427,12 +445,16 @@ export function SettingsTranscription({
                             type="button"
                             onClick={() => {
                               setInstalling("Starting…");
+                              setInstallingId(m.id);
                               void guard(() => installSherpaModel(m.id));
                             }}
                           >
                             Install
                           </button>
                         )}
+                        {installingId === m.id && installing ? (
+                          <em className="row-detail">{installing}</em>
+                        ) : null}
                       </li>
                     );
                   })}
