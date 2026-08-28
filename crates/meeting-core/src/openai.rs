@@ -106,7 +106,7 @@ const RECONNECT_MARGIN: Duration = Duration::from_secs(120);
 /// format and the capability table declares only that, so a mismatch is a bug
 /// here rather than something to negotiate.
 #[must_use]
-pub fn session_update(model: &str, language: Option<&str>) -> Value {
+pub fn session_update(model: &str, language: Option<&str>, sample_rate: u32) -> Value {
     // Built as a map rather than indexed into, because this workspace denies
     // indexing in library code -- `Value`'s Index panics on a type mismatch, and
     // "it is an object, I just made it" is exactly the reasoning that lint exists
@@ -120,14 +120,24 @@ pub fn session_update(model: &str, language: Option<&str>) -> Value {
     }
     let transcription = Value::Object(transcription);
 
-    // `session.update`, not `transcription_session.update`. The GA API rejects
-    // the latter by name and lists what it takes instead -- see the module doc
-    // and `BETA_HEADER`. Renaming the type is the whole of what the server
-    // asked for; whether the GA session payload also moves `input_audio_format`
-    // and `input_audio_transcription` under an `audio.input` object is not
-    // something this build has been told, and a wrong guess at a nested shape
-    // is harder to read back from an error than a wrong name. If the payload is
-    // also stale, the next live attempt will say which field.
+    // The GA session payload, arrived at one server message at a time. Four
+    // live attempts named, in order: the beta header, the frame type, the
+    // missing `session.type`, and then
+    // `Unknown parameter: 'session.input_audio_format'.`
+    //
+    // That last one is why the three audio fields move together rather than one
+    // per round trip. Up to that point the server had objected only to names,
+    // so changing one thing at a time was both cheapest and most readable. It
+    // then said a field that had always been at the top of `session` is not
+    // known there at all, which is a different kind of answer: the family has
+    // moved, and `input_audio_transcription` and `turn_detection` are its
+    // siblings. Relocating one and leaving two behind would buy two more
+    // meetings' worth of round trips to learn what this one already implies.
+    //
+    // **Inferred as a group, and not verified.** `audio.input` with `format`,
+    // `transcription` and `turn_detection` under it is the shape this is
+    // written against. If any part is wrong the server names the parameter, as
+    // it has every time so far.
     json!({
         "type": "session.update",
         "session": {
@@ -137,13 +147,21 @@ pub fn session_update(model: &str, language: Option<&str>) -> Value {
             // session object as well, and the two must agree -- this is the
             // transcription-only session, not the conversational one.
             "type": "transcription",
-            "input_audio_format": "pcm16",
-            "input_audio_transcription": transcription,
-            // Server-side voice activity detection, so the server decides where
-            // an utterance ends. The alternative is committing buffers from here,
-            // which would put a second opinion about sentence boundaries in a
-            // client that cannot hear.
-            "turn_detection": { "type": "server_vad" },
+            "audio": {
+                "input": {
+                    // The rate is the session's own, already checked against
+                    // the capability table by `validate`, rather than a
+                    // constant that could disagree with the audio being sent.
+                    "format": { "type": "audio/pcm", "rate": sample_rate },
+                    "transcription": transcription,
+                    // Server-side voice activity detection, so the server
+                    // decides where an utterance ends. The alternative is
+                    // committing buffers from here, which would put a second
+                    // opinion about sentence boundaries in a client that cannot
+                    // hear.
+                    "turn_detection": { "type": "server_vad" },
+                }
+            }
         }
     })
 }
@@ -396,18 +414,41 @@ mod tests {
         assert!(kw_network_policy::validate_websocket(ENDPOINT, PURPOSE).is_ok());
     }
 
+    /// The one rate this provider declares, so the fixtures agree with the
+    /// capability table rather than inventing a second answer.
+    const RATE: u32 = 24_000;
+
     #[test]
     fn the_session_update_names_the_format_and_the_model() {
-        let message = session_update(DEFAULT_MODEL, None);
+        let message = session_update(DEFAULT_MODEL, None, RATE);
         assert_eq!(message["type"], "session.update");
         // Required, and separate from the endpoint's `intent=transcription`.
         assert_eq!(message["session"]["type"], "transcription");
-        assert_eq!(message["session"]["input_audio_format"], "pcm16");
-        assert_eq!(
-            message["session"]["input_audio_transcription"]["model"],
-            DEFAULT_MODEL
-        );
-        assert_eq!(message["session"]["turn_detection"]["type"], "server_vad");
+
+        let input = &message["session"]["audio"]["input"];
+        assert_eq!(input["format"]["type"], "audio/pcm");
+        assert_eq!(input["format"]["rate"], RATE);
+        assert_eq!(input["transcription"]["model"], DEFAULT_MODEL);
+        assert_eq!(input["turn_detection"]["type"], "server_vad");
+
+        // The beta spellings are gone rather than sent alongside. GA answered
+        // `Unknown parameter: 'session.input_audio_format'`, so leaving it in
+        // would be sending a field the server has said it does not know.
+        assert!(message["session"].get("input_audio_format").is_none());
+        assert!(message["session"]
+            .get("input_audio_transcription")
+            .is_none());
+        assert!(message["session"].get("turn_detection").is_none());
+    }
+
+    #[test]
+    fn the_rate_sent_is_the_session_rate_not_a_constant() {
+        // A format that disagrees with the audio is worse than one that is
+        // merely wrong: the server would decode it and produce nonsense.
+        for rate in [16_000, 24_000, 48_000] {
+            let message = session_update(DEFAULT_MODEL, None, rate);
+            assert_eq!(message["session"]["audio"]["input"]["format"]["rate"], rate);
+        }
     }
 
     #[test]
@@ -415,18 +456,18 @@ mod tests {
         // This provider detects language. Pinning it to the wrong one is worse
         // than letting it decide, so an absent or blank choice sends nothing.
         for absent in [None, Some(""), Some("   ")] {
-            let message = session_update(DEFAULT_MODEL, absent);
+            let message = session_update(DEFAULT_MODEL, absent, RATE);
             assert!(
-                message["session"]["input_audio_transcription"]
+                message["session"]["audio"]["input"]["transcription"]
                     .get("language")
                     .is_none(),
                 "{absent:?} should not send a language"
             );
         }
 
-        let message = session_update(DEFAULT_MODEL, Some("sv"));
+        let message = session_update(DEFAULT_MODEL, Some("sv"), RATE);
         assert_eq!(
-            message["session"]["input_audio_transcription"]["language"],
+            message["session"]["audio"]["input"]["transcription"]["language"],
             "sv"
         );
     }
@@ -436,7 +477,7 @@ mod tests {
         // The capability table says Unsupported. Sending them anyway would look
         // like support to anybody reading the wire, and upstream putting them in
         // this provider's cache key is exactly that mistake.
-        let rendered = serde_json::to_string(&session_update(DEFAULT_MODEL, None)).unwrap();
+        let rendered = serde_json::to_string(&session_update(DEFAULT_MODEL, None, RATE)).unwrap();
         assert!(!rendered.contains("Knegis"));
         assert!(!rendered.contains("keyterm"));
         assert!(!rendered.contains("prompt"));

@@ -497,7 +497,17 @@ is harder to read back from an error than a wrong name, so it was left alone.
 Then `Missing required parameter: 'session.type'.` -- GA wants the session object to name itself
 `transcription` even though the endpoint already carries `intent=transcription`. Added.
 
-Four round trips, each about two minutes, each ending in the server naming the next thing. None of
+Then `Unknown parameter: 'session.input_audio_format'.` -- a different kind of answer from the
+three before it. Those were names; this one says a field that had always sat at the top of
+`session` is not known there at all, which means the audio family has moved and
+`input_audio_transcription` and `turn_detection` are its siblings. All three were relocated under
+`audio.input` in one step rather than one per round trip: relocating one and leaving two behind
+would buy two more meetings' worth of attempts to learn what that message already implies. The
+sample rate now comes from the session config, already checked against the capability table, rather
+than a constant that could disagree with the audio being sent. **Inferred as a group and not
+verified.**
+
+Five round trips, each about two minutes, each ending in the server naming the next thing. None of
 it would have been possible before the close reason was kept.
 
 **The honest-failure message works at Stop.** The fourth attempt ended with *"Nothing was
