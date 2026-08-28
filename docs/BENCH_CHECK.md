@@ -494,8 +494,17 @@ still valid, so the audio frames were never the problem. **The session payload i
 unconfirmed** -- the server has objected only to type names so far, and guessing at a nested shape
 is harder to read back from an error than a wrong name, so it was left alone.
 
-Three round trips, each about two minutes, each ending in the server naming the next thing. None of
+Then `Missing required parameter: 'session.type'.` -- GA wants the session object to name itself
+`transcription` even though the endpoint already carries `intent=transcription`. Added.
+
+Four round trips, each about two minutes, each ending in the server naming the next thing. None of
 it would have been possible before the close reason was kept.
+
+**The honest-failure message works at Stop.** The fourth attempt ended with *"Nothing was
+transcribed — no speech was recognised, or the provider returned nothing. The recording is at
+…\meetings60828-135901.wav."* That is the right sentence: it does not claim success, it does
+not blame the user, and it says where the audio is. The gap remains that it arrives at Stop rather
+than at second zero -- **KNEG-95**.
 
 **And the more serious defect it exposed: a meeting whose provider dies at second zero looks
 exactly like one that works.** Both sockets closed immediately; the application reported

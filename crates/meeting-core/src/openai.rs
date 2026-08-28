@@ -87,8 +87,10 @@ pub const PURPOSE: RequestPurpose = RequestPurpose::UserConfiguredTranscriptionP
 /// opened and stayed open. It did rename `transcription_session.update`, which
 /// the same attempt reported as
 /// `Invalid value: 'tra...ate'. Supported values are: 'session.update', ...` --
-/// fixed in [`session_update`]. What remains unconfirmed is the session payload
-/// itself; the server has so far objected only to the type name.
+/// fixed in [`session_update`], along with `session.type`, which GA requires on
+/// the session object even though the endpoint already carries
+/// `intent=transcription`. Each of those arrived as a named parameter in the
+/// server's own words, one live attempt at a time.
 pub const BETA_HEADER: (&str, &str) = ("OpenAI-Beta", "realtime=v1");
 
 /// How long before the server's cap to reconnect on purpose.
@@ -129,6 +131,12 @@ pub fn session_update(model: &str, language: Option<&str>) -> Value {
     json!({
         "type": "session.update",
         "session": {
+            // Required by the GA API, which answered the version without it
+            // with `Missing required parameter: 'session.type'.` The endpoint
+            // already carries `intent=transcription`; GA wants it named on the
+            // session object as well, and the two must agree -- this is the
+            // transcription-only session, not the conversational one.
+            "type": "transcription",
             "input_audio_format": "pcm16",
             "input_audio_transcription": transcription,
             // Server-side voice activity detection, so the server decides where
@@ -392,6 +400,8 @@ mod tests {
     fn the_session_update_names_the_format_and_the_model() {
         let message = session_update(DEFAULT_MODEL, None);
         assert_eq!(message["type"], "session.update");
+        // Required, and separate from the endpoint's `intent=transcription`.
+        assert_eq!(message["session"]["type"], "transcription");
         assert_eq!(message["session"]["input_audio_format"], "pcm16");
         assert_eq!(
             message["session"]["input_audio_transcription"]["model"],
