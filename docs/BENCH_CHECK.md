@@ -399,6 +399,79 @@ the parity and gate suite — never by a person driving real traffic through it.
 
 ---
 
+## 2026-08-28 — the bench run repeated in the application window
+
+Windows 11 Pro 26200, WebView2 151.0.4129.107. Debug build via `npm run tauri:dev`,
+`KNEGISWHISPER_LOG=info,knegiswhisper_lib=debug`.
+
+**This one was real.** Every fixture tell from the day before came back correct: version `0.1.0`
+rather than `0.1.0-dev`, the seven egress purposes under their real names rather than four
+including `provider-catalog`, and the updater's honest refusal rather than "Up to date". The
+banner added after that run did its job by being absent.
+
+### Verified
+
+| What | Evidence |
+| --- | --- |
+| **The application boots and all thirteen screens render** | Diagnostics reports the real machine: Windows Credential Manager, models under the per-user Roaming path with no fallback needed, `WASAPI loopback — Speakers (Realtek(R) Audio)`, `WH_KEYBOARD_LL hook on a dedicated thread` |
+| **Capture exclusion and non-activation, read back from the real window** | `GetWindowDisplayAffinity = WDA_EXCLUDEFROMCAPTURE`; `GetWindowLongPtrW(GWL_EXSTYLE) & WS_EX_NOACTIVATE`. The screen says plainly that this confirms the flag, not that a given recorder honours it |
+| **The updater refuses honestly rather than claiming to be current** | *"Update checking is not securely configured — no updater public key is set, so a downloaded update's authenticity could never be checked."* The path Task 16 wrote and nobody had pressed |
+| **The egress list is the enum, not a copy of it** | All seven purposes, under the names `RequestPurpose` uses |
+| **A stored OpenAI key reaches OpenAI** | `openai/catalog pass — 130 models live; all 3 pinned ids present`. Chunk A's keystone claim, unchecked since it was written, is now checked |
+| **Audio import transcribes end to end** | A Swedish radio recording imported through `Notes > Upload` and came back with a transcript and a note; a second import ("Hello") also landed. Chunk G's first genuine pass |
+
+### Findings
+
+**1. The connection test reported a working provider as broken.**
+`openai/chat` failed with
+`400 Unsupported parameter: 'max_tokens' is not supported with this model. Use
+'max_completion_tokens' instead.`
+
+The provider was fine. `provider-probe::chat_probe_body` hardcoded `"max_tokens": 16`, under a
+comment claiming that avoided parameters a provider might reject — it did the opposite.
+`reasoning-core::params::shape_for` already exists precisely for this disagreement, reads
+`token_param` per model from the registry, and its own module doc says it is *the* place that turns
+registry facts into parameters. The probe was the one call site that went around it, and the
+registry says OpenAI's first model, `gpt-5.6-sol`, takes `max_completion_tokens`.
+
+Worth naming the shape of this: it is the project's usual failure mode inverted. Every other claim
+defect found so far was a screen saying something worked when it did not. This one said a healthy
+integration was broken. Both are false, and a false negative here would have sent someone hunting a
+credential problem that did not exist. Fixed, with a test that walks every reasoning provider in the
+registry and asserts the probe body carries that provider's parameter and not the other one.
+
+**2. The test suite only passed on a machine where nobody had used the application.** Installing
+ffmpeg through `Notes > Upload` — step 5 of this very run — broke two tests in `media.rs` that
+asserted "nothing was downloaded in this test" while reading the real sidecar directory. They were
+tests about the machine, not about the code. `MediaImportRuntime::rooted` now takes the sidecar
+directory as a parameter, for the same reason `binary_locator::locate` takes its search inputs as
+parameters, and the tests point it at an empty temporary directory.
+
+**3. Dictation cleanup is still not verified.** Reported as "Works", but the A/B was not run and the
+screen cannot show the difference: it displays the final transcript only, so a cleanup that did
+nothing is indistinguishable from one that worked. Finding 1 makes this worth repeating rather than
+assuming — until the probe was fixed there was no way to tell whether the reasoning path was
+reachable at all.
+
+### Still unchecked, and needs a person at the machine
+
+1. **The cleanup A/B.** Dictate one sentence with a filler word, cleanup off; dictate it again with
+   cleanup on; compare. Nothing else distinguishes the two states from the UI as it stands.
+2. **`Test connections` re-run after finding 1.** The chat probe should now pass with the same key.
+3. **Whether a long import is transcribed in full.** The Swedish import produced a single segment
+   at `00:00:00`. If the source was a full radio programme rather than a clip, that is a truncation
+   defect and not a transcription-quality one — `media.rs` hands the whole WAV to the executor in
+   one call and chunks nothing.
+4. **The Parakeet selector.** Built on 2026-08-27, never opened. Install a model, confirm the button
+   turns blue, dictate through it, and confirm the whisper row above then says dictation is going
+   elsewhere.
+5. **`Settings > Meetings`, re-read.** The screen text quoted in this run's notes was copied from
+   the day before: it still shows AssemblyAI and Corti as "ready to use" and Deepgram as needing a
+   mid-session refresh, both of which were corrected in `be22bd0` after that text was captured.
+6. **Meeting detection firing on a real call.** Teams was open but not in a call again.
+
+---
+
 ## 2026-08-27 — first bench run of chunks E–J, partial
 
 Windows 11 Pro 26200, `Headphones (Bose QC45)` as the default output. Debug build via

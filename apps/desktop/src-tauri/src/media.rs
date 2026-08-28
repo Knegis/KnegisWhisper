@@ -563,6 +563,10 @@ pub struct MediaImportRuntime {
     /// reach the same local engine. Resolving one of them to whisper and the
     /// other to sherpa would make `Transport::Local` mean two things.
     local_sherpa: crate::local_asr::Selection,
+    /// Where downloaded sidecars live. Held rather than read from
+    /// `kw_storage::paths` at each use, so a test can point it at an empty
+    /// directory -- see [`MediaImportRuntime::rooted`].
+    sidecar_root: PathBuf,
     db: Db,
 }
 
@@ -583,6 +587,37 @@ impl MediaImportRuntime {
         local_sherpa: crate::local_asr::Selection,
         db: Db,
     ) -> Result<Self, String> {
+        Self::rooted(
+            policy,
+            credentials,
+            local_port,
+            local_model,
+            local_sherpa,
+            db,
+            kw_storage::paths::sidecar_dir().path,
+        )
+    }
+
+    /// [`Self::new`], with the directory downloaded sidecars live in supplied
+    /// rather than read from the environment.
+    ///
+    /// Injected for the reason `binary_locator::locate` takes its search inputs
+    /// as parameters: a test that reads the real install directory is a test
+    /// about the machine. These two used to assert "nothing was downloaded in
+    /// this test" against the real path, which held only while nobody had ever
+    /// used the feature -- and stopped holding the moment a bench check on
+    /// 2026-08-28 installed ffmpeg through the screen. A suite that fails
+    /// because the application was used is a suite nobody can trust.
+    #[allow(clippy::too_many_arguments)]
+    fn rooted(
+        policy: NetworkPolicy,
+        credentials: Arc<dyn CredentialStore>,
+        local_port: LocalPort,
+        local_model: Arc<RwLock<Option<String>>>,
+        local_sherpa: crate::local_asr::Selection,
+        db: Db,
+        sidecar_root: PathBuf,
+    ) -> Result<Self, String> {
         let catalog = Catalog::shipped().map_err(|err| err.to_string())?;
         Ok(Self {
             catalog,
@@ -592,13 +627,14 @@ impl MediaImportRuntime {
             local_model,
             local_sherpa,
             db,
+            sidecar_root,
         })
     }
 
     fn search_path(&self) -> SearchPath {
         SearchPath {
             bundled: None,
-            downloaded: kw_storage::paths::sidecar_dir().path,
+            downloaded: self.sidecar_root.clone(),
         }
     }
 
@@ -967,8 +1003,14 @@ pub async fn media_import_video(
 mod tests {
     use super::*;
 
-    async fn runtime() -> MediaImportRuntime {
-        MediaImportRuntime::new(
+    /// A runtime whose sidecar directory is empty and belongs to this test.
+    ///
+    /// Returned with the `TempDir` alive, because dropping it deletes the
+    /// directory and every assertion about "nothing is installed" would then be
+    /// true for the wrong reason.
+    async fn runtime() -> (MediaImportRuntime, tempfile::TempDir) {
+        let root = tempfile::tempdir().unwrap();
+        let rt = MediaImportRuntime::rooted(
             NetworkPolicy::new().unwrap(),
             Arc::new(kw_security::MemoryCredentialStore::new()),
             Arc::new(RwLock::new(None)),
@@ -977,8 +1019,10 @@ mod tests {
             // which local engine an import lands on.
             Arc::new(RwLock::new(None)),
             Db::open_in_memory().await.unwrap(),
+            root.path().to_path_buf(),
         )
-        .unwrap()
+        .unwrap();
+        (rt, root)
     }
 
     /* ------------------------------------------------------- url validation */
@@ -1150,7 +1194,7 @@ mod tests {
     async fn ffmpeg_and_yt_dlp_are_both_in_the_shipped_catalogue() {
         // If Task 10's pins ever moved or were renamed, this fails here rather
         // than as a confusing "not installed" from every import.
-        let rt = runtime().await;
+        let (rt, _root) = runtime().await;
         for sidecar in [MediaSidecar::Ffmpeg, MediaSidecar::YtDlp] {
             let name = sidecar.catalog_name();
             match rt.catalog.resolve(name) {
@@ -1165,7 +1209,7 @@ mod tests {
         // The honesty requirement this exists for: a missing sidecar must
         // read as "not installed, here is how to fix it", not as a raw
         // "could not start process" error.
-        let rt = runtime().await;
+        let (rt, _root) = runtime().await;
         match rt.locate_executable(MediaSidecar::Ffmpeg) {
             Err(MediaImportError::SidecarNotInstalled { explain }) => {
                 assert!(explain.to_lowercase().contains("ffmpeg") || explain.contains("Looked in"));
@@ -1179,7 +1223,7 @@ mod tests {
 
     #[tokio::test]
     async fn sidecar_status_never_claims_an_uninstalled_sidecar_is_installed() {
-        let rt = runtime().await;
+        let (rt, _root) = runtime().await;
         for sidecar in [MediaSidecar::Ffmpeg, MediaSidecar::YtDlp] {
             let status = rt.sidecar_status(sidecar);
             assert!(!status.installed, "nothing was downloaded in this test");

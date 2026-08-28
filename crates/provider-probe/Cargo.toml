@@ -21,6 +21,9 @@ tracing.workspace = true
 
 kw-network-policy.workspace = true
 kw-provider-registry.workspace = true
+# For `params::shape_for`. A health check that speaks a different dialect from
+# the client it is vouching for is not a health check -- see `chat_probe_body`.
+kw-reasoning-core.workspace = true
 kw-security.workspace = true
 
 [dependencies.reqwest]

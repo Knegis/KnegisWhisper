@@ -2909,6 +2909,7 @@ dependencies = [
  "async-trait",
  "kw-network-policy",
  "kw-provider-registry",
+ "kw-reasoning-core",
  "kw-security",
  "reqwest 0.12.28",
  "serde",

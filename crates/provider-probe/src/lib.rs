@@ -648,7 +648,7 @@ pub async fn probe_transcription_provider(
     let chat = if let Ok(reasoning) = registry.reasoning_provider(provider_id) {
         match reasoning.models.first() {
             Some(model) => {
-                let body = chat_probe_body(&model.id);
+                let body = chat_probe_body(registry, provider_id, &model.id);
                 match transport
                     .post_json(
                         &format!("{base}/chat/completions"),
@@ -699,16 +699,32 @@ pub async fn probe_transcription_provider(
 
 /// The chat probe body.
 ///
-/// Deliberately minimal and deterministic: a health check should not depend on
-/// sampling parameters a provider might reject.
-fn chat_probe_body(model: &str) -> String {
+/// Minimal and deterministic -- no sampling parameters, because a health check
+/// should not fail over a `temperature` a reasoning model rejects.
+///
+/// The token cap is the exception, and it has to be shaped rather than
+/// hardcoded. This function used to send `max_tokens` unconditionally, with a
+/// comment claiming that avoided parameters a provider might reject; it did the
+/// opposite. A bench check on 2026-08-28 pressed *Test connections* with a
+/// working OpenAI key and got
+/// `400 Unsupported parameter: 'max_tokens' is not supported with this model.
+/// Use 'max_completion_tokens' instead.` -- the screen reporting a healthy
+/// provider as broken, which is the same class of false claim as the reverse
+/// and no less misleading.
+///
+/// `reasoning_core::params::shape_for` is the one place that turns registry
+/// facts into parameters, and its own module doc says so. The probe asks it the
+/// same question the client asks, so the two cannot drift: a provider that
+/// passes here is one the client can actually talk to.
+fn chat_probe_body(registry: &Registry, provider: &str, model: &str) -> String {
+    let shape = kw_reasoning_core::params::shape_for(registry, provider, model);
     serde_json::json!({
         "model": model,
         "messages": [
             { "role": "system", "content": "You are a health check." },
             { "role": "user", "content": "Reply with the single word: OK" }
         ],
-        "max_tokens": 16,
+        shape.token_param: 16,
     })
     .to_string()
 }
@@ -838,6 +854,58 @@ mod tests {
 
     fn registry() -> &'static Registry {
         kw_provider_registry::registry().expect("the shipped registry must parse")
+    }
+
+    /// The regression a bench check found: the probe sent `max_tokens` to every
+    /// provider, OpenAI answered 400, and the screen reported a working key as
+    /// a broken integration.
+    #[test]
+    fn the_chat_probe_uses_the_token_parameter_the_model_actually_takes() {
+        let registry = registry();
+
+        for provider in &registry.reasoning {
+            let Some(model) = provider.models.first() else {
+                continue;
+            };
+            let body: serde_json::Value =
+                serde_json::from_str(&chat_probe_body(registry, &provider.id, &model.id)).unwrap();
+
+            let shape = kw_reasoning_core::params::shape_for(registry, &provider.id, &model.id);
+            let other = if shape.token_param == "max_tokens" {
+                "max_completion_tokens"
+            } else {
+                "max_tokens"
+            };
+
+            assert_eq!(
+                body[&shape.token_param], 16,
+                "{} should cap tokens with {}",
+                provider.id, shape.token_param
+            );
+            assert!(
+                body.get(other).is_none(),
+                "{} must not also carry {other}",
+                provider.id
+            );
+        }
+    }
+
+    /// The two shapes both occur in the shipped registry, so the test above is
+    /// actually exercising the branch rather than agreeing with itself.
+    #[test]
+    fn both_token_parameters_are_represented_in_the_registry() {
+        let registry = registry();
+        let params: std::collections::BTreeSet<String> = registry
+            .reasoning
+            .iter()
+            .filter_map(|p| p.models.first().map(|m| (p, m)))
+            .map(|(p, m)| kw_reasoning_core::params::shape_for(registry, &p.id, &m.id).token_param)
+            .collect();
+
+        assert!(
+            params.contains("max_tokens") && params.contains("max_completion_tokens"),
+            "only saw {params:?}"
+        );
     }
 
     /* ------------------------------------------------- the 2xx-is-not-a-pass rule */
