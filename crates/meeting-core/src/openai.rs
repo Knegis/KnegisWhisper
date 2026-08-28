@@ -28,7 +28,7 @@
 //!
 //! Connect to `wss://api.openai.com/v1/realtime?intent=transcription` with a
 //! bearer token and no beta header -- see [`BETA_HEADER`]. Send a
-//! `transcription_session.update` naming the model and the audio format, then
+//! `session.update` naming the model and the audio format, then
 //! `input_audio_buffer.append` frames carrying base64 PCM16. Transcript arrives
 //! as `conversation.item.input_audio_transcription.delta` (partial) and
 //! `.completed` (final).
@@ -83,13 +83,12 @@ pub const PURPOSE: RequestPurpose = RequestPurpose::UserConfiguredTranscriptionP
 /// The endpoint was already `/v1/realtime`, so the header was the thing
 /// selecting the retired shape. It is no longer sent.
 ///
-/// **Believed, not verified.** Removing the header is what the server's own
-/// message asks for, and it is the smallest change that can be right. Whether
-/// the GA shape also renames `transcription_session.update` or alters the frame
-/// grammar is not something this build has been told, and no live call has
-/// confirmed the client works without the header -- only that it fails with it.
-/// A further mismatch will now arrive as the provider's own close reason rather
-/// than as a send error, which is what made this diagnosable at all.
+/// **Removing it was right, and confirmed live minutes later**: the socket
+/// opened and stayed open. It did rename `transcription_session.update`, which
+/// the same attempt reported as
+/// `Invalid value: 'tra...ate'. Supported values are: 'session.update', ...` --
+/// fixed in [`session_update`]. What remains unconfirmed is the session payload
+/// itself; the server has so far objected only to the type name.
 pub const BETA_HEADER: (&str, &str) = ("OpenAI-Beta", "realtime=v1");
 
 /// How long before the server's cap to reconnect on purpose.
@@ -119,8 +118,16 @@ pub fn session_update(model: &str, language: Option<&str>) -> Value {
     }
     let transcription = Value::Object(transcription);
 
+    // `session.update`, not `transcription_session.update`. The GA API rejects
+    // the latter by name and lists what it takes instead -- see the module doc
+    // and `BETA_HEADER`. Renaming the type is the whole of what the server
+    // asked for; whether the GA session payload also moves `input_audio_format`
+    // and `input_audio_transcription` under an `audio.input` object is not
+    // something this build has been told, and a wrong guess at a nested shape
+    // is harder to read back from an error than a wrong name. If the payload is
+    // also stale, the next live attempt will say which field.
     json!({
-        "type": "transcription_session.update",
+        "type": "session.update",
         "session": {
             "input_audio_format": "pcm16",
             "input_audio_transcription": transcription,
@@ -197,7 +204,14 @@ pub fn interpret(frame: &str) -> Incoming {
                 .to_owned(),
             is_final: true,
         },
-        "transcription_session.created" | "transcription_session.updated" => Incoming::Ready,
+        // Both spellings. The GA API renamed the session events along with the
+        // update frame; accepting the beta pair as well costs nothing and means
+        // a server that still speaks either is understood rather than having
+        // its readiness fall through to `Other`.
+        "session.created"
+        | "session.updated"
+        | "transcription_session.created"
+        | "transcription_session.updated" => Incoming::Ready,
         "error" => Incoming::Failed {
             message: value
                 .get("error")
@@ -377,7 +391,7 @@ mod tests {
     #[test]
     fn the_session_update_names_the_format_and_the_model() {
         let message = session_update(DEFAULT_MODEL, None);
-        assert_eq!(message["type"], "transcription_session.update");
+        assert_eq!(message["type"], "session.update");
         assert_eq!(message["session"]["input_audio_format"], "pcm16");
         assert_eq!(
             message["session"]["input_audio_transcription"]["model"],
@@ -466,6 +480,8 @@ mod tests {
     #[test]
     fn the_session_being_ready_is_recognised() {
         for frame in [
+            r#"{"type":"session.created"}"#,
+            r#"{"type":"session.updated"}"#,
             r#"{"type":"transcription_session.created"}"#,
             r#"{"type":"transcription_session.updated"}"#,
         ] {

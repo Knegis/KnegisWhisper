@@ -480,6 +480,23 @@ Worth noting what this cost: the client was written against documentation, marke
 fixtures, no live call* in the manifest, and shipped correct-for-its-time. The failure was not a
 coding mistake. It is what "unverified" means, and it took ten minutes of a real meeting to find.
 
+**Removing the header was right, confirmed nine minutes later**: the socket opened and stayed
+open. The same attempt named the next mismatch, which is the method working --
+
+```
+Invalid value: 'tra...ate'. Supported values are: 'session.update', 'session.close',
+'input_audio_buffer.append', ...
+```
+
+`transcription_session.update` became `session.update`; the session events gained `session.created`
+/ `session.updated`, and the client now accepts both spellings. `input_audio_buffer.append` is
+still valid, so the audio frames were never the problem. **The session payload is still
+unconfirmed** -- the server has objected only to type names so far, and guessing at a nested shape
+is harder to read back from an error than a wrong name, so it was left alone.
+
+Three round trips, each about two minutes, each ending in the server naming the next thing. None of
+it would have been possible before the close reason was kept.
+
 **And the more serious defect it exposed: a meeting whose provider dies at second zero looks
 exactly like one that works.** Both sockets closed immediately; the application reported
 **Recording**, kept the indicator up, captured both streams for as long as it was left running, and
