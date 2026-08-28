@@ -19,6 +19,7 @@
 use std::sync::{Arc, RwLock};
 
 use kw_sidecar::pid::PidStore;
+use kw_sidecar::process::Health as _;
 use kw_sidecar::{port, process, Catalog, HttpHealth, Launch, Running, StartTimings};
 use kw_storage::paths;
 use kw_transcription_core::local::{self, ServerOptions};
@@ -118,6 +119,21 @@ impl LocalTranscription {
                 tracing::warn!(error = %err, "could not stop the local model server cleanly");
             });
         }
+        if let Ok(mut port) = self.port.write() {
+            *port = None;
+        }
+        if let Ok(mut model) = self.model.write() {
+            *model = None;
+        }
+    }
+
+    /// Drop the recorded port and model for a server that has already gone.
+    ///
+    /// Not [`Self::stop`]: there is nothing to signal. The child is already
+    /// dead, and asking the reaper to stop it would either find nothing or --
+    /// worse, on a reused process id -- find something else. This only forgets.
+    async fn forget_port(&self) {
+        *self.running.lock().await = None;
         if let Ok(mut port) = self.port.write() {
             *port = None;
         }
@@ -505,9 +521,29 @@ impl LocalTranscription {
     /// Start the server for one model, or return the port if it is already up.
     pub async fn start_model(&self, model_id: &str) -> Result<u16, String> {
         let local = self;
-        // Already running: answer with the port rather than starting a second one.
+        // Already running: answer with the port rather than starting a second
+        // one -- but only if something is still there.
+        //
+        // This used to return the recorded port unconditionally, which made a
+        // dead server permanent. The child can go without the application
+        // noticing (a crash, a machine that slept, someone ending the task) and
+        // nothing clears `port`, so every dictation failed against a port with
+        // nothing behind it and pressing "Use for dictation" handed back the
+        // same dead port instead of starting a server. The only cure was
+        // restarting the whole application. Found on 2026-08-28: the app
+        // holding 8178, no listener, no process.
         if let Some(port) = local.port.read().ok().and_then(|p| *p) {
-            return Ok(port);
+            if HttpHealth::new(local.policy.clone(), local::HEALTH_PATH)
+                .is_ready(port)
+                .await
+            {
+                return Ok(port);
+            }
+            tracing::warn!(
+                port,
+                "the recorded local model server is not answering; starting a new one"
+            );
+            local.forget_port().await;
         }
 
         let (spec, asset) = local
