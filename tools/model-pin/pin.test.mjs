@@ -222,6 +222,7 @@ function fixtureLocalLlm() {
           {
             id: "gemma-with-a-drafter",
             hfRepo: "unsloth/gemma-4-E2B-it-qat-GGUF",
+            revision: "a".repeat(40),
             fileName: "gemma.gguf",
             sizeBytes: 3_349_516_256,
             sizeMeasured: true,
@@ -229,6 +230,7 @@ function fixtureLocalLlm() {
             sha256Measured: true,
             draft: {
               hfRepo: "unsloth/gemma-4-E2B-it-qat-GGUF",
+              revision: "a".repeat(40),
               fileName: "mtp-gemma.gguf",
               sizeBytes: 59_235_648,
               sizeMeasured: true,
@@ -239,6 +241,7 @@ function fixtureLocalLlm() {
           {
             id: "stated-only",
             hfRepo: "bartowski/whatever-GGUF",
+            revision: "b".repeat(40),
             fileName: "stated.gguf",
             sizeBytes: 806_058_496,
             sizeMeasured: true,
@@ -271,6 +274,16 @@ test("statedTargets keeps which standard each pin already met", () => {
   assert.equal(targets[0].measured, true);
   assert.equal(targets[1].measured, false);
   assert.equal(targets[2].measured, false);
+});
+
+test("statedTargets carries the commit each object is pinned to", () => {
+  // Without it verifyStated would read the tree at `main`, which since
+  // KNEG-103 is not where the installer fetches from -- it would answer
+  // confidently about different bytes.
+  const targets = statedTargets(fixtureLocalLlm());
+  assert.equal(targets[0].revision, "a".repeat(40));
+  assert.equal(targets[1].revision, "a".repeat(40), "a drafter carries its own");
+  assert.equal(targets[2].revision, "b".repeat(40));
 });
 
 test("statedTargets ignores the whisper and sherpa pins entirely", () => {
@@ -307,6 +320,9 @@ test("the committed registry still carries a digest for all 39 GGUF objects", ()
     assert.notEqual(target.sizeBytes % 1_000_000, 0, `${target.id}'s size looks rounded`);
     assert.ok(target.repo?.includes("/"), `${target.id} has no owner/name repo`);
     assert.ok(target.file?.endsWith(".gguf"), `${target.id} does not name a .gguf`);
+    // A branch name here would make --verify-stated read a tree the installer
+    // never fetches from, and report a pass about it.
+    assert.match(target.revision, /^[0-9a-f]{40}$/, `${target.id} is not pinned to a commit`);
   }
 });
 

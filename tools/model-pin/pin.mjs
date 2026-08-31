@@ -86,9 +86,23 @@
  * The same file, `localLlm[].models[]` and their drafters -- the 39 GGUF
  * objects. It does **not** download them: 202 GB is why they were never
  * digest-pinned in the first place. It reads Hugging Face's
- * `/api/models/{repo}/tree/main?expand=true`, which returns every object's
- * `lfs.oid` and `lfs.size` in one response per repository, and compares those
- * against what is committed.
+ * `/api/models/{repo}/tree/{revision}?expand=true`, which returns every
+ * object's `lfs.oid` and `lfs.size` in one response per repository, and
+ * compares those against what is committed.
+ *
+ * **The revision is the committed one, not `main`, and that changed what this
+ * mode is for.** Until KNEG-103 it asked "has the publisher re-uploaded", and
+ * a yes was an emergency: the bytes behind our URL had moved out from under
+ * the digest. Now the URL names a commit, so a re-upload cannot move them, and
+ * the question is a better one -- **do the digest and the revision committed
+ * beside each other describe the same object?** Nothing else in the repository
+ * checks that pair, and nothing else would notice them drifting apart.
+ *
+ * It also reads `/api/models/{repo}` for each repository and says where `main`
+ * has moved past the pinned commit. That is reported and never failed on:
+ * upstream publishing is normal, and a weekly job that exited non-zero for it
+ * would be ignored by the second month. It is news about pins worth revisiting,
+ * not a defect.
  *
  * `--verify` re-measures bytes. `--verify-stated` re-reads a claim. Both catch
  * a silent upstream re-upload, which is the failure that matters most here;
@@ -445,7 +459,10 @@ export async function verify(only) {
  * skip, for the reason `pinnedTargets` gives: the generator emits `sha256`,
  * `sha256Measured` and `sizeBytes` together, so half a pin means
  * `config/provider-registry.json` was hand-edited, and half a pin is the one
- * input that would let this report a pass over something nobody checked.
+ * input that would let this report a pass over something nobody checked. A
+ * missing `revision` is the same failure and dies the same way -- reading the
+ * tree at `main` instead would silently answer a question about different
+ * bytes than the ones the installer fetches.
  */
 export function statedTargets(reg = registry()) {
   const targets = [];
@@ -459,9 +476,18 @@ export function statedTargets(reg = registry()) {
           "hand-edited -- fix the pin in generate-provider-registry.mjs and regenerate."
       );
     }
+    if (!/^[0-9a-f]{40}$/.test(String(object.revision))) {
+      die(
+        `localLlm/${id} has no usable revision (got ${JSON.stringify(object.revision)}). The ` +
+          "generator refuses to emit a model without one, so config/provider-registry.json " +
+          "has been hand-edited -- fix HF_REVISIONS in generate-provider-registry.mjs and " +
+          "regenerate."
+      );
+    }
     targets.push({
       id,
       repo: object.hfRepo,
+      revision: object.revision,
       file: object.fileName,
       sha256: object.sha256.toLowerCase(),
       sizeBytes: object.sizeBytes,
@@ -526,11 +552,20 @@ async function modelInfo(repo) {
 }
 
 /**
- * Re-read every committed GGUF pin from Hugging Face and report disagreements.
+ * Re-read every committed GGUF pin at its pinned commit and report disagreements.
  *
- * Non-zero exit on any disagreement, the same contract `--verify` has. One
- * request per repository, so 39 objects cost 36 requests and a few seconds --
+ * Non-zero exit on any disagreement, the same contract `--verify` has. Two
+ * requests per repository -- the tree at the pinned commit, and what `main`
+ * points at now -- so 39 objects cost about 72 requests and a few seconds,
  * which is the point: this can run weekly where re-downloading 202 GB cannot.
+ *
+ * The two halves answer different questions and only the first can fail.
+ * Reading the tree at the committed revision asks whether the digest and the
+ * revision beside it describe the same object, and whether that commit still
+ * resolves at all -- a repository going private or being force-pushed would
+ * break every install of its models, and nothing else here would notice.
+ * Reading `main` asks whether upstream has published since, which is normal
+ * and is reported as news.
  */
 export async function verifyStated(only) {
   const targets = statedTargets().filter((t) => !only || t.id === only);
@@ -544,26 +579,29 @@ export async function verifyStated(only) {
     );
   }
 
+  // Keyed on repository *and* revision rather than repository alone. One
+  // revision per repository is how HF_REVISIONS is built, but a cache that
+  // assumed it would answer from the wrong tree the day that stopped being
+  // true, and would do it silently.
   const trees = new Map();
   for (const target of targets) {
-    if (trees.has(target.repo)) continue;
-    console.error(`reading ${target.repo} …`);
-    // `main` for now. The next commit pins these to the committed revision,
-    // which is the whole point of KNEG-103; passing it explicitly here keeps
-    // this mode reading exactly what it read before `tree` gained the
-    // parameter, rather than reading `tree/undefined`.
-    trees.set(target.repo, await tree(target.repo, "main"));
+    const key = `${target.repo}@${target.revision}`;
+    if (trees.has(key)) continue;
+    console.error(`reading ${target.repo} at ${target.revision.slice(0, 12)} …`);
+    trees.set(key, await tree(target.repo, target.revision));
   }
 
   const wrong = [];
   for (const target of targets) {
-    const entries = trees.get(target.repo);
+    const entries = trees.get(`${target.repo}@${target.revision}`);
     const entry = Array.isArray(entries)
       ? entries.find((e) => e.path === target.file)
       : undefined;
 
     if (!entry) {
-      wrong.push(`${target.id}: ${target.file} is no longer in ${target.repo}`);
+      wrong.push(
+        `${target.id}: ${target.file} is not in ${target.repo} at ${target.revision}`
+      );
       continue;
     }
     // `lfs.oid` is the object's SHA-256, because git-lfs is content-addressed
@@ -588,12 +626,42 @@ export async function verifyStated(only) {
     process.exit(1);
   }
 
+  // Everything below this line is reporting, not checking. `wrong` is already
+  // empty or the process has already exited.
+  const moved = [];
+  const repos = [...new Set(targets.map((t) => t.repo))];
+  for (const repo of repos) {
+    const pinned = targets.find((t) => t.repo === repo).revision;
+    const info = await modelInfo(repo);
+    if (typeof info.sha === "string" && info.sha !== pinned) {
+      moved.push(
+        `  ${repo}: pinned ${pinned.slice(0, 12)}, main is now ${info.sha.slice(0, 12)}` +
+          `${info.lastModified ? ` (pushed ${String(info.lastModified).slice(0, 10)})` : ""}`
+      );
+    }
+  }
+
   const measured = targets.filter((t) => t.measured).length;
   console.log(
-    `model-pin --verify-stated: ${targets.length} object(s) match what Hugging Face states ` +
-      `(${trees.size} tree request(s); ${measured} pinned to bytes hashed here, which this ` +
-      `mode does not re-hash).`
+    `model-pin --verify-stated: ${targets.length} object(s) still match their committed ` +
+      `digest and length at the commit they are pinned to (${trees.size} tree request(s); ` +
+      `${measured} pinned to bytes hashed here, which this mode does not re-hash).`
   );
+
+  if (moved.length > 0) {
+    // Deliberately not a failure. A publisher pushing is not a defect, and the
+    // whole point of pinning a commit is that it costs us nothing when they do.
+    // It is worth reading, because a pin far behind a busy repository is a pin
+    // somebody should decide about rather than one that has decided for itself.
+    console.log(
+      `\n${moved.length} of ${repos.length} repositories have moved past the pinned commit. ` +
+        `That is not a failure -- the pinned commit is what gets downloaded -- but it is ` +
+        `what to re-read with --revisions when these pins are next revisited:`
+    );
+    for (const line of moved) console.log(line);
+  } else {
+    console.log(`No repository has moved past its pinned commit.`);
+  }
 }
 
 /* --------------------------------------------------------------- revisions */

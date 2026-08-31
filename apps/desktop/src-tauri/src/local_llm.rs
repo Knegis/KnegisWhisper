@@ -1491,12 +1491,23 @@ mod tests {
     /// stronger, because `lfs.size` comes back in the same response.
     ///
     /// **What it does and does not prove.** It compares this repository's pin
-    /// against Hugging Face's current statement. For the thirty-two stated
-    /// digests that is the same standard they were pinned to, so agreement means
-    /// "unchanged". For the seven measured ones it is weaker than how they were
-    /// pinned — those bytes were hashed here — so agreement means Hugging Face
-    /// has not re-uploaded, not that the bytes are still what we hashed. Only a
-    /// download proves that, and `tools/model-pin/pin.mjs --url` is how.
+    /// against Hugging Face's statement *at the commit the installer downloads
+    /// from*. For the thirty-two stated digests that is the same standard they
+    /// were pinned to, so agreement means "unchanged". For the seven measured
+    /// ones it is weaker than how they were pinned — those bytes were hashed
+    /// here — so agreement means Hugging Face has not re-uploaded, not that the
+    /// bytes are still what we hashed. Only a download proves that, and
+    /// `tools/model-pin/pin.mjs --url` is how.
+    ///
+    /// **The revision changed what this asks (KNEG-103).** Reading the tree at
+    /// `main` used to ask "has the publisher re-uploaded", and a yes meant the
+    /// bytes behind our URL had moved out from under the digest. The URL names a
+    /// commit now, so a push cannot move them, and this asks something better:
+    /// **do the digest and the revision committed beside each other describe the
+    /// same object?** Nothing else in the workspace checks that pair. It also
+    /// catches a pinned commit that has stopped resolving — a repository going
+    /// private, or a force-push — which would break every install of its models
+    /// and which nothing else would notice.
     #[tokio::test]
     #[ignore = "sends one tree request per repository to huggingface.co; run with --ignored"]
     async fn the_stated_digests_still_match_hugging_face() {
@@ -1505,28 +1516,40 @@ mod tests {
         let registry = kw_provider_registry::registry().expect("registry");
         let policy = NetworkPolicy::new().expect("the shared client builds");
 
-        // (label, repo, file, committed digest, committed size)
-        let mut targets: Vec<(String, String, String, String, Option<u64>)> = Vec::new();
+        /// One committed pin, as the tree read has to see it. A struct rather
+        /// than the six-tuple this outgrew when the revision joined it.
+        struct Stated {
+            label: String,
+            repo: String,
+            revision: String,
+            file: String,
+            digest: String,
+            size: Option<u64>,
+        }
+
+        let mut targets: Vec<Stated> = Vec::new();
         for provider in &registry.local_llm {
             for model in &provider.models {
                 if let Some(digest) = &model.sha256 {
-                    targets.push((
-                        model.id.clone(),
-                        model.hf_repo.clone(),
-                        model.file_name.clone(),
-                        digest.clone(),
-                        model.size_bytes,
-                    ));
+                    targets.push(Stated {
+                        label: model.id.clone(),
+                        repo: model.hf_repo.clone(),
+                        revision: model.revision.clone(),
+                        file: model.file_name.clone(),
+                        digest: digest.clone(),
+                        size: model.size_bytes,
+                    });
                 }
                 if let Some(draft) = &model.draft {
                     if let Some(digest) = &draft.sha256 {
-                        targets.push((
-                            format!("{} (drafter)", model.id),
-                            draft.hf_repo.clone(),
-                            draft.file_name.clone(),
-                            digest.clone(),
-                            draft.size_bytes,
-                        ));
+                        targets.push(Stated {
+                            label: format!("{} (drafter)", model.id),
+                            repo: draft.hf_repo.clone(),
+                            revision: draft.revision.clone(),
+                            file: draft.file_name.clone(),
+                            digest: digest.clone(),
+                            size: draft.size_bytes,
+                        });
                     }
                 }
             }
@@ -1536,15 +1559,21 @@ mod tests {
             "nothing is pinned, so nothing is checked"
         );
 
-        // One request per repository, not per object: three of the repos here
-        // hold two objects each.
+        // One request per repository *and revision*, not per object: three of
+        // the repos here hold two objects each. Keying on both rather than on
+        // the repository alone is not redundant — one revision per repository
+        // is how `HF_REVISIONS` is built, and a cache that assumed it would
+        // answer from the wrong tree, silently, the day that stopped holding.
         let mut trees: HashMap<String, serde_json::Value> = HashMap::new();
-        for (_, repo, _, _, _) in &targets {
-            if trees.contains_key(repo) {
+        for target in &targets {
+            let key = format!("{}@{}", target.repo, target.revision);
+            if trees.contains_key(&key) {
                 continue;
             }
+            let (repo, revision) = (&target.repo, &target.revision);
             let url = format!(
-                "https://huggingface.co/api/models/{repo}/tree/main?expand=true&recursive=true"
+                "https://huggingface.co/api/models/{repo}/tree/{revision}\
+                 ?expand=true&recursive=true"
             );
             let body = policy
                 .request(
@@ -1559,7 +1588,7 @@ mod tests {
                 .json::<serde_json::Value>()
                 .await
                 .expect("the tree is JSON");
-            trees.insert(repo.clone(), body);
+            trees.insert(key, body);
         }
         println!(
             "{} tree requests for {} objects",
@@ -1568,9 +1597,17 @@ mod tests {
         );
 
         let mut wrong: Vec<String> = Vec::new();
-        for (label, repo, file, committed, committed_size) in &targets {
+        for target in &targets {
+            let Stated {
+                label,
+                repo,
+                revision,
+                file,
+                digest: committed,
+                size: committed_size,
+            } = target;
             let entry = trees
-                .get(repo)
+                .get(&format!("{repo}@{revision}"))
                 .and_then(|t| t.as_array())
                 .and_then(|entries| {
                     entries
@@ -1580,7 +1617,8 @@ mod tests {
 
             let Some(entry) = entry else {
                 wrong.push(format!(
-                    "{label}: {file} is no longer in {repo} — the file has moved or been renamed"
+                    "{label}: {file} is not in {repo} at {revision} — the pin names a commit \
+                     that does not hold it"
                 ));
                 continue;
             };
@@ -1617,7 +1655,10 @@ mod tests {
 
         assert!(
             wrong.is_empty(),
-            "{} of {} objects have changed upstream; re-measure into LOCAL_LLM_PINS:\n{}",
+            "{} of {} objects disagree with the commit they are pinned to. That is a \
+             hand-edited registry or a repository that has been rewritten, not an ordinary \
+             re-upload — a push to main cannot reach these. Re-read HF_REVISIONS and \
+             re-measure LOCAL_LLM_PINS together:\n{}",
             wrong.len(),
             targets.len(),
             wrong.join("\n")
