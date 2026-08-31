@@ -1253,9 +1253,15 @@ impl MeetingRuntime {
             ));
         }
         if transcript.gaps > 0 {
+            // Two causes, and `MeetingTranscript::gaps` is one number that does
+            // not distinguish them: the local model falling behind the meeting,
+            // or a session past the limit on how much transcript is retained.
+            // Naming both is honest where naming one was accurate until
+            // KNEG-109 gave the count a second source.
             content.push_str(&format!(
-                "\n\n({} stretch(es) of audio were never transcribed: the transcriber could not \
-                 keep up with the meeting.)",
+                "\n\n({} stretch(es) of audio were never transcribed: either the transcriber \
+                 could not keep up with the meeting, or the meeting ran past the limit on how \
+                 much transcript one session keeps.)",
                 transcript.gaps
             ));
         }

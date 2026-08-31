@@ -266,6 +266,93 @@ Unchanged from the Phases 1–4 entry, restated here so they are not buried:
 
 ---
 
+## 2026-08-31 (KNEG-109) — a ceiling that cost something, and did not say what
+
+`deepgram_socket` bounds how much transcript one session retains: 16 MB, or 10 000 events. That
+bound is right — provider responses are outside the trust boundary, and session-long retention has
+to be limited by something other than the provider's good behaviour. What was wrong was every part
+of what happened when it was reached.
+
+```rust
+if !budget.reserve(text.len()) {
+    tracing::warn!(?source, "the provider exceeded the transcript session budget");
+    return;
+}
+```
+
+### One `return` doing three kinds of damage
+
+**It stopped the reader, not the retention.** The meeting kept recording, the provider kept sending,
+the socket stayed open, and nothing further was transcribed. What the ceiling exists for is bounding
+what is kept, and dropping the text does that on its own; ending the reader is a separate act
+nobody asked for.
+
+**It switched off KNEG-79's fix for the rest of the meeting.** This is the part that was not visible
+when the issue was filed. A provider error frame arriving after the ceiling has to reach
+`SessionFault` — that is the whole of the change landed hours earlier — and a dead reader cannot
+record one. So the budget quietly reintroduced the silence, on the client where the wire shape is
+believed rather than confirmed.
+
+**It picked a capture at random.** The budget is shared through an `Arc`, so whichever of the two
+readers happened to hit the ceiling first was the one that died and the other carried on. A meeting
+could end with the microphone transcribed and the system audio not, decided by arrival order, with
+nothing recording which.
+
+And `deepgram::transcript` hardcoded `gaps: 0`. `MeetingTranscript::gaps` exists so that *"a
+transcript with a hole in it must not look complete"*, and `keep` in `meeting.rs` appends a
+paragraph to the saved note when it is non-zero. A budget-exhausted session had a hole and reported
+none.
+
+### Counted, not fatal
+
+The issue's own reasoning was that counting is probably right and ending is probably wrong — a
+16 MB transcript is a long working meeting, not a failure, and failing it at the ceiling would
+discard a good transcript. That is what landed. `FaultKind` gained nothing; the session does not
+end. The reader `continue`s, the text is dropped, and the stretch is counted.
+
+### A gap is a run, not a frame
+
+`TranscriptBudget` counts transitions into refusal rather than refusals. Counting per frame would
+report a number nobody could act on — a long meeting past the ceiling would claim thousands of
+holes where there is one.
+
+Two details make that more than a detail:
+
+- **A refusal is not final.** The byte ceiling is a total, so a short event can still be admitted
+  after a long one was turned away. Two holes with transcript between them are two holes, so the
+  flag has to close when something gets through. (The *event* ceiling is final once reached, since
+  every event costs one.)
+- **One flag per capture, not one per session.** The microphone can be dropping while the system
+  audio is still being admitted. A single shared flag would end the microphone's stretch on the
+  strength of somebody else's frame, and the two captures are not the same hole.
+
+`reserve` returns `Reserved::{Room, NoRoom { opens_a_gap }}` rather than a `bool`, because the
+caller has to do something different for the first refusal of a run than for the rest of it: one
+`warn!` per stretch. Per frame it would be the loudest line in the log for the remainder of the
+meeting.
+
+### The sentence on the note was true and is now only half true
+
+`keep` said: *"N stretch(es) of audio were never transcribed: the transcriber could not keep up with
+the meeting."* Accurate while the only source of a gap was `local::LocalWindowProvider`, which
+counts a sustained deficit — the model falling four hops behind and skipping to live. A budget gap
+is not that. It is this application's own retention ceiling on a very long session, and there is
+nothing the transcriber could have done faster.
+
+So `gaps` now has two producers and one number, and the number does not say which. Both the field's
+doc comment and the note's sentence name both possibilities rather than asserting one. Carrying the
+cause properly would mean `gaps` stops being a `u32`, which is a change to a serialized type for a
+distinction nobody has yet needed to act on — recorded as the trade rather than made silently.
+
+### What is not verified, and it is most of it
+
+No key for Deepgram exists on any machine this project has touched, so none of this has run against
+a real provider (KNEG-53, KNEG-56). Reaching 16 MB of transcript needs a very long meeting on a
+service nobody can currently connect to. The budget arithmetic and the gap counting are unit-tested
+against the real `TranscriptBudget`; the reader's behaviour around them is read from the code.
+
+---
+
 ## 2026-08-31 (KNEG-110) — a field that carried two facts, and only one of them stayed true
 
 `LocalApiRuntime` stored the `Permissions` that `discovery::write` returned and showed that value
@@ -816,6 +903,11 @@ exhaustion, so a session past `MAX_TRANSCRIPT_BYTES` or `MAX_TRANSCRIPT_EVENTS` 
 transcribes nothing further — silently, and uncounted, because `gaps` is hardcoded to zero. Bounding
 untrusted provider output is deliberate; not counting what the bound costs is a gap. The comment now
 says so and the behaviour is unchanged.
+
+> **Fixed the same day (KNEG-109), and the filing understated it.** The reader no longer returns, so
+> the ceiling bounds retention without also ending transcription — and without silently switching
+> *this* change off for the rest of the meeting, which is what a dead reader did to `SessionFault`.
+> See the KNEG-109 entry at the top of this file.
 ## 2026-08-31 (KNEG-80) — a path the renderer could invent, and why the capability beat the fusion
 
 `Notes > Upload` had a hole with a very short description and a very long consequence.

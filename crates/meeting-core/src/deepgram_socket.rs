@@ -34,7 +34,7 @@
 //! third field for a rotation deadline, and the test at the bottom of this file
 //! checks that this struct's own description of itself does not mention one.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -63,14 +63,69 @@ const MAX_MESSAGE_BYTES: usize = 1024 * 1024;
 const MAX_TRANSCRIPT_BYTES: usize = 16 * 1024 * 1024;
 const MAX_TRANSCRIPT_EVENTS: usize = 10_000;
 
+/// What a [`TranscriptBudget::reserve`] call decided.
+///
+/// A two-variant answer rather than a `bool`, because the caller has to do
+/// something different for the *first* refusal of a run than for the rest of
+/// it: one log line per stretch of dropped transcript, not one per frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Reserved {
+    /// There was room. Keep the text.
+    Room,
+    /// There was not. Drop the text and carry on reading.
+    NoRoom {
+        /// Whether this refusal began a new stretch for this capture.
+        opens_a_gap: bool,
+    },
+}
+
+/// How much transcript one session may retain, and what it cost to stop.
+///
+/// The ceilings are deliberate: provider responses are outside the trust
+/// boundary, so session-long retention has to be bounded by something other
+/// than the provider's good behaviour. Shared by both captures through an
+/// `Arc`, because the bound is on the session and not on a socket.
+///
+/// **What the counters below are for.** Refusing is not free — the audio in
+/// that stretch is never transcribed — and until KNEG-109 the cost was paid
+/// invisibly: the reader task returned, the meeting kept recording, and
+/// `deepgram::transcript` reported `gaps: 0`. `MeetingTranscript::gaps` exists
+/// precisely so that "a transcript with a hole in it must not look complete",
+/// and this is the thing that fills it in.
 #[derive(Default)]
 struct TranscriptBudget {
     bytes: AtomicUsize,
     events: AtomicUsize,
+    /// Whether the last thing each capture offered was refused.
+    ///
+    /// One flag per capture rather than one for the session. A gap is a
+    /// *stretch* of untranscribed audio and it belongs to the capture it
+    /// happened in: the microphone can be dropping while the system audio is
+    /// still being admitted, and a single shared flag would end the
+    /// microphone's stretch on the strength of somebody else's frame.
+    mic_dropping: AtomicBool,
+    system_dropping: AtomicBool,
+    /// How many stretches have begun, across both captures.
+    gaps: AtomicU32,
 }
 
 impl TranscriptBudget {
-    fn reserve(&self, bytes: usize) -> bool {
+    /// Which capture's dropping flag this is.
+    const fn dropping(&self, source: AudioSource) -> &AtomicBool {
+        match source {
+            AudioSource::Mic => &self.mic_dropping,
+            AudioSource::System => &self.system_dropping,
+        }
+    }
+
+    /// Take `bytes` for one transcript event from `source`.
+    ///
+    /// Note that a refusal is not final. The byte ceiling is a total, so a
+    /// short event can still fit after a long one was turned away -- which is
+    /// why gaps are counted as runs rather than as a single flag flipped once.
+    /// (The event ceiling *is* final once reached, since every event costs
+    /// one.)
+    fn reserve(&self, source: AudioSource, bytes: usize) -> Reserved {
         if self
             .bytes
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |used| {
@@ -79,7 +134,7 @@ impl TranscriptBudget {
             })
             .is_err()
         {
-            return false;
+            return self.refuse(source);
         }
 
         if self
@@ -91,9 +146,27 @@ impl TranscriptBudget {
             .is_err()
         {
             self.bytes.fetch_sub(bytes, Ordering::Relaxed);
-            return false;
+            return self.refuse(source);
         }
-        true
+
+        // Admitting closes this capture's stretch, so the next refusal counts
+        // as a new one.
+        self.dropping(source).store(false, Ordering::Relaxed);
+        Reserved::Room
+    }
+
+    /// Mark `source` as dropping, counting a gap if it was not already.
+    fn refuse(&self, source: AudioSource) -> Reserved {
+        let opens_a_gap = !self.dropping(source).swap(true, Ordering::Relaxed);
+        if opens_a_gap {
+            self.gaps.fetch_add(1, Ordering::Relaxed);
+        }
+        Reserved::NoRoom { opens_a_gap }
+    }
+
+    /// How many stretches of audio this session never transcribed.
+    fn gaps(&self) -> u32 {
+        self.gaps.load(Ordering::Relaxed)
     }
 }
 
@@ -335,12 +408,33 @@ async fn read(
                 is_final,
                 speaker,
             } if !text.trim().is_empty() => {
-                if !budget.reserve(text.len()) {
-                    tracing::warn!(
-                        ?source,
-                        "the provider exceeded the transcript session budget"
-                    );
-                    return;
+                // Dropped, and counted, but the reader keeps going. It used
+                // to `return` here, which was three problems in one line.
+                //
+                // The session's *other* frames still matter: an error frame
+                // arriving after the ceiling has to reach `SessionFault`, and a
+                // dead reader cannot record one -- so the budget silently
+                // switched off KNEG-79's fix for the rest of the meeting. The
+                // socket also has to keep draining, or the provider is left
+                // pushing into a buffer nobody reads. And because the budget is
+                // shared, whichever capture happened to hit the ceiling first
+                // was the one that died, leaving the other transcribing: a
+                // meeting with the microphone kept and the system audio not,
+                // decided by arrival order.
+                //
+                // What the ceiling is for is bounding retention, and dropping
+                // the text does that on its own.
+                if let Reserved::NoRoom { opens_a_gap } = budget.reserve(source, text.len()) {
+                    if opens_a_gap {
+                        // Once per stretch. Per frame, this would be the
+                        // loudest line in the log for the rest of the meeting.
+                        tracing::warn!(
+                            ?source,
+                            "the transcript session budget is full; this capture is no longer \
+                             being transcribed, and the saved note will say so"
+                        );
+                    }
+                    continue;
                 }
                 let event = deepgram::event(
                     text,
@@ -507,7 +601,7 @@ impl MeetingTranscriptionProvider for DeepgramRealtime {
             .started
             .map_or(0.0, |started| started.elapsed().as_secs_f64());
 
-        Ok(deepgram::transcript(events, duration))
+        Ok(deepgram::transcript(events, duration, self.budget.gaps()))
     }
 
     async fn cancel(&mut self) -> Result<(), MeetingError> {
@@ -769,11 +863,18 @@ mod tests {
         assert!(!paused);
     }
 
+    /// `Reserved::Room`, ignoring whether a refusal opened a gap.
+    fn admitted(reserved: Reserved) -> bool {
+        reserved == Reserved::Room
+    }
+
     #[test]
     fn transcript_budget_limits_bytes_across_both_sockets() {
         let budget = TranscriptBudget::default();
-        assert!(budget.reserve(MAX_TRANSCRIPT_BYTES));
-        assert!(!budget.reserve(1));
+        assert!(admitted(
+            budget.reserve(AudioSource::Mic, MAX_TRANSCRIPT_BYTES)
+        ));
+        assert!(!admitted(budget.reserve(AudioSource::System, 1)));
         assert_eq!(budget.bytes.load(Ordering::Relaxed), MAX_TRANSCRIPT_BYTES);
         assert_eq!(budget.events.load(Ordering::Relaxed), 1);
     }
@@ -782,10 +883,100 @@ mod tests {
     fn transcript_budget_limits_event_overhead() {
         let budget = TranscriptBudget::default();
         for _ in 0..MAX_TRANSCRIPT_EVENTS {
-            assert!(budget.reserve(1));
+            assert!(admitted(budget.reserve(AudioSource::Mic, 1)));
         }
-        assert!(!budget.reserve(1));
+        assert!(!admitted(budget.reserve(AudioSource::Mic, 1)));
         assert_eq!(budget.bytes.load(Ordering::Relaxed), MAX_TRANSCRIPT_EVENTS);
         assert_eq!(budget.events.load(Ordering::Relaxed), MAX_TRANSCRIPT_EVENTS);
+    }
+
+    /* --------------------------------------------- what the ceiling costs */
+
+    #[test]
+    fn a_run_of_refusals_is_one_gap_and_not_one_per_frame() {
+        // The count reaches `MeetingTranscript::gaps`, which `keep` renders as
+        // "N stretch(es) of audio were never transcribed". Counting per frame
+        // would report a number nobody could act on -- a long meeting past the
+        // ceiling would claim thousands of holes where there is one.
+        let budget = TranscriptBudget::default();
+        assert!(admitted(
+            budget.reserve(AudioSource::Mic, MAX_TRANSCRIPT_BYTES)
+        ));
+        assert_eq!(budget.gaps(), 0, "nothing has been refused yet");
+
+        assert_eq!(
+            budget.reserve(AudioSource::Mic, 10),
+            Reserved::NoRoom { opens_a_gap: true }
+        );
+        for _ in 0..50 {
+            assert_eq!(
+                budget.reserve(AudioSource::Mic, 10),
+                Reserved::NoRoom { opens_a_gap: false },
+                "still the same stretch"
+            );
+        }
+        assert_eq!(budget.gaps(), 1);
+    }
+
+    #[test]
+    fn admitting_again_ends_the_stretch_so_the_next_refusal_is_a_new_one() {
+        // A refusal is not final: the byte ceiling is a total, so a short event
+        // can fit after a long one was turned away. Two holes with transcript
+        // between them are two holes.
+        let budget = TranscriptBudget::default();
+        assert!(admitted(
+            budget.reserve(AudioSource::Mic, MAX_TRANSCRIPT_BYTES - 4)
+        ));
+
+        assert_eq!(
+            budget.reserve(AudioSource::Mic, 100),
+            Reserved::NoRoom { opens_a_gap: true }
+        );
+        assert!(
+            admitted(budget.reserve(AudioSource::Mic, 4)),
+            "a short event still fits"
+        );
+        assert_eq!(
+            budget.reserve(AudioSource::Mic, 100),
+            Reserved::NoRoom { opens_a_gap: true },
+            "the stretch closed when something got through, so this opens a new one"
+        );
+        assert_eq!(budget.gaps(), 2);
+    }
+
+    #[test]
+    fn each_capture_has_its_own_stretch() {
+        // One shared flag would end the microphone's stretch on the strength of
+        // a system-audio frame, and the two captures are not the same hole.
+        let budget = TranscriptBudget::default();
+        for _ in 0..MAX_TRANSCRIPT_EVENTS {
+            assert!(admitted(budget.reserve(AudioSource::Mic, 1)));
+        }
+
+        assert_eq!(
+            budget.reserve(AudioSource::Mic, 1),
+            Reserved::NoRoom { opens_a_gap: true }
+        );
+        assert_eq!(
+            budget.reserve(AudioSource::System, 1),
+            Reserved::NoRoom { opens_a_gap: true },
+            "the system capture has its own stretch to open"
+        );
+        assert_eq!(budget.gaps(), 2);
+
+        assert_eq!(
+            budget.reserve(AudioSource::Mic, 1),
+            Reserved::NoRoom { opens_a_gap: false },
+            "and the microphone is still in the one it opened"
+        );
+        assert_eq!(budget.gaps(), 2);
+    }
+
+    #[test]
+    fn a_session_that_never_filled_the_budget_reports_no_gaps() {
+        let budget = TranscriptBudget::default();
+        assert!(admitted(budget.reserve(AudioSource::Mic, 1_000)));
+        assert!(admitted(budget.reserve(AudioSource::System, 1_000)));
+        assert_eq!(budget.gaps(), 0);
     }
 }

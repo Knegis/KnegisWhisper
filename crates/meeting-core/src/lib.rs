@@ -127,8 +127,18 @@ pub struct MeetingTranscript {
     ///
     /// A separate count from `reconnects` because the causes differ and so does
     /// what a user would do about them: a reconnect is the network, and a gap is
-    /// the transcriber failing to keep up with the meeting. Both leave a hole,
-    /// and a transcript with a hole in it must not look complete.
+    /// the transcription itself not covering the audio. Both leave a hole, and a
+    /// transcript with a hole in it must not look complete.
+    ///
+    /// **Two things produce one**, and this number does not say which.
+    /// `local::LocalWindowProvider` counts a sustained deficit — the model
+    /// falling behind the meeting, four hops' worth, and skipping to live.
+    /// `deepgram_socket::TranscriptBudget` counts a run of transcript refused
+    /// by this application's own retention ceiling on a very long session
+    /// (KNEG-109). A person can act on the first and only wants to know about
+    /// the second, but the hole is the same shape, so the count is shared and
+    /// the sentence in `meeting.rs` names both possibilities rather than
+    /// asserting one.
     pub gaps: u32,
 }
 

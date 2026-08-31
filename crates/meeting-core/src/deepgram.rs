@@ -400,25 +400,30 @@ pub fn frame_bytes(chunk: &AudioChunk) -> &[u8] {
 /// there is no clock deciding to rebuild the sockets, and no `SessionClock`
 /// exists in this module for that reason -- the same shape as
 /// [`crate::assemblyai::transcript`].
+///
+/// `gaps` is `TranscriptBudget::gaps` from the socket layer: how many stretches
+/// of audio went untranscribed because the session's retention ceiling was
+/// full. It is a parameter rather than a hardcoded `0` as of KNEG-109 — bounding
+/// untrusted provider output is deliberate, and so is saying what the bound
+/// cost. `keep` in `meeting.rs` turns a non-zero count into a paragraph on the
+/// saved note, which is the whole reason `MeetingTranscript::gaps` exists.
+///
+/// Nothing is dropped on the way *out*: audio either reaches the socket or the
+/// session ends. Three things end it and none of them skips ahead — a send that
+/// fails, an error frame the provider sent, and a first frame this client could
+/// not read. See `crate::fault`. So every gap this can report came from the
+/// ceiling on the way in.
 #[must_use]
-pub fn transcript(events: Vec<TranscriptEvent>, duration_seconds: f64) -> MeetingTranscript {
+pub fn transcript(
+    events: Vec<TranscriptEvent>,
+    duration_seconds: f64,
+    gaps: u32,
+) -> MeetingTranscript {
     MeetingTranscript {
         events,
         duration_seconds,
         reconnects: 0,
-        // Nothing is dropped by this client on the way out: audio either
-        // reaches the socket or the session ends. Three things end it and none
-        // of them skips ahead — a send that fails, an error frame the provider
-        // sent, and a first frame this client could not read. See
-        // `crate::fault`.
-        //
-        // Not the whole truth on the way in, and that half predates this: the
-        // reader stops on `TranscriptBudget` exhaustion, so a session past
-        // `MAX_TRANSCRIPT_BYTES` or `MAX_TRANSCRIPT_EVENTS` keeps recording and
-        // transcribes nothing further — and that is not counted here either.
-        // Bounding untrusted provider output is deliberate; not counting what
-        // the bound costs is a gap, filed rather than papered over here.
-        gaps: 0,
+        gaps,
     }
 }
 
@@ -870,7 +875,7 @@ mod tests {
     }
 
     #[test]
-    fn the_transcript_reports_no_reconnects_and_no_gaps() {
+    fn the_transcript_reports_no_reconnects_and_the_gaps_it_is_given() {
         let events = vec![event(
             "hello".to_owned(),
             true,
@@ -878,7 +883,7 @@ mod tests {
             1.5,
             AudioSource::System,
         )];
-        let transcript = transcript(events, 90.0);
+        let transcript = transcript(events, 90.0, 0);
 
         assert_eq!(
             transcript.reconnects, 0,
@@ -886,10 +891,19 @@ mod tests {
         );
         assert_eq!(
             transcript.gaps, 0,
-            "this client either sends a frame or the session ends"
+            "nothing hit the retention ceiling in this session"
         );
         assert_eq!(transcript.events[0].source, AudioSource::System);
         assert_eq!(transcript.events[0].speaker.as_deref(), Some("0"));
+    }
+
+    #[test]
+    fn a_gap_the_socket_counted_reaches_the_saved_transcript() {
+        // The whole of KNEG-109 in one assertion. `keep` in `meeting.rs`
+        // appends "N stretch(es) of audio were never transcribed" when this is
+        // non-zero, so a hardcoded `0` here was a hole the note denied having.
+        let transcript = transcript(Vec::new(), 90.0, 2);
+        assert_eq!(transcript.gaps, 2);
     }
 
     #[test]
