@@ -260,6 +260,37 @@ pub async fn history_clear(state: State<'_, AppState>) -> CmdResult<u64> {
         .map_err(|e| fail("could not clear history", e))
 }
 
+/// Whether the pre-cleanup transcript is kept alongside the cleaned one.
+///
+/// Read from settings rather than from the running session, because
+/// `DbHistory::keep_raw_text` reads it per dictation and there is no cached copy
+/// that could disagree with the stored one.
+#[tauri::command]
+pub async fn history_keep_raw_text(state: State<'_, AppState>) -> CmdResult<bool> {
+    Ok(kw_storage::settings::get_or(
+        state.db().pool(),
+        crate::dictation::KEEP_RAW_TEXT_KEY,
+        false,
+    )
+    .await
+    .unwrap_or(false))
+}
+
+/// Keep, or stop keeping, the pre-cleanup transcript.
+///
+/// Takes effect on the next dictation, not after a relaunch: the sink reads the
+/// setting each time it writes a row.
+#[tauri::command]
+pub async fn history_set_keep_raw_text(state: State<'_, AppState>, enabled: bool) -> CmdResult<()> {
+    kw_storage::settings::set(
+        state.db().pool(),
+        crate::dictation::KEEP_RAW_TEXT_KEY,
+        &enabled,
+    )
+    .await
+    .map_err(|e| fail("could not save the setting", e))
+}
+
 /* ------------------------------------------------------------------ providers */
 
 /// What would happen if dictation were pointed at this provider right now.

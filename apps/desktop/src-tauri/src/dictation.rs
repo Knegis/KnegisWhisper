@@ -513,6 +513,15 @@ pub struct DbHistory {
 /// The settings key that switches history off.
 pub const HISTORY_ENABLED_KEY: &str = "history.enabled";
 
+/// The settings key that keeps the pre-cleanup transcript.
+///
+/// Off by default: it stores a second copy of what someone said, and the point
+/// of cleanup is that the tidy version is the one wanted. Switched on, a history
+/// row that carries a raw text is proof cleanup changed something -- which is
+/// the question a bench check on 2026-08-28 needed a second transcriber to
+/// answer, because this setting existed in `kw_app_core` and had no way in.
+pub const KEEP_RAW_TEXT_KEY: &str = "history.keepRawText";
+
 impl DbHistory {
     #[must_use]
     pub const fn new(db: Db) -> Self {
@@ -529,6 +538,14 @@ impl History for DbHistory {
         kw_storage::settings::get_or(self.db.pool(), HISTORY_ENABLED_KEY, true)
             .await
             .unwrap_or(true)
+    }
+
+    async fn keep_raw_text(&self) -> bool {
+        // Read per dictation, like `enabled` above, so switching it on applies
+        // to the next thing said rather than after a relaunch.
+        kw_storage::settings::get_or(self.db.pool(), KEEP_RAW_TEXT_KEY, false)
+            .await
+            .unwrap_or(false)
     }
 
     async fn record(&self, entry: HistoryEntry) -> Option<i64> {
@@ -705,9 +722,6 @@ impl DictationRuntime {
             Arc::new(ClipboardInserter::new()),
             Arc::new(DbHistory::new(db.clone())),
             Arc::new(EventSink::new(app, state)),
-            // Keeping the pre-cleanup transcript is opt-in; the default is not
-            // to store two copies of what someone said.
-            false,
         );
 
         Self {
@@ -1087,6 +1101,24 @@ mod tests {
             .await
             .unwrap();
         assert!(!history.enabled().await);
+    }
+
+    #[tokio::test]
+    async fn the_pre_cleanup_transcript_is_not_kept_unless_asked_for() {
+        // The default, and the reason it is the default: switching it on stores
+        // a second copy of what someone said. Before this setting existed the
+        // answer was `false` with no way to change it, which is how a bench
+        // check ended up needing a second transcriber to find out whether
+        // cleanup had done anything.
+        let db = Db::open_in_memory().await.unwrap();
+        let history = DbHistory::new(db.clone());
+        assert!(!history.keep_raw_text().await);
+
+        kw_storage::settings::set(db.pool(), KEEP_RAW_TEXT_KEY, &true)
+            .await
+            .unwrap();
+        // Read per dictation, so the next one keeps it -- no relaunch.
+        assert!(history.keep_raw_text().await);
     }
 
     #[tokio::test]

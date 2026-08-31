@@ -443,7 +443,7 @@ once, near the top of the whisper block — far above the control that started i
 `InstallProgress::Model` already carries the model id, so the line now renders on the row whose
 button was pressed, for both engines. Fixed.
 
-**2. `keep_raw_text` is opt-in with nothing to opt in with.** Open.
+**2. `keep_raw_text` was opt-in with nothing to opt in with.** Fixed 2026-08-31.
 `kw_app_core::dictation` stores the pre-cleanup transcript as `Transcription.raw_text`, but only
 when `keep_raw_text` is true and only when it differs from the cleaned text — which would answer
 "did cleanup change anything" exactly, and permanently. It is hardcoded `false` at
@@ -452,6 +452,18 @@ no command and no UI, and nothing renders `rawText`, which is already in the IPC
 history. Had it been reachable, this run would not have needed a second transcriber to answer the
 question. Same class as the four hotkeys that registered and dispatched nowhere: a capability that
 exists, is described, and has no way in.
+
+Now reachable. Keeping the raw text moved from a `bool` fixed when `Dictation` was built to
+`History::keep_raw_text`, asked of the sink per dictation — the same shape `History::enabled`
+already had, and the reason a change now applies to the next thing said rather than after a
+relaunch. `Settings` key `history.keepRawText`, off by default, with the toggle and the second line
+on `Dictation`'s History section. The trait's default is `false`, so an implementation that does not
+answer keeps one copy rather than two: a second copy of a person's speech is opted into, never out
+of.
+
+**Still unchecked:** nobody has switched it on and dictated. Turn it on, dictate a sentence with
+filler words through Parakeet with cleanup on, and confirm the row shows both versions — and that a
+dictation cleanup did *not* change shows only one.
 
 ### Added by the live Teams meeting, same day
 

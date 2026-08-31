@@ -23,12 +23,14 @@ import {
   getHistory,
   getHotkeys,
   getInputDevices,
+  getKeepRawText,
   isInsertionSupported,
   onDictationOutcome,
   onDictationState,
   onHotkey,
   setHotkey,
   setInputDevice,
+  setKeepRawText,
   toggleDictation,
   type Binding,
   type ShortcutHookStatus,
@@ -54,7 +56,7 @@ export function DictationView({
   hook: ShortcutHookStatus;
 }) {
   const load = useCallback(async () => {
-    const [hotkeys, session, devices, canInsert, route, history] =
+    const [hotkeys, session, devices, canInsert, route, history, keepRaw] =
       await Promise.all([
         getHotkeys(),
         getDictationState(),
@@ -62,8 +64,9 @@ export function DictationView({
         isInsertionSupported(),
         getDictationRoute(),
         getHistory(20),
+        getKeepRawText(),
       ]);
-    return { hotkeys, session, devices, canInsert, route, history };
+    return { hotkeys, session, devices, canInsert, route, history, keepRaw };
   }, []);
 
   const { data, error, reload, guard } = useRefresh(load);
@@ -140,7 +143,7 @@ export function DictationView({
     );
   }
 
-  const { hotkeys, devices, canInsert, route, history } = data;
+  const { hotkeys, devices, canInsert, route, history, keepRaw } = data;
   // Keyed by action, because that is the shape of the fact: nothing handles the
   // chat agent, whatever it happens to be bound to.
   const unhandled = new Map<string, string>(
@@ -318,6 +321,38 @@ export function DictationView({
 
       <section>
         <h2>History</h2>
+
+        {/* The same shape `Settings > Meetings` uses for "Offer to record":
+            `Row` takes a string value, and this needs a control. */}
+        <div className="row">
+          <span className="row-label">Keep the text before cleanup</span>
+          <span className="row-value controls">
+            <label>
+              <input
+                type="checkbox"
+                checked={keepRaw}
+                onChange={(e) => {
+                  const enabled = e.target.checked;
+                  void guard(async () => {
+                    await setKeepRawText(enabled);
+                    await reload();
+                  });
+                }}
+              />
+              Store both versions when cleanup changes the text
+            </label>
+            {/* Said plainly because this is a privacy choice, not a
+                preference: switching it on stores a second copy of what was
+                said. The reason to want it is that a row carrying both is the
+                only proof cleanup did anything on that dictation. */}
+            <em className="row-detail">
+              {keepRaw
+                ? "Two copies of what you said are stored on rows cleanup altered."
+                : "Only the final text is stored. Switch this on to see what cleanup changed."}
+            </em>
+          </span>
+        </div>
+
         {history.length === 0 ? (
           <p className="muted">Nothing dictated yet.</p>
         ) : (
@@ -330,6 +365,13 @@ export function DictationView({
                   <code>{h.status}</code> {h.text || h.errorMessage || "(empty)"}
                   {h.provider ? (
                     <em className="row-detail">{h.provider}</em>
+                  ) : null}
+                  {/* Only ever present when cleanup changed the text and the
+                      user asked to keep it -- see `raw_for_history`. So its
+                      presence is the finding, and it is labelled rather than
+                      shown as a bare second line. */}
+                  {h.rawText ? (
+                    <em className="row-detail">before cleanup: {h.rawText}</em>
                   ) : null}
                 </li>
               ))}

@@ -1053,6 +1053,10 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
   },
   history_delete: () => true,
   history_clear: () => HISTORY.length,
+  // On, so the invented history above can show a `rawText` row. The real
+  // default is off -- see `KEEP_RAW_TEXT_KEY`.
+  history_keep_raw_text: () => true,
+  history_set_keep_raw_text: () => null,
 
   /* notes */
   notes_list: (a) => {

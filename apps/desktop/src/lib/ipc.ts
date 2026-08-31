@@ -539,6 +539,21 @@ export async function clearHistory(): Promise<number> {
   return invoke<number>("history_clear");
 }
 
+/**
+ * Whether the pre-cleanup transcript is kept beside the cleaned one.
+ *
+ * Off by default. Switched on, a history row that carries a `rawText` is proof
+ * cleanup changed something on that dictation -- which is otherwise only
+ * answerable by dictating the same sentence twice.
+ */
+export async function getKeepRawText(): Promise<boolean> {
+  return invoke<boolean>("history_keep_raw_text");
+}
+
+export async function setKeepRawText(enabled: boolean): Promise<void> {
+  return invoke<void>("history_set_keep_raw_text", { enabled });
+}
+
 /* --------------------------------------------------------------------- notes */
 
 /**
