@@ -52,7 +52,8 @@ own extractor-generated requests, none of them observable here. DNS rebinding de
 literal-host check by construction. Rather than ship an SSRF surface with a guard that cannot cover
 it, `media_import_url` is unregistered as a command, `Notes > Upload` offers no URL field, and
 `media:url-import` is `reachable: false`. Audio and video import, which take a local path and never
-fetch anything, are unaffected. The full accounting, and what re-opening it requires, is in
+fetch anything, are unaffected — and that local path must be one a file dialog returned, which the
+Webview section below describes. The full accounting, and what re-opening it requires, is in
 `docs/NETWORK_BOUNDARY.md`'s "SSRF guards for URL import" section.
 
 ## Updates
@@ -154,23 +155,33 @@ arbitrary filesystem access, no process spawning, no direct database or credenti
 HTTP. Command payloads are typed and validated at the boundary; paths and URLs are validated
 before use.
 
-**`Notes > Upload`'s file pickers are a narrower exception, worth naming precisely rather than
-folding into the paragraph above.** `pick_import_file` opens a real OS dialog and returns the
-chosen path *to the renderer*, which holds it in React state and passes it as a plain string to a
-separate command — `media_import_audio`, `media_import_video`, or `import_openwhispr` — on a later
-click. What holds: the renderer has no independent way to *obtain* a path, since there is no
-filesystem or dialog capability in `capabilities/default.json`; only a real dialog produces one.
-What does not hold: unlike `note_export_to_file`, which fuses picking and writing into one atomic
-command specifically so the frontend never sees or supplies a path at all, these three commands
-accept whatever path string they are called with and read it — nothing confirms it is the one
-`pick_import_file` returned rather than one invented outright. **Concretely:** a compromised
-renderer, already in this document's threat model, can call `media_import_audio` directly with an
-arbitrary local path with no dialog involved; with a cloud transcription provider configured, that
-file's contents then leave the machine. Not yet closed. Two hardening directions, neither chosen
-yet: fuse picking and importing into one atomic command the way export already does (in tension
-with `Notes > Upload`'s pick-then-review-then-confirm flow, which export's single-click save does
-not need); or a capability restricting which paths these three commands will accept, independent
-of whatever the renderer claims. See `docs/BENCH_CHECK.md`'s Task 12 entry.
+**`Notes > Upload`'s file pickers take a different shape from the rest, worth naming precisely
+rather than folding into the paragraph above.** `pick_import_file` opens a real OS dialog and
+returns the chosen path *to the renderer*, which holds it in React state and passes it as a plain
+string to a separate command — `media_import_audio`, `media_import_video`, or `import_openwhispr` —
+on a later click. That is not the shape `note_export_to_file` uses, which fuses picking and writing
+into one atomic command so the frontend never sees or supplies a path at all; fusing pick and
+import the same way would fight this screen's pick-then-review-then-confirm flow, which a
+single-click save does not need. So the path does cross the boundary, and what makes that safe is a
+capability rather than the shape: **`commands::DialogGrants` records the canonical form of every
+path `pick_import_file` returns, and those three commands — the only three in the application that
+accept a path at all — refuse anything that set does not hold.** A compromised renderer calling
+`media_import_audio` directly with an arbitrary local path is refused before the file is opened,
+which is what stops that file's contents from reaching a configured cloud transcription provider.
+
+Four properties of that set, each a deliberate choice. It is keyed on `std::fs::canonicalize`
+output, not on the string the renderer sent, because `pick_import_file` returns
+`path.display().to_string()` and `display()` is lossy — the cost is that a path whose name does not
+survive lossy conversion cannot be imported, which was already true in practice and is now an
+explicit refusal. It lasts until the application exits, because single-use would break
+retry-after-failure, which the screen relies on today. It is not time-bounded, because the review
+step can legitimately sit open across a sidecar install of tens of megabytes. And it is bounded by
+count (32) so a renderer calling the picker in a loop cannot grow it without limit.
+
+**What is asserted and what is not.** Unit tests in `apps/desktop/src-tauri/src/media.rs` cover the
+refusal, the retry, eviction past the bound, and an ungranted credential-file path. Only a real
+call against the running application proves the policy is consulted on this path; that check is
+still open as item 1 under `docs/BENCH_CHECK.md`'s Task 12 heading.
 
 ## Sidecars and downloaded models
 
