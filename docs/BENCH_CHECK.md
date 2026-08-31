@@ -403,24 +403,32 @@ of chunk F is green tests and code review; none of it has touched real hardware 
    and restart it. Confirms whether an orphaned per-import scratch directory is left behind — a
    known, disclosed gap with no startup sweep.
 
-### Added by Task 12 (`Notes > Upload`'s file pickers), and unchecked
+### Added by Task 12 (`Notes > Upload`'s file pickers), decided in code and unchecked on hardware
 
-A code-review finding, not yet exercised on real hardware or decided on: `pick_import_file` opens
-a real dialog and hands the chosen path *back to the renderer*, which passes it as a plain string
-to `media_import_audio`, `media_import_video`, or `import_openwhispr` on a later click. Those three
-commands read whatever path they are called with — nothing confirms it is the one the dialog
-returned. See `docs/SECURITY.md`'s Webview section for the full description.
+A code-review finding: `pick_import_file` opens a real dialog and hands the chosen path *back to
+the renderer*, which passes it as a plain string to `media_import_audio`, `media_import_video`, or
+`import_openwhispr` on a later click. Those three commands used to read whatever path they were
+called with — nothing confirmed it was the one the dialog returned.
 
-1. **Decide whether to close the gap, and how.** Two directions, neither chosen: fuse pick and
-   import into one atomic command the way `note_export_to_file` fuses pick and write (in tension
-   with `Notes > Upload`'s pick-then-review-then-confirm flow, which a single-click save does not
-   need); or add a capability that restricts which paths these three commands will read, independent
-   of whatever the renderer supplies.
-2. **If closed by restricting paths, confirm the restriction with a real compromised-renderer
-   simulation** — call the command directly (bypassing the picker) with a path never returned by
-   `pick_import_file`, e.g. a credential file or another user's document, and confirm it is refused
-   rather than read. A unit test can assert the policy; only a real call against the running
-   application proves the policy is actually consulted on this path.
+**Decided (KNEG-80), by capability rather than by fusing.** `commands::DialogGrants` records the
+canonical form of every path `pick_import_file` returns and those three commands authorise against
+it; a path no dialog produced is refused before anything opens the file. Fusing pick and import
+into one atomic command the way `note_export_to_file` fuses pick and write was the other direction
+and was not taken: it fights this screen's pick-then-review-then-confirm flow, which a single-click
+save does not need. The grant is session-lifetime and bounded by count rather than by time, for
+reasons `docs/SECURITY.md`'s Webview section and `docs/ENGINEERING_LOG.md`'s entry both give. This
+item is therefore no longer a decision to make; only the check below remains.
+
+1. **Confirm the restriction with a real compromised-renderer simulation** — from the running
+   application's devtools console, call the command directly (bypassing the picker) with a path
+   never returned by `pick_import_file`, e.g. a credential file or another user's document, and
+   confirm it is refused rather than read. A unit test can assert the policy; only a real call
+   against the running application proves the policy is actually consulted on this path. Four unit
+   tests in `apps/desktop/src-tauri/src/media.rs` assert it, and that is all they assert.
+2. **Confirm the picker still works end to end, and that retry does.** Pick an audio file, let the
+   import run, and — separately — pick a file, cause the import to fail (an ffmpeg not yet
+   installed will do), and press Import again on the same path. The second attempt must be
+   accepted; a grant that did not survive a retry would break a flow that works today.
 
 ### Added by chunk H (MCP and CLI screens), and unchecked
 

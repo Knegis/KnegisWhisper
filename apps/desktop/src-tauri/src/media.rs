@@ -456,20 +456,26 @@ fn tail_bytes(bytes: &[u8], max: usize) -> &[u8] {
 
 /// Whether `path` names a file that can be imported.
 ///
+/// `path` is the canonical path [`crate::commands::DialogGrants::authorise`]
+/// returned, not a string the renderer supplied -- *whether this path may be
+/// read at all* is decided in the command, before this. What is left here is
+/// whether the granted path still names a file: a directory canonicalises
+/// perfectly well, and a file picked and then deleted keeps its grant for the
+/// rest of the session.
+///
 /// Extracted so this check is unit-testable on its own: nothing outside a
 /// running application can construct a real `tauri::AppHandle`, so any
 /// function that needs one -- as [`MediaImportRuntime::import_local_file`]
 /// does, to report progress -- cannot be called from a plain unit test at
 /// all, not even to reach a branch that never uses it.
-fn check_importable_file(path: &str) -> Result<PathBuf, MediaImportError> {
-    let input = PathBuf::from(path);
-    if !input.is_file() {
+fn check_importable_file(path: &Path) -> Result<PathBuf, MediaImportError> {
+    if !path.is_file() {
         return Err(MediaImportError::io(
-            &input,
+            path,
             std::io::Error::new(std::io::ErrorKind::NotFound, "not a file"),
         ));
     }
-    Ok(input)
+    Ok(path.to_path_buf())
 }
 
 /// yt-dlp's own markers for a download that has not finished yet. A file
@@ -937,10 +943,16 @@ impl MediaImportRuntime {
     }
 
     /// Import an already-local audio or video file.
+    ///
+    /// `path` is a path a real OS dialog returned, authorised by
+    /// [`crate::commands::DialogGrants`] in the command above this. Nothing
+    /// here re-derives that: this function is reachable only through
+    /// [`media_import_audio`] and [`media_import_video`], both of which
+    /// authorise first.
     pub async fn import_local_file(
         &self,
         app: &AppHandle,
-        path: &str,
+        path: &Path,
         source: MediaImportSource,
     ) -> Result<MediaImportResult, MediaImportError> {
         let input = check_importable_file(path)?;
@@ -1065,28 +1077,41 @@ pub async fn media_import_install_sidecar(
 }
 
 /// Import a local audio file.
+///
+/// **`path` is refused unless a real OS dialog returned it.** The renderer
+/// supplies a plain string here, so the string alone proves nothing; the
+/// canonical form of it must be one [`crate::commands::pick_import_file`]
+/// recorded. Without that check a compromised renderer could name any local
+/// file and, with a cloud transcription provider configured, watch its
+/// contents leave the machine. See [`crate::commands::DialogGrants`] and
+/// `docs/SECURITY.md`'s Webview section.
 #[tauri::command]
 pub async fn media_import_audio(
     app: AppHandle,
     runtime: State<'_, Arc<MediaImportRuntime>>,
+    grants: State<'_, crate::commands::DialogGrants>,
     path: String,
 ) -> Result<MediaImportResult, String> {
+    let granted = grants.authorise(&path)?;
     runtime
-        .import_local_file(&app, &path, MediaImportSource::Audio)
+        .import_local_file(&app, &granted, MediaImportSource::Audio)
         .await
         .map_err(|err| err.to_string())
 }
 
 /// Import a local video file. Only the label differs from audio import --
-/// ffmpeg strips any video track either way.
+/// ffmpeg strips any video track either way, and the same dialog grant is
+/// required.
 #[tauri::command]
 pub async fn media_import_video(
     app: AppHandle,
     runtime: State<'_, Arc<MediaImportRuntime>>,
+    grants: State<'_, crate::commands::DialogGrants>,
     path: String,
 ) -> Result<MediaImportResult, String> {
+    let granted = grants.authorise(&path)?;
     runtime
-        .import_local_file(&app, &path, MediaImportSource::Video)
+        .import_local_file(&app, &granted, MediaImportSource::Video)
         .await
         .map_err(|err| err.to_string())
 }
@@ -1335,28 +1360,146 @@ mod tests {
     //
     // `import_local_file` itself takes a `&AppHandle`, which nothing outside a
     // running application can construct -- so it is untestable directly, on
-    // purpose. `check_importable_file` is the pure extraction of its one
-    // decision that does not need one, following the same pattern
-    // `meeting.rs`, `updater.rs` and `calendar.rs` use.
+    // purpose. `check_importable_file` and `DialogGrants::authorise` are the
+    // pure extractions of its two decisions that do not need one, following
+    // the same pattern `meeting.rs`, `updater.rs` and `calendar.rs` use.
+    //
+    // The two are deliberately separate questions. `authorise` answers "may
+    // this path be read at all", and is the guard a compromised renderer meets;
+    // `check_importable_file` answers "is what it names still a file", and only
+    // ever sees a path that already passed the first.
+
+    use crate::commands::DialogGrants;
+
+    /// A file that exists, so `canonicalize` has something to resolve.
+    fn touch(dir: &std::path::Path, name: &str) -> PathBuf {
+        let path = dir.join(name);
+        std::fs::write(&path, b"not really audio, just a file").unwrap();
+        path
+    }
 
     #[test]
     fn a_directory_is_not_an_importable_file() {
         let dir = tempfile::tempdir().unwrap();
-        let err = check_importable_file(dir.path().to_str().unwrap()).unwrap_err();
+        let err = check_importable_file(dir.path()).unwrap_err();
         assert!(matches!(err, MediaImportError::Io { .. }));
     }
 
     #[test]
     fn a_path_that_does_not_exist_is_not_an_importable_file() {
-        let err = check_importable_file("Z:/definitely/not/a/real/path.mp3").unwrap_err();
+        let err = check_importable_file(std::path::Path::new("Z:/definitely/not/a/real/path.mp3"))
+            .unwrap_err();
         assert!(matches!(err, MediaImportError::Io { .. }));
     }
 
     #[test]
-    fn an_ordinary_file_is_importable() {
+    fn an_ordinary_file_is_importable_only_when_the_dialog_returned_it() {
         let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("clip.mp3");
-        std::fs::write(&file, b"not really audio, just a file").unwrap();
-        assert_eq!(check_importable_file(file.to_str().unwrap()).unwrap(), file);
+        let file = touch(dir.path(), "clip.mp3");
+        let grants = DialogGrants::default();
+
+        // Before the dialog: existing, readable, ordinary -- and refused. This
+        // test used to assert the first three alone, which made it a false
+        // negative once the grant became the thing that decides.
+        assert!(grants.authorise(file.to_str().unwrap()).is_err());
+
+        let granted = grants.grant(&file).unwrap();
+        let authorised = grants.authorise(file.to_str().unwrap()).unwrap();
+        assert_eq!(authorised, granted);
+        assert_eq!(check_importable_file(&authorised).unwrap(), granted);
+    }
+
+    #[test]
+    fn a_path_the_dialog_never_returned_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let picked = touch(dir.path(), "picked.mp3");
+        let never_picked = touch(dir.path(), "never-picked.mp3");
+
+        let grants = DialogGrants::default();
+        grants.grant(&picked).unwrap();
+
+        // A sibling in the very directory the user did pick from is still not
+        // the file they picked.
+        assert!(grants.authorise(never_picked.to_str().unwrap()).is_err());
+        assert!(grants.authorise(picked.to_str().unwrap()).is_ok());
+    }
+
+    #[test]
+    fn a_granted_path_survives_two_imports() {
+        // Retry-after-failure exists today: `NotesUpload.tsx`'s `catch` leaves
+        // the picked path in state, so the same file can be tried again any
+        // number of times after a failed conversion. A single-use grant would
+        // break that, which is why the grant lasts the session.
+        let dir = tempfile::tempdir().unwrap();
+        let file = touch(dir.path(), "retry.mp3");
+
+        let grants = DialogGrants::default();
+        grants.grant(&file).unwrap();
+
+        let first = grants.authorise(file.to_str().unwrap()).unwrap();
+        let second = grants.authorise(file.to_str().unwrap()).unwrap();
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn the_oldest_grant_is_evicted_past_the_bound() {
+        let dir = tempfile::tempdir().unwrap();
+        let grants = DialogGrants::default();
+
+        let oldest = touch(dir.path(), "oldest.mp3");
+        grants.grant(&oldest).unwrap();
+
+        // One more than the bound allows, counting the one above.
+        for n in 0..crate::commands::MAX_DIALOG_GRANTS {
+            let path = touch(dir.path(), &format!("later-{n}.mp3"));
+            grants.grant(&path).unwrap();
+        }
+
+        assert!(
+            grants.authorise(oldest.to_str().unwrap()).is_err(),
+            "the oldest grant should have been evicted"
+        );
+        let newest = dir.path().join(format!(
+            "later-{}.mp3",
+            crate::commands::MAX_DIALOG_GRANTS - 1
+        ));
+        assert!(grants.authorise(newest.to_str().unwrap()).is_ok());
+    }
+
+    #[test]
+    fn an_ungranted_credential_file_is_refused_rather_than_read() {
+        // The compromised-renderer case, in the shape
+        // `an_export_filename_survives_a_hostile_title` uses for export: the
+        // caller names a file it was never given and that it has no business
+        // reading. Real files in a temp directory rather than `~/.aws`, so the
+        // test asserts the refusal and not merely that the path is absent.
+        let dir = tempfile::tempdir().unwrap();
+        let credentials = touch(dir.path(), "credentials");
+        let ssh_key = touch(dir.path(), "id_rsa");
+        let innocuous = touch(dir.path(), "meeting.m4a");
+
+        let grants = DialogGrants::default();
+        grants.grant(&innocuous).unwrap();
+
+        for hostile in [&credentials, &ssh_key] {
+            let err = grants.authorise(hostile.to_str().unwrap()).unwrap_err();
+            assert!(
+                err.contains("not chosen through the import dialog"),
+                "expected a refusal naming the dialog, got {err}"
+            );
+        }
+
+        // Traversal does not launder an ungranted path either. This one
+        // canonicalises perfectly well -- `subdir` exists, so it resolves to
+        // the very `credentials` above -- and is refused on identity, because
+        // the set holds resolved paths and not prefixes.
+        std::fs::create_dir(dir.path().join("subdir")).unwrap();
+        let traversal = dir.path().join("subdir").join("..").join("credentials");
+        assert_eq!(
+            std::fs::canonicalize(&traversal).unwrap(),
+            std::fs::canonicalize(&credentials).unwrap(),
+            "the traversal should reach the same file, or this asserts nothing"
+        );
+        assert!(grants.authorise(traversal.to_str().unwrap()).is_err());
     }
 }

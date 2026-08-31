@@ -51,6 +51,21 @@ maintained in place rather than appended to, because its purpose is to be curren
 > now fails open**, because the fix inverted what a miss in `is_private_host` costs. See "Task 20 —
 > the network boundary does not stop SSRF over HTTPS" below.
 >
+> **`Notes > Upload`'s import paths are now a capability, not an assumption (KNEG-80).**
+> `pick_import_file` returned the chosen path to the renderer and `media_import_audio`,
+> `media_import_video` and `import_openwhispr` read whatever they were handed; the renderer could
+> not *obtain* a path (`capabilities/default.json` is `["core:default"]` and nothing else) but
+> nothing *checked* that, so a compromised renderer could name any readable file and, with a cloud
+> transcription provider configured, watch it leave the machine. `commands::DialogGrants` now
+> records the canonical form of every dialog-returned path for the life of the process and those
+> three commands — **the only three in the application that accept a path**, enumerated rather than
+> assumed — refuse anything else. Session-lifetime because retry-after-failure exists today,
+> count-bounded rather than timed for `meeting::Watcher::offered`'s reason, and keyed on
+> `canonicalize` because `display()` is lossy — the cost being that a path whose name does not
+> survive `display()` is refused outright. Four unit tests assert the policy; **only a real call
+> against the running application proves it is consulted**, which is still open as item 1 under
+> `BENCH_CHECK.md`'s Task 12 heading. See "a path the renderer could invent" below.
+>
 > **Task 19 audited every manifest entry whose `status` asserts a working implementation exists**
 > (`verify-parity.mjs`'s `ACTIVE` set) and found three more instances of the same overclaim
 > `platform:aec` was already corrected for mid-run: `meeting-stream:tinfoil-realtime` (status
@@ -522,6 +537,107 @@ exhaustion, so a session past `MAX_TRANSCRIPT_BYTES` or `MAX_TRANSCRIPT_EVENTS` 
 transcribes nothing further — silently, and uncounted, because `gaps` is hardcoded to zero. Bounding
 untrusted provider output is deliberate; not counting what the bound costs is a gap. The comment now
 says so and the behaviour is unchanged.
+## 2026-08-31 (KNEG-80) — a path the renderer could invent, and why the capability beat the fusion
+
+`Notes > Upload` had a hole with a very short description and a very long consequence.
+`pick_import_file` opened a real OS dialog and returned the chosen path **to the renderer**, which
+held it in React state and passed it as a plain string to `media_import_audio`,
+`media_import_video` or `import_openwhispr` on a later click. Those three read whatever path they
+were called with. Nothing confirmed it was the one the dialog returned.
+
+The half that held is worth stating first, because it is the reason this sat unnoticed:
+`apps/desktop/src-tauri/capabilities/default.json` grants exactly `["core:default"]` — no `fs:*`,
+no `dialog:*`, no `shell:*`, no `http:*` — so the renderer genuinely has no independent way to
+*obtain* a path. Every path it could hold came from a real dialog. But "cannot obtain" and "is
+checked" are different claims, and only the first was true. A compromised renderer — which
+`docs/SECURITY.md`'s threat model includes, so this is not an invented adversary — could call
+`media_import_audio` with any path it liked, and the path becomes argv for a spawned ffmpeg, which
+writes `converted.wav`, which is read into memory and handed to
+`kw_transcription_core::Executor::transcribe`. With a cloud provider configured, that is an
+exfiltration path for any readable file on the machine, reached with one IPC call.
+
+### Why a capability rather than fusing pick and import
+
+`note_export_to_file` already demonstrates the airtight shape: it fuses picking and writing into
+one atomic command, so the frontend never sees or supplies a path at all. Copying that shape here
+was the obvious first answer and it is the wrong one, for a reason that is about the screen rather
+than about security. Export is a single click — choose where, write, done. Import is
+pick-then-review-then-confirm: the user picks a file, the screen shows what it picked and what
+provider will transcribe it, and *then* they press Import. Fusing would collapse the review step
+that the screen exists to provide. A guarantee bought by deleting the interaction it was protecting
+is not a good trade.
+
+So the path still crosses the boundary, and what makes it safe is a capability instead:
+`commands::DialogGrants`, a `Mutex<VecDeque<PathBuf>>` managed in `lib.rs`, written only by
+`pick_import_file` and consulted by all three path-accepting commands before they touch anything.
+
+Three implementation choices, each of which had a plausible alternative that is worse:
+
+- **Session-lifetime, not single-use.** Single-use is the tighter policy and it breaks a flow that
+  works today: `NotesUpload.tsx`'s `catch` leaves the picked path in state after a failure, so the
+  same file can be retried without re-picking. A grant consumed by the first attempt would turn
+  every failed import into a re-pick. There is a test for the two-attempt case specifically, so the
+  next person to reach for single-use has to delete an assertion that says why not.
+- **Bounded by count, not by time.** A time bound would refuse a file the user really did pick if
+  they left the review step open — and they realistically will, because that screen can sit on a
+  picked path across an ffmpeg install of tens of megabytes. This is the same argument
+  `meeting::Watcher::offered` makes in its doc comment for keying on the provider rather than on a
+  timestamp: a time-tuned suppression gets one of its two cases wrong whichever way it is set, and
+  identity gets both right. Reusing that reasoning was better than restating it. The bound is 32,
+  which the screen (one path at a time) will never approach; it exists so a renderer calling the
+  picker in a loop cannot grow the set without limit.
+- **Keyed on a canonicalised `PathBuf`, never the string.** `pick_import_file` returns
+  `path.display().to_string()`, which is **lossy**. Comparing strings would mean comparing a path
+  that had already lost information. Both the insert and the check go through `std::fs::canonicalize`
+  — which on Windows returns the verbatim `\\?\C:\...` form, so both sides must canonicalise or a
+  canonical path gets compared against a raw one and never matches.
+
+### What the lossy path costs, stated rather than buried
+
+A path whose name does not survive `display()` cannot be imported. That is a real refusal and it is
+written into the code as one. It is **not** a regression: `check_importable_file`'s `is_file()`
+already failed on that same lossy string today, silently and by accident. The change is that it is
+now deliberate and says so. If someone with a filename that does this ever reports it, the answer
+is to stop round-tripping the path through the renderer at all — i.e. the fusion above, for that
+one case — not to compare strings.
+
+One smaller decision inside `authorise`: a path that cannot be canonicalised and a path nobody
+granted get the *same* refusal. Distinguishing them would make the command answer "does this file
+exist" for any path a compromised renderer cared to name, which is a smaller leak than the one
+being closed but is free to avoid — and a path that will not canonicalise cannot be in the set
+anyway, since every member of it came out of `canonicalize`.
+
+### The surface is closed, and that was checked rather than assumed
+
+`pick_import_file` is the only dialog-returning command that hands a path to the renderer.
+`note_export_to_file` returns one too, but only as an after-the-fact report of what it already
+wrote, and nothing accepts it back. Every `#[tauri::command]` in
+`apps/desktop/src-tauri/src` was enumerated and its parameters read: exactly three take a path —
+`commands::import_openwhispr` (through `ImportRequest.path`), `media::media_import_audio` and
+`media::media_import_video`. The other struct-shaped parameters (`NoteUpdateRequest`,
+`CleanupSettings`, `EnterpriseConfig`, `Lists`) carry no path field; `CleanupSettings.self_hosted_url`
+is a URL and goes through the network policy, not the filesystem.
+
+### What this does not prove
+
+Four unit tests assert the policy — an ungranted path is refused, a granted one survives two
+imports, the oldest is evicted past the bound, and an ungranted credential-file path is refused
+rather than read (including one reached by traversal that canonicalises onto it). `authorise` takes
+no `AppHandle` precisely so those tests can exist; there is no Tauri command test harness in this
+repo, so anything reachable only through a command is untested by construction. **Only a real call
+against the running application proves the policy is consulted on this path**, and that has not
+been run. It is item 1 under Task 12 in `BENCH_CHECK.md`, where it was already written before this
+change and where it stays.
+
+Dev mode was checked, not assumed: all four commands are stubbed in `devFixtures.ts`, which
+intercepts at `invoke` and throws loudly on anything unstubbed, so no fixture reaches Rust and none
+needs a fake grant.
+
+Two doc corrections came along with it. `config/ui-surfaces.json`'s `Notes > Upload` note still
+described "Audio, video and URL import" months after URL import was withdrawn — the parity gate
+checks `surfaceId`, `component`, `built` and the `data-surface` marker, never the note prose, so
+nothing was ever going to catch that. And the same entry said nothing about path restriction. Both
+fixed.
 
 ---
 
