@@ -73,13 +73,19 @@ maintained in place rather than appended to, because its purpose is to be curren
 > and for Task 20 say so item by item, and none of them should be read as done until someone
 > actually presses the buttons.
 >
-> **A cross-cutting gap, recorded and deliberately not fixed:** all four meeting socket clients
-> (`openai_socket.rs`, `assemblyai_socket.rs`, `deepgram_socket.rs`, `corti_socket.rs`) log a
-> provider-reported error frame with `tracing::warn!` and never turn it into an `Err`. A server that
-> accepts a malformed session-config frame, stays open, and emits nothing would let a meeting
-> "complete successfully" holding an empty transcript, evidenced only by a log line nobody in the
-> room can see. `BENCH_CHECK.md` item 13 under chunk E already carries this; it predates every task
-> in this run and is shared by all four clients equally.
+> **The cross-cutting gap in all four meeting socket clients is closed at the end of the meeting
+> and still open during it (KNEG-79, 2026-08-31).** All four (`openai_socket.rs`,
+> `assemblyai_socket.rs`, `deepgram_socket.rs`, `corti_socket.rs`) used to log a provider-reported
+> error frame with `tracing::warn!` and never turn it into an `Err`, so a server that accepted a
+> malformed session-config frame, stayed open and emitted nothing let a meeting "complete
+> successfully" holding an empty transcript. They now record into
+> `kw_meeting_core::fault::SessionFault` and both `send_audio` and `finish` consult it, so Stop
+> reports the provider's own sentence. `stop()` was fixed with it — a pump failure used to return
+> early, leaving the runtime idle and the screen stuck on "Recording" with no working button.
+> **What is still true:** the failure is invisible *while* the meeting runs (KNEG-95, which carries
+> a design decision this did not take), and three of the four clients have never met a real
+> provider error because no key exists for AssemblyAI, Deepgram or Corti. See the 2026-08-31
+> (KNEG-79) entry below, and `BENCH_CHECK.md` item 13.
 >
 > **Eighteen of the thirty-five local text-generation models could not be installed at all**, and
 > the reason was arithmetic in a config file rather than anything in the download path: upstream's
@@ -221,6 +227,183 @@ Unchanged from the Phases 1–4 entry, restated here so they are not buried:
   porting matrix. Upstream pins both by commit and verifies neither.
 - ~~**`nircmd`**~~ — **dropped**, as leaned towards: third-tier Windows paste fallback only, and
   `SendInput` works.
+
+---
+
+## 2026-08-31 (KNEG-79) — four clients that heard "no" and said nothing
+
+The four cloud meeting clients each read a provider-reported error frame, logged it with
+`tracing::warn!("the provider reported an error")`, and carried on. None of `connect`, `send_audio`
+or `finish` ever returned an `Err` because of it, so a provider that rejected the session-config
+frame and kept the socket open produced a meeting that "completed successfully" holding an empty
+transcript — and an empty transcript becomes `MeetingOutcome::NothingTranscribed`, which is exactly
+what a quiet room produces. The gap had been recorded three times, in `BENCH_CHECK.md` item 13,
+`BUILD_PLAN.md` and this file's own carry-forward, and fixed none of them.
+
+It stopped being hypothetical on 2026-08-28. Both OpenAI sockets were closed by the server
+milliseconds after connecting; the application reported **Recording**, kept the indicator up,
+captured microphone and system audio for as long as it was left running, and said nothing. One
+`DEBUG nothing is consuming the meeting audio` per second was the only trace.
+
+### What was built
+
+`crates/meeting-core/src/fault.rs`: `SessionFault`, one cell per session shared by both readers and
+consulted by both writers, plus `ends_the_session` — a pure, total function answering *does a fault
+of this kind mean the session is over?*
+
+The pure split was not optional. There is no socket harness in this repository: no `wiremock`, no
+`mockito`, no fake `MeetingTranscriptionProvider`, no `crates/meeting-core/tests/`. Every test in
+the four socket modules returned before a socket ever opened, and each module's own header said so.
+Anything reachable only through a live socket is untested by construction, which is the same reason
+`openai::SessionClock` was pulled out of the socket: *a rule that only runs against a live
+sixty-minute call is a rule nobody checks.*
+
+### Three decisions worth the space
+
+**`OnceLock`, not `Mutex`, so first-wins is true by construction.** A cascade of frames after the
+real error would bury it, so the first fault has to win. Written as `if held.is_none() { ... }` that
+is a convention a later edit can invert; written as `OnceLock::set` it is the type's own behaviour,
+and there is no poisoned-lock branch to write around this workspace's `unwrap_used = "deny"`.
+
+First rather than last, because of the one real observation there is. The 2026-08-28 order was:
+
+```text
+WARN the provider reported an error       The Realtime Beta API is no longer supported.
+WARN the transcription socket was closed  said=... (code 4000)
+```
+
+The first line explains the meeting. The second is a number. Last-wins keeps the number.
+
+**One cell per session, not one per socket.** Every client here refuses to open only one socket —
+"a session with only the microphone open would transcribe half the meeting and report success" — so
+a dead system-audio socket has to end the session even while the microphone socket is healthy. The
+two almost always die of the same cause, and the recorded sentence names which capture it came
+from, so one true sentence beats the same sentence twice.
+
+That has one sharp edge, and it is the reason `openai_socket::reconnect` swaps in a *new* cell
+before rebuilding. `Connection::close` sends a close frame and only then aborts the reader, so the
+socket a reconnect retires can still read the server's reply — and a close frame is a
+`FaultKind::Reported`. Shared across generations, this fix would have failed every meeting over
+sixty minutes at its own reconnect: a new defect introduced by the fix for an old one.
+
+**The non-JSON case, decided rather than left to fall through.** All four `interpret` functions
+answered *any* unparseable frame with `Incoming::Failed`, so an HTML error body and a text keepalive
+this parser happens not to know were the same thing. Making `Failed` fatal without splitting them
+would have killed a working meeting over a keepalive — a new defect of the fix's own making, and
+the exact failure mode this change exists to prevent.
+
+So there is a fifth variant, `Incoming::Unreadable { preview }`, in all four rules modules, and the
+rule is about *when* it arrives: **an unreadable frame on a socket that has never yet produced a
+frame this client could parse ends the session; one that arrives after it has does not.** That
+targets the observed hazard — garbage where a session-accepted frame belonged — and cannot kill a
+stream that has demonstrably been speaking this client's language. "Understood" means *parsed*, so
+`Ready`, a transcript, an error frame and even an event this client does not act on all count; ping
+and pong never reach an `interpret` call. The loop supplies one `bool` and `ends_the_session` holds
+the rule.
+
+The frame itself is repeated back rather than replaced with "not JSON", through one shared
+`fault::preview` — control characters flattened, runs collapsed, capped at 120 characters, because
+provider responses are outside the trust boundary and this text reaches both a log field and a
+sentence on screen. `<html>502 Bad Gateway</html>` is worth ten diagnostics that say "not JSON", and
+the wire most likely to produce one is Corti's, which was invented with no vendor documentation at
+all.
+
+### Edited four times rather than extracted
+
+`type Socket`, `type Sink`, `struct Connection`, `Connection::close`, the whole `read` skeleton,
+`fn connection`, `pause`/`resume`/`cancel` and the `static FALLBACK` blocks are near-duplicated
+across the four socket modules. Unifying them is a real refactor with its own risk and KNEG-89
+already tracks it, so what was extracted here is the *decision* — one `SessionFault`, one
+`ends_the_session`, one `close_reason`, one `preview`, one `SocketFault::into_error` — and the four
+call sites were edited by hand.
+
+Four hand-applied copies of a security-relevant decision is exactly how one gets missed, so
+`all_four_cloud_clients_record_a_fault_and_consult_it_at_both_ends` reads the four modules' own
+source with `include_str!` — the device `kw_network_policy` already uses for
+`forbidden-domains.json` — and fails if any one of them lacks the field, any of the four record
+calls, or the two `self.fault.take()` sites. It is a text match and will not catch a client that
+consults the cell and ignores the answer; the two behavioural tests now at the bottom of each socket
+module do that, one client at a time.
+
+Those two tests per module are the first in those four files to reach past the guard clauses, and
+they exist because `send_audio` checks the cell **first** — before `paused`, before the reconnect
+clock, before the connection lookup. A test can then record a fault exactly as the reader task would
+and ask what `send_audio` and `finish` do about it, with no socket, no key and no network. Placing
+the check first is also correct on its own terms: a provider that reported an error and kept the
+socket open produces a *successful* send, so nothing about the send can be asked.
+
+The per-socket `Closed` cell in `openai_socket` was **not** folded in. Two cells, two jobs: that one
+supplies better words for a send that has already failed, this one decides whether the session is
+over. Folding them would have put `ad9dac1`'s hard-won behaviour — the thing that made five GA-API
+faults diagnosable — at risk for a tidiness gain.
+
+### `stop()`, which was worse than it looked
+
+`stop()` returned early from three places: the recorder thread having stopped, the thread not
+answering, and the pump failing. `Live` had already been `take`n by then, so each of them left the
+runtime idle while skipping the whole tail — no `OUTCOME_EVENT`, no `MeetingState::Idle`, no
+`meeting_window::set_visible(false)`, no `watch.forget`.
+
+And the screen was then stuck permanently, not briefly: `guard` in `useRefresh.ts` does not
+`reload()` when a mutation throws, so the frontend stayed on `finishing`, where
+`SettingsMeetings.tsx` renders neither Stop nor Discard and disables Start. No working button, tray
+still lit, indicator window still up, until the application was restarted.
+
+Every failure is an outcome now. Three free functions came out of it — `close_recorder`,
+`pump_result`, `failed_message` — testable with no `AppHandle`, `Db` or `NetworkPolicy`, which is
+the shape `resolve_key_ref` and its neighbours already use in that file.
+
+**The whole-file local pass still runs after a pump failure**, and that is a fix in its own right
+rather than a concession: the saved note comes from that pass and only falls back to the cloud
+partials, so a provider that dies at second zero costs the live transcript, not the meeting. The old
+`?` skipped the pass entirely, which was a pure loss. `keep` takes `live_failure: Option<&str>` and
+uses it twice — an empty result becomes `Failed` naming what the provider said instead of
+`NothingTranscribed`, and a note that *was* produced says in its own text that the live half failed.
+
+### No fake provider, and what it would take
+
+`pump` has zero test coverage and still does. Introducing the repository's first fake
+`MeetingTranscriptionProvider` was considered and declined: `pump` already propagates its `Err`
+correctly through `?`, so the fake would have tested a line that was not broken, while the broken
+line was in `stop()` — which needs an `AppHandle`, a `Db` and a `NetworkPolicy`, none of which a
+fake provider supplies. The free functions cover what actually changed.
+
+Recorded for whoever does want it, because KNEG-95 will: the obstacle is `pump`'s `app: AppHandle`,
+and the better of the two routes is giving `pump` a small `TranscriptSink` trait — matching what
+`calendar-core` did with `TokenSender` and its test-only `PlaintextLoopbackSender` — rather than
+enabling `tauri`'s `test` feature, which nothing in this workspace uses.
+
+### What stays KNEG-95's, and was deliberately not taken
+
+**A dead provider is still silent mid-meeting.** The indicator stays up, recording continues, and
+nothing reaches the screen until Stop. No new `MeetingState` variant, no change to whether recording
+continues, `MeetingRuntime::status()` still does not consult `pump.is_finished()`, and no new
+mid-meeting error event. That is a product decision about whether a dead provider stops the
+recording, falls back immediately, or carries on saying so, and it belongs to the repository owner.
+
+### What could not be verified, and is not claimed anywhere
+
+**No key exists on any machine this project has touched for AssemblyAI, Deepgram or Corti.** Three
+of the four clients' behaviour against a real provider error is unverified, and the tests added here
+verify this application's wiring rather than any provider's behaviour. The argument for the change
+is that it is exactly the mechanism that would have surfaced the five OpenAI faults of 2026-08-28 in
+one attempt instead of five. That is an argument, not evidence, and the code comments,
+`PLATFORM_SUPPORT.md` and `BENCH_CHECK.md` item 13 all say so in those terms.
+
+One risk is written into `ends_the_session`'s doc comment rather than hidden: `FaultKind::Reported`
+ends the session on the **first** error frame, and a provider that emits benign `error` frames
+routinely would make that too eager. The mitigation, if it ever matters, is one line — give
+`Reported` the same "before anything was understood" test `Unreadable` has.
+
+### Found while here, filed rather than widened
+
+`deepgram::transcript`'s `gaps: 0` carried the comment *"Nothing is dropped by this client: the
+socket either carries a frame or the send fails and the session ends."* That was untrue for a second
+reason, predating all of this: `deepgram_socket`'s reader `return`s on `TranscriptBudget`
+exhaustion, so a session past `MAX_TRANSCRIPT_BYTES` or `MAX_TRANSCRIPT_EVENTS` keeps recording and
+transcribes nothing further — silently, and uncounted, because `gaps` is hardcoded to zero. Bounding
+untrusted provider output is deliberate; not counting what the bound costs is a gap. The comment now
+says so and the behaviour is unchanged.
 
 ---
 
