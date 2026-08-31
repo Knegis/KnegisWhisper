@@ -291,6 +291,11 @@ pub fn run() -> anyhow::Result<()> {
             }
             app.manage(updater::LastCheck::default());
 
+            // Empty at startup, and only `pick_import_file` ever adds to it:
+            // the three commands that take a file path refuse anything this
+            // set does not hold. See `commands::DialogGrants`.
+            app.manage(commands::DialogGrants::default());
+
             let meetings = std::sync::Arc::new(meeting::MeetingRuntime::new(
                 handle.clone(),
                 db.clone(),
