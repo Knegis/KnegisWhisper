@@ -70,6 +70,16 @@ pub enum Integrity {
     /// anybody has spent the bandwidth to hash it, which for `large` is 2.9 GB.
     /// Deleting this would leave two options for that model, refusing to install
     /// it or installing it while implying a digest match, and both are worse.
+    ///
+    /// **Why this is not what sherpa does.** `sherpa_models::install` refuses an
+    /// unpinned model outright with `MissingPin`. The asymmetry is deliberate and
+    /// rests on what the two formats are: a whisper model is a bare `.bin` that
+    /// is downloaded and never unpacked, so the worst an unverified one can do is
+    /// produce bad transcripts. A sherpa model is a `.tar.bz2` that goes through
+    /// `kw_sidecar::extract`, which means path traversal and decompression are in
+    /// play before anything reads a weight. Refusing to unpack an unauthenticated
+    /// archive and agreeing to load unauthenticated weights are proportionate to
+    /// two different exposures, not one rule applied inconsistently.
     Size { expected_bytes: u64 },
     /// The registry gave neither.
     Unknown,
