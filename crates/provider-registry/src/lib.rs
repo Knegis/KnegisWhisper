@@ -172,6 +172,12 @@ pub struct SherpaModel {
     pub download_url: String,
     pub extract_dir: String,
     pub size_mb: Option<f64>,
+    /// SHA-256 of the compressed archive, required before installation.
+    pub sha256: Option<String>,
+    /// Exact byte count of the compressed archive.
+    pub expected_size_bytes: Option<u64>,
+    /// Hard ceiling for bytes written while extracting the archive.
+    pub max_extracted_size_bytes: Option<u64>,
     pub language: Option<String>,
     pub supported_languages: Option<Vec<String>>,
     /// True for the Nemotron streaming runtimes; the Parakeet models are batch.
