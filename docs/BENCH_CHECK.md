@@ -197,17 +197,19 @@ the application has not locked itself out. Two further facts came out of the sam
   That is why both are still restricted rather than the directory being trusted to have covered
   the file.
 
-**Two things this did not close, both recorded rather than fixed, and both filed (KNEG-110,
-KNEG-111):**
+**Two things this did not close. One has since been fixed, one is still open (KNEG-110, KNEG-111):**
 
-1. **The verdict is a snapshot taken when the API starts.** `local_api_status` reports what the
-   write measured; nothing re-reads the DACL while the application runs. During this run a trustee
-   was added to a protected directory by something outside the application, between the write's
-   read-back and the next `icacls`, and the application would not have noticed until its next
-   start. (That particular ACE was an artifact of the sandboxed harness the measurement ran under —
-   it did not reproduce when `discovery::write` created the directory itself, which is what the
-   application does — but the *general* fact that a protected DACL can be widened after the fact is
-   real.)
+1. **The verdict was a snapshot taken when the API starts — fixed the same day.** `local_api_status`
+   reported what the write measured, and nothing re-read the DACL while the application ran. During
+   this run a trustee was added to a protected directory by something outside the application,
+   between the write's read-back and the next `icacls`, and the application would not have noticed
+   until its next start. (That particular ACE was an artifact of the sandboxed harness the
+   measurement ran under — it did not reproduce when `discovery::write` created the directory
+   itself, which is what the application does — but the *general* fact that a protected DACL can be
+   widened after the fact is real.)
+
+   Closed by KNEG-110: `discovery::inspect` is the tail of `write` extracted, and both settings
+   screens call it on every status request instead of reading a stored value.
 2. **The `windows-latest` CI job is still off for every trigger but `workflow_dispatch`**, so none
    of this Win32 code is compiled by CI, let alone run. The pure classifier is, because
    `file_acl::classify` takes plain Rust facts and the measured DACL above is a fixture in its test

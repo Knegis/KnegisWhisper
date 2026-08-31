@@ -176,10 +176,16 @@ The directory's verdict gates the file's (`file_acl::combine`). A perfectly rest
 a directory another user may delete children of can be deleted and replaced, and a client then
 reads an attacker's port and token — for this file, worse than being readable.
 
-**The verdict is a snapshot taken when the API starts, not a live reading.** `local_api_status`
-reports what the write measured; nothing re-checks the DACL while the application runs. Something
-with write access to the parent can add a trustee afterwards and the screen will not say so until
-the next start. Recorded as a known limitation rather than fixed here.
+**The verdict is read when it is asked for, not remembered from the write.** `local_api_status`
+and `cli_status` both call `discovery::inspect`, which re-reads the file's access list and the
+directory's on every call — two `stat` calls on Unix, two `GetNamedSecurityInfoW` calls on Windows.
+Something with write access to the parent that adds a trustee afterwards is reported the next time
+a screen asks, rather than at the next launch (KNEG-110).
+
+It **re-reads and never re-applies**, deliberately. Silently repairing an access list somebody
+changed on purpose is its own kind of surprise, and a status screen has to be able to describe a
+bad state without altering it. So the application will tell you the token file has been widened; it
+will not quietly narrow it again.
 
 **Corrected 2026-08-27:** this section used to go on to say that `Permissions::is_as_expected`
 returned `true` for `InheritedFromProfile` and so `Integrations > Local API` showed no warning and

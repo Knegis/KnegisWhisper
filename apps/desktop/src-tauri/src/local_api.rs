@@ -37,8 +37,19 @@ const BIND_ATTEMPTS: u32 = 5;
 pub struct LocalApiRuntime {
     db: Db,
     served: tokio::sync::Mutex<Option<Served>>,
-    /// The permissions the discovery file actually ended up with.
-    permissions: std::sync::RwLock<Option<Permissions>>,
+    /// Whether there is a discovery file on disk for this runtime.
+    ///
+    /// A flag and not the permissions themselves, which is the whole of
+    /// KNEG-110. This used to hold the `Permissions` that `discovery::write`
+    /// returned, and every screen rendered that value for as long as the
+    /// application ran -- so an access list widened after start was reported as
+    /// whatever it had been at start. One field carried two facts, "there is a
+    /// file" and "here is its state", and only the first of them stays true on
+    /// its own.
+    ///
+    /// The state is read live by [`Self::permissions_now`]. This says only
+    /// whether there is anything to read.
+    discovery_written: std::sync::atomic::AtomicBool,
     /// Where the discovery file goes.
     ///
     /// A field rather than a call to `discovery::default_path` at each use, so
@@ -71,7 +82,7 @@ impl LocalApiRuntime {
         Self {
             db,
             served: tokio::sync::Mutex::new(None),
-            permissions: std::sync::RwLock::new(None),
+            discovery_written: std::sync::atomic::AtomicBool::new(false),
             discovery_path,
         }
     }
@@ -167,9 +178,8 @@ impl LocalApiRuntime {
             );
         }
 
-        if let Ok(mut held) = self.permissions.write() {
-            *held = Some(permissions);
-        }
+        self.discovery_written
+            .store(true, std::sync::atomic::Ordering::Release);
         *held = Some(served);
 
         tracing::info!(port, "the local API is listening on loopback");
@@ -183,11 +193,38 @@ impl LocalApiRuntime {
         &self.discovery_path
     }
 
-    /// The discovery file's permissions as of the last successful write.
-    /// `None` once the API has stopped: the file is removed with it, so
-    /// there is nothing left to describe.
-    pub(crate) fn permissions_snapshot(&self) -> Option<Permissions> {
-        self.permissions.read().ok().and_then(|held| held.clone())
+    /// The discovery file's permissions, **read now** rather than remembered.
+    ///
+    /// `None` once the API has stopped: the file is removed with it, so there
+    /// is nothing left to describe. That is what the `Option` means, and it is
+    /// all it means -- the value inside it is never older than this call.
+    ///
+    /// This used to return the verdict `discovery::write` produced at start,
+    /// which is a claim about the past rendered as a claim about the present.
+    /// Anything able to write to `~/.knegiswhisper` can widen the access list
+    /// after that moment, and both settings screens went on reporting the old
+    /// answer until the next launch (KNEG-110).
+    ///
+    /// **Cheap enough not to cache.** Two `stat` calls on Unix, two
+    /// `GetNamedSecurityInfoW` calls on Windows, on a path already in the
+    /// filesystem cache. Nothing polls it on a timer: `useRefresh` fetches when
+    /// a screen mounts and when something asks it to, so a cache would add a
+    /// staleness window to fix a cost nobody is paying.
+    pub(crate) fn permissions_now(&self) -> Option<Permissions> {
+        self.is_running()
+            .then(|| discovery::inspect(&self.discovery_path))
+    }
+
+    /// Whether the discovery file is on disk, which is to say whether the API
+    /// is running.
+    ///
+    /// Its own method because two screens ask exactly this and used to ask it
+    /// as `permissions_snapshot().is_some()` -- reading a permission verdict to
+    /// learn something that is not about permissions. That idiom is what made
+    /// the staleness above easy to miss.
+    pub(crate) fn is_running(&self) -> bool {
+        self.discovery_written
+            .load(std::sync::atomic::Ordering::Acquire)
     }
 
     /// Stop the server and remove the discovery file.
@@ -204,9 +241,8 @@ impl LocalApiRuntime {
             tracing::warn!(error = %err, "could not remove the discovery file");
         }
 
-        if let Ok(mut permissions) = self.permissions.write() {
-            *permissions = None;
-        }
+        self.discovery_written
+            .store(false, std::sync::atomic::Ordering::Release);
     }
 }
 
@@ -364,7 +400,7 @@ pub async fn local_api_status(
         .unwrap_or(ENABLED_BY_DEFAULT);
 
     let port = api.served.lock().await.as_ref().map(Served::port);
-    let permissions = api.permissions.read().ok().and_then(|held| held.clone());
+    let permissions = api.permissions_now();
 
     Ok(LocalApiStatus {
         enabled,
@@ -499,7 +535,7 @@ mod tests {
         let (api, _db, _dir) = runtime().await;
         api.start().await.unwrap();
 
-        let permissions = api.permissions.read().unwrap().clone().unwrap();
+        let permissions = api.permissions_now().unwrap();
         let explanation = permissions.explain();
         if cfg!(unix) {
             assert!(explanation.contains("verified"), "{explanation}");
@@ -534,22 +570,89 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_permissions_snapshot_tracks_running_not_a_cached_start() {
+    async fn there_is_nothing_to_report_until_a_file_exists() {
+        // The `Option` means "is there a discovery file", and since KNEG-110
+        // that is *all* it means -- the value inside it is read fresh.
         let (api, _db, _dir) = runtime().await;
-        assert_eq!(api.permissions_snapshot(), None, "nothing has run yet");
+        assert_eq!(api.permissions_now(), None, "nothing has run yet");
+        assert!(!api.is_running());
 
         api.start().await.unwrap();
         assert!(
-            api.permissions_snapshot().is_some(),
+            api.permissions_now().is_some(),
             "a real file was just written"
         );
+        assert!(api.is_running());
 
         api.stop().await;
         assert_eq!(
-            api.permissions_snapshot(),
+            api.permissions_now(),
             None,
             "the file is gone, so there is nothing left to report"
         );
+        assert!(!api.is_running());
+    }
+
+    /// The regression KNEG-110 was opened for: a verdict stored at start and
+    /// shown forever.
+    ///
+    /// The file is removed behind the runtime's back, which is what anything
+    /// with write access to `~/.knegiswhisper` could do at any moment. Nothing
+    /// tells `LocalApiRuntime` it happened. A stored snapshot would go on
+    /// reporting the restriction it verified at start; a re-read cannot.
+    ///
+    /// Deleting rather than widening because that is the one way to change what
+    /// the access list says that works identically on every platform. The Unix
+    /// test below drives the case the issue actually described -- a file that
+    /// still exists and now grants more -- and runs on CI's Linux box, which is
+    /// the only place the whole of this file is compiled.
+    #[tokio::test]
+    async fn the_verdict_is_re_read_rather_than_remembered() {
+        let (api, _db, _dir) = runtime().await;
+        api.start().await.unwrap();
+
+        let at_start = api.permissions_now().expect("it is running");
+        std::fs::remove_file(&api.discovery_path).unwrap();
+        let now = api
+            .permissions_now()
+            .expect("still running as far as it knows");
+
+        assert_ne!(
+            at_start, now,
+            "the verdict is a re-read; a stored one could not have changed"
+        );
+        assert!(
+            !DiscoveryPermissions::from(&now).is_confirmed(),
+            "a file that is not there is not a verified restriction: {}",
+            now.explain()
+        );
+
+        api.stop().await;
+    }
+
+    /// The case the issue described, on the platform where it can be staged:
+    /// the file is still there and now grants more than it did.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_mode_widened_after_start_is_reported() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let (api, _db, _dir) = runtime().await;
+        api.start().await.unwrap();
+        assert!(matches!(
+            api.permissions_now(),
+            Some(Permissions::OwnerOnly)
+        ));
+
+        std::fs::set_permissions(&api.discovery_path, std::fs::Permissions::from_mode(0o644))
+            .unwrap();
+
+        match api.permissions_now() {
+            Some(Permissions::Wider { mode }) => assert_eq!(mode, 0o644),
+            other => panic!("a world-readable token file should be reported: {other:?}"),
+        }
+
+        api.stop().await;
     }
 
     /// Every `Permissions` variant, paired with what it must convert to.

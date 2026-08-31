@@ -179,15 +179,44 @@ pub fn write(path: &Path, port: u16, token: &LocalApiToken) -> Result<Permission
         source,
     })?;
 
-    // After the rename, against the path the caller is told about. The
-    // directory's verdict gates the file's: a perfectly restricted file in a
-    // directory another user may delete children of can be replaced, and a
-    // client then reads an attacker's port and token rather than ours.
+    // After the rename, against the path the caller is told about.
+    Ok(inspect(path))
+}
+
+/// What the discovery file and the directory holding it grant, right now.
+///
+/// Reads; never writes. Two `stat` calls on Unix, two `GetNamedSecurityInfoW`
+/// calls on Windows, and nothing is applied -- so this is safe to call on a
+/// path this process did not create and safe to call repeatedly.
+///
+/// **The directory's verdict gates the file's**, through
+/// [`file_acl::combine`]. A perfectly restricted file in a directory another
+/// user may delete children of can be replaced, and a client then reads an
+/// attacker's port and token rather than ours. For a file whose contents *are*
+/// the access control, being replaceable is worse than being readable.
+///
+/// Extracted from the tail of [`write`], which now ends by calling it, so the
+/// verdict a caller is handed after a write and the verdict it gets from a
+/// later re-read are produced by the same expression rather than by two that
+/// have to be kept in step. That mattered as soon as there was a second
+/// caller: `LocalApiRuntime` used to store this value at start and show it
+/// forever, so anything that widened the access list afterwards went
+/// unreported until the next launch (KNEG-110).
+///
+/// Deliberately **not** a re-apply. Silently repairing an access list somebody
+/// changed on purpose is its own kind of surprise, and it would make this
+/// function unusable for the thing it exists for -- a status screen must be
+/// able to describe a bad state without altering it.
+#[must_use]
+pub fn inspect(path: &Path) -> Permissions {
     let file = file_acl::verify(path, PathKind::File);
-    Ok(match parent {
+    match path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
         Some(parent) => file_acl::combine(&file_acl::verify(parent, PathKind::Directory), &file),
         None => file,
-    })
+    }
 }
 
 /// Read the discovery file, validating the token on the way in.
@@ -362,6 +391,51 @@ mod tests {
         let file = kw_security::file_acl::verify(&path, PathKind::File);
         let directory = kw_security::file_acl::verify(dir.path(), PathKind::Directory);
         assert_eq!(reported, kw_security::file_acl::combine(&directory, &file));
+
+        // And that `write` produces it by calling `inspect`, rather than by a
+        // second copy of the same expression that could drift from it.
+        assert_eq!(reported, inspect(&path));
+    }
+
+    #[test]
+    fn inspect_reads_and_never_writes() {
+        // It is called from a status screen, on a path this process may not
+        // have created. A function that repaired what it found would make a
+        // bad state impossible to describe without changing it.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(FILE_NAME);
+
+        let verdict = inspect(&path);
+
+        assert!(!path.exists(), "inspect created a file");
+        assert_eq!(
+            std::fs::read_dir(dir.path()).unwrap().count(),
+            0,
+            "inspect wrote something into the directory"
+        );
+        assert!(
+            !verdict.is_confirmed(),
+            "a file that is not there is not a verified restriction: {}",
+            verdict.explain()
+        );
+    }
+
+    #[test]
+    fn inspect_sees_a_change_write_could_not_have_known_about() {
+        // The whole of KNEG-110: the verdict `write` returns describes the
+        // moment it ran, and anything with write access to the directory can
+        // change the answer afterwards.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(FILE_NAME);
+        let at_write = write(&path, 8200, &token()).unwrap();
+
+        std::fs::remove_file(&path).unwrap();
+
+        assert_ne!(
+            at_write,
+            inspect(&path),
+            "inspect returned the same verdict for a file that is no longer there"
+        );
     }
 
     #[test]

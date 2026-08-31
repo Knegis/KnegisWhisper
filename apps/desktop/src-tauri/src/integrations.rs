@@ -59,12 +59,15 @@ pub struct CliStatus {
 /// application.
 #[tauri::command]
 pub fn cli_status(api: State<'_, Arc<LocalApiRuntime>>) -> CliStatus {
-    let permissions = api.permissions_snapshot();
+    // Read now, not remembered. `permissions_now` re-reads the access list on
+    // every call, so this screen describes the file as it is rather than as it
+    // was when the API started -- see KNEG-110.
+    let permissions = api.permissions_now();
     CliStatus {
         binary_name: cli_binary_name(),
         binary_location: locate_default(&cli_binary_name()),
         discovery_path: api.discovery_path().display().to_string(),
-        local_api_running: permissions.is_some(),
+        local_api_running: api.is_running(),
         discovery_permissions: permissions.as_ref().map(DiscoveryPermissions::from),
     }
 }
@@ -102,7 +105,7 @@ pub fn mcp_status(api: State<'_, Arc<LocalApiRuntime>>) -> McpStatus {
         binary_name,
         binary_location: location,
         command,
-        local_api_running: api.permissions_snapshot().is_some(),
+        local_api_running: api.is_running(),
     }
 }
 

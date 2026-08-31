@@ -129,15 +129,19 @@ maintained in place rather than appended to, because its purpose is to be curren
 > token user, `NT AUTHORITY\SYSTEM`, `BUILTIN\Administrators`), no `(I)` on any of them, on both
 > paths. **Deliberately not owner-only** — an administrator can take ownership anyway, so what a
 > confirmed Windows result claims is that the *unexpected* trustees are gone and inheritance is off,
-> which is narrower and true. Still open: **the verdict is a snapshot taken at start**, and nothing
-> re-reads the DACL while the application runs, so a trustee added afterwards will not show on
-> `Integrations > API` until the next start; and **CI compiles none of the Win32 code**, because the
+> which is narrower and true. The snapshot that used to sit behind that verdict is gone — since
+> KNEG-110 both screens re-read the access list on every status request. Still open: **CI compiles
+> none of the Win32 code**, because the
 > `windows-latest` job is off for every trigger but `workflow_dispatch`. The pure classifier is
 > covered on Linux by design — `file_acl::classify` takes plain Rust facts and the measured DACL is
 > a fixture in its test module. The three Win32 calls are covered by this repository's first two
 > `#[cfg(windows)]` tests and by `cargo run -p kw-security --example dacl_probe`, and by nothing
-> unattended. Both open items are filed — KNEG-110 for the snapshot, KNEG-111 for the CI gap. See
-> the 2026-08-31 KNEG-34 entry below and `docs/BENCH_CHECK.md` finding 2.
+> unattended. KNEG-111 tracks that gap. See the 2026-08-31 KNEG-34 entry below and
+> `docs/BENCH_CHECK.md` finding 2.
+>
+> **The DACL is now measured on the live file**, not only on test directories: after a normal
+> application start, `dacl_probe` reports `SE_DACL_PROTECTED` set and exactly three access entries,
+> none inherited. `Jobbdator\CodexSandboxUsers` is gone from the real token file.
 >
 > **Three smaller items recorded rather than chased**, each detailed in its own entry below: a
 > `kw-storage` test that failed once and passed on re-run during Task 8 (every other full-suite run
@@ -259,6 +263,80 @@ Unchanged from the Phases 1–4 entry, restated here so they are not buried:
   porting matrix. Upstream pins both by commit and verifies neither.
 - ~~**`nircmd`**~~ — **dropped**, as leaned towards: third-tier Windows paste fallback only, and
   `SendInput` works.
+
+---
+
+## 2026-08-31 (KNEG-110) — a field that carried two facts, and only one of them stayed true
+
+`LocalApiRuntime` stored the `Permissions` that `discovery::write` returned and showed that value
+for as long as the application ran. Both settings screens rendered a claim about the past as a claim
+about the present: anything with write access to `~/.knegiswhisper` could widen the access list a
+second after start, and neither screen would say so until the next launch.
+
+### The shape of the mistake is worth naming, because it is not "forgot to refresh"
+
+One field held two facts:
+
+```rust
+/// The permissions the discovery file actually ended up with.
+permissions: std::sync::RwLock<Option<Permissions>>,
+```
+
+The `Option` meant *is the API running* — the file is deleted on stop, so `None` is the honest
+answer then. The `Permissions` inside it meant *what the file grants*. Only the first of those stays
+true on its own. And the confusion was load-bearing rather than theoretical: `integrations.rs` asked
+`permissions_snapshot().is_some()` **twice**, reading a permission verdict to learn something that
+is not about permissions. An idiom like that is what makes a staleness bug easy to walk past.
+
+So the fix is not a refresh call bolted on. The field becomes `discovery_written: AtomicBool` —
+"there is a file" and nothing else — and the value is read when it is asked for. `is_running()` is
+its own method now, so the two questions are asked separately.
+
+### `discovery::inspect`, extracted rather than written
+
+`write` already ended with exactly the read this needed:
+
+```rust
+let file = file_acl::verify(path, PathKind::File);
+match parent { Some(p) => file_acl::combine(&file_acl::verify(p, PathKind::Directory), &file), … }
+```
+
+That expression is now `discovery::inspect`, and `write` ends by calling it. Extracting rather than
+re-writing matters here more than usual: the verdict a caller gets after a write and the verdict it
+gets from a later re-read have to *be* the same judgement, not two judgements that agree today. The
+directory's verdict gating the file's is the part that would have drifted first — it is the
+non-obvious half, and it is the half a second author would most likely leave out.
+
+`the_read_back_describes_the_file_the_caller_is_told_about` already reconstructed the expression
+independently and asserted `write` matched it. It keeps doing that, and gained one line asserting
+`inspect` matches too, so the test now pins both the value and the fact that there is one copy of it.
+
+### Read, never re-apply
+
+Deliberate, and the reason is written at the call site. Silently repairing an access list somebody
+changed on purpose is its own kind of surprise, and it would make the function unusable for what it
+exists for: a status screen has to be able to *describe* a bad state without altering it. So the
+application will tell you the token file has been widened. It will not quietly narrow it again.
+
+### No cache, and that is a measurement rather than an omission
+
+Two `stat` calls on Unix, two `GetNamedSecurityInfoW` calls on Windows, against a path already in
+the filesystem cache. The issue suggested a short cache might be wanted because this is a UI refresh
+path — but `useRefresh` has no timer. It fetches when a screen mounts and when something asks it to.
+A cache would have added a staleness window, in the function whose entire purpose is removing one,
+to fix a cost nobody is paying.
+
+### The regression test, and why it deletes rather than widens
+
+`the_verdict_is_re_read_rather_than_remembered` removes the discovery file behind the runtime's back
+and asserts the verdict changes. Deleting is the one way to change what an access list says that
+works identically on every platform, and this machine is Windows.
+
+The case the issue actually described — a file that still exists and now grants more — is
+`a_mode_widened_after_start_is_reported`, a `#[cfg(unix)]` test that chmods to `0644` and requires
+`Wider { mode: 0o644 }`. It does not run here. It runs on CI's `contracts` job, which is
+`ubuntu-latest` and is the only place the whole of this file is compiled — the same asymmetry
+KNEG-111 is about, pointing the other way for once.
 
 ---
 
@@ -548,9 +626,10 @@ sidecar over an odd access list would be the worse outcome. A PID is not a secre
 for **integrity**, and `pid.rs`'s own "a record another user could rewrite is a request to signal a
 PID of their choosing" is the sentence worth keeping.
 
-**Two things found and not fixed, both filed (KNEG-110, KNEG-111).** The verdict is a **snapshot taken when the API starts** —
-`local_api_status` reports what the write measured, and nothing re-reads the DACL while the
-application runs. During this run a trustee was added to a protected directory by something outside
+**Two things found and not fixed here, both filed (KNEG-110, KNEG-111); the first has since been
+fixed.** The verdict was a **snapshot taken when the API starts** —
+`local_api_status` reported what the write measured, and nothing re-read the DACL while the
+application ran. During this run a trustee was added to a protected directory by something outside
 the application, between the write's read-back and the next `icacls`; the application would not have
 noticed until its next start. (That specific ACE was an artifact of the sandboxed harness the
 measurement ran under, and did not reproduce when `discovery::write` created the directory itself,
