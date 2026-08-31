@@ -267,17 +267,79 @@ const whisper = Object.entries(R.whisperModels).map(([id, m]) => ({
   recommended: m.recommended === true,
 }));
 
+/**
+ * Integrity pins for the Parakeet archives, measured rather than declared.
+ *
+ * Project-supplied data with nowhere else to live. Upstream's baseline carries
+ * `expectedSizeBytes` for every *whisper* model, which is why those pass
+ * straight through below -- and nothing at all for `parakeetModels`, because
+ * upstream never pinned them. The baseline is a frozen record of what upstream
+ * had and must not gain fields we invented, so the pins belong here, the same
+ * reasoning `OWN_CREDENTIAL_SLOTS` is built on.
+ *
+ * `f17a5fd` added these three fields straight into `config/provider-registry.json`,
+ * which is *generated* by this script -- so running it deleted the security fix
+ * and `--check` failed on a clean tree. Putting them here is what makes the pin
+ * survive a regeneration.
+ *
+ * **`sha256` and `expectedSizeBytes` are measurements.** Both byte counts were
+ * confirmed against the live release assets' `content-length` on 2026-08-31, and
+ * `parakeet-unified`'s also matches the figure `docs/PLATFORM_SUPPORT.md`
+ * recorded from a real install. Never hand-write either: re-measure.
+ *
+ * **`maxExtractedSizeBytes` is a judgement.** It is a decompression-bomb
+ * ceiling, not a measurement -- the real extracted footprint of
+ * `parakeet-unified` was measured at ~663 MB, and 750 MiB gives that headroom
+ * without leaving the limit meaningless. Being wrong high costs protection;
+ * being wrong low rejects a legitimate install, so it errs high.
+ *
+ * A model with no entry here cannot be installed at all:
+ * `kw_transcription_core::sherpa_models::install` refuses with `MissingPin`
+ * rather than downloading something unauthenticated. That is why the two
+ * Nemotron streaming models are absent rather than pinned with placeholders --
+ * they are `reachable: false` and nothing can install them yet, and a
+ * placeholder digest would be a lie that only failed at the worst moment.
+ */
+const SHERPA_PINS = {
+  "parakeet-tdt-0.6b-v3": {
+    sha256: "5793d0fd397c5778d2cf2126994d58e9d56b1be7c04d13c7a15bb1b4eafb16bf",
+    expectedSizeBytes: 487_170_055,
+    maxExtractedSizeBytes: 800 * 1024 * 1024,
+  },
+  "parakeet-unified-en-0.6b": {
+    sha256: "99f63605b3a85a54c250c0869670a687b7d6598a47bf2421515e1f839a76e150",
+    expectedSizeBytes: 501_350_460,
+    maxExtractedSizeBytes: 750 * 1024 * 1024,
+  },
+};
+
 const sherpa = Object.entries(R.parakeetModels).map(([id, m]) => ({
   id,
   name: m.name,
   downloadUrl: m.downloadUrl,
   extractDir: m.extractDir,
   sizeMb: m.sizeMb ?? null,
+  // Nulls rather than omitted keys, so the shape does not change between a
+  // pinned model and an unpinned one -- the Rust reads `Option` for all three.
+  sha256: SHERPA_PINS[id]?.sha256 ?? null,
+  expectedSizeBytes: SHERPA_PINS[id]?.expectedSizeBytes ?? null,
+  maxExtractedSizeBytes: SHERPA_PINS[id]?.maxExtractedSizeBytes ?? null,
   language: m.language ?? null,
   supportedLanguages: m.supportedLanguages ?? null,
   // "online" means a streaming-capable runtime; "offline" is batch only.
   streaming: m.runtime === "online",
 }));
+
+// A pin for a model that does not exist is a typo that would otherwise go
+// unnoticed until somebody wondered why verification never ran.
+for (const id of Object.keys(SHERPA_PINS)) {
+  if (!(id in R.parakeetModels)) {
+    die(
+      `SHERPA_PINS has an entry for "${id}", which is not a model in the ` +
+        `baseline's parakeetModels. Fix the id, or remove the pin.`
+    );
+  }
+}
 
 // --- credentials -------------------------------------------------------------
 // Built last, because `usedFor` is derived from the lists above rather than

@@ -191,7 +191,17 @@ export interface SherpaModel {
   readonly name: string;
   readonly downloadUrl: string;
   readonly extractDir: string;
+  /** A display estimate of the *extracted* footprint, not the download. */
   readonly sizeMb: number | null;
+  /**
+   * The archive's pinned digest and exact compressed size, and a ceiling on
+   * what it may extract to. Null on the two Nemotron streaming models, which
+   * nothing can install: sherpa_models::install refuses an unpinned model
+   * rather than downloading something unauthenticated.
+   */
+  readonly sha256: string | null;
+  readonly expectedSizeBytes: number | null;
+  readonly maxExtractedSizeBytes: number | null;
   readonly language: string | null;
   readonly supportedLanguages: readonly string[] | null;
   /** True for the Nemotron streaming runtimes; Parakeet models are batch. */

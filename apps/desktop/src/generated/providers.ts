@@ -171,7 +171,17 @@ export interface SherpaModel {
   readonly name: string;
   readonly downloadUrl: string;
   readonly extractDir: string;
+  /** A display estimate of the *extracted* footprint, not the download. */
   readonly sizeMb: number | null;
+  /**
+   * The archive's pinned digest and exact compressed size, and a ceiling on
+   * what it may extract to. Null on the two Nemotron streaming models, which
+   * nothing can install: sherpa_models::install refuses an unpinned model
+   * rather than downloading something unauthenticated.
+   */
+  readonly sha256: string | null;
+  readonly expectedSizeBytes: number | null;
+  readonly maxExtractedSizeBytes: number | null;
   readonly language: string | null;
   readonly supportedLanguages: readonly string[] | null;
   /** True for the Nemotron streaming runtimes; Parakeet models are batch. */
@@ -1498,6 +1508,9 @@ export const PROVIDER_REGISTRY = {
         "downloadUrl": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-560ms-int8-2026-06-11.tar.bz2",
         "extractDir": "sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-560ms-int8-2026-06-11",
         "sizeMb": 650,
+        "sha256": null,
+        "expectedSizeBytes": null,
+        "maxExtractedSizeBytes": null,
         "language": "multilingual",
         "supportedLanguages": [
           "en",
@@ -1524,6 +1537,9 @@ export const PROVIDER_REGISTRY = {
         "downloadUrl": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemotron-speech-streaming-en-0.6b-560ms-int8-2026-04-25.tar.bz2",
         "extractDir": "sherpa-onnx-nemotron-speech-streaming-en-0.6b-560ms-int8-2026-04-25",
         "sizeMb": 632,
+        "sha256": null,
+        "expectedSizeBytes": null,
+        "maxExtractedSizeBytes": null,
         "language": "en",
         "supportedLanguages": [
           "en"
