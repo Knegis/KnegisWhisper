@@ -643,6 +643,31 @@ dead provider stops the recording, falls back immediately, or carries on with a 
    2 240 bytes adrift from their old declared size, so this is not hypothetical. If an install fails
    with "the download is N bytes and this model measures exactly M", the pin is stale, not the
    connection — re-run the ignored test and re-measure into `LOCAL_LLM_SIZES`.
+8. **Whether a newly digest-pinned whisper model installs through the screen — nobody has pressed
+   the button on any of the five.** Until 2026-08-31 only `tiny` carried a digest; the other five
+   were size-checked with a 5% tolerance. All six now carry a SHA-256 and an exact length measured
+   by downloading them, so `Settings > Transcription > Local` holds every one of them to
+   `kw_sidecar::integrity::verify` and the row's *Verified by* reads `digest` rather than `size`.
+   See [ENGINEERING_LOG.md](ENGINEERING_LOG.md) under 2026-08-31 (whisper pins).
+
+   **What is verified:** all six digests were reproduced from a real download by
+   `tools/model-pin/pin.mjs`, and `tiny`'s round trip — download, digest match, server start, real
+   transcription — is exercised end to end by `cargo test -p kw-transcription-core --test
+   local_dictation -- --ignored`. **What is not:** the other five have never been installed by any
+   route, through the screen or otherwise. `base` is the *recommended* model and the one a new user
+   will press first.
+
+   Press *Install* on `base` (142 MB) and confirm three things: the progress bar reaches
+   `Verifying`, the row afterwards says the check was a **digest** and not a size, and the model
+   then loads and transcribes. `small` (466 MB) is the cheapest second data point. `large` is 2.9 GB
+   and proves nothing the others do not.
+
+   **The thing to watch for is the same opposite failure as item 7, and it is sharper here.** These
+   six are fetched from HuggingFace `resolve/main`, a branch pointer, and the check is now a digest
+   rather than a 5% window — so *any* upstream re-upload, of any size, stops the install dead with
+   an integrity error. `node tools/model-pin/pin.mjs --verify` re-measures all eight model pins
+   (about 8 GB) and is what should be run before believing the download is at fault; the weekly
+   `pin-verify.yml` job runs it unattended. See KNEG-103, and KNEG-105 for this item.
 
 ---
 

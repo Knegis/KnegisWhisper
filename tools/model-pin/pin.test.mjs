@@ -4,13 +4,21 @@
  * Three things are worth asserting without a network: that the argument parser
  * agrees with the documented command lines, that hashing a file on disk
  * produces the digest and the size the rest of the world would produce for the
- * same bytes, and that the reader for the Rust `PINNED` table refuses to guess.
+ * same bytes, and that `pinnedTargets` finds every committed pin and no
+ * phantoms.
  *
- * The last is the one that earns its keep. `pinnedTargets` reads a Rust literal
- * from a Node tool, and the failure mode of a loose reader is not a crash — it
- * is `--verify` checking zero models and printing a pass. So the negative cases
- * are asserted: a table that moved, a table whose declared arity no longer
- * matches its rows.
+ * The last is the one that earns its keep, and the reason has not changed even
+ * though the reader has: the failure mode of a loose discovery step is not a
+ * crash, it is `--verify` checking zero models and printing a pass.
+ *
+ * **What used to be here.** Five tests covered `parseWhisperPins`, which read
+ * the `PINNED` array out of `crates/transcription-core/src/models.rs` — a
+ * table gone missing, a declared arity disagreeing with the rows, a digest
+ * that was not 64 hex characters. They were written as a tripwire for the day
+ * the whisper pins moved into the registry generator beside `SHERPA_PINS`.
+ * That day was 2026-08-31; the pins are `WHISPER_PINS` now, this tool reads
+ * one generated JSON document, and the tripwire went with the thing it was
+ * guarding. Retiring it is the outcome it existed for.
  *
  * Run: node --test tools/model-pin/pin.test.mjs
  */
@@ -22,7 +30,7 @@ import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { args, measureFile, parseWhisperPins, pinnedTargets } from "./pin.mjs";
+import { args, measureFile, pinnedTargets } from "./pin.mjs";
 
 /* -------------------------------------------------------------------- args */
 
@@ -118,101 +126,23 @@ test("measureFile streams a file larger than one chunk without changing the answ
   }
 });
 
-/* ------------------------------------------------------- the Rust PINNED table */
-
-const REAL_SHAPE = `
-const PINNED: [(&str, &str, u64); 1] = [(
-    "tiny",
-    "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21",
-    77_691_713,
-)];
-`;
-
-test("parseWhisperPins reads the committed table's shape", () => {
-  assert.deepEqual(parseWhisperPins(REAL_SHAPE), [
-    {
-      id: "tiny",
-      sha256: "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21",
-      sizeBytes: 77_691_713,
-    },
-  ]);
-});
-
-test("parseWhisperPins reads a multi-row table written on one line each", () => {
-  const source = `
-const PINNED: [(&str, &str, u64); 2] = [
-    ("tiny", "${"a".repeat(64)}", 77_691_713),
-    ("base", "${"b".repeat(64)}", 147_951_465),
-];
-`;
-  const rows = parseWhisperPins(source);
-  assert.deepEqual(
-    rows.map((r) => [r.id, r.sizeBytes]),
-    [
-      ["tiny", 77_691_713],
-      ["base", 147_951_465],
-    ]
-  );
-});
-
-test("parseWhisperPins lowercases a digest written in upper case", () => {
-  const source = `const PINNED: [(&str, &str, u64); 1] = [("tiny", "${"A".repeat(64)}", 1)];`;
-  assert.equal(parseWhisperPins(source)[0].sha256, "a".repeat(64));
-});
-
-test("parseWhisperPins throws when the table is gone", () => {
-  assert.throws(() => parseWhisperPins("// no table here\n"), /no `const PINNED/);
-});
-
-test("parseWhisperPins throws when the declared arity disagrees with the rows", () => {
-  // The checksum that matters: a table saying it holds three entries while
-  // only two parse means a row is not a plain tuple, and verifying the two
-  // that happened to parse would report a pass over an unchecked model.
-  const source = `
-const PINNED: [(&str, &str, u64); 3] = [
-    ("tiny", "${"a".repeat(64)}", 1),
-    ("base", "${"b".repeat(64)}", 2),
-    ("small", SMALL_DIGEST, 3),
-];
-`;
-  assert.throws(() => parseWhisperPins(source), /declares 3 entries and 2 parsed/);
-});
-
-test("parseWhisperPins rejects a digest that is not 64 hex characters", () => {
-  // Caught by the arity checksum rather than by a separate rule: a short
-  // digest fails to match the tuple pattern, the count comes up short, and
-  // the parse throws instead of returning a table missing a row.
-  const source = `const PINNED: [(&str, &str, u64); 1] = [("tiny", "deadbeef", 1)];`;
-  assert.throws(() => parseWhisperPins(source), /declares 1 entries and 0 parsed/);
-});
-
 /* --------------------------------------------------------- pinned targets */
 
-test("pinnedTargets joins the Rust pins to the registry for their URLs", () => {
-  const reg = {
+/** A registry shaped like the real one, with both families and both states. */
+function fixtureRegistry() {
+  return {
     localAsr: {
       whisper: [
         {
           id: "tiny",
           downloadUrl: "https://example.invalid/ggml-tiny.bin",
-          // Rounded, as the real registry's are. The target must not use it.
-          expectedSizeBytes: 78_000_000,
+          sha256: "a".repeat(64),
+          // The measured length. `sizeMb` beside it is the rounded display
+          // figure, and a target must never be built from that one.
+          sizeMb: 75,
+          expectedSizeBytes: 77_691_713,
         },
       ],
-      sherpa: [],
-    },
-  };
-  const targets = pinnedTargets(reg, REAL_SHAPE);
-  assert.equal(targets.length, 1);
-  assert.equal(targets[0].kind, "whisper");
-  assert.equal(targets[0].url, "https://example.invalid/ggml-tiny.bin");
-  assert.equal(targets[0].sizeBytes, 77_691_713);
-});
-
-test("pinnedTargets takes sherpa pins from the registry and skips the unpinned", () => {
-  const reg = {
-    localAsr: {
-      whisper: [{ id: "tiny", downloadUrl: "https://example.invalid/ggml-tiny.bin" }],
       sherpa: [
         {
           id: "pinned-model",
@@ -229,22 +159,53 @@ test("pinnedTargets takes sherpa pins from the registry and skips the unpinned",
       ],
     },
   };
-  const targets = pinnedTargets(reg, REAL_SHAPE);
+}
+
+test("pinnedTargets reads both families out of the registry", () => {
+  const targets = pinnedTargets(fixtureRegistry());
   assert.deepEqual(
     targets.map((t) => `${t.kind}/${t.id}`),
     ["whisper/tiny", "sherpa/pinned-model"]
   );
+  assert.equal(targets[0].url, "https://example.invalid/ggml-tiny.bin");
+  assert.equal(targets[0].sizeBytes, 77_691_713);
   assert.equal(targets[1].sizeBytes, 487_170_055);
 });
 
-test("the committed registry and PINNED table actually join", () => {
-  // Not a unit test of anything — an assertion that the two real files this
-  // tool reads still line up, so `--verify` would have something to measure.
-  // It is the check that would have caught the pins moving.
+test("pinnedTargets skips a model with no committed digest", () => {
+  // The two Nemotron streaming models are in the registry and pinned nowhere.
+  // Reporting them as unverifiable would be noise; there is nothing committed
+  // to disagree with.
+  const targets = pinnedTargets(fixtureRegistry());
+  assert.ok(!targets.some((t) => t.id === "unpinned-model"));
+});
+
+test("pinnedTargets lowercases a digest so the comparison cannot miss", () => {
+  const reg = fixtureRegistry();
+  reg.localAsr.whisper[0].sha256 = "A".repeat(64);
+  assert.equal(pinnedTargets(reg)[0].sha256, "a".repeat(64));
+});
+
+test("pinnedTargets survives a registry with no localAsr at all", () => {
+  assert.deepEqual(pinnedTargets({}), []);
+});
+
+test("the committed registry still carries pins for all six whisper models", () => {
+  // Not a unit test of anything — an assertion that the real file this tool
+  // reads still has something in it, so `--verify` would have something to
+  // measure. A pin dropped from WHISPER_PINS would otherwise make `--verify`
+  // quietly check five models and pass.
   const targets = pinnedTargets();
-  assert.ok(targets.length > 0, "no committed model pins were discovered");
+  const whisper = targets.filter((t) => t.kind === "whisper");
+  const sherpa = targets.filter((t) => t.kind === "sherpa");
+  assert.equal(whisper.length, 6, "every whisper model is pinned");
+  assert.equal(sherpa.length, 2, "both installable Parakeet archives are pinned");
   for (const t of targets) {
     assert.match(t.sha256, /^[0-9a-f]{64}$/, `${t.id} has no usable digest`);
     assert.ok(t.url?.startsWith("https://"), `${t.id} has no https URL`);
+    assert.ok(Number.isInteger(t.sizeBytes) && t.sizeBytes > 0, `${t.id} has no measured size`);
+    // A measured length, never a rounded one. Every figure the baseline
+    // declared was a round million; no real file is.
+    assert.notEqual(t.sizeBytes % 1_000_000, 0, `${t.id}'s size looks rounded`);
   }
 });

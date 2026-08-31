@@ -41,10 +41,20 @@ jobs:
       - name: Verify pinned sidecar targets
         run: node tools/sidecar-pin/pin.mjs --verify
 
-      # The same job for model files. Roughly 1 GB a week today, which is the
-      # price of noticing an upstream re-upload within seven days rather than
-      # when somebody's install fails -- and models are downloaded from
-      # HuggingFace `resolve/main`, a moving reference, so there is more to
-      # notice here than for the sidecars' dated release tags. See KNEG-103.
+      # The same job for model files. Roughly 8 GB a week: two Parakeet
+      # archives at about 500 MB each and, since 2026-08-31, all six whisper
+      # models (6.49 GiB) rather than `tiny` alone. It was 1 GB before that.
+      #
+      # The price is worth paying here more than anywhere else in this
+      # workflow. The sidecars hang off dated release tags; every one of these
+      # eight is fetched from a reference that moves -- HuggingFace
+      # `resolve/main`, a branch pointer, and k2-fsa's rolling `asr-models`
+      # release -- and the whisper pins are now digest-exact, so a re-upload
+      # stops an install dead instead of passing a size check. This job is what
+      # turns that into a Monday-morning failure somebody reads rather than a
+      # user's failed download. See KNEG-103.
+      #
+      # If the runtime becomes a problem, `--only <id>` narrows it; rotating
+      # subsets would be the cheap fix, at the cost of the seven-day bound.
       - name: Verify pinned model files
         run: node tools/model-pin/pin.mjs --verify

@@ -741,6 +741,55 @@ reaching it.
   has listed those as unread fields since the probe. That is now a gap with a
   known cure rather than an unexamined one.
 
+## Local ASR: the model pins, measured
+
+Measured on 2026-08-31, Windows 11 Pro 26200, by `node tools/model-pin/pin.mjs
+--url <downloadUrl> --id <id>` for each model in turn: the bytes were downloaded
+in full, hashed on the way through to a file, and the length read from `stat`
+after the stream closed. Never `content-length` — a truncated body agrees with
+its own header and disagrees with itself. 6,966,596,962 bytes total, 6.49 GiB,
+14 min 33 s of transfer.
+
+| model | file | SHA-256 | measured bytes |
+| --- | --- | --- | --- |
+| `tiny` | `ggml-tiny.bin` | `be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21` | 77,691,713 |
+| `base` | `ggml-base.bin` | `60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe` | 147,951,465 |
+| `small` | `ggml-small.bin` | `1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b` | 487,601,967 |
+| `medium` | `ggml-medium.bin` | `6c14d5adee5f86394037b4e4e8b59f1673b6cee10e3cf0b11bbdbee79c156208` | 1,533,763,059 |
+| `turbo` | `ggml-large-v3-turbo.bin` | `1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69` | 1,624,555,275 |
+| `large` | `ggml-large-v3.bin` | `64d182b440b98d5203c4f9bd541544d84c605196c4f7b845dfa11fb23594d1e2` | 3,095,033,483 |
+
+All served by `us.aws.cdn.hf.co`, which is where `huggingface.co/.../resolve/main`
+redirects. The pins live in `WHISPER_PINS` in
+`tools/integration-audit/generate-provider-registry.mjs` and reach the
+application as `WhisperModel::sha256` / `expected_size_bytes`.
+
+**`tiny` reproduced the pin that was already committed**, byte count and digest
+both, from a tool that had not seen it. That is what makes the other five
+trustworthy: the same run validated the instrument.
+
+Both Parakeet archives were re-measured the same way and the same day —
+487,170,055 bytes (464.6 MiB) and 501,350,460 bytes (478.1 MiB), digests
+unchanged. Before this, only their lengths had been checked, against
+`content-length`.
+
+**What this proves and what it does not.** Every one of these eight digests
+matches the bytes the host serves today. That is the check, run once; it says
+nothing about who built those bytes, and nothing about tomorrow — all six whisper
+URLs point at `resolve/main`, a *branch*, and the Parakeet archives sit in a
+rolling GitHub release. `node tools/model-pin/pin.mjs --verify` re-runs the whole
+set (about 8 GB) and `.github/workflows/pin-verify.yml` does it weekly, which is
+what turns an upstream re-upload into a failure somebody reads rather than a
+failed install. See KNEG-103.
+
+**Consequence for an install.** All six models are now held to
+`kw_sidecar::integrity::verify`, so the *Verified by* column reads `digest` for
+every row rather than `size` for five of them. `tiny` is the only one whose whole
+round trip has been driven — `cargo test -p kw-transcription-core --test
+local_dictation -- --ignored` downloads it, asserts `DigestMatched`, starts the
+server and transcribes. The other five have never been installed by any route;
+that is a by-hand item in [BENCH_CHECK.md](BENCH_CHECK.md) and KNEG-105.
+
 ## GPU acceleration
 
 | Backend | Windows | macOS | Linux |

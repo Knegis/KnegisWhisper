@@ -172,7 +172,22 @@ pub struct WhisperModel {
     pub name: String,
     pub file_name: String,
     pub download_url: String,
+    /// A display estimate, rounded. What the settings screen shows.
     pub size_mb: Option<f64>,
+    /// SHA-256 of the model file, measured from a real download.
+    ///
+    /// Non-null for all six shipped models. `Option` because a model added to
+    /// the registry before anybody downloads it has no digest, and
+    /// `models::integrity_for` degrades to a size check rather than pretending
+    /// otherwise.
+    pub sha256: Option<String>,
+    /// The model file's expected length.
+    ///
+    /// Where `sha256` is set, this is the exact count measured in the same
+    /// download — the number `kw_sidecar::integrity` is handed, so it has to be
+    /// bytes that were actually there. Where `sha256` is `None` it is upstream's
+    /// rounded declaration, and `models::integrity_for` holds it to a tolerance
+    /// instead. Never the rounded `size_mb` scaled.
     pub expected_size_bytes: Option<u64>,
     pub recommended: bool,
 }
