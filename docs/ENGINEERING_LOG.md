@@ -293,7 +293,7 @@ job beside the parity gate and the domain scanner.
 **It found the fourth instance on its first run.** `meetings.detect` — the allow and deny lists
 deciding which running applications count as a meeting — has a `#[tauri::command]` that writes it,
 registered in `generate_handler!`, with an IPC wrapper and a dev fixture, and **no screen calls
-it**. Everything except the control exists. Filed as KNEG-113 and declared `reachable: false` with
+it**. Everything except the control exists. Filed as KNEG-114 and declared `reachable: false` with
 a note, so the gate stays green while the gap stays visible — the same treatment the parity gate
 gives its unreachable integrations, and for the same reason: a backlog printed on success is read,
 and a red gate that is red every day is not.
@@ -829,7 +829,7 @@ refresh. Every later call failed outright rather than updating anything.
 
 But the gap it appeared to cover is real and now has nothing covering it: the installed whisper
 sidecar dates from 2026-08-25 and the pinned archive has since gained `bench.exe` and `command.exe`,
-so it is measurably behind. Filed as **KNEG-113** with the rename measurement, rather than solved
+so it is measurably behind. Filed as **KNEG-114** with the rename measurement, rather than solved
 here by a scheme whose cleanup story is unresolved — a displaced directory still cannot be deleted
 while the old executable runs, so it has to survive until a launch where nothing holds it.
 

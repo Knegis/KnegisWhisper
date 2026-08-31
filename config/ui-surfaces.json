@@ -42,7 +42,7 @@
       "surfaceId": "settings.meetings",
       "component": "apps/desktop/src/views/SettingsMeetings.tsx",
       "built": true,
-      "note": "Sets the meeting provider, the prompt-on-detect switch, the language hint and the key terms. It does not set meetings.detect -- the allow and deny lists deciding which applications count as a meeting have a registered command and no control here, which config/settings-keys.json declares unreachable (KNEG-113)."
+      "note": "Sets the meeting provider, the prompt-on-detect switch, the language hint and the key terms. It does not set meetings.detect -- the allow and deny lists deciding which applications count as a meeting have a registered command and no control here, which config/settings-keys.json declares unreachable (KNEG-114)."
     },
     "Dictation > Shortcuts": {
       "surfaceId": "dictation.shortcuts",
