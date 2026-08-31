@@ -278,6 +278,58 @@ Unchanged from the Phases 1–4 entry, restated here so they are not buried:
 
 ---
 
+## 2026-08-31 (KNEG-115) — measuring the cost without choosing the fix
+
+KNEG-115 says its own fix *"belongs to the repo owner rather than being chosen in passing"*, because
+it changes when the **default** hotkey fires. It also says what would inform that decision and had
+not been done: *"whether that is noticed depends on how quickly the overlay appears and whether the
+second press stops it — not measured, and worth measuring before deciding severity."*
+
+That half needs nobody's hands. Five tests now drive the shipped `ChordWatcher` with the exact
+key-down and key-up order a person produces:
+
+```
+Ctrl+Win+Left, once                       1 fire
+Ctrl+Win+Left, twice                      2 fires
+Ctrl+Win held, arrow tapped four times    1 fire
+Ctrl held, Win tapped twice               2 fires
+LeftControl+LeftSuper (a sided chord)     1 fire
+```
+
+### Two fires is the finding, not one
+
+`dictation::on_hotkey` calls `DictationRuntime::toggle`. So an even number of fires is not a pair
+that cancels out: **the first starts recording and the second stops it, transcribes what the
+microphone heard in between, and puts the text at the cursor through a synthetic paste.**
+
+A user on the default binding who switches virtual desktop, works for a while, and switches back has
+recorded that interval and had a transcript of it typed into whatever had focus. The issue said "a
+dictation starts on the way past". It is worse than that, and the difference is the difference
+between an annoyance and something that types your speech into a document.
+
+The toggle-and-paste half is read from `on_hotkey` and the inserter, not executed — the fire counts
+are measured, the consequence of a fire is traced. Both are labelled that way where they are
+written.
+
+### What bounds it, in both directions
+
+Holding Ctrl and Win while cycling four desktops is **one** toggle, not four: rule 2 refuses while a
+non-modifier is held, and the arrow going back down brings one with it. But releasing and
+re-pressing either modifier re-arms, so Control held with the Windows key tapped twice **is** two
+toggles.
+
+And a sided chord is no escape from this one. It is from AltGr, which is why KNEG-37 and this are
+separate issues — `LeftControl+LeftSuper` is a prefix of `Ctrl+Win+Left` exactly as the unsided
+chord is.
+
+### The fix is still not chosen
+
+Deliberately. All three options in the issue cost something real, and the one the issue calls honest
+— fire on release — adds the hold time to every dictation start, which is the latency
+`ModifierOnly` exists to avoid. That is a trade for the person who has to live with the default.
+
+---
+
 ## 2026-08-31 (KNEG-117) — the brute force was the weaker half, and the arithmetic says so
 
 KNEG-88 found one intermittent test in `kw-storage`, and its real content was that a credential

@@ -786,6 +786,150 @@ mod tests {
         assert!(watcher(&["Control+Super"]).is_watching());
     }
 
+    /* ------------------------------------ how often a prefix chord fires */
+
+    /// Drive a watcher with a real keystroke and count the fires.
+    ///
+    /// `true` is a key going down, `false` up. Written out rather than
+    /// abbreviated because the *order* is the whole subject: the fault
+    /// KNEG-115 describes is entirely about what is held at each instant.
+    fn fires(chord: &str, keystroke: &[(Key, bool)]) -> usize {
+        let mut watcher = ChordWatcher::new(vec![Chord::parse(chord).expect("a valid chord")]);
+        let mut count = 0;
+        for (key, down) in keystroke {
+            if *down {
+                if watcher.key_down(*key) != Fired::Nothing {
+                    count += 1;
+                }
+            } else {
+                watcher.key_up(*key);
+            }
+        }
+        count
+    }
+
+    /// The arrow key in `Ctrl+Win+Left`. Any non-modifier scan code will do.
+    const ARROW: Key = Key::Other(37);
+
+    /// Switching virtual desktop fires the default dictation chord once.
+    ///
+    /// **The measurement KNEG-115 asked for and did not have.** `Control+Super`
+    /// is the shipped default and `Ctrl+Win+Left` switches desktop on Windows,
+    /// so this is what a user on the default binding gets for an ordinary
+    /// keystroke they did not think of as a shortcut.
+    ///
+    /// Once, not twice. The chord completes when Super goes down and the arrow
+    /// arriving afterwards cannot un-fire it — rule 2 disqualifies a chord while
+    /// an ordinary key is held, which stops a *second* fire and does nothing
+    /// about the first.
+    #[test]
+    fn switching_virtual_desktop_fires_the_default_chord_once() {
+        assert_eq!(
+            fires(
+                "Control+Super",
+                &[
+                    (Key::LeftControl, true),
+                    (Key::LeftSuper, true),
+                    (ARROW, true),
+                    (ARROW, false),
+                    (Key::LeftSuper, false),
+                    (Key::LeftControl, false),
+                ]
+            ),
+            1
+        );
+    }
+
+    /// Two desktop switches are a start and a stop, and that is the cost.
+    ///
+    /// `dictation::on_hotkey` calls `DictationRuntime::toggle`, so an even
+    /// number of fires is not harmless — the first starts recording and the
+    /// second stops it, transcribes what the microphone heard in between, and
+    /// puts the text at the cursor through a synthetic paste.
+    ///
+    /// So a user who switches desktop, works, and switches back has recorded
+    /// the interval and had it typed into whatever had focus. That is a
+    /// materially worse consequence than "a dictation starts on the way past",
+    /// and it is why this is measured here rather than described.
+    #[test]
+    fn two_desktop_switches_are_a_start_and_a_stop() {
+        let once = [
+            (Key::LeftControl, true),
+            (Key::LeftSuper, true),
+            (ARROW, true),
+            (ARROW, false),
+            (Key::LeftSuper, false),
+            (Key::LeftControl, false),
+        ];
+        let twice: Vec<(Key, bool)> = once.iter().chain(once.iter()).copied().collect();
+        assert_eq!(fires("Control+Super", &twice), 2);
+    }
+
+    /// Tapping the arrow repeatedly without letting go of the chord fires once.
+    ///
+    /// Worth knowing, because it bounds the damage: cycling through four
+    /// desktops with Ctrl and Win held is one toggle, not four. The re-arm on
+    /// key-up is real, but the arrow going back down brings a non-modifier with
+    /// it and rule 2 refuses.
+    #[test]
+    fn holding_the_chord_through_several_taps_still_fires_once() {
+        let mut keystroke = vec![(Key::LeftControl, true), (Key::LeftSuper, true)];
+        for _ in 0..4 {
+            keystroke.push((ARROW, true));
+            keystroke.push((ARROW, false));
+        }
+        keystroke.push((Key::LeftSuper, false));
+        keystroke.push((Key::LeftControl, false));
+
+        assert_eq!(fires("Control+Super", &keystroke), 1);
+    }
+
+    /// Releasing and re-pressing one modifier of the chord fires again.
+    ///
+    /// The other bound on the damage, in the unhelpful direction. Rule 1 re-arms
+    /// on any key going up, so a user who keeps Control down and taps the
+    /// Windows key twice has toggled twice.
+    #[test]
+    fn re_pressing_one_modifier_of_the_chord_fires_again() {
+        assert_eq!(
+            fires(
+                "Control+Super",
+                &[
+                    (Key::LeftControl, true),
+                    (Key::LeftSuper, true),
+                    (Key::LeftSuper, false),
+                    (Key::LeftSuper, true),
+                    (Key::LeftControl, false),
+                    (Key::LeftSuper, false),
+                ]
+            ),
+            2
+        );
+    }
+
+    /// A sided chord is not an escape from this one.
+    ///
+    /// It is from AltGr (KNEG-37), which is why the two are separate issues.
+    /// `LeftControl+LeftSuper` is a prefix of `Ctrl+Win+Left` exactly as the
+    /// unsided chord is.
+    #[test]
+    fn naming_a_side_does_not_help_with_a_prefix() {
+        assert_eq!(
+            fires(
+                "LeftControl+LeftSuper",
+                &[
+                    (Key::LeftControl, true),
+                    (Key::LeftSuper, true),
+                    (ARROW, true),
+                    (ARROW, false),
+                    (Key::LeftSuper, false),
+                    (Key::LeftControl, false),
+                ]
+            ),
+            1
+        );
+    }
+
     /* --------------------------------------------------------- sided escapes */
 
     /// The escape has to be checked by the matcher, not asserted. `Control+Alt`
