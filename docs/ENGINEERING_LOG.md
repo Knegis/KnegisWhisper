@@ -101,6 +101,22 @@ maintained in place rather than appended to, because its purpose is to be curren
 > were downloaded and hashed to test the metadata before any of it was trusted. `node
 > tools/model-pin/pin.mjs --verify-stated` re-reads all 39 in 36 requests and runs weekly.
 >
+> **The Windows DACL gap is closed as of 2026-08-31 (KNEG-34), and the two things it did *not*
+> close are worth carrying.** `kw_security::file_acl` applies and reads back an explicit protected
+> access list at all four call sites — the discovery file, its directory, and both of
+> `kw_sidecar::pid`'s. Measured with `icacls` from outside the process: three trustees (the process's
+> token user, `NT AUTHORITY\SYSTEM`, `BUILTIN\Administrators`), no `(I)` on any of them, on both
+> paths. **Deliberately not owner-only** — an administrator can take ownership anyway, so what a
+> confirmed Windows result claims is that the *unexpected* trustees are gone and inheritance is off,
+> which is narrower and true. Still open: **the verdict is a snapshot taken at start**, and nothing
+> re-reads the DACL while the application runs, so a trustee added afterwards will not show on
+> `Integrations > API` until the next start; and **CI compiles none of the Win32 code**, because the
+> `windows-latest` job is off for every trigger but `workflow_dispatch`. The pure classifier is
+> covered on Linux by design — `file_acl::classify` takes plain Rust facts and the measured DACL is
+> a fixture in its test module. The three Win32 calls are covered by this repository's first two
+> `#[cfg(windows)]` tests and by `cargo run -p kw-security --example dacl_probe`, and by nothing
+> unattended. See the 2026-08-31 KNEG-34 entry below and `docs/BENCH_CHECK.md` finding 2.
+>
 > **Three smaller items recorded rather than chased**, each detailed in its own entry below: a
 > `kw-storage` test that failed once and passed on re-run during Task 8 (every other full-suite run
 > this session was clean, so intermittent rather than new); `apps/desktop/src-tauri/src/meeting.rs`
@@ -221,6 +237,110 @@ Unchanged from the Phases 1–4 entry, restated here so they are not buried:
   porting matrix. Upstream pins both by commit and verifies neither.
 - ~~**`nircmd`**~~ — **dropped**, as leaned towards: third-tier Windows paste fallback only, and
   `SendInput` works.
+
+---
+
+## 2026-08-31 (KNEG-34) — the token file finally gets a DACL, and the read-back moves
+
+`discovery::restrict_file` was a no-op under `cfg(not(unix))`, so the local API's bearer token sat
+in a file with whatever ACL the profile directory carried. Measured three times on the same machine
+across five days — 2026-08-26, 2026-08-31, and again immediately before the fix landed — and
+identical every time: two trustees with Modify who were neither the user nor administrators, every
+entry inherited, `DC` (delete-child) on both of them so the file could also be deleted and replaced.
+A pass on 2026-08-27 had fixed only the *reporting* of that gap. This is the gap.
+
+The reasoning is more interesting than the outcome, which is three `icacls` lines.
+
+**Owner + SYSTEM + Administrators, not owner-only.** The obvious target is a DACL granting only the
+user. It is the wrong one. An administrator can take ownership of any object and re-grant themselves
+anything, so excluding them costs backup and repair tooling real breakage and buys a strictness that
+does not exist; and the project brief forbids attempting to bypass administrator controls in the
+first place. What was actually worth removing was the *unexpected* trustees and the inheritance that
+kept handing them down — which is exactly what the old code comment falsely claimed the inherited
+ACL already gave. So "confirmed" on Windows is a deliberately narrower claim than "confirmed" on
+Unix, and the settings label still says an administrator can read the token. Stating a smaller true
+thing beats stating a larger one that is not.
+
+**The grant comes from the process token, not from the object's owner.** `GetNamedSecurityInfoW`
+returns the owner in the same call, and using it is the obvious shortcut. On a machine whose policy
+makes `BUILTIN\Administrators` the owner of objects an elevated process creates, that shortcut
+produces a DACL listing Administrators and *not* the user — and a later non-elevated run cannot read
+its own file. Silent, and only on machines with that policy, which is the worst combination. So the
+grant is `OpenProcessToken`/`TokenUser`. The owner is still read back and still judged: an owner
+outside the three holds `WRITE_DAC` and can re-grant itself, so it counts as an extra trustee
+whether or not it has an entry of its own. On this machine the token user is `S-1-12-1-…`, an Azure
+AD SID rather than the `S-1-5-21-…` a hardcoded guess would have reached for.
+
+**The DACL survives the rename — measured, not reasoned.** `discovery::write` restricts a temporary
+and then `fs::rename`s it into place. The argument that this is safe (a move within one directory on
+one volume preserves the file object and its descriptor; inheritance is re-applied on a copy or a
+cross-volume move) is correct, and it was still only an argument. It is now a `#[cfg(windows)]` test
+and a probe run. **The read-back moved anyway**, to after the rename, because the old code verified
+`local-api.json.new` — a path that does not exist by the time the verdict reaches the caller. On
+Unix that verdict was true of the final file by an argument the code never made. That is the same
+class of defect one level down, inside the file written to avoid it.
+
+**The directory-before-file ordering is a real property, and it needed a second half.**
+`restrict_directory(parent)` runs before the temporary is created, so the temporary inherits a
+protected list and the token's bytes never touch disk under the loose one. Measured: a file created
+inside a protected directory does inherit exactly the three trustees — but *not* `SE_DACL_PROTECTED`,
+so it reports `StillInheriting` and would follow the directory if the directory changed. Hence the
+file is still restricted in its own right. And `fs::write` alone put the token's bytes on disk before
+anything narrowed the file, which is a real window on Unix too — a `0700` directory does not stop a
+`0644` file inside it. The temporary is now created empty, restricted, and only then written into.
+
+**The directory's verdict gates the file's.** A perfectly restricted file inside a directory another
+user may delete children of is not a restricted file: it can be deleted and replaced, and the CLI
+and MCP client then read an attacker's port and token. For a file whose contents *are* the access
+control, that is worse than being readable, not smaller. `file_acl::combine` is the pure function
+that says so, and a perfect file in a loose directory reports `DirectoryNotRestricted`.
+
+**Ten states, not four, and the count-not-names call.** The Windows read-back can fail in ways
+`Wider { mode }` cannot express — it is Unix-shaped and cannot carry a trustee — and collapsing them
+into `Unknown` would report something that was measured as something that was not. So five mismatch
+arms, each with its own sentence in `labels.ts`. `ExtraTrustees` carries a **count**, not names: the
+value crosses to TypeScript and onto a screen that ends up in screenshots and bug reports, and a
+trustee name is one of the machine's account and group names. The SIDs go to a `tracing::warn!`
+inside `verify` instead, and the label says where to look. `DaclFacts.dacl` is an `Option` because a
+NULL access list grants everyone everything while an empty one grants nobody anything, and code that
+conflates them reports the worst case as the best.
+
+**`is_confirmed()`'s line is checked versus unchecked, not strict versus lax.** The old doc comment
+argued the other one, and it had to be rewritten rather than extended: `OwnerAndAdministrators` lets
+administrators read the file and passes, because the list was read back entry by entry;
+`InheritedFromProfile` may well be perfectly restrictive and does not, because nothing looked.
+`kw_local_api::Permissions::is_as_expected()` — the helper whose "as restrictive as the platform
+allows" is the sentence that misled once and is recorded as a finding in three documents — was
+deleted. It had no non-test caller. There are now two `is_confirmed()` definitions, one per side of
+the IPC boundary, and two definitions of one line is the shape of the original defect, so
+`the_two_confirmed_decisions_cannot_drift_apart` walks every variant and requires them to agree.
+
+**The second false comment.** `kw_sidecar::pid`'s `restrict_file` claimed *"on Windows the file
+inherits the user profile's ACL, which already excludes other users"* — the same assertion as the
+one in `discovery.rs`, in a different crate, about the same profile directory, equally false. Two
+independent comments asserting an unverified fact about the same thing is the argument for one
+shared helper rather than two call sites that each get to believe something. The PID record's
+verdict is logged rather than reported to the user, and the comment says why: its worst case is a
+forged entry `crate::reap`'s command-line check already refuses to act on, so refusing to start a
+sidecar over an odd access list would be the worse outcome. A PID is not a secret — it is protected
+for **integrity**, and `pid.rs`'s own "a record another user could rewrite is a request to signal a
+PID of their choosing" is the sentence worth keeping.
+
+**Two things found and not fixed.** The verdict is a **snapshot taken when the API starts** —
+`local_api_status` reports what the write measured, and nothing re-reads the DACL while the
+application runs. During this run a trustee was added to a protected directory by something outside
+the application, between the write's read-back and the next `icacls`; the application would not have
+noticed until its next start. (That specific ACE was an artifact of the sandboxed harness the
+measurement ran under, and did not reproduce when `discovery::write` created the directory itself,
+which is what the application does — but the general fact is real.) And **CI never compiles any of
+this**: `.github/workflows/ci.yml`'s `contracts` job runs on `ubuntu-latest`, and the
+`windows-latest` matrix job is switched off for every trigger but `workflow_dispatch`. The pure
+classifier *is* covered there, deliberately — `file_acl::classify` takes plain Rust facts, and the
+measured DACL above is a fixture in its test module, so the regression test for a Windows exposure
+runs on a Linux box. The three Win32 calls are covered by two `#[cfg(windows)]` tests — the
+repository's first — and by `cargo run -p kw-security --example dacl_probe`, which verifies only
+when given a path so the real `~/.knegiswhisper` can be re-measured without the default being
+destructive.
 
 ---
 
