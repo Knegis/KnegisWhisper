@@ -652,6 +652,12 @@ honest answer and also the whole capability for that client -- Teams runs the ca
 **KNEG-94** (mic listener over `IAudioSessionManager2`), with a calendar cross-check noted as the
 possibly cheaper half.
 
+**Repeated on a second real Teams call, 2026-08-31**, with the same result and no offer window. Two
+independent calls is what turns "it did not fire that time" into a property of the mechanism, and it
+is the reason KNEG-58's Teams row is now closed as *cannot fire* rather than *unverified* -- a
+distinction worth having, because the two look identical from a bench run and only one of them is
+worth another attempt.
+
 **`openai-realtime` cannot connect at all: the beta API shape was retired.** Its first live use
 was closed on both sockets within milliseconds:
 
@@ -779,7 +785,22 @@ with a fourth `MeetingState` saying so.
    recording. Point it at a model with `KW_SHERPA_MODEL_DIR` and `KW_SHERPA_EXECUTABLE`.
    **Still uncovered:** real speech with hesitations, a recording long enough for the
    200-character backstop to fire, and any language other than English.
-6. **Meeting detection firing on a real call.**
+6. **Meeting detection firing on a real call — driven twice now, and it cannot fire for Teams.**
+   Not an open question any more, and not a defect either. Microsoft Teams, in a real call, on
+   2026-08-28 and again on 2026-08-31: no offer window either time. New Teams runs the call inside
+   `ms-teams.exe` and spawns no child process, so the process table shows exactly the same thing
+   during a call as it does with the client idle in the tray. `Settings > Meetings` says so in
+   words — *"open, but not detectably in a call, so recording is not offered for it"* — and
+   offering on "the client is open" would prompt at every Windows launch for anyone whose Teams
+   starts with the machine. **The ceiling is the mechanism, not the table**, so no process name
+   would fix it; KNEG-94 (a microphone-session listener over `IAudioSessionManager2`, which asks
+   whether anything is capturing rather than what is running) is the only thing that changes the
+   answer for this client.
+
+   **Still genuinely uncovered:** Zoom's `CptHost.exe` and Webex's `webexmta.exe`, the two in-call
+   names that were *written from knowledge rather than ported* and have never been seen to match
+   anything. Those two are what a real call on either client would settle, and neither has had one
+   (KNEG-58).
 7. **Whether a previously-uninstallable local LLM now installs through the screen — nobody has
    pressed the button.** Until 2026-08-31, eighteen of the thirty-five models in
    `Settings > Local models` downloaded in full and were then deleted, because their declared size
