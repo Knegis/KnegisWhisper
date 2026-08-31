@@ -288,12 +288,7 @@ async fn dispatch(client: &Client, command: &Command) -> Result<(Value, String),
 
         Command::History(History::Get { id }) => {
             let value = client.get(&format!("/v1/transcriptions/{id}")).await?;
-            let human = value
-                .get("data")
-                .and_then(|d| d.get("text"))
-                .and_then(Value::as_str)
-                .unwrap_or("no text in the reply")
-                .to_owned();
+            let human = render::transcript(&value);
             Ok((value, human))
         }
 

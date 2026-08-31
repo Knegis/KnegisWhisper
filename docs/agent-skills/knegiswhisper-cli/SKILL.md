@@ -50,6 +50,25 @@ knegiswhisper history forget-audio  <ID>
 `--limit` defaults to 20 wherever it appears. `history list --after ID`
 continues from a previous page.
 
+**`history list` has a `status` column, and a failed row explains itself** on a
+marked continuation line beneath it:
+
+```
+id  when                 status     provider  text
+19  2026-08-26 09:51:11  failed     -         -
+      ↳ provider returned 429
+```
+
+So `completed`, `failed` and `cancelled` are three answers rather than one, and
+a row with no text is never ambiguous between "it broke", "I cancelled it" and
+"the microphone heard nothing". Parse `--json` rather than this table if you are
+branching on it — the human form is free to change and nothing machine-readable
+is built on it.
+
+**`history get` prints the transcript and nothing else**, so it can be
+redirected to a file. A row with no transcript prints its status and reason
+instead of the blank line it used to.
+
 **`notes set` with no flags changes nothing and is refused** rather than
 reported as a success — the same rule the API applies to an empty patch, for the
 same reason: it is nearly always a mistyped flag.

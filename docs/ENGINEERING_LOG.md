@@ -270,6 +270,102 @@ Unchanged from the Phases 1–4 entry, restated here so they are not buried:
 
 ---
 
+## 2026-08-31 (KNEG-36) — the cheap fix would have destroyed the thing worth keeping
+
+`knegiswhisper history list` rendered `id, when, provider, text`. A failed dictation has neither a
+provider nor text, so it printed two dashes:
+
+```
+id  when                 provider  text
+19  2026-08-26 09:51:11  -         -
+```
+
+The API had the answer the whole time — `/v1/transcriptions/list` returns `status` and
+`errorMessage`, and the dashboard shows both. This was a renderer discarding what it was given.
+
+### The obvious fix is wrong, and one code path proves it
+
+Put the error message where the transcript would go. Four columns stay four, nothing widens, and the
+row reads `19 … - provider returned 429`. It took reading `Dictation::fail` to see why not:
+
+```rust
+let (text, raw, provider, model) = match recovered {
+    Some((text, raw, provider, model)) => (text, Some(raw), Some(provider), model),
+    None => (String::new(), None, None, None),
+};
+```
+
+A dictation that **transcribed correctly and then failed to paste** is recorded as `failed` with the
+recovered text *and* a provider *and* a reason. That branch exists because the words are the half
+worth keeping — its sibling comment says so outright: *"The text exists and only the paste failed,
+so the user must be able to…"*. Writing the error into that cell would have thrown away precisely
+what the recovery was added to save, and no test would have caught it, because no test had a
+recovered failure in it.
+
+So: **`status` becomes a column**, the transcript keeps its own, and the reason goes on a marked
+continuation line where it competes with neither.
+
+```
+id  when                 status     provider  text
+18  2026-08-26 09:50:02  completed  local     the quick brown fox jumps over the lazy dog
+19  2026-08-26 09:51:11  failed     -         -
+      ↳ provider returned 429
+20  2026-08-26 09:52:40  cancelled  -         -
+```
+
+`cancelled` came along at no cost, and is the second half of the same defect: it also had no
+provider and no text, so "I cancelled it", "it broke" and "the microphone heard nothing" were one
+indistinguishable row. Three statuses, three answers.
+
+### A note is not a column, and the reason is arithmetic
+
+An error message is present on a small minority of rows and long when present. A sixth column would
+be empty for almost every row and would push the transcript off an 80-column terminal for all of
+them to accommodate a few. A continuation line costs a line only where there is something to say.
+It is capped at 100 characters rather than the cells' 48, because a provider error is the one string
+here whose useful half is usually at the *end* — an HTTP status, a rate-limit reason — and cutting
+it at 48 keeps the boilerplate and drops the fact.
+
+One table renderer, not two: `rows` now delegates to `rows_noted` with a closure that never returns
+a note, so the four callers with nothing to add are untouched and the width arithmetic exists once.
+
+### `history get` had the same defect, worse, and is fixed differently
+
+It rendered `data.text` alone. For a failed row that is `""` — so the command exited zero and
+printed **a blank line**. Worse than two dashes: with `list` there is at least a row to notice.
+
+It is *not* fixed by printing a report, because printing the transcript alone is the command's job:
+`knegiswhisper history get 3 > note.txt` must write a file with nothing in it but the words, and
+`end_to_end.rs` pins that with `assert_eq!(stdout.trim(), "three")`. So it prints the transcript
+when there is one and the status and reason when there is not.
+
+**The limit that leaves, stated rather than discovered:** a recovered failure has both, and `get`
+prints only the transcript. The clean answer is the reason on stderr and the words on stdout, which
+needs `dispatch`'s `(Value, String)` to become a three-tuple across fifteen arms — too much churn
+for one line of output when `list` already shows that row in full. Written into the doc comment
+rather than left as an accident.
+
+### Proven by mutation, and by driving the real socket
+
+The renderer's own tests build JSON by hand, which proves the table *can* show a status and says
+nothing about whether the server sends one. So `end_to_end.rs` gained a case that records a real
+failed row, starts the real server, and runs the compiled binary — the two halves of the claim
+checked against each other rather than separately.
+
+Each part of the fix was then removed in turn to confirm a test breaks:
+
+```
+the status column removed      -> 2 tests fail
+the continuation line removed  -> 5 tests fail
+history get back to data.text  -> 2 tests fail
+```
+
+Not a redaction concern: the string is the one the dashboard already renders through
+`outcomeLabel`, and credentials live in `kw_security::Secret`, whose `Display` is `<redacted>`, so
+a key cannot reach an error message in the first place.
+
+---
+
 ## 2026-08-31 (KNEG-104) — the fourth instance, found by the gate written for the first three
 
 Three defects in this repository have had one shape, and each was found by a person reading a

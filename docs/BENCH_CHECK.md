@@ -216,17 +216,38 @@ the application has not locked itself out. Two further facts came out of the sam
    module. The three Win32 calls are covered by two `#[cfg(windows)]` tests and by
    `cargo run -p kw-security --example dacl_probe`, and by nothing that runs unattended.
 
-**3. `knegiswhisper history list` hides failures.** The table renders `id, when, provider, text`.
-A failed dictation has neither a provider nor text, so it prints as two dashes and says nothing —
-while `/v1/transcriptions/list` returns `"status": "failed"` and a precise `errorMessage`, which
-the dashboard does show. The information exists and the presentation layer discards it:
+**3. `knegiswhisper history list` hides failures.** Fixed 2026-08-31. The table rendered
+`id, when, provider, text`. A failed dictation has neither a provider nor text, so it printed as two
+dashes and said nothing — while `/v1/transcriptions/list` returns `"status": "failed"` and a precise
+`errorMessage`, which the dashboard does show. The information existed and the presentation layer
+discarded it:
 
 ```
 id  when                 provider  text
 19  2026-08-26 09:51:11  -         -
 ```
 
-Phase 6 is marked verified, and this is in it.
+Phase 6 is marked verified, and this was in it.
+
+`status` is now a column, and a row with a reason gets a marked continuation line under it:
+
+```
+id  when                 status     provider  text
+18  2026-08-26 09:50:02  completed  local     the quick brown fox jumps over the lazy dog
+19  2026-08-26 09:51:11  failed     -         -
+      ↳ provider returned 429
+20  2026-08-26 09:52:40  cancelled  -         -
+```
+
+**Why the reason is not simply written where the text would go**, which is the cheaper fix and the
+wrong one: `Dictation::fail` records a dictation that transcribed and *then* failed to paste with
+the recovered text as well as the reason, because the words are the half worth keeping. Putting the
+error in that cell would destroy exactly what the recovery exists for. `cancelled` came along free —
+it had the same two dashes and was equally indistinguishable from a dictation that heard nothing.
+
+**`history get` had the same defect, worse.** It rendered `data.text` alone, which for a failed row
+is `""` — so the command exited zero and printed a blank line. It now prints the transcript when
+there is one, keeping `history get 3 > note.txt` clean, and says what happened when there is not.
 
 ### Observed, worth knowing, not defects
 

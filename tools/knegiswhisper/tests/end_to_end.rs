@@ -367,6 +367,58 @@ async fn history_is_paged_and_a_recording_can_be_deleted_on_its_own() {
     harness.stop().await;
 }
 
+/// A failed dictation reaches the terminal as a failure (KNEG-36).
+///
+/// The renderer's own tests build the JSON by hand, which proves the table can
+/// show a status and a reason and says nothing about whether the server sends
+/// them. This drives the real `/v1/transcriptions/list` over a real socket, so
+/// the two halves of the claim -- the API has the information, the CLI shows it
+/// -- are checked against each other rather than separately.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_failed_dictation_is_visible_from_the_command_line() {
+    let db = Db::open_in_memory().await.unwrap();
+
+    transcriptions::record(
+        db.pool(),
+        &transcriptions::NewTranscription {
+            text: "the quick brown fox".to_owned(),
+            provider: Some("local".to_owned()),
+            ..Default::default()
+        },
+        transcriptions::Status::Completed,
+    )
+    .await
+    .unwrap();
+
+    // No provider and no text, which is what made this row two dashes.
+    let failed = transcriptions::record(
+        db.pool(),
+        &transcriptions::NewTranscription {
+            text: String::new(),
+            error_message: Some("provider returned 429".to_owned()),
+            ..Default::default()
+        },
+        transcriptions::Status::Failed,
+    )
+    .await
+    .unwrap();
+
+    let harness = Harness::with_db(db).await;
+
+    let listed = stdout(&harness.run(&["history", "list"]));
+    assert!(listed.contains("failed"), "{listed}");
+    assert!(listed.contains("provider returned 429"), "{listed}");
+    // The successful row is still a successful row, not collateral.
+    assert!(listed.contains("the quick brown fox"), "{listed}");
+
+    // And the single-row command no longer answers with a blank line.
+    let one = stdout(&harness.run(&["history", "get", &failed.to_string()]));
+    assert!(!one.trim().is_empty(), "an empty answer is the defect");
+    assert!(one.contains("provider returned 429"), "{one}");
+
+    harness.stop().await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn json_output_is_the_servers_answer_and_nothing_else() {
     // A script must be able to pipe this straight into a JSON parser, with no
