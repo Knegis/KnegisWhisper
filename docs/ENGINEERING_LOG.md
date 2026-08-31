@@ -166,12 +166,16 @@ badge or before the next merge to `main`.
 
 | Thing | State | What is missing |
 | --- | --- | --- |
-| Local transcription (Phase 2) | Reachable, unconfirmed by hand | The interface exists now: install and server commands, a route the user can point at the local model, and a hotkey that runs the session. What is missing is a person pressing that hotkey and watching text appear — see the by-hand check in `docs/PHASES_0_6_COMPLETION_PLAN.md`. Green tests are not that. |
-| Meeting transcription (Phase 4) | Contract only | The five WebSocket clients. `is_allowed` returns true only for a provider with a client, so nothing claims otherwise. Each needs real credentials against a live service to verify. |
-| Enterprise reasoning (Bedrock, Azure, Vertex) | `ShapeNotImplemented` | The three request shapes. They refuse honestly rather than falling back. |
-| `storage::import::from_openwhispr` | Works, no UI | Deliberately absent from `config/integration-manifest.json` — adding it before it is reachable would be exactly the unconfigurable-backend the parity gate exists to catch. Add both together. |
-| Local API and CLI (Phase 6) | Reachable, unconfirmed by hand | The application starts and stops the server now, off by default, with the discovery file's real permissions shown in settings. What is missing is the compiled CLI having been run against a running application by a person rather than by a test harness. |
-| Phases 5, 7–9 | Not started | Calendars, MCP, diarization + Qdrant, packaging. System audio and the meeting clients remain from Phase 4. |
+| Local transcription (Phase 2) | **Driven by hand** | Nothing. 2026-08-25: seven local transcriptions with the network off, text at the caret in Notepad and VS Code, the clipboard given back, focus never moving. `BENCH_CHECK.md`'s 2026-08-26 list still asks for the microphone leg, which contradicts that run and is tracked as KNEG-47 rather than resolved by preference. |
+| Meeting transcription (Phase 4) | Four clients written, one confirmed | OpenAI Realtime has met a live server; AssemblyAI, Deepgram and Corti are *believed* wire shapes with no key on any machine this project has touched (KNEG-53, KNEG-55-57). Tinfoil is declined on principle, not missing. A dead provider is reported at Stop and still silent mid-meeting (KNEG-95). |
+| Enterprise reasoning (Bedrock, Azure, Vertex) | `ShapeNotImplemented` | The three request shapes. They refuse honestly rather than falling back, and none has made a live call (KNEG-54). |
+| `storage::import::from_openwhispr` | Reachable | Nothing. `Notes > Upload` exposes it (KNEG-71), and it now refuses a path no file dialog returned (KNEG-80). Nobody has imported a real OpenWhispr database by hand (KNEG-90). |
+| Local API and CLI (Phase 6) | Reachable, exercised by hand | 2026-08-25: the compiled CLI read history out of a running application. The discovery file's permissions are re-read on every status request rather than remembered (KNEG-110), and on Windows carry an explicit protected DACL verified on the live file (KNEG-34). |
+| Calendars (Phase 5) | Built, never connected | `calendar-core`, loopback PKCE, `Integrations > Calendar`. No calendar code has answered a real request (KNEG-82); Apple Calendar is described and unimplemented (KNEG-81). |
+| MCP and the integration screens (Phase 7) | Built, never connected | Thirteen tools over stdio, plus both screens and the agent skills. No MCP client has ever driven it (KNEG-91). |
+| Media import (Phase 8) | Reachable | Subtitle export is verified end to end against the real server. Diarization and semantic search are not started (KNEG-73). Nobody has pressed *Import* on a real file (KNEG-90). |
+| Release (Phase 9) | Never run | The workflow exists, has never been dispatched, and no signing keypair exists (KNEG-43). |
+| Agent features (Phase 10) | Not started | Chat agent, voice agent, translation (KNEG-74). There is no chat screen; the local LLM's one consumer is dictation cleanup. |
 
 ### Claims that are unverified rather than verified
 
