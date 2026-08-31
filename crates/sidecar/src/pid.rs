@@ -14,6 +14,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use kw_security::file_acl::{self, PathKind};
 use serde::{Deserialize, Serialize};
 
 /// Subdirectory of the application data directory holding the records.
@@ -107,7 +108,7 @@ impl PidStore {
             path: self.dir.clone(),
             source,
         })?;
-        restrict_dir(&self.dir);
+        restrict(&self.dir, PathKind::Directory);
 
         let body = serde_json::to_string_pretty(record).map_err(|source| PidError::Write {
             path: path.clone(),
@@ -118,7 +119,7 @@ impl PidStore {
             path: path.clone(),
             source,
         })?;
-        restrict_file(&path);
+        restrict(&path, PathKind::File);
 
         Ok(())
     }
@@ -204,34 +205,38 @@ fn parse(path: &Path, body: &str) -> Result<PidRecord, PidError> {
     Ok(record)
 }
 
-/// Owner-only on Unix. A no-op elsewhere.
+/// Narrow who may write here, and log it if that did not happen.
 ///
-/// A PID is not a secret, so this is not protecting a credential — it keeps a
-/// file this application acts on out of reach of other local users, because a
-/// record another user could rewrite is a request to signal a PID of their
-/// choosing. On Windows the file inherits the user profile's ACL, which already
-/// excludes other users.
-fn restrict_file(path: &Path) {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
+/// A PID is not a secret, so this is not protecting a credential — it is
+/// protecting **integrity**. A record another user could rewrite is a request to
+/// signal a PID of their choosing, and `crate::reap` acts on what it reads.
+///
+/// This used to say *"on Windows the file inherits the user profile's ACL, which
+/// already excludes other users"*, and that is false on a real machine:
+/// `icacls` on `%USERPROFILE%\.knegiswhisper` found two trustees with Modify
+/// that were neither the user nor administrators, every entry inherited. The
+/// mechanism now comes from `kw_security::file_acl`, which applies an explicit
+/// protected list on Windows as well as `0600`/`0700` on Unix — and reads it
+/// back, so a claim like the old one cannot be made again without evidence.
+///
+/// The verdict is logged rather than returned. Unlike the discovery file, whose
+/// permissions *are* its access control and which therefore reports them to the
+/// user, a PID record's worst case is a stale or forged entry that
+/// `crate::reap`'s command-line check already refuses to act on. A sidecar that
+/// would not start because its PID directory has an odd access list would be a
+/// worse outcome than the exposure.
+fn restrict(path: &Path, kind: PathKind) {
+    if let Err(error) = file_acl::apply(path, kind) {
+        tracing::warn!(path = %path.display(), %error, "could not restrict the PID record");
+        return;
     }
-    #[cfg(not(unix))]
-    {
-        let _ = path;
-    }
-}
-
-fn restrict_dir(path: &Path) {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o700));
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = path;
+    let verdict = file_acl::verify(path, kind);
+    if !verdict.is_confirmed() {
+        tracing::warn!(
+            path = %path.display(),
+            permissions = %verdict.explain(),
+            "a PID record another local user could rewrite is a record that can name any process"
+        );
     }
 }
 
