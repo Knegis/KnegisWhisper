@@ -154,6 +154,7 @@ export interface DraftModel {
   readonly hfRepo: string;
   readonly fileName: string;
   readonly sizeBytes: number | null;
+  readonly sizeMeasured: boolean;
 }
 
 export interface LocalLlmModel {
@@ -162,6 +163,14 @@ export interface LocalLlmModel {
   readonly fileName: string;
   readonly hfRepo: string;
   readonly sizeBytes: number | null;
+  /**
+   * Whether \`sizeBytes\` was measured against the publisher or copied from
+   * upstream's declaration. Upstream declared a size for every model and was
+   * wrong about eighteen of them, so a non-null size is not on its own a
+   * trustworthy one; the installer holds a measured size to exact equality and
+   * a declared one to 5%.
+   */
+  readonly sizeMeasured: boolean;
   readonly quantization: string | null;
   readonly contextLength: number | null;
   readonly recommended: boolean;

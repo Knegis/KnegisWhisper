@@ -230,31 +230,159 @@ const enterprise = R.enterpriseProviders.map((p) => ({
 }));
 
 // --- local llama.cpp ---------------------------------------------------------
+
+/**
+ * Measured byte counts for the local-LLM GGUFs, replacing upstream's declared
+ * ones.
+ *
+ * Same reasoning as `SHERPA_PINS` below -- project-supplied data with nowhere
+ * else to live, because the baseline is a frozen record of what upstream had and
+ * must not gain fields we invented. The difference is that here the field
+ * already exists and upstream's value for it is *wrong*, so this table overrides
+ * rather than adds.
+ *
+ * **What was wrong.** Upstream derived `sizeBytes` from its own `size` label --
+ * a base-10 "GB" figure -- by multiplying by 2^30 instead of 10^9. Eighteen of
+ * the thirty-five models were therefore 6.7-7.9% larger than the file Hugging
+ * Face serves, and `download_gguf` deleted any finished download more than 5%
+ * from the declared size. Those eighteen could not be installed at all: 101 GB
+ * of successful downloads, thrown away on arrival. Over the eighteen,
+ * declared / measured averages 1.0738 and 2^30 / 10^9 is 1.073741824. The full
+ * arithmetic is in `docs/ENGINEERING_LOG.md`, 2026-08-31.
+ *
+ * **These are measurements, taken on 2026-08-31**, from the `x-linked-size`
+ * response header on an HTTP HEAD to
+ * `https://huggingface.co/{hfRepo}/resolve/main/{fileName}`. Hugging Face serves
+ * these through LFS, so that header carries the true object size while
+ * `content-length` describes the 302 that points at it. Four were cross-checked
+ * against `/api/models/{hfRepo}/tree/main`, which reports the same `lfs.size`.
+ *
+ * **They are not bytes on disk after a download**, which is the stronger
+ * standard `tools/sidecar-pin/pin.mjs` holds itself to and the reason that tool
+ * can also pin a SHA-256. The difference is a cost decision, not a preference:
+ * these 39 objects total 202 GB, and downloading all of them to confirm a length
+ * the publisher already states is not justified for a size pin. So read this
+ * table as "Hugging Face says the object is this long", never as "these bytes
+ * were seen" -- and do not add a `sha256` here on the strength of it. A digest
+ * belongs to bytes somebody actually hashed.
+ *
+ * A model here is held to its size *exactly* rather than within 5%; see
+ * `download_gguf` in `apps/desktop/src-tauri/src/local_llm.rs`. A model absent
+ * from this table keeps upstream's declared figure and the tolerance check, so
+ * adding a model without measuring it is degraded rather than broken.
+ *
+ * Never hand-write an entry: re-measure. The `#[ignore]`d
+ * `the_measured_sizes_still_match_hugging_face` test in `local_llm.rs` is that
+ * re-measurement, and it is what turns a silent upstream re-upload into a
+ * failure somebody sees.
+ */
+const LOCAL_LLM_SIZES = {
+  "qwen3.5-9b-q4_k_m": { sizeBytes: 6_169_341_984 },
+  "qwen3.5-4b-q4_k_m": { sizeBytes: 3_013_027_808 },
+  "qwen3.5-2b-q4_k_m": { sizeBytes: 1_396_198_496 },
+  "qwen3-8b-q4_k_m": { sizeBytes: 5_027_783_488 },
+  "qwen3-8b-q5_k_m": { sizeBytes: 5_851_112_224 },
+  "qwen3-4b-q4_k_m": { sizeBytes: 2_497_280_256 },
+  "qwen3-1.7b-q8_0": { sizeBytes: 1_834_426_016 },
+  "qwen3-32b-q4_k_m": { sizeBytes: 19_762_149_024 },
+  "qwen2.5-1.5b-instruct-q5_k_m": { sizeBytes: 1_285_494_304 },
+  "qwen2.5-3b-instruct-q5_k_m": { sizeBytes: 2_438_740_384 },
+  "qwen2.5-7b-instruct-q4_k_m": { sizeBytes: 4_683_074_240 },
+  "qwen2.5-7b-instruct-q5_k_m": { sizeBytes: 5_444_831_936 },
+  "mistral-nemo-12b-instruct-q4_k_m": { sizeBytes: 7_477_208_320 },
+  "mistral-7b-instruct-v0.3-q4_k_m": { sizeBytes: 4_372_812_000 },
+  "mistral-7b-instruct-v0.3-q5_k_m": { sizeBytes: 5_136_175_328 },
+  "llama-3.2-1b-instruct-q4_k_m": { sizeBytes: 807_694_464 },
+  "llama-3.2-3b-instruct-q4_k_m": { sizeBytes: 2_019_377_696 },
+  "llama-3.1-8b-instruct-q4_k_m": { sizeBytes: 4_920_739_232 },
+  "gpt-oss-20b-mxfp4": { sizeBytes: 12_109_566_624 },
+  "gemma-4-31b-it-q4_k_m": { sizeBytes: 19_598_489_952 },
+  "gemma-4-31b-it-qat-q4_0": {
+    sizeBytes: 17_651_001_568,
+    draftSizeBytes: 279_955_968,
+  },
+  "gemma-4-26b-a4b-it-q4_k_m": { sizeBytes: 17_035_039_872 },
+  "gemma-4-26b-a4b-it-qat-q4_0": {
+    sizeBytes: 14_439_363_584,
+    draftSizeBytes: 251_939_328,
+  },
+  "gemma-4-e4b-it-q4_k_m": { sizeBytes: 5_405_170_144 },
+  "gemma-4-e4b-it-qat-q4_0": {
+    sizeBytes: 5_154_941_280,
+    draftSizeBytes: 59_678_016,
+  },
+  "gemma-4-e2b-it-q4_k_m": { sizeBytes: 3_462_680_032 },
+  "gemma-4-e2b-it-qat-q4_0": {
+    sizeBytes: 3_349_516_256,
+    draftSizeBytes: 59_235_648,
+  },
+  "gemma-3-12b-it-q4_k_m": { sizeBytes: 7_300_575_264 },
+  "gemma-3-4b-it-q4_k_m": { sizeBytes: 2_489_758_112 },
+  "gemma-3-1b-it-q4_k_m": { sizeBytes: 806_058_496 },
+  "lfm2.5-1.2b-instruct-q4_k_m": { sizeBytes: 730_895_168 },
+  "lfm2.5-8b-a1b-q4_k_m": { sizeBytes: 5_155_564_768 },
+  "lfm2-2.6b-q4_k_m": { sizeBytes: 1_563_668_704 },
+  "lfm2.5-350m-q8_0": { sizeBytes: 379_217_632 },
+  "lfm2.5-230m-q8_0": { sizeBytes: 246_598_496 },
+};
+
 const localLlm = R.localProviders.map((p) => ({
   id: p.id,
   name: p.name,
   baseUrl: p.baseUrl ?? null,
-  models: p.models.map((m) => ({
-    id: m.id,
-    name: m.name,
-    fileName: m.fileName,
-    hfRepo: m.hfRepo,
-    sizeBytes: m.sizeBytes ?? null,
-    quantization: m.quantization ?? null,
-    contextLength: m.contextLength ?? null,
-    recommended: m.recommended === true,
-    supportsThinking: m.supportsThinking === true,
-    // Speculative-decoding drafter, present on the Gemma QAT models only.
-    draft:
-      m.draftHfRepo === undefined
-        ? null
-        : {
-            hfRepo: m.draftHfRepo,
-            fileName: m.draftFileName,
-            sizeBytes: m.draftSizeBytes ?? null,
-          },
-  })),
+  models: p.models.map((m) => {
+    const measured = LOCAL_LLM_SIZES[m.id];
+    return {
+      id: m.id,
+      name: m.name,
+      fileName: m.fileName,
+      hfRepo: m.hfRepo,
+      sizeBytes: measured?.sizeBytes ?? m.sizeBytes ?? null,
+      // Whether that number was measured against the publisher or copied from
+      // upstream's declaration. The installer reads it to decide between an
+      // exact comparison and a 5% tolerance, so it must not be inferred from
+      // `sizeBytes` being non-null -- upstream declared a size for every model
+      // and was wrong about eighteen of them.
+      sizeMeasured: measured?.sizeBytes !== undefined,
+      quantization: m.quantization ?? null,
+      contextLength: m.contextLength ?? null,
+      recommended: m.recommended === true,
+      supportsThinking: m.supportsThinking === true,
+      // Speculative-decoding drafter, present on the Gemma QAT models only.
+      draft:
+        m.draftHfRepo === undefined
+          ? null
+          : {
+              hfRepo: m.draftHfRepo,
+              fileName: m.draftFileName,
+              sizeBytes: measured?.draftSizeBytes ?? m.draftSizeBytes ?? null,
+              sizeMeasured: measured?.draftSizeBytes !== undefined,
+            },
+    };
+  }),
 }));
+
+// A pin for a model that does not exist is a typo that would otherwise go
+// unnoticed until somebody wondered why the size was never checked exactly --
+// the same failure mode SHERPA_PINS guards against, and the same guard.
+const LOCAL_LLM_BY_ID = new Map(
+  R.localProviders.flatMap((p) => p.models.map((m) => [m.id, m]))
+);
+for (const [id, pin] of Object.entries(LOCAL_LLM_SIZES)) {
+  const model = LOCAL_LLM_BY_ID.get(id);
+  if (!model) {
+    die(
+      `LOCAL_LLM_SIZES has an entry for "${id}", which is not a model in the ` +
+        `baseline's localProviders. Fix the id, or remove the pin.`
+    );
+  }
+  if (pin.draftSizeBytes !== undefined && model.draftHfRepo === undefined) {
+    die(
+      `LOCAL_LLM_SIZES pins a drafter size for "${id}", which has no drafter. ` +
+        `A measurement with nothing to check is a measurement of the wrong file.`
+    );
+  }
+}
 
 // --- local ASR ---------------------------------------------------------------
 const whisper = Object.entries(R.whisperModels).map(([id, m]) => ({

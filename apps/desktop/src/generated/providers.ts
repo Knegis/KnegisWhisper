@@ -134,6 +134,7 @@ export interface DraftModel {
   readonly hfRepo: string;
   readonly fileName: string;
   readonly sizeBytes: number | null;
+  readonly sizeMeasured: boolean;
 }
 
 export interface LocalLlmModel {
@@ -142,6 +143,14 @@ export interface LocalLlmModel {
   readonly fileName: string;
   readonly hfRepo: string;
   readonly sizeBytes: number | null;
+  /**
+   * Whether `sizeBytes` was measured against the publisher or copied from
+   * upstream's declaration. Upstream declared a size for every model and was
+   * wrong about eighteen of them, so a non-null size is not on its own a
+   * trustworthy one; the installer holds a measured size to exact equality and
+   * a declared one to 5%.
+   */
+  readonly sizeMeasured: boolean;
   readonly quantization: string | null;
   readonly contextLength: number | null;
   readonly recommended: boolean;
@@ -975,7 +984,8 @@ export const PROVIDER_REGISTRY = {
           "name": "Qwen3.5 9B",
           "fileName": "Qwen_Qwen3.5-9B-Q4_K_M.gguf",
           "hfRepo": "bartowski/Qwen_Qwen3.5-9B-GGUF",
-          "sizeBytes": 5889811552,
+          "sizeBytes": 6169341984,
+          "sizeMeasured": true,
           "quantization": "q4_k_m",
           "contextLength": 262144,
           "recommended": true,
@@ -987,7 +997,8 @@ export const PROVIDER_REGISTRY = {
           "name": "Qwen3.5 4B",
           "fileName": "Qwen_Qwen3.5-4B-Q4_K_M.gguf",
           "hfRepo": "bartowski/Qwen_Qwen3.5-4B-GGUF",
-          "sizeBytes": 2871743520,
+          "sizeBytes": 3013027808,
+          "sizeMeasured": true,
           "quantization": "q4_k_m",
           "contextLength": 262144,
           "recommended": false,
@@ -999,7 +1010,8 @@ export const PROVIDER_REGISTRY = {
           "name": "Qwen3.5 2B",
           "fileName": "Qwen_Qwen3.5-2B-Q4_K_M.gguf",
           "hfRepo": "bartowski/Qwen_Qwen3.5-2B-GGUF",
-          "sizeBytes": 1329766560,
+          "sizeBytes": 1396198496,
+          "sizeMeasured": true,
           "quantization": "q4_k_m",
           "contextLength": 262144,
           "recommended": false,
@@ -1011,7 +1023,8 @@ export const PROVIDER_REGISTRY = {
           "name": "Qwen3 8B",
           "fileName": "Qwen3-8B-Q4_K_M.gguf",
           "hfRepo": "Qwen/Qwen3-8B-GGUF",
-          "sizeBytes": 5402263552,
+          "sizeBytes": 5027783488,
+          "sizeMeasured": true,
           "quantization": "q4_k_m",
           "contextLength": 131072,
           "recommended": false,
@@ -1023,7 +1036,8 @@ export const PROVIDER_REGISTRY = {
           "name": "Qwen3 8B (Q5)",
           "fileName": "Qwen3-8B-Q5_K_M.gguf",
           "hfRepo": "Qwen/Qwen3-8B-GGUF",
-          "sizeBytes": 6281625600,
+          "sizeBytes": 5851112224,
+          "sizeMeasured": true,
           "quantization": "q5_k_m",
           "contextLength": 131072,
           "recommended": false,
@@ -1035,7 +1049,8 @@ export const PROVIDER_REGISTRY = {
           "name": "Qwen3 4B",
           "fileName": "Qwen3-4B-Q4_K_M.gguf",
           "hfRepo": "Qwen/Qwen3-4B-GGUF",
-          "sizeBytes": 2684354560,
+          "sizeBytes": 2497280256,
+          "sizeMeasured": true,
           "quantization": "q4_k_m",
           "contextLength": 131072,
           "recommended": false,
@@ -1047,7 +1062,8 @@ export const PROVIDER_REGISTRY = {
           "name": "Qwen3 1.7B",
           "fileName": "Qwen3-1.7B-Q8_0.gguf",
           "hfRepo": "Qwen/Qwen3-1.7B-GGUF",
-          "sizeBytes": 1965555712,
+          "sizeBytes": 1834426016,
+          "sizeMeasured": true,
           "quantization": "q8_0",
           "contextLength": 131072,
           "recommended": false,
@@ -1059,7 +1075,8 @@ export const PROVIDER_REGISTRY = {
           "name": "Qwen3 32B",
           "fileName": "Qwen3-32B-Q4_K_M.gguf",
           "hfRepo": "Qwen/Qwen3-32B-GGUF",
-          "sizeBytes": 21260251955,
+          "sizeBytes": 19762149024,
+          "sizeMeasured": true,
           "quantization": "q4_k_m",
           "contextLength": 131072,
           "recommended": false,
@@ -1071,7 +1088,8 @@ export const PROVIDER_REGISTRY = {
           "name": "Qwen2.5 1.5B",
           "fileName": "qwen2.5-1.5b-instruct-q5_k_m.gguf",
           "hfRepo": "Qwen/Qwen2.5-1.5B-Instruct-GGUF",
-          "sizeBytes": 1395864371,
+          "sizeBytes": 1285494304,
+          "sizeMeasured": true,
           "quantization": "q5_k_m",
           "contextLength": 32768,
           "recommended": false,
@@ -1083,7 +1101,8 @@ export const PROVIDER_REGISTRY = {
           "name": "Qwen2.5 3B",
           "fileName": "qwen2.5-3b-instruct-q5_k_m.gguf",
           "hfRepo": "Qwen/Qwen2.5-3B-Instruct-GGUF",
-          "sizeBytes": 2620055552,
+          "sizeBytes": 2438740384,
+          "sizeMeasured": true,
           "quantization": "q5_k_m",
           "contextLength": 32768,
           "recommended": false,
@@ -1095,7 +1114,8 @@ export const PROVIDER_REGISTRY = {
           "name": "Qwen2.5 7B",
           "fileName": "Qwen2.5-7B-Instruct-Q4_K_M.gguf",
           "hfRepo": "bartowski/Qwen2.5-7B-Instruct-GGUF",
-          "sizeBytes": 5025128858,
+          "sizeBytes": 4683074240,
+          "sizeMeasured": true,
           "quantization": "q4_k_m",
           "contextLength": 128000,
           "recommended": false,
@@ -1107,7 +1127,8 @@ export const PROVIDER_REGISTRY = {
           "name": "Qwen2.5 7B (Q5)",
           "fileName": "Qwen2.5-7B-Instruct-Q5_K_M.gguf",
           "hfRepo": "bartowski/Qwen2.5-7B-Instruct-GGUF",
-          "sizeBytes": 5841530470,
+          "sizeBytes": 5444831936,
+          "sizeMeasured": true,
           "quantization": "q5_k_m",
           "contextLength": 128000,
           "recommended": false,
@@ -1126,7 +1147,8 @@ export const PROVIDER_REGISTRY = {
           "name": "Mistral Nemo 12B",
           "fileName": "Mistral-Nemo-12B-Instruct.Q4_K_M.gguf",
           "hfRepo": "mradermacher/Mistral-Nemo-12B-Instruct-GGUF",
-          "sizeBytes": 8028321792,
+          "sizeBytes": 7477208320,
+          "sizeMeasured": true,
           "quantization": "q4_k_m",
           "contextLength": 131072,
           "recommended": true,
@@ -1138,7 +1160,8 @@ export const PROVIDER_REGISTRY = {
           "name": "Mistral 7B Instruct v0.3",
           "fileName": "Mistral-7B-Instruct-v0.3-Q4_K_M.gguf",
           "hfRepo": "bartowski/Mistral-7B-Instruct-v0.3-GGUF",
-          "sizeBytes": 4692635648,
+          "sizeBytes": 4372812000,
+          "sizeMeasured": true,
           "quantization": "q4_k_m",
           "contextLength": 32768,
           "recommended": false,
@@ -1150,7 +1173,8 @@ export const PROVIDER_REGISTRY = {
           "name": "Mistral 7B Instruct v0.3 (Q5)",
           "fileName": "Mistral-7B-Instruct-v0.3-Q5_K_M.gguf",
           "hfRepo": "bartowski/Mistral-7B-Instruct-v0.3-GGUF",
-          "sizeBytes": 5519900672,
+          "sizeBytes": 5136175328,
+          "sizeMeasured": true,
           "quantization": "q5_k_m",
           "contextLength": 32768,
           "recommended": false,
@@ -1169,7 +1193,8 @@ export const PROVIDER_REGISTRY = {
           "name": "Llama 3.2 1B",
           "fileName": "Llama-3.2-1B-Instruct-Q4_K_M.gguf",
           "hfRepo": "bartowski/Llama-3.2-1B-Instruct-GGUF",
-          "sizeBytes": 847249408,
+          "sizeBytes": 807694464,
+          "sizeMeasured": true,
           "quantization": "q4_k_m",
           "contextLength": 131072,
           "recommended": false,
@@ -1181,7 +1206,8 @@ export const PROVIDER_REGISTRY = {
           "name": "Llama 3.2 3B",
           "fileName": "Llama-3.2-3B-Instruct-Q4_K_M.gguf",
           "hfRepo": "bartowski/Llama-3.2-3B-Instruct-GGUF",
-          "sizeBytes": 2168958976,
+          "sizeBytes": 2019377696,
+          "sizeMeasured": true,
           "quantization": "q4_k_m",
           "contextLength": 131072,
           "recommended": true,
@@ -1193,7 +1219,8 @@ export const PROVIDER_REGISTRY = {
           "name": "Llama 3.1 8B",
           "fileName": "Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
           "hfRepo": "bartowski/Meta-Llama-3.1-8B-Instruct-GGUF",
-          "sizeBytes": 5282717696,
+          "sizeBytes": 4920739232,
+          "sizeMeasured": true,
           "quantization": "q4_k_m",
           "contextLength": 131072,
           "recommended": false,
@@ -1212,7 +1239,8 @@ export const PROVIDER_REGISTRY = {
           "name": "GPT-OSS 20B",
           "fileName": "gpt-oss-20b-MXFP4.gguf",
           "hfRepo": "ggml-org/gpt-oss-20b-GGUF",
-          "sizeBytes": 12999763968,
+          "sizeBytes": 12109566624,
+          "sizeMeasured": true,
           "quantization": "mxfp4",
           "contextLength": 128000,
           "recommended": true,
@@ -1231,7 +1259,8 @@ export const PROVIDER_REGISTRY = {
           "name": "Gemma 4 31B",
           "fileName": "google_gemma-4-31B-it-Q4_K_M.gguf",
           "hfRepo": "bartowski/google_gemma-4-31B-it-GGUF",
-          "sizeBytes": 19598487712,
+          "sizeBytes": 19598489952,
+          "sizeMeasured": true,
           "quantization": "q4_k_m",
           "contextLength": 262144,
           "recommended": false,
@@ -1244,6 +1273,7 @@ export const PROVIDER_REGISTRY = {
           "fileName": "gemma-4-31B_q4_0-it.gguf",
           "hfRepo": "google/gemma-4-31B-it-qat-q4_0-gguf",
           "sizeBytes": 17651001568,
+          "sizeMeasured": true,
           "quantization": "q4_0",
           "contextLength": 262144,
           "recommended": false,
@@ -1251,7 +1281,8 @@ export const PROVIDER_REGISTRY = {
           "draft": {
             "hfRepo": "unsloth/gemma-4-31B-it-qat-GGUF",
             "fileName": "mtp-gemma-4-31B-it.gguf",
-            "sizeBytes": 279955968
+            "sizeBytes": 279955968,
+            "sizeMeasured": true
           }
         },
         {
@@ -1259,7 +1290,8 @@ export const PROVIDER_REGISTRY = {
           "name": "Gemma 4 26B MoE",
           "fileName": "google_gemma-4-26B-A4B-it-Q4_K_M.gguf",
           "hfRepo": "bartowski/google_gemma-4-26B-A4B-it-GGUF",
-          "sizeBytes": 17035037632,
+          "sizeBytes": 17035039872,
+          "sizeMeasured": true,
           "quantization": "q4_k_m",
           "contextLength": 262144,
           "recommended": false,
@@ -1272,6 +1304,7 @@ export const PROVIDER_REGISTRY = {
           "fileName": "gemma-4-26B_q4_0-it.gguf",
           "hfRepo": "google/gemma-4-26B-A4B-it-qat-q4_0-gguf",
           "sizeBytes": 14439363584,
+          "sizeMeasured": true,
           "quantization": "q4_0",
           "contextLength": 262144,
           "recommended": false,
@@ -1279,7 +1312,8 @@ export const PROVIDER_REGISTRY = {
           "draft": {
             "hfRepo": "unsloth/gemma-4-26B-A4B-it-qat-GGUF",
             "fileName": "mtp-gemma-4-26B-A4B-it.gguf",
-            "sizeBytes": 251939328
+            "sizeBytes": 251939328,
+            "sizeMeasured": true
           }
         },
         {
@@ -1287,7 +1321,8 @@ export const PROVIDER_REGISTRY = {
           "name": "Gemma 4 E4B",
           "fileName": "google_gemma-4-E4B-it-Q4_K_M.gguf",
           "hfRepo": "bartowski/google_gemma-4-E4B-it-GGUF",
-          "sizeBytes": 5812137984,
+          "sizeBytes": 5405170144,
+          "sizeMeasured": true,
           "quantization": "q4_k_m",
           "contextLength": 262144,
           "recommended": false,
@@ -1300,6 +1335,7 @@ export const PROVIDER_REGISTRY = {
           "fileName": "gemma-4-E4B_q4_0-it.gguf",
           "hfRepo": "google/gemma-4-E4B-it-qat-q4_0-gguf",
           "sizeBytes": 5154941280,
+          "sizeMeasured": true,
           "quantization": "q4_0",
           "contextLength": 262144,
           "recommended": true,
@@ -1307,7 +1343,8 @@ export const PROVIDER_REGISTRY = {
           "draft": {
             "hfRepo": "unsloth/gemma-4-E4B-it-qat-GGUF",
             "fileName": "mtp-gemma-4-E4B-it.gguf",
-            "sizeBytes": 59678016
+            "sizeBytes": 59678016,
+            "sizeMeasured": true
           }
         },
         {
@@ -1315,7 +1352,8 @@ export const PROVIDER_REGISTRY = {
           "name": "Gemma 4 E2B",
           "fileName": "google_gemma-4-E2B-it-Q4_K_M.gguf",
           "hfRepo": "bartowski/google_gemma-4-E2B-it-GGUF",
-          "sizeBytes": 3711514624,
+          "sizeBytes": 3462680032,
+          "sizeMeasured": true,
           "quantization": "q4_k_m",
           "contextLength": 262144,
           "recommended": false,
@@ -1328,6 +1366,7 @@ export const PROVIDER_REGISTRY = {
           "fileName": "gemma-4-E2B_q4_0-it.gguf",
           "hfRepo": "google/gemma-4-E2B-it-qat-q4_0-gguf",
           "sizeBytes": 3349516256,
+          "sizeMeasured": true,
           "quantization": "q4_0",
           "contextLength": 262144,
           "recommended": false,
@@ -1335,7 +1374,8 @@ export const PROVIDER_REGISTRY = {
           "draft": {
             "hfRepo": "unsloth/gemma-4-E2B-it-qat-GGUF",
             "fileName": "mtp-gemma-4-E2B-it.gguf",
-            "sizeBytes": 59235648
+            "sizeBytes": 59235648,
+            "sizeMeasured": true
           }
         },
         {
@@ -1343,7 +1383,8 @@ export const PROVIDER_REGISTRY = {
           "name": "Gemma 3 12B",
           "fileName": "google_gemma-3-12b-it-Q4_K_M.gguf",
           "hfRepo": "bartowski/google_gemma-3-12b-it-GGUF",
-          "sizeBytes": 7847624704,
+          "sizeBytes": 7300575264,
+          "sizeMeasured": true,
           "quantization": "q4_k_m",
           "contextLength": 131072,
           "recommended": false,
@@ -1356,6 +1397,7 @@ export const PROVIDER_REGISTRY = {
           "fileName": "google_gemma-3-4b-it-Q4_K_M.gguf",
           "hfRepo": "bartowski/google_gemma-3-4b-it-GGUF",
           "sizeBytes": 2489758112,
+          "sizeMeasured": true,
           "quantization": "q4_k_m",
           "contextLength": 131072,
           "recommended": false,
@@ -1368,6 +1410,7 @@ export const PROVIDER_REGISTRY = {
           "fileName": "google_gemma-3-1b-it-Q4_K_M.gguf",
           "hfRepo": "bartowski/google_gemma-3-1b-it-GGUF",
           "sizeBytes": 806058496,
+          "sizeMeasured": true,
           "quantization": "q4_k_m",
           "contextLength": 32768,
           "recommended": false,
@@ -1387,6 +1430,7 @@ export const PROVIDER_REGISTRY = {
           "fileName": "LFM2.5-1.2B-Instruct-Q4_K_M.gguf",
           "hfRepo": "LiquidAI/LFM2.5-1.2B-Instruct-GGUF",
           "sizeBytes": 730895168,
+          "sizeMeasured": true,
           "quantization": "q4_k_m",
           "contextLength": 32768,
           "recommended": true,
@@ -1399,6 +1443,7 @@ export const PROVIDER_REGISTRY = {
           "fileName": "LFM2.5-8B-A1B-Q4_K_M.gguf",
           "hfRepo": "LiquidAI/LFM2.5-8B-A1B-GGUF",
           "sizeBytes": 5155564768,
+          "sizeMeasured": true,
           "quantization": "q4_k_m",
           "contextLength": 32768,
           "recommended": false,
@@ -1411,6 +1456,7 @@ export const PROVIDER_REGISTRY = {
           "fileName": "LFM2-2.6B-Q4_K_M.gguf",
           "hfRepo": "LiquidAI/LFM2-2.6B-GGUF",
           "sizeBytes": 1563668704,
+          "sizeMeasured": true,
           "quantization": "q4_k_m",
           "contextLength": 32768,
           "recommended": false,
@@ -1423,6 +1469,7 @@ export const PROVIDER_REGISTRY = {
           "fileName": "LFM2.5-350M-Q8_0.gguf",
           "hfRepo": "LiquidAI/LFM2.5-350M-GGUF",
           "sizeBytes": 379217632,
+          "sizeMeasured": true,
           "quantization": "q8_0",
           "contextLength": 32768,
           "recommended": false,
@@ -1435,6 +1482,7 @@ export const PROVIDER_REGISTRY = {
           "fileName": "LFM2.5-230M-Q8_0.gguf",
           "hfRepo": "LiquidAI/LFM2.5-230M-GGUF",
           "sizeBytes": 246598496,
+          "sizeMeasured": true,
           "quantization": "q8_0",
           "contextLength": 32768,
           "recommended": false,

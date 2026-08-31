@@ -550,7 +550,7 @@ pub async fn local_llm_install(
         &llm.policy,
         &gguf_url(&model.hf_repo, &model.file_name),
         &gguf_path(&model.file_name),
-        model.size_bytes,
+        SizeCheck::of(model.size_bytes, model.size_measured),
         &mut |written, total| {
             emit(LocalLlmProgress::Model {
                 id: model_id.clone(),
@@ -567,7 +567,7 @@ pub async fn local_llm_install(
             &llm.policy,
             &gguf_url(&draft.hf_repo, &draft.file_name),
             &gguf_path(&draft.file_name),
-            draft.size_bytes,
+            SizeCheck::of(draft.size_bytes, draft.size_measured),
             &mut |written, total| {
                 emit(LocalLlmProgress::Draft {
                     id: model_id.clone(),
@@ -583,18 +583,102 @@ pub async fn local_llm_install(
     Ok(())
 }
 
-/// Download one GGUF, verified by size where the registry declares one.
+/// How strictly a finished download is held to the length the registry carries.
+///
+/// Three states, because the registry's byte counts have three provenances and
+/// they are not equally trustworthy. `config/provider-registry.json` says which
+/// one each number is with a `sizeMeasured` flag; the measurements themselves
+/// are `LOCAL_LLM_SIZES` in
+/// `tools/integration-audit/generate-provider-registry.mjs`.
+///
+/// **Why exactness became safe.** Until the sizes were measured, every model was
+/// checked within 5%, and it had to be: upstream's figures were *derived* from a
+/// two-significant-figure "GB" label rather than observed, and eighteen of the
+/// thirty-five were 6.7–7.9% high because that base-10 label had been multiplied
+/// by 2^30 instead of 10^9. A tolerance is the right answer to a rounded number
+/// and the wrong answer to a measured one — it was wide enough to hide the
+/// defect and still not wide enough to install those eighteen, which downloaded
+/// in full and were deleted on arrival. Against a figure read from the
+/// publisher's own object size there is nothing left to round, so the file
+/// either has that many bytes or is not that file.
+///
+/// **What exactness costs.** A publisher who re-uploads a model — bartowski
+/// re-quantising against a newer llama.cpp, say — now fails the install loudly
+/// instead of passing silently. That is the trade taken deliberately: a silent
+/// pass means the user runs weights nobody in this project ever measured, and a
+/// loud failure means somebody re-runs the measurement. The `#[ignore]`d
+/// `the_measured_sizes_still_match_hugging_face` test below is how that gets
+/// noticed before a user meets it. Two models were already 2 240 bytes adrift
+/// from their declared size when this was measured, so the case is not
+/// hypothetical.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SizeCheck {
+    /// Measured against the publisher's own object size, so the download must
+    /// match it to the byte.
+    Exact(u64),
+    /// Upstream's declaration, never measured. Held to
+    /// [`kw_transcription_core::models::within_tolerance`]'s 5%, which is what
+    /// every model used to get. Reached only by a model added to the registry
+    /// without being measured.
+    Approximate(u64),
+    /// The registry carries no length. Nothing to check, and nothing is claimed.
+    Unknown,
+}
+
+impl SizeCheck {
+    /// Read the check out of a registry entry.
+    ///
+    /// A size flagged as measured but absent is read as [`Self::Unknown`] rather
+    /// than trusted: the generator cannot produce that pair, and if it ever did,
+    /// the safe reading of "measured, value missing" is that nothing is known.
+    fn of(size_bytes: Option<u64>, measured: bool) -> Self {
+        match (size_bytes, measured) {
+            (Some(bytes), true) => Self::Exact(bytes),
+            (Some(bytes), false) => Self::Approximate(bytes),
+            (None, _) => Self::Unknown,
+        }
+    }
+
+    /// Whether a finished download of `actual` bytes is the file that was asked
+    /// for, and if not, why — phrased in the terms the check was made in.
+    ///
+    /// "about 5 027 783 488" and "exactly 5 027 783 488" are different claims and
+    /// the message must not blur them. The first invites the reader to shrug at a
+    /// small difference; under [`Self::Exact`] there is no such thing as a small
+    /// difference.
+    fn verify(self, actual: u64) -> Result<(), String> {
+        match self {
+            Self::Exact(expected) if actual != expected => Err(format!(
+                "the download is {actual} bytes and this model measures exactly {expected}. \
+                 Nothing was installed."
+            )),
+            Self::Approximate(expected)
+                if !kw_transcription_core::models::within_tolerance(actual, expected) =>
+            {
+                Err(format!(
+                    "the download is {actual} bytes and the registry expects about {expected}. \
+                     Nothing was installed."
+                ))
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
+/// Download one GGUF, verified by size where the registry carries one.
 ///
 /// **Size, not digest.** The registry carries no SHA-256 for these files and
 /// inventing one from a download would pin whatever arrived rather than what the
 /// publisher built — a pin that verifies nothing while looking like it does. The
 /// honest position is that a GGUF is checked by length and the screen says so,
 /// exactly as `VerifiedBy::Size` already does for whisper models.
+///
+/// How strict that length check is, and why, is [`SizeCheck`].
 async fn download_gguf(
     policy: &NetworkPolicy,
     url: &str,
     destination: &std::path::Path,
-    expected_bytes: Option<u64>,
+    size: SizeCheck,
     progress: &mut (dyn FnMut(u64, Option<u64>) + Send),
 ) -> Result<(), String> {
     if destination.exists() {
@@ -615,17 +699,12 @@ async fn download_gguf(
         .await
         .map_err(|e| e.to_string())?;
 
-    if let Some(expected) = expected_bytes {
-        let actual = std::fs::metadata(&partial)
-            .map_err(|e| e.to_string())?
-            .len();
-        if !kw_transcription_core::models::within_tolerance(actual, expected) {
-            let _ = std::fs::remove_file(&partial);
-            return Err(format!(
-                "the download is {actual} bytes and the registry expects about {expected}. \
-                 Nothing was installed."
-            ));
-        }
+    let actual = std::fs::metadata(&partial)
+        .map_err(|e| e.to_string())?
+        .len();
+    if let Err(refusal) = size.verify(actual) {
+        let _ = std::fs::remove_file(&partial);
+        return Err(refusal);
     }
 
     std::fs::rename(&partial, destination).map_err(|e| e.to_string())
@@ -764,6 +843,195 @@ mod tests {
     #[test]
     fn an_untouched_endpoint_is_not_immediately_stale() {
         assert_eq!(LocalEndpoint::default().idle_for(), Duration::ZERO);
+    }
+
+    /// A measured size is held to the byte; a declared one is not.
+    ///
+    /// The third assertion is the defect, as arithmetic: a base-10 "5 GB" label
+    /// multiplied by 2^30 rather than 10^9 declares 6.9% more bytes than the file
+    /// has, which is outside the tolerance. Eighteen models were declared that
+    /// way, downloaded in full, and deleted on arrival.
+    #[test]
+    fn a_measured_size_is_held_to_the_byte_and_a_declared_one_to_five_percent() {
+        let bytes = 5_000_000_000_u64;
+
+        let measured = SizeCheck::of(Some(bytes), true);
+        assert!(measured.verify(bytes).is_ok());
+        assert!(measured.verify(bytes - 1).is_err());
+        assert!(measured.verify(bytes + 1).is_err());
+
+        let declared = SizeCheck::of(Some(bytes), false);
+        assert!(declared.verify(bytes - 1).is_ok());
+
+        let double_converted = SizeCheck::of(Some(5 * 1024 * 1024 * 1024), false);
+        assert!(double_converted.verify(bytes).is_err());
+
+        // A flag with no number behind it claims nothing.
+        assert_eq!(SizeCheck::of(None, true), SizeCheck::Unknown);
+        assert!(SizeCheck::Unknown.verify(1).is_ok());
+    }
+
+    /// Every registry entry the installer can download resolves to a real check.
+    ///
+    /// Two of the three states are acceptable — a measured size held to the byte,
+    /// a declared one held to 5% — and [`SizeCheck::Unknown`] is not: it means
+    /// several gigabytes are written into the model directory with nothing having
+    /// looked at them. It would take a registry that lost the field rather than a
+    /// model somebody forgot to measure, which is why it is asserted rather than
+    /// assumed.
+    ///
+    /// The second assertion is the weaker one on purpose. Every model and every
+    /// drafter is measured today; a new one added before it is measured is
+    /// *degraded*, not broken, and this is where that shows up. Resolve it by
+    /// measuring the model into `LOCAL_LLM_SIZES` — or, if it genuinely cannot be
+    /// measured, by naming it here and saying why.
+    #[test]
+    fn every_local_model_carries_a_size_the_installer_will_check() {
+        let registry = kw_provider_registry::registry().expect("registry");
+
+        let mut checks: Vec<(String, SizeCheck)> = Vec::new();
+        for provider in &registry.local_llm {
+            for model in &provider.models {
+                checks.push((
+                    model.id.clone(),
+                    SizeCheck::of(model.size_bytes, model.size_measured),
+                ));
+                if let Some(draft) = &model.draft {
+                    checks.push((
+                        format!("{} (drafter)", model.id),
+                        SizeCheck::of(draft.size_bytes, draft.size_measured),
+                    ));
+                }
+            }
+        }
+
+        assert!(
+            checks.len() >= 35,
+            "expected every registry model and drafter, got {}",
+            checks.len()
+        );
+
+        let unchecked: Vec<&str> = checks
+            .iter()
+            .filter(|(_, c)| *c == SizeCheck::Unknown)
+            .map(|(id, _)| id.as_str())
+            .collect();
+        assert!(
+            unchecked.is_empty(),
+            "these would install unverified: {unchecked:?}"
+        );
+
+        let unmeasured: Vec<&str> = checks
+            .iter()
+            .filter(|(_, c)| matches!(c, SizeCheck::Approximate(_)))
+            .map(|(id, _)| id.as_str())
+            .collect();
+        assert!(
+            unmeasured.is_empty(),
+            "these still ride on upstream's declared size, which was wrong for \
+             eighteen models: {unmeasured:?}. Measure them into LOCAL_LLM_SIZES in \
+             tools/integration-audit/generate-provider-registry.mjs."
+        );
+    }
+
+    /// Every committed size still matches the file Hugging Face serves.
+    ///
+    /// `#[ignore]`d because it reaches the network, but it downloads nothing:
+    /// one HEAD per object, no bodies, a few seconds in total. Run it:
+    ///
+    /// ```text
+    /// cargo test -p knegiswhisper local_llm -- --ignored --nocapture
+    /// ```
+    ///
+    /// This is the whole reason exact equality is safe to require. A committed
+    /// measurement rots the moment a publisher re-uploads, and a rotted one is
+    /// worse than a tolerance because it fails at the end of a twenty-gigabyte
+    /// download in front of a user. This is the same measurement the pins were
+    /// taken with, so a re-upload shows up here first.
+    ///
+    /// `x-linked-size` rather than `content-length`: Hugging Face serves these
+    /// through LFS and answers a `resolve/main` request with a 302 to a CDN, so
+    /// `content-length` describes the redirect while `x-linked-size` carries the
+    /// object. The fallback is used only on a 200, where there is no redirect for
+    /// `content-length` to be measuring.
+    #[tokio::test]
+    #[ignore = "sends one HEAD request per model to huggingface.co; run with --ignored"]
+    async fn the_measured_sizes_still_match_hugging_face() {
+        let registry = kw_provider_registry::registry().expect("registry");
+        let policy = NetworkPolicy::new().expect("the shared client builds");
+
+        let mut targets: Vec<(String, String, u64)> = Vec::new();
+        for provider in &registry.local_llm {
+            for model in &provider.models {
+                if let (Some(bytes), true) = (model.size_bytes, model.size_measured) {
+                    targets.push((
+                        model.id.clone(),
+                        gguf_url(&model.hf_repo, &model.file_name),
+                        bytes,
+                    ));
+                }
+                if let Some(draft) = &model.draft {
+                    if let (Some(bytes), true) = (draft.size_bytes, draft.size_measured) {
+                        targets.push((
+                            format!("{} (drafter)", model.id),
+                            gguf_url(&draft.hf_repo, &draft.file_name),
+                            bytes,
+                        ));
+                    }
+                }
+            }
+        }
+        assert!(
+            !targets.is_empty(),
+            "nothing is pinned, so nothing is checked"
+        );
+
+        let mut wrong: Vec<String> = Vec::new();
+        for (id, url, committed) in &targets {
+            let response = policy
+                .request(
+                    kw_network_policy::RequestPurpose::UserTriggeredModelDownload,
+                    reqwest::Method::HEAD,
+                    url,
+                )
+                .expect("the boundary allows huggingface.co")
+                .send()
+                .await
+                .expect("huggingface.co answers a HEAD");
+
+            let status = response.status();
+            let served = response
+                .headers()
+                .get("x-linked-size")
+                .or_else(|| {
+                    status
+                        .is_success()
+                        .then(|| response.headers().get(reqwest::header::CONTENT_LENGTH))
+                        .flatten()
+                })
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.parse::<u64>().ok());
+
+            match served {
+                Some(bytes) if bytes == *committed => {
+                    println!("{id}: {bytes} bytes, unchanged");
+                }
+                Some(bytes) => wrong.push(format!(
+                    "{id}: committed {committed}, served {bytes} (status {status})"
+                )),
+                None => wrong.push(format!(
+                    "{id}: no size header at all (status {status}) — the file may have moved"
+                )),
+            }
+        }
+
+        assert!(
+            wrong.is_empty(),
+            "{} of {} sizes have changed upstream; re-measure into LOCAL_LLM_SIZES:\n{}",
+            wrong.len(),
+            targets.len(),
+            wrong.join("\n")
+        );
     }
 
     /// The install progress states cross the boundary tagged and camelCased.

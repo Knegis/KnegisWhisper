@@ -238,7 +238,11 @@ Nothing here needs a developer. All of it is buttons, one sentence spoken aloud,
    that the tidied text comes back; nobody has read it.
 5. **Install a local LLM** under `Settings > Local models`, hold a chat, and leave it idle for five
    minutes to see it stop. Sizes reach 5.9 GB — the smallest is the point of the check, not the
-   largest.
+   largest. **Note, 2026-08-31:** the smallest models were never the broken ones. Eighteen of the
+   thirty-five had a declared size 6.7–7.9% off the real file and were deleted after downloading in
+   full; every model that matched was one of the small `lfm2*` or Gemma QAT builds. Doing this check
+   with `lfm2.5-230m-q8_0` would have proved nothing about the other eighteen — see item 7 under the
+   2026-08-28 round-two list.
 6. **Press `Control+Super`** once with the default restored, and watch what the Start menu does to
    focus while a dictation is running. The hook deliberately does not consume the keystroke, which
    is the right choice and has a consequence nobody has looked at.
@@ -612,6 +616,33 @@ dead provider stops the recording, falls back immediately, or carries on with a 
    **Still uncovered:** real speech with hesitations, a recording long enough for the
    200-character backstop to fire, and any language other than English.
 6. **Meeting detection firing on a real call.**
+7. **Whether a previously-uninstallable local LLM now installs through the screen — nobody has
+   pressed the button.** Until 2026-08-31, eighteen of the thirty-five models in
+   `Settings > Local models` downloaded in full and were then deleted, because their declared size
+   was a base-10 "GB" figure multiplied by 2^30 and `download_gguf` rejects anything more than 5%
+   from the declared length. All 39 objects are now measured from Hugging Face and held to **exact**
+   equality; the arithmetic and the evidence are in
+   [ENGINEERING_LOG.md](ENGINEERING_LOG.md) under 2026-08-31.
+
+   **What is verified:** the committed sizes match what Hugging Face serves — `cargo test -p
+   knegiswhisper local_llm -- --ignored` HEADs all 39 and passed on all 39 — and a unit test proves
+   every model resolves to a check rather than to "no size declared". **What is not:** no GGUF has
+   been downloaded through the application since the change. Press *Install (1.3 GB)* on
+   `qwen2.5-1.5b-instruct-q5_k_m` — the smallest of the eighteen and the worst offender of them, at
+   7.9% — and confirm the download renames into place instead of being deleted, that the row then
+   shows *Use this model*, and that pressing it starts a server that answers. **The size on the
+   button is itself part of the check:** it now reads the measured figure, so *Install (1.3 GB)*
+   where it used to say 1.4 GB is the fix visible on screen.
+
+   A drafter is a second progress bar after the first, and nobody has seen that either.
+   `gemma-4-e2b-it-qat-q4_0` is the cheapest way to reach it (3.3 GB plus a 59 MB drafter) — its
+   size was already correct, so it exercises the drafter path and not the fix.
+
+   **The thing to watch for is the opposite failure.** Exact equality means an upstream re-upload
+   now fails at the *end* of the download rather than passing quietly. Two Gemma models were already
+   2 240 bytes adrift from their old declared size, so this is not hypothetical. If an install fails
+   with "the download is N bytes and this model measures exactly M", the pin is stale, not the
+   connection — re-run the ignored test and re-measure into `LOCAL_LLM_SIZES`.
 
 ---
 
