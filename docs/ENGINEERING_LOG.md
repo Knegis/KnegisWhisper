@@ -274,6 +274,92 @@ Unchanged from the Phases 1–4 entry, restated here so they are not buried:
 
 ---
 
+## 2026-08-31 (KNEG-35) — one table, two readers, and a sentence with a hole in it
+
+`keys.rs` has expressed `RightControl+Super` since the hook was written — the headline capability
+of running a low-level hook at all, since no cross-platform shortcut API can see which side a
+modifier is on. No accelerator a user could type reached it. `hotkey::MODIFIERS` had nine unsided
+spellings, so `classify` read `RightControl` as *the key*:
+
+```
+     RightControl+Super -> Standard { accelerator: "RightControl+Super" }
+RightControl+RightShift -> Invalid { reason: "it names 2 non-modifier keys; a shortcut may have one" }
+```
+
+The first went to the system register, the one mechanism that cannot tell the sides apart. The
+second was refused with a message blaming the user's spelling for our own missing alias.
+
+### One table, because two lists put both failures one edit away
+
+The fix is not "add the sided spellings to `MODIFIERS`". Two lists of the same set drift, and they
+drift in two directions with different symptoms: a spelling `classify` accepts and `Chord::parse`
+does not becomes a shortcut the screen calls hookable and `KeyHook::install` then refuses; a
+spelling `Chord::parse` accepts and `classify` does not is this issue.
+
+So `keys::SIDED_MODIFIERS` is the one table, `Chord::parse` reads it, and `classify` reads it
+through `keys::sided_modifier`. The unsided list stays separate and stays in `hotkey.rs`, because it
+answers to something different — the shortcut plugin. That is why `Win` is absent from it and
+present in the chord parser: the plugin rejects `Win`, and being stricter than the platform is a
+different mistake from being looser.
+
+`every_sided_spelling_the_chord_parser_takes_is_a_modifier_here` is what makes the shared table more
+than decoration. A constant only one side actually consults looks identical from the outside.
+
+### The third state nobody had a name for
+
+Adding sided spellings as modifiers creates a case that did not exist before: `RightControl+D`. It
+would have fallen through to `Standard` and been handed to the register, which cannot see the side —
+strictly worse than the old behaviour, because the old behaviour at least refused.
+
+Neither mechanism can take it. The register is the only thing that handles an ordinary key and
+cannot see sides; the hook is the only thing that can see sides and `Chord::parse` refuses anything
+that is not a modifier. So it is `Invalid`, with **both** ways out named — drop the key, or drop the
+side — and a test asserting the classifier accepts each of them. A refusal that suggests something
+the same field then rejects is the defect this issue mostly was.
+
+The same reasoning removed a piece of advice: `explain()` told a user without the hook to *"add a
+regular key, for example {accelerator}+Space"*. For a sided chord that produces an `Invalid`. It now
+says there is no accelerator to fall back to, because there is not one.
+
+### The caution can finally name a remedy, and it is checked rather than asserted
+
+KNEG-37's AltGr warning deliberately named no remedy: a sided chord avoids AltGr completely, and
+the settings field rejected every sided spelling. It accepts them now.
+
+`keys::sided_escape` builds the suggestion from the chord that actually collided and then **passes
+it back through `altgr_collision`** — the same matcher that produced the warning. AltGr being left
+Control and right Alt specifically is a claim about when a chord fires, and this module's standing
+rule is that such claims are answered by running the watcher rather than by reasoning about names.
+If the candidate still collides, no remedy is named. Mutating `RightControl` to `LeftControl` in the
+builder — the AltGr side — makes the re-check reject it and the test fail, which is what says the
+re-check is load-bearing rather than ceremony.
+
+### The hole in the sentence
+
+Both AltGr cautions had shipped like this:
+
+```
+This layout types '@'                      with Control and Alt together, and Windows sends
+```
+
+Line continuations in the Rust string literals had lost their backslashes in an earlier edit, so the
+source indentation became twenty spaces in the middle of a sentence on screen. `cargo fmt` does not
+look inside a string literal, and the tests asserted `reason.contains("AltGr")`, so nothing caught
+it — it was found by printing the text and reading it, which is the only thing that ever finds
+this class.
+
+`no_caution_has_a_hole_where_a_line_continuation_should_be` asserts no caution reason contains a run
+of two spaces. Cheap, and it fails the moment a continuation is lost again.
+
+### Not closed by this
+
+A person typing a sided chord into `Dictation > Shortcuts` and watching it fire. The hook path is
+measured — `keyhook_probe` injects `RightControl+RightShift` and sees two fires for two presses —
+and the classifier is now measured, but the two have never been driven end to end from the screen.
+That is KNEG-47's territory.
+
+---
+
 ## 2026-08-31 (KNEG-114) — the control the gate asked for, and the hole the gate turned out to have
 
 `meetings.detect` holds the allow and deny lists deciding which running applications count as a
@@ -598,8 +684,10 @@ leaving it out is a real gap rather than a tidy boundary — stated rather than 
 
 **A remedy.** A sided chord avoids AltGr entirely, because AltGr is *left* Control and *right* Alt
 specifically: `LeftControl+LeftAlt` and `RightControl+Alt` both come back unaffected, and
-`keys::Chord` already parses them. No settings field accepts a sided spelling — that is KNEG-35 — so
-suggesting one would be advice that cannot be followed. The caution states the problem and stops.
+`keys::Chord` already parses them. No settings field accepted a sided spelling — that was KNEG-35 —
+so suggesting one would have been advice that could not be followed, and the caution stated the
+problem and stopped. **KNEG-35 closed on 2026-08-31**, and the caution now names the escape,
+computed from the colliding chord and re-checked against `altgr_collision` before it is offered.
 
 ### A mutation test that found the wrong reason
 
@@ -2809,7 +2897,7 @@ the ones between them.
 Injecting `Control+Alt` this time started a real microphone capture **66 ms** after the chord, and
 four presses drove four alternations. That is the link that had been missing.
 
-### Finding: sided modifiers are built and unreachable
+### Finding: sided modifiers are built and unreachable (closed 2026-08-31, KNEG-35)
 
 `keys.rs` expresses `RightControl+Super` — the headline capability of having a low-level hook at
 all, since the cross-platform API cannot see which side a modifier is on. `PLATFORM_SUPPORT.md` said

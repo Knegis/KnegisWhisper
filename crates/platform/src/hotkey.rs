@@ -105,8 +105,13 @@ impl fmt::Display for HotkeyAction {
     }
 }
 
-/// Modifier names the cross-platform accelerator syntax accepts.
-/// Recognised modifier spellings, compared case-insensitively.
+/// Modifier spellings the cross-platform accelerator syntax accepts, compared
+/// case-insensitively.
+///
+/// **Unsided only.** The sided spellings live in
+/// [`crate::keys::SIDED_MODIFIERS`] and are recognised by [`classify`] through
+/// it, because a chord naming a side can never go to the system register —
+/// see [`is_modifier`].
 ///
 /// `Ctrl` earns its place by measurement, not taste: the shortcut plugin
 /// registers `Ctrl+Shift+D` happily, and without this entry `Ctrl` counts as a
@@ -125,6 +130,20 @@ const MODIFIERS: [&str; 9] = [
     "Alt",
     "Shift",
 ];
+
+/// Whether `part` is a modifier at all, either side or one named side.
+///
+/// Two sources, deliberately. The unsided spellings are the ones the shortcut
+/// plugin takes, so this list is answerable to the plugin and diverges from the
+/// chord parser where the plugin does (`Win` is absent because the plugin
+/// rejects it). The sided ones are answerable to the chord parser instead,
+/// because the register cannot express them at all and the hook is the only
+/// thing that will ever see them — so they come from
+/// [`crate::keys::SIDED_MODIFIERS`] rather than being spelled again here.
+fn is_modifier(part: &str) -> bool {
+    MODIFIERS.iter().any(|m| m.eq_ignore_ascii_case(part))
+        || crate::keys::sided_modifier(part).is_some()
+}
 
 /// What an accelerator string can be registered as.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
@@ -181,12 +200,28 @@ impl Accelerator {
             // Windows build has the hook; the others do not, and telling a
             // Windows user to add a regular key would be telling them to work
             // around something that works.
-            Self::ModifierOnly { accelerator, .. } => {
+            Self::ModifierOnly {
+                accelerator,
+                modifiers,
+            } => {
                 if crate::keyhook::support().is_available() {
                     format!(
                         "{accelerator} uses only modifier keys, so it is handled by a keyboard \
                          hook rather than the system shortcut register. It still works, and it \
                          does not stop the same keys reaching other applications."
+                    )
+                } else if modifiers.iter().any(|m| is_sided(m)) {
+                    // The fallback advice below is wrong for a sided chord:
+                    // adding a regular key to one makes it `Invalid`, because
+                    // the register cannot see a side at all. Telling someone to
+                    // do a thing the field then refuses is the defect KNEG-35
+                    // was mostly about, so it is not repeated here.
+                    format!(
+                        "{accelerator} names one side of a key, which only a low-level keyboard \
+                         hook can tell apart, and this platform does not have one in this build. \
+                         There is no accelerator to fall back to here: the system shortcut \
+                         register cannot see which side a modifier is on. Write the modifiers \
+                         without a side to have it work anywhere."
                     )
                 } else {
                     format!(
@@ -237,7 +272,7 @@ pub fn classify(input: &str) -> Accelerator {
     let mut keys = Vec::new();
     for part in parts {
         let part = part.trim();
-        if MODIFIERS.iter().any(|m| m.eq_ignore_ascii_case(part)) {
+        if is_modifier(part) {
             modifiers.push(part.to_owned());
         } else {
             keys.push(part.to_owned());
@@ -261,8 +296,49 @@ pub fn classify(input: &str) -> Accelerator {
         };
     }
 
+    // A side plus an ordinary key is the one combination neither mechanism can
+    // take, and it must not fall through to `Standard`. The system register is
+    // the only thing that handles an ordinary key and it cannot see which side a
+    // modifier is on; the hook is the only thing that can see the side and
+    // `keys::Chord::parse` refuses anything that is not a modifier. Reported
+    // with both ways out rather than a bare refusal — unlike the AltGr caution,
+    // this one has remedies that the field really accepts.
+    if let Some(sided) = modifiers.iter().find(|m| is_sided(m)) {
+        let key = keys.first().map_or("", String::as_str);
+        return Accelerator::Invalid {
+            input: input.to_owned(),
+            reason: format!(
+                "{sided} names one side of a key, and a shortcut naming a side has to be \
+                 watched by the keyboard hook, which only ever matches modifiers. Either drop \
+                 {key:?} and use modifiers alone, or write {} instead of {sided} to accept \
+                 either side.",
+                unsided_of(sided)
+            ),
+        };
+    }
+
     Accelerator::Standard {
         accelerator: trimmed.to_owned(),
+    }
+}
+
+/// Whether this modifier spelling names one particular side.
+fn is_sided(part: &str) -> bool {
+    crate::keys::sided_modifier(part).is_some()
+}
+
+/// The either-side spelling to suggest in place of a sided one.
+///
+/// Falls back to the input rather than inventing a name: a spelling reaching
+/// here is one [`crate::keys::SIDED_MODIFIERS`] resolved, so every case is
+/// covered, and a wrong suggestion would be worse than an unhelpful one.
+fn unsided_of(sided: &str) -> &str {
+    match crate::keys::sided_modifier(sided) {
+        Some(crate::keys::Key::LeftControl | crate::keys::Key::RightControl) => "Control",
+        Some(crate::keys::Key::LeftShift | crate::keys::Key::RightShift) => "Shift",
+        Some(crate::keys::Key::LeftAlt | crate::keys::Key::RightAlt) => "Alt",
+        Some(crate::keys::Key::LeftSuper | crate::keys::Key::RightSuper) => "Super",
+        Some(crate::keys::Key::Other(_)) | None => sided,
     }
 }
 
@@ -423,16 +499,35 @@ pub fn cautions(bindings: &[Binding], altgr: &crate::keyboard_layout::AltGr) -> 
                 continue;
             };
 
+            // Suggested now that it can be typed. Until KNEG-35 closed,
+            // `classify` read `RightControl` as a *key*, so the settings field
+            // refused every sided spelling -- and this caution deliberately
+            // named no remedy, because pointing at one the field then rejects
+            // is worse than stating the problem and stopping. It accepts them
+            // now. `sided_escape` builds the suggestion from the chord that
+            // actually collided and re-runs the matcher over it, so the sentence
+            // only appears when the escape really escapes.
+            let remedy = crate::keys::sided_escape(&chord).map_or_else(String::new, |escape| {
+                format!(" Naming one side avoids it entirely: {escape}.")
+            });
+
             // The two sentences differ in what they can promise. One has read
             // the layout and can name the character; the other is telling
             // somebody what would happen if their layout has AltGr, and says so
             // rather than asserting it does.
             let reason = match altgr {
                 AltGr::Present { example } => format!(
-                    "{accelerator} also fires when you press {press}. This layout types {example:?}                      with Control and Alt together, and Windows sends left Control and right Alt                      for AltGr -- which completes this chord, with nothing downstream able to tell                      that apart from you pressing it deliberately."
+                    "{accelerator} also fires when you press {press}. This layout types \
+                     {example:?} with Control and Alt together, and Windows sends left \
+                     Control and right Alt for AltGr -- which completes this chord, with \
+                     nothing downstream able to tell that apart from you pressing it \
+                     deliberately.{remedy}"
                 ),
                 AltGr::Unknown { why } => format!(
-                    "{accelerator} also fires when you press {press}, on any layout with an AltGr                      key -- Nordic, German and most non-US layouts. Windows sends left Control and                      right Alt for AltGr, which completes this chord. Whether this layout has one                      was not determined: {why}"
+                    "{accelerator} also fires when you press {press}, on any layout with \
+                     an AltGr key -- Nordic, German and most non-US layouts. Windows sends \
+                     left Control and right Alt for AltGr, which completes this chord. \
+                     Whether this layout has one was not determined: {why}.{remedy}"
                 ),
                 // Filtered out above; matched rather than caught by a wildcard
                 // so a fourth variant has to be thought about here.
@@ -617,6 +712,139 @@ mod tests {
             );
         } else {
             assert!(explanation.contains("does nothing"), "{explanation}");
+        }
+    }
+
+    /* ------------------------------------------------------- sided modifiers */
+
+    /// The whole of KNEG-35 in one assertion. `keys::Chord` has expressed these
+    /// since the hook was written; `classify` read the first part as *the key*,
+    /// so the first went to the system register -- the one mechanism that cannot
+    /// see a side -- and the second was refused for naming two keys.
+    #[test]
+    fn a_sided_chord_is_hookable_rather_than_registrable_or_refused() {
+        for accelerator in [
+            "RightControl+Super",
+            "RightControl+RightShift",
+            "LeftControl+LeftAlt",
+            "RightControl+Alt",
+            "rcontrol+lshift",
+        ] {
+            match classify(accelerator) {
+                Accelerator::ModifierOnly { .. } => {}
+                other => panic!("{accelerator} should be hookable, got {other:?}"),
+            }
+        }
+    }
+
+    /// Every spelling the chord parser takes, the classifier takes. The two read
+    /// one table so this cannot drift, and the test is what says so out loud --
+    /// a shared constant that only one side actually consults would look
+    /// identical from here.
+    #[test]
+    fn every_sided_spelling_the_chord_parser_takes_is_a_modifier_here() {
+        for (spelling, _) in crate::keys::SIDED_MODIFIERS {
+            let accelerator = format!("{spelling}+Super");
+            assert!(
+                crate::keys::Chord::parse(&accelerator).is_ok(),
+                "{accelerator}: the chord parser refused its own table entry"
+            );
+            match classify(&accelerator) {
+                Accelerator::ModifierOnly { .. } => {}
+                other => panic!("{accelerator} should be hookable, got {other:?}"),
+            }
+        }
+    }
+
+    /// The combination neither mechanism can take, and the reason it must not
+    /// fall through to `Standard`: the register would be handed a modifier whose
+    /// side it cannot see. Before this it was `Invalid` for the wrong reason
+    /// ("it names 2 non-modifier keys"), which blamed the spelling.
+    #[test]
+    fn a_side_plus_an_ordinary_key_is_refused_with_both_ways_out() {
+        match classify("RightControl+D") {
+            Accelerator::Invalid { reason, .. } => {
+                assert!(reason.contains("one side"), "{reason}");
+                assert!(
+                    reason.contains("Control"),
+                    "no unsided suggestion: {reason}"
+                );
+                assert!(
+                    !reason.contains("non-modifier keys"),
+                    "still blaming the spelling: {reason}"
+                );
+            }
+            other => panic!("RightControl+D should be Invalid, got {other:?}"),
+        }
+    }
+
+    /// A suggestion the field would refuse is worse than none, so the two the
+    /// refusal offers are both checked against the classifier itself.
+    #[test]
+    fn both_ways_out_of_a_sided_key_combination_are_accepted() {
+        assert!(matches!(
+            classify("RightControl+LeftAlt"),
+            Accelerator::ModifierOnly { .. }
+        ));
+        assert!(classify("Control+D").is_registrable());
+    }
+
+    /* -------------------------------------------------------- caution wording */
+
+    /// The AltGr caution used to name no remedy because none could be typed.
+    /// One can now, and it is built from the chord that collided rather than
+    /// from a fixed example.
+    #[test]
+    fn the_altgr_caution_now_names_an_escape_that_works() {
+        let layout = crate::keyboard_layout::AltGr::Present { example: '@' };
+        let found = cautions(&[bound(HotkeyAction::Dictation, "Control+Alt")], &layout);
+
+        assert_eq!(found.len(), 1, "{found:?}");
+        let reason = &found[0].reason;
+        assert!(reason.contains("Naming one side"), "{reason}");
+
+        // The escape it names has to survive the same matcher that produced the
+        // warning, and has to be something the settings field accepts.
+        let escape = reason
+            .rsplit_once(": ")
+            .map(|(_, tail)| tail.trim_end_matches('.'))
+            .unwrap_or_default();
+        assert!(!escape.is_empty(), "no escape named: {reason}");
+        let chord = crate::keys::Chord::parse(escape)
+            .unwrap_or_else(|e| panic!("{escape} does not parse: {e}"));
+        assert!(
+            crate::keys::altgr_collision(&chord).is_none(),
+            "{escape} still fires on AltGr"
+        );
+        assert!(
+            matches!(classify(escape), Accelerator::ModifierOnly { .. }),
+            "{escape} is not something the settings field accepts"
+        );
+    }
+
+    /// A line continuation in a Rust string swallows the newline and the
+    /// following indentation -- unless the backslash is lost, in which case the
+    /// indentation becomes twenty spaces in the middle of a sentence on screen.
+    /// Both AltGr cautions shipped that way and `cargo fmt` does not look inside
+    /// a string literal, so nothing caught it. This does.
+    #[test]
+    fn no_caution_has_a_hole_where_a_line_continuation_should_be() {
+        let layouts = [
+            crate::keyboard_layout::AltGr::Present { example: '@' },
+            crate::keyboard_layout::AltGr::Unknown {
+                why: "the layout could not be read".to_owned(),
+            },
+        ];
+        let bindings = [bound(HotkeyAction::Dictation, "Control+Alt")];
+
+        for layout in layouts {
+            for caution in cautions(&bindings, &layout) {
+                assert!(
+                    !caution.reason.contains("  "),
+                    "a run of spaces in a sentence shown to a person: {}",
+                    caution.reason
+                );
+            }
         }
     }
 

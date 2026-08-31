@@ -22,7 +22,9 @@
 //!    another application.
 //! 3. **Left and right are different keys.** Windows reports them separately and
 //!    upstream's native listeners watched them separately. `RightControl+Super`
-//!    is a usable shortcut precisely because it is distinct.
+//!    is a usable shortcut precisely because it is distinct — and it is one a user
+//!    can type only because [`SIDED_MODIFIERS`] is read by `hotkey::classify`
+//!    too. It was not, and the capability sat there with no way in (KNEG-35).
 //! 4. **A modifier-only chord waits for the last key.** It fires when the final
 //!    key of the set goes down, not when the first does — otherwise `Control`
 //!    alone would fire `Control+Super` on its way to being pressed.
@@ -53,6 +55,54 @@ pub enum Key {
     Other(u32),
 }
 
+/// Every spelling that names a modifier on one particular side.
+///
+/// **One table, two readers, and that is the point.** [`Chord::parse`] resolves
+/// these to a key, and `hotkey::classify` has to recognise exactly the same set
+/// and no other. A spelling `classify` accepts that this parser does not becomes
+/// a shortcut the settings screen calls hookable and `KeyHook::install` then
+/// refuses; a spelling this parser accepts that `classify` does not was KNEG-35
+/// — the headline capability of running a low-level hook at all, and no
+/// accelerator a user could type reached it. Two lists would put both failures
+/// one careless edit away.
+///
+/// `altgr` is in the table because Windows sends right Alt for it and a chord
+/// watcher sees exactly that. It is not an endorsement of binding it — see
+/// [`altgr_collision`], which is about the opposite problem.
+pub const SIDED_MODIFIERS: [(&str, Key); 19] = [
+    ("leftcontrol", Key::LeftControl),
+    ("lcontrol", Key::LeftControl),
+    ("rightcontrol", Key::RightControl),
+    ("rcontrol", Key::RightControl),
+    ("leftshift", Key::LeftShift),
+    ("lshift", Key::LeftShift),
+    ("rightshift", Key::RightShift),
+    ("rshift", Key::RightShift),
+    ("leftalt", Key::LeftAlt),
+    ("lalt", Key::LeftAlt),
+    ("rightalt", Key::RightAlt),
+    ("ralt", Key::RightAlt),
+    ("altgr", Key::RightAlt),
+    ("leftsuper", Key::LeftSuper),
+    ("lsuper", Key::LeftSuper),
+    ("leftwin", Key::LeftSuper),
+    ("rightsuper", Key::RightSuper),
+    ("rsuper", Key::RightSuper),
+    ("rightwin", Key::RightSuper),
+];
+
+/// The key `name` spells, if it names one particular side.
+///
+/// Case-insensitive, like every other spelling in this module.
+#[must_use]
+pub fn sided_modifier(name: &str) -> Option<Key> {
+    let lower = name.to_lowercase();
+    SIDED_MODIFIERS
+        .iter()
+        .find(|(spelling, _)| *spelling == lower)
+        .map(|(_, key)| *key)
+}
+
 impl Key {
     /// Whether this is a modifier.
     #[must_use]
@@ -71,6 +121,25 @@ impl Key {
             Self::LeftShift | Self::RightShift => Some("Shift"),
             Self::LeftAlt | Self::RightAlt => Some("Alt"),
             Self::LeftSuper | Self::RightSuper => Some("Super"),
+            Self::Other(_) => None,
+        }
+    }
+
+    /// The canonical sided spelling, for building an accelerator string.
+    ///
+    /// The inverse of the sided half of [`SIDED_MODIFIERS`]: that table maps
+    /// many spellings onto one key, and this picks the one to show a person.
+    #[must_use]
+    pub const fn sided_spelling(self) -> Option<&'static str> {
+        match self {
+            Self::LeftControl => Some("LeftControl"),
+            Self::RightControl => Some("RightControl"),
+            Self::LeftShift => Some("LeftShift"),
+            Self::RightShift => Some("RightShift"),
+            Self::LeftAlt => Some("LeftAlt"),
+            Self::RightAlt => Some("RightAlt"),
+            Self::LeftSuper => Some("LeftSuper"),
+            Self::RightSuper => Some("RightSuper"),
             Self::Other(_) => None,
         }
     }
@@ -162,6 +231,15 @@ impl Chord {
         // Accepted spellings match `hotkey::MODIFIERS`, plus the sided ones a
         // hook makes possible for the first time.
         let lower = name.to_lowercase();
+
+        // Read from the shared table rather than repeated here, so the set this
+        // accepts and the set `hotkey::classify` accepts are the same set by
+        // construction. Before the match, because a sided spelling is never also
+        // one of the either-side ones below.
+        if let Some(key) = sided_modifier(&lower) {
+            return Ok(ChordKey::Exact(key));
+        }
+
         Ok(match lower.as_str() {
             "control" | "ctrl" | "commandorcontrol" | "cmdorctrl" => {
                 ChordKey::EitherSide("Control")
@@ -169,15 +247,6 @@ impl Chord {
             "shift" => ChordKey::EitherSide("Shift"),
             "alt" | "option" => ChordKey::EitherSide("Alt"),
             "super" | "meta" | "cmd" | "command" | "win" => ChordKey::EitherSide("Super"),
-
-            "leftcontrol" | "lcontrol" => ChordKey::Exact(Key::LeftControl),
-            "rightcontrol" | "rcontrol" => ChordKey::Exact(Key::RightControl),
-            "leftshift" | "lshift" => ChordKey::Exact(Key::LeftShift),
-            "rightshift" | "rshift" => ChordKey::Exact(Key::RightShift),
-            "leftalt" | "lalt" => ChordKey::Exact(Key::LeftAlt),
-            "rightalt" | "ralt" | "altgr" => ChordKey::Exact(Key::RightAlt),
-            "leftsuper" | "lsuper" | "leftwin" => ChordKey::Exact(Key::LeftSuper),
-            "rightsuper" | "rsuper" | "rightwin" => ChordKey::Exact(Key::RightSuper),
 
             // A single character or a named key: registrable elsewhere.
             other if other.chars().count() == 1 || is_named_key(other) => {
@@ -281,6 +350,44 @@ pub fn altgr_collision(chord: &Chord) -> Option<&'static str> {
         }
     }
     None
+}
+
+/// A sided spelling of `chord` that an AltGr keystroke does not complete, if
+/// one exists.
+///
+/// **Assembled, then checked with the same matcher the warning used.** AltGr is
+/// left Control and right Alt *specifically*, so naming the other side of
+/// either one breaks the collision — but that is a claim about when a chord
+/// fires, and this module's standing rule is that such claims are answered by
+/// running [`ChordWatcher`] rather than by reasoning about names. So the
+/// candidate is built and then passed back through [`altgr_collision`]; if it
+/// still collides, nothing is suggested.
+///
+/// A remedy that does not work is worse than no remedy. That is not a general
+/// sentiment: the AltGr caution named no remedy at all until KNEG-35 closed,
+/// precisely because the settings field rejected every sided spelling, and
+/// pointing at one would have sent the reader to a control that refused them.
+///
+/// Only `Control` and `Alt` are given a side. Siding `Shift` or `Super` would
+/// narrow the shortcut for nothing — AltGr involves neither.
+#[must_use]
+pub fn sided_escape(chord: &Chord) -> Option<String> {
+    let mut spelled = Vec::with_capacity(chord.keys.len());
+    for key in &chord.keys {
+        spelled.push(match key {
+            ChordKey::EitherSide("Control") => "RightControl".to_owned(),
+            ChordKey::EitherSide("Alt") => "LeftAlt".to_owned(),
+            ChordKey::EitherSide(name) => (*name).to_owned(),
+            ChordKey::Exact(exact) => exact.sided_spelling()?.to_owned(),
+        });
+    }
+
+    let candidate = spelled.join("+");
+    let parsed = Chord::parse(&candidate).ok()?;
+    if altgr_collision(&parsed).is_some() {
+        return None;
+    }
+    Some(candidate)
 }
 
 /// Whether a name is a key the cross-platform API would know.
@@ -677,5 +784,55 @@ mod tests {
     fn an_empty_watcher_is_not_watching() {
         assert!(!ChordWatcher::new(Vec::new()).is_watching());
         assert!(watcher(&["Control+Super"]).is_watching());
+    }
+
+    /* --------------------------------------------------------- sided escapes */
+
+    /// The escape has to be checked by the matcher, not asserted. `Control+Alt`
+    /// is the chord the caution fires on, and `RightControl+LeftAlt` is what
+    /// AltGr -- left Control and right Alt -- cannot complete.
+    #[test]
+    fn the_escape_from_altgr_is_one_the_matcher_agrees_with() {
+        let colliding = Chord::parse("Control+Alt").expect("a valid chord");
+        assert!(altgr_collision(&colliding).is_some(), "premise");
+
+        // Sorted, not in the order the user typed: `Chord::parse` orders and
+        // deduplicates so `Control+Super` and `Super+Control` are one chord, and
+        // the suggestion is spelled from the chord rather than from the input.
+        // It is a shortcut to type, not a quotation of theirs.
+        let escape = sided_escape(&colliding).expect("an escape exists");
+        assert_eq!(escape, "LeftAlt+RightControl");
+
+        let parsed = Chord::parse(&escape).expect("the escape parses");
+        assert!(
+            altgr_collision(&parsed).is_none(),
+            "{escape} still collides"
+        );
+    }
+
+    /// Shift and Super are left alone: AltGr involves neither, and siding them
+    /// would narrow the shortcut for nothing.
+    #[test]
+    fn only_the_keys_altgr_uses_are_given_a_side() {
+        let chord = Chord::parse("Control+Shift+Alt").expect("a valid chord");
+        assert_eq!(
+            sided_escape(&chord).as_deref(),
+            Some("LeftAlt+RightControl+Shift")
+        );
+    }
+
+    /// Every spelling in the table resolves, and resolves to the key its name
+    /// says. The classifier reads this table too, so an entry that resolved to
+    /// the wrong key would misroute a shortcut rather than refuse it.
+    #[test]
+    fn every_sided_spelling_resolves_to_the_side_it_names() {
+        for (spelling, key) in SIDED_MODIFIERS {
+            assert_eq!(sided_modifier(spelling), Some(key), "{spelling}");
+            assert_eq!(
+                sided_modifier(&spelling.to_uppercase()),
+                Some(key),
+                "{spelling} is case-sensitive"
+            );
+        }
     }
 }

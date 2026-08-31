@@ -104,20 +104,26 @@ Debug build via `npm run tauri:dev`, `KNEGISWHISPER_LOG=info,knegiswhisper_lib=d
 
 ### Findings
 
-**1. Sided modifiers are built and unconfigurable.** `crates/platform/src/keys.rs` handles
-`RightControl+Super`, `PLATFORM_SUPPORT.md` said "Built with the same hook", and no accelerator a
-user can type reaches it. `hotkey::MODIFIERS` has no sided spellings, so `classify` sees
-`RightControl` as *the key*:
+**1. Sided modifiers were built and unconfigurable.** *(Fixed 2026-08-31, KNEG-35.)*
+`crates/platform/src/keys.rs` handled `RightControl+Super`, `PLATFORM_SUPPORT.md` said "Built with
+the same hook", and no accelerator a user could type reached it. `hotkey::MODIFIERS` had no sided
+spellings, so `classify` saw `RightControl` as *the key*:
 
 ```
      RightControl+Super -> Standard { accelerator: "RightControl+Super" }
 RightControl+RightShift -> Invalid { reason: "it names 2 non-modifier keys; a shortcut may have one" }
 ```
 
-The first is handed to the system shortcut register, which is the one mechanism that cannot
-distinguish sides. The second is refused with a message blaming the user's spelling for a missing
+The first was handed to the system shortcut register, which is the one mechanism that cannot
+distinguish sides. The second was refused with a message blaming the user's spelling for a missing
 alias — the same shape as the `Ctrl` defect already recorded in `ENGINEERING_LOG.md`. Same class as
-the four dead hotkeys: a capability that exists, is documented, and has no way in.
+the four dead hotkeys: a capability that existed, was documented, and had no way in.
+
+Both now classify as `ModifierOnly` and go to the hook. The spellings live in one table read by both
+`Chord::parse` and `classify`, so the two cannot drift; `RightControl+D` is refused, because neither
+mechanism can take a side *and* an ordinary key, and the refusal names both ways out. The same pass
+found that both AltGr caution sentences had lost their line continuations and were shipping twenty
+spaces mid-sentence — fixed, and now gated. See `docs/ENGINEERING_LOG.md` § 2026-08-31 (KNEG-35).
 
 **2. The local API token file got no permissions of its own on Windows, and the comment saying
 what it inherited was wrong on a real machine. Fixed 2026-08-31 — the measurement below is the

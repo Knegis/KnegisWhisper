@@ -396,7 +396,7 @@ because modifier-only combinations do not work there.
 | | State |
 | --- | --- |
 | Windows modifier-only | **verified.** One `WH_KEYBOARD_LL` hook on one thread, in-process, not one child per key. `cargo run -p kw-platform --example keyhook_probe` installs it, injects two presses, and asserts it fires exactly twice. |
-| Windows right-side modifiers | **Built and unreachable.** `keys.rs` expresses `RightControl+Super`, because a low-level hook reports the sided virtual keys and the cross-platform API does not — but no accelerator a user can type gets there. `hotkey::MODIFIERS` has no sided spellings, so `classify` reads `RightControl` as *the key* and hands `RightControl+Super` to the system register, the one mechanism that cannot tell the sides apart; and `RightControl+RightShift` comes back `Invalid` — "it names 2 non-modifier keys" — which blames the user's spelling for a missing alias. See [BENCH_CHECK.md](BENCH_CHECK.md). |
+| Windows right-side modifiers | **Built and reachable** since 2026-08-31 (KNEG-35). `RightControl+Super` and `RightControl+RightShift` both classify as `ModifierOnly` and go to the keyboard hook, which is the only mechanism that can see a side at all. The spellings come from one table, `keys::SIDED_MODIFIERS`, read by `Chord::parse` and by `hotkey::classify`, so the set each accepts cannot drift from the other. A side combined with an *ordinary* key (`RightControl+D`) is refused, because neither mechanism can take it — the register cannot see the side and the hook only matches modifiers — and the refusal names both ways out. **Never driven from the screen:** the hook path is measured by `keyhook_probe` and the classifier by unit tests, and nobody has typed one into `Dictation > Shortcuts` (KNEG-47). |
 | Windows mouse buttons, push-to-talk | Not built. Both need a second hook (`WH_MOUSE_LL`) or key-up routing, and neither has a consumer yet. |
 | macOS, Linux | Not built, and the reason is reported rather than the capability being silently absent: macOS needs a `CGEventTap` and the Accessibility permission that goes with it, and Wayland's global-shortcuts portal takes only chords the compositor can register. |
 
@@ -448,9 +448,11 @@ both re-runnable with `cargo run -p kw-platform --example altgr_probe`:
   Control arrives while Shift is already held, completing the chord before the Alt is pressed.
 
 A **sided** chord avoids it entirely, because AltGr is left Control and right Alt specifically:
-`LeftControl+LeftAlt` and `RightControl+Alt` are both unaffected and `keys::Chord` already parses
-them. No settings field accepts a sided spelling, which is KNEG-35 — so the caution states the
-problem and deliberately does not suggest a remedy that cannot be typed.
+`LeftControl+LeftAlt` and `RightControl+Alt` are both unaffected. Until KNEG-35 closed on
+2026-08-31 no settings field accepted a sided spelling, so the caution stated the problem and
+deliberately suggested nothing. It now names an escape — built from the chord that collided by
+`keys::sided_escape`, and passed back through `altgr_collision` before it is offered, so a
+suggestion that still fires on AltGr is never made.
 
 **Standard accelerators are not warned about**, and that is a decision rather than an oversight.
 `Control+Alt+D` goes to the system shortcut register rather than to the hook, and whether *that*
