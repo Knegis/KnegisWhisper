@@ -201,8 +201,14 @@ impl MeetingState {
 /// Which captures are actually running.
 ///
 /// Reported rather than assumed, because a meeting works microphone-only and the
-/// user should know which one they got. Zero system-audio samples means nobody
-/// else spoke; *no system capture at all* is a different fact.
+/// user should know which one they got. *No system capture at all* is a
+/// different fact from a capture that produced nothing.
+///
+/// It used to say here that zero system-audio samples means nobody else spoke.
+/// It does not, and that was KNEG-38: an output device with nothing playing
+/// delivers no callback at all, so zero samples is equally what a capture that
+/// never worked produces. [`Delivered`] carries which of the possible answers
+/// applies, and says plainly that two of them cannot be told apart.
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct Sources {
@@ -359,7 +365,6 @@ enum RecorderCommand {
 /// on screen why the first two look alike.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "kebab-case")]
-#[ts(export)]
 pub enum Delivered {
     /// Never opened. [`Sources`] carries the reason.
     NotCaptured,
