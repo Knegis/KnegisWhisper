@@ -353,11 +353,15 @@ says "seen to match". Everything else about chunk E is green tests.
 
 Nothing here needs a developer. All of it is buttons, one sentence spoken aloud, and a restart.
 
-1. **Speak into the microphone.** Press `Control+L` (the bound dictation hotkey), say *"the quick
-   brown fox jumps over the lazy dog"*, press it again. The local model is installed and resumed at
-   launch, and the server transcribes correctly when handed a file — the untested leg is
-   microphone → speech gate → transcription. Do it in Notepad and again in VS Code, and watch that
-   the caret never leaves the target window.
+1. **Speak into the microphone — done 2026-08-28, and the leg this item was written for is
+   closed.** Dictation into Notepad produced correct text repeatedly, in the real application
+   window, on both `whisper-tiny` and the installed Parakeet model: microphone → speech gate →
+   transcription works. (Incidental, and worth keeping: on this hardware Parakeet was correct every
+   take where `tiny` gave *"the lace dome"* and *"the quick plan forks"*.)
+
+   **What is still not done, and it is the careful half.** The same dictation **in VS Code** —
+   only Notepad has been used — and watching that the caret never leaves the target window. See
+   KNEG-47, which carries both.
 2. **Check the clipboard survives.** Copy `KEEP ME` first, dictate, then paste. You should get
    `KEEP ME` back.
 3. **Store a provider key** under `Settings > Providers`, press Save, and run the connection test.

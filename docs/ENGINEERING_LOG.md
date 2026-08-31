@@ -166,7 +166,7 @@ badge or before the next merge to `main`.
 
 | Thing | State | What is missing |
 | --- | --- | --- |
-| Local transcription (Phase 2) | **Driven by hand** | Nothing. 2026-08-25: seven local transcriptions with the network off, text at the caret in Notepad and VS Code, the clipboard given back, focus never moving. `BENCH_CHECK.md`'s 2026-08-26 list still asks for the microphone leg, which contradicts that run and is tracked as KNEG-47 rather than resolved by preference. |
+| Local transcription (Phase 2) | **Driven by hand** | The core leg is closed: 2026-08-28, in the real application window, dictation into Notepad produced correct text repeatedly on both `whisper-tiny` and Parakeet. Four smaller checks remain and are KNEG-47's — the same dictation in VS Code, the caret never leaving the target window, the `KEEP ME` clipboard round trip, and `Control+Super` mid-dictation. |
 | Meeting transcription (Phase 4) | Four clients written, one confirmed | OpenAI Realtime has met a live server; AssemblyAI, Deepgram and Corti are *believed* wire shapes with no key on any machine this project has touched (KNEG-53, KNEG-55-57). Tinfoil is declined on principle, not missing. A dead provider is reported at Stop and still silent mid-meeting (KNEG-95). |
 | Enterprise reasoning (Bedrock, Azure, Vertex) | `ShapeNotImplemented` | The three request shapes. They refuse honestly rather than falling back, and none has made a live call (KNEG-54). |
 | `storage::import::from_openwhispr` | Reachable | Nothing. `Notes > Upload` exposes it (KNEG-71), and it now refuses a path no file dialog returned (KNEG-80). Nobody has imported a real OpenWhispr database by hand (KNEG-90). |

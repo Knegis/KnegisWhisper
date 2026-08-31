@@ -21,7 +21,7 @@ when you configure them with your own credentials, and requests go straight to t
 > | --- | --- |
 > | 0 — Upstream audit and parity contracts | Complete |
 > | 1 — Tauri foundation | Complete. Boots to a dashboard, lives in the tray, registers hotkeys, creates a capture-excluded overlay. |
-> | 2 — Dictation | Complete, and driven by hand on 2026-08-25: seven local transcriptions with the network off, text landing at the caret in Notepad and VS Code, the clipboard given back, focus never moving. |
+> | 2 — Dictation | Complete, and driven by hand: dictation into a real editor produced correct text repeatedly on both `whisper-tiny` and Parakeet (2026-08-28), after seven local transcriptions with the network off on 2026-08-25. A handful of smaller checks around it are still open — see [BENCH_CHECK.md](docs/BENCH_CHECK.md). |
 > | 3 — Reasoning | Complete. Routing, request shaping and chat dispatch; cleanup against any OpenAI-compatible provider. Bedrock, Azure and Vertex refuse honestly rather than falling back, and none of the three has made a live call. |
 > | 4 — Meetings and notes | Notes, folders, search and export to txt/md/json/srt/vtt are reachable from the dashboard. System audio is built and verified on hardware (Windows WASAPI loopback). Four cloud clients are written — OpenAI Realtime, AssemblyAI, Deepgram, Corti — and only OpenAI has met a live server; the fifth, Tinfoil, is declined on principle rather than unfinished. The local route produced a live transcript on 2026-08-28. |
 > | 5 — Calendars | Built. `calendar-core`, loopback PKCE, tokens held by reference, and `Integrations > Calendar`. No calendar code has answered a real request. |
