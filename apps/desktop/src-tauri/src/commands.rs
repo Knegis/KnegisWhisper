@@ -140,7 +140,11 @@ fn report_with_layout(
     altgr: &kw_platform::keyboard_layout::AltGr,
 ) -> HotkeyReport {
     let conflicts = hotkey::conflicts(&bindings);
-    let cautions = hotkey::cautions(&bindings, altgr);
+    // Two kinds, kept separate because they are different facts about the same
+    // chord and either can hold without the other: AltGr depends on the layout,
+    // and being a prefix depends only on the chord having two keys.
+    let mut cautions = hotkey::cautions(&bindings, altgr);
+    cautions.extend(hotkey::prefix_cautions(&bindings));
 
     // Asked of the registration module rather than recomputed, because that is
     // the module that decides. `Binding::is_usable` can only speak about the
@@ -253,10 +257,11 @@ pub async fn hotkey_set(
     let mine = reports.into_iter().find(|r| r.action == action);
 
     let binding = Binding::from_stored(action, &canonical);
-    let cautions = hotkey::cautions(
+    let mut cautions = hotkey::cautions(
         std::slice::from_ref(&binding),
         &kw_platform::keyboard_layout::altgr(),
     );
+    cautions.extend(hotkey::prefix_cautions(std::slice::from_ref(&binding)));
 
     Ok(HotkeyChange {
         binding,
@@ -1332,8 +1337,30 @@ mod tests {
         let swedish = kw_platform::keyboard_layout::AltGr::Present { example: '@' };
         let report = report_with_layout(bindings.clone(), &swedish);
 
-        assert_eq!(report.cautions.len(), 1, "{:?}", report.cautions);
-        assert_eq!(report.cautions[0].action, HotkeyAction::Dictation);
+        // Two, and they are different facts about the same chord: AltGr depends
+        // on the layout, being a prefix of a longer shortcut depends only on
+        // the chord having two keys. Either can hold without the other, so they
+        // are separate sentences rather than one merged one -- and asserting
+        // "exactly one caution" was what this used to do, which would have
+        // hidden the second the moment it arrived (KNEG-115).
+        assert_eq!(report.cautions.len(), 2, "{:?}", report.cautions);
+        assert!(report
+            .cautions
+            .iter()
+            .all(|c| c.action == HotkeyAction::Dictation));
+        assert!(
+            report.cautions.iter().any(|c| c.reason.contains("AltGr")),
+            "{:?}",
+            report.cautions
+        );
+        assert!(
+            report
+                .cautions
+                .iter()
+                .any(|c| c.reason.contains("Ctrl+Alt+Delete")),
+            "{:?}",
+            report.cautions
+        );
 
         // And it is a caution rather than a problem: the hotkey is fine. Saying
         // otherwise would send someone looking for a typo in an accelerator
@@ -1363,9 +1390,18 @@ mod tests {
             "the caution must not change what counts as unusable"
         );
 
-        // The same bindings on a layout with no AltGr produce nothing at all.
+        // The same bindings on a layout with no AltGr lose the AltGr caution and
+        // keep the other one. That is the separation earning its place: a US
+        // keyboard cannot press AltGr, and it can press Ctrl+Alt+Delete.
         let us = kw_platform::keyboard_layout::AltGr::Absent;
-        assert!(report_with_layout(bindings, &us).cautions.is_empty());
+        let on_us = report_with_layout(bindings, &us).cautions;
+        assert_eq!(on_us.len(), 1, "{on_us:?}");
+        assert!(!on_us[0].reason.contains("AltGr"), "{:?}", on_us[0]);
+        assert!(
+            on_us[0].reason.contains("Ctrl+Alt+Delete"),
+            "{:?}",
+            on_us[0]
+        );
     }
 
     #[tokio::test]

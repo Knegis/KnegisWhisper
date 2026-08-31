@@ -445,6 +445,71 @@ pub struct Caution {
     pub reason: String,
 }
 
+/// Every modifier-only accelerator in `bindings`, with what it also fires on.
+///
+/// **The measured defect (KNEG-115).** A two-modifier chord completes the
+/// instant both keys are down — before the third key of a longer shortcut
+/// arrives — so it goes off on the way past. `Control+Super` is the shipped
+/// default and `Ctrl+Win+Left` switches virtual desktop, which means an ordinary
+/// keystroke starts a dictation. Driving the shipped matcher with a real key
+/// order measures it at one fire per switch, and `on_hotkey` is a **toggle**, so
+/// two switches record the interval between them and paste the transcript
+/// wherever the cursor is.
+///
+/// **This warns and changes nothing.** When a modifier-only chord should fire is
+/// KNEG-115's open question, and every answer to it costs something: firing on
+/// release adds the hold time to every dictation start, which is the latency
+/// `ModifierOnly` exists to avoid. Choosing that in passing would be deciding
+/// the behaviour of the shipped default on the way past — which is, with some
+/// irony, exactly the failure being warned about. So the exposure is disclosed
+/// and the decision is left where it belongs.
+///
+/// **Every modifier-only chord gets one**, not only the ones with a named
+/// example, because the general statement is true of all of them and
+/// [`crate::keys::COMMON_PREFIXES`] cannot be exhaustive. A caution that
+/// appeared only for the five listed keystrokes would read as a clean bill of
+/// health for the sixth.
+#[must_use]
+pub fn prefix_cautions(bindings: &[Binding]) -> Vec<Caution> {
+    let mut found = Vec::new();
+    for binding in bindings {
+        for accelerator in &binding.accelerators {
+            let Accelerator::ModifierOnly { accelerator, .. } = accelerator else {
+                continue;
+            };
+            let Ok(chord) = crate::keys::Chord::parse(accelerator) else {
+                continue;
+            };
+
+            let example = crate::keys::prefix_collision(&chord).map_or_else(String::new, |press| {
+                format!(" On this platform that includes {press}.")
+            });
+
+            // Only for the action that is actually handled. Saying "recorded
+            // and pasted" about a hotkey nothing dispatches would be inventing
+            // a consequence -- see `commands::hotkeys`, which reports the other
+            // four as unhandled rather than letting them look wired.
+            let consequence = if binding.action == HotkeyAction::Dictation {
+                " Dictation is a toggle, so two of those record everything in between and put \
+                 the transcript wherever the cursor is."
+            } else {
+                ""
+            };
+
+            found.push(Caution {
+                action: binding.action,
+                accelerator: accelerator.clone(),
+                reason: format!(
+                    "{accelerator} fires as soon as both keys are down, so it also goes off on \
+                     the way into any longer shortcut that starts with them.{example}\
+                     {consequence}"
+                ),
+            });
+        }
+    }
+    found
+}
+
 /// Every accelerator in `bindings` that an AltGr keystroke also fires.
 ///
 /// **The measured defect (KNEG-37).** On a Nordic, German or most other non-US
@@ -837,15 +902,99 @@ mod tests {
         ];
         let bindings = [bound(HotkeyAction::Dictation, "Control+Alt")];
 
-        for layout in layouts {
-            for caution in cautions(&bindings, &layout) {
-                assert!(
-                    !caution.reason.contains("  "),
-                    "a run of spaces in a sentence shown to a person: {}",
-                    caution.reason
-                );
-            }
+        let all = layouts
+            .into_iter()
+            .flat_map(|layout| cautions(&bindings, &layout))
+            .chain(prefix_cautions(&bindings));
+
+        for caution in all {
+            assert!(
+                !caution.reason.contains("  "),
+                "a run of spaces in a sentence shown to a person: {}",
+                caution.reason
+            );
         }
+    }
+
+    /* ------------------------------------------------- prefix cautions */
+
+    /// The shipped default is warned about, by name.
+    ///
+    /// `Control+Super` is what the application binds out of the box and
+    /// `Ctrl+Win+Left` switches virtual desktop, so this is the sentence a user
+    /// on the default sees. It has to name the keystroke: "any longer shortcut"
+    /// alone is true and gives nobody anything to recognise.
+    #[test]
+    fn the_default_dictation_hotkey_says_what_else_fires_it() {
+        let found = prefix_cautions(&[bound(HotkeyAction::Dictation, "Control+Super")]);
+        assert_eq!(found.len(), 1, "{found:?}");
+        let reason = &found[0].reason;
+        assert!(reason.contains("Ctrl+Win+Left"), "{reason}");
+        assert!(reason.contains("toggle"), "{reason}");
+    }
+
+    /// A chord with no listed keystroke is still warned about.
+    ///
+    /// `COMMON_PREFIXES` cannot be exhaustive — every two-modifier chord is a
+    /// prefix of something. A caution that appeared only for the listed ones
+    /// would read as a clean bill of health for the rest, which is the opposite
+    /// of what is true.
+    #[test]
+    fn a_chord_with_no_named_example_is_cautioned_anyway() {
+        let found = prefix_cautions(&[bound(HotkeyAction::Dictation, "Alt+Super")]);
+        assert_eq!(found.len(), 1, "{found:?}");
+        let reason = &found[0].reason;
+        assert!(reason.contains("as soon as both keys are down"), "{reason}");
+        assert!(
+            !reason.contains("On this platform"),
+            "no example exists, so none should be claimed: {reason}"
+        );
+    }
+
+    /// An accelerator with an ordinary key in it is not affected.
+    ///
+    /// It goes to the system shortcut register, which arbitrates it against
+    /// every other application and never reaches this matcher. Warning about it
+    /// would be noise, and noise is what stops the real cautions being read.
+    #[test]
+    fn a_registrable_accelerator_gets_no_prefix_caution() {
+        assert!(prefix_cautions(&[bound(HotkeyAction::Dictation, "Control+Shift+D")]).is_empty());
+    }
+
+    /// Only the action something dispatches is told what it costs.
+    ///
+    /// Four of the five actions have no handler, and `commands::hotkeys`
+    /// reports them as unhandled rather than letting a bound key look wired.
+    /// Telling one of those that it records and pastes would invent a
+    /// consequence it does not have.
+    #[test]
+    fn an_unhandled_action_is_not_told_it_records_anything() {
+        let found = prefix_cautions(&[bound(HotkeyAction::ChatAgent, "Control+Super")]);
+        assert_eq!(found.len(), 1, "{found:?}");
+        let reason = &found[0].reason;
+        assert!(reason.contains("Ctrl+Win+Left"), "{reason}");
+        assert!(
+            !reason.contains("toggle"),
+            "nothing dispatches this action, so it records nothing: {reason}"
+        );
+    }
+
+    /// A sided chord is warned about too, and this is why it is worth saying.
+    ///
+    /// KNEG-35 made sided spellings typable and KNEG-37's AltGr caution now
+    /// suggests one as a remedy. That remedy is right about AltGr and does
+    /// nothing about this: `LeftControl+LeftSuper` is a prefix of
+    /// `Ctrl+Win+Left` exactly as the unsided chord is. Somebody following the
+    /// AltGr advice must not land here believing they are done.
+    #[test]
+    fn the_altgr_remedy_is_not_a_remedy_for_this() {
+        let found = prefix_cautions(&[bound(HotkeyAction::Dictation, "LeftControl+LeftSuper")]);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(
+            found[0].reason.contains("Ctrl+Win+Left"),
+            "{}",
+            found[0].reason
+        );
     }
 
     #[test]

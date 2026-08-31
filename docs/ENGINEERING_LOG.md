@@ -322,11 +322,46 @@ And a sided chord is no escape from this one. It is from AltGr, which is why KNE
 separate issues — `LeftControl+LeftSuper` is a prefix of `Ctrl+Win+Left` exactly as the unsided
 chord is.
 
-### The fix is still not chosen
+### The fix is still not chosen, and the exposure is now disclosed
 
-Deliberately. All three options in the issue cost something real, and the one the issue calls honest
-— fire on release — adds the hold time to every dictation start, which is the latency
-`ModifierOnly` exists to avoid. That is a trade for the person who has to live with the default.
+All three options in the issue cost something real, and the one it calls honest — fire on release
+— adds the hold time to every dictation start, which is the latency `ModifierOnly` exists to
+avoid. That is a trade for the person who lives with the default, and choosing it in passing would
+be deciding the behaviour of the shipped default on the way past — which is, with some irony,
+exactly the failure being warned about.
+
+So `hotkey::prefix_cautions` warns and changes nothing, which is the pattern KNEG-37 established for
+AltGr and needs no decision at all. On screen:
+
+> Control+Super fires as soon as both keys are down, so it also goes off on the way into any longer
+> shortcut that starts with them. On this platform that includes Ctrl+Win+Left, which switches
+> virtual desktop. Dictation is a toggle, so two of those record everything in between and put the
+> transcript wherever the cursor is.
+
+Which chord collides with which keystroke is asked of the **real matcher**, exactly as
+`altgr_collision` is, for the same reason: a predicate reasoning about modifier names would be free
+to drift from the behaviour in precisely the cases nobody wrote a test for.
+
+**Every modifier-only chord gets a caution, not only the five with a named example.**
+`COMMON_PREFIXES` cannot be exhaustive — every two-modifier chord is a prefix of something — and a
+warning that appeared only for the listed keystrokes would read as a clean bill of health for the
+sixth. `Alt+Super` gets the general sentence and no invented example.
+
+**Only the handled action is told what it costs.** Four of the five actions have no handler;
+telling one of those that it records and pastes would invent a consequence it does not have.
+
+### Two cautions, kept apart
+
+`Control+Alt` on a Nordic layout now produces two sentences, and a test that asserted *exactly one*
+had to be re-scoped rather than relaxed. They are different facts: AltGr depends on the layout,
+being a prefix depends only on the chord having two keys, and either holds without the other. On a
+US layout the AltGr one disappears and the prefix one stays — a US keyboard cannot press AltGr and
+can certainly press Ctrl+Alt+Delete.
+
+That also closes a loop worth noticing. KNEG-37's caution now suggests a sided chord as its remedy,
+and KNEG-35 made sided chords typable. Someone who follows that advice gets a chord that is still a
+prefix, and `the_altgr_remedy_is_not_a_remedy_for_this` is the test that says so out loud rather
+than leaving them to find out.
 
 ---
 

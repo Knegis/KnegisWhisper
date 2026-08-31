@@ -390,6 +390,63 @@ pub fn sided_escape(chord: &Chord) -> Option<String> {
     Some(candidate)
 }
 
+/// Ordinary keystrokes whose first two keys are modifiers, and what they do.
+///
+/// The third key is [`Key::Other`] with an arbitrary scan code: which key it is
+/// does not matter, only that it is not a modifier, because the chord has
+/// already completed by the time it arrives. That is the whole of KNEG-115.
+///
+/// **This list is not exhaustive and cannot be.** Every two-modifier chord is a
+/// prefix of *something*; these are the ones common enough on Windows to name.
+/// A chord absent from it is not thereby safe, which is why the caution built
+/// from this says the general thing as well as the specific one.
+const COMMON_PREFIXES: [(&str, &[Key]); 5] = [
+    (
+        "Ctrl+Win+Left, which switches virtual desktop",
+        &[Key::LeftControl, Key::LeftSuper, Key::Other(37)],
+    ),
+    (
+        "Ctrl+Shift+Escape, which opens Task Manager",
+        &[Key::LeftControl, Key::LeftShift, Key::Other(27)],
+    ),
+    (
+        "Ctrl+Alt+Delete",
+        &[Key::LeftControl, Key::LeftAlt, Key::Other(46)],
+    ),
+    (
+        "Win+Shift+S, which takes a screenshot",
+        &[Key::LeftSuper, Key::LeftShift, Key::Other(83)],
+    ),
+    (
+        "Alt+Shift+Tab, which switches window",
+        &[Key::LeftAlt, Key::LeftShift, Key::Other(9)],
+    ),
+];
+
+/// Which ordinary keystroke, if any, this chord fires on the way through.
+///
+/// **Decided by running the real matcher**, for the reason [`altgr_collision`]
+/// is: whether `Control+Super` fires during `Ctrl+Win+Left` has an exact answer
+/// that [`ChordWatcher`] already computes, and a predicate reasoning about
+/// modifier names would be free to drift away from it in exactly the cases
+/// nobody wrote a test for.
+///
+/// Returns `None` when no *listed* keystroke completes it, which is not the
+/// same as safe. See [`COMMON_PREFIXES`].
+#[must_use]
+pub fn prefix_collision(chord: &Chord) -> Option<&'static str> {
+    for (description, sequence) in COMMON_PREFIXES {
+        let mut watcher = ChordWatcher::new(vec![chord.clone()]);
+        if sequence
+            .iter()
+            .any(|key| watcher.key_down(*key) != Fired::Nothing)
+        {
+            return Some(description);
+        }
+    }
+    None
+}
+
 /// Whether a name is a key the cross-platform API would know.
 ///
 /// Not exhaustive and does not need to be: it exists so `Control+F5` reports "F5
