@@ -1,5 +1,5 @@
 {
-  "$comment": "Every UI surface a config/integration-manifest.json entry may name, and whether it exists. `built` is mechanical: tools/integration-audit/verify-parity.mjs requires the named component to exist and to render data-surface=\"<surfaceId>\". The manifest's per-entry `reachable` is the claim that a user can actually configure that integration through the surface, and it may only be true where the surface is built. The two are separate because a surface can exist and still not configure everything it lists -- see Settings > Transcription below.",
+  "$comment": "Every UI surface a config/integration-manifest.json entry or a config/settings-keys.json entry may name, and whether it exists. `built` is mechanical: tools/integration-audit/verify-parity.mjs requires the named component to exist and to render data-surface=\"<surfaceId>\". The per-entry `reachable` in each of those two files is the claim that a user can actually reach that thing through the surface, and it may only be true where the surface is built. The two are separate because a surface can exist and still not configure everything it lists -- see Settings > Transcription below. tools/settings-audit/scan.mjs goes one step further for a settings key: the surface's component must call the IPC wrapper for the command that writes that key, so naming a screen is not enough.",
   "schemaVersion": 1,
   "surfaces": {
     "Settings > Providers": {
@@ -18,7 +18,7 @@
       "surfaceId": "settings.transcription.local",
       "component": "apps/desktop/src/views/SettingsTranscription.tsx",
       "built": true,
-      "note": "Offers whisper models only. The sherpa-onnx sidecar now exists (Task 17) and Task 18 measured and implemented its offline CLI contract for the two Parakeet models -- both transcribe correctly, proven by a real test -- but this screen has not been extended to install or select them, so all four non-whisper local-asr entries stay unreachable: the two Parakeet ones because the runtime is proven but has no selector here yet, and the two Nemotron ones for an unrelated reason -- they are streaming models over sherpa's own WebSocket protocol, which nobody has built a client for. apps/desktop/src-tauri/src/dictation.rs's own comment on LocalTargets names the Parakeet wiring as the anticipated next step."
+      "note": "Offers the six whisper models and, since 121dc4c, the two Parakeet models through the sherpa-onnx sidecar -- sherpa_install_model installs the CLI too if it is missing, and sherpa_use_model resolves a selection before remembering it, so a model that cannot run is refused now rather than at the next dictation. One local engine, not two: a selected sherpa model wins over a running whisper server, and local_server_start clears the sherpa selection. The two Nemotron entries stay unreachable for an unrelated reason -- they are streaming models over sherpa's own WebSocket protocol, which nobody has built a client for. Writes transcription.localModel and transcription.sherpaModel (config/settings-keys.json)."
     },
     "Settings > Intelligence": {
       "surfaceId": "settings.intelligence",
@@ -41,7 +41,20 @@
     "Settings > Meetings": {
       "surfaceId": "settings.meetings",
       "component": "apps/desktop/src/views/SettingsMeetings.tsx",
-      "built": true
+      "built": true,
+      "note": "Sets the meeting provider, the prompt-on-detect switch, the language hint and the key terms. It does not set meetings.detect -- the allow and deny lists deciding which applications count as a meeting have a registered command and no control here, which config/settings-keys.json declares unreachable (KNEG-113)."
+    },
+    "Dictation > Shortcuts": {
+      "surfaceId": "dictation.shortcuts",
+      "component": "apps/desktop/src/views/Dictation.tsx",
+      "built": true,
+      "note": "Binds an accelerator to each of the five hotkey actions and writes hotkey.<action>. Binding a key and seeing whether anything handled it are on one screen deliberately -- the first bench check could not tell \"the hotkey did nothing\" from \"the hotkey saved nothing\". Four of the five actions have no handler; commands::hotkeys reports that as an UnhandledAction rather than letting a bound key look wired."
+    },
+    "Dictation > History": {
+      "surfaceId": "dictation.history",
+      "component": "apps/desktop/src/views/Dictation.tsx",
+      "built": true,
+      "note": "Switches history off, keeps the pre-cleanup transcript, and clears what is stored. The first two controls exist because the backend honoured history.enabled and history.keepRawText with no way in (KNEG-98, KNEG-99) -- the pattern tools/settings-audit/scan.mjs now gates."
     },
     "Integrations > Calendar": {
       "surfaceId": "integrations.calendar",

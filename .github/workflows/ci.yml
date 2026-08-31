@@ -35,6 +35,13 @@ jobs:
       - name: Integration parity
         run: node tools/integration-audit/verify-parity.mjs
 
+      # Enumerates the settings keys the Rust side reads and fails when one of
+      # them cannot be changed by anything shipped. Three defects had that
+      # shape and all three had passing unit tests -- a test sets the value
+      # directly, so it never asks whether a user can reach it.
+      - name: Settings keys are reachable
+        run: node tools/settings-audit/scan.mjs
+
       # A source-level check, not `cargo metadata`: it runs with no toolchain,
       # so it belongs here rather than in the rust job. Catches two crates
       # producing a same-named binary, which cargo lets silently overwrite.
@@ -60,6 +67,13 @@ jobs:
       # still reports green. These assert the UI-surface rules actually fire.
       - name: Parity gate self-tests
         run: node --test tools/integration-audit/verify-parity.test.mjs
+
+      # Same again, and the argument is sharpest here: this gate exists because
+      # three settings had passing tests and no way in, so a gate against that
+      # which was itself only ever run green would be the same mistake a third
+      # time. Each rule was also neutered in turn to confirm a test breaks.
+      - name: Settings gate self-tests
+        run: node --test tools/settings-audit/scan.test.mjs
 
       # Six of these cover the pin reader refusing to parse a table whose shape
       # has changed. That is the case worth guarding: a verifier that silently

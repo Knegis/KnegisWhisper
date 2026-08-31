@@ -633,6 +633,16 @@ history*.
 new entry appears and the entries already listed are untouched. Switch it back on and confirm the
 next dictation is written without a relaunch — the sink reads the setting per row, so it should be.
 
+**The pattern is now gated, and the gate found a fourth instance immediately (2026-08-31,
+KNEG-104).** `tools/settings-audit/scan.mjs` enumerates every settings key the backend reads and
+fails when one of them names no `#[tauri::command]` that writes it, when that command is
+unregistered, or when the screen it claims never calls the writer. The fourth:
+`meetings.detect` — the allow and deny lists deciding which applications count as a meeting — has
+the command, the registration, the IPC wrapper and a dev fixture, and **no control on
+`Settings > Meetings`**. Found by the gate rather than by anyone reading a screen, which is the
+first time that has happened for this defect class. Filed as KNEG-113 and declared unreachable in
+`config/settings-keys.json` rather than hidden, so it prints on every successful run.
+
 ### Added by the live Teams meeting, same day
 
 **Verified:** `meeting-stream:local` produces a **live** transcript during recording, not only a

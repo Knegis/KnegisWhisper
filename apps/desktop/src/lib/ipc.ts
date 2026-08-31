@@ -689,7 +689,20 @@ export async function setSetting(key: string, value: unknown): Promise<void> {
   return invoke("settings_set", { key, value });
 }
 
-/** Every settings key Rust will accept, so a screen cannot invent one. */
+/**
+ * Every settings key that currently has a stored value. Values are not returned.
+ *
+ * Not the set of keys Rust will accept, which this said until 2026-08-31: the
+ * command reads the `settings` table, so a key at its default has never been
+ * written and does not appear. The list of keys the application has, and which
+ * screen changes each one, is `config/settings-keys.json`, gated by
+ * `tools/settings-audit/scan.mjs`.
+ *
+ * This and the two wrappers above it have no caller. Every screen goes through
+ * a command named for the setting it changes instead, which is what lets that
+ * gate tell a key with a way in from one without -- a generic writer would make
+ * every key look reachable.
+ */
 export async function getSettingsKeys(): Promise<string[]> {
   return invoke<string[]>("settings_keys");
 }

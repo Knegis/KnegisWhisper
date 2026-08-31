@@ -177,7 +177,7 @@ export function DictationView({
     <div className="view">
       {error ? <p className="error">{error}</p> : null}
 
-      <section>
+      <section data-surface="dictation.shortcuts">
         <h2>Shortcuts</h2>
         {hotkeys.bindings.map((b) => (
           <div key={b.action} className="row">
@@ -340,7 +340,7 @@ export function DictationView({
         ) : null}
       </section>
 
-      <section>
+      <section data-surface="dictation.history">
         <h2>History</h2>
 
         {/* First, because it governs whether the other two controls in this

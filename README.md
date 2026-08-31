@@ -63,7 +63,8 @@ when you configure them with your own credentials, and requests go straight to t
 | [NETWORK_BOUNDARY.md](docs/NETWORK_BOUNDARY.md) | Every reason this app makes a network request |
 | [PLATFORM_SUPPORT.md](docs/PLATFORM_SUPPORT.md) | What works where, and what is unverified |
 | [PORTING_MATRIX.md](docs/PORTING_MATRIX.md) | How each upstream piece is handled |
-| [`config/ui-surfaces.json`](config/ui-surfaces.json) | Every UI surface an integration may claim, and whether it exists |
+| [`config/ui-surfaces.json`](config/ui-surfaces.json) | Every UI surface an integration or a setting may claim, and whether it exists |
+| [`config/settings-keys.json`](config/settings-keys.json) | Every settings key the backend reads, and how a user changes it |
 | [SECURITY.md](docs/SECURITY.md) | Threat model, credential handling, reporting |
 | [UPSTREAM_AUDIT.md](docs/UPSTREAM_AUDIT.md) | Phase 0 audit of both upstream projects |
 
@@ -74,8 +75,10 @@ Requires Rust 1.90+, Node 22+, and a platform C toolchain.
 ```sh
 # Repository contracts — the same checks CI gates on
 node tools/integration-audit/verify-parity.mjs   # integration parity
+node tools/settings-audit/scan.mjs               # settings keys a user can reach
 node tools/domain-scanner/scan.mjs               # forbidden vendor domains
 node --test tools/domain-scanner/scan.test.mjs   # scanner self-tests
+node --test tools/settings-audit/scan.test.mjs   # settings gate self-tests
 
 # Rust
 cargo fmt --all --check

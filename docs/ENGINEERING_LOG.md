@@ -270,6 +270,111 @@ Unchanged from the Phases 1–4 entry, restated here so they are not buried:
 
 ---
 
+## 2026-08-31 (KNEG-104) — the fourth instance, found by the gate written for the first three
+
+Three defects in this repository have had one shape, and each was found by a person reading a
+screen rather than by anything automatic:
+
+1. Four hotkeys that registered and dispatched nowhere.
+2. `history.keepRawText`, hardcoded `false` at the only real call site, under a comment calling it
+   opt-in (KNEG-98).
+3. `history.enabled`, honoured before every history row and settable only by editing SQLite by hand
+   (KNEG-99).
+
+**Why the tests were no help, which is the whole point.** Every one of those settings had a key, a
+default, and a passing unit test. A test sets the value directly — so it exercises the branch and
+never asks whether anybody can reach it. Three green suites and three settings nobody could change.
+That is not a gap in coverage; it is a question the tests were not shaped to ask, and the fix is a
+different kind of check rather than more of the same kind.
+
+`config/settings-keys.json` plus `tools/settings-audit/scan.mjs` is that check, in the contracts
+job beside the parity gate and the domain scanner.
+
+**It found the fourth instance on its first run.** `meetings.detect` — the allow and deny lists
+deciding which running applications count as a meeting — has a `#[tauri::command]` that writes it,
+registered in `generate_handler!`, with an IPC wrapper and a dev fixture, and **no screen calls
+it**. Everything except the control exists. Filed as KNEG-113 and declared `reachable: false` with
+a note, so the gate stays green while the gap stays visible — the same treatment the parity gate
+gives its unreachable integrations, and for the same reason: a backlog printed on success is read,
+and a red gate that is red every day is not.
+
+### Two design decisions that decide whether it means anything
+
+**The generic writer cannot count as a writer.** `commands::settings_set(key, value)` writes
+whatever key the renderer names. Counting it would make the gate pass for every key ever added,
+which is a check that reports success by construction. The set of such commands is *computed from
+source* — a command whose key argument resolves to a renderer-supplied expression — rather than
+hardcoded, so a second generic writer would be caught the day it is added rather than the day
+somebody remembers this paragraph. Naming one in `writtenBy` is the `generic-writer` violation.
+
+**An unresolvable key expression is a violation, never a skip.** The scanner resolves four shapes:
+a literal, a `const NAME: &str`, a small `fn -> &'static str` match (how the calendar keys are
+written), and a declared derived family (the five `hotkey.*`, built by `format!` in another crate
+and pinned there by a named test this gate resolves). Anything else fails. A scanner that quietly
+ignores the shape it does not understand reports green on exactly the key nobody can change — the
+defect it exists to catch, one level up. That is not hypothetical here: rule 5 of the parity gate
+had degenerated into a non-empty-string test and passed for sixty-four entries before rule 7 was
+added, which is the same failure and is why this one was written to fail loud instead.
+
+### Attribution, and the limit that came with it
+
+A write is attributed to the last function declared at or before it. This is not a call graph and
+does not pretend to be — a key written *only* by a helper the command calls would read as unwritten
+and fail. That direction is the safe one: it is loud, and the fix is a sentence rather than a
+silent pass. Measured before relying on it: of the production writes on the committed tree, every
+one sits directly inside a command except calendar's OAuth bookkeeping and
+`local_asr::clear_selection`, and the calendar pair are declared `internal` on their own merits.
+
+The same attribution is why test code needs no special handling. A `#[cfg(test)]` function is never
+a `#[tauri::command]`, so a test setting a value directly — the exact thing that hid all three
+original defects — cannot count as the way a user changes it. Nothing had to be stripped for that
+to hold; it falls out of asking the right question.
+
+### Reachability is resolved to a component, not to a string
+
+A key claiming `reachable: true` names a surface in `config/ui-surfaces.json`, and that surface's
+component must call the IPC wrapper for one of the key's writers. Naming a screen is not enough —
+which is precisely how `meetings.detect` is broken, and is the reason that key fails the check
+while every other meeting setting passes. Two surfaces were added to the registry to make this
+sayable, `Dictation > Shortcuts` and `Dictation > History`, both real sections of `Dictation.tsx`
+that had never been declared because no integration entry happened to name them.
+
+**What the gate does not claim.** That a key changes behaviour, or that anything is wired behind
+it. All five `hotkey.*` keys are writable from `Dictation > Shortcuts` and four of the five actions
+still have no handler; `commands::hotkeys` reports that separately as an `UnhandledAction`. This
+answers one question: can a user change the value at all.
+
+### Proven by neutering, not by passing
+
+Twenty-two self-tests, every case mutating the real committed inputs one at a time; the first two
+reconstruct KNEG-99 as it actually stood. Then each of six rules was disabled in turn and the suite
+re-run, to confirm a test breaks rather than assuming it would:
+
+```
+unwritable-key                  -> a test fails
+unreachable-writer              -> a test fails
+unresolvable-key-expression     -> two tests fail
+command-does-not-write-the-key  -> a test fails
+generic-writer                  -> a test fails
+undeclared-writer               -> a test fails
+```
+
+A gate against "a test passed and proved nothing" that had only ever been run green would be the
+same mistake a third time.
+
+### Corrected in passing
+
+- `getSettingsKeys`'s doc comment in `ipc.ts` said it returned *"every settings key Rust will
+  accept, so a screen cannot invent one"*. It returns the keys that currently have a stored row, so
+  a key sitting at its default is absent — and the command accepts any key `kw_storage::settings`
+  does not reject as credential-shaped. The three generic settings wrappers also have no caller,
+  which is now stated where somebody would otherwise reach for one.
+- `config/ui-surfaces.json`'s note for `Settings > Transcription > Local` still said the screen had
+  not been extended to install or select the Parakeet models. `121dc4c` added that selector and
+  flipped both manifest entries to `reachable: true`; the note was three commits stale.
+
+---
+
 ## 2026-08-31 (KNEG-93) — the residue that stopped being residue when the cost inverted
 
 `is_private_host` carried three gaps recorded as *accepted* rather than missed. Two of them are
