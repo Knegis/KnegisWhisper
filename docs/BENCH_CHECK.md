@@ -19,6 +19,67 @@ unchecked rather than left implied.
 
 ---
 
+## 2026-08-31 (later) — the first press of *Install*, and two things it found
+
+Two by-hand checks run on the machine against a debug build. One passed, one failed, and the failure
+is the more useful of the two.
+
+### Verified
+
+**A previously-uninstallable local LLM now installs.** `qwen2.5-1.5b-instruct-q5_k_m` is on disk at
+**1,285,494,304 bytes**, which is the pinned length to the byte. That model was one of the eighteen
+that downloaded in full and were then deleted for being 6.7–7.9% off a declared size, and it was the
+worst offender of the small ones at 7.9%. So KNEG-101's arithmetic fix and KNEG-45's digest are both
+proven on hardware for the first time: an exact length check and a SHA-256 both passed against real
+bytes through the application, not through a test.
+
+The `llama` sidecar installed alongside it, unattended, in the same run.
+
+**Still unverified, and the file on disk does not show it:** what the row said. Nobody read
+*checksum verified against the publisher's own* on screen, before the install or after it, and
+nothing has rendered `VerifiedBy::StatedDigest` outside a dev fixture. That sentence is the whole
+visible surface of KNEG-45 and it remains unseen.
+
+### Findings
+
+**1. No whisper model could be installed while a whisper model was in use.** Pressing *Install* on
+`base` did nothing: no `ggml-base.bin`, no `.partial`, and no error the person at the machine could
+act on.
+
+`local_model_install` installed the server sidecar **unconditionally** before the model, and
+`kw_sidecar::install` finishes by replacing the sidecar directory. `resume_last_used` had already
+started `whisper-server.exe` out of that directory at launch — `tiny` was installed and remembered.
+On Windows a directory holding a running executable cannot be removed. So the `?` returned before
+the model was ever fetched.
+
+Measured on this machine rather than assumed: `remove_dir_all` on a directory containing a running
+executable fails with **`WinError 5`, Access is denied, on the `.exe` itself**. The evidence the
+failed run left behind was a `sidecars/whisper.incoming` staging directory holding a complete,
+verified, extracted copy of the sidecar that never got promoted.
+
+The same run installed a GGUF successfully, which is what made the cause obvious:
+`local_llm_install` has always guarded the sidecar install with `kw_sidecar::locate`, and the
+whisper path never did. Fixed by giving it the same guard.
+
+**Skipping loses nothing.** The unconditional call looked like a way to keep the sidecar current,
+and never was — it can only succeed when no server is running, which is only the first install, when
+there is nothing to refresh. Keeping a sidecar current after that is **KNEG-113**, which is a real
+gap and a different one: the installed whisper sidecar dates from 2026-08-25 and the pinned archive
+has since gained `bench.exe` and `command.exe`, so it is measurably behind.
+
+**2. There is no chat, and two documents told a person to hold one.** The instruction "install a
+local LLM and hold a chat" names a screen that does not exist. The application has thirteen views
+and none of them is a chat; `config/ui-surfaces.json` has no such surface, and the chat agent is
+phase 10 (KNEG-74).
+
+The local LLM has exactly one consumer: **dictation cleanup**. The route to exercise a downloaded
+GGUF is `Settings > Local models` → *Use this model*, then `Settings > Intelligence` → the **local
+model** route, then dictate. `reasoning.rs` already wires the two screens together and says so on
+screen — *"no local model is running. Start one under Local models."* — so the path is built and
+only its name was wrong. Both instructions are corrected.
+
+---
+
 ## 2026-08-26 — chunks A–D, as far as one machine can go unattended
 
 Windows 11 Pro 26200, AMD, `Speakers (Realtek(R) Audio)`, `Microphone Array (AMD Audio Device)`.
@@ -303,7 +364,7 @@ Nothing here needs a developer. All of it is buttons, one sentence spoken aloud,
    exercised it.
 4. **Switch dictation cleanup on** under `Settings > Intelligence` and dictate. Chunk B's claim is
    that the tidied text comes back; nobody has read it.
-5. **Install a local LLM** under `Settings > Local models`, hold a chat, and leave it idle for five
+5. **Install a local LLM** under `Settings > Local models`, use it, and leave it idle for five
    minutes to see it stop. Sizes reach 5.9 GB — the smallest is the point of the check, not the
    largest. **Note, 2026-08-31:** the smallest models were never the broken ones. Eighteen of the
    thirty-five had a declared size 6.7–7.9% off the real file and were deleted after downloading in
@@ -720,11 +781,14 @@ with a fourth `MeetingState` saying so.
    organisation, were downloaded in full and hashed, agreeing exactly. Unit tests prove every model
    resolves to a real size check and a real digest check rather than to "nothing declared".
 
-   **What is not:** no GGUF has been downloaded *through the application* since either change.
-   Press *Install (1.3 GB)* on `qwen2.5-1.5b-instruct-q5_k_m` — the smallest of the eighteen and
-   the worst offender of them, at 7.9% — and confirm the download renames into place instead of
-   being deleted, that the row then shows *Use this model*, and that pressing it starts a server
-   that answers. **Two things on screen are part of the check.** The size on the button reads the
+   **Done on 2026-08-31**, and it passed: `qwen2.5-1.5b-instruct-q5_k_m` — the smallest of the
+   eighteen and the worst offender of them, at 7.9% — was installed through the screen and is on
+   disk at **1,285,494,304 bytes**, the pinned length to the byte. The exact-length check and the
+   SHA-256 both passed against real bytes fetched by the application. See the 2026-08-31 (later)
+   section at the top of this file.
+
+   **What is still not checked, and the file on disk cannot show it:** that the row then shows
+   *Use this model*, and that pressing it starts a server that answers. **Two things on screen are part of the check.** The size on the button reads the
    measured figure, so *Install (1.3 GB)* where it used to say 1.4 GB is the size fix visible
    without instrumentation. And the row should read *checksum verified against the publisher's own*
    before the install and *… is installed — checksum verified against the publisher's own* after

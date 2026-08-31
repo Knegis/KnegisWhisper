@@ -262,6 +262,91 @@ Unchanged from the Phases 1–4 entry, restated here so they are not buried:
 
 ---
 
+## 2026-08-31 (bench) — the install button that could only ever work once
+
+The first person to press *Install* on a whisper model found nothing happened. No `ggml-base.bin`,
+no `.partial`, no error worth acting on. The same session installed a 1.3 GB GGUF without trouble,
+which is what made the cause findable.
+
+### What it was
+
+`local_model_install` installed the server sidecar **unconditionally** before the model:
+
+```rust
+kw_sidecar::install(&local.policy, spec, asset, &sidecars.path, ...).await?;
+let installed = models::install(&local.policy, model, &models_dir.path, ...).await?;
+```
+
+`kw_sidecar::install` ends by replacing the sidecar directory, and `resume_last_used` has already
+started `whisper-server.exe` out of that directory by the time anybody presses anything. On Windows
+a directory holding a running executable cannot be removed, so `remove_dir(&final_dir)` failed, the
+`?` returned, and the model was never fetched.
+
+**So the button could only work when no whisper model was in use — which is to say, once.** After
+the first install there is always a model to resume, so there is always a server running out of the
+directory the next install has to replace.
+
+### Measured rather than reasoned
+
+The mechanism was checked on this machine rather than taken from memory, because "Windows locks
+running executables" is the kind of thing that is true in outline and wrong in the detail:
+
+- `remove_dir_all` on a directory holding a running `.exe` → **`WinError 5`, Access is denied**,
+  reported against the `.exe` itself.
+- `rename` of that same directory → **succeeds.** Windows denies delete on the image file, not
+  rename of a parent. Worth writing down; it is the escape hatch if a real upgrade path ever needs
+  one.
+
+A first attempt at this measurement used `timeout.exe`, which exits immediately with no console
+attached, and reported "no lock". It proved nothing and would have sent the diagnosis the wrong way.
+The second used `ping -n 40`, confirmed running in the process list before the deletion was tried.
+
+The failed run had also left its own evidence: `sidecars/whisper.incoming` holding a complete,
+verified, extracted copy of the sidecar that never got promoted — exactly the state the code leaves
+when it fails between extraction and the swap.
+
+### The fix was already written, in the file next door
+
+`local_llm_install` in `local_llm.rs` has always guarded the same call:
+
+```rust
+let installation = kw_sidecar::locate(SIDECAR, asset, &search_path, &kw_sidecar::RealFs);
+if installation.executable().is_none() { kw_sidecar::install(...).await?; }
+```
+
+That is why the GGUF installed on the run that the whisper model failed. The whisper path now does
+the same thing, through a named `sidecar_needed` so the judgement is testable — the command takes an
+`AppHandle` and is untestable by construction, the same reason `check_importable_file` and
+`import_pick_dialog` exist. Three tests: installed skips, missing installs, and **`Incomplete`
+installs**, which is the case with the judgement in it — a directory with no executable is an
+interrupted extraction, nothing is running out of it, and replacing it is safe.
+
+### Skipping loses nothing, and that is worth arguing rather than asserting
+
+The unconditional call looks like a way to keep the sidecar current. It never was. It can only
+succeed when no server is running, which is only the first install, when there is nothing to
+refresh. Every later call failed outright rather than updating anything.
+
+But the gap it appeared to cover is real and now has nothing covering it: the installed whisper
+sidecar dates from 2026-08-25 and the pinned archive has since gained `bench.exe` and `command.exe`,
+so it is measurably behind. Filed as **KNEG-113** with the rename measurement, rather than solved
+here by a scheme whose cleanup story is unresolved — a displaced directory still cannot be deleted
+while the old executable runs, so it has to survive until a launch where nothing holds it.
+
+### The other finding: two documents told a person to hold a chat
+
+`docs/BENCH_CHECK.md` and `docs/BUILD_PLAN.md` both instructed the reader to install a local LLM and
+*hold a chat*. **There is no chat.** The application has thirteen views, none of them a chat;
+`config/ui-surfaces.json` has no such surface; the chat agent is phase 10 (KNEG-74).
+
+The local LLM has one consumer, dictation cleanup, and the path is built: `Settings > Local models`
+→ *Use this model*, then `Settings > Intelligence` → the **local model** route, then dictate.
+`reasoning.rs` already says so on screen — *"no local model is running. Start one under Local
+models."* Only the instruction was wrong, and an unrunnable by-hand step is worse than a missing
+one: it reads as a defect in the application rather than in the sentence.
+
+---
+
 ## 2026-08-31 (KNEG-103) — 45 URLs stop naming a branch
 
 Every model this application downloads was fetched from

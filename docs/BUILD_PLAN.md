@@ -768,7 +768,9 @@ each item is in that file, not here.
 - **A:** store a key for OpenAI, run the connection test, see it pass; confirm the input never
   reads a stored secret back; confirm the parity gate's unreachable count drops. **Not yet done by
   a person** — `BENCH_CHECK.md`'s "still unchecked" list, item 3.
-- **B:** dictate with cleanup on and see the tidied text; start llama-server and hold a chat;
+- **B:** dictate with cleanup on and see the tidied text; start llama-server and route cleanup
+  through it (there is no chat screen — the local LLM's only consumer is cleanup, and the chat agent
+  is phase 10);
   confirm the 5-minute idle stop. **Not yet done by a person** — same list, items 4–5.
 - **C:** one live provider per client, if a key exists; otherwise the honest refusal.
 - **D:** record system audio while a video plays, with the microphone muted, and confirm both
