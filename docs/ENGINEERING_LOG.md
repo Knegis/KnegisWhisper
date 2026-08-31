@@ -266,6 +266,85 @@ Unchanged from the Phases 1–4 entry, restated here so they are not buried:
 
 ---
 
+## 2026-08-31 (KNEG-86 / KNEG-85) — the gate that could not check the one thing it was for
+
+`verify-parity.mjs` refuses a `reachable: true` claim unless the component file
+exists and renders its `data-surface` marker. That is the standard it holds UI
+surfaces to. A `kind: "documentation"` entry was held to nothing comparable: the
+rule checked that it **named** a target and stopped there.
+
+So `developer:agent-skills` carried `status: "ported"` with
+`target: "docs/agent-skills/"` for a twenty-task run, against a directory that
+had never existed, and no gate in this repository could have said so. It was
+found by hand, by the audit that was looking for exactly that pattern one step
+further along.
+
+### The exemption was right and the hole was next to it
+
+Documentation carries no code, so the backend and UI requirements genuinely do
+not apply. The mistake was the `continue` that followed: nothing took their
+place, which made a documentation entry the one kind that could assert work was
+done with nothing checking. It gets its own equivalent now — if the status is in
+`ACTIVE`, the target has to be there.
+
+**Existence and content.** An empty `docs/agent-skills/` satisfies "the
+rewritten documentation lives here" no better than a missing one, and is the
+same hole one commit later.
+
+### Injected, and failing closed
+
+`hasTarget` is a parameter, the way `readComponent` already is, because a rule
+that can only be run against the committed tree is a rule nobody can prove
+bites. The file's own doc comment already made that argument: *"this tree is
+clean" and "the rules work" are different claims, and only the second one keeps
+working after a refactor.*
+
+Its default is `() => false` — refuse every target. A caller who forgets to
+inject it gets a loud failure rather than a silent pass, which is the direction
+that matters for a check whose entire job is catching a claim about something
+that is not there. There is a test for the default, because a fail-closed
+default nobody exercises is an assumption rather than a behaviour.
+
+### Proved by removing the thing
+
+The strongest evidence is not a unit test. With `docs/agent-skills/` moved
+aside, the real gate exits **1** with:
+
+```
+documentation-target-missing (1)
+  developer:agent-skills: status "ported" claims the rewritten documentation is
+  at "docs/agent-skills/", which does not exist or is empty
+```
+
+and exits 0 with it restored. That is the original defect, reproduced against
+the fix.
+
+### And then the documentation, which is the point (KNEG-85)
+
+`docs/agent-skills/` now holds `knegiswhisper-api/SKILL.md` and
+`knegiswhisper-cli/SKILL.md`, and the manifest entry says `ported` again — a
+claim something now verifies.
+
+Two things about their content are deliberate:
+
+- **No hosted endpoint appears in either**, and neither says what they replaced.
+  The manifest's `upstream` array is where the provenance belongs; a skill that
+  spends a paragraph on a service that is not there teaches an agent about the
+  wrong system.
+- **Every shape in them was read out of the code that serves it** — the route
+  table in `server.rs`, the request types in `wire.rs`, the `clap` definitions
+  in `knegiswhisper/src/main.rs`, the `TOOLS` list in the MCP crate. Not one
+  endpoint was described from a memory of what an API like this usually does.
+
+And the limit is stated in the files themselves rather than left for a reader to
+discover: **no MCP client has ever connected to `knegiswhisper-mcp`** (KNEG-91).
+The protocol handling is unit-tested and has never had a real client on the
+other end, so the skill tells the agent to believe the wire over the document if
+they disagree. A skill that overstates its own confidence is the same defect
+this pair of issues is about, one layer up.
+
+---
+
 ## 2026-08-31 (KNEG-109) — a ceiling that cost something, and did not say what
 
 `deepgram_socket` bounds how much transcript one session retains: 16 MB, or 10 000 events. That

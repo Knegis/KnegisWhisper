@@ -1040,7 +1040,7 @@
       "note": "NOT a port. Upstream MCP is a hosted Streamable-HTTP service; no local or stdio implementation exists in the checkout. Entirely new work: tools/knegiswhisper-mcp is a stdio server reusing the CLI's own client and discovery-file reader over the local API, and Integrations > MCP shows the exact command line to configure in a client plus whether the binary was actually found."
     },
     "developer:agent-skills": {
-      "status": "temporarily-deferred",
+      "status": "ported",
       "phase": 7,
       "kind": "documentation",
       "upstream": [
@@ -1048,15 +1048,7 @@
         "agent-skills/openwhispr-cli/SKILL.md"
       ],
       "target": "docs/agent-skills/",
-      "deferral": {
-        "why": "Found by Task 19, not carried forward by any earlier task: this entry claimed status \"ported\" with target \"docs/agent-skills/\", and neither that directory nor any rewritten SKILL.md exists anywhere in this repository -- the rewrite was never done. verify-parity.mjs's incomplete-documentation rule only checks that a documentation entry names a target path, not that the path exists on disk, so nothing caught this. Corrected to the status that matches what is actually there: nothing.",
-        "dependencies": [
-          "someone to write docs/agent-skills/ rewriting the two upstream SKILL.md files to reference knegiswhisper / knegiswhisper-mcp and the local API only, in place of api.openwhispr.com and mcp.openwhispr.com"
-        ],
-        "interface": "none -- documentation only, no backend or UI surface of its own",
-        "expectedPhase": 7
-      },
-      "note": "Status corrected by Task 19: this previously claimed \"ported\" and named docs/agent-skills/ as where the rewritten docs live, but that directory does not exist. Documentation only -- no backend or UI surface of its own -- so this is not part of the ACTIVE-status audit's implementation-overclaim pattern; it is the same honesty defect one step earlier, a claim that specific work was done when it was not."
+      "note": "Written 2026-08-31 (KNEG-85): docs/agent-skills/ holds knegiswhisper-api/SKILL.md and knegiswhisper-cli/SKILL.md, covering the loopback HTTP API, the knegiswhisper command and the knegiswhisper-mcp stdio server. No hosted endpoint appears in either. This entry claimed \"ported\" for a twenty-task run against a directory that had never existed; the gate that should have caught that only checked the target was named, and now checks it exists and is not empty (KNEG-86, rule documentation-target-missing). So this status is a claim something verifies again."
     },
     "meeting-detect:zoom": {
       "status": "ported-with-new-rust-implementation",
