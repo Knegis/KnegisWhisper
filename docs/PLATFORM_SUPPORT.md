@@ -607,6 +607,49 @@ statically links `onnxruntime` into every one of those ~23 executables rather
 than sharing one `onnxruntime.dll` beside them the way the Windows "shared"
 build does.
 
+## Local ASR: whisper-server timings
+
+Measured on 2026-08-31, Windows 11 Pro 26200, against `ggml-tiny` and 13.5 s of
+synthesised speech, by starting the pinned `whisper-server.exe` by hand on a
+spare port and posting the same WAV to `/inference` under each configuration.
+
+**The question.** A 3,401-second Swedish import exported as a single subtitle
+cue at `00:00:00`, and the recorded suspicion was that `media.rs` failed to
+divide it. That was wrong. The server had not been asked for any timings, so
+there was nothing to divide.
+
+| server flags | `response_format=json` | `response_format=verbose_json` |
+| --- | --- | --- |
+| `--no-timestamps` (as shipped until 2026-08-31) | 0.63 / 0.65 / 0.65 s | **one** segment for the whole recording, carrying neither `start` nor `end` |
+| `--max-len 1000` | 0.66 / 0.66 / 0.70 s | 0.95 / 0.95 / 1.01 s, **one segment per utterance** with real `start` and `end` |
+
+Three runs each, `curl -w %{time_total}`.
+
+**What was ruled out.** Neither `split_on_word` nor `max_len` is honoured as a
+request field: sending `max_len=0` and `split_on_word=true` as form fields
+returned byte-identical responses to sending neither. They are start-time flags.
+`--max-len 0` at start time also changes nothing, because whisper.cpp's server
+reads `0` as `60` — which is where the sixty-character mid-utterance wrap that
+`--no-timestamps` was ported to remove actually comes from. An explicit cap far
+above what a 30-second decode window can hold removes the wrap by never
+reaching it.
+
+**What this fixed and what it did not.**
+
+- Media import now asks for `verbose_json` (`WhisperServer::timed`) and gets one
+  cue per utterance. Dictation and meetings still ask for `json`.
+- Dictation's output is **unchanged**, which was checked rather than assumed: the
+  `\n` that now separates utterances in `text` is collapsed by
+  `local::interpret`, and the result is byte-identical to what `--no-timestamps`
+  returned for the same audio.
+- **A cloud provider still reports no timings**, so an import routed to one gets
+  the single honest fallback cue the screen writes. Only the local whisper server
+  is fixed.
+- **`sherpa-onnx-offline` already prints `timestamps` and `words` on stdout** and
+  `sherpa::interpret` does not read them — see the sherpa section above, which
+  has listed those as unread fields since the probe. That is now a gap with a
+  known cure rather than an unexamined one.
+
 ## GPU acceleration
 
 | Backend | Windows | macOS | Linux |

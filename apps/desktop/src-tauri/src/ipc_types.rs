@@ -230,6 +230,7 @@ fn render() -> String {
             crate::media::MediaSidecar,
             crate::media::SidecarStatus,
             crate::media::MediaImportSource,
+            crate::media::ImportedSegment,
             crate::media::MediaImportResult,
             crate::media::MediaImportProgress,
         ],

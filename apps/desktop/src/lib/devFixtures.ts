@@ -1366,6 +1366,10 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
       model: "gpt-4o-transcribe",
       durationMs: 184_000,
       source: { kind: "audio" },
+      // A cloud provider answers with prose and reports no timings, so the
+      // screen writes its one honest fallback cue. Left empty on purpose:
+      // these two fixtures exist to show both halves.
+      segments: [],
     }) satisfies MediaImportResult,
   media_import_video: () =>
     ({
@@ -1374,6 +1378,14 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
       model: "whisper-large-v3-turbo-q5",
       durationMs: 921_000,
       source: { kind: "video" },
+      // The local server does report timings, one per utterance.
+      segments: [
+        {
+          text: "Recorded walkthrough of the meeting detector.",
+          timestamp: 0,
+          endTimestamp: 3.4,
+        },
+      ],
     }) satisfies MediaImportResult,
   /* calendars */
   calendar_status: () => CALENDAR,

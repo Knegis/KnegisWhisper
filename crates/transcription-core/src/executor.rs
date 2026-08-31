@@ -27,13 +27,23 @@ use crate::local::{Inference, LocalTranscriber};
 use crate::route::{Auth, AuthScheme, Transport};
 
 /// A finished transcription.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+// No `Eq`: a segment's timings are `f64`. Nothing compares two transcripts for
+// total equality, and `PartialEq` is what the tests use.
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Transcript {
     pub text: String,
     /// Which provider produced it, for the history row.
     pub provider: String,
     /// Which model, where the provider reports or was told one.
     pub model: Option<String>,
+    /// The transcript divided into timed utterances, when the engine timed it.
+    ///
+    /// Empty for every provider that answers with prose and for a local engine
+    /// that was not asked for timings, which is all of them but media import.
+    /// An empty list means *no timings were reported* -- never "the recording
+    /// was one utterance", which is the claim a single synthesised segment
+    /// spanning the whole file would make.
+    pub segments: Vec<crate::local::TimedSegment>,
 }
 
 /// Why a transcription failed.
@@ -244,6 +254,13 @@ impl<'a> Executor<'a> {
                 text,
                 provider: "local".to_owned(),
                 model: local.model_name(),
+                segments: Vec::new(),
+            }),
+            Inference::Timed { text, segments } => Ok(Transcript {
+                text,
+                provider: "local".to_owned(),
+                model: local.model_name(),
+                segments,
             }),
             Inference::Empty => Err(TranscriptionError::LocalEmpty),
             Inference::Rejected { status, body } => Err(TranscriptionError::LocalFailed {
@@ -568,6 +585,10 @@ pub fn interpret_response(
     };
 
     Ok(Transcript {
+        // No timings: every batch provider on this path answers with prose. A
+        // provider that reports segments would be a reason to read them here,
+        // not a reason to invent one.
+        segments: Vec::new(),
         text: text.trim().to_owned(),
         provider: provider.to_owned(),
         // Prefer what the provider says it used over what we asked for.

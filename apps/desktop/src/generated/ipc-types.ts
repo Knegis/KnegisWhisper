@@ -1241,10 +1241,34 @@ availability: Availability, installed: boolean, };
 export type MediaImportSource = { "kind": "audio" } | { "kind": "video" } | { "kind": "url", host: string, };
 
 /**
+ * One timed utterance of an imported transcript.
+ *
+ * A local mirror of `kw_transcription_core::local::TimedSegment` because that
+ * crate has no `ts-rs` dependency and should not gain one to cross an IPC
+ * boundary it knows nothing about. The field names match
+ * `kw_notes_core::transcript::Segment`, which is what the screen writes into.
+ */
+export type ImportedSegment = { text: string,
+/**
+ * Seconds from the start of the recording.
+ */
+timestamp: number, endTimestamp: number, };
+
+/**
  * What a finished import produced. The frontend turns this into a note; this
  * module does not write one itself.
  */
 export type MediaImportResult = { text: string, provider: string, model: string | null,
+/**
+ * The transcript divided into timed utterances, when the engine timed it.
+ *
+ * **Empty means no timings were reported**, not "the recording was one
+ * utterance". Only the local whisper server reports them, and only because
+ * this path asks (`WhisperServer::timed`); a cloud provider answers with
+ * prose, so an import routed to one still has no cues. The screen writes
+ * one segment spanning the recording in that case and says as much.
+ */
+segments: Array<ImportedSegment>,
 /**
  * Computed from the converted WAV, not asked of the source file, so it
  * reflects what was actually transcribed.

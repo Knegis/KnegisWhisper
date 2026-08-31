@@ -1214,8 +1214,15 @@ impl MeetingRuntime {
             kw_transcription_core::local::WhisperServer::new(self.policy.clone(), port, model);
 
         match server.transcribe(wav, None, None).await? {
-            Inference::Text(text) if !text.trim().is_empty() => Ok(Some(text)),
-            Inference::Text(_) | Inference::Empty => Ok(None),
+            // This is the whole-file fallback: one string is what it wants,
+            // and it is not asked for timings. `Timed` is accepted anyway
+            // because the text is the same text -- refusing it would turn a
+            // server configuration change into a lost recording, which is the
+            // opposite of what a fallback is for.
+            Inference::Text(text) | Inference::Timed { text, .. } if !text.trim().is_empty() => {
+                Ok(Some(text))
+            }
+            Inference::Text(_) | Inference::Timed { .. } | Inference::Empty => Ok(None),
             Inference::Rejected { status, body } => {
                 Err(format!("the local server answered {status}: {body}"))
             }

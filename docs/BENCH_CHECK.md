@@ -550,8 +550,15 @@ dead provider stops the recording, falls back immediately, or carries on with a 
    that matters, because a recording being imported usually cannot be made again. The remaining
    half of KNEG-96 — *why* the child exits unattended — is untouched by that fix and needs the
    first two log lines after a restart to tell the two candidates apart.
-3. **Whether a long import is transcribed in full.** The Swedish import produced one segment at
-   `00:00:00`; `media.rs` chunks nothing.
+3. **Whether a long import is transcribed in full — answered, and the diagnosis here was wrong.**
+   The Swedish import *was* transcribed in full: 39,142 characters for 3,401 seconds. It produced
+   one segment at `00:00:00` because the server was started with `--no-timestamps` and so reported
+   no timings at all — not because `media.rs` failed to divide it. Measured on 2026-08-31 and fixed
+   by capping the segment length instead; the table is in
+   [PLATFORM_SUPPORT.md](PLATFORM_SUPPORT.md#local-asr-whisper-server-timings). **Still needs a
+   person:** import a long recording through a *local* model and export it as SRT, and check the
+   cues land where the speech does. An import routed to a cloud provider still gets one cue, which
+   is correct — no cloud batch provider on this path reports segments.
 4. **`parakeet-tdt-0.6b-v3`** — offered on the same measured layout, still never downloaded.
 5. **Meeting detection firing on a real call.**
 

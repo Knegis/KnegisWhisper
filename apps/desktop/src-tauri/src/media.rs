@@ -169,10 +169,43 @@ pub struct MediaImportResult {
     pub text: String,
     pub provider: String,
     pub model: Option<String>,
+    /// The transcript divided into timed utterances, when the engine timed it.
+    ///
+    /// **Empty means no timings were reported**, not "the recording was one
+    /// utterance". Only the local whisper server reports them, and only because
+    /// this path asks (`WhisperServer::timed`); a cloud provider answers with
+    /// prose, so an import routed to one still has no cues. The screen writes
+    /// one segment spanning the recording in that case and says as much.
+    pub segments: Vec<ImportedSegment>,
     /// Computed from the converted WAV, not asked of the source file, so it
     /// reflects what was actually transcribed.
     pub duration_ms: u64,
     pub source: MediaImportSource,
+}
+
+/// One timed utterance of an imported transcript.
+///
+/// A local mirror of `kw_transcription_core::local::TimedSegment` because that
+/// crate has no `ts-rs` dependency and should not gain one to cross an IPC
+/// boundary it knows nothing about. The field names match
+/// `kw_notes_core::transcript::Segment`, which is what the screen writes into.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportedSegment {
+    pub text: String,
+    /// Seconds from the start of the recording.
+    pub timestamp: f64,
+    pub end_timestamp: f64,
+}
+
+impl From<&kw_transcription_core::local::TimedSegment> for ImportedSegment {
+    fn from(segment: &kw_transcription_core::local::TimedSegment) -> Self {
+        Self {
+            text: segment.text.clone(),
+            timestamp: segment.start,
+            end_timestamp: segment.end,
+        }
+    }
 }
 
 /// Progress of installing a media-import sidecar, or of running an import
@@ -767,7 +800,14 @@ impl MediaImportRuntime {
         };
 
         let model = self.local_model.read().ok().and_then(|held| held.clone());
-        Ok(Some(WhisperServer::new(self.policy.clone(), port, model)))
+        // `.timed()`: an import becomes a note that can be exported as SRT or
+        // WebVTT, and without timings that export is one cue spanning the whole
+        // recording. Dictation does not ask, because it wants a line of text and
+        // the timings cost about 45% more wall clock -- measured, see
+        // `kw_transcription_core::local`'s module doc.
+        Ok(Some(
+            WhisperServer::new(self.policy.clone(), port, model).timed(),
+        ))
     }
 
     /// The local engine for an import: the same one dictation would use.
@@ -916,6 +956,7 @@ impl MediaImportRuntime {
         let (transcript, duration_ms) = outcome?;
         emit_progress(app, MediaImportProgress::Done);
         Ok(MediaImportResult {
+            segments: transcript.segments.iter().map(Into::into).collect(),
             text: transcript.text,
             provider: transcript.provider,
             model: transcript.model,
@@ -949,6 +990,7 @@ impl MediaImportRuntime {
         let (transcript, duration_ms) = outcome?;
         emit_progress(app, MediaImportProgress::Done);
         Ok(MediaImportResult {
+            segments: transcript.segments.iter().map(Into::into).collect(),
             text: transcript.text,
             provider: transcript.provider,
             model: transcript.model,
