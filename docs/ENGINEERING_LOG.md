@@ -115,7 +115,8 @@ maintained in place rather than appended to, because its purpose is to be curren
 > covered on Linux by design — `file_acl::classify` takes plain Rust facts and the measured DACL is
 > a fixture in its test module. The three Win32 calls are covered by this repository's first two
 > `#[cfg(windows)]` tests and by `cargo run -p kw-security --example dacl_probe`, and by nothing
-> unattended. See the 2026-08-31 KNEG-34 entry below and `docs/BENCH_CHECK.md` finding 2.
+> unattended. Both open items are filed — KNEG-110 for the snapshot, KNEG-111 for the CI gap. See
+> the 2026-08-31 KNEG-34 entry below and `docs/BENCH_CHECK.md` finding 2.
 >
 > **Three smaller items recorded rather than chased**, each detailed in its own entry below: a
 > `kw-storage` test that failed once and passed on re-run during Task 8 (every other full-suite run
@@ -326,7 +327,7 @@ sidecar over an odd access list would be the worse outcome. A PID is not a secre
 for **integrity**, and `pid.rs`'s own "a record another user could rewrite is a request to signal a
 PID of their choosing" is the sentence worth keeping.
 
-**Two things found and not fixed.** The verdict is a **snapshot taken when the API starts** —
+**Two things found and not fixed, both filed (KNEG-110, KNEG-111).** The verdict is a **snapshot taken when the API starts** —
 `local_api_status` reports what the write measured, and nothing re-reads the DACL while the
 application runs. During this run a trustee was added to a protected directory by something outside
 the application, between the write's read-back and the next `icacls`; the application would not have

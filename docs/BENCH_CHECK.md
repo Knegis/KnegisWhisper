@@ -136,7 +136,8 @@ the application has not locked itself out. Two further facts came out of the sam
   That is why both are still restricted rather than the directory being trusted to have covered
   the file.
 
-**Two things this did not close, both recorded rather than fixed:**
+**Two things this did not close, both recorded rather than fixed, and both filed (KNEG-110,
+KNEG-111):**
 
 1. **The verdict is a snapshot taken when the API starts.** `local_api_status` reports what the
    write measured; nothing re-reads the DACL while the application runs. During this run a trustee
