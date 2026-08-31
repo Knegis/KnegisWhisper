@@ -269,6 +269,17 @@ state of its own and the screen prints a different sentence for it, so the weake
 displayed as the stronger one. Measuring all thirty-nine is 202 GB of downloading, which is the
 cost decision this trade is made against (KNEG-45).
 
+**A digest only bounds a transfer if it and the URL describe the same object.** Until 2026-08-31
+every model URL ended `resolve/main`, a branch pointer: the bytes behind it changed whenever the
+publisher pushed, so a digest measured on Monday would refuse Tuesday's install — the correct
+refusal, for a reason that had nothing to do with the user or the download. All 45 Hugging Face
+URLs now name a commit, measured into `HF_REVISIONS` by `node tools/model-pin/pin.mjs --revisions`
+and held by four generator guards. This is **not** a stronger integrity claim; the digest is still
+what proves the bytes. It removes a class of spurious failure and makes the URL and the digest
+describe the same objects by construction. The two Parakeet archives are the remaining exception:
+they are GitHub release assets in k2-fsa's rolling `asr-models` tag, where an asset can be replaced
+under the same name, and only the weekly re-measurement would notice (KNEG-103).
+
 **A bound is only ever an exact figure.** Every bound above comes from a measurement:
 `tools/sidecar-pin/pin.mjs` and `tools/model-pin/pin.mjs` take the length from `stat` after a full
 download, never from `content-length`, because a truncated body agrees with its own header. A

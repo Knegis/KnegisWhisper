@@ -769,8 +769,8 @@ its own header and disagrees with itself. 6,966,596,962 bytes total, 6.49 GiB,
 | `turbo` | `ggml-large-v3-turbo.bin` | `1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69` | 1,624,555,275 |
 | `large` | `ggml-large-v3.bin` | `64d182b440b98d5203c4f9bd541544d84c605196c4f7b845dfa11fb23594d1e2` | 3,095,033,483 |
 
-All served by `us.aws.cdn.hf.co`, which is where `huggingface.co/.../resolve/main`
-redirects. The pins live in `WHISPER_PINS` in
+All served by `us.aws.cdn.hf.co`, which is where a `huggingface.co/.../resolve/…`
+request redirects. The pins live in `WHISPER_PINS` in
 `tools/integration-audit/generate-provider-registry.mjs` and reach the
 application as `WhisperModel::sha256` / `expected_size_bytes`.
 
@@ -784,13 +784,18 @@ unchanged. Before this, only their lengths had been checked, against
 `content-length`.
 
 **What this proves and what it does not.** Every one of these eight digests
-matches the bytes the host serves today. That is the check, run once; it says
-nothing about who built those bytes, and nothing about tomorrow — all six whisper
-URLs point at `resolve/main`, a *branch*, and the Parakeet archives sit in a
-rolling GitHub release. `node tools/model-pin/pin.mjs --verify` re-runs the whole
-set (about 8 GB) and `.github/workflows/pin-verify.yml` does it weekly, which is
-what turns an upstream re-upload into a failure somebody reads rather than a
-failed install. See KNEG-103.
+matches the bytes the host serves today. That is the check, run once, and it says
+nothing about who built those bytes.
+
+About tomorrow the two families now differ, and the difference is the whole of
+KNEG-103. **The six whisper URLs name a commit** — `5359861c739e955e79d9a303bcbc70fb988958b1`,
+measured into `HF_REVISIONS` on 2026-08-31 — so a push to `ggerganov/whisper.cpp`
+cannot move the bytes these digests describe. **The two Parakeet archives still
+sit in k2-fsa's rolling `asr-models` release**, where an asset can be replaced
+under the same name, and nothing pins them harder than the digest itself. So for
+whisper the weekly `node tools/model-pin/pin.mjs --verify` now catches a rewritten
+repository and a damaged transfer; for Parakeet it is still the only thing
+standing between a swapped asset and a failed install.
 
 **Consequence for an install.** All six models are now held to
 `kw_sidecar::integrity::verify`, so the *Verified by* column reads `digest` for

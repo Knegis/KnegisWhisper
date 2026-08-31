@@ -257,7 +257,9 @@ Live calls stay unverified and `PLATFORM_SUPPORT.md` now has a table saying so p
   downloaded and hashed here, one per publishing organisation; the other thirty-two are Hugging
   Face's stated `lfs.oid`, which is a real digest of the object but arrives over the same channel
   as the bytes. **The screen says which.** *checksum verified* and *checksum verified against the
-  publisher's own* are different rows, because they are different claims (KNEG-45).
+  publisher's own* are different rows, because they are different claims (KNEG-45). The URL names
+  the commit the digest was measured against — `resolve/{sha}`, never `resolve/main` — so a
+  publisher pushing cannot move the bytes out from under it (KNEG-103).
 - **5-minute idle auto-stop.** `LocalEndpoint` is the trick: reading the port is what records a
   use, so there is no `touch()` for anyone to forget, and a settings screen reads through
   `running_port()` which does not.

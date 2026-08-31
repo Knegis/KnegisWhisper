@@ -262,6 +262,121 @@ Unchanged from the Phases 1–4 entry, restated here so they are not buried:
 
 ---
 
+## 2026-08-31 (KNEG-103) — 45 URLs stop naming a branch
+
+Every model this application downloads was fetched from
+`https://huggingface.co/{repo}/resolve/main/{file}`. `main` is a branch pointer. The bytes behind it
+change whenever the publisher pushes, and as of earlier the same day every one of those 45 objects
+carried a digest measured against the bytes that were there *then*.
+
+So the defect was not that a re-upload would go unnoticed. It was that a re-upload would be noticed
+in the worst possible place: at the end of a nineteen-gigabyte download, in front of a user, as an
+integrity error they cannot get past, caused by somebody else's routine publishing.
+
+### It was not theoretical, and the measurement says how far from it
+
+`node tools/model-pin/pin.mjs --revisions` reads `/api/models/{repo}` for all thirty-seven
+repositories — 36 GGUF plus `ggerganov/whisper.cpp`. Of the thirty-seven, **twenty-one last moved
+during 2026, and four moved on 2026-08-24 — seven days before the digests were taken.** The four are
+LiquidAI's LFM2.5 repositories.
+
+Nothing had moved *since* the pins: all 39 stated digests and all 39 lengths still agreed, and the
+two whisper digests spot-checked during the design pass came back byte-identical to what was
+committed. The pins were correct. They were also one push away from not being, on a table where four
+rows had changed inside the previous week.
+
+### Where the revision lives, and why not beside the digest
+
+One entry per **repository**, not per object. `HF_REVISIONS` is keyed on `owner/name`, so the six
+whisper models share one row and the thirty-nine GGUF objects fill thirty-six. A revision is a
+property of the repository at a point in time; a per-object copy would be six identical strings that
+could go inconsistent, and there is no state a reader could make sense of where two files in the same
+repository are pinned to different commits by accident.
+
+The table sits in the generator beside `WHISPER_PINS`, `SHERPA_PINS` and `LOCAL_LLM_PINS`, for the
+reason all three of those are there: `config/upstream-integration-baseline.json` is a frozen record of
+what upstream had and must not gain fields we invented, and `config/provider-registry.json` is
+generated, so anything hand-edited into it dies at the next regeneration.
+
+### Two families, two mechanisms, one table
+
+The whisper URL is *stored* — upstream's baseline supplies it whole — so the generator rewrites the
+revision into it on the way out. The GGUF URL is *composed* in `local_llm.rs` from `hfRepo` +
+`fileName`, so it gained a third part. Same pin, two paths, and the difference is a fact about where
+each URL comes from rather than a choice.
+
+`parseHfUrl` is exported from `tools/model-pin/pin.mjs` and imported by the generator. That is a real
+coupling between a build gate and an audit tool, taken deliberately: the generator rewrites those
+three parts and `--verify-stated` reads them, and two regexes for one URL shape would have drifted
+apart on the first publisher who put an object in a subdirectory — which several already do, for
+multi-part quantisations.
+
+### `revision` is a required field, and `sha256` is not
+
+`LocalLlmModel::sha256` is an `Option`, so a model added before anybody spends the bandwidth degrades
+to a size check. `LocalLlmModel::revision` is a plain `String`.
+
+The asymmetry is the point. A missing digest degrades to a weaker check that is still a check. A
+missing revision would degrade to `main`, which is not a weaker version of this fix — it is the
+defect, reintroduced silently, for one model out of thirty-nine. So the generator refuses to emit a
+model without one, and a registry that somehow reached the Rust without it fails to deserialise
+rather than quietly floating.
+
+Four guards, each one run against a deliberately broken table before being trusted:
+
+- a repository with no `HF_REVISIONS` entry dies **naming the model that needed it**, not just the
+  repository;
+- a revision that is not 40 lowercase hex dies, with "re-read it; do not hand-correct it";
+- a revision no model downloads from dies as a typo — the same guard the three pin tables carry;
+- every shipped whisper URL is re-parsed after the rewrite and must name a commit. `pinnedHfUrl`
+  lets a non-Hugging-Face URL through untouched, which is right — there is nothing there to pin —
+  and this is what stops that from becoming a quiet way back to a floating reference.
+
+### What this is not
+
+**It is not a stronger integrity claim.** The digest is what proves the bytes; a revision only decides
+which bytes were promised. Nothing here defends against a compromised huggingface.co any better than
+before — one host still serves both the object and, for thirty-two of the thirty-nine, the `lfs.oid`
+they are checked against.
+
+What it removes is a class of spurious failure. What it adds is that the URL and the digest now
+describe the same object *by construction* rather than by nobody having pushed yet.
+
+### `--verify-stated` was asking the wrong question and is now asking a better one
+
+It read each repository's tree at `main`. That answered "has the publisher re-uploaded", which was
+the right question while the URL pointed at `main` and is the wrong one now — a push cannot reach a
+pinned commit, so the answer stopped being about anything the installer would fetch.
+
+Reading the tree at the *committed* revision asks something nothing else in the workspace checks:
+**do the digest and the revision committed beside each other describe the same object?** Those two
+numbers are measured in different runs by different code and could drift apart with nobody noticing.
+It also catches a pinned commit that has stopped resolving — a force-push, or a repository going
+private — which would break every install of its models.
+
+A second half reports which repositories have published past their pinned commit, and **does not
+fail on it**. Upstream publishing is normal, and that is now the whole point: a weekly job that went
+red every time a publisher pushed would be ignored by the second month. It is news about pins worth
+revisiting, printed as such.
+
+The tree cache is keyed on repository *and* revision, in the tool and in the Rust test both. One
+revision per repository is how the table is built, and a cache that assumed it would read the wrong
+tree, silently, the day that stopped holding.
+
+Measured after the change: **39 objects, 36 tree requests, all matching at their pinned commits; no
+repository has moved past its pin.** The two `#[ignore]`d Rust tests agree — 39 HEADs at
+commit-pinned URLs and 36 tree reads, in nine seconds.
+
+### What is still hanging off a moving reference
+
+The two Parakeet archives. They are GitHub release assets in k2-fsa's rolling `asr-models` tag, where
+an asset can be replaced under the same name, and there is no commit-sha equivalent to reach for.
+Their digest is the only thing that would notice a swap, and the weekly `--verify` is what runs it.
+That is unchanged by this and is recorded in `docs/PLATFORM_SUPPORT.md` rather than left implied by a
+fix that did not cover them.
+
+---
+
 ## 2026-08-31 (KNEG-34) — the token file finally gets a DACL, and the read-back moves
 
 `discovery::restrict_file` was a no-op under `cfg(not(unix))`, so the local API's bearer token sat
@@ -1058,6 +1173,11 @@ move a file by more than 5% to be noticed; now any change at all fails the insta
 integrity error and the user cannot proceed. Identical to the trade `98e836b` took for the GGUF
 sizes, taken again for the same reason: a silent pass means running weights nobody here measured.
 See **KNEG-103**, which now covers a digest-exact surface rather than a size-exact one.
+
+> **Superseded the same day.** KNEG-103 landed: all six URLs name commit `5359861c` instead of
+> `main`, so this cost is no longer paid — a publisher pushing cannot move the bytes these digests
+> describe. The entry above is what was true when the digests were measured, and the reasoning that
+> made pinning the revision the obvious next thing. See the KNEG-103 entry at the top of this file.
 
 What notices first is `node tools/model-pin/pin.mjs --verify`, and its weekly cost went from about
 1 GB to about **8 GB** — two Parakeet archives plus six whisper models rather than one.

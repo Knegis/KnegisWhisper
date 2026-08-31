@@ -736,15 +736,17 @@ with a fourth `MeetingState` saying so.
    `gemma-4-e2b-it-qat-q4_0` is the cheapest way to reach it (3.3 GB plus a 59 MB drafter) — its
    size was already correct, so it exercises the drafter path and not the fix.
 
-   **The thing to watch for is the opposite failure.** Exact equality means an upstream re-upload
-   now fails at the *end* of the download rather than passing quietly. Two Gemma models were already
-   2 240 bytes adrift from their old declared size, so this is not hypothetical. If an install fails
-   with "the download is N bytes and this model measures exactly M", the pin is stale, not the
-   connection — re-run the ignored tests and re-measure into `LOCAL_LLM_PINS`. The same is true of a
-   failure naming a digest: since 2026-08-31 an upstream re-upload trips the hash as well as the
-   length, and `node tools/model-pin/pin.mjs --verify-stated` tells the two apart in seconds —
-   agreement there means the bytes were corrupted in transfer, disagreement means the pin is
-   stale.
+   **What to watch for if it fails, and it is narrower than it was.** Exact equality means a
+   mismatch fails at the *end* of the download rather than passing quietly, and both Gemma models
+   were already 2 240 bytes adrift from their old declared size — so a failing check is not
+   hypothetical. What has changed is what can cause one. **Since KNEG-103 the URL names a commit,
+   not `resolve/main`, so an upstream re-upload cannot reach these bytes at all.** A failure naming
+   a length or a digest is therefore a corrupted transfer first and a rewritten repository second,
+   not routine publishing. `node tools/model-pin/pin.mjs --verify-stated` separates the two in
+   seconds: it reads each repository's tree *at the pinned commit*, so agreement there means the
+   pin is intact and the bytes were damaged on the way down, and disagreement means the commit
+   itself no longer holds what we committed beside it — a force-push or a repository gone
+   private.
 8. **Whether a newly digest-pinned whisper model installs through the screen — nobody has pressed
    the button on any of the five.** Until 2026-08-31 only `tiny` carried a digest; the other five
    were size-checked with a 5% tolerance. All six now carry a SHA-256 and an exact length measured
@@ -764,12 +766,15 @@ with a fourth `MeetingState` saying so.
    then loads and transcribes. `small` (466 MB) is the cheapest second data point. `large` is 2.9 GB
    and proves nothing the others do not.
 
-   **The thing to watch for is the same opposite failure as item 7, and it is sharper here.** These
-   six are fetched from HuggingFace `resolve/main`, a branch pointer, and the check is now a digest
-   rather than a 5% window — so *any* upstream re-upload, of any size, stops the install dead with
-   an integrity error. `node tools/model-pin/pin.mjs --verify` re-measures all eight model pins
-   (about 8 GB) and is what should be run before believing the download is at fault; the weekly
-   `pin-verify.yml` job runs it unattended. See KNEG-103, and KNEG-105 for this item.
+   **What to watch for if it fails, same as item 7.** The check is a digest rather than a 5%
+   window, so any disagreement at all stops the install dead. It used to be sharper here than
+   anywhere: these six were fetched from HuggingFace `resolve/main`, a branch pointer, so *any*
+   upstream push would have broken them. **KNEG-103 closed that on 2026-08-31** — the six URLs now
+   name commit `5359861c`, which is what the digests were measured against, and `ggerganov/
+   whisper.cpp` has not been touched since 2024-10-29 in any case. A failure is a damaged download
+   or a rewritten repository, not routine publishing. `node tools/model-pin/pin.mjs --verify`
+   re-measures all eight model pins (about 8 GB) and is what to run before believing the download
+   is at fault; the weekly `pin-verify.yml` job runs it unattended. See KNEG-105 for this item.
 
 ---
 

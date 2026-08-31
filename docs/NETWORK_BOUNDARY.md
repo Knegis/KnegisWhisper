@@ -209,7 +209,7 @@ rule (`MissingPin`, refuse) and deliberate.
 
 **Two digest standards, and the boundary is where the difference lives.** The whisper and Parakeet
 pins are bytes this project downloaded and hashed. Thirty-two of the thirty-nine GGUF pins are
-Hugging Face's stated `lfs.oid`, read from `/api/models/{repo}/tree/main` — a true SHA-256 of the
+Hugging Face's stated `lfs.oid`, read from `/api/models/{repo}/tree/{commit}` — a true SHA-256 of the
 object, because git-lfs is content-addressed on it, but *delivered by the same host that serves the
 bytes*. It closes a corrupted transfer, a truncation that kept the length, and an accidental
 re-upload. It does not close a compromised huggingface.co, and it is never reported as though it
