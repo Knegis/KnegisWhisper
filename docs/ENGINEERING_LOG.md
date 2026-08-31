@@ -270,6 +270,79 @@ Unchanged from the Phases 1–4 entry, restated here so they are not buried:
 
 ---
 
+## 2026-08-31 (KNEG-93) — the residue that stopped being residue when the cost inverted
+
+`is_private_host` carried three gaps recorded as *accepted* rather than missed. Two of them are
+closed now, and the reason to reopen them was not that anything new was found. It was that the
+decisions had been made against a cost that no longer applies.
+
+**The inversion, which the issue stated and is worth keeping.** Before the SSRF fix, a false
+negative in this predicate meant a plaintext request to that address was *refused* — the plaintext
+arm only allows what the predicate calls private, so a miss lost permission rather than gaining it.
+After the fix, the identical false negative means an HTTPS or WSS request is *allowed*, because the
+private check is now what refuses it there. **The same class of gap that used to fail closed now
+fails open.** Every one of these was accepted while it failed closed.
+
+### Closed as a family, which is what the note itself asked for
+
+Each embedding had been noticed separately — IPv4-translated during the review, NAT64 and 6to4
+raised unprompted by the re-reviewer afterwards — and each was accepted on the same argument: the
+prefix is not routed on an ordinary host, so a `connect()` fails rather than arriving.
+
+That argument is about the *host's* configuration. It stops holding the moment a machine has 6to4 or
+a NAT64 resolver, and nothing in this process can see whether it does. The recorded decision was
+that if the family were ever closed it should be closed by enumerating the RFCs rather than by
+adding a prefix each time somebody spots one, and `embedded_ipv4s` is that enumeration: IPv4-mapped,
+IPv4-compatible, IPv4-translated, NAT64 well-known, NAT64 local-use, 6to4, Teredo.
+
+Two things about it were not obvious going in:
+
+- **Teredo carries two IPv4 addresses**, not one — the server in the clear at bits 32..64 and the
+  client at bits 96..128 XORed with all-ones. Either being private refuses the address, because a
+  packet to it involves both hosts. That is why the function returns `[Option<Ipv4Addr>; 2]` rather
+  than an `Option`.
+- **The NAT64 local-use prefix is not laid out the way the well-known one is.** `64:ff9b::/96` puts
+  the address in the low 32 bits; `64:ff9b:1::/48` follows RFC 6052 §2.2, which splits it around a
+  reserved octet — sixteen bits at 48..64 and sixteen more at 72..88. Reading four contiguous octets
+  parses fine and decodes a different address than the gateway will.
+
+### The tests state the bits, and were checked by breaking the code
+
+Both of those layouts are wrong-in-a-way-that-still-works hazards, and a test written from the same
+misreading as the implementation proves nothing. So the addresses are written out in hex, the
+decoded value is asserted exactly rather than only its privateness, and four deliberate mutations
+were run against the finished tests:
+
+```
+NAT64 /48 read as four contiguous octets   -> CAUGHT
+Teredo client not XORed                    -> CAUGHT
+6to4 read from the wrong offset            -> CAUGHT
+SIIT arm removed                           -> CAUGHT
+```
+
+Without the exact-value assertions the first two would have passed: in a NAT64 `/48` and a Teredo
+address there are enough nearby zero octets that a wrong offset still decodes *something* private.
+
+### The limit that remains, and it is real
+
+RFC 6052 permits a **network-specific** NAT64 prefix of any value at `/32`, `/40`, `/48`, `/56` or
+`/64`. Only the well-known and local-use prefixes have fixed values, so a site running NAT64 on its
+own prefix is invisible to this. Seeing it would mean reading the host's resolver configuration,
+which is the same class of problem as DNS rebinding — and DNS rebinding stays out of scope for
+exactly the reason it always has: the check runs against the literal host at validation time and has
+no view of what the name resolves to at connect time. That is the problem that withdrew URL import
+(KNEG-87), and it is not solved in passing.
+
+### And the small one
+
+`blocked_hosts()` lowercased configured vendor hosts and did not strip trailing dots from them, while
+`is_blocked` stripped them from its input. No entry in `config/forbidden-domains.json` has one, so
+this was a footgun for whoever next edits that file rather than a live hole. Closed anyway: an
+asymmetry that costs one line to remove is not worth keeping, and the test asserts the property over
+whatever the file happens to contain rather than over today's entries.
+
+---
+
 ## 2026-08-31 (KNEG-112) — asking whether a GitHub asset can be pinned, and finding it cannot
 
 KNEG-103 pinned all 45 Hugging Face URLs to a commit and left two archives behind: the Parakeet
