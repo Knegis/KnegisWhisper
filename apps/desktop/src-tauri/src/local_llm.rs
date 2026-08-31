@@ -305,13 +305,26 @@ fn find_model<'a>(
         .ok_or_else(|| format!("{id:?} is not a model this build knows about"))
 }
 
-/// The download URL for a GGUF on Hugging Face.
+/// The download URL for a GGUF on Hugging Face, at the commit the registry pins.
 ///
 /// Built here rather than stored in the registry because it is mechanical, and
 /// because a URL in data is a URL somebody can point somewhere else. The host is
 /// the same one the whisper models come from.
-fn gguf_url(repo: &str, file_name: &str) -> String {
-    format!("https://huggingface.co/{repo}/resolve/main/{file_name}")
+///
+/// **The revision is the part that is not mechanical.** This used to interpolate
+/// `main`, which is a branch pointer: the bytes behind it change whenever the
+/// publisher pushes, so a digest measured against one commit would start failing
+/// installs the moment upstream published anything at all -- correctly refusing,
+/// for a reason that has nothing to do with the user or with the download.
+/// [`LocalLlmModel::revision`] is a commit sha measured into `HF_REVISIONS` in
+/// `tools/integration-audit/generate-provider-registry.mjs`, and the digest
+/// beside it describes that commit's object. KNEG-103.
+///
+/// The whisper models get the same treatment a different way: their URL is
+/// stored whole in the registry and the generator rewrites the revision into it,
+/// because upstream's baseline supplies the URL and this one is composed.
+fn gguf_url(repo: &str, revision: &str, file_name: &str) -> String {
+    format!("https://huggingface.co/{repo}/resolve/{revision}/{file_name}")
 }
 
 /* --------------------------------------------------------------- idle stop */
@@ -582,7 +595,7 @@ pub async fn local_llm_install(
 
     let checked = download_gguf(
         &llm.policy,
-        &gguf_url(&model.hf_repo, &model.file_name),
+        &gguf_url(&model.hf_repo, &model.revision, &model.file_name),
         &gguf_path(&model.file_name),
         SizeCheck::of(model.size_bytes, model.size_measured),
         &DigestCheck::of(model.sha256.as_deref(), model.sha256_measured),
@@ -606,7 +619,7 @@ pub async fn local_llm_install(
     if let Some(draft) = &model.draft {
         let draft_checked = download_gguf(
             &llm.policy,
-            &gguf_url(&draft.hf_repo, &draft.file_name),
+            &gguf_url(&draft.hf_repo, &draft.revision, &draft.file_name),
             &gguf_path(&draft.file_name),
             SizeCheck::of(draft.size_bytes, draft.size_measured),
             &DigestCheck::of(draft.sha256.as_deref(), draft.sha256_measured),
@@ -981,17 +994,71 @@ mod tests {
         assert_eq!(spec.port_range().expect("range").first, 8221);
     }
 
-    /// A URL is built from the repo and filename, never stored.
+    /// A URL is built from the repo, the pinned commit and the filename.
     #[test]
-    fn a_gguf_url_points_at_the_publishers_repo() {
+    fn a_gguf_url_points_at_one_commit_in_the_publishers_repo() {
         assert_eq!(
             gguf_url(
                 "bartowski/Qwen_Qwen3.5-9B-GGUF",
+                "182be2fd6c7bc44887d88a91cb03ff009cc9f549",
                 "Qwen_Qwen3.5-9B-Q4_K_M.gguf"
             ),
-            "https://huggingface.co/bartowski/Qwen_Qwen3.5-9B-GGUF/resolve/main/\
-             Qwen_Qwen3.5-9B-Q4_K_M.gguf"
+            "https://huggingface.co/bartowski/Qwen_Qwen3.5-9B-GGUF/resolve/\
+             182be2fd6c7bc44887d88a91cb03ff009cc9f549/Qwen_Qwen3.5-9B-Q4_K_M.gguf"
         );
+    }
+
+    /// Every GGUF in the registry names a commit, and no two of an object's
+    /// halves disagree about which one.
+    ///
+    /// The assertion that matters is `resolve/{40 hex}`: a model that slipped
+    /// back to `main` would still install, still verify against its digest
+    /// today, and start failing the first time its publisher pushed anything.
+    /// That is the shape of the defect this replaced, and it would be invisible
+    /// until it was somebody's broken install.
+    #[test]
+    fn every_gguf_is_fetched_from_a_commit_and_never_from_a_branch() {
+        let registry = kw_provider_registry::registry().expect("registry");
+        let mut checked = 0usize;
+        for provider in &registry.local_llm {
+            for model in &provider.models {
+                for (label, repo, revision, file) in std::iter::once((
+                    model.id.clone(),
+                    &model.hf_repo,
+                    &model.revision,
+                    &model.file_name,
+                ))
+                .chain(model.draft.iter().map(|d| {
+                    (
+                        format!("{} (drafter)", model.id),
+                        &d.hf_repo,
+                        &d.revision,
+                        &d.file_name,
+                    )
+                })) {
+                    assert_eq!(
+                        revision.len(),
+                        40,
+                        "{label}: {revision:?} is not a commit sha"
+                    );
+                    assert!(
+                        revision
+                            .chars()
+                            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+                        "{label}: {revision:?} is not 40 lowercase hex characters"
+                    );
+                    let url = gguf_url(repo, revision, file);
+                    assert!(
+                        url.contains(&format!("/resolve/{revision}/")),
+                        "{label}: {url} does not name the pinned commit"
+                    );
+                    checked += 1;
+                }
+            }
+        }
+        // The same count the digest and size assertions use. A model dropping
+        // out of the registry must not make this pass over fewer objects.
+        assert_eq!(checked, 39, "35 models plus 4 drafters");
     }
 
     /// Every model in the registry can be found by id.
@@ -1162,10 +1229,15 @@ mod tests {
     /// taken with, so a re-upload shows up here first.
     ///
     /// `x-linked-size` rather than `content-length`: Hugging Face serves these
-    /// through LFS and answers a `resolve/main` request with a 302 to a CDN, so
-    /// `content-length` describes the redirect while `x-linked-size` carries the
-    /// object. The fallback is used only on a 200, where there is no redirect for
-    /// `content-length` to be measuring.
+    /// through LFS and answers a `resolve/{commit}` request with a 302 to a CDN,
+    /// so `content-length` describes the redirect while `x-linked-size` carries
+    /// the object. The fallback is used only on a 200, where there is no redirect
+    /// for `content-length` to be measuring.
+    ///
+    /// Since KNEG-103 the URL names a commit rather than `main`, so this asks a
+    /// narrower question than it used to: not "has the publisher re-uploaded"
+    /// but "does the commit we pinned still hold an object of this length".
+    /// A publisher pushing a new commit no longer moves these bytes at all.
     #[tokio::test]
     #[ignore = "sends one HEAD request per model to huggingface.co; run with --ignored"]
     async fn the_measured_sizes_still_match_hugging_face() {
@@ -1178,7 +1250,7 @@ mod tests {
                 if let (Some(bytes), true) = (model.size_bytes, model.size_measured) {
                     targets.push((
                         model.id.clone(),
-                        gguf_url(&model.hf_repo, &model.file_name),
+                        gguf_url(&model.hf_repo, &model.revision, &model.file_name),
                         bytes,
                     ));
                 }
@@ -1186,7 +1258,7 @@ mod tests {
                     if let (Some(bytes), true) = (draft.size_bytes, draft.size_measured) {
                         targets.push((
                             format!("{} (drafter)", model.id),
-                            gguf_url(&draft.hf_repo, &draft.file_name),
+                            gguf_url(&draft.hf_repo, &draft.revision, &draft.file_name),
                             bytes,
                         ));
                     }

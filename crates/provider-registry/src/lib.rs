@@ -124,6 +124,10 @@ pub struct EnterpriseProvider {
 #[serde(rename_all = "camelCase")]
 pub struct DraftModel {
     pub hf_repo: String,
+    /// On the same terms as [`LocalLlmModel::revision`], and from a different
+    /// repository: a drafter lives beside the model it speeds up, not inside it,
+    /// so it carries its own commit and its own digest.
+    pub revision: String,
     pub file_name: String,
     pub size_bytes: Option<u64>,
     /// Whether [`Self::size_bytes`] was measured, on the same terms as
@@ -141,6 +145,18 @@ pub struct LocalLlmModel {
     pub name: String,
     pub file_name: String,
     pub hf_repo: String,
+    /// The commit the GGUF is downloaded from: a 40-character sha, never a
+    /// branch name.
+    ///
+    /// Not an `Option`, unlike [`Self::sha256`], and the difference is
+    /// deliberate. A missing digest degrades to a weaker check that is still a
+    /// check; a missing revision would degrade to `main`, which is the defect
+    /// KNEG-103 exists to remove -- the bytes would move whenever the publisher
+    /// pushed, and the digest committed beside them would then fail an install
+    /// for a reason that has nothing to do with the user. The generator refuses
+    /// to emit a model without one, so a registry that reaches here without it
+    /// was hand-edited and fails to load rather than quietly floating.
+    pub revision: String,
     pub size_bytes: Option<u64>,
     /// Whether [`Self::size_bytes`] is a measurement of the published file or
     /// upstream's declaration of it.

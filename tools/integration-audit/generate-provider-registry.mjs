@@ -26,6 +26,13 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+// One parser for the Hugging Face URL shape, shared with the tool that reads
+// the revisions this file pins. Importing it is a real coupling and the right
+// one: the generator rewrites those three parts and `--verify-stated` reads
+// them, so two copies of the regex would drift apart on the first publisher
+// who puts an object in a subdirectory.
+import { parseHfUrl } from "../model-pin/pin.mjs";
+
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const BASELINE = join(REPO_ROOT, "config/upstream-integration-baseline.json");
 const OUT = join(REPO_ROOT, "config/provider-registry.json");
@@ -228,6 +235,263 @@ const enterprise = R.enterpriseProviders.map((p) => ({
   deploymentNameDriven: p.models.length === 0,
   models: p.models.map((m) => ({ id: m.id, name: m.name })),
 }));
+
+// --- hugging face revisions --------------------------------------------------
+
+/**
+ * The commit each Hugging Face repository is pinned to, and when it last moved.
+ *
+ * Every model URL used to end `resolve/main/{fileName}`. `main` is a branch,
+ * not content: if a publisher pushes to it the bytes at that URL change, and
+ * every pin measured against them is silently wrong. `config/sidecars.json`
+ * already refuses that for sidecar binaries -- its rule is dated immutable
+ * release tags, and the reasoning recorded there is that *"a floating tag is a
+ * pin nobody is checking"*. Models got no such treatment until now (KNEG-103).
+ *
+ * `https://huggingface.co/{repo}/resolve/{sha}/{file}` is the immutable form,
+ * and it is what both families are built from now: whisper URLs are rewritten
+ * out of the frozen baseline by `pinnedHfUrl` below, and GGUF URLs are composed
+ * in `local_llm.rs` from `hfRepo` + `revision` + `fileName`.
+ *
+ * ## What this changes about a re-upload
+ *
+ * **Before:** a publisher pushing a new commit changed the bytes at our URL.
+ * With the digests taken on 2026-08-31 that turned every install of that model
+ * into an integrity failure the user could not get past -- the correct refusal,
+ * but a feature broken by somebody else's routine publishing.
+ *
+ * **After:** a new commit on `main` is invisible here. Our URL names a commit
+ * that already exists and Hugging Face keeps serving, so the digest and the
+ * length committed beside it stay true -- they describe that commit's objects.
+ *
+ * **This is not a stronger integrity claim.** The digest is still the thing
+ * that proves the bytes; a revision only decides *which* bytes were promised.
+ * What it removes is a class of spurious failure, and what it adds is that the
+ * URL and the digest now describe the same objects by construction rather than
+ * by nobody having pushed yet.
+ *
+ * ## The exposure was not theoretical
+ *
+ * Measured on 2026-08-31 by `node tools/model-pin/pin.mjs --revisions`: of the
+ * thirty-seven repositories here, twenty-one last moved during 2026 and **four
+ * moved on 2026-08-24, seven days before the digests were taken** -- LiquidAI's
+ * four LFM2.5 repositories. Nothing has moved *since* the pins, and the digests
+ * still agree. But a table where four rows changed in the week before it was
+ * written is not one to leave pointing at a branch.
+ *
+ * ## Reading and re-reading
+ *
+ * Never hand-write a revision. `node tools/model-pin/pin.mjs --revisions` reads
+ * `/api/models/{repo}` for all thirty-seven and prints this table.
+ * `--verify-stated` reads each repository's tree **at the pinned commit** and
+ * exits non-zero if an object's digest or length disagrees; it reports
+ * separately, and without failing, where `main` has since moved on. That second
+ * line is news rather than an error -- upstream publishing is normal, and a
+ * weekly job that exited non-zero for it would be ignored by the second month.
+ *
+ * `lastModified` is context and not part of the pin. It is what tells a reader
+ * whether a revision one commit behind belongs to a repository nobody touches
+ * or to one that moves weekly.
+ */
+const HF_REVISIONS = {
+  "LiquidAI/LFM2-2.6B-GGUF": {
+    revision: "a759abdc5955d4ca97763e5cb7ff3940589ba898",
+    lastModified: "2026-03-30",
+  },
+  "LiquidAI/LFM2.5-1.2B-Instruct-GGUF": {
+    revision: "6767265158422fb8a19c62ceb45f16f05363615b",
+    lastModified: "2026-08-24",
+  },
+  "LiquidAI/LFM2.5-230M-GGUF": {
+    revision: "cdf97bd8205908758f44aec508d68ac1aef98f5c",
+    lastModified: "2026-08-24",
+  },
+  "LiquidAI/LFM2.5-350M-GGUF": {
+    revision: "9969000761ce34de907bf20017cbfc3d52d6eaf9",
+    lastModified: "2026-08-24",
+  },
+  "LiquidAI/LFM2.5-8B-A1B-GGUF": {
+    revision: "49c14831707011e64d70b2ebd8462ba08d608434",
+    lastModified: "2026-08-24",
+  },
+  "Qwen/Qwen2.5-1.5B-Instruct-GGUF": {
+    revision: "91cad51170dc346986eccefdc2dd33a9da36ead9",
+    lastModified: "2024-09-20",
+  },
+  "Qwen/Qwen2.5-3B-Instruct-GGUF": {
+    revision: "7dabda4d13d513e3e842b20f0d435c732f172cbe",
+    lastModified: "2024-09-20",
+  },
+  "Qwen/Qwen3-1.7B-GGUF": {
+    revision: "90862c4b9d2787eaed51d12237eafdfe7c5f6077",
+    lastModified: "2025-05-09",
+  },
+  "Qwen/Qwen3-32B-GGUF": {
+    revision: "938a7432affaec9157f883a87164e2646ae17555",
+    lastModified: "2025-05-09",
+  },
+  "Qwen/Qwen3-4B-GGUF": {
+    revision: "bc640142c66e1fdd12af0bd68f40445458f3869b",
+    lastModified: "2025-05-21",
+  },
+  "Qwen/Qwen3-8B-GGUF": {
+    revision: "7c41481f57cb95916b40956ab2f0b139b296d974",
+    lastModified: "2025-05-21",
+  },
+  "bartowski/Llama-3.2-1B-Instruct-GGUF": {
+    revision: "067b946cf014b7c697f3654f621d577a3e3afd1c",
+    lastModified: "2024-10-08",
+  },
+  "bartowski/Llama-3.2-3B-Instruct-GGUF": {
+    revision: "5ab33fa94d1d04e903623ae72c95d1696f09f9e8",
+    lastModified: "2024-10-08",
+  },
+  "bartowski/Meta-Llama-3.1-8B-Instruct-GGUF": {
+    revision: "bf5b95e96dac0462e2a09145ec66cae9a3f12067",
+    lastModified: "2024-12-01",
+  },
+  "bartowski/Mistral-7B-Instruct-v0.3-GGUF": {
+    revision: "61fd4167fff3ab01ee1cfe0da183fa27a944db48",
+    lastModified: "2024-05-22",
+  },
+  "bartowski/Qwen2.5-7B-Instruct-GGUF": {
+    revision: "8911e8a47f92bac19d6f5c64a2e2095bd2f7d031",
+    lastModified: "2024-09-19",
+  },
+  "bartowski/Qwen_Qwen3.5-2B-GGUF": {
+    revision: "7d26695454df6de5fbcce2e58681e62dae06ce43",
+    lastModified: "2026-05-19",
+  },
+  "bartowski/Qwen_Qwen3.5-4B-GGUF": {
+    revision: "4168f45a16a1290d65a4ec0fa312ae917a4c15d6",
+    lastModified: "2026-05-19",
+  },
+  "bartowski/Qwen_Qwen3.5-9B-GGUF": {
+    revision: "182be2fd6c7bc44887d88a91cb03ff009cc9f549",
+    lastModified: "2026-05-19",
+  },
+  "bartowski/google_gemma-3-12b-it-GGUF": {
+    revision: "648e3a36a77c8a9f12d86e741f9dcb9089c769c4",
+    lastModified: "2025-03-22",
+  },
+  "bartowski/google_gemma-3-1b-it-GGUF": {
+    revision: "116f76234503685a98f572982177b11d44ec8ff1",
+    lastModified: "2025-03-12",
+  },
+  "bartowski/google_gemma-3-4b-it-GGUF": {
+    revision: "71506238f970075ca85125cd749c28b1b0eee84e",
+    lastModified: "2025-03-22",
+  },
+  "bartowski/google_gemma-4-26B-A4B-it-GGUF": {
+    revision: "10f3b41bcf8d3047f4e136e7197ffc2dd1654c9d",
+    lastModified: "2026-07-27",
+  },
+  "bartowski/google_gemma-4-31B-it-GGUF": {
+    revision: "619aca7589c72be65dd968de8602ad23d68b5c14",
+    lastModified: "2026-07-27",
+  },
+  "bartowski/google_gemma-4-E2B-it-GGUF": {
+    revision: "81012ba3538e061d5ee003f11f25335b17f82e2d",
+    lastModified: "2026-07-26",
+  },
+  "bartowski/google_gemma-4-E4B-it-GGUF": {
+    revision: "029e94146666900b08caf49a3b47b413dfa8ec66",
+    lastModified: "2026-07-26",
+  },
+  "ggerganov/whisper.cpp": {
+    revision: "5359861c739e955e79d9a303bcbc70fb988958b1",
+    lastModified: "2024-10-29",
+  },
+  "ggml-org/gpt-oss-20b-GGUF": {
+    revision: "ef9b12f2ff56c69cf32153a02784e7a3c88bf524",
+    lastModified: "2026-07-28",
+  },
+  "google/gemma-4-26B-A4B-it-qat-q4_0-gguf": {
+    revision: "d1c082be9cf3c8a514acf63b8761f4b41935842e",
+    lastModified: "2026-07-17",
+  },
+  "google/gemma-4-31B-it-qat-q4_0-gguf": {
+    revision: "59dde24573e7e61570dba08b18a2e1fe246955ed",
+    lastModified: "2026-07-17",
+  },
+  "google/gemma-4-E2B-it-qat-q4_0-gguf": {
+    revision: "675cff42a74c774d6cb76f76d8eacb49b48c9b93",
+    lastModified: "2026-07-17",
+  },
+  "google/gemma-4-E4B-it-qat-q4_0-gguf": {
+    revision: "4b4a2c1d584be7264f87aac328a1bc739ce81b6c",
+    lastModified: "2026-07-17",
+  },
+  "mradermacher/Mistral-Nemo-12B-Instruct-GGUF": {
+    revision: "308fe5820f484b70e0169aad5b5553e15aabd5b9",
+    lastModified: "2025-03-28",
+  },
+  "unsloth/gemma-4-26B-A4B-it-qat-GGUF": {
+    revision: "7b92b5b28818151e8669af2e45e88d6086f490dd",
+    lastModified: "2026-07-17",
+  },
+  "unsloth/gemma-4-31B-it-qat-GGUF": {
+    revision: "43cc1aeb31adf47ec06a854507ce552cd9862e6f",
+    lastModified: "2026-07-17",
+  },
+  "unsloth/gemma-4-E2B-it-qat-GGUF": {
+    revision: "66a399f68ddd113b06dff02fca9523e55465d11d",
+    lastModified: "2026-07-17",
+  },
+  "unsloth/gemma-4-E4B-it-qat-GGUF": {
+    revision: "8c5a9e4fd5482e2be20fe0bf013b4c262a8f4265",
+    lastModified: "2026-07-17",
+  },
+};
+
+/** Repositories some model actually downloads from, filled in by `revisionFor`. */
+const HF_REVISIONS_USED = new Set();
+
+/**
+ * The pinned commit for a repository, or a `die()` naming who needed it.
+ *
+ * Fails closed. A model whose repository has no revision would otherwise fall
+ * back to `main` and reintroduce exactly the defect this table exists to
+ * remove, silently, for one model out of thirty-nine.
+ */
+function revisionFor(repo, neededBy) {
+  const pin = HF_REVISIONS[repo];
+  if (!pin) {
+    die(
+      `no HF_REVISIONS entry for "${repo}", which "${neededBy}" downloads from. ` +
+        `Read it with: node tools/model-pin/pin.mjs --revisions`
+    );
+  }
+  if (!/^[0-9a-f]{40}$/.test(pin.revision)) {
+    die(
+      `HF_REVISIONS["${repo}"].revision is not a 40-character lowercase commit sha. ` +
+        `Re-read it; do not hand-correct it.`
+    );
+  }
+  HF_REVISIONS_USED.add(repo);
+  return pin.revision;
+}
+
+/**
+ * A baseline download URL, re-pointed at the pinned commit.
+ *
+ * The baseline is a frozen record of what upstream had and must not be edited,
+ * so the rewrite happens here, on the way into the generated registry -- the
+ * same reasoning `WHISPER_PINS` is built on, applied to the URL instead of the
+ * digest. `parseHfUrl` is imported from the pin tool rather than restated,
+ * because two regexes for one URL shape is how they drift.
+ *
+ * A URL that is not a Hugging Face `resolve` URL passes through untouched:
+ * there is nothing here to pin, and inventing a refusal for a shape nobody has
+ * used yet would be guessing. The guard after the whisper array is what stops
+ * that being a silent hole -- it asserts every shipped whisper URL really did
+ * come out of here naming a commit.
+ */
+function pinnedHfUrl(url, neededBy) {
+  const parsed = parseHfUrl(url);
+  if (!parsed) return url;
+  return `https://huggingface.co/${parsed.repo}/resolve/${revisionFor(parsed.repo, neededBy)}/${parsed.path}`;
+}
 
 // --- local llama.cpp ---------------------------------------------------------
 
@@ -497,6 +761,10 @@ const localLlm = R.localProviders.map((p) => ({
       name: m.name,
       fileName: m.fileName,
       hfRepo: m.hfRepo,
+      // The commit the GGUF is fetched from. `local_llm.rs` composes
+      // `resolve/{revision}/{fileName}` rather than `resolve/main`, so a
+      // publisher's next push cannot move the bytes under a committed digest.
+      revision: revisionFor(m.hfRepo, m.id),
       sizeBytes: pin?.sizeBytes ?? m.sizeBytes ?? null,
       // Whether that number was measured against the publisher or copied from
       // upstream's declaration. The installer reads it to decide between an
@@ -522,6 +790,7 @@ const localLlm = R.localProviders.map((p) => ({
           ? null
           : {
               hfRepo: m.draftHfRepo,
+              revision: revisionFor(m.draftHfRepo, `${m.id} (drafter)`),
               fileName: m.draftFileName,
               sizeBytes: pin?.draftSizeBytes ?? m.draftSizeBytes ?? null,
               sizeMeasured: pin?.draftSizeBytes !== undefined,
@@ -697,7 +966,10 @@ const whisper = Object.entries(R.whisperModels).map(([id, m]) => ({
   id,
   name: m.name,
   fileName: m.fileName,
-  downloadUrl: m.downloadUrl,
+  // Upstream's URL, re-pointed at the commit pinned in HF_REVISIONS. The
+  // baseline still records `resolve/main`, because the baseline records what
+  // upstream had; this is what KnegisWhisper downloads.
+  downloadUrl: pinnedHfUrl(m.downloadUrl, id),
   // The rounded display estimate. Deliberately left as upstream had it.
   sizeMb: m.sizeMb ?? null,
   sha256: WHISPER_PINS[id]?.sha256 ?? null,
@@ -707,6 +979,41 @@ const whisper = Object.entries(R.whisperModels).map(([id, m]) => ({
   expectedSizeBytes: WHISPER_PINS[id]?.expectedSizeBytes ?? m.expectedSizeBytes ?? null,
   recommended: m.recommended === true,
 }));
+
+// Every shipped whisper URL names a commit, not a branch. `pinnedHfUrl` lets a
+// non-Hugging-Face URL through untouched, which is right -- there is nothing
+// there to pin -- and this is what keeps that from being a way for a model to
+// go back to a floating reference without anybody deciding to.
+for (const model of whisper) {
+  const parsed = parseHfUrl(model.downloadUrl);
+  if (!parsed) {
+    die(
+      `whisper model "${model.id}" is not hosted on Hugging Face: ${model.downloadUrl}. ` +
+        `Nothing here knows how to pin that to an immutable revision. Decide what the ` +
+        `equivalent of a commit sha is for that host and say so here, rather than ` +
+        `shipping a model nobody can pin.`
+    );
+  }
+  if (!/^[0-9a-f]{40}$/.test(parsed.revision)) {
+    die(
+      `whisper model "${model.id}" still downloads from "${parsed.revision}", which is a ` +
+        `reference and not a commit. See HF_REVISIONS.`
+    );
+  }
+}
+
+// A revision for a repository nothing downloads from is a typo or a leftover --
+// the same guard SHERPA_PINS, WHISPER_PINS and LOCAL_LLM_PINS all carry, and
+// the same failure it catches: a pin that looks like coverage and is not. This
+// runs after every consumer above has asked for its revision.
+for (const repo of Object.keys(HF_REVISIONS)) {
+  if (!HF_REVISIONS_USED.has(repo)) {
+    die(
+      `HF_REVISIONS has an entry for "${repo}", which no model downloads from. ` +
+        `Fix the repository name, or remove the entry.`
+    );
+  }
+}
 
 /**
  * Integrity pins for the Parakeet archives, measured rather than declared.
