@@ -3011,7 +3011,9 @@ name = "kw-transcription-core"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "kw-audio-core",
  "kw-network-policy",
+ "kw-notes-core",
  "kw-provider-registry",
  "kw-security",
  "kw-sidecar",

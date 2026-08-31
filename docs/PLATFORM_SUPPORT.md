@@ -661,6 +661,43 @@ backstop that exists because a transducer has no decode window the way whisper
 does — and only ever at a word start, which is the protection `--split-on-word`
 gives whisper, unconditional here.
 
+## Local ASR: the health check, and a busy server
+
+Measured 2026-08-31 by `crates/transcription-core/tests/local_dictation.rs`, which
+now stops the real `whisper-server` and starts it again. The numbers matter
+because `2fe5825` put this probe in front of **every** local dictation and media
+import.
+
+| what is probed | `HttpHealth::is_ready` |
+| --- | --- |
+| a live, idle server | ~1 ms |
+| a live server **mid-transcription** | 5,235 probes, **0** reported not-ready, slowest **1.09 ms** |
+| a port whose server was just stopped | **2.004 s** |
+| a port that never had a server | **2.004 s** |
+
+**A busy server answers.** This was the risk worth checking before trusting the
+recovery path: `whisper-server` serves `GET /` concurrently with inference, so a
+server that is working cannot be judged gone and have a second one started on top
+of it. Probed 5,235 times during a real transcription without a single false
+negative.
+
+**A dead port costs the full two-second timeout, not a connection refused.** Both
+the just-vacated and the never-used port took 2.004 s, so this is not a lingering
+socket — a loopback connect to a closed port simply does not fail fast through
+`NetworkPolicy::loopback` here. What that means in practice:
+
+* A healthy dictation pays about a millisecond. Nothing to notice.
+* A dictation or import that has to recover waits two seconds before the restart
+  even begins, then waits for the model to load. That replaced *failing
+  outright*, so it is still the better outcome — but "the health check is a
+  loopback round trip" understates it on the path that matters.
+
+The evidence would support a shorter timeout for a liveness probe specifically —
+a busy server answers in about a millisecond, so 500 ms would be safe and would
+make recovery four times snappier. Not changed: `HttpHealth`'s two seconds is
+shared with `process::start`'s startup polling, where a model still loading needs
+the patience, and splitting the two is a change nobody has needed yet.
+
 ## Local ASR: whisper-server timings
 
 Measured on 2026-08-31, Windows 11 Pro 26200, against `ggml-tiny` and 13.5 s of

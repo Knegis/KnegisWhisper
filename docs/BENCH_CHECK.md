@@ -554,29 +554,41 @@ dead provider stops the recording, falls back immediately, or carries on with a 
 
 1. **`Settings > Meetings`, re-read** — still carried over from an earlier paste. AssemblyAI and
    Corti should now name the missing key rather than reading "ready to use".
-2. **Whether dictation and import now recover from a dead local server on their own.** Written on
-   2026-08-31 and covered by tests that reach the decision but not the round trip: kill
-   `whisper-server` from Task Manager while the app holds its port, then dictate. Expected: one
-   `the local model server has gone; starting it again`, one `the local model server was started
-   again`, and a transcript — not a failure. Then repeat with a media import, which is the case
-   that matters, because a recording being imported usually cannot be made again. The remaining
-   half of KNEG-96 — *why* the child exits unattended — is untouched by that fix and needs the
-   first two log lines after a restart to tell the two candidates apart.
-3. **Whether a long import is transcribed in full — answered, and the diagnosis here was wrong.**
-   The Swedish import *was* transcribed in full: 39,142 characters for 3,401 seconds. It produced
-   one segment at `00:00:00` because the server was started with `--no-timestamps` and so reported
-   no timings at all — not because `media.rs` failed to divide it. Measured on 2026-08-31 and fixed
-   by capping the segment length instead; the table is in
-   [PLATFORM_SUPPORT.md](PLATFORM_SUPPORT.md#local-asr-whisper-server-timings). **Still needs a
-   person:** import a long recording through a *local* model and export it as SRT, and check the
-   cues land where the speech does. An import routed to a cloud provider still gets one cue, which
-   is correct — no cloud batch provider on this path reports segments.
+2. **Whether dictation and import now recover from a dead local server — the mechanism is
+   verified, the wiring is not.** `local_dictation.rs` now stops the real server, confirms the
+   health check reports it gone, starts it again on the same port, and transcribes through the
+   revived one. It also probed a *busy* server 5,235 times mid-transcription with **zero** false
+   negatives, which was the risk worth checking: a working server judged gone would have had a
+   second one started on top of it. Both measurements are in
+   [PLATFORM_SUPPORT.md](PLATFORM_SUPPORT.md#local-asr-the-health-check-and-a-busy-server), along
+   with the surprise — a dead port costs the **full two-second timeout**, not a fast refusal.
+   **Still needs a person:** the Tauri leg. Kill `whisper-server` from Task Manager while the app
+   holds its port, then dictate, and confirm the two log lines appear and a transcript arrives. The
+   remaining half of KNEG-96 — *why* the child exits unattended — is untouched by that fix.
+3. **Whether a long import is transcribed in full — answered, verified end to end, and the
+   diagnosis here was wrong.** The Swedish import *was* transcribed in full: 39,142 characters for
+   3,401 seconds. It produced one segment at `00:00:00` because the server was started with
+   `--no-timestamps` and so reported no timings at all — not because `media.rs` failed to divide
+   it. Fixed by capping the segment length; the measurement is in
+   [PLATFORM_SUPPORT.md](PLATFORM_SUPPORT.md#local-asr-whisper-server-timings).
+
+   **Verified 2026-08-31** by `crates/transcription-core/tests/subtitle_export.rs`, which builds a
+   78-second recording, runs it through the real server with the *shipped* `build_args`, and
+   exports a real subtitle file. **20 cues from `00:00:00` to `00:01:17`**, each 3–5 seconds, text
+   correct. The same test through the installed Parakeet model gives 20 cues with finer boundaries
+   (`00:00:23,920` against whisper's `00:00:23,000`), non-overlapping, from per-token onsets.
+
+   An import routed to a **cloud** provider still gets one cue, which is correct — no cloud batch
+   provider on this path reports segments. **Still needs a person** only for the screen: press
+   *Import* on a real file and export from the note, since nothing here has been through
+   `NotesUpload`.
 4. **`parakeet-tdt-0.6b-v3`** — offered on the same measured layout, still never downloaded.
-5. **Whether a Parakeet import exports usable cues.** `sherpa::cues` was written on 2026-08-31
-   against one measured run of `sherpa-onnx-offline` over 13.5 s of synthesised speech, and its
-   three cues match whisper's own segmenter on the same audio. What that run does *not* cover:
-   real speech with hesitations, a recording long enough for the 200-character backstop to fire,
-   and a language other than English. Import something long with Parakeet selected, export SRT.
+5. **Whether a Parakeet import exports usable cues — verified for a long recording.** See item 3:
+   `subtitle_export.rs` runs the real `sherpa-onnx-offline` against the installed
+   `parakeet-unified-en-0.6b` over 78 seconds and gets 20 non-overlapping cues spanning the
+   recording. Point it at a model with `KW_SHERPA_MODEL_DIR` and `KW_SHERPA_EXECUTABLE`.
+   **Still uncovered:** real speech with hesitations, a recording long enough for the
+   200-character backstop to fire, and any language other than English.
 6. **Meeting detection firing on a real call.**
 
 ---
