@@ -21,6 +21,7 @@
 
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -93,6 +94,8 @@ pub trait Health: Send + Sync {
 pub struct StartTimings {
     pub timeout: Duration,
     pub poll_interval: Duration,
+    /// How often [`watch_for_death`] asks whether the child is still there.
+    pub watch_interval: Duration,
 }
 
 impl Default for StartTimings {
@@ -100,9 +103,18 @@ impl Default for StartTimings {
         Self {
             timeout: START_TIMEOUT,
             poll_interval: START_POLL_INTERVAL,
+            watch_interval: WATCH_INTERVAL,
         }
     }
 }
+
+/// How often a started sidecar is asked whether it is still alive.
+///
+/// Five seconds. This is a post-mortem, not a supervisor: nothing acts on the
+/// answer, because the transcription paths already health-check the recorded
+/// port and revive the server themselves. Noticing a death within five seconds
+/// is enough to put it next to the log lines that explain it.
+const WATCH_INTERVAL: Duration = Duration::from_secs(5);
 
 /// A sidecar that started and answered.
 #[derive(Debug)]
@@ -111,8 +123,13 @@ pub struct Running {
     port: u16,
     pid: u32,
     executable: PathBuf,
-    child: tokio::process::Child,
+    /// Shared with [`watch_for_death`], which needs to ask `try_wait` and must
+    /// not take the handle away from [`Running::stop`].
+    child: Arc<tokio::sync::Mutex<tokio::process::Child>>,
     stderr: Arc<Mutex<StderrTail>>,
+    /// Set by [`Running::stop`] before it kills, so the watcher can tell a
+    /// shutdown we asked for from one we did not.
+    asked_to_stop: Arc<AtomicBool>,
 }
 
 impl Running {
@@ -140,8 +157,13 @@ impl Running {
     ///
     /// `try_wait` rather than a signal, so this can never have a side effect on
     /// a process id that has been reused.
-    pub fn is_running(&mut self) -> bool {
-        matches!(self.child.try_wait(), Ok(None))
+    ///
+    /// `&mut self` is kept although the handle is now behind a lock: every
+    /// caller already had one, and taking `&self` would let two of them race
+    /// for the same reap.
+    pub async fn is_running(&mut self) -> bool {
+        let mut child = self.child.lock().await;
+        matches!(child.try_wait(), Ok(None))
     }
 
     /// The tail of the sidecar's diagnostics. Bounded, and never routinely
@@ -166,13 +188,22 @@ impl Running {
     /// orphans here, and the symptom is indirect: the orphan keeps the stderr
     /// pipe open, so the reader task never finishes. It showed up first as a
     /// test that took twenty seconds.
-    pub async fn stop(mut self, store: &PidStore) -> Result<(), ProcessError> {
+    pub async fn stop(self, store: &PidStore) -> Result<(), ProcessError> {
+        // Before the kill, not after: the watcher wakes on its own schedule, and
+        // a flag set afterwards would let it report a shutdown we asked for as
+        // an unexplained death. It is read again on the far side of `try_wait`
+        // for the same reason.
+        self.asked_to_stop.store(true, Ordering::SeqCst);
+
         // `kill` is TerminateProcess on Windows and SIGKILL on Unix. These
-        // servers hold no state that needs flushing — the model is read-only and
-        // an in-flight request is one we are abandoning on purpose — so there is
+        // servers hold no state that needs flushing -- the model is read-only and
+        // an in-flight request is one we are abandoning on purpose -- so there is
         // nothing a graceful shutdown would protect.
-        let _ = self.child.kill().await;
-        let _ = self.child.wait().await;
+        {
+            let mut child = self.child.lock().await;
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+        }
         store.clear(&self.name)?;
         Ok(())
     }
@@ -240,26 +271,34 @@ pub async fn start<H: Health>(
         executable: launch.executable.display().to_string(),
     })?;
 
-    let mut running = Running {
+    let running = Running {
         name: spec.name.clone(),
         port: launch.port,
         pid,
         executable: launch.executable.clone(),
-        child,
+        child: Arc::new(tokio::sync::Mutex::new(child)),
         stderr,
+        asked_to_stop: Arc::new(AtomicBool::new(false)),
     };
 
     let deadline = tokio::time::Instant::now() + timings.timeout;
     loop {
         if health.is_ready(launch.port).await {
             tracing::info!(sidecar = %spec.name, port = launch.port, pid, "sidecar ready");
+            // Spawned only on the success path, so a child that died during
+            // startup is reported once, by the branch below, rather than twice.
+            watch_for_death(&running, store, timings.watch_interval);
             return Ok(running);
         }
 
         // Checked after the health probe, so a server that became ready and then
         // exited in the same instant is reported as ready rather than as a
         // startup crash.
-        if let Ok(Some(status)) = running.child.try_wait() {
+        let exited = {
+            let mut child = running.child.lock().await;
+            child.try_wait()
+        };
+        if let Ok(Some(status)) = exited {
             let _ = store.clear(&spec.name);
             return Err(ProcessError::ExitedDuringStartup {
                 name: spec.name.clone(),
@@ -283,6 +322,106 @@ pub async fn start<H: Health>(
 
         tokio::time::sleep(timings.poll_interval).await;
     }
+}
+
+/// Say so when the child ends without being asked to.
+///
+/// **Nothing did, before 2026-08-31.** [`start`] reports a child that dies
+/// *during* startup and [`Running::stop`] ends one deliberately. Between those
+/// two there was no observer at all: the process could go away and the only
+/// trace was a later connection refused, with nothing to say whether it had
+/// crashed, been killed, or exited cleanly. It happened at least twice in one
+/// afternoon on 2026-08-28 and the record could not distinguish those three.
+/// KNEG-96.
+///
+/// **This does not restart anything, and that is deliberate.** The
+/// transcription and import paths already health-check the recorded port and
+/// revive the remembered model themselves. A second thing that restarts
+/// servers would race them. What was missing was not recovery; it was an
+/// explanation.
+///
+/// Polling rather than awaiting the child, because `stop` needs that handle
+/// too and a watcher parked in `wait()` would hold it for the life of the
+/// process.
+///
+/// **The stderr tail is logged, and stdout is not, and the difference is not an
+/// accident.** [`start`] sends stdout to `Stdio::null()` precisely because it
+/// can carry recognised text; stderr carries the loader and model diagnostics,
+/// which is what a post-mortem needs. The same tail is already shown to the
+/// user by [`ProcessError::ExitedDuringStartup`].
+fn watch_for_death(running: &Running, store: &PidStore, interval: Duration) {
+    let name = running.name.clone();
+    let pid = running.pid;
+    let port = running.port;
+    let child = Arc::clone(&running.child);
+    let stderr = Arc::clone(&running.stderr);
+    let asked_to_stop = Arc::clone(&running.asked_to_stop);
+    let store: PidStore = (*store).clone();
+    let started = std::time::Instant::now();
+
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(interval).await;
+            if asked_to_stop.load(Ordering::SeqCst) {
+                return;
+            }
+
+            let exited = {
+                let mut child = child.lock().await;
+                child.try_wait()
+            };
+
+            let status = match exited {
+                Ok(None) => continue,
+                Ok(Some(status)) => status,
+                Err(err) => {
+                    tracing::warn!(
+                        sidecar = %name, pid,
+                        error = %err,
+                        "could not tell whether the sidecar is still running; giving up watching it"
+                    );
+                    return;
+                }
+            };
+
+            // Read again on this side of the reap: `stop` can have set it while
+            // the lock above was held, and reporting a shutdown we asked for as
+            // an unexplained death is exactly the noise that makes a real one
+            // easy to skip past.
+            if asked_to_stop.load(Ordering::SeqCst) {
+                return;
+            }
+
+            let tail = stderr
+                .lock()
+                .map(|tail| tail.text())
+                .unwrap_or_else(|_| "the diagnostics buffer was poisoned".to_owned());
+
+            tracing::error!(
+                sidecar = %name,
+                pid,
+                port,
+                exit = %describe(&status),
+                ran_for_seconds = started.elapsed().as_secs(),
+                diagnostics = %tail,
+                "the sidecar exited on its own; nothing asked it to stop"
+            );
+
+            // Cleared for the same reason `stop` clears it: a record naming a
+            // process that no longer exists is how a reused process id comes to
+            // look like a live server. The reaper verifies before acting, so
+            // this is belt and braces -- and it is also the thing a test can
+            // observe, since a log line is not.
+            if let Err(err) = store.clear(&name) {
+                tracing::warn!(
+                    sidecar = %name,
+                    error = %err,
+                    "could not clear the PID record of a sidecar that exited"
+                );
+            }
+            return;
+        }
+    });
 }
 
 fn describe(status: &std::process::ExitStatus) -> String {
@@ -396,6 +535,10 @@ mod tests {
         StartTimings {
             timeout: Duration::from_millis(400),
             poll_interval: Duration::from_millis(10),
+            // Short enough that a test can outlive one tick without waiting,
+            // and long enough not to spin: the watcher runs for the life of
+            // every started sidecar in this module's tests.
+            watch_interval: Duration::from_millis(30),
         }
     }
 
@@ -476,6 +619,117 @@ mod tests {
         }
     }
 
+    /// A process that answers, then exits on its own shortly afterwards.
+    ///
+    /// The shape KNEG-96 is about: the health check passes, `start` returns
+    /// `Ok`, and some time later the child is gone with nobody having asked.
+    fn dies_after_a_moment(port: u16) -> Launch {
+        if cfg!(windows) {
+            // Two pings, about a second apart, then exit 0. `timeout` needs a
+            // console and refuses one when stdin is null.
+            Launch {
+                executable: PathBuf::from("ping.exe"),
+                args: owned(&["-n", "2", "127.0.0.1"]),
+                port,
+            }
+        } else {
+            Launch {
+                executable: PathBuf::from("/bin/sleep"),
+                args: owned(&["1"]),
+                port,
+            }
+        }
+    }
+
+    /// Wait for the PID record to go, or give up.
+    ///
+    /// Polled rather than slept for a fixed time: the child's own lifetime is
+    /// approximate, and a fixed sleep long enough to be reliable would be long
+    /// enough to be worth avoiding.
+    async fn record_cleared_within(store: &PidStore, name: &str, patience: Duration) -> bool {
+        let deadline = tokio::time::Instant::now() + patience;
+        while tokio::time::Instant::now() < deadline {
+            if store.read(name).ok().flatten().is_none() {
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        false
+    }
+
+    /// A sidecar that goes away on its own is noticed, and its PID record does
+    /// not outlive it.
+    ///
+    /// The log line is the point of KNEG-96 and a log line is not assertable,
+    /// so the record is what this checks: same code path, same trigger, and a
+    /// stale record naming a dead process is independently the thing that makes
+    /// a reused process id look like a live server.
+    #[tokio::test]
+    async fn a_sidecar_that_dies_unasked_is_noticed() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = PidStore::new(dir.path());
+
+        let running = start(
+            &spec(),
+            &dies_after_a_moment(8190),
+            &store,
+            &ReadyAfter::immediately(),
+            fast(),
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            store.read("probe").unwrap().is_some(),
+            "the record should exist while the process does"
+        );
+
+        assert!(
+            record_cleared_within(&store, "probe", Duration::from_secs(20)).await,
+            "nothing noticed the sidecar had gone"
+        );
+
+        // Dropped afterwards rather than stopped: stopping it would be the very
+        // case this test is distinguishing itself from.
+        drop(running);
+    }
+
+    /// A shutdown we asked for is not reported as a death.
+    ///
+    /// Without the flag, `stop` would kill the child and the watcher would wake
+    /// up seconds later and log an unexplained exit for it. Every deliberate
+    /// model switch would produce one, which is exactly the noise that makes a
+    /// real occurrence easy to scroll past.
+    #[tokio::test]
+    async fn stopping_a_sidecar_is_not_reported_as_a_death() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = PidStore::new(dir.path());
+
+        let running = start(
+            &spec(),
+            &long_lived(8191),
+            &store,
+            &ReadyAfter::immediately(),
+            fast(),
+        )
+        .await
+        .unwrap();
+
+        let asked_to_stop = Arc::clone(&running.asked_to_stop);
+        running.stop(&store).await.unwrap();
+        assert!(
+            asked_to_stop.load(Ordering::SeqCst),
+            "stop must mark the shutdown before it kills, or the watcher reports it"
+        );
+
+        // Long enough for several watcher ticks at the interval `fast` sets.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(
+            store.read("probe").unwrap().is_none(),
+            "stop clears the record itself"
+        );
+    }
+
     #[tokio::test]
     async fn a_sidecar_that_answers_is_returned_running() {
         let dir = tempfile::tempdir().unwrap();
@@ -493,7 +747,7 @@ mod tests {
 
         assert_eq!(running.port(), 8178);
         assert!(running.pid() > 0);
-        assert!(running.is_running());
+        assert!(running.is_running().await);
 
         running.stop(&store).await.unwrap();
     }

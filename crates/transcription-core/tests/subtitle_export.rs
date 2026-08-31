@@ -154,6 +154,8 @@ async fn a_long_recording_exports_as_many_cues_not_one() {
         StartTimings {
             timeout: Duration::from_secs(90),
             poll_interval: Duration::from_millis(100),
+            // The death watcher's interval is not what these tests are about.
+            ..StartTimings::default()
         },
     )
     .await

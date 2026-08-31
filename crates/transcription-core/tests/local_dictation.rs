@@ -106,6 +106,8 @@ async fn speech_goes_in_and_the_right_words_come_out() {
         StartTimings {
             timeout: Duration::from_secs(90),
             poll_interval: Duration::from_millis(100),
+            // The death watcher's interval is not what these tests are about.
+            ..StartTimings::default()
         },
     )
     .await
@@ -210,6 +212,8 @@ async fn speech_goes_in_and_the_right_words_come_out() {
         StartTimings {
             timeout: Duration::from_secs(90),
             poll_interval: Duration::from_millis(100),
+            // The death watcher's interval is not what these tests are about.
+            ..StartTimings::default()
         },
     )
     .await
