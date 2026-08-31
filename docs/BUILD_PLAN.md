@@ -251,10 +251,13 @@ Live calls stay unverified and `PLATFORM_SUPPORT.md` now has a table saying so p
   measured — including **both macOS ones**, which whisper.cpp does not publish. CPU builds: an
   accelerated build is 15–25× the download, needs a matching driver, and fails at launch in a way
   that reads as a broken install.
-- GGUF download through `network-policy` with `.partial`-then-rename, size-checked against the
-  registry. **Not digest-checked**, and the screen says so: the registry carries no SHA-256 for
-  these files, and inventing one from a download would pin whatever arrived while looking like a
-  guarantee.
+- GGUF download through `network-policy` with `.partial`-then-rename, held to an **exact** length
+  and to a **SHA-256**, both from the registry, and the partial deleted on either refusal. All 39
+  published objects — 35 models and 4 drafters — carry a digest as of 2026-08-31. Seven were
+  downloaded and hashed here, one per publishing organisation; the other thirty-two are Hugging
+  Face's stated `lfs.oid`, which is a real digest of the object but arrives over the same channel
+  as the bytes. **The screen says which.** *checksum verified* and *checksum verified against the
+  publisher's own* are different rows, because they are different claims (KNEG-45).
 - **5-minute idle auto-stop.** `LocalEndpoint` is the trick: reading the port is what records a
   use, so there is no `touch()` for anyone to forget, and a settings screen reads through
   `running_port()` which does not.

@@ -30,7 +30,7 @@ import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { args, measureFile, pinnedTargets } from "./pin.mjs";
+import { args, measureFile, pinnedTargets, statedTargets } from "./pin.mjs";
 
 /* -------------------------------------------------------------------- args */
 
@@ -207,5 +207,105 @@ test("the committed registry still carries pins for all six whisper models", () 
     // A measured length, never a rounded one. Every figure the baseline
     // declared was a round million; no real file is.
     assert.notEqual(t.sizeBytes % 1_000_000, 0, `${t.id}'s size looks rounded`);
+  }
+});
+
+/* --------------------------------------------------------- stated targets */
+
+/** A `localLlm` shaped like the real one: a drafter, and both digest standards. */
+function fixtureLocalLlm() {
+  return {
+    localLlm: [
+      {
+        id: "gemma",
+        models: [
+          {
+            id: "gemma-with-a-drafter",
+            hfRepo: "unsloth/gemma-4-E2B-it-qat-GGUF",
+            fileName: "gemma.gguf",
+            sizeBytes: 3_349_516_256,
+            sizeMeasured: true,
+            sha256: "d".repeat(64),
+            sha256Measured: true,
+            draft: {
+              hfRepo: "unsloth/gemma-4-E2B-it-qat-GGUF",
+              fileName: "mtp-gemma.gguf",
+              sizeBytes: 59_235_648,
+              sizeMeasured: true,
+              sha256: "e".repeat(64),
+              sha256Measured: false,
+            },
+          },
+          {
+            id: "stated-only",
+            hfRepo: "bartowski/whatever-GGUF",
+            fileName: "stated.gguf",
+            sizeBytes: 806_058_496,
+            sizeMeasured: true,
+            sha256: "f".repeat(64),
+            sha256Measured: false,
+            draft: null,
+          },
+        ],
+      },
+    ],
+  };
+}
+
+test("statedTargets reads models and their drafters as separate objects", () => {
+  const targets = statedTargets(fixtureLocalLlm());
+  assert.deepEqual(
+    targets.map((t) => t.id),
+    ["gemma-with-a-drafter", "gemma-with-a-drafter (drafter)", "stated-only"]
+  );
+  assert.equal(targets[1].file, "mtp-gemma.gguf");
+  assert.equal(targets[1].sizeBytes, 59_235_648);
+});
+
+test("statedTargets keeps which standard each pin already met", () => {
+  // The distinction this whole mode has to preserve: agreement with a stated
+  // oid means "upstream has not re-uploaded", and for the seven measured pins
+  // that is weaker than how they were pinned. A caller that cannot tell them
+  // apart cannot say so.
+  const targets = statedTargets(fixtureLocalLlm());
+  assert.equal(targets[0].measured, true);
+  assert.equal(targets[1].measured, false);
+  assert.equal(targets[2].measured, false);
+});
+
+test("statedTargets ignores the whisper and sherpa pins entirely", () => {
+  // Those are bytes this project hashed. Re-reading a publisher's claim is not
+  // how they are checked, and including them would make a weaker check look
+  // like it covered them.
+  assert.deepEqual(statedTargets(fixtureRegistry()), []);
+});
+
+test("statedTargets survives a registry with no localLlm at all", () => {
+  assert.deepEqual(statedTargets({}), []);
+});
+
+test("statedTargets lowercases a digest so the comparison cannot miss", () => {
+  const reg = fixtureLocalLlm();
+  reg.localLlm[0].models[0].sha256 = "D".repeat(64);
+  assert.equal(statedTargets(reg)[0].sha256, "d".repeat(64));
+});
+
+test("the committed registry still carries a digest for all 39 GGUF objects", () => {
+  // The same argument as the whisper assertion above: a pin dropped from
+  // LOCAL_LLM_PINS would otherwise make --verify-stated quietly check 38
+  // objects and pass. 35 models plus 4 drafters.
+  const targets = statedTargets();
+  assert.equal(targets.length, 39, "every model and drafter is pinned");
+  for (const target of targets) {
+    assert.match(target.sha256, /^[0-9a-f]{64}$/, `${target.id} has no usable digest`);
+    assert.ok(
+      Number.isInteger(target.sizeBytes) && target.sizeBytes > 0,
+      `${target.id} has no measured size`
+    );
+    // A measured length, never a rounded one -- every figure upstream declared
+    // was a round million, and no real file is.
+    assert.notEqual(target.sizeBytes % 1_000_000, 0, `${target.id}'s size looks rounded`);
+    assert.ok(target.repo?.includes("/"), `${target.id} has no owner/name repo`);
+    assert.ok(target.file?.endsWith(".gguf"), `${target.id} does not name a .gguf`);
   }
 });

@@ -58,3 +58,16 @@ jobs:
       # subsets would be the cheap fix, at the cost of the seven-day bound.
       - name: Verify pinned model files
         run: node tools/model-pin/pin.mjs --verify
+
+      # The 39 local-LLM GGUFs, which are pinned to a digest but cannot be
+      # re-downloaded: they total 202 GB. This re-reads Hugging Face's
+      # `lfs.oid` for each -- 36 requests, no bodies, a few seconds -- and
+      # fails if any object's digest or length has moved.
+      #
+      # Cheaper than everything above it and, for the failure this workflow
+      # exists to catch, just as effective: 32 of the 39 pins *are* the stated
+      # oid, so re-reading it is the same standard they were taken at. For the
+      # seven that were hashed here it is weaker, and the tool says so in its
+      # own output rather than leaving the reader to assume otherwise.
+      - name: Re-read the stated GGUF digests
+        run: node tools/model-pin/pin.mjs --verify-stated

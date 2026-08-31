@@ -697,10 +697,16 @@ const LOCAL_LLM: LocalLlmStatus = {
       recommended: true,
       supportsThinking: false,
       installed: false,
+      // The ordinary case: thirty-two of the thirty-nine published objects are
+      // checked against the publisher's stated digest, not one measured here.
+      verifiedBy: "stated-digest",
       draft: {
         fileName: "qwen2.5-0.5b-instruct-q4.gguf",
         sizeBytes: 352_000_000,
         installed: false,
+        // Deliberately stronger than its model's, so the screen's "the drafter
+        // differs" branch is rendered by a fixture rather than only in theory.
+        verifiedBy: "digest",
       },
     },
     {
@@ -713,6 +719,7 @@ const LOCAL_LLM: LocalLlmStatus = {
       recommended: false,
       supportsThinking: false,
       installed: false,
+      verifiedBy: "digest",
       draft: null,
     },
     {
@@ -725,6 +732,10 @@ const LOCAL_LLM: LocalLlmStatus = {
       recommended: false,
       supportsThinking: true,
       installed: false,
+      // The degraded case: a model added to the registry before anybody measured
+      // or pinned it. Nothing ships in this state, and the screen still has to
+      // say so plainly rather than leaving the row silent.
+      verifiedBy: "size",
       draft: null,
     },
   ],

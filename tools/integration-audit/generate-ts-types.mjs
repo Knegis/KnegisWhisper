@@ -155,6 +155,9 @@ export interface DraftModel {
   readonly fileName: string;
   readonly sizeBytes: number | null;
   readonly sizeMeasured: boolean;
+  /** On the same terms as \`LocalLlmModel.sha256\`. */
+  readonly sha256: string | null;
+  readonly sha256Measured: boolean;
 }
 
 export interface LocalLlmModel {
@@ -171,6 +174,20 @@ export interface LocalLlmModel {
    * a declared one to 5%.
    */
   readonly sizeMeasured: boolean;
+  /**
+   * The object's SHA-256, and whether this project measured it.
+   *
+   * Non-null on all thirty-nine published objects. \`sha256Measured\` is the
+   * part that matters: **true** means the bytes were downloaded and hashed
+   * here, **false** means this is the publisher's stated \`lfs.oid\` — a real
+   * digest of the object, but one delivered by the same host that serves the
+   * bytes, so it catches corruption and re-uploads and not a compromised
+   * huggingface.co. Seven of the thirty-nine are measured, one per publishing
+   * organisation. Anything shown to a person about how a model was verified
+   * must read this flag and not just the digest.
+   */
+  readonly sha256: string | null;
+  readonly sha256Measured: boolean;
   readonly quantization: string | null;
   readonly contextLength: number | null;
   readonly recommended: boolean;

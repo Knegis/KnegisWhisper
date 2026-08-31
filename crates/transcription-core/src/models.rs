@@ -17,7 +17,7 @@
 //!
 //! **The pins do not live here.** They live in `WHISPER_PINS` in
 //! `tools/integration-audit/generate-provider-registry.mjs`, beside
-//! `SHERPA_PINS` and `LOCAL_LLM_SIZES`, and reach this module as
+//! `SHERPA_PINS` and `LOCAL_LLM_PINS`, and reach this module as
 //! [`WhisperModel::sha256`] and [`WhisperModel::expected_size_bytes`]. Three
 //! model families keeping their pins in three different places was the actual
 //! problem: `model-pin --verify` had to *parse this file's Rust* to check the

@@ -129,6 +129,9 @@ pub struct DraftModel {
     /// Whether [`Self::size_bytes`] was measured, on the same terms as
     /// [`LocalLlmModel::size_measured`].
     pub size_measured: bool,
+    /// On the same terms as [`LocalLlmModel::sha256`].
+    pub sha256: Option<String>,
+    pub sha256_measured: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -149,6 +152,25 @@ pub struct LocalLlmModel {
     /// nothing on its own. A measured size is checked for exact equality after a
     /// download; a declared one only within 5%.
     pub size_measured: bool,
+    /// The object's SHA-256, non-null for all thirty-nine published objects.
+    ///
+    /// Read it through `local_llm.rs`'s `DigestCheck::of`, which takes this and
+    /// [`Self::sha256_measured`] together, rather than reaching for the string:
+    /// the two fields are one fact and the flag is not decoration.
+    pub sha256: Option<String>,
+    /// Whether [`Self::sha256`] is bytes this project hashed or the publisher's
+    /// stated `lfs.oid`.
+    ///
+    /// Both are held to exact equality after a download, so this does not change
+    /// what the installer *does*. It changes what may honestly be said about a
+    /// model that passed. A stated oid is a real SHA-256 of the object -- git-lfs
+    /// is content-addressed on it -- and it catches a corrupted transfer, a
+    /// truncation the length survived, and an accidental re-upload. It does not
+    /// catch a compromised huggingface.co, because that one host would serve
+    /// both the bytes and the digest they are checked against. Seven of the
+    /// thirty-nine objects are measured, one per publishing organisation; see
+    /// `LOCAL_LLM_PINS` in `tools/integration-audit/generate-provider-registry.mjs`.
+    pub sha256_measured: bool,
     pub quantization: Option<String>,
     pub context_length: Option<u32>,
     pub recommended: bool,

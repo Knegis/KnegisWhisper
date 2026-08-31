@@ -223,17 +223,40 @@ impl Availability {
 
 /// How firmly a model's identity can be established.
 ///
-/// Three states rather than a boolean, and an enum rather than a string. It was
+/// Four states rather than a boolean, and an enum rather than a string. It was
 /// a `&'static str` whose three values the frontend re-declared by hand as a
 /// union; nothing held the two in step, so a fourth state added here would have
-/// reached a UI that did not know about it. Now it cannot.
+/// reached a UI that did not know about it. Now it cannot -- and the fourth
+/// state duly arrived, as [`Self::StatedDigest`].
+///
+/// Shared between the whisper models and the local-LLM GGUFs, which need
+/// different subsets of it: whisper reaches [`Self::Digest`] on all six and
+/// [`Self::StatedDigest`] on none, and the GGUFs are the other way round for
+/// thirty-two of thirty-nine objects. A variant unreachable on one path is kept
+/// rather than split into two enums, for the reason
+/// `models::Verification::SizeOnly` is kept: it is still the honest answer for a
+/// model somebody adds tomorrow.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "kebab-case")]
 pub enum VerifiedBy {
-    /// A measured SHA-256 is pinned for this model and the file matched it.
+    /// A SHA-256 **this project measured** is pinned for this model, and the file
+    /// matched it. The strongest of the four: the digest was taken from bytes
+    /// that were downloaded once and hashed here, and committed to this
+    /// repository, so it is not delivered by whoever serves the download.
     Digest,
-    /// Only a declared size is known. The file is the right length; it has not
-    /// been proven to be the file the publisher built.
+    /// The **publisher's stated** SHA-256 is pinned for this model, and the file
+    /// matched it.
+    ///
+    /// Weaker than [`Self::Digest`] in one specific way that must not be blurred:
+    /// the digest came from the same host as the bytes -- Hugging Face's
+    /// `lfs.oid`, which is a true SHA-256 of the object because git-lfs is
+    /// content-addressed on it. So this catches a corrupted transfer, a
+    /// truncation that happened to keep the length, and an accidental re-upload;
+    /// it does not catch a huggingface.co that has been compromised, since one
+    /// host would serve both halves of the comparison.
+    StatedDigest,
+    /// Only a size is known. The file is the right length; it has not been proven
+    /// to be the file the publisher built.
     Size,
     /// Neither is known. Reported, never silent.
     Nothing,
@@ -263,8 +286,35 @@ impl VerifiedBy {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Digest => "digest",
+            Self::StatedDigest => "stated-digest",
             Self::Size => "size",
             Self::Nothing => "nothing",
+        }
+    }
+
+    /// The weaker of two verdicts.
+    ///
+    /// An install that downloads two files -- a GGUF and its speculative-decoding
+    /// drafter -- is only as verified as its weakest half, and reporting the
+    /// model's verdict while a drafter rode in on a weaker one would be the kind
+    /// of rounding-up this enum exists to prevent.
+    #[must_use]
+    pub const fn weaker(self, other: Self) -> Self {
+        // Ordinals rather than `PartialOrd`, so the ordering is stated here and
+        // not implied by the declaration order of the variants -- reordering the
+        // variants for readability must not silently reorder the strengths.
+        const fn rank(v: VerifiedBy) -> u8 {
+            match v {
+                VerifiedBy::Digest => 3,
+                VerifiedBy::StatedDigest => 2,
+                VerifiedBy::Size => 1,
+                VerifiedBy::Nothing => 0,
+            }
+        }
+        if rank(other) < rank(self) {
+            other
+        } else {
+            self
         }
     }
 }

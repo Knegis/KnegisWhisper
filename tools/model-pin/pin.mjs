@@ -62,6 +62,7 @@
  *   node tools/model-pin/pin.mjs --url <url> [--id <model-id>] [--keep <path>]
  *   node tools/model-pin/pin.mjs --file <path> [--id <model-id>]
  *   node tools/model-pin/pin.mjs --verify [--only <model-id>]
+ *   node tools/model-pin/pin.mjs --verify-stated [--only <model-id>]
  *
  *   # Measure and assert in one step — this is the acceptance run:
  *   node tools/model-pin/pin.mjs \
@@ -78,6 +79,21 @@
  * Their source is `WHISPER_PINS` and `SHERPA_PINS` in
  * `tools/integration-audit/generate-provider-registry.mjs`; a model with a
  * null `sha256` is skipped, because there is nothing committed to re-measure.
+ *
+ * ## What `--verify-stated` reads, and why it is a different verb
+ *
+ * The same file, `localLlm[].models[]` and their drafters -- the 39 GGUF
+ * objects. It does **not** download them: 202 GB is why they were never
+ * digest-pinned in the first place. It reads Hugging Face's
+ * `/api/models/{repo}/tree/main?expand=true`, which returns every object's
+ * `lfs.oid` and `lfs.size` in one response per repository, and compares those
+ * against what is committed.
+ *
+ * `--verify` re-measures bytes. `--verify-stated` re-reads a claim. Both catch
+ * a silent upstream re-upload, which is the failure that matters most here;
+ * only the first can catch bytes that disagree with the claim. They are two
+ * commands rather than one flag because a tool that reports "verified" should
+ * never be vague about which of those it did.
  *
  * This used to be two files. The whisper pins lived in a `PINNED` table in
  * `crates/transcription-core/src/models.rs`, so this tool parsed a Rust
@@ -401,6 +417,139 @@ export async function verify(only) {
   console.log(`model-pin --verify: ${targets.length} model(s) match the committed pins.`);
 }
 
+
+/**
+ * Every committed GGUF pin, as things to re-read rather than re-download.
+ *
+ * `localLlm` only. The whisper and sherpa pins are bytes this project hashed,
+ * so re-reading a publisher's claim is not how they are checked -- `--verify`
+ * is. Included here would make a weaker check look like it covered them.
+ *
+ * A digest with no size, or a size with no digest, is a `die()` and not a
+ * skip, for the reason `pinnedTargets` gives: the generator emits `sha256`,
+ * `sha256Measured` and `sizeBytes` together, so half a pin means
+ * `config/provider-registry.json` was hand-edited, and half a pin is the one
+ * input that would let this report a pass over something nobody checked.
+ */
+export function statedTargets(reg = registry()) {
+  const targets = [];
+
+  const add = (id, object) => {
+    if (!object.sha256 && object.sizeBytes === null) return;
+    if (!object.sha256 || typeof object.sizeBytes !== "number") {
+      die(
+        `localLlm/${id} has ${object.sha256 ? "a sha256 and no sizeBytes" : "a sizeBytes and no sha256"}. ` +
+          "The generator emits both or neither, so config/provider-registry.json has been " +
+          "hand-edited -- fix the pin in generate-provider-registry.mjs and regenerate."
+      );
+    }
+    targets.push({
+      id,
+      repo: object.hfRepo,
+      file: object.fileName,
+      sha256: object.sha256.toLowerCase(),
+      sizeBytes: object.sizeBytes,
+      // Which standard this pin already met. A measured pin is *stronger* than
+      // what this mode can check, so agreement here means "upstream has not
+      // re-uploaded" and not "the bytes are still what we hashed".
+      measured: object.sha256Measured === true,
+    });
+  };
+
+  for (const provider of reg.localLlm ?? []) {
+    for (const model of provider.models ?? []) {
+      add(model.id, model);
+      if (model.draft) add(`${model.id} (drafter)`, model.draft);
+    }
+  }
+
+  return targets;
+}
+
+/** One repository tree, as JSON. Bounded redirects, same as `download`. */
+async function tree(repo) {
+  let current = `https://huggingface.co/api/models/${repo}/tree/main?expand=true&recursive=true`;
+  for (let hop = 0; hop < 6; hop += 1) {
+    const response = await fetch(current, { redirect: "manual" });
+    if (response.status >= 300 && response.status < 400) {
+      const next = response.headers.get("location");
+      if (!next) die(`${current} redirected with no Location header`);
+      current = new URL(next, current).toString();
+      continue;
+    }
+    if (!response.ok) die(`${current} returned HTTP ${response.status}`);
+    return response.json();
+  }
+  return die(`the tree for ${repo} redirected more than five times`);
+}
+
+/**
+ * Re-read every committed GGUF pin from Hugging Face and report disagreements.
+ *
+ * Non-zero exit on any disagreement, the same contract `--verify` has. One
+ * request per repository, so 39 objects cost 36 requests and a few seconds --
+ * which is the point: this can run weekly where re-downloading 202 GB cannot.
+ */
+export async function verifyStated(only) {
+  const targets = statedTargets().filter((t) => !only || t.id === only);
+
+  if (targets.length === 0) {
+    die(
+      only
+        ? `no committed GGUF pin for a model with id "${only}".`
+        : "no committed GGUF pins were found at all. That is not a pass -- see the header of " +
+            "this file for where pins are read from."
+    );
+  }
+
+  const trees = new Map();
+  for (const target of targets) {
+    if (trees.has(target.repo)) continue;
+    console.error(`reading ${target.repo} …`);
+    trees.set(target.repo, await tree(target.repo));
+  }
+
+  const wrong = [];
+  for (const target of targets) {
+    const entries = trees.get(target.repo);
+    const entry = Array.isArray(entries)
+      ? entries.find((e) => e.path === target.file)
+      : undefined;
+
+    if (!entry) {
+      wrong.push(`${target.id}: ${target.file} is no longer in ${target.repo}`);
+      continue;
+    }
+    // `lfs.oid` is the object's SHA-256, because git-lfs is content-addressed
+    // on it. No `lfs` block at all on a multi-gigabyte GGUF would itself be
+    // the news, so it is reported rather than skipped.
+    const oid = entry.lfs?.oid;
+    if (!oid) {
+      wrong.push(`${target.id}: no lfs.oid in its tree entry — it may no longer be an LFS object`);
+    } else if (oid.toLowerCase() !== target.sha256) {
+      wrong.push(`${target.id}: committed ${target.sha256}, stated ${oid}`);
+    }
+    if (typeof entry.lfs?.size === "number" && entry.lfs.size !== target.sizeBytes) {
+      wrong.push(`${target.id}: committed ${target.sizeBytes} bytes, stated ${entry.lfs.size}`);
+    }
+  }
+
+  if (wrong.length > 0) {
+    console.error(
+      `\nmodel-pin --verify-stated: ${wrong.length} disagreement(s) over ${targets.length} object(s)`
+    );
+    for (const line of wrong) console.error(`  ${line}`);
+    process.exit(1);
+  }
+
+  const measured = targets.filter((t) => t.measured).length;
+  console.log(
+    `model-pin --verify-stated: ${targets.length} object(s) match what Hugging Face states ` +
+      `(${trees.size} tree request(s); ${measured} pinned to bytes hashed here, which this ` +
+      `mode does not re-hash).`
+  );
+}
+
 /* -------------------------------------------------------------------- main */
 
 /** `ggml-tiny.bin` from a whisper URL — a label, never part of a pin. */
@@ -414,8 +563,15 @@ function labelFor(options) {
 async function main(argv) {
   const options = args(argv);
 
+  const only = typeof options.only === "string" ? options.only : null;
+
   if (options.verify) {
-    await verify(typeof options.only === "string" ? options.only : null);
+    await verify(only);
+    return;
+  }
+
+  if (options["verify-stated"]) {
+    await verifyStated(only);
     return;
   }
 
@@ -424,7 +580,8 @@ async function main(argv) {
   if (hasUrl === hasFile) {
     die(
       "exactly one of --url <url> or --file <path> is required. See the header of this file " +
-        "for examples, or --verify to re-measure the committed pins."
+        "for examples, --verify to re-measure the committed pins, or --verify-stated to " +
+        "re-read the GGUF pins from Hugging Face without downloading them."
     );
   }
 

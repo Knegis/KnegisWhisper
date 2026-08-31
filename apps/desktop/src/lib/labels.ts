@@ -195,11 +195,22 @@ export function outcomeLabel(outcome: DictationOutcome): string {
   }
 }
 
-/** How a model's bytes were checked, said plainly rather than implied. */
+/**
+ * How a model's bytes were checked, said plainly rather than implied.
+ *
+ * The two digest cases are deliberately not the same phrase. Both mean the file
+ * hashed to the digest it was held to; they differ in where that digest came
+ * from, and that is the whole of the difference between "nobody who serves this
+ * download could have chosen the answer" and "the publisher could". Collapsing
+ * them into "checksum verified" would be the exact rounding-up that
+ * `LOCAL_LLM_PINS` carries a per-row flag to prevent.
+ */
 export function verificationLabel(verifiedBy: VerifiedBy): string {
   switch (verifiedBy) {
     case "digest":
       return "checksum verified";
+    case "stated-digest":
+      return "checksum verified against the publisher's own";
     case "size":
       // The honest wording. A file of about the right length has not been proven
       // to be the file the publisher built.

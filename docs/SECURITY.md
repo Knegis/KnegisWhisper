@@ -198,6 +198,20 @@ because a pinned archive can still be a decompression bomb if whoever pinned it 
 | Whisper `.bin` models | `expectedSizeBytes`, exact | none — not an archive |
 | Local text-generation GGUFs | `sizeBytes` where measured; none where declared | none — not an archive |
 
+**Every downloadable asset above is digest-checked as of 2026-08-31, but not all to the same
+standard, and the difference is reported rather than averaged.** Sidecar binaries, whisper models
+and Parakeet archives are pinned to bytes this project downloaded and hashed. Thirty-two of the
+thirty-nine local-LLM GGUF objects are pinned to Hugging Face's stated `lfs.oid` instead: a real
+SHA-256 of the object — git-lfs is content-addressed on it — delivered over the same channel as the
+bytes. That catches a corrupted transfer, a truncation the length survived, and an accidental
+re-upload; it does not catch a compromised huggingface.co, because one host would serve both halves
+of the comparison. The remaining seven were downloaded and hashed here, one per publishing
+organisation, which is how the stated metadata was tested: thirteen objects across eight
+organisations, 30.08 GiB, no disagreement. `local_model::VerifiedBy` carries `StatedDigest` as a
+state of its own and the screen prints a different sentence for it, so the weaker pin is never
+displayed as the stronger one. Measuring all thirty-nine is 202 GB of downloading, which is the
+cost decision this trade is made against (KNEG-45).
+
 **A bound is only ever an exact figure.** Every bound above comes from a measurement:
 `tools/sidecar-pin/pin.mjs` and `tools/model-pin/pin.mjs` take the length from `stat` after a full
 download, never from `content-length`, because a truncated body agrees with its own header. A

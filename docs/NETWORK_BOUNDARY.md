@@ -200,13 +200,22 @@ held to a *weaker rule* — a digest where one is known, a size within a toleran
 which check applied is reported to the caller rather than implied, because wrong weights produce
 bad transcripts while wrong code produces a compromised machine.
 
-**As of 2026-08-31 every model this application can install is in fact digest-pinned**: all six
-whisper models and both installable Parakeet archives were downloaded and hashed, and their pins
-are in the registry generator. So the weaker rule is what the *type system* permits, not what the
-shipped registry contains. It stays weaker on purpose — a whisper model added to the baseline
-before somebody spends the bandwidth degrades to a size check rather than becoming uninstallable,
-which is the opposite of the sherpa rule (`MissingPin`, refuse) and deliberate. The local-LLM
-GGUFs remain size-only by policy; see KNEG-45.
+**As of 2026-08-31 every model this application can install is in fact digest-pinned** — all six
+whisper models, both installable Parakeet archives, and all 39 local-LLM GGUF objects. So the
+weaker rule is what the *type system* permits, not what the shipped registry contains. It stays
+weaker on purpose: a whisper model added to the baseline before somebody spends the bandwidth
+degrades to a size check rather than becoming uninstallable, which is the opposite of the sherpa
+rule (`MissingPin`, refuse) and deliberate.
+
+**Two digest standards, and the boundary is where the difference lives.** The whisper and Parakeet
+pins are bytes this project downloaded and hashed. Thirty-two of the thirty-nine GGUF pins are
+Hugging Face's stated `lfs.oid`, read from `/api/models/{repo}/tree/main` — a true SHA-256 of the
+object, because git-lfs is content-addressed on it, but *delivered by the same host that serves the
+bytes*. It closes a corrupted transfer, a truncation that kept the length, and an accidental
+re-upload. It does not close a compromised huggingface.co, and it is never reported as though it
+did: `VerifiedBy::StatedDigest` is a distinct state on the wire and a distinct sentence on screen.
+Seven of the thirty-nine were downloaded and hashed here, one per publishing organisation, which is
+how the metadata itself was tested. See KNEG-45.
 
 ## Plaintext HTTP, and HTTPS to a private address
 

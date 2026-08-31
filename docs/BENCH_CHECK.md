@@ -624,15 +624,26 @@ dead provider stops the recording, falls back immediately, or carries on with a 
    equality; the arithmetic and the evidence are in
    [ENGINEERING_LOG.md](ENGINEERING_LOG.md) under 2026-08-31.
 
-   **What is verified:** the committed sizes match what Hugging Face serves — `cargo test -p
-   knegiswhisper local_llm -- --ignored` HEADs all 39 and passed on all 39 — and a unit test proves
-   every model resolves to a check rather than to "no size declared". **What is not:** no GGUF has
-   been downloaded through the application since the change. Press *Install (1.3 GB)* on
-   `qwen2.5-1.5b-instruct-q5_k_m` — the smallest of the eighteen and the worst offender of them, at
-   7.9% — and confirm the download renames into place instead of being deleted, that the row then
-   shows *Use this model*, and that pressing it starts a server that answers. **The size on the
-   button is itself part of the check:** it now reads the measured figure, so *Install (1.3 GB)*
-   where it used to say 1.4 GB is the fix visible on screen.
+   All 39 also carry a **SHA-256** as of 2026-08-31, so the install now hashes what it downloaded
+   before renaming it into place.
+
+   **What is verified:** the committed sizes and digests match what Hugging Face states — `cargo
+   test -p knegiswhisper local_llm -- --ignored` checks all 39 of each and passed on all 39, as
+   does `node tools/model-pin/pin.mjs --verify-stated` — and seven objects, one per publishing
+   organisation, were downloaded in full and hashed, agreeing exactly. Unit tests prove every model
+   resolves to a real size check and a real digest check rather than to "nothing declared".
+
+   **What is not:** no GGUF has been downloaded *through the application* since either change.
+   Press *Install (1.3 GB)* on `qwen2.5-1.5b-instruct-q5_k_m` — the smallest of the eighteen and
+   the worst offender of them, at 7.9% — and confirm the download renames into place instead of
+   being deleted, that the row then shows *Use this model*, and that pressing it starts a server
+   that answers. **Two things on screen are part of the check.** The size on the button reads the
+   measured figure, so *Install (1.3 GB)* where it used to say 1.4 GB is the size fix visible
+   without instrumentation. And the row should read *checksum verified against the publisher's own*
+   before the install and *… is installed — checksum verified against the publisher's own* after
+   it, with a *Checking … against its checksum…* line in between; that phrase, rather than the
+   bare *checksum verified* the whisper models get, is the digest fix visible without
+   instrumentation. Nothing has rendered `VerifiedBy::StatedDigest` outside a dev fixture.
 
    A drafter is a second progress bar after the first, and nobody has seen that either.
    `gemma-4-e2b-it-qat-q4_0` is the cheapest way to reach it (3.3 GB plus a 59 MB drafter) — its
@@ -642,7 +653,11 @@ dead provider stops the recording, falls back immediately, or carries on with a 
    now fails at the *end* of the download rather than passing quietly. Two Gemma models were already
    2 240 bytes adrift from their old declared size, so this is not hypothetical. If an install fails
    with "the download is N bytes and this model measures exactly M", the pin is stale, not the
-   connection — re-run the ignored test and re-measure into `LOCAL_LLM_SIZES`.
+   connection — re-run the ignored tests and re-measure into `LOCAL_LLM_PINS`. The same is true of a
+   failure naming a digest: since 2026-08-31 an upstream re-upload trips the hash as well as the
+   length, and `node tools/model-pin/pin.mjs --verify-stated` tells the two apart in seconds —
+   agreement there means the bytes were corrupted in transfer, disagreement means the pin is
+   stale.
 8. **Whether a newly digest-pinned whisper model installs through the screen — nobody has pressed
    the button on any of the five.** Until 2026-08-31 only `tiny` carried a digest; the other five
    were size-checked with a 5% tolerance. All six now carry a SHA-256 and an exact length measured

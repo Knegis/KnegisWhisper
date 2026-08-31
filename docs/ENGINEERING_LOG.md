@@ -86,12 +86,20 @@ maintained in place rather than appended to, because its purpose is to be curren
 > `sizeBytes` was a base-10 "GB" label multiplied by 2^30 instead of 10^9, so eighteen models
 > downloaded in full — 101 GB — and were deleted by a 5% size check on arrival. All 39 objects (35
 > models, 4 drafters, 202 GB) are now measured from Hugging Face's `x-linked-size` into
-> `LOCAL_LLM_SIZES` in the registry generator, and a measured size is checked for **exact** equality
+> `LOCAL_LLM_PINS` in the registry generator, and a measured size is checked for **exact** equality
 > rather than within 5%. Two related facts worth carrying: `qwen3.5-2b-q4_k_m` was passing the old
 > check by 0.0042 percentage points, about 5.6 KB, and two Gemma models were already 2 240 bytes
 > adrift from their declared size — upstream re-uploads are real, and the `#[ignore]`d
 > `the_measured_sizes_still_match_hugging_face` test in `local_llm.rs` is what catches the next one.
 > See the 2026-08-31 entry on the local-LLM sizes below.
+>
+> **All 39 also carry a SHA-256 as of the same day (KNEG-45), and 32 of them are the publisher's
+> stated `lfs.oid` rather than bytes hashed here.** That is a weaker standard, deliberately taken,
+> and it is carried through the code as a distinct state rather than a footnote:
+> `sha256Measured` in the registry, `DigestCheck::Stated` in Rust, `VerifiedBy::StatedDigest` on
+> the wire, and a different sentence on screen. Seven objects — one per publishing organisation —
+> were downloaded and hashed to test the metadata before any of it was trusted. `node
+> tools/model-pin/pin.mjs --verify-stated` re-reads all 39 in 36 requests and runs weekly.
 >
 > **Three smaller items recorded rather than chased**, each detailed in its own entry below: a
 > `kw-storage` test that failed once and passed on re-run during Task 8 (every other full-suite run
@@ -213,6 +221,136 @@ Unchanged from the Phases 1–4 entry, restated here so they are not buried:
   porting matrix. Upstream pins both by commit and verifies neither.
 - ~~**`nircmd`**~~ — **dropped**, as leaned towards: third-tier Windows paste fallback only, and
   `SendInput` works.
+
+---
+
+## 2026-08-31 (KNEG-45) — 39 GGUFs get a digest, and a second standard gets a name
+
+The GGUFs were the last download path with no digest. Closing that was declined twice on the same
+grounds — 202 GB of downloading is not justified for a pin — and what changed is not the willingness
+to spend it. It is that the pin was available for 36 HTTP requests.
+
+### The lead, and what it took to believe it
+
+The whisper-pins run on the same day found that
+`https://huggingface.co/api/models/{repo}/tree/main?expand=true` returns `lfs.oid` per object, and
+that this **is** the file's SHA-256 — git-lfs is content-addressed on exactly that hash, so the
+pointer file committed in the repository is the digest. It agreed with all six measured whisper
+digests. `ggml-large-v3.bin`'s row was read from the API while its 2.9 GB download was still in
+flight and predicted the answer correctly.
+
+That was one repository. The issue said so, in as many words: *"Nobody has compared an `lfs.oid`
+from a bartowski GGUF repo against a real download."* So the first thing done here was not to write
+code.
+
+**36 tree calls covered all 39 objects.** Every one returned a well-formed 64-hex `lfs.oid`, and
+every one's `lfs.size` matched the byte count already committed from `x-linked-size`. That second
+agreement is worth naming precisely: it is one Hugging Face instrument confirming another, not an
+independent measurement, because both are the same publisher's metadata.
+
+**Then the smallest object from each of the seven publishing organisations was downloaded in full
+and hashed** — bartowski, Qwen, mradermacher, ggml-org, google, unsloth, LiquidAI, 23.6 GiB — by
+`tools/model-pin/pin.mjs`, hashing each stream on its way to disk and taking the length from `stat`.
+All seven digests and all seven lengths matched the stated ones exactly. With whisper's six that is
+**thirteen objects across eight organisations, 30.08 GiB, no disagreement.**
+
+Those seven are not thrown away afterwards. They are committed as `sha256Measured: true`, which
+makes the table honest about itself rather than uniform.
+
+### The distinction, and where it is enforced
+
+`LOCAL_LLM_SIZES` became `LOCAL_LLM_PINS` and every row now carries a digest. Seven carry a flag
+saying this project hashed it.
+
+**What a stated oid buys.** An exact length turns "roughly this file" into "a file of exactly
+6,169,341,984 bytes", which was `KNEG-101` and was a real narrowing. It is still satisfied by *any*
+6,169,341,984 bytes. A digest is satisfied by one file. Corrupted transfer, truncation that
+happened to keep the length, accidental re-upload: all three now fail where they used to install.
+
+**What it does not buy, and this is the sentence the implementation had to keep.** The oid comes
+from the same host as the bytes. A compromised huggingface.co would serve both halves of the
+comparison, and a digest committed to *this* repository is what defends against that. So the two
+are not the same claim and must not be reported as one.
+
+Three places enforce that, rather than one comment asking nicely:
+
+- **The type.** `DigestCheck` has `Measured(String)` and `Stated(String)`, so nothing downstream can
+  reach the digest without having been handed which kind it is. A `String` and a `bool` beside it
+  would have let a caller read one and forget the other.
+- **The wire.** `local_model::VerifiedBy` gained a fourth variant, `StatedDigest`, spelled
+  `"stated-digest"`. The enum's own comment already predicted this: it exists because the frontend
+  used to re-declare a `&'static str`'s values by hand, so *"a fourth state added here would have
+  reached a UI that did not know about it"*. It duly arrived.
+- **The screen.** *checksum verified* and *checksum verified against the publisher's own* are
+  different rows in `verificationLabel`, and the row says it **before** the Install button as well
+  as after, for the reason the size is said before it.
+
+### On overturning a prohibition
+
+The comment being replaced said, in bold: *"do not add a `sha256` here on the strength of it. A
+digest belongs to bytes somebody actually hashed."* Written by the same run that measured the
+whisper pins, and it was right about what it was aimed at — the only alternative then on offer was
+deriving a digest from one download, which pins whatever arrived while looking like a guarantee. It
+still forbids that.
+
+An oid is a different object. It is stated by the publisher *before* any transfer, which is what
+makes it testable against one, and thirteen downloads is what testing it looked like. The rewritten
+comment carries the old prohibition verbatim and says why this is not an instance of it, because a
+rule that quietly disappears when it becomes inconvenient teaches the next reader nothing.
+
+### The check costs a full read of the file
+
+Verification is a second pass: `kw_sidecar::integrity::hash_file` reads the finished download back
+off the disk. For `qwen3-32b-q4_k_m` that is 19.8 GB, so it runs under `spawn_blocking` and emits
+its own progress state. `LocalLlmProgress::Verifying` exists because a progress line that stops
+moving for a minute reads as a hang, not as work.
+
+Two deliberate limits, recorded rather than implied:
+
+- **Length first, then hash.** The length is free — it is already on the filesystem — and a
+  truncated transfer is the common failure, so checking it first turns the common case into a
+  specific message rather than a digest mismatch that could mean anything.
+- **The check happens at install and is not repeated.** `installed: true` afterwards means the path
+  exists. The whisper path *does* re-hash on every status call, and gets away with it because its
+  largest model is 3 GB; re-reading 20 GB every time a settings screen opens is not a trade worth
+  making. A model corrupted after a successful install is therefore not caught. Filed as KNEG-107,
+  not hidden.
+
+### An install is as verified as its weakest half
+
+Five models download a speculative-decoding drafter alongside the GGUF, from a different repository.
+`VerifiedBy::weaker` picks the lower of the two verdicts for the `Done` event, so a drafter riding
+in on a stated oid cannot be reported under the model's measured one. Its ordering is written as
+explicit ranks rather than derived from `PartialOrd`, so reordering the variants for readability
+cannot silently reorder the strengths.
+
+`Done`'s `verifiedBy` is `Option`, and `None` means the files were already on disk and this install
+checked nothing — which is honest where borrowing the previous install's claim would not be.
+
+### `--verify-stated`, and why it is a second verb
+
+`tools/model-pin/pin.mjs --verify` downloads and re-hashes. It cannot cover these 39 objects for the
+reason they went unpinned for so long. `--verify-stated` re-reads the trees instead: 36 requests, no
+bodies, a few seconds, and it fails if any digest or length has moved. The weekly `pin-verify.yml`
+runs it beside the two download-based checks.
+
+Two commands rather than one flag, because a tool that prints "verified" must never be vague about
+which of those it did. Its success line says how many of the objects it checked are pinned to bytes
+hashed here — the ones it is *not* the right instrument for.
+
+For the thirty-two stated pins this is the same standard they were taken at, so agreement means
+"unchanged". For the seven measured ones it is strictly weaker, and the test's doc comment says so:
+agreement means Hugging Face has not re-uploaded, not that the bytes are still what we hashed. Only
+a download proves the second thing.
+
+### Two counts are asserted rather than assumed
+
+`every_local_model_carries_a_digest_the_installer_will_check` asserts 39 objects, zero with no
+digest, and **exactly seven** measured. The last of those is not a lower bound on purpose. If it
+moves, either somebody measured more — good, and the number should follow in the same commit — or a
+pin was quietly downgraded, which is the thing worth catching. The same shape asserts 39 in
+`pin.test.mjs`, so a pin dropped from `LOCAL_LLM_PINS` cannot make `--verify-stated` check 38
+objects and pass.
 
 ---
 
@@ -441,7 +579,11 @@ huggingface.co, because one host would serve both halves. A digest measured once
 *this* repository does defend against that, which is the whole reason `config/sidecars.json`'s rule
 is "a pin is only a pin if it was measured". So: a middle tier, strictly better than a length,
 strictly worse than the strong pin, and it must never be written into a table that reads as the
-strong pin. Recorded as a lead on KNEG-45 rather than done here.
+strong pin.
+
+**Recorded as a lead on KNEG-45 rather than done here — and taken up later the same day.** The lead
+held: see the KNEG-45 entry above, where seven objects across seven publishing organisations were
+downloaded and hashed to test it before any of it was written down as a pin.
 
 ### Three pin tables became one
 
