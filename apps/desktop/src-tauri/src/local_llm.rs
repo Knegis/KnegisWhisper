@@ -305,13 +305,26 @@ fn find_model<'a>(
         .ok_or_else(|| format!("{id:?} is not a model this build knows about"))
 }
 
-/// The download URL for a GGUF on Hugging Face.
+/// The download URL for a GGUF on Hugging Face, at the commit the registry pins.
 ///
 /// Built here rather than stored in the registry because it is mechanical, and
 /// because a URL in data is a URL somebody can point somewhere else. The host is
 /// the same one the whisper models come from.
-fn gguf_url(repo: &str, file_name: &str) -> String {
-    format!("https://huggingface.co/{repo}/resolve/main/{file_name}")
+///
+/// **The revision is the part that is not mechanical.** This used to interpolate
+/// `main`, which is a branch pointer: the bytes behind it change whenever the
+/// publisher pushes, so a digest measured against one commit would start failing
+/// installs the moment upstream published anything at all -- correctly refusing,
+/// for a reason that has nothing to do with the user or with the download.
+/// [`LocalLlmModel::revision`] is a commit sha measured into `HF_REVISIONS` in
+/// `tools/integration-audit/generate-provider-registry.mjs`, and the digest
+/// beside it describes that commit's object. KNEG-103.
+///
+/// The whisper models get the same treatment a different way: their URL is
+/// stored whole in the registry and the generator rewrites the revision into it,
+/// because upstream's baseline supplies the URL and this one is composed.
+fn gguf_url(repo: &str, revision: &str, file_name: &str) -> String {
+    format!("https://huggingface.co/{repo}/resolve/{revision}/{file_name}")
 }
 
 /* --------------------------------------------------------------- idle stop */
@@ -582,7 +595,7 @@ pub async fn local_llm_install(
 
     let checked = download_gguf(
         &llm.policy,
-        &gguf_url(&model.hf_repo, &model.file_name),
+        &gguf_url(&model.hf_repo, &model.revision, &model.file_name),
         &gguf_path(&model.file_name),
         SizeCheck::of(model.size_bytes, model.size_measured),
         &DigestCheck::of(model.sha256.as_deref(), model.sha256_measured),
@@ -606,7 +619,7 @@ pub async fn local_llm_install(
     if let Some(draft) = &model.draft {
         let draft_checked = download_gguf(
             &llm.policy,
-            &gguf_url(&draft.hf_repo, &draft.file_name),
+            &gguf_url(&draft.hf_repo, &draft.revision, &draft.file_name),
             &gguf_path(&draft.file_name),
             SizeCheck::of(draft.size_bytes, draft.size_measured),
             &DigestCheck::of(draft.sha256.as_deref(), draft.sha256_measured),
@@ -981,17 +994,71 @@ mod tests {
         assert_eq!(spec.port_range().expect("range").first, 8221);
     }
 
-    /// A URL is built from the repo and filename, never stored.
+    /// A URL is built from the repo, the pinned commit and the filename.
     #[test]
-    fn a_gguf_url_points_at_the_publishers_repo() {
+    fn a_gguf_url_points_at_one_commit_in_the_publishers_repo() {
         assert_eq!(
             gguf_url(
                 "bartowski/Qwen_Qwen3.5-9B-GGUF",
+                "182be2fd6c7bc44887d88a91cb03ff009cc9f549",
                 "Qwen_Qwen3.5-9B-Q4_K_M.gguf"
             ),
-            "https://huggingface.co/bartowski/Qwen_Qwen3.5-9B-GGUF/resolve/main/\
-             Qwen_Qwen3.5-9B-Q4_K_M.gguf"
+            "https://huggingface.co/bartowski/Qwen_Qwen3.5-9B-GGUF/resolve/\
+             182be2fd6c7bc44887d88a91cb03ff009cc9f549/Qwen_Qwen3.5-9B-Q4_K_M.gguf"
         );
+    }
+
+    /// Every GGUF in the registry names a commit, and no two of an object's
+    /// halves disagree about which one.
+    ///
+    /// The assertion that matters is `resolve/{40 hex}`: a model that slipped
+    /// back to `main` would still install, still verify against its digest
+    /// today, and start failing the first time its publisher pushed anything.
+    /// That is the shape of the defect this replaced, and it would be invisible
+    /// until it was somebody's broken install.
+    #[test]
+    fn every_gguf_is_fetched_from_a_commit_and_never_from_a_branch() {
+        let registry = kw_provider_registry::registry().expect("registry");
+        let mut checked = 0usize;
+        for provider in &registry.local_llm {
+            for model in &provider.models {
+                for (label, repo, revision, file) in std::iter::once((
+                    model.id.clone(),
+                    &model.hf_repo,
+                    &model.revision,
+                    &model.file_name,
+                ))
+                .chain(model.draft.iter().map(|d| {
+                    (
+                        format!("{} (drafter)", model.id),
+                        &d.hf_repo,
+                        &d.revision,
+                        &d.file_name,
+                    )
+                })) {
+                    assert_eq!(
+                        revision.len(),
+                        40,
+                        "{label}: {revision:?} is not a commit sha"
+                    );
+                    assert!(
+                        revision
+                            .chars()
+                            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+                        "{label}: {revision:?} is not 40 lowercase hex characters"
+                    );
+                    let url = gguf_url(repo, revision, file);
+                    assert!(
+                        url.contains(&format!("/resolve/{revision}/")),
+                        "{label}: {url} does not name the pinned commit"
+                    );
+                    checked += 1;
+                }
+            }
+        }
+        // The same count the digest and size assertions use. A model dropping
+        // out of the registry must not make this pass over fewer objects.
+        assert_eq!(checked, 39, "35 models plus 4 drafters");
     }
 
     /// Every model in the registry can be found by id.
@@ -1162,10 +1229,15 @@ mod tests {
     /// taken with, so a re-upload shows up here first.
     ///
     /// `x-linked-size` rather than `content-length`: Hugging Face serves these
-    /// through LFS and answers a `resolve/main` request with a 302 to a CDN, so
-    /// `content-length` describes the redirect while `x-linked-size` carries the
-    /// object. The fallback is used only on a 200, where there is no redirect for
-    /// `content-length` to be measuring.
+    /// through LFS and answers a `resolve/{commit}` request with a 302 to a CDN,
+    /// so `content-length` describes the redirect while `x-linked-size` carries
+    /// the object. The fallback is used only on a 200, where there is no redirect
+    /// for `content-length` to be measuring.
+    ///
+    /// Since KNEG-103 the URL names a commit rather than `main`, so this asks a
+    /// narrower question than it used to: not "has the publisher re-uploaded"
+    /// but "does the commit we pinned still hold an object of this length".
+    /// A publisher pushing a new commit no longer moves these bytes at all.
     #[tokio::test]
     #[ignore = "sends one HEAD request per model to huggingface.co; run with --ignored"]
     async fn the_measured_sizes_still_match_hugging_face() {
@@ -1178,7 +1250,7 @@ mod tests {
                 if let (Some(bytes), true) = (model.size_bytes, model.size_measured) {
                     targets.push((
                         model.id.clone(),
-                        gguf_url(&model.hf_repo, &model.file_name),
+                        gguf_url(&model.hf_repo, &model.revision, &model.file_name),
                         bytes,
                     ));
                 }
@@ -1186,7 +1258,7 @@ mod tests {
                     if let (Some(bytes), true) = (draft.size_bytes, draft.size_measured) {
                         targets.push((
                             format!("{} (drafter)", model.id),
-                            gguf_url(&draft.hf_repo, &draft.file_name),
+                            gguf_url(&draft.hf_repo, &draft.revision, &draft.file_name),
                             bytes,
                         ));
                     }
@@ -1419,12 +1491,23 @@ mod tests {
     /// stronger, because `lfs.size` comes back in the same response.
     ///
     /// **What it does and does not prove.** It compares this repository's pin
-    /// against Hugging Face's current statement. For the thirty-two stated
-    /// digests that is the same standard they were pinned to, so agreement means
-    /// "unchanged". For the seven measured ones it is weaker than how they were
-    /// pinned — those bytes were hashed here — so agreement means Hugging Face
-    /// has not re-uploaded, not that the bytes are still what we hashed. Only a
-    /// download proves that, and `tools/model-pin/pin.mjs --url` is how.
+    /// against Hugging Face's statement *at the commit the installer downloads
+    /// from*. For the thirty-two stated digests that is the same standard they
+    /// were pinned to, so agreement means "unchanged". For the seven measured
+    /// ones it is weaker than how they were pinned — those bytes were hashed
+    /// here — so agreement means Hugging Face has not re-uploaded, not that the
+    /// bytes are still what we hashed. Only a download proves that, and
+    /// `tools/model-pin/pin.mjs --url` is how.
+    ///
+    /// **The revision changed what this asks (KNEG-103).** Reading the tree at
+    /// `main` used to ask "has the publisher re-uploaded", and a yes meant the
+    /// bytes behind our URL had moved out from under the digest. The URL names a
+    /// commit now, so a push cannot move them, and this asks something better:
+    /// **do the digest and the revision committed beside each other describe the
+    /// same object?** Nothing else in the workspace checks that pair. It also
+    /// catches a pinned commit that has stopped resolving — a repository going
+    /// private, or a force-push — which would break every install of its models
+    /// and which nothing else would notice.
     #[tokio::test]
     #[ignore = "sends one tree request per repository to huggingface.co; run with --ignored"]
     async fn the_stated_digests_still_match_hugging_face() {
@@ -1433,28 +1516,40 @@ mod tests {
         let registry = kw_provider_registry::registry().expect("registry");
         let policy = NetworkPolicy::new().expect("the shared client builds");
 
-        // (label, repo, file, committed digest, committed size)
-        let mut targets: Vec<(String, String, String, String, Option<u64>)> = Vec::new();
+        /// One committed pin, as the tree read has to see it. A struct rather
+        /// than the six-tuple this outgrew when the revision joined it.
+        struct Stated {
+            label: String,
+            repo: String,
+            revision: String,
+            file: String,
+            digest: String,
+            size: Option<u64>,
+        }
+
+        let mut targets: Vec<Stated> = Vec::new();
         for provider in &registry.local_llm {
             for model in &provider.models {
                 if let Some(digest) = &model.sha256 {
-                    targets.push((
-                        model.id.clone(),
-                        model.hf_repo.clone(),
-                        model.file_name.clone(),
-                        digest.clone(),
-                        model.size_bytes,
-                    ));
+                    targets.push(Stated {
+                        label: model.id.clone(),
+                        repo: model.hf_repo.clone(),
+                        revision: model.revision.clone(),
+                        file: model.file_name.clone(),
+                        digest: digest.clone(),
+                        size: model.size_bytes,
+                    });
                 }
                 if let Some(draft) = &model.draft {
                     if let Some(digest) = &draft.sha256 {
-                        targets.push((
-                            format!("{} (drafter)", model.id),
-                            draft.hf_repo.clone(),
-                            draft.file_name.clone(),
-                            digest.clone(),
-                            draft.size_bytes,
-                        ));
+                        targets.push(Stated {
+                            label: format!("{} (drafter)", model.id),
+                            repo: draft.hf_repo.clone(),
+                            revision: draft.revision.clone(),
+                            file: draft.file_name.clone(),
+                            digest: digest.clone(),
+                            size: draft.size_bytes,
+                        });
                     }
                 }
             }
@@ -1464,15 +1559,21 @@ mod tests {
             "nothing is pinned, so nothing is checked"
         );
 
-        // One request per repository, not per object: three of the repos here
-        // hold two objects each.
+        // One request per repository *and revision*, not per object: three of
+        // the repos here hold two objects each. Keying on both rather than on
+        // the repository alone is not redundant — one revision per repository
+        // is how `HF_REVISIONS` is built, and a cache that assumed it would
+        // answer from the wrong tree, silently, the day that stopped holding.
         let mut trees: HashMap<String, serde_json::Value> = HashMap::new();
-        for (_, repo, _, _, _) in &targets {
-            if trees.contains_key(repo) {
+        for target in &targets {
+            let key = format!("{}@{}", target.repo, target.revision);
+            if trees.contains_key(&key) {
                 continue;
             }
+            let (repo, revision) = (&target.repo, &target.revision);
             let url = format!(
-                "https://huggingface.co/api/models/{repo}/tree/main?expand=true&recursive=true"
+                "https://huggingface.co/api/models/{repo}/tree/{revision}\
+                 ?expand=true&recursive=true"
             );
             let body = policy
                 .request(
@@ -1487,7 +1588,7 @@ mod tests {
                 .json::<serde_json::Value>()
                 .await
                 .expect("the tree is JSON");
-            trees.insert(repo.clone(), body);
+            trees.insert(key, body);
         }
         println!(
             "{} tree requests for {} objects",
@@ -1496,9 +1597,17 @@ mod tests {
         );
 
         let mut wrong: Vec<String> = Vec::new();
-        for (label, repo, file, committed, committed_size) in &targets {
+        for target in &targets {
+            let Stated {
+                label,
+                repo,
+                revision,
+                file,
+                digest: committed,
+                size: committed_size,
+            } = target;
             let entry = trees
-                .get(repo)
+                .get(&format!("{repo}@{revision}"))
                 .and_then(|t| t.as_array())
                 .and_then(|entries| {
                     entries
@@ -1508,7 +1617,8 @@ mod tests {
 
             let Some(entry) = entry else {
                 wrong.push(format!(
-                    "{label}: {file} is no longer in {repo} — the file has moved or been renamed"
+                    "{label}: {file} is not in {repo} at {revision} — the pin names a commit \
+                     that does not hold it"
                 ));
                 continue;
             };
@@ -1545,7 +1655,10 @@ mod tests {
 
         assert!(
             wrong.is_empty(),
-            "{} of {} objects have changed upstream; re-measure into LOCAL_LLM_PINS:\n{}",
+            "{} of {} objects disagree with the commit they are pinned to. That is a \
+             hand-edited registry or a repository that has been rewritten, not an ordinary \
+             re-upload — a push to main cannot reach these. Re-read HF_REVISIONS and \
+             re-measure LOCAL_LLM_PINS together:\n{}",
             wrong.len(),
             targets.len(),
             wrong.join("\n")

@@ -151,7 +151,21 @@ const BINDINGS: Binding[] = [
       },
     ],
   },
-  { action: "voice-agent", accelerators: [standard("Control+Shift+V")] },
+  {
+    // `Control+Alt` rather than another tidy chord, because this is the one
+    // that renders the caution below -- and a fixture that never shows a
+    // warning is a fixture nobody can check the warning against. On a Nordic
+    // or German layout this really does start dictation every time you type
+    // `@` (KNEG-37).
+    action: "voice-agent",
+    accelerators: [
+      {
+        kind: "modifier-only",
+        accelerator: "Control+Alt",
+        modifiers: ["Control", "Alt"],
+      },
+    ],
+  },
   {
     action: "translation",
     accelerators: [
@@ -171,6 +185,18 @@ const HOTKEYS: HotkeyReport = {
     {
       action: "voice-agent",
       reason: "no voice-agent client is built into this release",
+    },
+  ],
+  // The sentence `hotkey::cautions` builds when the layout was read and found
+  // to have AltGr -- the Present arm, naming the character, because that is
+  // what a Nordic or German user gets and the one worth being able to see
+  // while styling this.
+  cautions: [
+    {
+      action: "voice-agent",
+      accelerator: "Control+Alt",
+      reason:
+        "Control+Alt also fires when you press AltGr. This layout types '@' with Control and Alt together, and Windows sends left Control and right Alt for AltGr -- which completes this chord, with nothing downstream able to tell that apart from you pressing it deliberately.",
     },
   ],
 };
@@ -545,6 +571,7 @@ const MEETING_PROVIDERS: MeetingProviderSummary[] = [
 
 let meetingStatus: MeetingStatus = {
   state: "idle",
+  transcriptFailure: null,
   provider: null,
   elapsedSeconds: 0,
   sources: null,
@@ -751,7 +778,10 @@ const LOCAL_API: LocalApiStatus = {
   port: 8749,
   discoveryPath:
     "C:\\Users\\dev\\AppData\\Roaming\\KnegisWhisper\\local-api.json",
-  discoveryPermissions: { state: "owner-only" },
+  /* Windows paths, so the Windows state. This used to say "owner-only", which
+   * only a Unix machine can produce and which both screens render with a
+   * literal `0600` that could never appear beside a `C:\` path. */
+  discoveryPermissions: { state: "owner-and-administrators" },
 };
 
 /* ------------------------------------------------------ cli, mcp and import */
@@ -765,7 +795,10 @@ const CLI: CliStatus = {
   discoveryPath:
     "C:\\Users\\dev\\AppData\\Roaming\\KnegisWhisper\\local-api.json",
   localApiRunning: true,
-  discoveryPermissions: { state: "owner-only" },
+  /* Same file, same machine, so the same state as `LOCAL_API` above. The two
+   * screens read one file; a fixture where they disagreed would hide exactly
+   * the drift `discoveryPermissionsLabel` exists to prevent. */
+  discoveryPermissions: { state: "owner-and-administrators" },
 };
 
 const MCP: McpStatus = {
@@ -1039,6 +1072,17 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
         accelerator,
       })),
       live: accelerators.length > 0,
+      // Computed from the accelerator rather than hardcoded, so typing
+      // `Control+Alt` into the field in dev mode produces the warning the real
+      // backend would. The real rule runs the chord matcher over the keys
+      // AltGr sends; this is the shape of its answer, not a second copy of it.
+      cautions: accelerators
+        .filter((a) => /control|ctrl/i.test(a) && /(^|\+)alt/i.test(a))
+        .map((accelerator) => ({
+          action,
+          accelerator,
+          reason: `${accelerator} also fires when you press AltGr. This layout types '@' with Control and Alt together, and Windows sends left Control and right Alt for AltGr -- which completes this chord, with nothing downstream able to tell that apart from you pressing it deliberately.`,
+        })),
     };
     return change;
   },
@@ -1485,7 +1529,19 @@ const devConsole = {
     void emit("dictation-state", state);
   },
   meetingState(state: MeetingState) {
-    meetingStatus = { ...meetingStatus, state };
+    // The failure sentence travels with the state rather than being a second
+    // thing to remember to set: `recording-without-transcript` with an empty
+    // detail line is the one rendering of this screen that cannot be reviewed,
+    // because the sentence is most of what it exists to show. The words are the
+    // real ones, from the meeting of 2026-08-28.
+    meetingStatus = {
+      ...meetingStatus,
+      state,
+      transcriptFailure:
+        state === "recording-without-transcript"
+          ? "openai-realtime accepted the connection and then stopped transcribing: on the system audio stream the provider reported: The Realtime Beta API is no longer supported."
+          : null,
+    };
     void emit("meeting-state", state);
   },
   transcript(text: string, isFinal = true) {

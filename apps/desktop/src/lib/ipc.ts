@@ -689,7 +689,20 @@ export async function setSetting(key: string, value: unknown): Promise<void> {
   return invoke("settings_set", { key, value });
 }
 
-/** Every settings key Rust will accept, so a screen cannot invent one. */
+/**
+ * Every settings key that currently has a stored value. Values are not returned.
+ *
+ * Not the set of keys Rust will accept, which this said until 2026-08-31: the
+ * command reads the `settings` table, so a key at its default has never been
+ * written and does not appear. The list of keys the application has, and which
+ * screen changes each one, is `config/settings-keys.json`, gated by
+ * `tools/settings-audit/scan.mjs`.
+ *
+ * This and the two wrappers above it have no caller. Every screen goes through
+ * a command named for the setting it changes instead, which is what lets that
+ * gate tell a key with a way in from one without -- a generic writer would make
+ * every key look reachable.
+ */
 export async function getSettingsKeys(): Promise<string[]> {
   return invoke<string[]>("settings_keys");
 }
@@ -706,15 +719,24 @@ export async function importOpenWhispr(path: string): Promise<ImportReport> {
  *
  * The renderer has no independent way to obtain a path here -- there is no
  * filesystem or dialog capability, so the only path this screen can ever
- * hold is one a real OS dialog returned from this call. **That is not the
- * same guarantee `exportNoteToFile` gets from its save dialog.** That command
- * fuses picking and writing into one atomic call on the Rust side, so the
- * frontend never sees or supplies a path at all. This one hands the chosen
- * path back, and the screen passes it on to a later, separate import call --
- * see `pick_import_file`'s doc comment in `commands.rs` for the gap that
- * leaves open and the hardening options being weighed (also
- * `docs/SECURITY.md`'s Webview section and `docs/BENCH_CHECK.md`'s Task 12
- * entry).
+ * hold is one a real OS dialog returned from this call. **And that is now
+ * checked rather than assumed.** Rust records the canonical form of every
+ * path it returns from here, for as long as the app runs, and the three
+ * commands that take a path -- `importAudioFile`, `importVideoFile` and
+ * `importOpenWhispr` -- refuse a path that is not in that set. So a path this
+ * screen holds can be imported, re-imported after a failure, and imported
+ * again; a path invented anywhere else cannot.
+ *
+ * Two consequences worth knowing on this side. The string returned is the
+ * display form, which is what to show the user and what to derive a note
+ * title from -- Rust canonicalises it again on the way back in, so do not
+ * rewrite or normalise it here or it will stop matching. And a path whose
+ * name does not survive lossy conversion cannot be imported at all; it is
+ * refused rather than silently read.
+ *
+ * See `pick_import_file`'s doc comment in `commands.rs`, `docs/SECURITY.md`'s
+ * Webview section, and `docs/BENCH_CHECK.md`'s Task 12 entry -- which still
+ * carries the by-hand check that the policy is consulted on the real path.
  */
 export async function pickImportFile(
   kind: ImportPickKind,

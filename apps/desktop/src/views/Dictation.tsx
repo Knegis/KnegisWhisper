@@ -177,7 +177,7 @@ export function DictationView({
     <div className="view">
       {error ? <p className="error">{error}</p> : null}
 
-      <section>
+      <section data-surface="dictation.shortcuts">
         <h2>Shortcuts</h2>
         {hotkeys.bindings.map((b) => (
           <div key={b.action} className="row">
@@ -249,6 +249,19 @@ export function DictationView({
             .
           </p>
         ) : null}
+        {/*
+          A third category, warn-coloured rather than filed under the caveats
+          below, because it is the only thing on this screen that says a hotkey
+          which *works* will also do something you did not ask for. Binding
+          `Control+Alt` on a Nordic or German layout starts a dictation every
+          time you type `@` — the keys Windows sends for AltGr are the chord,
+          and nothing downstream can tell the two apart. See KNEG-37.
+        */}
+        {hotkeys.cautions.map((c, i) => (
+          <p className="caveat warn" key={`caution-${i}`}>
+            <strong>{c.action}:</strong> {c.reason}
+          </p>
+        ))}
         {lastHotkey ? <Row label="Last fired" value={lastHotkey} /> : null}
         {hotkeys.unhandled.length > 0 ? (
           <p className="caveat">
@@ -340,7 +353,7 @@ export function DictationView({
         ) : null}
       </section>
 
-      <section>
+      <section data-surface="dictation.history">
         <h2>History</h2>
 
         {/* First, because it governs whether the other two controls in this

@@ -51,6 +51,21 @@ maintained in place rather than appended to, because its purpose is to be curren
 > now fails open**, because the fix inverted what a miss in `is_private_host` costs. See "Task 20 —
 > the network boundary does not stop SSRF over HTTPS" below.
 >
+> **`Notes > Upload`'s import paths are now a capability, not an assumption (KNEG-80).**
+> `pick_import_file` returned the chosen path to the renderer and `media_import_audio`,
+> `media_import_video` and `import_openwhispr` read whatever they were handed; the renderer could
+> not *obtain* a path (`capabilities/default.json` is `["core:default"]` and nothing else) but
+> nothing *checked* that, so a compromised renderer could name any readable file and, with a cloud
+> transcription provider configured, watch it leave the machine. `commands::DialogGrants` now
+> records the canonical form of every dialog-returned path for the life of the process and those
+> three commands — **the only three in the application that accept a path**, enumerated rather than
+> assumed — refuse anything else. Session-lifetime because retry-after-failure exists today,
+> count-bounded rather than timed for `meeting::Watcher::offered`'s reason, and keyed on
+> `canonicalize` because `display()` is lossy — the cost being that a path whose name does not
+> survive `display()` is refused outright. Four unit tests assert the policy; **only a real call
+> against the running application proves it is consulted**, which is still open as item 1 under
+> `BENCH_CHECK.md`'s Task 12 heading. See "a path the renderer could invent" below.
+>
 > **Task 19 audited every manifest entry whose `status` asserts a working implementation exists**
 > (`verify-parity.mjs`'s `ACTIVE` set) and found three more instances of the same overclaim
 > `platform:aec` was already corrected for mid-run: `meeting-stream:tinfoil-realtime` (status
@@ -73,13 +88,23 @@ maintained in place rather than appended to, because its purpose is to be curren
 > and for Task 20 say so item by item, and none of them should be read as done until someone
 > actually presses the buttons.
 >
-> **A cross-cutting gap, recorded and deliberately not fixed:** all four meeting socket clients
-> (`openai_socket.rs`, `assemblyai_socket.rs`, `deepgram_socket.rs`, `corti_socket.rs`) log a
-> provider-reported error frame with `tracing::warn!` and never turn it into an `Err`. A server that
-> accepts a malformed session-config frame, stays open, and emits nothing would let a meeting
-> "complete successfully" holding an empty transcript, evidenced only by a log line nobody in the
-> room can see. `BENCH_CHECK.md` item 13 under chunk E already carries this; it predates every task
-> in this run and is shared by all four clients equally.
+> **The cross-cutting gap in all four meeting socket clients is closed at the end of the meeting
+> and still open during it (KNEG-79, 2026-08-31).** All four (`openai_socket.rs`,
+> `assemblyai_socket.rs`, `deepgram_socket.rs`, `corti_socket.rs`) used to log a provider-reported
+> error frame with `tracing::warn!` and never turn it into an `Err`, so a server that accepted a
+> malformed session-config frame, stayed open and emitted nothing let a meeting "complete
+> successfully" holding an empty transcript. They now record into
+> `kw_meeting_core::fault::SessionFault` and both `send_audio` and `finish` consult it, so Stop
+> reports the provider's own sentence. `stop()` was fixed with it — a pump failure used to return
+> early, leaving the runtime idle and the screen stuck on "Recording" with no working button.
+> **The mid-meeting half closed the same day (KNEG-95).** A dead provider now changes the
+> indicator instead of leaving it saying "Recording" — a fourth `MeetingState`, the recording
+> deliberately left running, and the provider's own sentence on `Settings > Meetings`. See the
+> 2026-08-31 (KNEG-95) entry.
+>
+> **What is still true:** three of the four clients have never met a real provider error, because
+> no key exists for AssemblyAI, Deepgram or Corti, so the wiring is what the tests check and not
+> any provider's behaviour. See the 2026-08-31 (KNEG-79) entry below, and `BENCH_CHECK.md` item 13.
 >
 > **Eighteen of the thirty-five local text-generation models could not be installed at all**, and
 > the reason was arithmetic in a config file rather than anything in the download path: upstream's
@@ -100,6 +125,27 @@ maintained in place rather than appended to, because its purpose is to be curren
 > the wire, and a different sentence on screen. Seven objects — one per publishing organisation —
 > were downloaded and hashed to test the metadata before any of it was trusted. `node
 > tools/model-pin/pin.mjs --verify-stated` re-reads all 39 in 36 requests and runs weekly.
+>
+> **The Windows DACL gap is closed as of 2026-08-31 (KNEG-34), and the two things it did *not*
+> close are worth carrying.** `kw_security::file_acl` applies and reads back an explicit protected
+> access list at all four call sites — the discovery file, its directory, and both of
+> `kw_sidecar::pid`'s. Measured with `icacls` from outside the process: three trustees (the process's
+> token user, `NT AUTHORITY\SYSTEM`, `BUILTIN\Administrators`), no `(I)` on any of them, on both
+> paths. **Deliberately not owner-only** — an administrator can take ownership anyway, so what a
+> confirmed Windows result claims is that the *unexpected* trustees are gone and inheritance is off,
+> which is narrower and true. The snapshot that used to sit behind that verdict is gone — since
+> KNEG-110 both screens re-read the access list on every status request. Still open: **CI compiles
+> none of the Win32 code**, because the
+> `windows-latest` job is off for every trigger but `workflow_dispatch`. The pure classifier is
+> covered on Linux by design — `file_acl::classify` takes plain Rust facts and the measured DACL is
+> a fixture in its test module. The three Win32 calls are covered by this repository's first two
+> `#[cfg(windows)]` tests and by `cargo run -p kw-security --example dacl_probe`, and by nothing
+> unattended. KNEG-111 tracks that gap. See the 2026-08-31 KNEG-34 entry below and
+> `docs/BENCH_CHECK.md` finding 2.
+>
+> **The DACL is now measured on the live file**, not only on test directories: after a normal
+> application start, `dacl_probe` reports `SE_DACL_PROTECTED` set and exactly three access entries,
+> none inherited. `Jobbdator\CodexSandboxUsers` is gone from the real token file.
 >
 > **Three smaller items recorded rather than chased**, each detailed in its own entry below: a
 > `kw-storage` test that failed once and passed on re-run during Task 8 (every other full-suite run
@@ -124,12 +170,16 @@ badge or before the next merge to `main`.
 
 | Thing | State | What is missing |
 | --- | --- | --- |
-| Local transcription (Phase 2) | Reachable, unconfirmed by hand | The interface exists now: install and server commands, a route the user can point at the local model, and a hotkey that runs the session. What is missing is a person pressing that hotkey and watching text appear — see the by-hand check in `docs/PHASES_0_6_COMPLETION_PLAN.md`. Green tests are not that. |
-| Meeting transcription (Phase 4) | Contract only | The five WebSocket clients. `is_allowed` returns true only for a provider with a client, so nothing claims otherwise. Each needs real credentials against a live service to verify. |
-| Enterprise reasoning (Bedrock, Azure, Vertex) | `ShapeNotImplemented` | The three request shapes. They refuse honestly rather than falling back. |
-| `storage::import::from_openwhispr` | Works, no UI | Deliberately absent from `config/integration-manifest.json` — adding it before it is reachable would be exactly the unconfigurable-backend the parity gate exists to catch. Add both together. |
-| Local API and CLI (Phase 6) | Reachable, unconfirmed by hand | The application starts and stops the server now, off by default, with the discovery file's real permissions shown in settings. What is missing is the compiled CLI having been run against a running application by a person rather than by a test harness. |
-| Phases 5, 7–9 | Not started | Calendars, MCP, diarization + Qdrant, packaging. System audio and the meeting clients remain from Phase 4. |
+| Local transcription (Phase 2) | **Driven by hand** | The core leg is closed: 2026-08-28, in the real application window, dictation into Notepad produced correct text repeatedly on both `whisper-tiny` and Parakeet. Four smaller checks remain and are KNEG-47's — the same dictation in VS Code, the caret never leaving the target window, the `KEEP ME` clipboard round trip, and `Control+Super` mid-dictation. |
+| Meeting transcription (Phase 4) | Four clients written, one confirmed | OpenAI Realtime has met a live server; AssemblyAI, Deepgram and Corti are *believed* wire shapes with no key on any machine this project has touched (KNEG-53, KNEG-55-57). Tinfoil is declined on principle, not missing. A dead provider is reported at Stop *and* mid-meeting, with the recording deliberately left running (KNEG-79, KNEG-95). |
+| Enterprise reasoning (Bedrock, Azure, Vertex) | `ShapeNotImplemented` | The three request shapes. They refuse honestly rather than falling back, and none has made a live call (KNEG-54). |
+| `storage::import::from_openwhispr` | Reachable | Nothing. `Notes > Upload` exposes it (KNEG-71), and it now refuses a path no file dialog returned (KNEG-80). Nobody has imported a real OpenWhispr database by hand (KNEG-90). |
+| Local API and CLI (Phase 6) | Reachable, exercised by hand | 2026-08-25: the compiled CLI read history out of a running application. The discovery file's permissions are re-read on every status request rather than remembered (KNEG-110), and on Windows carry an explicit protected DACL verified on the live file (KNEG-34). |
+| Calendars (Phase 5) | Built, never connected | `calendar-core`, loopback PKCE, `Integrations > Calendar`. No calendar code has answered a real request (KNEG-82); Apple Calendar is described and unimplemented (KNEG-81). |
+| MCP and the integration screens (Phase 7) | Built, never connected | Thirteen tools over stdio, plus both screens and the agent skills. No MCP client has ever driven it (KNEG-91). |
+| Media import (Phase 8) | Reachable | Subtitle export is verified end to end against the real server. Diarization and semantic search are not started (KNEG-73). Nobody has pressed *Import* on a real file (KNEG-90). |
+| Release (Phase 9) | Never run | The workflow exists, has never been dispatched, and no signing keypair exists (KNEG-43). |
+| Agent features (Phase 10) | Not started | Chat agent, voice agent, translation (KNEG-74). There is no chat screen; the local LLM's one consumer is dictation cleanup. |
 
 ### Claims that are unverified rather than verified
 
@@ -221,6 +271,1414 @@ Unchanged from the Phases 1–4 entry, restated here so they are not buried:
   porting matrix. Upstream pins both by commit and verifies neither.
 - ~~**`nircmd`**~~ — **dropped**, as leaned towards: third-tier Windows paste fallback only, and
   `SendInput` works.
+
+---
+
+## 2026-08-31 (KNEG-95) — the lock is the arbiter, and the state leads with the word that is still true
+
+The last of the 2026-08-28 meeting silence. Both OpenAI Realtime sockets closed within milliseconds
+of connecting; the application said **Recording**, kept the indicator up, captured both streams for
+as long as it was left running, and said nothing. KNEG-79 fixed the end of that meeting — Stop now
+reports the provider's own sentence. This is the middle of it.
+
+The shape was the repository owner's to pick, and was picked: **keep recording, and change the
+indicator to say the transcript died.** Not stop the recording, and not fall back to the whole-file
+pass immediately. The argument is the one artefact that cannot be recreated: the WAV is what saved
+the 28 August session, `record` already keeps writing when nothing is consuming the audio — on
+purpose, with a comment saying why — and the saved note comes from the whole-file pass over that
+file rather than from the live partials. Stopping the recording to report a dead provider would
+destroy the valuable half in order to fix the misleading half.
+
+### `MeetingState::RecordingWithoutTranscript`, and why the name matters
+
+The first word is the one that is still true. In the enum, in the JSON on the wire, in a log line
+and on the screen, a reader who sees only the first word is not misled: the microphone is open, the
+file is growing, and the indicator the brief requires is still up. `TranscriptLost` would have been
+shorter and would have invited exactly the wrong inference.
+
+`MeetingState::is_running` came out of `emit_state` at the same time. The tray rule was
+`state != MeetingState::Idle` written inline, which is correct and is also the kind of thing a
+fourth variant walks past. Now there is one place to answer it and a test that asks all four.
+
+### The lock is the arbiter, and that is the whole design
+
+The hard part was never the state. It was deciding **which ending is worth announcing**, because the
+pump ends on every path — including the ordinary one, where Stop closes the recorder and the pump
+drains and returns.
+
+The trap: a provider that faults on the *final* frame ends the pump during `finish_recording`, which
+runs the whole-file pass and can take minutes on a long meeting. An announcement there would
+overwrite `Finishing` with "the transcript died" and leave the user looking at it until the pass
+returned. That is not a narrow race; it is a wide and ordinary one.
+
+`live` is now an `Arc<Mutex<Option<Live>>>`, the pump's own task holds a handle to it, and
+`announce_transcript_ended` decides and emits **while holding that lock**. `stop` and `cancel` take
+the session out under the same lock, so *"there is still a session here"* is exactly *"stopping has
+not begun"*. One fact, not a second flag that could drift out of step with it. Emitting after
+releasing the lock would reopen the same window, which is why the emit is inside it.
+
+**And a second race underneath it, found by asking what `stop` actually holds.** `stop` takes `Live`
+out and then spends the whole-file pass *outside* the lock, and `start` refuses only while a session
+is held — so a second meeting can begin while the first is still finishing. A late pump task would
+then find *a* session, believe it to be its own, and mark a healthy new meeting as having lost its
+transcript. `is_this_session` compares the fault cell with `Arc::ptr_eq` rather than trusting
+presence. The cell is the session's identity because it is already per-session and already shared
+with exactly the task that needs it; a counter would have been a second thing to keep in step.
+
+### `pump.is_finished()`, narrowed to the one case the cell cannot cover
+
+KNEG-95 named `status()` not consulting `pump.is_finished()` as part of the gap, and it is consulted
+now — but the interesting part is what it is *for*. The announcement is written by the pump's own
+task **before that task returns**, so the join handle cannot report finished first. "Finished, and
+nothing announced" therefore means exactly one thing: the task panicked, or it was aborted. There is
+no provider sentence for either, and the screen still must not claim a transcript is being produced.
+Without that ordering the check would be redundant; with it, it is precise.
+
+### One sentence, not two
+
+`live_transcript_ended` is the only formatter. The indicator's sentence mid-meeting and the outcome's
+sentence at Stop are the same string from the same function, and a test asserts the two call sites
+agree rather than trusting that they were written to. A user who reads the indicator and then reads
+the outcome is not told two stories about one failure.
+
+Its `Ok` arm is the one worth reading twice. The pump returns `Ok` when the audio channel closes,
+which at Stop is what is supposed to happen. Reaching it *while a session is still held* means the
+channel closed with no Stop behind it, and `record` has no path that ends by itself — it returns on
+`Finish`, on `Cancel`, and on the command channel disconnecting, all three of which run only after
+`stop` or `cancel` has taken the session. So that arm means the recording thread panicked, and the
+recording has stopped along with the transcription.
+
+**That is the one case where the state is wrong in its first word, and it is reported anyway.** The
+alternative is the silence this whole change exists to end, and the sentence — which is what a
+person actually reads — says the true thing: *"the recording thread stopped, so nothing further is
+being recorded or transcribed."* Filed as **KNEG-116** (Low) rather than left in a comment: a fifth
+state for a case reachable only by a panic, and untestable without one, was more machinery than the
+fact justified — and that is a judgement somebody should be able to revisit.
+
+### Where it shows
+
+The indicator window keeps its red edge, its timer and its Stop button, and changes its second line
+to *"live transcript stopped — still recording"* in amber. Amber rather than red for the same
+reason `.caveat.warn` splits the mark from the prose: the red edge means **recording**, which is
+still true and is the one indicator the brief requires. Painting the line red as well would say the
+recording had failed, when the recording is the half that is working.
+
+The provider's own sentence is too long for a 392x92 panel and goes to `Settings > Meetings`, which
+has room for it, together with what happens next: recording continues, and Stop will still
+transcribe the whole recording. The live-transcript panel there says its lines are the last ones
+rather than the most recent ones, because "replaced as it is revised" stops being true the moment
+nothing more is coming.
+
+### What this did not do
+
+**No provider was faulted to test it.** The unit tests cover the decisions — which state, whose
+session, which sentence — and `announce_transcript_ended` itself is not among them, because it takes
+an `AppHandle` and nothing outside a running application can construct one. The by-hand check is in
+`BENCH_CHECK.md`: start a meeting on a provider configured wrongly and watch the indicator change
+without the recording stopping.
+
+Six mutations, each caught by exactly the test written for it:
+
+```
+live_state ignores a vanished pump          -> a_pump_that_vanished_without_a_word...
+identity check becomes a presence check     -> a_late_ending_cannot_be_pinned_on_the_next_meeting
+any session is my session                   -> a_late_ending_cannot_be_pinned_on_the_next_meeting
+the tray rule forgets the new state         -> every_state_but_idle_is_a_running_session
+stop formats its own sentence again         -> the_indicator_and_the_outcome_use_one_sentence
+the new state serialises under another name -> the_states_serialise_as_the_frontend_reads_them
+```
+
+The `TranscriptSink` trait the KNEG-79 entry predicted this work would want was **not** needed, and
+that entry has been corrected rather than left standing. The decisions that mattered turned out to
+be expressible as free functions over plain values, which is the shape `pump_result`,
+`close_recorder` and `failed_message` already had. `pump` still has no test coverage and still needs
+none: it propagates its `Err` correctly, and what was wrong was what nobody did with it.
+
+---
+
+## 2026-08-31 (KNEG-37) — asking the matcher instead of describing it, and finding two more
+
+On a Nordic, German or most other non-US layout, `@ $ € { [` are typed with AltGr, and **Windows has
+no AltGr virtual key** — the keyboard layout synthesises left Control plus right Alt. So a
+modifier-only chord of `Control+Alt` fires on every one of those keystrokes. Measured 2026-08-26 by
+injecting exactly that pair and watching a dictation start.
+
+Nothing downstream can separate the two, so this is not fixable at the hook. The fix is that
+something says so, which is what was missing.
+
+### The implementation choice that did all the work
+
+The obvious way to decide whether an accelerator collides with AltGr is to ask whether it names
+both a Control and an Alt. Two or three lines, and it is what the issue's own description suggests.
+
+Instead, `keys::altgr_collision` **drives the real `ChordWatcher`** with the keys a real AltGr press
+sends and reports whether it fired. The argument for it was drift: the matcher is the thing that
+actually decides, several hundred times a second, and a separate predicate reasoning about modifier
+names would be free to disagree with it — silently, in exactly the cases nobody wrote a test for.
+
+It paid for itself immediately, twice.
+
+**`Control+Shift` collides too.** Nobody predicted this and the name-based predicate would have
+called it safe. AltGr's *left Control* arrives while Shift is already held, so the chord is complete
+before the Alt is pressed. A user who binds `Control+Shift` — a far more ordinary choice than
+`Control+Alt` — starts a dictation whenever they type a shifted AltGr character.
+
+**And then the bigger one, which is not this issue.** Driving the same matcher with an ordinary
+three-key shortcut, in the order a person presses it:
+
+```
+Control+Super    while pressing Ctrl+Win+Left  -> FIRES
+Control+Shift    while pressing Ctrl+Shift+D   -> FIRES
+Control+Alt      while pressing Ctrl+Alt+Del   -> FIRES
+```
+
+`Control+Super` is the **shipped default**, and `Ctrl+Win+Left` switches virtual desktop. A
+two-modifier chord completes on the way to any longer chord that begins with the same two — rule 2
+stops the longer chord *matching*, and nothing stops the shorter one *firing* as its prefix. That is
+general, it affects the default, and fixing it means changing when a modifier-only chord fires, so
+it is KNEG-115 rather than something to quietly fold in here.
+
+### Two measurements, not one, and the second one is the layout
+
+Whether a chord collides is a property of the chord. Whether the user can *make* that keystroke is a
+property of their keyboard, and warning a US-layout user about a key they do not have is noise.
+
+`kw_platform::keyboard_layout` asks `VkKeyScanExW` whether any character needs Control and Alt
+together. **Not a locale table:** "Swedish" is not the fact, `'@'` needing Control and Alt is — and
+the character found is carried into the warning, because *"this layout types '@' with Control and
+Alt together"* is a sentence the reader can check against the keyboard in front of them and *"your
+layout has AltGr"* is not. On this machine: present, `'@'`.
+
+Three states rather than a boolean, for the reason `content_protection` has them: a platform that
+cannot be asked must not answer "no". `Absent` suppresses the warning; `Unknown` still warns and
+says it could not tell. Failing open, deliberately — a spare sentence costs a reader a moment, and
+silence on a layout that does have AltGr is the defect.
+
+### What is deliberately not warned about
+
+**Standard accelerators.** `Control+Alt+D` goes to the system shortcut register rather than the
+hook, and whether *that* also sees AltGr as Control+Alt has never been measured by this project.
+Widely believed; unverified here; so not claimed on a screen. It is also the more common binding, so
+leaving it out is a real gap rather than a tidy boundary — stated rather than papered over.
+
+**A remedy.** A sided chord avoids AltGr entirely, because AltGr is *left* Control and *right* Alt
+specifically: `LeftControl+LeftAlt` and `RightControl+Alt` both come back unaffected, and
+`keys::Chord` already parses them. No settings field accepts a sided spelling — that is KNEG-35 — so
+suggesting one would be advice that cannot be followed. The caution states the problem and stops.
+
+### A mutation test that found the wrong reason
+
+Four mutations, to check each part carries weight:
+
+```
+only the bare AltGr press modelled  -> 3 tests fail
+Absent counts as possible           -> 1 test fails
+Alt alone counts as AltGr           -> 1 test fails
+the ModifierOnly guard removed      -> nothing fails
+```
+
+The fourth was the useful one. `a_standard_accelerator_is_not_claimed_about` passed with the guard
+deleted, because `Chord::parse` refuses an ordinary key and had been doing all the excluding. The
+guard was not useless — it excludes an `Invalid` accelerator, and `classify("Control+Alt+")` is
+invalid (empty segment) while `Chord::parse` skips the empty segment and returns a perfectly good
+`Control+Alt`, so without it a shortcut that does nothing at all would collect a warning about what
+else it does. The test simply asserted the right outcome for the wrong reason. Fixed by testing the
+case the guard is actually for, after which removing it fails.
+
+### Where it shows
+
+A third category on the Shortcuts section, beside `conflicts` and `unusable` and not folded into
+either: those two mean the hotkey will not do its job, and a caution means it will, and will also do
+it when nobody asked. `hotkey_set` returns the same sentence, because the moment to learn that
+`Control+Alt` is AltGr is when you press Set. The mark is red and the prose is not —
+`.row-detail.warn` is red *because every string reaching it is a failure*, and this one is the
+opposite: the hotkey is registered, live and working, which is precisely why it fires when you type
+`@`.
+
+`cargo run -p kw-platform --example altgr_probe` re-runs both measurements on any machine.
+---
+
+## 2026-08-31 (KNEG-36) — the cheap fix would have destroyed the thing worth keeping
+
+`knegiswhisper history list` rendered `id, when, provider, text`. A failed dictation has neither a
+provider nor text, so it printed two dashes:
+
+```
+id  when                 provider  text
+19  2026-08-26 09:51:11  -         -
+```
+
+The API had the answer the whole time — `/v1/transcriptions/list` returns `status` and
+`errorMessage`, and the dashboard shows both. This was a renderer discarding what it was given.
+
+### The obvious fix is wrong, and one code path proves it
+
+Put the error message where the transcript would go. Four columns stay four, nothing widens, and the
+row reads `19 … - provider returned 429`. It took reading `Dictation::fail` to see why not:
+
+```rust
+let (text, raw, provider, model) = match recovered {
+    Some((text, raw, provider, model)) => (text, Some(raw), Some(provider), model),
+    None => (String::new(), None, None, None),
+};
+```
+
+A dictation that **transcribed correctly and then failed to paste** is recorded as `failed` with the
+recovered text *and* a provider *and* a reason. That branch exists because the words are the half
+worth keeping — its sibling comment says so outright: *"The text exists and only the paste failed,
+so the user must be able to…"*. Writing the error into that cell would have thrown away precisely
+what the recovery was added to save, and no test would have caught it, because no test had a
+recovered failure in it.
+
+So: **`status` becomes a column**, the transcript keeps its own, and the reason goes on a marked
+continuation line where it competes with neither.
+
+```
+id  when                 status     provider  text
+18  2026-08-26 09:50:02  completed  local     the quick brown fox jumps over the lazy dog
+19  2026-08-26 09:51:11  failed     -         -
+      ↳ provider returned 429
+20  2026-08-26 09:52:40  cancelled  -         -
+```
+
+`cancelled` came along at no cost, and is the second half of the same defect: it also had no
+provider and no text, so "I cancelled it", "it broke" and "the microphone heard nothing" were one
+indistinguishable row. Three statuses, three answers.
+
+### A note is not a column, and the reason is arithmetic
+
+An error message is present on a small minority of rows and long when present. A sixth column would
+be empty for almost every row and would push the transcript off an 80-column terminal for all of
+them to accommodate a few. A continuation line costs a line only where there is something to say.
+It is capped at 100 characters rather than the cells' 48, because a provider error is the one string
+here whose useful half is usually at the *end* — an HTTP status, a rate-limit reason — and cutting
+it at 48 keeps the boilerplate and drops the fact.
+
+One table renderer, not two: `rows` now delegates to `rows_noted` with a closure that never returns
+a note, so the four callers with nothing to add are untouched and the width arithmetic exists once.
+
+### `history get` had the same defect, worse, and is fixed differently
+
+It rendered `data.text` alone. For a failed row that is `""` — so the command exited zero and
+printed **a blank line**. Worse than two dashes: with `list` there is at least a row to notice.
+
+It is *not* fixed by printing a report, because printing the transcript alone is the command's job:
+`knegiswhisper history get 3 > note.txt` must write a file with nothing in it but the words, and
+`end_to_end.rs` pins that with `assert_eq!(stdout.trim(), "three")`. So it prints the transcript
+when there is one and the status and reason when there is not.
+
+**The limit that leaves, stated rather than discovered:** a recovered failure has both, and `get`
+prints only the transcript. The clean answer is the reason on stderr and the words on stdout, which
+needs `dispatch`'s `(Value, String)` to become a three-tuple across fifteen arms — too much churn
+for one line of output when `list` already shows that row in full. Written into the doc comment
+rather than left as an accident.
+
+### Proven by mutation, and by driving the real socket
+
+The renderer's own tests build JSON by hand, which proves the table *can* show a status and says
+nothing about whether the server sends one. So `end_to_end.rs` gained a case that records a real
+failed row, starts the real server, and runs the compiled binary — the two halves of the claim
+checked against each other rather than separately.
+
+Each part of the fix was then removed in turn to confirm a test breaks:
+
+```
+the status column removed      -> 2 tests fail
+the continuation line removed  -> 5 tests fail
+history get back to data.text  -> 2 tests fail
+```
+
+Not a redaction concern: the string is the one the dashboard already renders through
+`outcomeLabel`, and credentials live in `kw_security::Secret`, whose `Display` is `<redacted>`, so
+a key cannot reach an error message in the first place.
+
+---
+
+## 2026-08-31 (KNEG-104) — the fourth instance, found by the gate written for the first three
+
+Three defects in this repository have had one shape, and each was found by a person reading a
+screen rather than by anything automatic:
+
+1. Four hotkeys that registered and dispatched nowhere.
+2. `history.keepRawText`, hardcoded `false` at the only real call site, under a comment calling it
+   opt-in (KNEG-98).
+3. `history.enabled`, honoured before every history row and settable only by editing SQLite by hand
+   (KNEG-99).
+
+**Why the tests were no help, which is the whole point.** Every one of those settings had a key, a
+default, and a passing unit test. A test sets the value directly — so it exercises the branch and
+never asks whether anybody can reach it. Three green suites and three settings nobody could change.
+That is not a gap in coverage; it is a question the tests were not shaped to ask, and the fix is a
+different kind of check rather than more of the same kind.
+
+`config/settings-keys.json` plus `tools/settings-audit/scan.mjs` is that check, in the contracts
+job beside the parity gate and the domain scanner.
+
+**It found the fourth instance on its first run.** `meetings.detect` — the allow and deny lists
+deciding which running applications count as a meeting — has a `#[tauri::command]` that writes it,
+registered in `generate_handler!`, with an IPC wrapper and a dev fixture, and **no screen calls
+it**. Everything except the control exists. Filed as KNEG-114 and declared `reachable: false` with
+a note, so the gate stays green while the gap stays visible — the same treatment the parity gate
+gives its unreachable integrations, and for the same reason: a backlog printed on success is read,
+and a red gate that is red every day is not.
+
+### Two design decisions that decide whether it means anything
+
+**The generic writer cannot count as a writer.** `commands::settings_set(key, value)` writes
+whatever key the renderer names. Counting it would make the gate pass for every key ever added,
+which is a check that reports success by construction. The set of such commands is *computed from
+source* — a command whose key argument resolves to a renderer-supplied expression — rather than
+hardcoded, so a second generic writer would be caught the day it is added rather than the day
+somebody remembers this paragraph. Naming one in `writtenBy` is the `generic-writer` violation.
+
+**An unresolvable key expression is a violation, never a skip.** The scanner resolves four shapes:
+a literal, a `const NAME: &str`, a small `fn -> &'static str` match (how the calendar keys are
+written), and a declared derived family (the five `hotkey.*`, built by `format!` in another crate
+and pinned there by a named test this gate resolves). Anything else fails. A scanner that quietly
+ignores the shape it does not understand reports green on exactly the key nobody can change — the
+defect it exists to catch, one level up. That is not hypothetical here: rule 5 of the parity gate
+had degenerated into a non-empty-string test and passed for sixty-four entries before rule 7 was
+added, which is the same failure and is why this one was written to fail loud instead.
+
+### Attribution, and the limit that came with it
+
+A write is attributed to the last function declared at or before it. This is not a call graph and
+does not pretend to be — a key written *only* by a helper the command calls would read as unwritten
+and fail. That direction is the safe one: it is loud, and the fix is a sentence rather than a
+silent pass. Measured before relying on it: of the production writes on the committed tree, every
+one sits directly inside a command except calendar's OAuth bookkeeping and
+`local_asr::clear_selection`, and the calendar pair are declared `internal` on their own merits.
+
+The same attribution is why test code needs no special handling. A `#[cfg(test)]` function is never
+a `#[tauri::command]`, so a test setting a value directly — the exact thing that hid all three
+original defects — cannot count as the way a user changes it. Nothing had to be stripped for that
+to hold; it falls out of asking the right question.
+
+### Reachability is resolved to a component, not to a string
+
+A key claiming `reachable: true` names a surface in `config/ui-surfaces.json`, and that surface's
+component must call the IPC wrapper for one of the key's writers. Naming a screen is not enough —
+which is precisely how `meetings.detect` is broken, and is the reason that key fails the check
+while every other meeting setting passes. Two surfaces were added to the registry to make this
+sayable, `Dictation > Shortcuts` and `Dictation > History`, both real sections of `Dictation.tsx`
+that had never been declared because no integration entry happened to name them.
+
+**What the gate does not claim.** That a key changes behaviour, or that anything is wired behind
+it. All five `hotkey.*` keys are writable from `Dictation > Shortcuts` and four of the five actions
+still have no handler; `commands::hotkeys` reports that separately as an `UnhandledAction`. This
+answers one question: can a user change the value at all.
+
+### Proven by neutering, not by passing
+
+Twenty-two self-tests, every case mutating the real committed inputs one at a time; the first two
+reconstruct KNEG-99 as it actually stood. Then each of six rules was disabled in turn and the suite
+re-run, to confirm a test breaks rather than assuming it would:
+
+```
+unwritable-key                  -> a test fails
+unreachable-writer              -> a test fails
+unresolvable-key-expression     -> two tests fail
+command-does-not-write-the-key  -> a test fails
+generic-writer                  -> a test fails
+undeclared-writer               -> a test fails
+```
+
+A gate against "a test passed and proved nothing" that had only ever been run green would be the
+same mistake a third time.
+
+### Corrected in passing
+
+- `getSettingsKeys`'s doc comment in `ipc.ts` said it returned *"every settings key Rust will
+  accept, so a screen cannot invent one"*. It returns the keys that currently have a stored row, so
+  a key sitting at its default is absent — and the command accepts any key `kw_storage::settings`
+  does not reject as credential-shaped. The three generic settings wrappers also have no caller,
+  which is now stated where somebody would otherwise reach for one.
+- `config/ui-surfaces.json`'s note for `Settings > Transcription > Local` still said the screen had
+  not been extended to install or select the Parakeet models. `121dc4c` added that selector and
+  flipped both manifest entries to `reachable: true`; the note was three commits stale.
+
+---
+
+## 2026-08-31 (KNEG-93) — the residue that stopped being residue when the cost inverted
+
+`is_private_host` carried three gaps recorded as *accepted* rather than missed. Two of them are
+closed now, and the reason to reopen them was not that anything new was found. It was that the
+decisions had been made against a cost that no longer applies.
+
+**The inversion, which the issue stated and is worth keeping.** Before the SSRF fix, a false
+negative in this predicate meant a plaintext request to that address was *refused* — the plaintext
+arm only allows what the predicate calls private, so a miss lost permission rather than gaining it.
+After the fix, the identical false negative means an HTTPS or WSS request is *allowed*, because the
+private check is now what refuses it there. **The same class of gap that used to fail closed now
+fails open.** Every one of these was accepted while it failed closed.
+
+### Closed as a family, which is what the note itself asked for
+
+Each embedding had been noticed separately — IPv4-translated during the review, NAT64 and 6to4
+raised unprompted by the re-reviewer afterwards — and each was accepted on the same argument: the
+prefix is not routed on an ordinary host, so a `connect()` fails rather than arriving.
+
+That argument is about the *host's* configuration. It stops holding the moment a machine has 6to4 or
+a NAT64 resolver, and nothing in this process can see whether it does. The recorded decision was
+that if the family were ever closed it should be closed by enumerating the RFCs rather than by
+adding a prefix each time somebody spots one, and `embedded_ipv4s` is that enumeration: IPv4-mapped,
+IPv4-compatible, IPv4-translated, NAT64 well-known, NAT64 local-use, 6to4, Teredo.
+
+Two things about it were not obvious going in:
+
+- **Teredo carries two IPv4 addresses**, not one — the server in the clear at bits 32..64 and the
+  client at bits 96..128 XORed with all-ones. Either being private refuses the address, because a
+  packet to it involves both hosts. That is why the function returns `[Option<Ipv4Addr>; 2]` rather
+  than an `Option`.
+- **The NAT64 local-use prefix is not laid out the way the well-known one is.** `64:ff9b::/96` puts
+  the address in the low 32 bits; `64:ff9b:1::/48` follows RFC 6052 §2.2, which splits it around a
+  reserved octet — sixteen bits at 48..64 and sixteen more at 72..88. Reading four contiguous octets
+  parses fine and decodes a different address than the gateway will.
+
+### The tests state the bits, and were checked by breaking the code
+
+Both of those layouts are wrong-in-a-way-that-still-works hazards, and a test written from the same
+misreading as the implementation proves nothing. So the addresses are written out in hex, the
+decoded value is asserted exactly rather than only its privateness, and four deliberate mutations
+were run against the finished tests:
+
+```
+NAT64 /48 read as four contiguous octets   -> CAUGHT
+Teredo client not XORed                    -> CAUGHT
+6to4 read from the wrong offset            -> CAUGHT
+SIIT arm removed                           -> CAUGHT
+```
+
+Without the exact-value assertions the first two would have passed: in a NAT64 `/48` and a Teredo
+address there are enough nearby zero octets that a wrong offset still decodes *something* private.
+
+### The limit that remains, and it is real
+
+RFC 6052 permits a **network-specific** NAT64 prefix of any value at `/32`, `/40`, `/48`, `/56` or
+`/64`. Only the well-known and local-use prefixes have fixed values, so a site running NAT64 on its
+own prefix is invisible to this. Seeing it would mean reading the host's resolver configuration,
+which is the same class of problem as DNS rebinding — and DNS rebinding stays out of scope for
+exactly the reason it always has: the check runs against the literal host at validation time and has
+no view of what the name resolves to at connect time. That is the problem that withdrew URL import
+(KNEG-87), and it is not solved in passing.
+
+### And the small one
+
+`blocked_hosts()` lowercased configured vendor hosts and did not strip trailing dots from them, while
+`is_blocked` stripped them from its input. No entry in `config/forbidden-domains.json` has one, so
+this was a footgun for whoever next edits that file rather than a live hole. Closed anyway: an
+asymmetry that costs one line to remove is not worth keeping, and the test asserts the property over
+whatever the file happens to contain rather than over today's entries.
+
+---
+
+## 2026-08-31 (KNEG-112) — asking whether a GitHub asset can be pinned, and finding it cannot
+
+KNEG-103 pinned all 45 Hugging Face URLs to a commit and left two archives behind: the Parakeet
+models, which are assets in k2-fsa's rolling `asr-models` GitHub release. The issue filed for them
+opened with three directions and said, in as many words, that the first task was a question rather
+than a fix and **nobody had looked at any of them.** So this is what looking found.
+
+### (a) Dated immutable tags — dead, measured
+
+k2-fsa publishes plenty of versioned releases: `v1.13.6`, `v1.13.5`, twenty-odd `v1.12.x`, each with
+280–340 assets. It looked promising for about a minute.
+
+They carry **library binaries and no models.** `v1.13.6` has 283 assets and **zero** whose name
+mentions `parakeet` — `sherpa-onnx-1.13.6.aar`, `sherpa-onnx-jvm-1.13.6.jar`, and so on. Every model
+archive lives in `asr-models`, a tag created 2023-11-20 that now holds **498 assets** and is added to
+continuously. There is no dated release to move to because the models were never in one.
+
+### (b) The Hugging Face mirror — real, and a different artifact
+
+`csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8` exists, published by sherpa-onnx's own
+maintainer, so `resolve/{sha}` is available in principle.
+
+It holds the model **unpacked**: a 652 MB `encoder.int8.onnx`, a decoder, a joiner, `tokens.txt` and
+four test wavs. Not the 487 MB `.tar.bz2` this application downloads. Switching would mean replacing
+one archive fetch with a multi-file fetch, discarding the extraction path and with it
+`maxExtractedSizeBytes` — the decompression-bomb ceiling KNEG-100 and KNEG-102 were about — in
+exchange for **no integrity gain**, because the digest is already measured. A rewrite that trades a
+working defence for a URL shape is not an improvement.
+
+### The fourth direction the issue did not know about, which also fails
+
+GitHub gives every release asset an id, and `api.github.com/repos/{repo}/releases/assets/{id}`
+serves that exact upload — measured: `302` to `release-assets.githubusercontent.com`. It looks
+exactly like the `resolve/{sha}` analogue.
+
+**It is not one, and the reason is the whole finding.** Git keeps old commits, which is why pinning
+one costs upstream nothing and keeps us working when `main` moves. GitHub does *not* keep old
+assets: a name cannot be overwritten, so replacing an asset means deleting it and uploading again,
+and the old id goes with the deletion. An id-pinned URL therefore turns a swap into a `404` where
+the name-pinned URL turns it into a digest failure. **Both block the install.** The pin would look
+like KNEG-103's and buy nothing.
+
+*Reasoned, not measured.* Nothing here can make k2-fsa replace an asset to watch what happens to the
+id, so this rests on how GitHub's release API is documented to behave and not on an observation.
+
+### What is actually there, and it is worth having
+
+**GitHub's release API states a `digest` and a `size` per asset.** One request returns all 498. And:
+
+```
+parakeet-tdt-0.6b-v3       sha256:5793d0fd…eafb16bf   487,170,055
+parakeet-unified-en-0.6b   sha256:99f63605…9a76e150   501,350,460
+```
+
+Both digests and both sizes match the committed pins **to the character**. That is the same shape as
+`lfs.oid` — the publisher's stated digest, over the same channel as the bytes — and it is
+independent corroboration of a measurement this project made by downloading, at no bandwidth cost.
+
+`--verify-stated` reads it weekly now, beside the Hugging Face trees. Two hosts, one verb, and the
+success line says which of them was which: for these two the stated digest is **weaker** than how
+they were pinned, since their bytes were hashed here, so agreement means the asset has not been
+swapped and not that the bytes are still what we hashed. Only the download proves the second thing,
+and the download still runs.
+
+### So the URL half is declined, and that is a result
+
+The issue allowed for it: *"the honest answer may be that the digest is all there is, and this
+closes as declined with the reasoning written down — which is a better outcome than an issue that
+sits open implying somebody forgot."* It is, and it does. What changed is that the reasoning is now
+three measurements rather than an assumption, and the gap it leaves is watched weekly instead of
+only at install.
+
+---
+
+## 2026-08-31 (KNEG-86 / KNEG-85) — the gate that could not check the one thing it was for
+
+`verify-parity.mjs` refuses a `reachable: true` claim unless the component file
+exists and renders its `data-surface` marker. That is the standard it holds UI
+surfaces to. A `kind: "documentation"` entry was held to nothing comparable: the
+rule checked that it **named** a target and stopped there.
+
+So `developer:agent-skills` carried `status: "ported"` with
+`target: "docs/agent-skills/"` for a twenty-task run, against a directory that
+had never existed, and no gate in this repository could have said so. It was
+found by hand, by the audit that was looking for exactly that pattern one step
+further along.
+
+### The exemption was right and the hole was next to it
+
+Documentation carries no code, so the backend and UI requirements genuinely do
+not apply. The mistake was the `continue` that followed: nothing took their
+place, which made a documentation entry the one kind that could assert work was
+done with nothing checking. It gets its own equivalent now — if the status is in
+`ACTIVE`, the target has to be there.
+
+**Existence and content.** An empty `docs/agent-skills/` satisfies "the
+rewritten documentation lives here" no better than a missing one, and is the
+same hole one commit later.
+
+### Injected, and failing closed
+
+`hasTarget` is a parameter, the way `readComponent` already is, because a rule
+that can only be run against the committed tree is a rule nobody can prove
+bites. The file's own doc comment already made that argument: *"this tree is
+clean" and "the rules work" are different claims, and only the second one keeps
+working after a refactor.*
+
+Its default is `() => false` — refuse every target. A caller who forgets to
+inject it gets a loud failure rather than a silent pass, which is the direction
+that matters for a check whose entire job is catching a claim about something
+that is not there. There is a test for the default, because a fail-closed
+default nobody exercises is an assumption rather than a behaviour.
+
+### Proved by removing the thing
+
+The strongest evidence is not a unit test. With `docs/agent-skills/` moved
+aside, the real gate exits **1** with:
+
+```
+documentation-target-missing (1)
+  developer:agent-skills: status "ported" claims the rewritten documentation is
+  at "docs/agent-skills/", which does not exist or is empty
+```
+
+and exits 0 with it restored. That is the original defect, reproduced against
+the fix.
+
+### And then the documentation, which is the point (KNEG-85)
+
+`docs/agent-skills/` now holds `knegiswhisper-api/SKILL.md` and
+`knegiswhisper-cli/SKILL.md`, and the manifest entry says `ported` again — a
+claim something now verifies.
+
+Two things about their content are deliberate:
+
+- **No hosted endpoint appears in either**, and neither says what they replaced.
+  The manifest's `upstream` array is where the provenance belongs; a skill that
+  spends a paragraph on a service that is not there teaches an agent about the
+  wrong system.
+- **Every shape in them was read out of the code that serves it** — the route
+  table in `server.rs`, the request types in `wire.rs`, the `clap` definitions
+  in `knegiswhisper/src/main.rs`, the `TOOLS` list in the MCP crate. Not one
+  endpoint was described from a memory of what an API like this usually does.
+
+And the limit is stated in the files themselves rather than left for a reader to
+discover: **no MCP client has ever connected to `knegiswhisper-mcp`** (KNEG-91).
+The protocol handling is unit-tested and has never had a real client on the
+other end, so the skill tells the agent to believe the wire over the document if
+they disagree. A skill that overstates its own confidence is the same defect
+this pair of issues is about, one layer up.
+
+---
+
+## 2026-08-31 (KNEG-109) — a ceiling that cost something, and did not say what
+
+`deepgram_socket` bounds how much transcript one session retains: 16 MB, or 10 000 events. That
+bound is right — provider responses are outside the trust boundary, and session-long retention has
+to be limited by something other than the provider's good behaviour. What was wrong was every part
+of what happened when it was reached.
+
+```rust
+if !budget.reserve(text.len()) {
+    tracing::warn!(?source, "the provider exceeded the transcript session budget");
+    return;
+}
+```
+
+### One `return` doing three kinds of damage
+
+**It stopped the reader, not the retention.** The meeting kept recording, the provider kept sending,
+the socket stayed open, and nothing further was transcribed. What the ceiling exists for is bounding
+what is kept, and dropping the text does that on its own; ending the reader is a separate act
+nobody asked for.
+
+**It switched off KNEG-79's fix for the rest of the meeting.** This is the part that was not visible
+when the issue was filed. A provider error frame arriving after the ceiling has to reach
+`SessionFault` — that is the whole of the change landed hours earlier — and a dead reader cannot
+record one. So the budget quietly reintroduced the silence, on the client where the wire shape is
+believed rather than confirmed.
+
+**It picked a capture at random.** The budget is shared through an `Arc`, so whichever of the two
+readers happened to hit the ceiling first was the one that died and the other carried on. A meeting
+could end with the microphone transcribed and the system audio not, decided by arrival order, with
+nothing recording which.
+
+And `deepgram::transcript` hardcoded `gaps: 0`. `MeetingTranscript::gaps` exists so that *"a
+transcript with a hole in it must not look complete"*, and `keep` in `meeting.rs` appends a
+paragraph to the saved note when it is non-zero. A budget-exhausted session had a hole and reported
+none.
+
+### Counted, not fatal
+
+The issue's own reasoning was that counting is probably right and ending is probably wrong — a
+16 MB transcript is a long working meeting, not a failure, and failing it at the ceiling would
+discard a good transcript. That is what landed. `FaultKind` gained nothing; the session does not
+end. The reader `continue`s, the text is dropped, and the stretch is counted.
+
+### A gap is a run, not a frame
+
+`TranscriptBudget` counts transitions into refusal rather than refusals. Counting per frame would
+report a number nobody could act on — a long meeting past the ceiling would claim thousands of
+holes where there is one.
+
+Two details make that more than a detail:
+
+- **A refusal is not final.** The byte ceiling is a total, so a short event can still be admitted
+  after a long one was turned away. Two holes with transcript between them are two holes, so the
+  flag has to close when something gets through. (The *event* ceiling is final once reached, since
+  every event costs one.)
+- **One flag per capture, not one per session.** The microphone can be dropping while the system
+  audio is still being admitted. A single shared flag would end the microphone's stretch on the
+  strength of somebody else's frame, and the two captures are not the same hole.
+
+`reserve` returns `Reserved::{Room, NoRoom { opens_a_gap }}` rather than a `bool`, because the
+caller has to do something different for the first refusal of a run than for the rest of it: one
+`warn!` per stretch. Per frame it would be the loudest line in the log for the remainder of the
+meeting.
+
+### The sentence on the note was true and is now only half true
+
+`keep` said: *"N stretch(es) of audio were never transcribed: the transcriber could not keep up with
+the meeting."* Accurate while the only source of a gap was `local::LocalWindowProvider`, which
+counts a sustained deficit — the model falling four hops behind and skipping to live. A budget gap
+is not that. It is this application's own retention ceiling on a very long session, and there is
+nothing the transcriber could have done faster.
+
+So `gaps` now has two producers and one number, and the number does not say which. Both the field's
+doc comment and the note's sentence name both possibilities rather than asserting one. Carrying the
+cause properly would mean `gaps` stops being a `u32`, which is a change to a serialized type for a
+distinction nobody has yet needed to act on — recorded as the trade rather than made silently.
+
+### What is not verified, and it is most of it
+
+No key for Deepgram exists on any machine this project has touched, so none of this has run against
+a real provider (KNEG-53, KNEG-56). Reaching 16 MB of transcript needs a very long meeting on a
+service nobody can currently connect to. The budget arithmetic and the gap counting are unit-tested
+against the real `TranscriptBudget`; the reader's behaviour around them is read from the code.
+
+---
+
+## 2026-08-31 (KNEG-110) — a field that carried two facts, and only one of them stayed true
+
+`LocalApiRuntime` stored the `Permissions` that `discovery::write` returned and showed that value
+for as long as the application ran. Both settings screens rendered a claim about the past as a claim
+about the present: anything with write access to `~/.knegiswhisper` could widen the access list a
+second after start, and neither screen would say so until the next launch.
+
+### The shape of the mistake is worth naming, because it is not "forgot to refresh"
+
+One field held two facts:
+
+```rust
+/// The permissions the discovery file actually ended up with.
+permissions: std::sync::RwLock<Option<Permissions>>,
+```
+
+The `Option` meant *is the API running* — the file is deleted on stop, so `None` is the honest
+answer then. The `Permissions` inside it meant *what the file grants*. Only the first of those stays
+true on its own. And the confusion was load-bearing rather than theoretical: `integrations.rs` asked
+`permissions_snapshot().is_some()` **twice**, reading a permission verdict to learn something that
+is not about permissions. An idiom like that is what makes a staleness bug easy to walk past.
+
+So the fix is not a refresh call bolted on. The field becomes `discovery_written: AtomicBool` —
+"there is a file" and nothing else — and the value is read when it is asked for. `is_running()` is
+its own method now, so the two questions are asked separately.
+
+### `discovery::inspect`, extracted rather than written
+
+`write` already ended with exactly the read this needed:
+
+```rust
+let file = file_acl::verify(path, PathKind::File);
+match parent { Some(p) => file_acl::combine(&file_acl::verify(p, PathKind::Directory), &file), … }
+```
+
+That expression is now `discovery::inspect`, and `write` ends by calling it. Extracting rather than
+re-writing matters here more than usual: the verdict a caller gets after a write and the verdict it
+gets from a later re-read have to *be* the same judgement, not two judgements that agree today. The
+directory's verdict gating the file's is the part that would have drifted first — it is the
+non-obvious half, and it is the half a second author would most likely leave out.
+
+`the_read_back_describes_the_file_the_caller_is_told_about` already reconstructed the expression
+independently and asserted `write` matched it. It keeps doing that, and gained one line asserting
+`inspect` matches too, so the test now pins both the value and the fact that there is one copy of it.
+
+### Read, never re-apply
+
+Deliberate, and the reason is written at the call site. Silently repairing an access list somebody
+changed on purpose is its own kind of surprise, and it would make the function unusable for what it
+exists for: a status screen has to be able to *describe* a bad state without altering it. So the
+application will tell you the token file has been widened. It will not quietly narrow it again.
+
+### No cache, and that is a measurement rather than an omission
+
+Two `stat` calls on Unix, two `GetNamedSecurityInfoW` calls on Windows, against a path already in
+the filesystem cache. The issue suggested a short cache might be wanted because this is a UI refresh
+path — but `useRefresh` has no timer. It fetches when a screen mounts and when something asks it to.
+A cache would have added a staleness window, in the function whose entire purpose is removing one,
+to fix a cost nobody is paying.
+
+### The regression test, and why it deletes rather than widens
+
+`the_verdict_is_re_read_rather_than_remembered` removes the discovery file behind the runtime's back
+and asserts the verdict changes. Deleting is the one way to change what an access list says that
+works identically on every platform, and this machine is Windows.
+
+The case the issue actually described — a file that still exists and now grants more — is
+`a_mode_widened_after_start_is_reported`, a `#[cfg(unix)]` test that chmods to `0644` and requires
+`Wider { mode: 0o644 }`. It does not run here. It runs on CI's `contracts` job, which is
+`ubuntu-latest` and is the only place the whole of this file is compiled — the same asymmetry
+KNEG-111 is about, pointing the other way for once.
+
+---
+
+## 2026-08-31 (bench) — the install button that could only ever work once
+
+The first person to press *Install* on a whisper model found nothing happened. No `ggml-base.bin`,
+no `.partial`, no error worth acting on. The same session installed a 1.3 GB GGUF without trouble,
+which is what made the cause findable.
+
+### What it was
+
+`local_model_install` installed the server sidecar **unconditionally** before the model:
+
+```rust
+kw_sidecar::install(&local.policy, spec, asset, &sidecars.path, ...).await?;
+let installed = models::install(&local.policy, model, &models_dir.path, ...).await?;
+```
+
+`kw_sidecar::install` ends by replacing the sidecar directory, and `resume_last_used` has already
+started `whisper-server.exe` out of that directory by the time anybody presses anything. On Windows
+a directory holding a running executable cannot be removed, so `remove_dir(&final_dir)` failed, the
+`?` returned, and the model was never fetched.
+
+**So the button could only work when no whisper model was in use — which is to say, once.** After
+the first install there is always a model to resume, so there is always a server running out of the
+directory the next install has to replace.
+
+### Measured rather than reasoned
+
+The mechanism was checked on this machine rather than taken from memory, because "Windows locks
+running executables" is the kind of thing that is true in outline and wrong in the detail:
+
+- `remove_dir_all` on a directory holding a running `.exe` → **`WinError 5`, Access is denied**,
+  reported against the `.exe` itself.
+- `rename` of that same directory → **succeeds.** Windows denies delete on the image file, not
+  rename of a parent. Worth writing down; it is the escape hatch if a real upgrade path ever needs
+  one.
+
+A first attempt at this measurement used `timeout.exe`, which exits immediately with no console
+attached, and reported "no lock". It proved nothing and would have sent the diagnosis the wrong way.
+The second used `ping -n 40`, confirmed running in the process list before the deletion was tried.
+
+The failed run had also left its own evidence: `sidecars/whisper.incoming` holding a complete,
+verified, extracted copy of the sidecar that never got promoted — exactly the state the code leaves
+when it fails between extraction and the swap.
+
+### The fix was already written, in the file next door
+
+`local_llm_install` in `local_llm.rs` has always guarded the same call:
+
+```rust
+let installation = kw_sidecar::locate(SIDECAR, asset, &search_path, &kw_sidecar::RealFs);
+if installation.executable().is_none() { kw_sidecar::install(...).await?; }
+```
+
+That is why the GGUF installed on the run that the whisper model failed. The whisper path now does
+the same thing, through a named `sidecar_needed` so the judgement is testable — the command takes an
+`AppHandle` and is untestable by construction, the same reason `check_importable_file` and
+`import_pick_dialog` exist. Three tests: installed skips, missing installs, and **`Incomplete`
+installs**, which is the case with the judgement in it — a directory with no executable is an
+interrupted extraction, nothing is running out of it, and replacing it is safe.
+
+### Skipping loses nothing, and that is worth arguing rather than asserting
+
+The unconditional call looks like a way to keep the sidecar current. It never was. It can only
+succeed when no server is running, which is only the first install, when there is nothing to
+refresh. Every later call failed outright rather than updating anything.
+
+But the gap it appeared to cover is real and now has nothing covering it: the installed whisper
+sidecar dates from 2026-08-25 and the pinned archive has since gained `bench.exe` and `command.exe`,
+so it is measurably behind. Filed as **KNEG-114** with the rename measurement, rather than solved
+here by a scheme whose cleanup story is unresolved — a displaced directory still cannot be deleted
+while the old executable runs, so it has to survive until a launch where nothing holds it.
+
+### The other finding: two documents told a person to hold a chat
+
+`docs/BENCH_CHECK.md` and `docs/BUILD_PLAN.md` both instructed the reader to install a local LLM and
+*hold a chat*. **There is no chat.** The application has thirteen views, none of them a chat;
+`config/ui-surfaces.json` has no such surface; the chat agent is phase 10 (KNEG-74).
+
+The local LLM has one consumer, dictation cleanup, and the path is built: `Settings > Local models`
+→ *Use this model*, then `Settings > Intelligence` → the **local model** route, then dictate.
+`reasoning.rs` already says so on screen — *"no local model is running. Start one under Local
+models."* Only the instruction was wrong, and an unrunnable by-hand step is worse than a missing
+one: it reads as a defect in the application rather than in the sentence.
+
+---
+
+## 2026-08-31 (KNEG-103) — 45 URLs stop naming a branch
+
+Every model this application downloads was fetched from
+`https://huggingface.co/{repo}/resolve/main/{file}`. `main` is a branch pointer. The bytes behind it
+change whenever the publisher pushes, and as of earlier the same day every one of those 45 objects
+carried a digest measured against the bytes that were there *then*.
+
+So the defect was not that a re-upload would go unnoticed. It was that a re-upload would be noticed
+in the worst possible place: at the end of a nineteen-gigabyte download, in front of a user, as an
+integrity error they cannot get past, caused by somebody else's routine publishing.
+
+### It was not theoretical, and the measurement says how far from it
+
+`node tools/model-pin/pin.mjs --revisions` reads `/api/models/{repo}` for all thirty-seven
+repositories — 36 GGUF plus `ggerganov/whisper.cpp`. Of the thirty-seven, **twenty-one last moved
+during 2026, and four moved on 2026-08-24 — seven days before the digests were taken.** The four are
+LiquidAI's LFM2.5 repositories.
+
+Nothing had moved *since* the pins: all 39 stated digests and all 39 lengths still agreed, and the
+two whisper digests spot-checked during the design pass came back byte-identical to what was
+committed. The pins were correct. They were also one push away from not being, on a table where four
+rows had changed inside the previous week.
+
+### Where the revision lives, and why not beside the digest
+
+One entry per **repository**, not per object. `HF_REVISIONS` is keyed on `owner/name`, so the six
+whisper models share one row and the thirty-nine GGUF objects fill thirty-six. A revision is a
+property of the repository at a point in time; a per-object copy would be six identical strings that
+could go inconsistent, and there is no state a reader could make sense of where two files in the same
+repository are pinned to different commits by accident.
+
+The table sits in the generator beside `WHISPER_PINS`, `SHERPA_PINS` and `LOCAL_LLM_PINS`, for the
+reason all three of those are there: `config/upstream-integration-baseline.json` is a frozen record of
+what upstream had and must not gain fields we invented, and `config/provider-registry.json` is
+generated, so anything hand-edited into it dies at the next regeneration.
+
+### Two families, two mechanisms, one table
+
+The whisper URL is *stored* — upstream's baseline supplies it whole — so the generator rewrites the
+revision into it on the way out. The GGUF URL is *composed* in `local_llm.rs` from `hfRepo` +
+`fileName`, so it gained a third part. Same pin, two paths, and the difference is a fact about where
+each URL comes from rather than a choice.
+
+`parseHfUrl` is exported from `tools/model-pin/pin.mjs` and imported by the generator. That is a real
+coupling between a build gate and an audit tool, taken deliberately: the generator rewrites those
+three parts and `--verify-stated` reads them, and two regexes for one URL shape would have drifted
+apart on the first publisher who put an object in a subdirectory — which several already do, for
+multi-part quantisations.
+
+### `revision` is a required field, and `sha256` is not
+
+`LocalLlmModel::sha256` is an `Option`, so a model added before anybody spends the bandwidth degrades
+to a size check. `LocalLlmModel::revision` is a plain `String`.
+
+The asymmetry is the point. A missing digest degrades to a weaker check that is still a check. A
+missing revision would degrade to `main`, which is not a weaker version of this fix — it is the
+defect, reintroduced silently, for one model out of thirty-nine. So the generator refuses to emit a
+model without one, and a registry that somehow reached the Rust without it fails to deserialise
+rather than quietly floating.
+
+Four guards, each one run against a deliberately broken table before being trusted:
+
+- a repository with no `HF_REVISIONS` entry dies **naming the model that needed it**, not just the
+  repository;
+- a revision that is not 40 lowercase hex dies, with "re-read it; do not hand-correct it";
+- a revision no model downloads from dies as a typo — the same guard the three pin tables carry;
+- every shipped whisper URL is re-parsed after the rewrite and must name a commit. `pinnedHfUrl`
+  lets a non-Hugging-Face URL through untouched, which is right — there is nothing there to pin —
+  and this is what stops that from becoming a quiet way back to a floating reference.
+
+### What this is not
+
+**It is not a stronger integrity claim.** The digest is what proves the bytes; a revision only decides
+which bytes were promised. Nothing here defends against a compromised huggingface.co any better than
+before — one host still serves both the object and, for thirty-two of the thirty-nine, the `lfs.oid`
+they are checked against.
+
+What it removes is a class of spurious failure. What it adds is that the URL and the digest now
+describe the same object *by construction* rather than by nobody having pushed yet.
+
+### `--verify-stated` was asking the wrong question and is now asking a better one
+
+It read each repository's tree at `main`. That answered "has the publisher re-uploaded", which was
+the right question while the URL pointed at `main` and is the wrong one now — a push cannot reach a
+pinned commit, so the answer stopped being about anything the installer would fetch.
+
+Reading the tree at the *committed* revision asks something nothing else in the workspace checks:
+**do the digest and the revision committed beside each other describe the same object?** Those two
+numbers are measured in different runs by different code and could drift apart with nobody noticing.
+It also catches a pinned commit that has stopped resolving — a force-push, or a repository going
+private — which would break every install of its models.
+
+A second half reports which repositories have published past their pinned commit, and **does not
+fail on it**. Upstream publishing is normal, and that is now the whole point: a weekly job that went
+red every time a publisher pushed would be ignored by the second month. It is news about pins worth
+revisiting, printed as such.
+
+The tree cache is keyed on repository *and* revision, in the tool and in the Rust test both. One
+revision per repository is how the table is built, and a cache that assumed it would read the wrong
+tree, silently, the day that stopped holding.
+
+Measured after the change: **39 objects, 36 tree requests, all matching at their pinned commits; no
+repository has moved past its pin.** The two `#[ignore]`d Rust tests agree — 39 HEADs at
+commit-pinned URLs and 36 tree reads, in nine seconds.
+
+### What is still hanging off a moving reference
+
+The two Parakeet archives. They are GitHub release assets in k2-fsa's rolling `asr-models` tag, where
+an asset can be replaced under the same name, and there is no commit-sha equivalent to reach for.
+Their digest is the only thing that would notice a swap, and the weekly `--verify` is what runs it.
+That is unchanged by this and is recorded in `docs/PLATFORM_SUPPORT.md` rather than left implied by a
+fix that did not cover them.
+
+---
+
+## 2026-08-31 (KNEG-34) — the token file finally gets a DACL, and the read-back moves
+
+`discovery::restrict_file` was a no-op under `cfg(not(unix))`, so the local API's bearer token sat
+in a file with whatever ACL the profile directory carried. Measured three times on the same machine
+across five days — 2026-08-26, 2026-08-31, and again immediately before the fix landed — and
+identical every time: two trustees with Modify who were neither the user nor administrators, every
+entry inherited, `DC` (delete-child) on both of them so the file could also be deleted and replaced.
+A pass on 2026-08-27 had fixed only the *reporting* of that gap. This is the gap.
+
+The reasoning is more interesting than the outcome, which is three `icacls` lines.
+
+**Owner + SYSTEM + Administrators, not owner-only.** The obvious target is a DACL granting only the
+user. It is the wrong one. An administrator can take ownership of any object and re-grant themselves
+anything, so excluding them costs backup and repair tooling real breakage and buys a strictness that
+does not exist; and the project brief forbids attempting to bypass administrator controls in the
+first place. What was actually worth removing was the *unexpected* trustees and the inheritance that
+kept handing them down — which is exactly what the old code comment falsely claimed the inherited
+ACL already gave. So "confirmed" on Windows is a deliberately narrower claim than "confirmed" on
+Unix, and the settings label still says an administrator can read the token. Stating a smaller true
+thing beats stating a larger one that is not.
+
+**The grant comes from the process token, not from the object's owner.** `GetNamedSecurityInfoW`
+returns the owner in the same call, and using it is the obvious shortcut. On a machine whose policy
+makes `BUILTIN\Administrators` the owner of objects an elevated process creates, that shortcut
+produces a DACL listing Administrators and *not* the user — and a later non-elevated run cannot read
+its own file. Silent, and only on machines with that policy, which is the worst combination. So the
+grant is `OpenProcessToken`/`TokenUser`. The owner is still read back and still judged: an owner
+outside the three holds `WRITE_DAC` and can re-grant itself, so it counts as an extra trustee
+whether or not it has an entry of its own. On this machine the token user is `S-1-12-1-…`, an Azure
+AD SID rather than the `S-1-5-21-…` a hardcoded guess would have reached for.
+
+**The DACL survives the rename — measured, not reasoned.** `discovery::write` restricts a temporary
+and then `fs::rename`s it into place. The argument that this is safe (a move within one directory on
+one volume preserves the file object and its descriptor; inheritance is re-applied on a copy or a
+cross-volume move) is correct, and it was still only an argument. It is now a `#[cfg(windows)]` test
+and a probe run. **The read-back moved anyway**, to after the rename, because the old code verified
+`local-api.json.new` — a path that does not exist by the time the verdict reaches the caller. On
+Unix that verdict was true of the final file by an argument the code never made. That is the same
+class of defect one level down, inside the file written to avoid it.
+
+**The directory-before-file ordering is a real property, and it needed a second half.**
+`restrict_directory(parent)` runs before the temporary is created, so the temporary inherits a
+protected list and the token's bytes never touch disk under the loose one. Measured: a file created
+inside a protected directory does inherit exactly the three trustees — but *not* `SE_DACL_PROTECTED`,
+so it reports `StillInheriting` and would follow the directory if the directory changed. Hence the
+file is still restricted in its own right. And `fs::write` alone put the token's bytes on disk before
+anything narrowed the file, which is a real window on Unix too — a `0700` directory does not stop a
+`0644` file inside it. The temporary is now created empty, restricted, and only then written into.
+
+**The directory's verdict gates the file's.** A perfectly restricted file inside a directory another
+user may delete children of is not a restricted file: it can be deleted and replaced, and the CLI
+and MCP client then read an attacker's port and token. For a file whose contents *are* the access
+control, that is worse than being readable, not smaller. `file_acl::combine` is the pure function
+that says so, and a perfect file in a loose directory reports `DirectoryNotRestricted`.
+
+**Ten states, not four, and the count-not-names call.** The Windows read-back can fail in ways
+`Wider { mode }` cannot express — it is Unix-shaped and cannot carry a trustee — and collapsing them
+into `Unknown` would report something that was measured as something that was not. So five mismatch
+arms, each with its own sentence in `labels.ts`. `ExtraTrustees` carries a **count**, not names: the
+value crosses to TypeScript and onto a screen that ends up in screenshots and bug reports, and a
+trustee name is one of the machine's account and group names. The SIDs go to a `tracing::warn!`
+inside `verify` instead, and the label says where to look. `DaclFacts.dacl` is an `Option` because a
+NULL access list grants everyone everything while an empty one grants nobody anything, and code that
+conflates them reports the worst case as the best.
+
+**`is_confirmed()`'s line is checked versus unchecked, not strict versus lax.** The old doc comment
+argued the other one, and it had to be rewritten rather than extended: `OwnerAndAdministrators` lets
+administrators read the file and passes, because the list was read back entry by entry;
+`InheritedFromProfile` may well be perfectly restrictive and does not, because nothing looked.
+`kw_local_api::Permissions::is_as_expected()` — the helper whose "as restrictive as the platform
+allows" is the sentence that misled once and is recorded as a finding in three documents — was
+deleted. It had no non-test caller. There are now two `is_confirmed()` definitions, one per side of
+the IPC boundary, and two definitions of one line is the shape of the original defect, so
+`the_two_confirmed_decisions_cannot_drift_apart` walks every variant and requires them to agree.
+
+**The second false comment.** `kw_sidecar::pid`'s `restrict_file` claimed *"on Windows the file
+inherits the user profile's ACL, which already excludes other users"* — the same assertion as the
+one in `discovery.rs`, in a different crate, about the same profile directory, equally false. Two
+independent comments asserting an unverified fact about the same thing is the argument for one
+shared helper rather than two call sites that each get to believe something. The PID record's
+verdict is logged rather than reported to the user, and the comment says why: its worst case is a
+forged entry `crate::reap`'s command-line check already refuses to act on, so refusing to start a
+sidecar over an odd access list would be the worse outcome. A PID is not a secret — it is protected
+for **integrity**, and `pid.rs`'s own "a record another user could rewrite is a request to signal a
+PID of their choosing" is the sentence worth keeping.
+
+**Two things found and not fixed here, both filed (KNEG-110, KNEG-111); the first has since been
+fixed.** The verdict was a **snapshot taken when the API starts** —
+`local_api_status` reported what the write measured, and nothing re-read the DACL while the
+application ran. During this run a trustee was added to a protected directory by something outside
+the application, between the write's read-back and the next `icacls`; the application would not have
+noticed until its next start. (That specific ACE was an artifact of the sandboxed harness the
+measurement ran under, and did not reproduce when `discovery::write` created the directory itself,
+which is what the application does — but the general fact is real.) And **CI never compiles any of
+this**: `.github/workflows/ci.yml`'s `contracts` job runs on `ubuntu-latest`, and the
+`windows-latest` matrix job is switched off for every trigger but `workflow_dispatch`. The pure
+classifier *is* covered there, deliberately — `file_acl::classify` takes plain Rust facts, and the
+measured DACL above is a fixture in its test module, so the regression test for a Windows exposure
+runs on a Linux box. The three Win32 calls are covered by two `#[cfg(windows)]` tests — the
+repository's first — and by `cargo run -p kw-security --example dacl_probe`, which verifies only
+when given a path so the real `~/.knegiswhisper` can be re-measured without the default being
+destructive.
+## 2026-08-31 (KNEG-79) — four clients that heard "no" and said nothing
+
+The four cloud meeting clients each read a provider-reported error frame, logged it with
+`tracing::warn!("the provider reported an error")`, and carried on. None of `connect`, `send_audio`
+or `finish` ever returned an `Err` because of it, so a provider that rejected the session-config
+frame and kept the socket open produced a meeting that "completed successfully" holding an empty
+transcript — and an empty transcript becomes `MeetingOutcome::NothingTranscribed`, which is exactly
+what a quiet room produces. The gap had been recorded three times, in `BENCH_CHECK.md` item 13,
+`BUILD_PLAN.md` and this file's own carry-forward, and fixed none of them.
+
+It stopped being hypothetical on 2026-08-28. Both OpenAI sockets were closed by the server
+milliseconds after connecting; the application reported **Recording**, kept the indicator up,
+captured microphone and system audio for as long as it was left running, and said nothing. One
+`DEBUG nothing is consuming the meeting audio` per second was the only trace.
+
+### What was built
+
+`crates/meeting-core/src/fault.rs`: `SessionFault`, one cell per session shared by both readers and
+consulted by both writers, plus `ends_the_session` — a pure, total function answering *does a fault
+of this kind mean the session is over?*
+
+The pure split was not optional. There is no socket harness in this repository: no `wiremock`, no
+`mockito`, no fake `MeetingTranscriptionProvider`, no `crates/meeting-core/tests/`. Every test in
+the four socket modules returned before a socket ever opened, and each module's own header said so.
+Anything reachable only through a live socket is untested by construction, which is the same reason
+`openai::SessionClock` was pulled out of the socket: *a rule that only runs against a live
+sixty-minute call is a rule nobody checks.*
+
+### Three decisions worth the space
+
+**`OnceLock`, not `Mutex`, so first-wins is true by construction.** A cascade of frames after the
+real error would bury it, so the first fault has to win. Written as `if held.is_none() { ... }` that
+is a convention a later edit can invert; written as `OnceLock::set` it is the type's own behaviour,
+and there is no poisoned-lock branch to write around this workspace's `unwrap_used = "deny"`.
+
+First rather than last, because of the one real observation there is. The 2026-08-28 order was:
+
+```text
+WARN the provider reported an error       The Realtime Beta API is no longer supported.
+WARN the transcription socket was closed  said=... (code 4000)
+```
+
+The first line explains the meeting. The second is a number. Last-wins keeps the number.
+
+**One cell per session, not one per socket.** Every client here refuses to open only one socket —
+"a session with only the microphone open would transcribe half the meeting and report success" — so
+a dead system-audio socket has to end the session even while the microphone socket is healthy. The
+two almost always die of the same cause, and the recorded sentence names which capture it came
+from, so one true sentence beats the same sentence twice.
+
+That has one sharp edge, and it is the reason `openai_socket::reconnect` swaps in a *new* cell
+before rebuilding. `Connection::close` sends a close frame and only then aborts the reader, so the
+socket a reconnect retires can still read the server's reply — and a close frame is a
+`FaultKind::Reported`. Shared across generations, this fix would have failed every meeting over
+sixty minutes at its own reconnect: a new defect introduced by the fix for an old one.
+
+**The non-JSON case, decided rather than left to fall through.** All four `interpret` functions
+answered *any* unparseable frame with `Incoming::Failed`, so an HTML error body and a text keepalive
+this parser happens not to know were the same thing. Making `Failed` fatal without splitting them
+would have killed a working meeting over a keepalive — a new defect of the fix's own making, and
+the exact failure mode this change exists to prevent.
+
+So there is a fifth variant, `Incoming::Unreadable { preview }`, in all four rules modules, and the
+rule is about *when* it arrives: **an unreadable frame on a socket that has never yet produced a
+frame this client could parse ends the session; one that arrives after it has does not.** That
+targets the observed hazard — garbage where a session-accepted frame belonged — and cannot kill a
+stream that has demonstrably been speaking this client's language. "Understood" means *parsed*, so
+`Ready`, a transcript, an error frame and even an event this client does not act on all count; ping
+and pong never reach an `interpret` call. The loop supplies one `bool` and `ends_the_session` holds
+the rule.
+
+The frame itself is repeated back rather than replaced with "not JSON", through one shared
+`fault::preview` — control characters flattened, runs collapsed, capped at 120 characters, because
+provider responses are outside the trust boundary and this text reaches both a log field and a
+sentence on screen. `<html>502 Bad Gateway</html>` is worth ten diagnostics that say "not JSON", and
+the wire most likely to produce one is Corti's, which was invented with no vendor documentation at
+all.
+
+### Edited four times rather than extracted
+
+`type Socket`, `type Sink`, `struct Connection`, `Connection::close`, the whole `read` skeleton,
+`fn connection`, `pause`/`resume`/`cancel` and the `static FALLBACK` blocks are near-duplicated
+across the four socket modules. Unifying them is a real refactor with its own risk and KNEG-89
+already tracks it, so what was extracted here is the *decision* — one `SessionFault`, one
+`ends_the_session`, one `close_reason`, one `preview`, one `SocketFault::into_error` — and the four
+call sites were edited by hand.
+
+Four hand-applied copies of a security-relevant decision is exactly how one gets missed, so
+`all_four_cloud_clients_record_a_fault_and_consult_it_at_both_ends` reads the four modules' own
+source with `include_str!` — the device `kw_network_policy` already uses for
+`forbidden-domains.json` — and fails if any one of them lacks the field, any of the four record
+calls, or the two `self.fault.take()` sites. It is a text match and will not catch a client that
+consults the cell and ignores the answer; the two behavioural tests now at the bottom of each socket
+module do that, one client at a time.
+
+Those two tests per module are the first in those four files to reach past the guard clauses, and
+they exist because `send_audio` checks the cell **first** — before `paused`, before the reconnect
+clock, before the connection lookup. A test can then record a fault exactly as the reader task would
+and ask what `send_audio` and `finish` do about it, with no socket, no key and no network. Placing
+the check first is also correct on its own terms: a provider that reported an error and kept the
+socket open produces a *successful* send, so nothing about the send can be asked.
+
+The per-socket `Closed` cell in `openai_socket` was **not** folded in. Two cells, two jobs: that one
+supplies better words for a send that has already failed, this one decides whether the session is
+over. Folding them would have put `ad9dac1`'s hard-won behaviour — the thing that made five GA-API
+faults diagnosable — at risk for a tidiness gain.
+
+### `stop()`, which was worse than it looked
+
+`stop()` returned early from three places: the recorder thread having stopped, the thread not
+answering, and the pump failing. `Live` had already been `take`n by then, so each of them left the
+runtime idle while skipping the whole tail — no `OUTCOME_EVENT`, no `MeetingState::Idle`, no
+`meeting_window::set_visible(false)`, no `watch.forget`.
+
+And the screen was then stuck permanently, not briefly: `guard` in `useRefresh.ts` does not
+`reload()` when a mutation throws, so the frontend stayed on `finishing`, where
+`SettingsMeetings.tsx` renders neither Stop nor Discard and disables Start. No working button, tray
+still lit, indicator window still up, until the application was restarted.
+
+Every failure is an outcome now. Three free functions came out of it — `close_recorder`,
+`pump_result`, `failed_message` — testable with no `AppHandle`, `Db` or `NetworkPolicy`, which is
+the shape `resolve_key_ref` and its neighbours already use in that file.
+
+**The whole-file local pass still runs after a pump failure**, and that is a fix in its own right
+rather than a concession: the saved note comes from that pass and only falls back to the cloud
+partials, so a provider that dies at second zero costs the live transcript, not the meeting. The old
+`?` skipped the pass entirely, which was a pure loss. `keep` takes `live_failure: Option<&str>` and
+uses it twice — an empty result becomes `Failed` naming what the provider said instead of
+`NothingTranscribed`, and a note that *was* produced says in its own text that the live half failed.
+
+### No fake provider, and what it would take
+
+`pump` has zero test coverage and still does. Introducing the repository's first fake
+`MeetingTranscriptionProvider` was considered and declined: `pump` already propagates its `Err`
+correctly through `?`, so the fake would have tested a line that was not broken, while the broken
+line was in `stop()` — which needs an `AppHandle`, a `Db` and a `NetworkPolicy`, none of which a
+fake provider supplies. The free functions cover what actually changed.
+
+Recorded for whoever does want it: the obstacle is `pump`'s `app: AppHandle`, and the better of the
+two routes is giving `pump` a small `TranscriptSink` trait — matching what `calendar-core` did with
+`TokenSender` and its test-only `PlaintextLoopbackSender` — rather than enabling `tauri`'s `test`
+feature, which nothing in this workspace uses.
+
+**This entry predicted KNEG-95 would need that, and it did not.** Corrected here rather than left
+standing: the decisions KNEG-95 turned out to need — which state to report, whose session an ending
+belongs to, which sentence to use — are all free functions over plain values, the same shape
+`pump_result` and `close_recorder` already had. `pump` is still untested and still does not need to
+be. What a `TranscriptSink` would buy is a test of `pump` itself, which nothing has yet wanted.
+
+### What stayed KNEG-95's, and was taken later the same day
+
+**A dead provider was still silent mid-meeting when this landed.** The indicator stayed up,
+recording continued, and nothing reached the screen until Stop. No new `MeetingState` variant, no
+change to whether recording continues, `MeetingRuntime::status()` not consulting
+`pump.is_finished()`, and no mid-meeting error event — all deliberate, because the choice between
+stopping the recording, falling back immediately, and carrying on while saying so belonged to the
+repository owner.
+
+That choice was made on 2026-08-31: **carry on, and say so.** Every one of the four items above is
+now done, and the reasoning is in the 2026-08-31 (KNEG-95) entry above — including the two races
+that decision turned out to contain, neither of which was visible from here.
+
+### What could not be verified, and is not claimed anywhere
+
+**No key exists on any machine this project has touched for AssemblyAI, Deepgram or Corti.** Three
+of the four clients' behaviour against a real provider error is unverified, and the tests added here
+verify this application's wiring rather than any provider's behaviour. The argument for the change
+is that it is exactly the mechanism that would have surfaced the five OpenAI faults of 2026-08-28 in
+one attempt instead of five. That is an argument, not evidence, and the code comments,
+`PLATFORM_SUPPORT.md` and `BENCH_CHECK.md` item 13 all say so in those terms.
+
+One risk is written into `ends_the_session`'s doc comment rather than hidden: `FaultKind::Reported`
+ends the session on the **first** error frame, and a provider that emits benign `error` frames
+routinely would make that too eager. The mitigation, if it ever matters, is one line — give
+`Reported` the same "before anything was understood" test `Unreadable` has.
+
+### Found while here, filed rather than widened
+
+`deepgram::transcript`'s `gaps: 0` carried the comment *"Nothing is dropped by this client: the
+socket either carries a frame or the send fails and the session ends."* That was untrue for a second
+reason, predating all of this: `deepgram_socket`'s reader `return`s on `TranscriptBudget`
+exhaustion, so a session past `MAX_TRANSCRIPT_BYTES` or `MAX_TRANSCRIPT_EVENTS` keeps recording and
+transcribes nothing further — silently, and uncounted, because `gaps` is hardcoded to zero. Bounding
+untrusted provider output is deliberate; not counting what the bound costs is a gap. The comment now
+says so and the behaviour is unchanged.
+
+> **Fixed the same day (KNEG-109), and the filing understated it.** The reader no longer returns, so
+> the ceiling bounds retention without also ending transcription — and without silently switching
+> *this* change off for the rest of the meeting, which is what a dead reader did to `SessionFault`.
+> See the KNEG-109 entry at the top of this file.
+## 2026-08-31 (KNEG-80) — a path the renderer could invent, and why the capability beat the fusion
+
+`Notes > Upload` had a hole with a very short description and a very long consequence.
+`pick_import_file` opened a real OS dialog and returned the chosen path **to the renderer**, which
+held it in React state and passed it as a plain string to `media_import_audio`,
+`media_import_video` or `import_openwhispr` on a later click. Those three read whatever path they
+were called with. Nothing confirmed it was the one the dialog returned.
+
+The half that held is worth stating first, because it is the reason this sat unnoticed:
+`apps/desktop/src-tauri/capabilities/default.json` grants exactly `["core:default"]` — no `fs:*`,
+no `dialog:*`, no `shell:*`, no `http:*` — so the renderer genuinely has no independent way to
+*obtain* a path. Every path it could hold came from a real dialog. But "cannot obtain" and "is
+checked" are different claims, and only the first was true. A compromised renderer — which
+`docs/SECURITY.md`'s threat model includes, so this is not an invented adversary — could call
+`media_import_audio` with any path it liked, and the path becomes argv for a spawned ffmpeg, which
+writes `converted.wav`, which is read into memory and handed to
+`kw_transcription_core::Executor::transcribe`. With a cloud provider configured, that is an
+exfiltration path for any readable file on the machine, reached with one IPC call.
+
+### Why a capability rather than fusing pick and import
+
+`note_export_to_file` already demonstrates the airtight shape: it fuses picking and writing into
+one atomic command, so the frontend never sees or supplies a path at all. Copying that shape here
+was the obvious first answer and it is the wrong one, for a reason that is about the screen rather
+than about security. Export is a single click — choose where, write, done. Import is
+pick-then-review-then-confirm: the user picks a file, the screen shows what it picked and what
+provider will transcribe it, and *then* they press Import. Fusing would collapse the review step
+that the screen exists to provide. A guarantee bought by deleting the interaction it was protecting
+is not a good trade.
+
+So the path still crosses the boundary, and what makes it safe is a capability instead:
+`commands::DialogGrants`, a `Mutex<VecDeque<PathBuf>>` managed in `lib.rs`, written only by
+`pick_import_file` and consulted by all three path-accepting commands before they touch anything.
+
+Three implementation choices, each of which had a plausible alternative that is worse:
+
+- **Session-lifetime, not single-use.** Single-use is the tighter policy and it breaks a flow that
+  works today: `NotesUpload.tsx`'s `catch` leaves the picked path in state after a failure, so the
+  same file can be retried without re-picking. A grant consumed by the first attempt would turn
+  every failed import into a re-pick. There is a test for the two-attempt case specifically, so the
+  next person to reach for single-use has to delete an assertion that says why not.
+- **Bounded by count, not by time.** A time bound would refuse a file the user really did pick if
+  they left the review step open — and they realistically will, because that screen can sit on a
+  picked path across an ffmpeg install of tens of megabytes. This is the same argument
+  `meeting::Watcher::offered` makes in its doc comment for keying on the provider rather than on a
+  timestamp: a time-tuned suppression gets one of its two cases wrong whichever way it is set, and
+  identity gets both right. Reusing that reasoning was better than restating it. The bound is 32,
+  which the screen (one path at a time) will never approach; it exists so a renderer calling the
+  picker in a loop cannot grow the set without limit.
+- **Keyed on a canonicalised `PathBuf`, never the string.** `pick_import_file` returns
+  `path.display().to_string()`, which is **lossy**. Comparing strings would mean comparing a path
+  that had already lost information. Both the insert and the check go through `std::fs::canonicalize`
+  — which on Windows returns the verbatim `\\?\C:\...` form, so both sides must canonicalise or a
+  canonical path gets compared against a raw one and never matches.
+
+### What the lossy path costs, stated rather than buried
+
+A path whose name does not survive `display()` cannot be imported. That is a real refusal and it is
+written into the code as one. It is **not** a regression: `check_importable_file`'s `is_file()`
+already failed on that same lossy string today, silently and by accident. The change is that it is
+now deliberate and says so. If someone with a filename that does this ever reports it, the answer
+is to stop round-tripping the path through the renderer at all — i.e. the fusion above, for that
+one case — not to compare strings.
+
+One smaller decision inside `authorise`: a path that cannot be canonicalised and a path nobody
+granted get the *same* refusal. Distinguishing them would make the command answer "does this file
+exist" for any path a compromised renderer cared to name, which is a smaller leak than the one
+being closed but is free to avoid — and a path that will not canonicalise cannot be in the set
+anyway, since every member of it came out of `canonicalize`.
+
+### The surface is closed, and that was checked rather than assumed
+
+`pick_import_file` is the only dialog-returning command that hands a path to the renderer.
+`note_export_to_file` returns one too, but only as an after-the-fact report of what it already
+wrote, and nothing accepts it back. Every `#[tauri::command]` in
+`apps/desktop/src-tauri/src` was enumerated and its parameters read: exactly three take a path —
+`commands::import_openwhispr` (through `ImportRequest.path`), `media::media_import_audio` and
+`media::media_import_video`. The other struct-shaped parameters (`NoteUpdateRequest`,
+`CleanupSettings`, `EnterpriseConfig`, `Lists`) carry no path field; `CleanupSettings.self_hosted_url`
+is a URL and goes through the network policy, not the filesystem.
+
+### What this does not prove
+
+Four unit tests assert the policy — an ungranted path is refused, a granted one survives two
+imports, the oldest is evicted past the bound, and an ungranted credential-file path is refused
+rather than read (including one reached by traversal that canonicalises onto it). `authorise` takes
+no `AppHandle` precisely so those tests can exist; there is no Tauri command test harness in this
+repo, so anything reachable only through a command is untested by construction. **Only a real call
+against the running application proves the policy is consulted on this path**, and that has not
+been run. It is item 1 under Task 12 in `BENCH_CHECK.md`, where it was already written before this
+change and where it stays.
+
+Dev mode was checked, not assumed: all four commands are stubbed in `devFixtures.ts`, which
+intercepts at `invoke` and throws loudly on anything unstubbed, so no fixture reaches Rust and none
+needs a fake grant.
+
+Two doc corrections came along with it. `config/ui-surfaces.json`'s `Notes > Upload` note still
+described "Audio, video and URL import" months after URL import was withdrawn — the parity gate
+checks `surfaceId`, `component`, `built` and the `data-surface` marker, never the note prose, so
+nothing was ever going to catch that. And the same entry said nothing about path restriction. Both
+fixed.
 
 ---
 
@@ -641,6 +2099,11 @@ move a file by more than 5% to be noticed; now any change at all fails the insta
 integrity error and the user cannot proceed. Identical to the trade `98e836b` took for the GGUF
 sizes, taken again for the same reason: a silent pass means running weights nobody here measured.
 See **KNEG-103**, which now covers a digest-exact surface rather than a size-exact one.
+
+> **Superseded the same day.** KNEG-103 landed: all six URLs name commit `5359861c` instead of
+> `main`, so this cost is no longer paid — a publisher pushing cannot move the bytes these digests
+> describe. The entry above is what was true when the digests were measured, and the reasoning that
+> made pinning the revision the obvious next thing. See the KNEG-103 entry at the top of this file.
 
 What notices first is `node tools/model-pin/pin.mjs --verify`, and its weekly cost went from about
 1 GB to about **8 GB** — two Parakeet archives plus six whisper models rather than one.

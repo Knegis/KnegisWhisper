@@ -63,6 +63,7 @@
  *   node tools/model-pin/pin.mjs --file <path> [--id <model-id>]
  *   node tools/model-pin/pin.mjs --verify [--only <model-id>]
  *   node tools/model-pin/pin.mjs --verify-stated [--only <model-id>]
+ *   node tools/model-pin/pin.mjs --revisions
  *
  *   # Measure and assert in one step — this is the acceptance run:
  *   node tools/model-pin/pin.mjs \
@@ -85,15 +86,54 @@
  * The same file, `localLlm[].models[]` and their drafters -- the 39 GGUF
  * objects. It does **not** download them: 202 GB is why they were never
  * digest-pinned in the first place. It reads Hugging Face's
- * `/api/models/{repo}/tree/main?expand=true`, which returns every object's
- * `lfs.oid` and `lfs.size` in one response per repository, and compares those
- * against what is committed.
+ * `/api/models/{repo}/tree/{revision}?expand=true`, which returns every
+ * object's `lfs.oid` and `lfs.size` in one response per repository, and
+ * compares those against what is committed.
+ *
+ * **The revision is the committed one, not `main`, and that changed what this
+ * mode is for.** Until KNEG-103 it asked "has the publisher re-uploaded", and
+ * a yes was an emergency: the bytes behind our URL had moved out from under
+ * the digest. Now the URL names a commit, so a re-upload cannot move them, and
+ * the question is a better one -- **do the digest and the revision committed
+ * beside each other describe the same object?** Nothing else in the repository
+ * checks that pair, and nothing else would notice them drifting apart.
+ *
+ * It also reads `/api/models/{repo}` for each repository and says where `main`
+ * has moved past the pinned commit. That is reported and never failed on:
+ * upstream publishing is normal, and a weekly job that exited non-zero for it
+ * would be ignored by the second month. It is news about pins worth revisiting,
+ * not a defect.
+ *
+ * **And the two sherpa archives, which are not on Hugging Face at all.** They
+ * are assets in k2-fsa's rolling `asr-models` GitHub release, and GitHub's
+ * release API states a `digest` and a `size` per asset -- the same shape as
+ * `lfs.oid`, from a different host, one request for all 498 assets. Those two
+ * are *also* downloaded and re-hashed by `--verify`, so this is not how they
+ * are checked; it is an earlier and far cheaper signal that tells a swapped
+ * asset from a damaged download before the 1 GB re-download runs. Measured
+ * 2026-08-31: both stated digests and both stated sizes match the committed
+ * pins exactly. See KNEG-112.
  *
  * `--verify` re-measures bytes. `--verify-stated` re-reads a claim. Both catch
  * a silent upstream re-upload, which is the failure that matters most here;
  * only the first can catch bytes that disagree with the claim. They are two
  * commands rather than one flag because a tool that reports "verified" should
  * never be vague about which of those it did.
+ *
+ * ## What `--revisions` measures
+ *
+ * Which commit each Hugging Face repository's `main` points at right now, for
+ * all 37 the registry names -- one request each, no bodies. It prints a
+ * pasteable `HF_REVISIONS` table, and it exists for the same reason every
+ * other mode here does: **a revision that was typed rather than read is not a
+ * pin.**
+ *
+ * This is a measuring verb, not a checking one. It reports what upstream says
+ * today and never compares that to what is committed; `--verify-stated` is
+ * where a disagreement becomes an exit code. Keeping the two apart is the same
+ * separation `--verify` and `--verify-stated` already have, and for the same
+ * reason: a run that both measures and asserts can always be misread as having
+ * asserted the thing it measured.
  *
  * This used to be two files. The whisper pins lived in a `PINNED` table in
  * `crates/transcription-core/src/models.rs`, so this tool parsed a Rust
@@ -429,7 +469,10 @@ export async function verify(only) {
  * skip, for the reason `pinnedTargets` gives: the generator emits `sha256`,
  * `sha256Measured` and `sizeBytes` together, so half a pin means
  * `config/provider-registry.json` was hand-edited, and half a pin is the one
- * input that would let this report a pass over something nobody checked.
+ * input that would let this report a pass over something nobody checked. A
+ * missing `revision` is the same failure and dies the same way -- reading the
+ * tree at `main` instead would silently answer a question about different
+ * bytes than the ones the installer fetches.
  */
 export function statedTargets(reg = registry()) {
   const targets = [];
@@ -443,9 +486,18 @@ export function statedTargets(reg = registry()) {
           "hand-edited -- fix the pin in generate-provider-registry.mjs and regenerate."
       );
     }
+    if (!/^[0-9a-f]{40}$/.test(String(object.revision))) {
+      die(
+        `localLlm/${id} has no usable revision (got ${JSON.stringify(object.revision)}). The ` +
+          "generator refuses to emit a model without one, so config/provider-registry.json " +
+          "has been hand-edited -- fix HF_REVISIONS in generate-provider-registry.mjs and " +
+          "regenerate."
+      );
+    }
     targets.push({
       id,
       repo: object.hfRepo,
+      revision: object.revision,
       file: object.fileName,
       sha256: object.sha256.toLowerCase(),
       sizeBytes: object.sizeBytes,
@@ -466,9 +518,9 @@ export function statedTargets(reg = registry()) {
   return targets;
 }
 
-/** One repository tree, as JSON. Bounded redirects, same as `download`. */
-async function tree(repo) {
-  let current = `https://huggingface.co/api/models/${repo}/tree/main?expand=true&recursive=true`;
+/** One Hugging Face API document, as JSON. Bounded redirects, same as `download`. */
+async function apiJson(url) {
+  let current = url;
   for (let hop = 0; hop < 6; hop += 1) {
     const response = await fetch(current, { redirect: "manual" });
     if (response.status >= 300 && response.status < 400) {
@@ -480,15 +532,124 @@ async function tree(repo) {
     if (!response.ok) die(`${current} returned HTTP ${response.status}`);
     return response.json();
   }
-  return die(`the tree for ${repo} redirected more than five times`);
+  return die(`${url} redirected more than five times`);
 }
 
 /**
- * Re-read every committed GGUF pin from Hugging Face and report disagreements.
+ * A GitHub release-asset download URL, split into repository / tag / name.
  *
- * Non-zero exit on any disagreement, the same contract `--verify` has. One
- * request per repository, so 39 objects cost 36 requests and a few seconds --
+ * Exported beside [`parseHfUrl`] and for the same reason: one parser per URL
+ * shape, so nothing has to keep two copies of it in step.
+ */
+export function parseGithubAssetUrl(url) {
+  const match =
+    /^https:\/\/github\.com\/([^/]+\/[^/]+)\/releases\/download\/([^/]+)\/(.+)$/.exec(
+      String(url)
+    );
+  if (!match) return null;
+  return { repo: match[1], tag: match[2], name: match[3] };
+}
+
+/**
+ * Every committed sherpa pin, as an asset to look up in a GitHub release.
+ *
+ * `localAsr.sherpa` only. A model with no `sha256` is skipped for the reason
+ * [`pinnedTargets`] gives -- today that is the two Nemotron streaming models,
+ * which nothing can install and nobody pinned.
+ *
+ * **These are bytes this project hashed**, unlike the GGUF pins. Re-reading
+ * what GitHub states about them is strictly weaker than the download
+ * `--verify` does, and is included here anyway because it is the difference
+ * between knowing within seconds and knowing after a gigabyte. The output says
+ * which, rather than letting a reader average the two.
+ */
+export function githubAssetTargets(reg = registry()) {
+  const targets = [];
+  for (const model of reg.localAsr?.sherpa ?? []) {
+    if (!model.sha256) continue;
+    const parsed = parseGithubAssetUrl(model.downloadUrl);
+    if (!parsed) {
+      die(
+        `sherpa/${model.id} is pinned but its downloadUrl is not a GitHub release asset: ` +
+          `${model.downloadUrl}. This mode does not know how to re-read that host.`
+      );
+    }
+    if (typeof model.expectedSizeBytes !== "number") {
+      die(
+        `sherpa/${model.id} has a sha256 and no expectedSizeBytes. The generator emits both or ` +
+          "neither, so config/provider-registry.json has been hand-edited."
+      );
+    }
+    targets.push({
+      id: model.id,
+      repo: parsed.repo,
+      tag: parsed.tag,
+      name: parsed.name,
+      sha256: model.sha256.toLowerCase(),
+      sizeBytes: model.expectedSizeBytes,
+    });
+  }
+  return targets;
+}
+
+/** One GitHub release, by tag, as JSON. */
+async function release(repo, tag) {
+  const url = `https://api.github.com/repos/${repo}/releases/tags/${tag}`;
+  const response = await fetch(url, {
+    headers: { accept: "application/vnd.github+json", "user-agent": "knegiswhisper-model-pin" },
+  });
+  if (response.status === 403 || response.status === 429) {
+    die(
+      `${url} returned HTTP ${response.status}. GitHub rate-limits unauthenticated API calls to ` +
+        "60 an hour per address; this mode needs one. Wait, or set GITHUB_TOKEN in the environment " +
+        "if a run needs more."
+    );
+  }
+  if (!response.ok) die(`${url} returned HTTP ${response.status}`);
+  return response.json();
+}
+
+/**
+ * One repository tree at a named revision, as JSON.
+ *
+ * The revision is a parameter rather than the constant `main` it used to be,
+ * because the answer to "what does this repository hold" is only meaningful
+ * once you say *when*. `--verify-stated` passes the committed commit; nothing
+ * asks for `main` any more.
+ */
+async function tree(repo, revision) {
+  return apiJson(
+    `https://huggingface.co/api/models/${repo}/tree/${revision}?expand=true&recursive=true`
+  );
+}
+
+/**
+ * What a repository's `main` points at right now, and when it last changed.
+ *
+ * `sha` is the commit that goes into `HF_REVISIONS`. `lastModified` is context
+ * rather than part of the pin: it is the difference between "nothing has
+ * touched this since 2024" and "this moved last week", which is what tells a
+ * reader whether a pin one commit behind is stale or simply older.
+ */
+async function modelInfo(repo) {
+  return apiJson(`https://huggingface.co/api/models/${repo}`);
+}
+
+/**
+ * Re-read every committed GGUF pin at its pinned commit and report disagreements.
+ *
+ * Non-zero exit on any disagreement, the same contract `--verify` has. Two
+ * requests per repository -- the tree at the pinned commit, and what `main`
+ * points at now -- so 39 objects cost about 72 requests and a few seconds,
  * which is the point: this can run weekly where re-downloading 202 GB cannot.
+ *
+ * The two halves answer different questions and only the first can fail.
+ * Reading the tree at the committed revision asks whether the digest and the
+ * revision beside it describe the same object, and whether that commit still
+ * resolves at all -- a repository going private or being force-pushed would
+ * break every install of its models, and nothing else here would notice.
+ * Reading `main` asks whether upstream has published since, which is normal
+ * and is reported as news.
  */
 export async function verifyStated(only) {
   const targets = statedTargets().filter((t) => !only || t.id === only);
@@ -502,22 +663,29 @@ export async function verifyStated(only) {
     );
   }
 
+  // Keyed on repository *and* revision rather than repository alone. One
+  // revision per repository is how HF_REVISIONS is built, but a cache that
+  // assumed it would answer from the wrong tree the day that stopped being
+  // true, and would do it silently.
   const trees = new Map();
   for (const target of targets) {
-    if (trees.has(target.repo)) continue;
-    console.error(`reading ${target.repo} …`);
-    trees.set(target.repo, await tree(target.repo));
+    const key = `${target.repo}@${target.revision}`;
+    if (trees.has(key)) continue;
+    console.error(`reading ${target.repo} at ${target.revision.slice(0, 12)} …`);
+    trees.set(key, await tree(target.repo, target.revision));
   }
 
   const wrong = [];
   for (const target of targets) {
-    const entries = trees.get(target.repo);
+    const entries = trees.get(`${target.repo}@${target.revision}`);
     const entry = Array.isArray(entries)
       ? entries.find((e) => e.path === target.file)
       : undefined;
 
     if (!entry) {
-      wrong.push(`${target.id}: ${target.file} is no longer in ${target.repo}`);
+      wrong.push(
+        `${target.id}: ${target.file} is not in ${target.repo} at ${target.revision}`
+      );
       continue;
     }
     // `lfs.oid` is the object's SHA-256, because git-lfs is content-addressed
@@ -542,12 +710,199 @@ export async function verifyStated(only) {
     process.exit(1);
   }
 
+  // Everything below this line is reporting, not checking. `wrong` is already
+  // empty or the process has already exited.
+  const moved = [];
+  const repos = [...new Set(targets.map((t) => t.repo))];
+  for (const repo of repos) {
+    const pinned = targets.find((t) => t.repo === repo).revision;
+    const info = await modelInfo(repo);
+    if (typeof info.sha === "string" && info.sha !== pinned) {
+      moved.push(
+        `  ${repo}: pinned ${pinned.slice(0, 12)}, main is now ${info.sha.slice(0, 12)}` +
+          `${info.lastModified ? ` (pushed ${String(info.lastModified).slice(0, 10)})` : ""}`
+      );
+    }
+  }
+
+  // The sherpa archives, from the other host. One request per release, and
+  // there is exactly one release.
+  const assets = only ? [] : githubAssetTargets();
+  const assetWrong = [];
+  const releases = new Map();
+  for (const target of assets) {
+    const key = `${target.repo}@${target.tag}`;
+    if (!releases.has(key)) {
+      console.error(`reading ${target.repo} release ${target.tag} …`);
+      releases.set(key, await release(target.repo, target.tag));
+    }
+    const found = (releases.get(key).assets ?? []).find((a) => a.name === target.name);
+    if (!found) {
+      assetWrong.push(`${target.id}: ${target.name} is no longer in ${target.repo} ${target.tag}`);
+      continue;
+    }
+    // GitHub states `sha256:<hex>`; the committed pin is bare hex.
+    const stated = String(found.digest ?? "").replace(/^sha256:/, "").toLowerCase();
+    if (!stated) {
+      assetWrong.push(
+        `${target.id}: the release API states no digest for this asset, so there is nothing ` +
+          "to compare -- re-download with --verify instead"
+      );
+    } else if (stated !== target.sha256) {
+      assetWrong.push(`${target.id}: committed ${target.sha256}, stated ${stated}`);
+    }
+    if (typeof found.size === "number" && found.size !== target.sizeBytes) {
+      assetWrong.push(`${target.id}: committed ${target.sizeBytes} bytes, stated ${found.size}`);
+    }
+  }
+
+  if (assetWrong.length > 0) {
+    console.error(
+      `\nmodel-pin --verify-stated: ${assetWrong.length} disagreement(s) over ${assets.length} ` +
+        "GitHub release asset(s)"
+    );
+    for (const line of assetWrong) console.error(`  ${line}`);
+    process.exit(1);
+  }
+
   const measured = targets.filter((t) => t.measured).length;
   console.log(
-    `model-pin --verify-stated: ${targets.length} object(s) match what Hugging Face states ` +
-      `(${trees.size} tree request(s); ${measured} pinned to bytes hashed here, which this ` +
-      `mode does not re-hash).`
+    `model-pin --verify-stated: ${targets.length} object(s) still match their committed ` +
+      `digest and length at the commit they are pinned to (${trees.size} tree request(s); ` +
+      `${measured} pinned to bytes hashed here, which this mode does not re-hash).`
   );
+  if (assets.length > 0) {
+    console.log(
+      `model-pin --verify-stated: ${assets.length} GitHub release asset(s) match what the ` +
+        "release API states. All of those are pinned to bytes hashed here, so agreement means " +
+        "the asset has not been swapped -- not that the bytes are still what we hashed. Only " +
+        "--verify proves the second thing."
+    );
+  }
+
+  if (moved.length > 0) {
+    // Deliberately not a failure. A publisher pushing is not a defect, and the
+    // whole point of pinning a commit is that it costs us nothing when they do.
+    // It is worth reading, because a pin far behind a busy repository is a pin
+    // somebody should decide about rather than one that has decided for itself.
+    console.log(
+      `\n${moved.length} of ${repos.length} repositories have moved past the pinned commit. ` +
+        `That is not a failure -- the pinned commit is what gets downloaded -- but it is ` +
+        `what to re-read with --revisions when these pins are next revisited:`
+    );
+    for (const line of moved) console.log(line);
+  } else {
+    console.log(`No repository has moved past its pinned commit.`);
+  }
+}
+
+/* --------------------------------------------------------------- revisions */
+
+/**
+ * A Hugging Face download URL, split into repository / revision / path.
+ *
+ * Exported because the same three parts are what
+ * `tools/integration-audit/generate-provider-registry.mjs` rewrites when it
+ * pins a whisper URL, and two regexes for one URL shape is how they drift.
+ * Returns `null` for anything that is not a Hugging Face `resolve` URL, which
+ * a caller must handle rather than assume away -- nothing in the registry is
+ * hosted elsewhere today, and that is a fact about today.
+ */
+export function parseHfUrl(url) {
+  const match = /^https:\/\/huggingface\.co\/([^/]+\/[^/]+)\/resolve\/([^/]+)\/(.+)$/.exec(
+    String(url)
+  );
+  if (!match) return null;
+  return { repo: match[1], revision: match[2], path: match[3] };
+}
+
+/**
+ * Every Hugging Face repository the registry downloads from, once each.
+ *
+ * Both families, because both are served by the same host under the same
+ * branch pointer: whisper URLs are stored whole and parsed back apart, GGUF
+ * URLs are composed from `hfRepo` and so are read directly. The `from` string
+ * is carried so a repository that cannot be read names the models that would
+ * stop installing, rather than only itself.
+ */
+export function hfRepos(reg = registry()) {
+  const found = new Map();
+  const add = (repo, from) => {
+    const seen = found.get(repo);
+    if (seen) {
+      if (!seen.includes(from)) seen.push(from);
+      return;
+    }
+    found.set(repo, [from]);
+  };
+
+  for (const model of reg.localAsr?.whisper ?? []) {
+    const parsed = parseHfUrl(model.downloadUrl);
+    if (parsed) add(parsed.repo, `whisper/${model.id}`);
+  }
+  for (const provider of reg.localLlm ?? []) {
+    for (const model of provider.models ?? []) {
+      if (model.hfRepo) add(model.hfRepo, `localLlm/${model.id}`);
+      if (model.draft?.hfRepo) add(model.draft.hfRepo, `localLlm/${model.id} (drafter)`);
+    }
+  }
+
+  return [...found.entries()]
+    .map(([repo, from]) => ({ repo, from }))
+    .sort((a, b) => (a.repo < b.repo ? -1 : a.repo > b.repo ? 1 : 0));
+}
+
+/**
+ * Read every repository's current `main` commit and print a pasteable table.
+ *
+ * Measures; never asserts. A repository that has moved past the committed
+ * revision is not this mode's news to break on -- upstream publishing is
+ * normal, and a tool that exits non-zero for it would be crying wolf weekly.
+ * `--verify-stated` is where a real disagreement becomes an exit code.
+ */
+export async function revisions() {
+  const repos = hfRepos();
+  if (repos.length === 0) {
+    die(
+      "no Hugging Face repositories were found in the registry at all. That is not a pass -- " +
+        "see the header of this file for where the registry is read from."
+    );
+  }
+
+  const rows = [];
+  for (const { repo, from } of repos) {
+    console.error(`reading ${repo} …`);
+    const info = await modelInfo(repo);
+    if (typeof info.sha !== "string" || !/^[0-9a-f]{40}$/.test(info.sha)) {
+      die(`${repo} returned no usable commit sha (got ${JSON.stringify(info.sha)}).`);
+    }
+    rows.push({
+      repo,
+      revision: info.sha,
+      // Date only. The time of day a publisher pushed is not context anybody
+      // reading a pin table needs, and a shorter string keeps the table
+      // scannable down the column that matters.
+      lastModified: String(info.lastModified ?? "").slice(0, 10) || null,
+      usedBy: from,
+    });
+  }
+
+  console.error("");
+  console.error("As the HF_REVISIONS table in tools/integration-audit/generate-provider-registry.mjs:");
+  console.error("");
+  for (const row of rows) {
+    console.error(`  "${row.repo}": {`);
+    console.error(`    revision: "${row.revision}",`);
+    console.error(`    lastModified: ${row.lastModified ? `"${row.lastModified}"` : "null"},`);
+    console.error(`  },`);
+  }
+  console.error("");
+  console.error(
+    `model-pin --revisions: read ${rows.length} repository/repositories. These are what ` +
+      `upstream points at today; nothing here was compared to what is committed.`
+  );
+
+  console.log(JSON.stringify(rows, null, 2));
 }
 
 /* -------------------------------------------------------------------- main */
@@ -575,13 +930,19 @@ async function main(argv) {
     return;
   }
 
+  if (options.revisions) {
+    await revisions();
+    return;
+  }
+
   const hasUrl = typeof options.url === "string";
   const hasFile = typeof options.file === "string";
   if (hasUrl === hasFile) {
     die(
       "exactly one of --url <url> or --file <path> is required. See the header of this file " +
-        "for examples, --verify to re-measure the committed pins, or --verify-stated to " +
-        "re-read the GGUF pins from Hugging Face without downloading them."
+        "for examples, --verify to re-measure the committed pins, --verify-stated to " +
+        "re-read the GGUF pins from Hugging Face without downloading them, or --revisions " +
+        "to read what each repository's main points at today."
     );
   }
 

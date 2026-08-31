@@ -52,7 +52,8 @@ own extractor-generated requests, none of them observable here. DNS rebinding de
 literal-host check by construction. Rather than ship an SSRF surface with a guard that cannot cover
 it, `media_import_url` is unregistered as a command, `Notes > Upload` offers no URL field, and
 `media:url-import` is `reachable: false`. Audio and video import, which take a local path and never
-fetch anything, are unaffected. The full accounting, and what re-opening it requires, is in
+fetch anything, are unaffected — and that local path must be one a file dialog returned, which the
+Webview section below describes. The full accounting, and what re-opening it requires, is in
 `docs/NETWORK_BOUNDARY.md`'s "SSRF guards for URL import" section.
 
 ## Updates
@@ -117,31 +118,83 @@ per start, compared with a constant-time comparison after a length check. Non-lo
 addresses are rejected even if the token matches. Request bodies are capped.
 
 The discovery file carries the port and token and is deleted on shutdown. Its permissions differ
-by platform, and this document used to claim `0600` everywhere, which was false:
+by platform, and this document used to claim `0600` everywhere, which was false. The mechanism is
+`kw_security::file_acl`, shared with `kw_sidecar::pid`, and it is **applied and then read back** on
+both platforms — some filesystems ignore mode bits, a DACL on a network redirector does not behave
+like one in a home directory, and a token in a file whose sharing was never checked is the same
+class of claim as a capture-exclusion flag reported `active` without asking the window.
 
-- **Unix:** `0600`, set and then **read back** — some filesystems ignore mode bits, and a token in
-  a world-readable file is worth knowing about before it is used. The containing directory is
-  `0700`.
-- **Windows:** *nothing is applied.* The file inherits whatever ACL the profile directory carries,
-  and `Permissions::InheritedFromProfile` reports that rather than claiming owner-only. **That is
-  an honest report of an unmet requirement, not a mechanism.** Measured on one real machine
-  (2026-08-26) the inherited ACL granted Modify to a local group that was neither the user nor the
-  administrators — see [BENCH_CHECK.md](BENCH_CHECK.md) — so on Windows, treat the token as
-  readable by anyone the profile directory lets in. That fact still stands; closing it means an
-  explicit owner-only DACL through `SetNamedSecurityInfoW` with `PROTECTED_DACL_SECURITY_INFORMATION`,
-  then reading the DACL back and reporting `OwnerOnly` only if it matches — the discipline the Unix
-  path already uses. Not done yet: `discovery::restrict_file` is still a no-op on Windows.
-  **Corrected 2026-08-27:** this paragraph used to go on to say that `Permissions::is_as_expected`
-  returned `true` for `InheritedFromProfile` and so `Integrations > Local API` showed no warning and
-  a sentence naming trustees nothing had read — true when written, and fixed by Task 14, which is
-  before this correction. The desktop layer now has its own `DiscoveryPermissions::is_confirmed()`,
-  which — unlike `kw_local_api::Permissions::is_as_expected()`, which still returns `true` for
-  `InheritedFromProfile` and is no longer read by anything user-facing — treats only `OwnerOnly` as
-  confirmed. Both the startup log warning and the two settings screens (`Integrations > Local API`
-  and `Integrations > CLI`) go through that one decision and now warn on `InheritedFromProfile`,
-  rendering "Not independently restricted" with a caveat naming administrators by name. The
-  unmet-requirement fact above is what that warning is about; only the claim that the application
-  hid it was wrong, and only that claim has been removed here.
+- **Unix:** `0600` on the file, `0700` on the containing directory, both read back.
+- **Windows:** an explicit DACL granting **the process's token user**, `NT AUTHORITY\SYSTEM` and
+  `BUILTIN\Administrators`, and nobody else, applied with
+  `PROTECTED_DACL_SECURITY_INFORMATION` so the profile directory's entries stop being inherited,
+  and then read back entry by entry through `GetNamedSecurityInfoW`. The containing directory gets
+  the same three, inheritable.
+
+  **Not owner-only, on purpose.** An administrator can take ownership of any object and re-grant
+  themselves anything, so a DACL that excludes them is theatre that breaks backup and repair
+  tooling for nothing. What a confirmed Windows result claims is narrower and true: the
+  *unexpected* trustees are gone and the inheritance that handed them down is off, both verified.
+  The settings label says an administrator can still read the token, because they can.
+
+  The grant is derived from `OpenProcessToken`/`TokenUser` rather than from the object's owner. On
+  a machine whose policy makes `BUILTIN\Administrators` the owner of what an elevated process
+  creates, an owner-derived DACL would omit the user and a later non-elevated run could not read
+  its own file. Ownership is never taken and the SACL is never touched.
+
+  **Measured on the machine that found the defect (2026-08-31).** Before, and unchanged across
+  three measurements since 2026-08-26, `~/.knegiswhisper/local-api.json` inherited Modify for two
+  trustees that were neither the user nor administrators — see
+  [BENCH_CHECK.md](BENCH_CHECK.md) finding 2 for the `icacls` output. After a real
+  `discovery::write` into a directory under `%USERPROFILE%`:
+
+  ```
+  C:\Users\AxelKarlsson\.knegiswhisper-acltest2
+      AzureAD\AxelKarlsson:(OI)(CI)(F)
+      NT AUTHORITY\SYSTEM:(OI)(CI)(F)
+      BUILTIN\Administrators:(OI)(CI)(F)
+
+  C:\Users\AxelKarlsson\.knegiswhisper-acltest2\local-api.json
+      AzureAD\AxelKarlsson:(F)
+      NT AUTHORITY\SYSTEM:(F)
+      BUILTIN\Administrators:(F)
+  ```
+
+  Three trustees, no `(I)` on any of them, on both. The application can still read the file it
+  wrote.
+
+Two orderings in `discovery::write` are load-bearing. The **directory is restricted before the
+temporary file is created**, so the temporary inherits a protected list and the token's bytes never
+touch disk under the loose one; the empty temporary is then restricted in its own right before the
+token is written into it, which closes the same window on Unix, where a `0700` directory does not
+stop a `0644` file inside it. And the **read-back happens after the rename**, against the path the
+caller is told about — verifying the temporary described a path that no longer existed by the time
+the verdict was returned. Measured: a rename within one directory keeps the file object and its
+whole security descriptor, `SE_DACL_PROTECTED` included.
+
+The directory's verdict gates the file's (`file_acl::combine`). A perfectly restricted file inside
+a directory another user may delete children of can be deleted and replaced, and a client then
+reads an attacker's port and token — for this file, worse than being readable.
+
+**The verdict is read when it is asked for, not remembered from the write.** `local_api_status`
+and `cli_status` both call `discovery::inspect`, which re-reads the file's access list and the
+directory's on every call — two `stat` calls on Unix, two `GetNamedSecurityInfoW` calls on Windows.
+Something with write access to the parent that adds a trustee afterwards is reported the next time
+a screen asks, rather than at the next launch (KNEG-110).
+
+It **re-reads and never re-applies**, deliberately. Silently repairing an access list somebody
+changed on purpose is its own kind of surprise, and a status screen has to be able to describe a
+bad state without altering it. So the application will tell you the token file has been widened; it
+will not quietly narrow it again.
+
+**Corrected 2026-08-27:** this section used to go on to say that `Permissions::is_as_expected`
+returned `true` for `InheritedFromProfile` and so `Integrations > Local API` showed no warning and
+a sentence naming trustees nothing had read — true when written, and fixed by Task 14. That helper
+has since been deleted outright; `DiscoveryPermissions::is_confirmed()` is the one decision both
+the startup warning and both settings screens go through. It draws the line at **checked versus
+unchecked**, not strict versus lax: the Windows state passes because the list was read back, and
+`InheritedFromProfile` — now reachable only on a target that is neither Unix nor Windows — does not,
+because nothing looked.
 
 The MCP server talks to the desktop application through this authenticated local API. Streamable
 HTTP is available but disabled by default; stdio is the normal transport. Destructive MCP tools
@@ -154,23 +207,33 @@ arbitrary filesystem access, no process spawning, no direct database or credenti
 HTTP. Command payloads are typed and validated at the boundary; paths and URLs are validated
 before use.
 
-**`Notes > Upload`'s file pickers are a narrower exception, worth naming precisely rather than
-folding into the paragraph above.** `pick_import_file` opens a real OS dialog and returns the
-chosen path *to the renderer*, which holds it in React state and passes it as a plain string to a
-separate command — `media_import_audio`, `media_import_video`, or `import_openwhispr` — on a later
-click. What holds: the renderer has no independent way to *obtain* a path, since there is no
-filesystem or dialog capability in `capabilities/default.json`; only a real dialog produces one.
-What does not hold: unlike `note_export_to_file`, which fuses picking and writing into one atomic
-command specifically so the frontend never sees or supplies a path at all, these three commands
-accept whatever path string they are called with and read it — nothing confirms it is the one
-`pick_import_file` returned rather than one invented outright. **Concretely:** a compromised
-renderer, already in this document's threat model, can call `media_import_audio` directly with an
-arbitrary local path with no dialog involved; with a cloud transcription provider configured, that
-file's contents then leave the machine. Not yet closed. Two hardening directions, neither chosen
-yet: fuse picking and importing into one atomic command the way export already does (in tension
-with `Notes > Upload`'s pick-then-review-then-confirm flow, which export's single-click save does
-not need); or a capability restricting which paths these three commands will accept, independent
-of whatever the renderer claims. See `docs/BENCH_CHECK.md`'s Task 12 entry.
+**`Notes > Upload`'s file pickers take a different shape from the rest, worth naming precisely
+rather than folding into the paragraph above.** `pick_import_file` opens a real OS dialog and
+returns the chosen path *to the renderer*, which holds it in React state and passes it as a plain
+string to a separate command — `media_import_audio`, `media_import_video`, or `import_openwhispr` —
+on a later click. That is not the shape `note_export_to_file` uses, which fuses picking and writing
+into one atomic command so the frontend never sees or supplies a path at all; fusing pick and
+import the same way would fight this screen's pick-then-review-then-confirm flow, which a
+single-click save does not need. So the path does cross the boundary, and what makes that safe is a
+capability rather than the shape: **`commands::DialogGrants` records the canonical form of every
+path `pick_import_file` returns, and those three commands — the only three in the application that
+accept a path at all — refuse anything that set does not hold.** A compromised renderer calling
+`media_import_audio` directly with an arbitrary local path is refused before the file is opened,
+which is what stops that file's contents from reaching a configured cloud transcription provider.
+
+Four properties of that set, each a deliberate choice. It is keyed on `std::fs::canonicalize`
+output, not on the string the renderer sent, because `pick_import_file` returns
+`path.display().to_string()` and `display()` is lossy — the cost is that a path whose name does not
+survive lossy conversion cannot be imported, which was already true in practice and is now an
+explicit refusal. It lasts until the application exits, because single-use would break
+retry-after-failure, which the screen relies on today. It is not time-bounded, because the review
+step can legitimately sit open across a sidecar install of tens of megabytes. And it is bounded by
+count (32) so a renderer calling the picker in a loop cannot grow it without limit.
+
+**What is asserted and what is not.** Unit tests in `apps/desktop/src-tauri/src/media.rs` cover the
+refusal, the retry, eviction past the bound, and an ungranted credential-file path. Only a real
+call against the running application proves the policy is consulted on this path; that check is
+still open as item 1 under `docs/BENCH_CHECK.md`'s Task 12 heading.
 
 ## Sidecars and downloaded models
 
@@ -211,6 +274,25 @@ organisations, 30.08 GiB, no disagreement. `local_model::VerifiedBy` carries `St
 state of its own and the screen prints a different sentence for it, so the weaker pin is never
 displayed as the stronger one. Measuring all thirty-nine is 202 GB of downloading, which is the
 cost decision this trade is made against (KNEG-45).
+
+**A digest only bounds a transfer if it and the URL describe the same object.** Until 2026-08-31
+every model URL ended `resolve/main`, a branch pointer: the bytes behind it changed whenever the
+publisher pushed, so a digest measured on Monday would refuse Tuesday's install — the correct
+refusal, for a reason that had nothing to do with the user or the download. All 45 Hugging Face
+URLs now name a commit, measured into `HF_REVISIONS` by `node tools/model-pin/pin.mjs --revisions`
+and held by four generator guards. This is **not** a stronger integrity claim; the digest is still
+what proves the bytes. It removes a class of spurious failure and makes the URL and the digest
+describe the same objects by construction.
+
+**The two Parakeet archives are the remaining exception, and it is now a measured one.** They are
+GitHub release assets in k2-fsa's rolling `asr-models` tag, where an asset can be replaced under
+the same name, and there is no immutable URL to move them to: the versioned releases carry library
+binaries and no models, the Hugging Face mirror holds unpacked files rather than the archive, and a
+release-asset id is destroyed when an asset is replaced rather than surviving beside the new one.
+What GitHub does offer is a **stated digest per asset**, which matched both committed pins exactly
+on 2026-08-31 and is re-read weekly by `--verify-stated` alongside the full `--verify` download. So
+a swap is caught twice — cheaply within a week, and unconditionally at install by the digest that
+was measured here (KNEG-112).
 
 **A bound is only ever an exact figure.** Every bound above comes from a measurement:
 `tools/sidecar-pin/pin.mjs` and `tools/model-pin/pin.mjs` take the length from `stat` after a full

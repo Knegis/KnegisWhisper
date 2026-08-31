@@ -5,13 +5,14 @@
  * The one thing this screen exists to get right after `Integrations > API`
  * got it wrong: the discovery file's permissions are shown as the actual
  * state and its evidence, never as a boolean. A bench check found that the
- * backend's own `Permissions::is_as_expected()` returns `true` for
+ * backend's own `Permissions::is_as_expected()` returned `true` for
  * `InheritedFromProfile` — correct as "the best this build currently
  * achieves", and wrong read as "verified restricted", since nothing checked
- * what that inherited ACL actually grants. This screen switches on the real
- * state (`discoveryPermissionsLabel` in `lib/labels.ts`) and gives
- * `InheritedFromProfile` its own honest sentence rather than a green tick
- * borrowed from a boolean that cannot tell the difference.
+ * what that inherited ACL actually grants. That helper has since been
+ * deleted. This screen switches on the real state
+ * (`discoveryPermissionsLabel` in `lib/labels.ts`), which now has a sentence
+ * for each of the ten states a read-back can produce rather than a green tick
+ * borrowed from a boolean that could not tell them apart.
  *
  * The binary's location is a real filesystem check too, next to this running
  * application and then on `PATH` — never assumed present because the CLI is

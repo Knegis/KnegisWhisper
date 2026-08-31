@@ -501,6 +501,22 @@ section {
   font-size: 0.8125rem;
 }
 
+/*
+ * A caveat about a hotkey that works and also does something else.
+ *
+ * The mark is red and the text is not, and the split is the point. `.row-detail
+ * .warn` above is red *because every string reaching it is a failure*; a
+ * caution is the opposite -- `Control+Alt` on a Nordic layout is registered,
+ * live and working, which is exactly why it starts a dictation every time you
+ * type `@`. Red prose would call that broken and send someone looking for a
+ * mistake in an accelerator that is spelled perfectly. A red mark in the margin
+ * says look here without saying it failed.
+ */
+.caveat.warn {
+  border-left-color: var(--error);
+  border-left-width: 3px;
+}
+
 .purposes {
   margin: 0.75rem 0 0;
   padding: 0;
@@ -903,6 +919,19 @@ label:has(> input[type="checkbox"]) {
 .notify button:hover:not(:disabled) {
   background: #3d55ff;
   color: #fdfdfd;
+}
+
+/*
+ * The second line, when what it carries is not a process name but a fault.
+ *
+ * Amber rather than the red the panel's edge already uses, and the split is the
+ * same one `.caveat.warn` makes: the red edge means *recording*, which is still
+ * true and is the one indicator the brief requires. Painting this line red too
+ * would say the recording had failed, when the recording is the half that is
+ * working.
+ */
+.notify-detail.notify-alert {
+  color: #fbbf24;
 }
 
 .notify-recording {

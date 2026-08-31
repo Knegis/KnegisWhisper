@@ -170,6 +170,16 @@ epistemic states sit inside the "unverified" claims below, and they are not inte
    and the table and prose below keep it separate rather than folding it into the same "unverified"
    word.
 
+**What a provider failure now does, for all five clients.** As of 2026-08-31 a provider that
+reports a fault -- an error frame, a close frame with a code and a reason, a dead transport, or a
+first frame this client cannot parse -- ends the session, and Stop reports the provider's own
+sentence rather than an empty transcript. That is a claim about *this application's* wiring only.
+It is covered by tests in each socket module that record a fault the way the reader task would; it
+is **not** evidence about any provider's behaviour, and for the three clients below with no key it
+has never been exercised by a real refusal. A provider that reports nothing and simply produces no
+transcript is still indistinguishable from a quiet room, and the failure is still invisible *while*
+the meeting runs.
+
 | Provider | Client | Verified |
 | --- | --- | --- |
 | Local windowed model | repeated `/inference` passes over the local `whisper-server` | ⚠️ built, never run by a person |
@@ -415,10 +425,42 @@ logged.** What leaves the module is the index of a chord that matched, never a k
 **A modifier-only chord fires on the second modifier going down**, which is what makes it feel
 immediate and also means a key pressed *afterwards* cannot call it back. The documented rule that an
 ordinary key disqualifies a modifier-only chord catches a key already held — somebody mid-word — not
-one pressed a moment later. The consequence measured on 2026-08-26: on a layout where AltGr is
-left-Control plus right-Alt (Nordic, German, and others), binding `Control+Alt` starts a dictation
-every time the user types `@`. The shipped default, `Control+Super`, is unaffected, and nothing
-warns anyone who chooses `Control+Alt`.
+one pressed a moment later.
+
+**The AltGr consequence, measured 2026-08-26 and warned about since 2026-08-31 (KNEG-37).** Windows
+has no AltGr virtual key: the keyboard layout synthesises **left Control plus right Alt**, so on a
+Nordic, German, Polish or most other non-US layout, binding `Control+Alt` starts a dictation every
+time the user types `@ $ € { [`. Nothing downstream can tell that apart from the chord being pressed
+deliberately, so it is not fixable at the hook — what was missing was anyone saying so.
+
+`Settings > Dictation`'s Shortcuts section now carries a caution per colliding binding, and
+`hotkey_set` returns the same sentence the moment the hotkey is saved. Two measurements feed it,
+both re-runnable with `cargo run -p kw-platform --example altgr_probe`:
+
+- **Does this layout have AltGr?** `kw_platform::keyboard_layout` asks `VkKeyScanExW` whether any
+  character needs Control and Alt together, and names the character it found rather than the locale.
+  On the development machine: *"AltGr is present: `'@'` is typed with Control and Alt together."* A
+  layout with none is left alone; a platform that cannot be asked warns anyway and says it could not
+  ask, because silence on a layout that does have AltGr is the defect and a spare sentence is not.
+- **Which chords collide?** `kw_platform::keys::altgr_collision` answers by driving the **real chord
+  matcher** with the keys a real AltGr press sends. That is not a stylistic choice: a predicate
+  reasoning about modifier names would have missed `Control+Shift`, which also fires — AltGr's left
+  Control arrives while Shift is already held, completing the chord before the Alt is pressed.
+
+A **sided** chord avoids it entirely, because AltGr is left Control and right Alt specifically:
+`LeftControl+LeftAlt` and `RightControl+Alt` are both unaffected and `keys::Chord` already parses
+them. No settings field accepts a sided spelling, which is KNEG-35 — so the caution states the
+problem and deliberately does not suggest a remedy that cannot be typed.
+
+**Standard accelerators are not warned about**, and that is a decision rather than an oversight.
+`Control+Alt+D` goes to the system shortcut register rather than to the hook, and whether *that*
+also sees AltGr as Control+Alt has never been measured by this project. Believed, widely, and
+unverified — so not claimed on a screen.
+
+**The shipped default is unaffected by AltGr and not by everything.** `Control+Super` survives every
+AltGr keystroke, and it does fire while reaching for `Ctrl+Win+Left`, because a two-modifier chord
+completes on the way to any longer chord that starts with the same two. That is general, affects the
+default, and is tracked separately (KNEG-115) rather than folded in here.
 
 Push-to-talk on Linux needs read access to `/dev/input`; without it the app reports the
 limitation and falls back to toggle mode rather than silently failing.
@@ -759,8 +801,8 @@ its own header and disagrees with itself. 6,966,596,962 bytes total, 6.49 GiB,
 | `turbo` | `ggml-large-v3-turbo.bin` | `1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69` | 1,624,555,275 |
 | `large` | `ggml-large-v3.bin` | `64d182b440b98d5203c4f9bd541544d84c605196c4f7b845dfa11fb23594d1e2` | 3,095,033,483 |
 
-All served by `us.aws.cdn.hf.co`, which is where `huggingface.co/.../resolve/main`
-redirects. The pins live in `WHISPER_PINS` in
+All served by `us.aws.cdn.hf.co`, which is where a `huggingface.co/.../resolve/…`
+request redirects. The pins live in `WHISPER_PINS` in
 `tools/integration-audit/generate-provider-registry.mjs` and reach the
 application as `WhisperModel::sha256` / `expected_size_bytes`.
 
@@ -774,13 +816,32 @@ unchanged. Before this, only their lengths had been checked, against
 `content-length`.
 
 **What this proves and what it does not.** Every one of these eight digests
-matches the bytes the host serves today. That is the check, run once; it says
-nothing about who built those bytes, and nothing about tomorrow — all six whisper
-URLs point at `resolve/main`, a *branch*, and the Parakeet archives sit in a
-rolling GitHub release. `node tools/model-pin/pin.mjs --verify` re-runs the whole
-set (about 8 GB) and `.github/workflows/pin-verify.yml` does it weekly, which is
-what turns an upstream re-upload into a failure somebody reads rather than a
-failed install. See KNEG-103.
+matches the bytes the host serves today. That is the check, run once, and it says
+nothing about who built those bytes.
+
+About tomorrow the two families now differ, and the difference is the whole of
+KNEG-103. **The six whisper URLs name a commit** — `5359861c739e955e79d9a303bcbc70fb988958b1`,
+measured into `HF_REVISIONS` on 2026-08-31 — so a push to `ggerganov/whisper.cpp`
+cannot move the bytes these digests describe. **The two Parakeet archives sit in
+k2-fsa's rolling `asr-models` release**, where an asset can be replaced under the
+same name, and **no immutable URL exists for them** — that was measured rather
+than assumed, and the measurements are in `ENGINEERING_LOG.md` under 2026-08-31
+(KNEG-112). What they have instead is a digest stated by the host:
+
+**GitHub's release API returns a **`digest`** and a **`size`** per asset**, one
+request for all 498 in the release. On 2026-08-31 both stated digests and both
+stated sizes matched the committed pins to the character — independent
+corroboration of a measurement, from the publisher's own metadata, at no
+bandwidth cost. `node tools/model-pin/pin.mjs --verify-stated` re-reads them
+weekly beside the Hugging Face trees.
+
+That is the same standard the thirty-two stated GGUF pins meet and it is
+*weaker* than how these two were pinned, since their bytes were hashed here. So
+agreement there means the asset has not been swapped, not that the bytes are
+still what we hashed; only the weekly `--verify`, which re-downloads about a
+gigabyte, proves the second thing. Having both is what separates "the pin is
+stale" from "the download was damaged" in seconds rather than after a
+gigabyte.
 
 **Consequence for an install.** All six models are now held to
 `kw_sidecar::integrity::verify`, so the *Verified by* column reads `digest` for

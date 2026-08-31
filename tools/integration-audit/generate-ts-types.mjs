@@ -152,6 +152,8 @@ export interface EnterpriseProvider {
 /** A speculative-decoding drafter downloaded alongside the main GGUF. */
 export interface DraftModel {
   readonly hfRepo: string;
+  /** On the same terms as \`LocalLlmModel.revision\`. */
+  readonly revision: string;
   readonly fileName: string;
   readonly sizeBytes: number | null;
   readonly sizeMeasured: boolean;
@@ -165,6 +167,16 @@ export interface LocalLlmModel {
   readonly name: string;
   readonly fileName: string;
   readonly hfRepo: string;
+  /**
+   * The commit the GGUF is downloaded from — a 40-character sha, never
+   * \`main\`.
+   *
+   * A branch pointer moves when the publisher pushes, which would move the
+   * bytes out from under the digest committed beside them and fail an install
+   * for a reason that has nothing to do with the user. Measured into
+   * \`HF_REVISIONS\` by \`node tools/model-pin/pin.mjs --revisions\`.
+   */
+  readonly revision: string;
   readonly sizeBytes: number | null;
   /**
    * Whether \`sizeBytes\` was measured against the publisher or copied from

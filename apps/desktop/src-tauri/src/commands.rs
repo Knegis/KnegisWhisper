@@ -10,6 +10,9 @@
 //! use. They are constructed from `Display`, which for every error type in this
 //! workspace is redacted where it needs to be.
 
+use std::collections::VecDeque;
+use std::path::{Path, PathBuf};
+
 use kw_notes_core::{notes, transcript};
 use kw_platform::hotkey::{self, Binding, HotkeyAction};
 use kw_provider_probe::{ProbeAudio, ProbeReport};
@@ -96,6 +99,13 @@ pub struct HotkeyReport {
     /// the reason. Separate because the two need different words: one is the
     /// user's to fix and the other is not.
     pub unhandled: Vec<UnhandledAction>,
+    /// Hotkeys that work and also fire when the user meant something else.
+    ///
+    /// A third category, not a third spelling of the first two. `unusable` and
+    /// `conflicts` both mean the hotkey will not do its job; a caution means it
+    /// will, and will do it at times nobody asked for. Today the only source is
+    /// AltGr (KNEG-37).
+    pub cautions: Vec<hotkey::Caution>,
 }
 
 /// Read the configured hotkeys and say what will actually work.
@@ -116,7 +126,21 @@ pub async fn hotkeys(state: State<'_, AppState>) -> CmdResult<HotkeyReport> {
 /// user's to fix — has nothing to do with Tauri, and leaving it inside the
 /// command is what made it untested.
 fn report_for(bindings: Vec<Binding>) -> HotkeyReport {
+    report_with_layout(bindings, &kw_platform::keyboard_layout::altgr())
+}
+
+/// [`report_for`], with the keyboard layout supplied.
+///
+/// Injected for the reason the parity gate injects `readComponent`: the
+/// interesting half is which accelerators an AltGr layout makes dangerous, and
+/// a test that could only assert it on a machine whose layout happens to have
+/// AltGr would pass here and prove nothing in CI, which is Linux.
+fn report_with_layout(
+    bindings: Vec<Binding>,
+    altgr: &kw_platform::keyboard_layout::AltGr,
+) -> HotkeyReport {
     let conflicts = hotkey::conflicts(&bindings);
+    let cautions = hotkey::cautions(&bindings, altgr);
 
     // Asked of the registration module rather than recomputed, because that is
     // the module that decides. `Binding::is_usable` can only speak about the
@@ -143,6 +167,7 @@ fn report_for(bindings: Vec<Binding>) -> HotkeyReport {
         conflicts,
         unusable,
         unhandled,
+        cautions,
     }
 }
 
@@ -179,6 +204,10 @@ pub struct HotkeyChange {
     pub registrations: Vec<crate::shortcuts::Registration>,
     /// True when at least one accelerator for this action is now live.
     pub live: bool,
+    /// What this hotkey will *also* do. Returned here as well as from
+    /// [`hotkeys`] because the moment to learn that `Control+Alt` is AltGr is
+    /// when you press Set, not the next time the screen is opened.
+    pub cautions: Vec<hotkey::Caution>,
 }
 
 /// Change one action's hotkey.
@@ -223,10 +252,17 @@ pub async fn hotkey_set(
     // with no results rather than inventing a success.
     let mine = reports.into_iter().find(|r| r.action == action);
 
+    let binding = Binding::from_stored(action, &canonical);
+    let cautions = hotkey::cautions(
+        std::slice::from_ref(&binding),
+        &kw_platform::keyboard_layout::altgr(),
+    );
+
     Ok(HotkeyChange {
-        binding: Binding::from_stored(action, &canonical),
+        binding,
         registrations: mine.as_ref().map(|r| r.results.clone()).unwrap_or_default(),
         live: mine.is_some_and(|r| r.is_live()),
+        cautions,
     })
 }
 
@@ -557,20 +593,142 @@ pub async fn probe_providers(state: State<'_, AppState>) -> CmdResult<ProbeRepor
 
 /* --------------------------------------------------------------------- import */
 
+/// How many dialog-returned paths [`DialogGrants`] remembers at once.
+///
+/// `Notes > Upload` holds one picked path at a time, so 32 is ample for any
+/// amount of re-picking a person does. The bound is here so a renderer calling
+/// `pick_import_file` in a loop cannot grow the set without limit.
+pub(crate) const MAX_DIALOG_GRANTS: usize = 32;
+
+/// What an import command says when it was handed a path no dialog produced.
+///
+/// One sentence for two cases on purpose — see [`DialogGrants::authorise`].
+const UNGRANTED_PATH: &str = "this file was not chosen through the import dialog, or is no \
+                              longer where it was. Choose it again.";
+
+/// The paths a real OS file dialog has returned this session.
+///
+/// **An import command reads a path only if this set holds it.** The renderer
+/// has no independent way to *obtain* a path — `capabilities/default.json`
+/// grants exactly `["core:default"]`, so there is no filesystem, dialog, shell
+/// or HTTP capability to get one from — but nothing used to *check* that, and
+/// a compromised renderer (which `docs/SECURITY.md`'s threat model includes)
+/// could call `media_import_audio` with any local path at all. With a cloud
+/// transcription provider configured, that file's contents then left the
+/// machine. This set is what closes that: [`pick_import_file`] is the only
+/// thing that puts a path in it, and [`media::media_import_audio`],
+/// [`media::media_import_video`] and [`import_openwhispr`] are the only three
+/// commands that take a path, so the surface is closed.
+///
+/// [`media::media_import_audio`]: crate::media::media_import_audio
+/// [`media::media_import_video`]: crate::media::media_import_video
+///
+/// **Session-lifetime, and bounded by count rather than by time.** A grant
+/// lasts until the application exits. Single-use would break
+/// retry-after-failure, which exists today — `NotesUpload.tsx`'s `catch`
+/// leaves the picked path in state, so the same file can be tried again after
+/// a failed conversion. A time bound would refuse a file the user really did
+/// pick if they left the review step open, and they realistically will: that
+/// screen can sit on a picked path across an ffmpeg install of tens of
+/// megabytes. This is the same argument `meeting::Watcher::offered` makes for
+/// keying on the provider rather than on a timestamp — read that field's doc
+/// comment; a time-tuned rule gets one of its two cases wrong whichever way it
+/// is set, and identity gets both right.
+///
+/// **The key is a canonicalised [`PathBuf`], never the string that crossed the
+/// boundary.** [`pick_import_file`] hands back `path.display().to_string()`,
+/// which is lossy. The consequence, stated plainly: a path whose name does not
+/// survive `display()` cannot be imported. That is not a regression — today
+/// `media::check_importable_file`'s `is_file()` already fails on such a string
+/// — but it becomes a deliberate refusal rather than an accident.
+#[derive(Debug, Default)]
+pub struct DialogGrants(std::sync::Mutex<VecDeque<PathBuf>>);
+
+impl DialogGrants {
+    /// The one canonical form both the grant and the check go through.
+    ///
+    /// `std::fs::canonicalize` on Windows returns a verbatim `\\?\C:\...`
+    /// path. Both sides must come through here, or a canonical path would be
+    /// compared against a raw one and never match.
+    fn key(path: &Path) -> std::io::Result<PathBuf> {
+        std::fs::canonicalize(path)
+    }
+
+    /// Remember `path` as dialog-returned, and answer with its canonical form.
+    pub(crate) fn grant(&self, path: &Path) -> std::io::Result<PathBuf> {
+        let key = Self::key(path)?;
+
+        let mut held = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        // Re-picking a path moves it to the newest end rather than leaving it
+        // where it was. The file just chosen is the one about to be imported,
+        // so it must not be the one the bound evicts.
+        held.retain(|existing| existing != &key);
+        held.push_back(key.clone());
+        while held.len() > MAX_DIALOG_GRANTS {
+            held.pop_front();
+        }
+
+        Ok(key)
+    }
+
+    /// The canonical path to import, or a refusal.
+    ///
+    /// The whole decision, and pure apart from the filesystem lookup
+    /// `canonicalize` needs: it takes no `AppHandle`, so it is unit-testable on
+    /// its own. That is the same reason `media::check_importable_file` and
+    /// [`import_pick_dialog`] are separate functions rather than inline
+    /// branches — nothing outside a running application can construct an
+    /// `AppHandle`, so anything reachable only through a command is untested by
+    /// construction.
+    ///
+    /// A path that cannot be canonicalised and a path nobody granted get the
+    /// *same* refusal, deliberately. Telling them apart would answer "does this
+    /// file exist" for any path a compromised renderer cared to name, and a
+    /// path that will not canonicalise cannot be in the set in any case, since
+    /// every member of it came out of `canonicalize`.
+    pub fn authorise(&self, path: &str) -> CmdResult<PathBuf> {
+        let Ok(key) = Self::key(Path::new(path)) else {
+            return Err(UNGRANTED_PATH.to_owned());
+        };
+
+        if self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains(&key)
+        {
+            Ok(key)
+        } else {
+            Err(UNGRANTED_PATH.to_owned())
+        }
+    }
+}
+
 /// Import an existing OpenWhispr database.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ImportRequest {
-    /// Absolute path to the source `transcriptions.db`.
+    /// Absolute path to the source `transcriptions.db`, as
+    /// [`pick_import_file`] returned it.
     pub path: String,
 }
 
 /// Import an OpenWhispr database, read-only, into this one.
+///
+/// **The path must be one a real dialog returned** — see [`DialogGrants`].
+/// `kw_storage::import::from_openwhispr` checks `exists()` rather than
+/// `is_file()`, so the grant is the only thing standing between this command
+/// and any readable path the caller names.
 #[tauri::command]
 pub async fn import_openwhispr(
     state: State<'_, AppState>,
+    grants: State<'_, DialogGrants>,
     request: ImportRequest,
 ) -> CmdResult<kw_storage::import::ImportReport> {
-    let path = std::path::PathBuf::from(&request.path);
+    let path = grants.authorise(&request.path)?;
     kw_storage::import::from_openwhispr(state.db(), &path, state.credentials())
         .await
         .map_err(|e| fail("import", e))
@@ -626,20 +784,30 @@ fn import_pick_dialog(
 /// capability in `capabilities/default.json`, so the only path a caller can
 /// ever have seen is one a real OS dialog produced through this command.
 ///
-/// **It is not, though, the same guarantee `note_export_to_file` makes.**
-/// That command fuses picking and writing into one atomic call, so the
-/// frontend never sees or supplies a path at all — the property
-/// `docs/SECURITY.md` names as answering path traversal through export. This
-/// command instead hands the chosen path *back* to the renderer, which holds
-/// it in state and passes it as a plain string to a separate command
-/// (`media_import_audio`, `media_import_video`, `import_openwhispr`) on a
-/// later click. Those commands read whatever path they are called with;
-/// nothing confirms it is the one this command returned rather than one a
-/// compromised renderer invented outright. See `docs/SECURITY.md`'s Webview
-/// section and `docs/BENCH_CHECK.md`'s Task 12 entry for the gap this leaves
-/// open and the hardening options being weighed.
+/// **It is not the shape `note_export_to_file` uses, and it is confirmed
+/// rather than assumed.** That command fuses picking and writing into one
+/// atomic call, so the frontend never sees or supplies a path at all. Fusing
+/// pick and import the same way would fight `Notes > Upload`'s
+/// pick-then-review-then-confirm flow, which a single-click save does not
+/// need, so this command still hands the chosen path *back* to the renderer,
+/// which holds it in state and passes it as a plain string to a separate
+/// command (`media_import_audio`, `media_import_video`, `import_openwhispr`)
+/// on a later click. What makes that safe is [`DialogGrants`]: the canonical
+/// form of every path this command returns is recorded, and those three
+/// commands authorise against that set before reading anything. A path no
+/// dialog produced is refused.
+///
+/// **What that does not cover.** A unit test asserts the policy; only a real
+/// call against the running application proves the policy is consulted on this
+/// path, and that check has not been run — see `docs/BENCH_CHECK.md`'s Task 12
+/// entry, and `docs/SECURITY.md`'s Webview section for the exposure this
+/// closed.
 #[tauri::command]
-pub async fn pick_import_file(app: AppHandle, kind: ImportPickKind) -> CmdResult<Option<String>> {
+pub async fn pick_import_file(
+    app: AppHandle,
+    grants: State<'_, DialogGrants>,
+    kind: ImportPickKind,
+) -> CmdResult<Option<String>> {
     use tauri_plugin_dialog::DialogExt as _;
 
     let (title, filter_name, extensions) = import_pick_dialog(kind);
@@ -666,6 +834,17 @@ pub async fn pick_import_file(app: AppHandle, kind: ImportPickKind) -> CmdResult
         .into_path()
         .map_err(|e| fail("could not resolve the chosen path", e))?;
 
+    // Granted before the path is handed over, so the renderer never holds a
+    // string no import command will accept.
+    grants
+        .grant(&path)
+        .map_err(|e| fail("could not resolve the chosen path", e))?;
+
+    // The *display* string, not the canonical one the grant is keyed on: the
+    // screen shows this path to the person who picked it and derives the note
+    // title from its file name, and Windows' verbatim `\\?\C:\...` form is not
+    // something to put in front of anyone. `authorise` canonicalises again on
+    // the way back in, so the two still meet.
     Ok(Some(path.display().to_string()))
 }
 
@@ -1129,6 +1308,64 @@ mod tests {
 
         // And it counts as unusable, which is the question the interface asks.
         assert!(report.unusable.contains(&HotkeyAction::ChatAgent));
+    }
+
+    /// The report carries the AltGr caution, and does it without asking the
+    /// machine it happens to be running on.
+    ///
+    /// The layout is injected rather than read, which is the point: CI is Linux
+    /// and would answer `Unknown`, and a developer on a US layout would get
+    /// `Absent`. A test whose result depends on the tester's keyboard is a test
+    /// that will be quietly wrong for someone.
+    #[tokio::test]
+    async fn a_hotkey_that_altgr_also_fires_is_reported_as_a_caution() {
+        let s = state().await;
+        settings::set(
+            s.db().pool(),
+            &HotkeyAction::Dictation.settings_key(),
+            &"Control+Alt",
+        )
+        .await
+        .unwrap();
+
+        let bindings = load_bindings(&s).await.unwrap();
+        let swedish = kw_platform::keyboard_layout::AltGr::Present { example: '@' };
+        let report = report_with_layout(bindings.clone(), &swedish);
+
+        assert_eq!(report.cautions.len(), 1, "{:?}", report.cautions);
+        assert_eq!(report.cautions[0].action, HotkeyAction::Dictation);
+
+        // And it is a caution rather than a problem: the hotkey is fine. Saying
+        // otherwise would send someone looking for a typo in an accelerator
+        // that is spelled perfectly and works exactly as written.
+        let dictation = report
+            .bindings
+            .iter()
+            .find(|b| b.action == HotkeyAction::Dictation)
+            .unwrap();
+        assert!(report.conflicts.is_empty());
+        assert!(
+            dictation.problems().iter().all(|p| !p.contains("AltGr")),
+            "the caution must not also be reported as a problem: {:?}",
+            dictation.problems()
+        );
+        // `unusable` does contain it, and that is about the accelerator being
+        // modifier-only rather than about AltGr -- the same is true of the
+        // shipped `Control+Super` default, which works. Asserted so the two are
+        // not confused later: nothing here made this hotkey unusable.
+        assert!(
+            report_with_layout(
+                bindings.clone(),
+                &kw_platform::keyboard_layout::AltGr::Absent
+            )
+            .unusable
+                == report.unusable,
+            "the caution must not change what counts as unusable"
+        );
+
+        // The same bindings on a layout with no AltGr produce nothing at all.
+        let us = kw_platform::keyboard_layout::AltGr::Absent;
+        assert!(report_with_layout(bindings, &us).cautions.is_empty());
     }
 
     #[tokio::test]

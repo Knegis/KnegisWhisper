@@ -2963,9 +2963,11 @@ dependencies = [
  "keyring",
  "serde",
  "subtle",
+ "tempfile",
  "thiserror 2.0.20",
  "tracing",
  "url",
+ "windows 0.58.0",
 ]
 
 [[package]]
@@ -2976,6 +2978,7 @@ dependencies = [
  "bzip2-rs",
  "flate2",
  "kw-network-policy",
+ "kw-security",
  "lzma-rs",
  "reqwest 0.12.28",
  "serde",

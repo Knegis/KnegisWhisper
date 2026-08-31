@@ -34,9 +34,12 @@ pub mod corti;
 pub mod corti_socket;
 pub mod deepgram;
 pub mod deepgram_socket;
+pub mod fault;
 pub mod local;
 pub mod openai;
 pub mod openai_socket;
+
+pub use fault::{ends_the_session, FaultKind, SessionFault, SocketFault};
 
 pub use capabilities::{
     availability, capabilities, client, credential_slot, declined, is_allowed, listing,
@@ -65,6 +68,20 @@ pub enum AudioSource {
     Mic,
     /// The system's output — everyone else in the meeting.
     System,
+}
+
+impl AudioSource {
+    /// What to call this capture in a sentence a person reads.
+    ///
+    /// Used where a fault has to say which of a session's two sockets it came
+    /// from — see [`fault::SessionFault`], which holds one cell for both.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Mic => "microphone",
+            Self::System => "system audio",
+        }
+    }
 }
 
 /// How to connect.
@@ -110,8 +127,18 @@ pub struct MeetingTranscript {
     ///
     /// A separate count from `reconnects` because the causes differ and so does
     /// what a user would do about them: a reconnect is the network, and a gap is
-    /// the transcriber failing to keep up with the meeting. Both leave a hole,
-    /// and a transcript with a hole in it must not look complete.
+    /// the transcription itself not covering the audio. Both leave a hole, and a
+    /// transcript with a hole in it must not look complete.
+    ///
+    /// **Two things produce one**, and this number does not say which.
+    /// `local::LocalWindowProvider` counts a sustained deficit — the model
+    /// falling behind the meeting, four hops' worth, and skipping to live.
+    /// `deepgram_socket::TranscriptBudget` counts a run of transcript refused
+    /// by this application's own retention ceiling on a very long session
+    /// (KNEG-109). A person can act on the first and only wants to know about
+    /// the second, but the hole is the same shape, so the count is shared and
+    /// the sentence in `meeting.rs` names both possibilities rather than
+    /// asserting one.
     pub gaps: u32,
 }
 
@@ -129,6 +156,21 @@ pub enum MeetingError {
 
     #[error("the connection to {provider} was lost and could not be resumed: {detail}")]
     Disconnected { provider: String, detail: String },
+
+    /// The provider took the connection and then said something was wrong.
+    ///
+    /// Neither of the two variants above fits: `Rejected` says the connection
+    /// was refused, and it was not; `Disconnected` says it was lost, and it may
+    /// still be open. The gap between them is exactly where a provider-reported
+    /// error frame used to fall through to a `tracing::warn!` and nothing else,
+    /// leaving a meeting that transcribed nothing looking like a quiet room. See
+    /// [`fault`].
+    ///
+    /// `detail` reaches the person in the room through
+    /// `MeetingOutcome::Failed`, so it carries the provider's own sentence and
+    /// which capture it came from rather than a code.
+    #[error("{provider} accepted the connection and then stopped transcribing: {detail}")]
+    ProviderFault { provider: String, detail: String },
 
     #[error(
         "{provider} accepts {accepted:?} Hz audio and was offered {offered} Hz. Resample \

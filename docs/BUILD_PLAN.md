@@ -257,7 +257,9 @@ Live calls stay unverified and `PLATFORM_SUPPORT.md` now has a table saying so p
   downloaded and hashed here, one per publishing organisation; the other thirty-two are Hugging
   Face's stated `lfs.oid`, which is a real digest of the object but arrives over the same channel
   as the bytes. **The screen says which.** *checksum verified* and *checksum verified against the
-  publisher's own* are different rows, because they are different claims (KNEG-45).
+  publisher's own* are different rows, because they are different claims (KNEG-45). The URL names
+  the commit the digest was measured against — `resolve/{sha}`, never `resolve/main` — so a
+  publisher pushing cannot move the bytes out from under it (KNEG-103).
 - **5-minute idle auto-stop.** `LocalEndpoint` is the trick: reading the port is what records a
   use, so there is no `touch()` for anyone to forget, and a settings screen reads through
   `running_port()` which does not.
@@ -512,15 +514,31 @@ audio capture is what determines whether a meeting can be recorded at all, and t
 AEC, a meeting recorded on speakers transcribes the far-end voice twice; on headphones there is
 nothing to cancel.
 
-### A cross-cutting gap in all four cloud clients, recorded and not fixed
+### A cross-cutting gap in all four cloud clients — *fixed 2026-08-31 (KNEG-79)*
 
-`openai_socket.rs`, `assemblyai_socket.rs`, `deepgram_socket.rs` and `corti_socket.rs` all treat a
-provider-reported error frame as `tracing::warn!` and never turn it into an `Err` from
-`connect`/`send_audio`/`finish`. A server that accepts a malformed session-config frame, stays open,
-and never emits a transcript would let a meeting "complete successfully" holding an empty
-transcript, evidenced only by a background log line nobody in the room can see. Predates every task
-in this chunk and is shared equally by all four — see `docs/BENCH_CHECK.md` item 13 and
-`docs/ENGINEERING_LOG.md`.
+`openai_socket.rs`, `assemblyai_socket.rs`, `deepgram_socket.rs` and `corti_socket.rs` all used to
+treat a provider-reported error frame as `tracing::warn!` and never turn it into an `Err` from
+`connect`/`send_audio`/`finish`. A server that accepted a malformed session-config frame, stayed
+open, and never emitted a transcript let a meeting "complete successfully" holding an empty
+transcript, evidenced only by a background log line nobody in the room can see. It predated every
+task in this chunk and was shared equally by all four.
+
+All four now record into `kw_meeting_core::fault::SessionFault` — one cell per session, shared by
+both sockets, first fault wins — and both `send_audio` and `finish` consult it, so the meeting ends
+as `MeetingOutcome::Failed` carrying the provider's own words. Whether a recorded fault ends the
+session is one pure function, `fault::ends_the_session`, because nothing in this workspace can open
+a socket in a test. `stop()` was fixed with it: a pump failure used to return early and leave the
+screen stuck on "Recording" with no working button on it.
+
+**The mid-meeting half closed the same day (KNEG-95),** with the decision it was waiting for: a
+dead provider carries on recording and says so, through a fourth `MeetingState` that changes the
+indicator rather than taking it down. The recording is left running deliberately — the WAV is the
+artefact that cannot be recreated, and the saved note comes from the whole-file pass over it.
+
+**One half remains open and is not this.** Three of the four clients have still never met a real
+provider error: no key exists for AssemblyAI, Deepgram or Corti, so what the tests cover is this
+application's wiring and not any provider's behaviour. See `docs/BENCH_CHECK.md` item 13 and the
+2026-08-31 (KNEG-79) and (KNEG-95) entries in `docs/ENGINEERING_LOG.md`.
 
 ---
 
@@ -754,7 +772,9 @@ each item is in that file, not here.
 - **A:** store a key for OpenAI, run the connection test, see it pass; confirm the input never
   reads a stored secret back; confirm the parity gate's unreachable count drops. **Not yet done by
   a person** — `BENCH_CHECK.md`'s "still unchecked" list, item 3.
-- **B:** dictate with cleanup on and see the tidied text; start llama-server and hold a chat;
+- **B:** dictate with cleanup on and see the tidied text; start llama-server and route cleanup
+  through it (there is no chat screen — the local LLM's only consumer is cleanup, and the chat agent
+  is phase 10);
   confirm the 5-minute idle stop. **Not yet done by a person** — same list, items 4–5.
 - **C:** one live provider per client, if a key exists; otherwise the honest refusal.
 - **D:** record system audio while a video plays, with the microphone muted, and confirm both

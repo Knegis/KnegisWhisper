@@ -2,7 +2,11 @@
 //!
 //! [`crate::deepgram`] is the part with rules in it — the endpoint, the frame
 //! grammar, what an incoming message means — and is covered by fixtures. This is
-//! the plumbing, and it is thin on purpose because no test here can reach it.
+//! the plumbing, and it is thin on purpose because almost no test here can reach
+//! it. The exceptions arrived with [`crate::fault`]: a fault can be recorded into
+//! the session's own cell exactly as the reader task would, with no socket, no
+//! key and no network, and `send_audio` and `finish` can then be asked what they
+//! do about it.
 //!
 //! # Two sockets, one per capture
 //!
@@ -30,7 +34,7 @@
 //! third field for a rotation deadline, and the test at the bottom of this file
 //! checks that this struct's own description of itself does not mention one.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -43,6 +47,7 @@ use tokio_tungstenite::tungstenite::Message;
 
 use crate::capabilities::MeetingProviderCapabilities;
 use crate::deepgram::{self, Incoming, AUTH_HEADER, AUTH_SCHEME, PROVIDER_ID, PURPOSE};
+use crate::fault::{close_reason, SessionFault};
 use crate::{
     AudioChunk, AudioSource, MeetingError, MeetingProviderConfig, MeetingTranscript,
     MeetingTranscriptionProvider, TranscriptEvent,
@@ -58,14 +63,69 @@ const MAX_MESSAGE_BYTES: usize = 1024 * 1024;
 const MAX_TRANSCRIPT_BYTES: usize = 16 * 1024 * 1024;
 const MAX_TRANSCRIPT_EVENTS: usize = 10_000;
 
+/// What a [`TranscriptBudget::reserve`] call decided.
+///
+/// A two-variant answer rather than a `bool`, because the caller has to do
+/// something different for the *first* refusal of a run than for the rest of
+/// it: one log line per stretch of dropped transcript, not one per frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Reserved {
+    /// There was room. Keep the text.
+    Room,
+    /// There was not. Drop the text and carry on reading.
+    NoRoom {
+        /// Whether this refusal began a new stretch for this capture.
+        opens_a_gap: bool,
+    },
+}
+
+/// How much transcript one session may retain, and what it cost to stop.
+///
+/// The ceilings are deliberate: provider responses are outside the trust
+/// boundary, so session-long retention has to be bounded by something other
+/// than the provider's good behaviour. Shared by both captures through an
+/// `Arc`, because the bound is on the session and not on a socket.
+///
+/// **What the counters below are for.** Refusing is not free — the audio in
+/// that stretch is never transcribed — and until KNEG-109 the cost was paid
+/// invisibly: the reader task returned, the meeting kept recording, and
+/// `deepgram::transcript` reported `gaps: 0`. `MeetingTranscript::gaps` exists
+/// precisely so that "a transcript with a hole in it must not look complete",
+/// and this is the thing that fills it in.
 #[derive(Default)]
 struct TranscriptBudget {
     bytes: AtomicUsize,
     events: AtomicUsize,
+    /// Whether the last thing each capture offered was refused.
+    ///
+    /// One flag per capture rather than one for the session. A gap is a
+    /// *stretch* of untranscribed audio and it belongs to the capture it
+    /// happened in: the microphone can be dropping while the system audio is
+    /// still being admitted, and a single shared flag would end the
+    /// microphone's stretch on the strength of somebody else's frame.
+    mic_dropping: AtomicBool,
+    system_dropping: AtomicBool,
+    /// How many stretches have begun, across both captures.
+    gaps: AtomicU32,
 }
 
 impl TranscriptBudget {
-    fn reserve(&self, bytes: usize) -> bool {
+    /// Which capture's dropping flag this is.
+    const fn dropping(&self, source: AudioSource) -> &AtomicBool {
+        match source {
+            AudioSource::Mic => &self.mic_dropping,
+            AudioSource::System => &self.system_dropping,
+        }
+    }
+
+    /// Take `bytes` for one transcript event from `source`.
+    ///
+    /// Note that a refusal is not final. The byte ceiling is a total, so a
+    /// short event can still fit after a long one was turned away -- which is
+    /// why gaps are counted as runs rather than as a single flag flipped once.
+    /// (The event ceiling *is* final once reached, since every event costs
+    /// one.)
+    fn reserve(&self, source: AudioSource, bytes: usize) -> Reserved {
         if self
             .bytes
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |used| {
@@ -74,7 +134,7 @@ impl TranscriptBudget {
             })
             .is_err()
         {
-            return false;
+            return self.refuse(source);
         }
 
         if self
@@ -86,9 +146,27 @@ impl TranscriptBudget {
             .is_err()
         {
             self.bytes.fetch_sub(bytes, Ordering::Relaxed);
-            return false;
+            return self.refuse(source);
         }
-        true
+
+        // Admitting closes this capture's stretch, so the next refusal counts
+        // as a new one.
+        self.dropping(source).store(false, Ordering::Relaxed);
+        Reserved::Room
+    }
+
+    /// Mark `source` as dropping, counting a gap if it was not already.
+    fn refuse(&self, source: AudioSource) -> Reserved {
+        let opens_a_gap = !self.dropping(source).swap(true, Ordering::Relaxed);
+        if opens_a_gap {
+            self.gaps.fetch_add(1, Ordering::Relaxed);
+        }
+        Reserved::NoRoom { opens_a_gap }
+    }
+
+    /// How many stretches of audio this session never transcribed.
+    fn gaps(&self) -> u32 {
+        self.gaps.load(Ordering::Relaxed)
     }
 }
 
@@ -106,6 +184,10 @@ pub struct DeepgramRealtime {
     /// Everything both sockets have said, in arrival order.
     events: Arc<std::sync::Mutex<Vec<TranscriptEvent>>>,
     budget: Arc<TranscriptBudget>,
+    /// Why the session is over, if it is. One cell for both sockets — see
+    /// [`SessionFault`]. Neither a socket nor a clock; see
+    /// `no_rotation_timer_exists_on_this_struct` at the bottom of this file.
+    fault: SessionFault,
     live: Option<mpsc::UnboundedSender<TranscriptEvent>>,
     started: Option<Instant>,
     paused: bool,
@@ -153,6 +235,7 @@ impl DeepgramRealtime {
             system: None,
             events: Arc::new(std::sync::Mutex::new(Vec::new())),
             budget: Arc::new(TranscriptBudget::default()),
+            fault: SessionFault::new(),
             live: None,
             started: None,
             paused: false,
@@ -254,6 +337,7 @@ impl DeepgramRealtime {
             Arc::clone(&self.budget),
             self.live.clone(),
             self.started.unwrap_or_else(Instant::now),
+            self.fault.clone(),
         ));
 
         Ok(Connection { sink, reader })
@@ -275,34 +359,82 @@ async fn read(
     budget: Arc<TranscriptBudget>,
     live: Option<mpsc::UnboundedSender<TranscriptEvent>>,
     started: Instant,
+    fault: SessionFault,
 ) {
+    // Whether this socket has ever produced a frame this client could parse.
+    // Only this loop knows it, and `fault::ends_the_session` needs it to tell
+    // garbage-where-a-handshake-belonged from a keepalive nobody recognises.
+    let mut understood = false;
+
     while let Some(frame) = stream.next().await {
         let text = match frame {
             Ok(Message::Text(text)) => text,
-            Ok(Message::Close(_)) => {
-                tracing::debug!(?source, "the provider closed the socket");
+            Ok(Message::Close(frame)) => {
+                // The code and the reason are the useful part and used to be
+                // discarded here -- this arm was a `debug!` with neither in it.
+                // `openai_socket` learned that lesson on 2026-08-28 against a
+                // live server; this client has never met one, which is the
+                // reason to have the words ready rather than a reason not to.
+                let said = close_reason(
+                    frame.as_ref().map(|f| u16::from(f.code)),
+                    frame.as_ref().map_or("", |f| f.reason.as_ref()),
+                );
+                tracing::warn!(?source, %said, "the transcription socket was closed");
+                fault.closed(source, &said);
                 return;
             }
             // Ping, pong and binary. tungstenite answers pings itself.
             Ok(_) => continue,
             Err(err) => {
                 tracing::warn!(error = %err, ?source, "the transcription socket failed");
+                fault.transport(source, &err.to_string());
                 return;
             }
         };
 
-        match deepgram::interpret(&text) {
+        let incoming = deepgram::interpret(&text);
+        if !matches!(incoming, Incoming::Unreadable { .. }) {
+            // Parsed, whatever it turned out to mean -- a transcript, a
+            // readiness event, an error frame, even an event this client does
+            // not act on. From here on, a frame that will not parse is a
+            // keepalive this parser does not know rather than a wire it cannot
+            // read at all, and the two get different answers.
+            understood = true;
+        }
+
+        match incoming {
             Incoming::Transcript {
                 text,
                 is_final,
                 speaker,
             } if !text.trim().is_empty() => {
-                if !budget.reserve(text.len()) {
-                    tracing::warn!(
-                        ?source,
-                        "the provider exceeded the transcript session budget"
-                    );
-                    return;
+                // Dropped, and counted, but the reader keeps going. It used
+                // to `return` here, which was three problems in one line.
+                //
+                // The session's *other* frames still matter: an error frame
+                // arriving after the ceiling has to reach `SessionFault`, and a
+                // dead reader cannot record one -- so the budget silently
+                // switched off KNEG-79's fix for the rest of the meeting. The
+                // socket also has to keep draining, or the provider is left
+                // pushing into a buffer nobody reads. And because the budget is
+                // shared, whichever capture happened to hit the ceiling first
+                // was the one that died, leaving the other transcribing: a
+                // meeting with the microphone kept and the system audio not,
+                // decided by arrival order.
+                //
+                // What the ceiling is for is bounding retention, and dropping
+                // the text does that on its own.
+                if let Reserved::NoRoom { opens_a_gap } = budget.reserve(source, text.len()) {
+                    if opens_a_gap {
+                        // Once per stretch. Per frame, this would be the
+                        // loudest line in the log for the rest of the meeting.
+                        tracing::warn!(
+                            ?source,
+                            "the transcript session budget is full; this capture is no longer \
+                             being transcribed, and the saved note will say so"
+                        );
+                    }
+                    continue;
                 }
                 let event = deepgram::event(
                     text,
@@ -324,9 +456,41 @@ async fn read(
             // speaking.
             Incoming::Transcript { .. } | Incoming::Ready => {}
             Incoming::Failed { message } => {
-                // Logged rather than swallowed. A meeting quietly producing
-                // no transcript is the failure this guards against.
+                // Recorded, not only logged. Until 2026-08-31 this arm *was*
+                // the defect: the warning went to a log nobody in the room can
+                // see and `send_audio` carried on succeeding, so a provider
+                // that rejected the session and kept the socket open produced
+                // a meeting that "completed successfully" holding nothing.
+                //
+                // This client has never been run against a live provider and no
+                // key for it exists on any machine this project has touched, so
+                // the wiring below is verified by the tests at the bottom of
+                // this file and the behaviour against a real provider error is
+                // not verified at all.
                 tracing::warn!(?source, %message, "the provider reported an error");
+                fault.reported(source, &message);
+                // Reading continues even though the session is over: a provider
+                // often follows an error frame with a close frame, and seeing
+                // the whole sequence in the log is what made the five OpenAI
+                // faults of 2026-08-28 diagnosable one at a time. First-wins
+                // keeps the better sentence whatever follows.
+            }
+            Incoming::Unreadable { preview } => {
+                if fault.unreadable(source, &preview, understood) {
+                    tracing::warn!(
+                        ?source,
+                        %preview,
+                        "the provider's first frame could not be read -- ending the session"
+                    );
+                    // Unlike the arm above, this one stops: by definition
+                    // nothing this socket sends can be read, so there is
+                    // nothing to stay for.
+                    return;
+                }
+                // A frame this parser does not recognise on a socket that has
+                // been speaking its language. Worth seeing; not worth ending a
+                // working meeting over -- see `fault::ends_the_session`.
+                tracing::warn!(?source, %preview, "a frame from the provider could not be read");
             }
             Incoming::Other { kind } => {
                 tracing::trace!(?source, %kind, "an event this client does not act on");
@@ -343,6 +507,11 @@ impl MeetingTranscriptionProvider for DeepgramRealtime {
         self.caps = Some(caps);
         self.config = Some(config);
         self.started = Some(Instant::now());
+        // A fresh cell per session. `SessionFault` cannot be cleared -- an
+        // `OnceLock` behind an `Arc` has no way to be unset -- so a second
+        // meeting on a reused provider gets its own rather than inheriting the
+        // first one's verdict.
+        self.fault = SessionFault::new();
         self.budget = Arc::new(TranscriptBudget::default());
 
         // Both, before returning. A session with only the microphone open
@@ -354,9 +523,20 @@ impl MeetingTranscriptionProvider for DeepgramRealtime {
     }
 
     async fn send_audio(&mut self, chunk: AudioChunk) -> Result<(), MeetingError> {
+        // First: before `paused`, and before the connection lookup. A provider
+        // that reported an error and kept the socket open produces a
+        // *successful* send, so nothing about the send itself can be asked --
+        // this is the check that was missing, and its absence is why a rejected
+        // session-config frame let a meeting finish looking successful. Being
+        // first is also what makes it testable with no socket.
+        if let Some(fault) = self.fault.take() {
+            return Err(fault.into_error(PROVIDER_ID));
+        }
+
         if self.paused {
             // Discarded, which is what pausing a recording means. Buffering
-            // would make "pause" mean "delay".
+            // would make "pause" mean "delay". A session already dead is
+            // reported above rather than paused into silence.
             return Ok(());
         }
 
@@ -394,8 +574,21 @@ impl MeetingTranscriptionProvider for DeepgramRealtime {
     }
 
     async fn finish(&mut self) -> Result<MeetingTranscript, MeetingError> {
+        // Read before the sockets are closed, so a fault that arrived after the
+        // last audio chunk is reported rather than lost to this client's own
+        // close frame.
+        let fault = self.fault.take();
+
         for connection in [self.mic.take(), self.system.take()].into_iter().flatten() {
             connection.close().await;
+        }
+
+        if let Some(fault) = fault {
+            // Rather than an empty transcript. An empty one becomes
+            // `MeetingOutcome::NothingTranscribed`, which is the sentence a
+            // quiet room gets; a provider that said something was wrong must
+            // not reach the screen as silence.
+            return Err(fault.into_error(PROVIDER_ID));
         }
 
         let events = self
@@ -408,7 +601,7 @@ impl MeetingTranscriptionProvider for DeepgramRealtime {
             .started
             .map_or(0.0, |started| started.elapsed().as_secs_f64());
 
-        Ok(deepgram::transcript(events, duration))
+        Ok(deepgram::transcript(events, duration, self.budget.gaps()))
     }
 
     async fn cancel(&mut self) -> Result<(), MeetingError> {
@@ -513,6 +706,70 @@ mod tests {
         assert_eq!(transcript.gaps, 0);
     }
 
+    #[tokio::test]
+    async fn a_reported_fault_fails_the_next_chunk_rather_than_being_swallowed() {
+        // The first test in this file to reach past the guard clauses, and the
+        // one this whole change exists for. No socket and no key: the fault goes
+        // into the session's own cell exactly as the reader task would put it
+        // there, and `send_audio` is asked what it does about it. Before
+        // 2026-08-31 the answer was `Ok(())`, for as long as the meeting was
+        // left running.
+        //
+        // What this verifies is the wiring, and only the wiring. No key for this
+        // provider exists on any machine this project has touched, so how it
+        // behaves against a real provider error is still unverified.
+        let mut provider = DeepgramRealtime::new(store());
+        provider.fault.reported(
+            AudioSource::System,
+            "the session configuration was rejected",
+        );
+
+        let err = provider
+            .send_audio(AudioChunk {
+                pcm: vec![0; 64],
+                source: AudioSource::Mic,
+            })
+            .await
+            .unwrap_err();
+        match err {
+            MeetingError::ProviderFault { provider, detail } => {
+                assert_eq!(provider, PROVIDER_ID);
+                assert!(
+                    detail.contains("session configuration was rejected"),
+                    "{detail}"
+                );
+                assert!(
+                    detail.contains("system audio"),
+                    "one cell for both sockets, so the sentence has to say which: {detail}"
+                );
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_fault_arriving_after_the_last_chunk_is_not_lost_at_finish() {
+        // A provider that says something is wrong between the final chunk and
+        // Stop used to produce a successful, empty transcript -- and an empty
+        // transcript becomes `MeetingOutcome::NothingTranscribed`, which is
+        // exactly the sentence a quiet room gets.
+        let mut provider = DeepgramRealtime::new(store());
+        assert!(
+            provider
+                .fault
+                .unreadable(AudioSource::Mic, "<html>502 Bad Gateway</html>", false),
+            "garbage where a session-accepted frame belonged ends the session"
+        );
+
+        let err = provider.finish().await.unwrap_err();
+        match err {
+            MeetingError::ProviderFault { detail, .. } => {
+                assert!(detail.contains("502 Bad Gateway"), "{detail}");
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
     #[test]
     fn the_declared_capabilities_are_the_tables() {
         let provider = DeepgramRealtime::new(store());
@@ -567,6 +824,15 @@ mod tests {
         // with `limit: Duration` to know when to act. A freshly constructed
         // provider has never connected, so every optional field below starts
         // empty and `paused` starts false.
+        //
+        // `fault: SessionFault` was added on 2026-08-31 and this tripwire is
+        // what forced the question to be answered here. It is neither a socket
+        // nor a clock: it holds one `Option<SocketFault>` in a `OnceLock`,
+        // written once by whichever reader sees a fault first and read by
+        // `send_audio` and `finish`. Nothing about it is time-based -- it has
+        // no deadline, schedules nothing, and is never re-read on a timer --
+        // so it does not make this struct's answer to "is there a rotation
+        // clock here?" any less "no".
         let provider = DeepgramRealtime::new(store());
         let DeepgramRealtime {
             credentials: _,
@@ -576,6 +842,7 @@ mod tests {
             system,
             events: _,
             budget: _,
+            fault,
             live,
             started,
             paused,
@@ -586,17 +853,28 @@ mod tests {
         assert!(system.is_none());
         assert!(live.is_none());
         assert!(
+            fault.take().is_none(),
+            "a provider that has never connected has nothing to have failed at"
+        );
+        assert!(
             started.is_none(),
             "session-start bookkeeping, not a rotation deadline -- see the comment above"
         );
         assert!(!paused);
     }
 
+    /// `Reserved::Room`, ignoring whether a refusal opened a gap.
+    fn admitted(reserved: Reserved) -> bool {
+        reserved == Reserved::Room
+    }
+
     #[test]
     fn transcript_budget_limits_bytes_across_both_sockets() {
         let budget = TranscriptBudget::default();
-        assert!(budget.reserve(MAX_TRANSCRIPT_BYTES));
-        assert!(!budget.reserve(1));
+        assert!(admitted(
+            budget.reserve(AudioSource::Mic, MAX_TRANSCRIPT_BYTES)
+        ));
+        assert!(!admitted(budget.reserve(AudioSource::System, 1)));
         assert_eq!(budget.bytes.load(Ordering::Relaxed), MAX_TRANSCRIPT_BYTES);
         assert_eq!(budget.events.load(Ordering::Relaxed), 1);
     }
@@ -605,10 +883,100 @@ mod tests {
     fn transcript_budget_limits_event_overhead() {
         let budget = TranscriptBudget::default();
         for _ in 0..MAX_TRANSCRIPT_EVENTS {
-            assert!(budget.reserve(1));
+            assert!(admitted(budget.reserve(AudioSource::Mic, 1)));
         }
-        assert!(!budget.reserve(1));
+        assert!(!admitted(budget.reserve(AudioSource::Mic, 1)));
         assert_eq!(budget.bytes.load(Ordering::Relaxed), MAX_TRANSCRIPT_EVENTS);
         assert_eq!(budget.events.load(Ordering::Relaxed), MAX_TRANSCRIPT_EVENTS);
+    }
+
+    /* --------------------------------------------- what the ceiling costs */
+
+    #[test]
+    fn a_run_of_refusals_is_one_gap_and_not_one_per_frame() {
+        // The count reaches `MeetingTranscript::gaps`, which `keep` renders as
+        // "N stretch(es) of audio were never transcribed". Counting per frame
+        // would report a number nobody could act on -- a long meeting past the
+        // ceiling would claim thousands of holes where there is one.
+        let budget = TranscriptBudget::default();
+        assert!(admitted(
+            budget.reserve(AudioSource::Mic, MAX_TRANSCRIPT_BYTES)
+        ));
+        assert_eq!(budget.gaps(), 0, "nothing has been refused yet");
+
+        assert_eq!(
+            budget.reserve(AudioSource::Mic, 10),
+            Reserved::NoRoom { opens_a_gap: true }
+        );
+        for _ in 0..50 {
+            assert_eq!(
+                budget.reserve(AudioSource::Mic, 10),
+                Reserved::NoRoom { opens_a_gap: false },
+                "still the same stretch"
+            );
+        }
+        assert_eq!(budget.gaps(), 1);
+    }
+
+    #[test]
+    fn admitting_again_ends_the_stretch_so_the_next_refusal_is_a_new_one() {
+        // A refusal is not final: the byte ceiling is a total, so a short event
+        // can fit after a long one was turned away. Two holes with transcript
+        // between them are two holes.
+        let budget = TranscriptBudget::default();
+        assert!(admitted(
+            budget.reserve(AudioSource::Mic, MAX_TRANSCRIPT_BYTES - 4)
+        ));
+
+        assert_eq!(
+            budget.reserve(AudioSource::Mic, 100),
+            Reserved::NoRoom { opens_a_gap: true }
+        );
+        assert!(
+            admitted(budget.reserve(AudioSource::Mic, 4)),
+            "a short event still fits"
+        );
+        assert_eq!(
+            budget.reserve(AudioSource::Mic, 100),
+            Reserved::NoRoom { opens_a_gap: true },
+            "the stretch closed when something got through, so this opens a new one"
+        );
+        assert_eq!(budget.gaps(), 2);
+    }
+
+    #[test]
+    fn each_capture_has_its_own_stretch() {
+        // One shared flag would end the microphone's stretch on the strength of
+        // a system-audio frame, and the two captures are not the same hole.
+        let budget = TranscriptBudget::default();
+        for _ in 0..MAX_TRANSCRIPT_EVENTS {
+            assert!(admitted(budget.reserve(AudioSource::Mic, 1)));
+        }
+
+        assert_eq!(
+            budget.reserve(AudioSource::Mic, 1),
+            Reserved::NoRoom { opens_a_gap: true }
+        );
+        assert_eq!(
+            budget.reserve(AudioSource::System, 1),
+            Reserved::NoRoom { opens_a_gap: true },
+            "the system capture has its own stretch to open"
+        );
+        assert_eq!(budget.gaps(), 2);
+
+        assert_eq!(
+            budget.reserve(AudioSource::Mic, 1),
+            Reserved::NoRoom { opens_a_gap: false },
+            "and the microphone is still in the one it opened"
+        );
+        assert_eq!(budget.gaps(), 2);
+    }
+
+    #[test]
+    fn a_session_that_never_filled_the_budget_reports_no_gaps() {
+        let budget = TranscriptBudget::default();
+        assert!(admitted(budget.reserve(AudioSource::Mic, 1_000)));
+        assert!(admitted(budget.reserve(AudioSource::System, 1_000)));
+        assert_eq!(budget.gaps(), 0);
     }
 }

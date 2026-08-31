@@ -411,6 +411,27 @@ pub enum InstallProgress {
     },
 }
 
+/// Whether a model install has to fetch the server binary first.
+///
+/// A pure decision with one caller, extracted for the reason
+/// `check_importable_file` and `import_pick_dialog` were: nothing outside a
+/// running application can construct a `tauri::AppHandle`, so the command below
+/// is untestable by construction and the judgement in it would be untested with
+/// it.
+///
+/// The judgement is which states count as "already there".
+/// [`kw_sidecar::Installation::Incomplete`] -- a directory that exists with no
+/// executable in it, from an interrupted extraction -- must reinstall, and does,
+/// because it has no executable. Only `Installed` skips.
+///
+/// Reinstalling when there is nothing to reinstall is not a wasted download; it
+/// is a failed install. `install` finishes by replacing the sidecar directory,
+/// and on Windows a directory holding a running executable cannot be removed --
+/// measured on 2026-08-31 as `WinError 5`, on the `.exe` itself. See KNEG-113.
+fn sidecar_needed(installation: &kw_sidecar::Installation) -> bool {
+    installation.executable().is_none()
+}
+
 /// Install the server binary and one model.
 ///
 /// Explicit: nothing downloads on first launch. This runs only because someone
@@ -445,17 +466,51 @@ pub async fn local_model_install(
 
     // The server first: a model with no server to load it is not usable, and the
     // server is the smaller download of the two.
-    kw_sidecar::install(&local.policy, spec, asset, &sidecars.path, &mut |p| {
-        emit(match p {
-            kw_sidecar::Progress::Downloading { written, total } => {
-                InstallProgress::Server { written, total }
-            }
-            kw_sidecar::Progress::Verifying => InstallProgress::Verifying,
-            kw_sidecar::Progress::Extracting => InstallProgress::Extracting,
-        });
-    })
-    .await
-    .map_err(|err| err.to_string())?;
+    //
+    // **Only if it is not already there.** This used to reinstall
+    // unconditionally, which made every whisper model after the first
+    // uninstallable. `install` finishes by replacing the sidecar directory, and
+    // `resume_last_used` has started `whisper-server.exe` out of that same
+    // directory by the time any of this runs -- so `remove_dir_all` fails with
+    // `WinError 5` on the running executable, the `?` here returns, and the
+    // model is never downloaded at all. Reported from the bench on 2026-08-31,
+    // pressing *Install* on `base` with `tiny` already resumed: no
+    // `ggml-base.bin`, no `.partial`, and a `whisper.incoming` staging
+    // directory left behind at the promote step.
+    //
+    // `local_llm_install` in `local_llm.rs` has always guarded it exactly this
+    // way, for the same reason, which is why installing a GGUF worked on the
+    // same run that this failed.
+    //
+    // **Nothing is lost by skipping.** The unconditional call looked like a way
+    // to refresh a sidecar to the pinned version, and it never was: it can only
+    // succeed when no server is running, which is only ever the first install,
+    // when there is nothing to refresh. Every later call failed outright rather
+    // than updating anything. Keeping a sidecar current after the first install
+    // is KNEG-113, filed with the measurement.
+    let installation = kw_sidecar::locate(
+        SIDECAR,
+        asset,
+        &kw_sidecar::SearchPath {
+            bundled: None,
+            downloaded: sidecars.path.clone(),
+        },
+        &kw_sidecar::RealFs,
+    );
+
+    if sidecar_needed(&installation) {
+        kw_sidecar::install(&local.policy, spec, asset, &sidecars.path, &mut |p| {
+            emit(match p {
+                kw_sidecar::Progress::Downloading { written, total } => {
+                    InstallProgress::Server { written, total }
+                }
+                kw_sidecar::Progress::Verifying => InstallProgress::Verifying,
+                kw_sidecar::Progress::Extracting => InstallProgress::Extracting,
+            });
+        })
+        .await
+        .map_err(|err| err.to_string())?;
+    }
 
     let installed = models::install(&local.policy, model, &models_dir.path, &mut |p| {
         emit(match p {
@@ -785,6 +840,47 @@ mod tests {
 
     async fn db() -> kw_storage::Db {
         kw_storage::Db::open_in_memory().await.unwrap()
+    }
+
+    /* ------------------------------------------------ the sidecar guard */
+
+    fn installed() -> kw_sidecar::Installation {
+        kw_sidecar::Installation::Installed {
+            executable: std::path::PathBuf::from("sidecars/whisper/whisper-server.exe"),
+            origin: "downloaded",
+        }
+    }
+
+    /// The regression that made every whisper model after the first
+    /// uninstallable.
+    ///
+    /// `install` ends by replacing the sidecar directory, and by the time a
+    /// user presses *Install* `resume_last_used` has started
+    /// `whisper-server.exe` out of it. On Windows that directory cannot be
+    /// removed while the executable inside it is running, so an unconditional
+    /// reinstall returned an error before the model was ever downloaded.
+    #[test]
+    fn an_installed_sidecar_is_not_reinstalled() {
+        assert!(!sidecar_needed(&installed()));
+    }
+
+    #[test]
+    fn a_missing_sidecar_is_installed() {
+        assert!(sidecar_needed(&kw_sidecar::Installation::NotInstalled {
+            looked_in: vec![std::path::PathBuf::from("sidecars")],
+        }));
+    }
+
+    /// A directory with no executable in it is an interrupted extraction, not
+    /// an install. Nothing is running out of it, so replacing it is safe --
+    /// which is why this is the one existing-directory case that still
+    /// reinstalls.
+    #[test]
+    fn a_half_extracted_sidecar_is_installed_again() {
+        assert!(sidecar_needed(&kw_sidecar::Installation::Incomplete {
+            dir: std::path::PathBuf::from("sidecars/whisper"),
+            expected: std::path::PathBuf::from("sidecars/whisper/whisper-server.exe"),
+        }));
     }
 
     /* -------------------------------------------------------- reviving */

@@ -30,7 +30,16 @@ import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { args, measureFile, pinnedTargets, statedTargets } from "./pin.mjs";
+import {
+  args,
+  githubAssetTargets,
+  hfRepos,
+  measureFile,
+  parseGithubAssetUrl,
+  parseHfUrl,
+  pinnedTargets,
+  statedTargets,
+} from "./pin.mjs";
 
 /* -------------------------------------------------------------------- args */
 
@@ -222,6 +231,7 @@ function fixtureLocalLlm() {
           {
             id: "gemma-with-a-drafter",
             hfRepo: "unsloth/gemma-4-E2B-it-qat-GGUF",
+            revision: "a".repeat(40),
             fileName: "gemma.gguf",
             sizeBytes: 3_349_516_256,
             sizeMeasured: true,
@@ -229,6 +239,7 @@ function fixtureLocalLlm() {
             sha256Measured: true,
             draft: {
               hfRepo: "unsloth/gemma-4-E2B-it-qat-GGUF",
+              revision: "a".repeat(40),
               fileName: "mtp-gemma.gguf",
               sizeBytes: 59_235_648,
               sizeMeasured: true,
@@ -239,6 +250,7 @@ function fixtureLocalLlm() {
           {
             id: "stated-only",
             hfRepo: "bartowski/whatever-GGUF",
+            revision: "b".repeat(40),
             fileName: "stated.gguf",
             sizeBytes: 806_058_496,
             sizeMeasured: true,
@@ -271,6 +283,16 @@ test("statedTargets keeps which standard each pin already met", () => {
   assert.equal(targets[0].measured, true);
   assert.equal(targets[1].measured, false);
   assert.equal(targets[2].measured, false);
+});
+
+test("statedTargets carries the commit each object is pinned to", () => {
+  // Without it verifyStated would read the tree at `main`, which since
+  // KNEG-103 is not where the installer fetches from -- it would answer
+  // confidently about different bytes.
+  const targets = statedTargets(fixtureLocalLlm());
+  assert.equal(targets[0].revision, "a".repeat(40));
+  assert.equal(targets[1].revision, "a".repeat(40), "a drafter carries its own");
+  assert.equal(targets[2].revision, "b".repeat(40));
 });
 
 test("statedTargets ignores the whisper and sherpa pins entirely", () => {
@@ -307,5 +329,148 @@ test("the committed registry still carries a digest for all 39 GGUF objects", ()
     assert.notEqual(target.sizeBytes % 1_000_000, 0, `${target.id}'s size looks rounded`);
     assert.ok(target.repo?.includes("/"), `${target.id} has no owner/name repo`);
     assert.ok(target.file?.endsWith(".gguf"), `${target.id} does not name a .gguf`);
+    // A branch name here would make --verify-stated read a tree the installer
+    // never fetches from, and report a pass about it.
+    assert.match(target.revision, /^[0-9a-f]{40}$/, `${target.id} is not pinned to a commit`);
+  }
+});
+
+/* ------------------------------------------------------------- revisions */
+
+test("parseHfUrl splits a Hugging Face resolve URL into its three parts", () => {
+  assert.deepEqual(
+    parseHfUrl("https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin"),
+    { repo: "ggerganov/whisper.cpp", revision: "main", path: "ggml-tiny.bin" }
+  );
+});
+
+test("parseHfUrl reads a commit sha as the revision, not just a branch name", () => {
+  const sha = "5359861c739e955e79d9a303bcbc70fb988958b1";
+  const parsed = parseHfUrl(
+    `https://huggingface.co/ggerganov/whisper.cpp/resolve/${sha}/ggml-base.bin`
+  );
+  assert.equal(parsed.revision, sha);
+  assert.equal(parsed.path, "ggml-base.bin");
+});
+
+test("parseHfUrl keeps a path with directories in it whole", () => {
+  // Several publishers put a multi-part quantisation in a subdirectory, and a
+  // parser that stopped at the first slash would name the wrong object.
+  const parsed = parseHfUrl(
+    "https://huggingface.co/unsloth/gemma-4-31B-it-qat-GGUF/resolve/main/Q4_0/part-1.gguf"
+  );
+  assert.equal(parsed.path, "Q4_0/part-1.gguf");
+});
+
+test("parseHfUrl returns null for a URL hosted somewhere else", () => {
+  // A caller has to handle this rather than assume it away. Nothing in the
+  // registry is hosted off Hugging Face today, and that is a fact about today.
+  assert.equal(parseHfUrl("https://github.com/k2-fsa/sherpa-onnx/releases/x.tar.bz2"), null);
+  assert.equal(parseHfUrl("https://huggingface.co/some-repo/blob/main/x.bin"), null);
+});
+
+test("hfRepos finds both families and counts a shared repository once", () => {
+  const repos = hfRepos({
+    localAsr: {
+      whisper: [
+        { id: "tiny", downloadUrl: "https://huggingface.co/one/two/resolve/main/a.bin" },
+        { id: "base", downloadUrl: "https://huggingface.co/one/two/resolve/main/b.bin" },
+      ],
+    },
+    localLlm: [
+      {
+        models: [
+          { id: "m", hfRepo: "three/four", draft: { hfRepo: "five/six" } },
+          { id: "n", hfRepo: "three/four" },
+        ],
+      },
+    ],
+  });
+  assert.deepEqual(
+    repos.map((r) => r.repo),
+    ["five/six", "one/two", "three/four"]
+  );
+  // Who would stop installing if that repository could not be read. A
+  // repository that names only itself understates what a failure costs.
+  assert.deepEqual(repos[1].from, ["whisper/tiny", "whisper/base"]);
+  assert.deepEqual(repos[2].from, ["localLlm/m", "localLlm/n"]);
+});
+
+test("hfRepos skips a whisper model hosted off Hugging Face rather than guessing", () => {
+  const repos = hfRepos({
+    localAsr: { whisper: [{ id: "x", downloadUrl: "https://example.invalid/x.bin" }] },
+  });
+  assert.deepEqual(repos, []);
+});
+
+test("hfRepos reads every repository the committed registry downloads from", () => {
+  // 36 GGUF repositories plus ggerganov/whisper.cpp. The count is asserted for
+  // the reason the 39-object count is: a repository silently dropping out of
+  // the registry would make --revisions read fewer and still report success.
+  const repos = hfRepos();
+  assert.equal(repos.length, 37);
+  assert.ok(repos.some((r) => r.repo === "ggerganov/whisper.cpp"));
+  for (const { repo, from } of repos) {
+    assert.match(repo, /^[^/]+\/[^/]+$/, `${repo} is not an owner/name pair`);
+    assert.ok(from.length > 0, `${repo} is named by nothing`);
+  }
+});
+
+/* -------------------------------------------- github release assets */
+
+test("parseGithubAssetUrl splits a release-asset URL into its three parts", () => {
+  assert.deepEqual(
+    parseGithubAssetUrl(
+      "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/a-model.tar.bz2"
+    ),
+    { repo: "k2-fsa/sherpa-onnx", tag: "asr-models", name: "a-model.tar.bz2" }
+  );
+});
+
+test("parseGithubAssetUrl returns null for anything that is not one", () => {
+  // A caller has to handle this rather than assume it away -- `githubAssetTargets`
+  // dies on it, because a pinned model whose host this cannot read would
+  // otherwise be skipped and reported as covered.
+  assert.equal(parseGithubAssetUrl("https://huggingface.co/a/b/resolve/main/c.bin"), null);
+  assert.equal(parseGithubAssetUrl("https://github.com/k2-fsa/sherpa-onnx/releases"), null);
+});
+
+test("githubAssetTargets reads the committed sherpa pins", () => {
+  const targets = githubAssetTargets({
+    localAsr: {
+      sherpa: [
+        {
+          id: "pinned",
+          downloadUrl: "https://github.com/o/r/releases/download/tag/x.tar.bz2",
+          sha256: "A".repeat(64),
+          expectedSizeBytes: 123,
+        },
+        { id: "unpinned", downloadUrl: "https://github.com/o/r/releases/download/tag/y.tar.bz2" },
+      ],
+    },
+  });
+  assert.equal(targets.length, 1, "a model with no digest has nothing to re-read");
+  assert.equal(targets[0].id, "pinned");
+  assert.equal(targets[0].repo, "o/r");
+  assert.equal(targets[0].tag, "tag");
+  assert.equal(targets[0].name, "x.tar.bz2");
+  assert.equal(targets[0].sha256, "a".repeat(64), "lowercased so the comparison cannot miss");
+});
+
+test("githubAssetTargets survives a registry with no sherpa models at all", () => {
+  assert.deepEqual(githubAssetTargets({}), []);
+});
+
+test("the committed registry still carries both sherpa archives as GitHub assets", () => {
+  // The same argument as the 39-object and six-whisper counts: an archive
+  // dropped from SHERPA_PINS would otherwise make --verify-stated check one
+  // asset, or none, and report success.
+  const targets = githubAssetTargets();
+  assert.equal(targets.length, 2, "both Parakeet archives are pinned");
+  for (const target of targets) {
+    assert.match(target.sha256, /^[0-9a-f]{64}$/, `${target.id} has no usable digest`);
+    assert.ok(target.sizeBytes > 0, `${target.id} has no measured size`);
+    assert.equal(target.repo, "k2-fsa/sherpa-onnx");
+    assert.ok(target.name.endsWith(".tar.bz2"), `${target.id} does not name an archive`);
   }
 });

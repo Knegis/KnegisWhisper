@@ -182,6 +182,17 @@ export type UnhandledAction = { action: HotkeyAction, reason: string, };
 export type Conflict = { accelerator: string, actions: Array<HotkeyAction>, };
 
 /**
+ * A hotkey that works, and also does something the user did not ask for.
+ *
+ * Deliberately not a [`Conflict`] and not a `problem`. Both of those mean the
+ * hotkey will not do its job; this one will, and will *additionally* fire when
+ * the user is doing something else entirely. Folding it into either would put
+ * "this does not work" and "this works too often" under one word, and the
+ * remedies are opposite.
+ */
+export type Caution = { action: HotkeyAction, accelerator: string, reason: string, };
+
+/**
  * One action's hotkeys, classified, with any problems spelled out.
  */
 export type HotkeyReport = { bindings: Array<Binding>,
@@ -200,7 +211,16 @@ unusable: Array<HotkeyAction>,
  * the reason. Separate because the two need different words: one is the
  * user's to fix and the other is not.
  */
-unhandled: Array<UnhandledAction>, };
+unhandled: Array<UnhandledAction>,
+/**
+ * Hotkeys that work and also fire when the user meant something else.
+ *
+ * A third category, not a third spelling of the first two. `unusable` and
+ * `conflicts` both mean the hotkey will not do its job; a caution means it
+ * will, and will do it at times nobody asked for. Today the only source is
+ * AltGr (KNEG-37).
+ */
+cautions: Array<Caution>, };
 
 /**
  * What happened when we tried to register one accelerator.
@@ -220,7 +240,13 @@ export type HotkeyChange = { binding: Binding, registrations: Array<Registration
 /**
  * True when at least one accelerator for this action is now live.
  */
-live: boolean, };
+live: boolean,
+/**
+ * What this hotkey will *also* do. Returned here as well as from
+ * [`hotkeys`] because the moment to learn that `Control+Alt` is AltGr is
+ * when you press Set, not the next time the screen is opened.
+ */
+cautions: Array<Caution>, };
 
 /* -------------------------------------------------------------- providers */
 /**
@@ -583,7 +609,7 @@ languageRequired: boolean, sessionLimitSeconds: number | null, };
 /**
  * What a meeting session is doing.
  */
-export type MeetingState = "idle" | "recording" | "finishing";
+export type MeetingState = "idle" | "recording" | "recording-without-transcript" | "finishing";
 
 /**
  * Which captures are actually running.
@@ -602,6 +628,22 @@ systemAudioReason: string | null, };
  * What can be said about the meeting session.
  */
 export type MeetingStatus = { state: MeetingState,
+/**
+ * Why the live transcription stopped, when it has.
+ *
+ * The provider's own sentence, naming which of the two sockets died --
+ * [`kw_meeting_core::MeetingError::ProviderFault`] renders it and
+ * [`live_transcript_ended`] formats it, so this is the same sentence the
+ * outcome at Stop will carry rather than a second wording of it.
+ *
+ * `None` while the transcription is running, and also for the one ending
+ * that has no sentence: a pump task that panicked or was aborted, which
+ * [`live_state`] still reports as
+ * [`MeetingState::RecordingWithoutTranscript`] because a state with no
+ * explanation is closer to the truth than a claim that the transcript is
+ * running.
+ */
+transcriptFailure: string | null,
 /**
  * The provider in use, while there is one.
  */
@@ -1125,20 +1167,27 @@ verifiedBy: VerifiedBy | null, } | { "stage": "stopped-when-idle" };
  * `local_model.rs`'s `VerifiedBy` already follow for their own core types.
  *
  * This type exists because of one specific defect.
- * `Permissions::is_as_expected()` returns `true` for `InheritedFromProfile`
+ * `Permissions::is_as_expected()` returned `true` for `InheritedFromProfile`
  * — correct as "the best this build currently achieves on this platform",
- * read by a screen that only has the boolean as "verified restricted", which
- * it is not: nothing was checked, it is simply what a file under
+ * read by a screen that only had the boolean as "verified restricted", which
+ * it was not: nothing was checked, it was simply what a file under
  * `%USERPROFILE%` gets by default, and two other trustees turned up in that
  * default on a real machine. See `docs/BENCH_CHECK.md`, 2026-08-26 finding 2.
- * `Integrations > CLI` switches on `state` and gives `InheritedFromProfile`
- * its own honest sentence rather than a green tick that reuses the boolean.
+ * That helper has since been deleted; this type and its
+ * [`Self::is_confirmed`] are what replaced it.
  */
-export type DiscoveryPermissions = { "state": "owner-only" } | { "state": "inherited-from-profile" } | { "state": "wider",
+export type DiscoveryPermissions = { "state": "owner-only" } | { "state": "owner-and-administrators" } | { "state": "inherited-from-profile" } | { "state": "wider",
 /**
  * Octal, e.g. `"644"`, matching how a person would type it to `chmod`.
  */
-mode: string, } | { "state": "unknown", reason: string, };
+mode: string, } | { "state": "extra-trustees",
+/**
+ * How many, not which. A trustee name is one of this machine's
+ * account or group names, and this value is rendered on a screen that
+ * ends up in screenshots and bug reports. The names go to the
+ * application log instead.
+ */
+count: number, } | { "state": "still-inheriting" } | { "state": "grants-everyone" } | { "state": "incomplete" } | { "state": "directory-not-restricted" } | { "state": "unknown", reason: string, };
 
 /**
  * What the settings screen shows about the local API.
@@ -1165,7 +1214,7 @@ discoveryPath: string | null,
  *
  * This used to carry a second field, `discovery_permissions_as_expected:
  * Option<bool>`, derived from `Permissions::is_as_expected()`. That
- * boolean is `true` for `InheritedFromProfile`, so the settings screen
+ * boolean was `true` for `InheritedFromProfile`, so the settings screen
  * warned only when it was `false` and stayed silent on an inherited ACL
  * -- reassuring where nothing had been verified. Removed rather than
  * redefined: a screen that reads the real state has no use for a second,

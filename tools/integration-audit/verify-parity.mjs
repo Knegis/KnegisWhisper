@@ -43,7 +43,7 @@
  * Exit:  0 = parity holds, 1 = one or more violations
  */
 
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -91,9 +91,22 @@ export const USER_CONFIGURABLE = new Set([
  * @param {object} input.surfaces   config/ui-surfaces.json
  * @param {(componentPath: string) => string | null} input.readComponent
  *   Source of a component, or null when there is no such file.
+ * @param {(targetPath: string) => boolean} [input.hasTarget]
+ *   Whether a documentation target exists and holds something. Injected for
+ *   the same reason `readComponent` is: a rule that can only be run against
+ *   the committed tree is a rule nobody can prove bites. Defaults to refusing
+ *   every target, so a caller that forgets it gets a loud failure rather than
+ *   a silent pass -- the direction that matters for a check whose whole job is
+ *   catching a claim about something that is not there.
  * @returns {{rule: string, key: string, detail: string}[]}
  */
-export function violations({ baseline, manifest, surfaces, readComponent }) {
+export function violations({
+  baseline,
+  manifest,
+  surfaces,
+  readComponent,
+  hasTarget = () => false,
+}) {
   const found = [];
   const fail = (rule, key, detail) => found.push({ rule, key, detail });
 
@@ -253,11 +266,31 @@ export function violations({ baseline, manifest, surfaces, readComponent }) {
       fail("undeclared-removal", key, "removed-vendor-service requires a detail explaining what was removed");
     }
 
-    // Documentation entries carry no code, so backend/UI requirements do not apply.
-    // They must instead name where the rewritten docs live.
+    // Documentation entries carry no code, so the backend and UI requirements
+    // below do not apply to them. They must instead name where the rewritten
+    // docs live -- and, if their status claims those docs exist, actually have
+    // them there.
+    //
+    // The second half is KNEG-86. Naming a target was the whole of the check
+    // for twenty tasks, and `developer:agent-skills` spent all of them claiming
+    // `status: "ported"` against `docs/agent-skills/`, a directory that has
+    // never existed. The exemption from the backend/UI rules was right; the
+    // hole was that nothing took its place, so a documentation entry was the
+    // one kind that could assert work was done with nothing checking.
+    //
+    // Existence *and* content: an empty directory satisfies "the rewritten docs
+    // live here" no better than a missing one, and is the same hole one commit
+    // later.
     if (e.kind === "documentation") {
       if (!e.target) {
         fail("incomplete-documentation", key, 'kind "documentation" requires a target path');
+      } else if (ACTIVE.has(e.status) && !hasTarget(e.target)) {
+        fail(
+          "documentation-target-missing",
+          key,
+          `status "${e.status}" claims the rewritten documentation is at "${e.target}", ` +
+            "which does not exist or is empty"
+        );
       }
       continue;
     }
@@ -320,6 +353,20 @@ function readComponentFromDisk(relative) {
   return existsSync(path) ? readFileSync(path, "utf8") : null;
 }
 
+/**
+ * Whether a documentation target exists on disk and holds something.
+ *
+ * A directory has to be non-empty, because a manifest entry saying the
+ * rewritten documentation lives at `docs/agent-skills/` is not satisfied by an
+ * empty `docs/agent-skills/`. A file only has to exist -- an empty one is a
+ * different kind of wrong and not one this gate is placed to judge.
+ */
+export function hasTargetOnDisk(relative, root = REPO_ROOT) {
+  const path = join(root, relative);
+  if (!existsSync(path)) return false;
+  return statSync(path).isDirectory() ? readdirSync(path).length > 0 : true;
+}
+
 function main() {
   const manifest = read("config/integration-manifest.json");
   const surfaces = read("config/ui-surfaces.json");
@@ -328,6 +375,7 @@ function main() {
     manifest,
     surfaces,
     readComponent: readComponentFromDisk,
+    hasTarget: (target) => hasTargetOnDisk(target),
   });
 
   const total = Object.keys(manifest.entries).length;

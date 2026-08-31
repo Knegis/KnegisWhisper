@@ -12,6 +12,7 @@
 
 pub mod hotkey;
 pub mod insertion;
+pub mod keyboard_layout;
 pub mod keyhook;
 pub mod keys;
 pub mod meeting_detect;
