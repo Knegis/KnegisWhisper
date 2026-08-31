@@ -21,6 +21,20 @@
  *   3. Runs the binaries `--rounds` times, cycling the thread count, and
  *      records the name of every test that ever failed.
  *
+ * ## It refuses to run against a tree you are editing
+ *
+ * The first workspace run reported
+ * `ipc_types::tests::generated_ipc_types_match_the_rust_types` failing nine
+ * times out of thirty. It was not unreliable. A Rust type and its generated
+ * TypeScript were being edited in another window while the hunt ran, and cargo
+ * rebuilt the binary underneath it — so the hunt was measuring the edits.
+ *
+ * That failure mode is worse than an ordinary false positive, because the
+ * report looks exactly like a real finding and names a real test. So the
+ * binaries are fingerprinted after the control and checked again at the end,
+ * and a run whose binaries moved is reported as **void** rather than as a
+ * result.
+ *
  * ## The control is not ceremony
  *
  * The first version of this reported **100% failures with no output**, for
@@ -56,6 +70,7 @@
  */
 
 import { spawnSync } from "node:child_process";
+import { statSync } from "node:fs";
 import { basename } from "node:path";
 
 /** Thread counts to cycle through, smallest first. */
@@ -127,6 +142,26 @@ function testBinaries(args) {
 }
 
 /**
+ * Size and modification time of each binary, to notice the tree moving.
+ *
+ * A rebuild during the run means the thing under test changed, and every
+ * failure after it is suspect. See the note at the top of this file for the
+ * run that made this necessary.
+ */
+function fingerprint(binaries) {
+  return binaries
+    .map((binary) => {
+      try {
+        const stat = statSync(binary);
+        return `${binary}:${stat.size}:${stat.mtimeMs}`;
+      } catch {
+        return `${binary}:gone`;
+      }
+    })
+    .join("|");
+}
+
+/**
  * Which tests failed in one run, by name.
  *
  * Returns an empty array for a clean run. Names come from libtest's own
@@ -169,6 +204,8 @@ function main() {
     process.exit(1);
   }
 
+  const before = fingerprint(binaries);
+
   const seen = new Map();
   let rounds = 0;
   let failedRounds = 0;
@@ -191,6 +228,15 @@ function main() {
     if (!args.json && round % 25 === 0) {
       console.log(`round ${round}/${args.rounds}, ${failedRounds} failed run(s) so far`);
     }
+  }
+
+  if (fingerprint(binaries) !== before) {
+    console.error(
+      "VOID: a test binary changed while the hunt was running, so the tree was rebuilt " +
+        "underneath it and every failure below is suspect. Re-run against a tree nobody " +
+        "is editing."
+    );
+    process.exit(1);
   }
 
   const findings = [...seen.entries()].map(([test, record]) => ({
