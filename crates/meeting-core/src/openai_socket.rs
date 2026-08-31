@@ -2,7 +2,12 @@
 //!
 //! [`crate::openai`] is the part with rules in it — what to send, what a frame
 //! means, when to reconnect — and is covered by fixtures. This is the plumbing,
-//! and it is thin on purpose because no test here can reach it.
+//! and it is thin on purpose because almost no test here can reach it. The two
+//! exceptions arrived with [`crate::fault`]: a fault can be recorded into the
+//! session's own cell exactly as the reader task would, with no socket, no key
+//! and no network, and `send_audio` and `finish` can then be asked what they do
+//! about it. That is the one path a live socket used to be the only way to
+//! reach, and it is the path this client got wrong.
 //!
 //! # Two sockets, one per capture
 //!
@@ -35,6 +40,7 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::capabilities::MeetingProviderCapabilities;
+use crate::fault::{close_reason, SessionFault};
 use crate::openai::{self, Incoming, SessionClock, DEFAULT_MODEL, ENDPOINT, PROVIDER_ID, PURPOSE};
 use crate::{
     AudioChunk, AudioSource, MeetingError, MeetingProviderConfig, MeetingTranscript,
@@ -54,6 +60,10 @@ pub struct OpenAiRealtime {
     system: Option<Connection>,
     /// Everything both sockets have said, in arrival order.
     events: Arc<std::sync::Mutex<Vec<TranscriptEvent>>>,
+    /// Why the session is over, if it is. One cell for both sockets — see
+    /// [`SessionFault`]. Distinct from `Connection::closed` below, which answers
+    /// a different question.
+    fault: SessionFault,
     live: Option<mpsc::UnboundedSender<TranscriptEvent>>,
     clock: Option<SessionClock>,
     started: Option<Instant>,
@@ -69,6 +79,14 @@ pub struct OpenAiRealtime {
 /// reason, and is what a real meeting produced on 2026-08-28. The provider's
 /// close frame carries a code and usually a sentence saying what was wrong;
 /// this keeps it so the failure can be reported in those terms instead.
+///
+/// **Not the same thing as [`SessionFault`], and deliberately not folded into
+/// it.** This one supplies better *words* for a send that has already failed;
+/// that one decides whether the session is over at all. Folding them would put
+/// this behaviour at risk for a tidiness gain: it is per-socket, and a
+/// session-wide first-wins cell would be poisoned by the close frame
+/// [`Connection::close`] provokes from the socket this client's own reconnect
+/// retires. Two cells, two jobs, neither needing to be cleared.
 type Closed = Arc<std::sync::Mutex<Option<String>>>;
 
 /// One open socket and the task reading it.
@@ -112,6 +130,7 @@ impl OpenAiRealtime {
             mic: None,
             system: None,
             events: Arc::new(std::sync::Mutex::new(Vec::new())),
+            fault: SessionFault::new(),
             live: None,
             clock: None,
             started: None,
@@ -197,6 +216,7 @@ impl OpenAiRealtime {
             self.live.clone(),
             self.started.unwrap_or_else(Instant::now),
             Arc::clone(&closed),
+            self.fault.clone(),
         ));
 
         Ok(Connection {
@@ -219,6 +239,20 @@ impl OpenAiRealtime {
         if let Some(connection) = self.system.take() {
             connection.close().await;
         }
+
+        // A new cell for the new pair of sockets, and this is not tidiness.
+        // `Connection::close` above sends a close frame and only then aborts the
+        // reader, so a retired socket can still read the server's reply -- and a
+        // close frame is a `FaultKind::Reported`. Kept across generations, that
+        // would fail every meeting over sixty minutes at its own reconnect. The
+        // retired readers keep clones of the old cell and write into it; nothing
+        // reads it again.
+        //
+        // What that costs: a genuine fault reported in the moments before a
+        // scheduled rebuild is discarded. The rebuild will meet the same
+        // provider a line later and be refused by it, so the loss is a worse
+        // sentence rather than a lost failure.
+        self.fault = SessionFault::new();
 
         self.mic = Some(self.open(AudioSource::Mic).await?);
         self.system = Some(self.open(AudioSource::System).await?);
@@ -245,7 +279,13 @@ async fn read(
     live: Option<mpsc::UnboundedSender<TranscriptEvent>>,
     started: Instant,
     closed: Closed,
+    fault: SessionFault,
 ) {
+    // Whether this socket has ever produced a frame this client could parse.
+    // Only this loop knows it, and `fault::ends_the_session` needs it to tell
+    // garbage-where-a-handshake-belonged from a keepalive nobody recognises.
+    let mut understood = false;
+
     while let Some(frame) = stream.next().await {
         let text = match frame {
             Ok(Message::Text(text)) => text,
@@ -253,38 +293,42 @@ async fn read(
                 // The code and reason are the useful part and used to be
                 // discarded. `warn`, not `debug`: the provider ending a session
                 // we did not end is worth seeing without turning logging up.
-                let said = frame.map_or_else(
-                    || "the provider closed the connection without saying why".to_owned(),
-                    |f| {
-                        let reason = f.reason.trim();
-                        if reason.is_empty() {
-                            format!("the provider closed the connection (code {})", f.code)
-                        } else {
-                            format!(
-                                "the provider closed the connection: {reason} (code {})",
-                                f.code
-                            )
-                        }
-                    },
+                let said = close_reason(
+                    frame.as_ref().map(|f| u16::from(f.code)),
+                    frame.as_ref().map_or("", |f| f.reason.as_ref()),
                 );
                 tracing::warn!(?source, %said, "the transcription socket was closed");
+                // Both cells, and they are not the same cell -- see `Closed`.
                 if let Ok(mut held) = closed.lock() {
-                    *held = Some(said);
+                    *held = Some(said.clone());
                 }
+                fault.closed(source, &said);
                 return;
             }
             // Ping, pong and binary. tungstenite answers pings itself.
             Ok(_) => continue,
             Err(err) => {
                 tracing::warn!(error = %err, ?source, "the transcription socket failed");
+                let said = err.to_string();
                 if let Ok(mut held) = closed.lock() {
-                    *held = Some(err.to_string());
+                    *held = Some(said.clone());
                 }
+                fault.transport(source, &said);
                 return;
             }
         };
 
-        match openai::interpret(&text) {
+        let incoming = openai::interpret(&text);
+        if !matches!(incoming, Incoming::Unreadable { .. }) {
+            // Parsed, whatever it turned out to mean -- a transcript, a
+            // readiness event, an error frame, even an event this client does
+            // not act on. From here on, a frame that will not parse is a
+            // keepalive this parser does not know rather than a wire it cannot
+            // read at all, and the two get different answers.
+            understood = true;
+        }
+
+        match incoming {
             Incoming::Transcript { text, is_final } if !text.trim().is_empty() => {
                 let event = openai::event(text, is_final, started.elapsed().as_secs_f64(), source);
                 if let Some(sink) = &live {
@@ -299,9 +343,35 @@ async fn read(
             // An empty delta between words, which is most frames.
             Incoming::Transcript { .. } | Incoming::Ready => {}
             Incoming::Failed { message } => {
-                // Logged rather than swallowed. A meeting quietly producing no
-                // transcript is the failure this guards against.
+                // Recorded, not only logged. Until 2026-08-31 this arm *was*
+                // the defect: the warning went to a log nobody in the room can
+                // see and `send_audio` carried on succeeding, so a provider
+                // that rejected the session and kept the socket open produced a
+                // meeting that "completed successfully" holding nothing.
                 tracing::warn!(?source, %message, "the provider reported an error");
+                fault.reported(source, &message);
+                // Reading continues even though the session is over. The
+                // provider often follows an error frame with a close frame, and
+                // seeing the whole sequence in the log is what made the five
+                // faults of 2026-08-28 diagnosable one at a time. First-wins
+                // keeps the better sentence whatever follows.
+            }
+            Incoming::Unreadable { preview } => {
+                if fault.unreadable(source, &preview, understood) {
+                    tracing::warn!(
+                        ?source,
+                        %preview,
+                        "the provider's first frame could not be read -- ending the session"
+                    );
+                    // Unlike the arm above, this one stops: by definition
+                    // nothing this socket sends can be read, so there is
+                    // nothing to stay for.
+                    return;
+                }
+                // A frame this parser does not recognise on a socket that has
+                // been speaking its language. Worth seeing; not worth ending a
+                // working meeting over -- see `fault::ends_the_session`.
+                tracing::warn!(?source, %preview, "a frame from the provider could not be read");
             }
             Incoming::Other { kind } => {
                 tracing::trace!(?source, %kind, "an event this client does not act on");
@@ -319,6 +389,11 @@ impl MeetingTranscriptionProvider for OpenAiRealtime {
         self.config = Some(config);
         self.started = Some(now);
         self.clock = Some(SessionClock::new(caps.session_limit, now));
+        // A fresh cell per session. `SessionFault` cannot be cleared -- an
+        // `OnceLock` behind an `Arc` has no way to be unset -- so a second
+        // meeting on a reused provider gets its own rather than inheriting the
+        // first one's verdict.
+        self.fault = SessionFault::new();
 
         // Both, before returning. A session with only the microphone open would
         // transcribe half the meeting and report success.
@@ -329,9 +404,21 @@ impl MeetingTranscriptionProvider for OpenAiRealtime {
     }
 
     async fn send_audio(&mut self, chunk: AudioChunk) -> Result<(), MeetingError> {
+        // First: before `paused`, before the reconnect clock, and before the
+        // connection lookup. A provider that reported an error and kept the
+        // socket open produces a *successful* send, so nothing about the send
+        // itself can be asked -- this is the check that was missing, and its
+        // absence is why a rejected session-config frame let a meeting finish
+        // looking successful. Being first is also what makes it testable with
+        // no socket.
+        if let Some(fault) = self.fault.take() {
+            return Err(fault.into_error(PROVIDER_ID));
+        }
+
         if self.paused {
             // Discarded, which is what pausing a recording means. Buffering would
-            // make "pause" mean "delay".
+            // make "pause" mean "delay". A session already dead is reported
+            // above rather than paused into silence.
             return Ok(());
         }
 
@@ -383,8 +470,21 @@ impl MeetingTranscriptionProvider for OpenAiRealtime {
     }
 
     async fn finish(&mut self) -> Result<MeetingTranscript, MeetingError> {
+        // Read before the sockets are closed, so a fault that arrived after the
+        // last audio chunk is reported rather than lost to this client's own
+        // close frame.
+        let fault = self.fault.take();
+
         for connection in [self.mic.take(), self.system.take()].into_iter().flatten() {
             connection.close().await;
+        }
+
+        if let Some(fault) = fault {
+            // Rather than an empty transcript. An empty one becomes
+            // `MeetingOutcome::NothingTranscribed`, which is the sentence a
+            // quiet room gets; a provider that said something was wrong must not
+            // reach the screen as silence.
+            return Err(fault.into_error(PROVIDER_ID));
         }
 
         let events = self
@@ -497,6 +597,91 @@ mod tests {
         assert!(transcript.events.is_empty());
         assert_eq!(transcript.reconnects, 0);
         assert_eq!(transcript.gaps, 0);
+    }
+
+    #[tokio::test]
+    async fn a_reported_fault_fails_the_next_chunk_rather_than_being_swallowed() {
+        // The first test in this file to reach past the guard clauses, and the
+        // one this whole change exists for. No socket and no key: the fault goes
+        // into the session's own cell exactly as the reader task would put it
+        // there, and `send_audio` is asked what it does about it. Before
+        // 2026-08-31 the answer was `Ok(())`, for as long as the meeting was
+        // left running.
+        //
+        // The words are the real ones, from the meeting of 2026-08-28.
+        let mut provider = OpenAiRealtime::new(store());
+        provider.fault.reported(
+            AudioSource::System,
+            "The Realtime Beta API is no longer supported.",
+        );
+
+        let err = provider
+            .send_audio(AudioChunk {
+                pcm: vec![0; 64],
+                source: AudioSource::Mic,
+            })
+            .await
+            .unwrap_err();
+        match err {
+            MeetingError::ProviderFault { provider, detail } => {
+                assert_eq!(provider, PROVIDER_ID);
+                assert!(detail.contains("Realtime Beta API"), "{detail}");
+                assert!(
+                    detail.contains("system audio"),
+                    "one cell for both sockets, so the sentence has to say which: {detail}"
+                );
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn the_socket_a_reconnect_retires_cannot_fail_the_session_it_was_rebuilt_for() {
+        // This client is the only one with a reconnect, and it is the only one
+        // where a session-wide fault cell can be poisoned by this client's own
+        // tidying up: `Connection::close` sends a close frame and only then
+        // aborts the reader, so the retired socket can still read the server's
+        // reply -- and a close frame is a `FaultKind::Reported`. Shared across
+        // generations, that would fail every meeting over sixty minutes at its
+        // own reconnect.
+        //
+        // `reconnect` therefore swaps in a new cell, and the retired reader's
+        // clone writes into the discarded one. This exercises the swap rather
+        // than the socket rebuild -- nothing here can open a socket -- so it
+        // checks the mechanism and not the timing.
+        let mut provider = OpenAiRealtime::new(store());
+        let retired = provider.fault.clone();
+        provider.fault = SessionFault::new();
+        retired.closed(
+            AudioSource::Mic,
+            "the provider closed the connection (code 1000)",
+        );
+
+        assert!(provider.fault.take().is_none());
+        assert!(provider.finish().await.unwrap().events.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_fault_arriving_after_the_last_chunk_is_not_lost_at_finish() {
+        // A provider that says something is wrong between the final chunk and
+        // Stop used to produce a successful, empty transcript -- and an empty
+        // transcript becomes `MeetingOutcome::NothingTranscribed`, which is
+        // exactly the sentence a quiet room gets.
+        let mut provider = OpenAiRealtime::new(store());
+        assert!(
+            provider
+                .fault
+                .unreadable(AudioSource::Mic, "<html>502 Bad Gateway</html>", false),
+            "garbage where a session-accepted frame belonged ends the session"
+        );
+
+        let err = provider.finish().await.unwrap_err();
+        match err {
+            MeetingError::ProviderFault { detail, .. } => {
+                assert!(detail.contains("502 Bad Gateway"), "{detail}");
+            }
+            other => panic!("{other:?}"),
+        }
     }
 
     #[test]

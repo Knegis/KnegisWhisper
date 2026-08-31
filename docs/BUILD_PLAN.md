@@ -512,15 +512,27 @@ audio capture is what determines whether a meeting can be recorded at all, and t
 AEC, a meeting recorded on speakers transcribes the far-end voice twice; on headphones there is
 nothing to cancel.
 
-### A cross-cutting gap in all four cloud clients, recorded and not fixed
+### A cross-cutting gap in all four cloud clients — *fixed 2026-08-31 (KNEG-79)*
 
-`openai_socket.rs`, `assemblyai_socket.rs`, `deepgram_socket.rs` and `corti_socket.rs` all treat a
-provider-reported error frame as `tracing::warn!` and never turn it into an `Err` from
-`connect`/`send_audio`/`finish`. A server that accepts a malformed session-config frame, stays open,
-and never emits a transcript would let a meeting "complete successfully" holding an empty
-transcript, evidenced only by a background log line nobody in the room can see. Predates every task
-in this chunk and is shared equally by all four — see `docs/BENCH_CHECK.md` item 13 and
-`docs/ENGINEERING_LOG.md`.
+`openai_socket.rs`, `assemblyai_socket.rs`, `deepgram_socket.rs` and `corti_socket.rs` all used to
+treat a provider-reported error frame as `tracing::warn!` and never turn it into an `Err` from
+`connect`/`send_audio`/`finish`. A server that accepted a malformed session-config frame, stayed
+open, and never emitted a transcript let a meeting "complete successfully" holding an empty
+transcript, evidenced only by a background log line nobody in the room can see. It predated every
+task in this chunk and was shared equally by all four.
+
+All four now record into `kw_meeting_core::fault::SessionFault` — one cell per session, shared by
+both sockets, first fault wins — and both `send_audio` and `finish` consult it, so the meeting ends
+as `MeetingOutcome::Failed` carrying the provider's own words. Whether a recorded fault ends the
+session is one pure function, `fault::ends_the_session`, because nothing in this workspace can open
+a socket in a test. `stop()` was fixed with it: a pump failure used to return early and leave the
+screen stuck on "Recording" with no working button on it.
+
+**Two halves remain open and are not this.** The failure is still silent *while* the meeting runs —
+KNEG-95, which carries a design decision about whether a dead provider stops the recording, falls
+back, or says so in a fourth `MeetingState`. And three of the four clients have still never met a
+real provider error: no key exists for AssemblyAI, Deepgram or Corti. See `docs/BENCH_CHECK.md`
+item 13 and the 2026-08-31 (KNEG-79) entry in `docs/ENGINEERING_LOG.md`.
 
 ---
 

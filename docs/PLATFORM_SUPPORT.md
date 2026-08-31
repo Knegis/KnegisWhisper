@@ -170,6 +170,16 @@ epistemic states sit inside the "unverified" claims below, and they are not inte
    and the table and prose below keep it separate rather than folding it into the same "unverified"
    word.
 
+**What a provider failure now does, for all five clients.** As of 2026-08-31 a provider that
+reports a fault -- an error frame, a close frame with a code and a reason, a dead transport, or a
+first frame this client cannot parse -- ends the session, and Stop reports the provider's own
+sentence rather than an empty transcript. That is a claim about *this application's* wiring only.
+It is covered by tests in each socket module that record a fault the way the reader task would; it
+is **not** evidence about any provider's behaviour, and for the three clients below with no key it
+has never been exercised by a real refusal. A provider that reports nothing and simply produces no
+transcript is still indistinguishable from a quiet room, and the failure is still invisible *while*
+the meeting runs.
+
 | Provider | Client | Verified |
 | --- | --- | --- |
 | Local windowed model | repeated `/inference` passes over the local `whisper-server` | ⚠️ built, never run by a person |

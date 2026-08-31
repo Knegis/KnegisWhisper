@@ -196,28 +196,42 @@ says "seen to match". Everything else about chunk E is green tests.
     documented one, and the most likely single outcome is a rejected handshake
     or a response nothing in this client recognises.
 13. **Start a meeting on each cloud provider and confirm that a provider-reported
-    failure is visible to the person in the room, not only in a log line.** This
-    predates the three clients this phase added and is shared by every cloud
-    client, OpenAI Realtime included: `assemblyai_socket.rs`, `deepgram_socket.rs`,
-    `corti_socket.rs` and `openai_socket.rs` all read a provider error frame,
-    log it with `tracing::warn!("the provider reported an error")`, and continue
-    -- none of `connect`, `send_audio` or `finish` ever returns an `Err` because
-    of it. A server that accepts a malformed session-config frame, keeps the
-    socket open, and simply never emits a transcript would let a meeting
-    "complete successfully" with an empty transcript, with nothing to show for
-    it but that one background log line nobody in the room can see. Confirm the
-    UI itself surfaces this, not just the log.
+    failure is visible to the person in the room, not only in a log line.**
+    **The code half closed 2026-08-31 (KNEG-79); the by-hand half below has not
+    been done and is why this item stays here.**
 
-    **Sharpened 2026-08-27 — the actionable half of this item.** The user-visible
-    shape a swallowed provider error produces is `MeetingOutcome::NothingTranscribed`,
-    the same outcome a genuinely quiet room produces, and `labels.ts` now says so
-    plainly ("no speech was recognised, or the provider returned nothing") rather
-    than naming one cause it cannot verify. That wording change is not the fix:
-    the actual gap is that nothing upstream of the label distinguishes the two
-    cases at all, for any of the four cloud clients. Closing it means one of
-    `connect`, `send_audio` or `finish` returning an `Err` for a provider-reported
-    error frame instead of only logging it, so a rejected handshake stops being
-    indistinguishable from silence by the time it reaches this screen.
+    What used to be true: all four socket clients read a provider error frame,
+    logged it with `tracing::warn!("the provider reported an error")`, and
+    continued -- none of `connect`, `send_audio` or `finish` ever returned an
+    `Err` because of it. A server that accepted a malformed session-config
+    frame, kept the socket open and never emitted a transcript let a meeting
+    "complete successfully" holding an empty transcript, evidenced only by that
+    one background log line. The user-visible shape was
+    `MeetingOutcome::NothingTranscribed` -- the same outcome a genuinely quiet
+    room produces.
+
+    What is true now: all four record into `kw_meeting_core::fault::SessionFault`
+    -- an error frame, a close frame's code and reason, a dead transport, and a
+    first frame that will not parse -- and both `send_audio` and `finish`
+    consult it, so a provider that says something is wrong ends the meeting as
+    `MeetingOutcome::Failed` carrying the provider's own sentence and which of
+    the two sockets it came from. `stop()` also no longer returns early on a
+    pump failure, which used to leave the screen stuck on "Recording" with no
+    working button. A provider that reports nothing and simply produces no
+    transcript still reaches `NothingTranscribed`, and `labels.ts` says so.
+
+    **What still needs a person, and it is the whole point of the item.** Three
+    of the four clients have never met a real provider error, because no key for
+    AssemblyAI, Deepgram or Corti exists on any machine this project has
+    touched. The wiring is covered by two tests per socket module -- a fault
+    recorded by hand into the session cell, then `send_audio` and `finish` asked
+    what they do about it -- and that is a test of this application, not of any
+    provider. Start a meeting on each cloud provider, provoke or wait for a
+    refusal, and confirm the sentence on screen names what the provider said.
+
+    Still open and deliberately not closed with it: the same failure is
+    **silent while the meeting is running**. See KNEG-95 and the 2026-08-28
+    entry below.
 
 ### Still unchecked, and needs a person at the machine
 
@@ -570,11 +584,23 @@ than at second zero -- **KNEG-95**.
 exactly like one that works.** Both sockets closed immediately; the application reported
 **Recording**, kept the indicator up, captured both streams for as long as it was left running, and
 said nothing. One `DEBUG nothing is consuming the meeting audio` per second was the only trace.
-`Incoming::Failed` is logged and never surfaced -- the cross-cutting gap `BUILD_PLAN.md` already
-records for all four cloud clients -- and `pump`'s error sits in a `JoinHandle` nobody awaits until
-Stop. Filed as **KNEG-95**, High, and deliberately not patched: it needs a decision about whether a
-dead provider stops the recording, falls back immediately, or carries on with a fourth
-`MeetingState` saying so.
+`Incoming::Failed` was logged and never surfaced -- the cross-cutting gap `BUILD_PLAN.md` recorded
+for all four cloud clients -- and `pump`'s error sat in a `JoinHandle` nobody awaited until Stop.
+Filed as **KNEG-95**, High.
+
+**Half of that is fixed as of 2026-08-31 (KNEG-79), and it is the half at the end of the meeting.**
+All four clients now record a provider fault and both `send_audio` and `finish` return an `Err` for
+it, so this meeting would have ended as *"The recording is at ... but the meeting could not be
+transcribed: openai-realtime accepted the connection and then stopped transcribing: on the system
+audio stream the provider reported: The Realtime Beta API is no longer supported."* -- five faults
+in one attempt rather than five attempts. `stop()` also stopped returning early on a pump failure,
+which had left the runtime idle while the screen said "Recording" with no working button on it.
+
+**The half that remains is exactly the sentence above it: it still arrives at Stop rather than at
+second zero.** The indicator stays up, recording continues, and nothing appears on screen while the
+meeting runs. That is **KNEG-95** and it was deliberately not taken here, because it needs a
+decision about whether a dead provider stops the recording, falls back immediately, or carries on
+with a fourth `MeetingState` saying so.
 
 ### Still unchecked, and needs a person at the machine
 

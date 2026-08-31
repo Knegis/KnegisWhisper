@@ -483,17 +483,25 @@ export function meetingOutcomeLabel(outcome: MeetingOutcome): string {
       return parts.join(" ");
     }
     case "nothing-transcribed":
-      // Not a failure, and not attributed to a cause this build cannot tell
-      // apart from another. A quiet room reads identically, from here, to a
-      // cloud provider that rejected the session-config frame and kept
-      // going: every socket client logs that rejection with `tracing::warn!`
-      // and continues rather than returning an `Err` (see
-      // docs/BENCH_CHECK.md item 13, and docs/PLATFORM_SUPPORT.md on which
-      // wires are unconfirmed against a live service). Saying "failed" would
-      // send somebody looking for a fault; naming "quiet room" as the sole
-      // cause would be asserting one guess this build has no way to confirm
-      // over an equally likely other one.
-      return `Nothing was transcribed — no speech was recognised, or the provider returned nothing. The recording is at ${outcome.recordingPath}.`;
+      // Still not a failure, and still not one named cause — but a narrower
+      // set of causes than this used to cover, and the sentence says which.
+      //
+      // A provider that *reports* a fault no longer arrives here. All four
+      // cloud clients now record an error frame, a close frame's reason, a
+      // dead transport, or an unreadable first frame into `SessionFault`, and
+      // `send_audio` and `finish` turn that into an `Err`, so a rejected
+      // session-config frame ends the meeting as `failed` carrying what the
+      // provider said. That was the confusion this comment used to describe
+      // and it is gone.
+      //
+      // What still lands here is genuinely ambiguous and is meant to be: a
+      // quiet room, and a provider that accepted the session, said nothing was
+      // wrong, and produced no transcript anyway — a silently misconfigured
+      // session, or a system-audio loopback with no samples in it. Nothing
+      // this side can separate those, so the sentence names both rather than
+      // picking one. Saying "failed" would send somebody hunting a fault that
+      // may not exist.
+      return `Nothing was transcribed — no speech was recognised, or the provider returned nothing without reporting a fault. The recording is at ${outcome.recordingPath}.`;
     case "cancelled":
       return "Discarded. The recording was deleted.";
     case "failed":

@@ -222,8 +222,20 @@ pub enum Incoming {
         speaker: Option<String>,
     },
     /// The server reported an error. Carried rather than logged, because a
-    /// meeting silently producing no transcript is the failure to avoid.
+    /// meeting silently producing no transcript is the failure to avoid — a
+    /// promise the socket layer broke until 2026-08-31, logging this and
+    /// carrying on. It now records into [`crate::fault::SessionFault`] and the
+    /// session ends.
     Failed { message: String },
+    /// A frame this client could not parse at all.
+    ///
+    /// Separate from [`Incoming::Failed`] on purpose. That one means the
+    /// provider *named* a fault; this one means we could not read what the
+    /// provider said. `interpret` used to answer both with `Failed`, so an HTML
+    /// error body and a text keepalive this parser happens not to know were the
+    /// same thing to every caller. [`crate::fault::ends_the_session`] is where
+    /// the difference is spent, and says why.
+    Unreadable { preview: String },
     /// Something this client does not act on. Named rather than ignored so a
     /// new event type shows up in a log instead of vanishing.
     Other { kind: String },
@@ -268,8 +280,13 @@ fn first_word_speaker(value: &Value) -> Option<String> {
 #[must_use]
 pub fn interpret(frame: &str) -> Incoming {
     let Ok(value) = serde_json::from_str::<Value>(frame) else {
-        return Incoming::Failed {
-            message: "the server sent something that is not JSON".to_owned(),
+        // Not `Failed`. An HTML error body and a keepalive this parser does not
+        // recognise both land here, and only one of them should end a meeting;
+        // the caller decides which, with `crate::fault::ends_the_session`. The
+        // frame itself is repeated back — bounded and flattened — because "not
+        // JSON" is worth very little next to what the provider actually sent.
+        return Incoming::Unreadable {
+            preview: crate::fault::preview(frame),
         };
     };
 
@@ -389,8 +406,18 @@ pub fn transcript(events: Vec<TranscriptEvent>, duration_seconds: f64) -> Meetin
         events,
         duration_seconds,
         reconnects: 0,
-        // Nothing is dropped by this client: the socket either carries a
-        // frame or the send fails and the session ends.
+        // Nothing is dropped by this client on the way out: audio either
+        // reaches the socket or the session ends. Three things end it and none
+        // of them skips ahead — a send that fails, an error frame the provider
+        // sent, and a first frame this client could not read. See
+        // `crate::fault`.
+        //
+        // Not the whole truth on the way in, and that half predates this: the
+        // reader stops on `TranscriptBudget` exhaustion, so a session past
+        // `MAX_TRANSCRIPT_BYTES` or `MAX_TRANSCRIPT_EVENTS` keeps recording and
+        // transcribes nothing further — and that is not counted here either.
+        // Bounding untrusted provider output is deliberate; not counting what
+        // the bound costs is a gap, filed rather than papered over here.
         gaps: 0,
     }
 }
@@ -715,9 +742,15 @@ mod tests {
     }
 
     #[test]
-    fn a_frame_that_is_not_json_is_a_failure_and_not_a_transcript() {
+    fn a_frame_that_is_not_json_is_unreadable_and_not_a_transcript() {
+        // `Unreadable` rather than `Failed`: whether this ends the session
+        // depends on when it arrived, and `crate::fault::ends_the_session` holds
+        // that rule. The frame is repeated back rather than replaced with "not
+        // JSON" — see `crate::fault::preview` for why, and for the bound on it.
         match interpret("<html>502 Bad Gateway</html>") {
-            Incoming::Failed { message } => assert!(message.contains("not JSON")),
+            Incoming::Unreadable { preview } => {
+                assert_eq!(preview, "<html>502 Bad Gateway</html>");
+            }
             other => panic!("{other:?}"),
         }
     }
