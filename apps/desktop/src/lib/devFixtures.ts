@@ -841,6 +841,20 @@ const CALENDAR: CalendarStatus = {
 
 /* ------------------------------------------------------- history and notes */
 
+/**
+ * The two history switches, held rather than returned as constants.
+ *
+ * The Dictation screen reloads after writing either one, so a constant would
+ * make the checkbox snap back and hide the thing worth looking at here: with
+ * `historyEnabled` off, "Keep the text before cleanup" is disabled and says why.
+ *
+ * `historyEnabled` starts on and `keepRawText` starts on. Only the first matches
+ * the real default -- keeping the raw text is off in a real install, and it is on
+ * here so the invented history below can show a `rawText` row.
+ */
+let historyEnabled = true;
+let keepRawText = true;
+
 const HISTORY: Transcription[] = [
   {
     id: 41,
@@ -1053,10 +1067,22 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
   },
   history_delete: () => true,
   history_clear: () => HISTORY.length,
+  // Clearing is not switching off and switching off is not clearing, which is
+  // the point the two adjacent controls have to make. `history_clear` reports a
+  // count and leaves the fixture list alone; this pair moves a flag and never
+  // touches a row.
+  history_enabled: () => historyEnabled,
+  history_set_enabled: (a) => {
+    historyEnabled = arg<boolean>(a, "enabled") ?? historyEnabled;
+    return null;
+  },
   // On, so the invented history above can show a `rawText` row. The real
   // default is off -- see `KEEP_RAW_TEXT_KEY`.
-  history_keep_raw_text: () => true,
-  history_set_keep_raw_text: () => null,
+  history_keep_raw_text: () => keepRawText,
+  history_set_keep_raw_text: (a) => {
+    keepRawText = arg<boolean>(a, "enabled") ?? keepRawText;
+    return null;
+  },
 
   /* notes */
   notes_list: (a) => {

@@ -21,6 +21,7 @@ import {
   getDictationRoute,
   getDictationState,
   getHistory,
+  getHistoryEnabled,
   getHotkeys,
   getInputDevices,
   getKeepRawText,
@@ -28,6 +29,7 @@ import {
   onDictationOutcome,
   onDictationState,
   onHotkey,
+  setHistoryEnabled,
   setHotkey,
   setInputDevice,
   setKeepRawText,
@@ -56,17 +58,35 @@ export function DictationView({
   hook: ShortcutHookStatus;
 }) {
   const load = useCallback(async () => {
-    const [hotkeys, session, devices, canInsert, route, history, keepRaw] =
-      await Promise.all([
-        getHotkeys(),
-        getDictationState(),
-        getInputDevices(),
-        isInsertionSupported(),
-        getDictationRoute(),
-        getHistory(20),
-        getKeepRawText(),
-      ]);
-    return { hotkeys, session, devices, canInsert, route, history, keepRaw };
+    const [
+      hotkeys,
+      session,
+      devices,
+      canInsert,
+      route,
+      history,
+      historyOn,
+      keepRaw,
+    ] = await Promise.all([
+      getHotkeys(),
+      getDictationState(),
+      getInputDevices(),
+      isInsertionSupported(),
+      getDictationRoute(),
+      getHistory(20),
+      getHistoryEnabled(),
+      getKeepRawText(),
+    ]);
+    return {
+      hotkeys,
+      session,
+      devices,
+      canInsert,
+      route,
+      history,
+      historyOn,
+      keepRaw,
+    };
   }, []);
 
   const { data, error, reload, guard } = useRefresh(load);
@@ -143,7 +163,8 @@ export function DictationView({
     );
   }
 
-  const { hotkeys, devices, canInsert, route, history, keepRaw } = data;
+  const { hotkeys, devices, canInsert, route, history, historyOn, keepRaw } =
+    data;
   // Keyed by action, because that is the shape of the fact: nothing handles the
   // chat agent, whatever it happens to be bound to.
   const unhandled = new Map<string, string>(
@@ -322,6 +343,42 @@ export function DictationView({
       <section>
         <h2>History</h2>
 
+        {/* First, because it governs whether the other two controls in this
+            section have anything to act on. Until 2026-08-31 the backend
+            honoured `history.enabled` before every write and nothing in the
+            application could set it: the only way to stop the app writing down
+            everything dictated was to edit SQLite by hand. */}
+        <div className="row">
+          <span className="row-label">Save dictation history</span>
+          <span className="row-value controls">
+            <label>
+              <input
+                type="checkbox"
+                checked={historyOn}
+                onChange={(e) => {
+                  const enabled = e.target.checked;
+                  void guard(async () => {
+                    await setHistoryEnabled(enabled);
+                    await reload();
+                  });
+                }}
+              />
+              Add each dictation to the list below
+            </label>
+            {/* This and Clear history are a stop and a delete, and they sound
+                alike enough that the difference has to be said rather than
+                discovered. Both sentences name the other control, so whichever
+                state the switch is in the user is told where the other half is.
+                Neither counts anything: the list below is capped at twenty, so
+                a number here would be a number about the wrong set. */}
+            <em className="row-detail">
+              {historyOn
+                ? "Switching this off stops new entries and deletes nothing — Clear history is the control that removes what is already saved."
+                : "Nothing new is being saved. Switching this off never deletes anything — what was saved before is still in the list until Clear history removes it."}
+            </em>
+          </span>
+        </div>
+
         {/* The same shape `Settings > Meetings` uses for "Offer to record":
             `Row` takes a string value, and this needs a control. */}
         <div className="row">
@@ -331,6 +388,11 @@ export function DictationView({
               <input
                 type="checkbox"
                 checked={keepRaw}
+                /* Disabled rather than hidden while history is off. It is a
+                   choice about what a row contains, and with history off there
+                   are no rows -- but the setting is still stored, so hiding it
+                   would leave a value the user set and can no longer see. */
+                disabled={!historyOn}
                 onChange={(e) => {
                   const enabled = e.target.checked;
                   void guard(async () => {
@@ -346,9 +408,11 @@ export function DictationView({
                 said. The reason to want it is that a row carrying both is the
                 only proof cleanup did anything on that dictation. */}
             <em className="row-detail">
-              {keepRaw
-                ? "Two copies of what you said are stored on rows cleanup altered."
-                : "Only the final text is stored. Switch this on to see what cleanup changed."}
+              {!historyOn
+                ? "No entries are being saved, so there is nothing for a second version to go on."
+                : keepRaw
+                  ? "Two copies of what you said are stored on rows cleanup altered."
+                  : "Only the final text is stored. Switch this on to see what cleanup changed."}
             </em>
           </span>
         </div>
