@@ -197,6 +197,21 @@ pub fn is_installed(dir: &Path, model: &WhisperModel) -> bool {
 }
 
 /// Download a model into `dir` and verify it.
+///
+/// The download is bounded where the model carries a **measured** length, and
+/// unbounded where it does not. All six shipped models carry one as of
+/// `a82d06b`, so in practice every install is bounded; the unbounded arm is for
+/// the same model [`Integrity::Size`] exists for — one added to the baseline
+/// before anybody has spent the bandwidth to measure it.
+///
+/// **The bound is only ever an exact figure.** Bounding a *declared* length
+/// would reintroduce KNEG-101, where `download_gguf` compared a finished
+/// download against a size that was 7.4% wrong for eighteen models and deleted
+/// all eighteen. That bug wasted the bandwidth; a bound would have refused the
+/// transfer mid-flight instead, which is faster and just as wrong. So
+/// [`Integrity::Size`]'s tolerance stays a *post*-download check and never
+/// becomes a bound: a rounded figure cannot bound anything, because the true
+/// length may be on either side of it.
 pub async fn install(
     policy: &NetworkPolicy,
     model: &WhisperModel,
@@ -215,14 +230,35 @@ pub async fn install(
     let final_path = model_path(dir, model);
     let partial = final_path.with_extension("partial");
 
-    policy
-        .download_to_file(
-            RequestPurpose::UserTriggeredModelDownload,
-            &model.download_url,
-            &partial,
-            &mut |written, total| progress(ModelProgress::Downloading { written, total }),
-        )
-        .await?;
+    let integrity = integrity_for(model);
+    let mut report = |written, total| progress(ModelProgress::Downloading { written, total });
+    match &integrity {
+        // A measured length, so it is exact and can bound the transfer.
+        Integrity::Pinned { size_bytes, .. } => {
+            policy
+                .download_to_file_bounded(
+                    RequestPurpose::UserTriggeredModelDownload,
+                    &model.download_url,
+                    &partial,
+                    *size_bytes,
+                    &mut report,
+                )
+                .await?;
+        }
+        // `Integrity::Size`'s figure is declared, and `Unknown` has none at
+        // all. Neither can bound a download; both are still checked against
+        // afterwards by `check` below.
+        Integrity::Size { .. } | Integrity::Unknown => {
+            policy
+                .download_to_file(
+                    RequestPurpose::UserTriggeredModelDownload,
+                    &model.download_url,
+                    &partial,
+                    &mut report,
+                )
+                .await?;
+        }
+    }
 
     progress(ModelProgress::Verifying);
 
@@ -234,7 +270,7 @@ pub async fn install(
         })?
         .len();
 
-    let verification = match check(&partial, bytes, &integrity_for(model), &model.file_name) {
+    let verification = match check(&partial, bytes, &integrity, &model.file_name) {
         Ok(verification) => verification,
         Err(err) => {
             // A file that failed its check must not be left where a later run

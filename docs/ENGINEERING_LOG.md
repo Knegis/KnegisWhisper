@@ -216,6 +216,175 @@ Unchanged from the Phases 1–4 entry, restated here so they are not buried:
 
 ---
 
+## 2026-08-31 (KNEG-100/102) — a ceiling that lied, four unbounded downloads, and 21 measured archives
+
+`f17a5fd` added two real protections and left them almost unused.
+`NetworkPolicy::download_to_file_bounded` refuses a body larger than a pinned length before it
+reaches disk; `kw_sidecar::extract_with_limit` caps what an archive may write when it is unpacked.
+One caller used either. This pass made both of them true everywhere they belong, and found that
+the extraction half had never worked for four of its five archive kinds.
+
+### The ceiling applied to one archive kind in five (KNEG-102)
+
+`extract_with_limit`'s doc comment said "refusing to write more than `max_bytes` in total". Its
+body threaded `max_bytes` to `TarBz2` alone; `Zip`, `TarGz`, `TarXz` and `Bare` took the argument
+and discarded it. **A ceiling that lies is worse than no ceiling** — it is the difference between a
+caller knowing it is unprotected and a caller believing it is protected. Nothing was exposed by
+it, because the only caller passing a limit installs `.tar.bz2` models. Luck, not design, and the
+luck would have run out at the next commit, which threads limits through the sidecar path — `zip`
+on Windows, `tar.xz` on Linux.
+
+**The header rule is not enough, and this was read rather than assumed.** The `TarBz2` path
+accumulated `entry.size()` and refused before writing. That is exact for a tar: `tar::Entry`'s
+reader is an `io::Take` over the same header size (`tar-0.4.46/src/entry.rs`, `EntryIo::Data`), so
+the bytes cannot disagree with the header. A zip entry's reader is a decompressor over
+`take(compressed_size)` (`zip-2.4.2/src/read.rs`, `make_reader`), and nothing in it holds the
+inflated output to the `uncompressed_size` the central directory declares.
+`a_zip_whose_header_understates_its_output_is_refused_on_the_real_bytes` patches a one-entry zip's
+declared size down to 1 for a 1 MiB payload; the crate hands over all 1 MiB. A header-only ceiling
+would have passed it, which is precisely the decompression bomb the ceiling exists for. So the
+copy is now bounded on the bytes that arrive as well, with the declared-size check kept in front of
+it as the fast refusal that stops an oversized entry landing at all.
+
+**A refusal takes back what it wrote.** `extract_tar_limited` returned `Err` and left every file it
+had already written; so did `extract_tar` and `extract_zip` on a corrupt entry or an unsafe name. A
+half-unpacked directory can look convincing to a later `locate`. The rollback removes its own files
+and then its own directories, deepest first, with `remove_dir` rather than `remove_dir_all` — and
+never `dest`, because for `sherpa_models::install` `dest` is the models *root* and clearing it would
+take every other installed model.
+
+**`InstallError::ExtractedTooLarge`** replaces `Archive { detail: "extracted data exceeds …" }`.
+`tests/tar_bz2_fixture.rs` had asserted on that substring because there was nothing better to match
+on.
+
+One test per `ArchiveKind`, every one overflowing on a *later* entry. The only ceiling test that
+existed used `max_bytes = 1`, which trips on the first entry and so proves nothing about partial
+output. Both sides of the boundary are asserted: an extraction fitting its ceiling exactly succeeds
+for all four archive kinds, because a bound that refuses a legitimate install is worse than no
+bound.
+
+### The extracted footprint of all 21 published sidecar targets, measured
+
+`Asset` had `sha256` and `sizeBytes` and no analogue of the `maxExtractedSizeBytes` the sherpa
+models carry, so there were two options: add the field and measure 21 targets, or bound the
+download only and say the extraction ceiling for sidecars is deliberately absent. The measurement
+turned out cheap — 1.85 GB in total, and `tools/sidecar-pin/pin.mjs` already downloads and indexes
+every archive on `--verify` — so the field exists and is mandatory.
+
+`node tools/sidecar-pin/pin.mjs --extracted --write`, 2026-08-31. Download and extracted are
+measurements; ceiling is the judgement.
+
+| target | archive | download | extracted | ceiling |
+| --- | --- | --- | --- | --- |
+| whisper/windows-x86_64 | zip | 8,361,840 | 21,213,696 | 27,262,976 |
+| whisper/linux-x86_64 | tar-gz | 9,503,425 | 24,527,510 | 31,457,280 |
+| whisper/linux-aarch64 | tar-gz | 4,572,294 | 10,587,134 | 13,631,488 |
+| llama/windows-x86_64 | zip | 17,287,711 | 44,587,872 | 56,623,104 |
+| llama/linux-x86_64 | tar-gz | 15,646,315 | 39,784,422 | 50,331,648 |
+| llama/linux-aarch64 | tar-gz | 12,665,261 | 31,133,878 | 39,845,888 |
+| llama/macos-x86_64 | tar-gz | 11,280,969 | 27,561,662 | 34,603,008 |
+| llama/macos-aarch64 | tar-gz | 10,978,734 | 27,450,446 | 34,603,008 |
+| ffmpeg/windows-x86_64 | zip | 145,349,121 | 343,922,176 | 429,916,160 |
+| ffmpeg/linux-x86_64 | tar-xz | 111,679,252 | 348,784,736 | 436,207,616 |
+| ffmpeg/linux-aarch64 | tar-xz | 96,564,568 | 283,579,184 | 355,467,264 |
+| yt-dlp/windows-x86_64 | bare | 17,840,399 | 17,840,399 | 17,840,399 |
+| yt-dlp/linux-x86_64 | bare | 40,446,224 | 40,446,224 | 40,446,224 |
+| yt-dlp/linux-aarch64 | bare | 40,167,448 | 40,167,448 | 40,167,448 |
+| yt-dlp/macos-x86_64 | bare | 37,146,048 | 37,146,048 | 37,146,048 |
+| yt-dlp/macos-aarch64 | bare | 37,146,048 | 37,146,048 | 37,146,048 |
+| sherpa/windows-x86_64 | tar-bz2 | 24,378,225 | 43,812,352 | 55,574,528 |
+| sherpa/linux-x86_64 | tar-bz2 | 384,752,102 | 1,249,715,232 | 1,562,378,240 |
+| sherpa/linux-aarch64 | tar-bz2 | 337,820,882 | 920,336,696 | 1,151,336,448 |
+| sherpa/macos-x86_64 | tar-bz2 | 254,918,578 | 879,667,336 | 1,099,956,224 |
+| sherpa/macos-aarch64 | tar-bz2 | 231,438,974 | 777,705,592 | 973,078,528 |
+
+Four things this measurement decided rather than assumed:
+
+- **Extracted is not the archive's uncompressed size.** Only the entries inside the payload
+  directory are ever written — the Windows whisper archive carries `main.exe`, `SDL2.dll`,
+  `llama.dll` and a dozen test binaries that are not — so `extractedBytes` mirrors
+  `install::payload_relative` rather than summing the index.
+- **For zip, the entries are inflated rather than read off the central directory.** Same reason the
+  Rust now bounds on real bytes: `uncompressed_size` is a declaration. The tool decompresses each
+  payload entry with `inflateRawSync` and counts what comes out.
+- **The ceiling is one stated rule, not 21 numbers.** Measured + 25%, rounded up to the next MiB
+  (`withHeadroom`). The drift a pinned asset sees between upstream builds is a few percent — a
+  rebuilt binary, an added microarchitecture DLL — not a multiple, and 25% absorbs that while still
+  refusing something that decompresses to several times what was measured. It errs high because
+  being wrong high costs protection and being wrong low refuses a legitimate install, which is the
+  trade `SHERPA_PINS` already records for its two hand-chosen figures.
+- **`Bare`'s ceiling is its download size, with no headroom.** The file is copied verbatim, so
+  headroom above a digest-pinned length could only ever be reached by a different file.
+
+**All 21 digests were re-verified in the same run**, as a side effect worth stating: the tool
+refuses to measure an asset whose digest has moved, because a ceiling derived from unpinned bytes
+pins the wrong number. `--verify` now re-measures the extracted total too and fails when a
+committed ceiling has become too tight to install through — the failure mode
+`docs/PLATFORM_SUPPORT.md` records for the sherpa `sizeMb` figure, caught by CI rather than by a
+user.
+
+### Which downloads got bounded, and which deliberately did not
+
+| caller | download | extraction |
+| --- | --- | --- |
+| `sidecar::install` — all 21 targets | `sizeBytes`, exact | `maxExtractedSizeBytes` |
+| `sherpa_models::install` | already bounded | already limited |
+| `models::install` — whisper `.bin` | `expectedSizeBytes` where `Integrity::Pinned` | n/a |
+| `local_llm::download_gguf` | `sizeBytes` where `SizeCheck::Exact` | n/a |
+| `examples/sherpa_probe.rs` | `expectedSizeBytes` | `maxExtractedSizeBytes` |
+
+**A bound is only ever an exact figure**, and that is the whole reason two of those rows are
+conditional. A bound refuses a transfer mid-flight, so a *declared* length cannot be one: the true
+length may be on either side of it. Bounding `SizeCheck::Approximate` would have reintroduced
+KNEG-101 in a faster form — eighteen GGUFs were declared 6.7–7.9% larger than the file Hugging Face
+serves, and the version of `download_gguf` that compared the *finished* download against that
+figure deleted all eighteen after 101 GB of successful transfer. A bound would have refused them
+sooner and just as wrongly. So `Approximate` and `Integrity::Size` keep their tolerance as a
+post-download check and never become bounds, which leaves an unmeasured model degraded rather than
+broken. Every shipped model reaches the bounded arm today.
+
+### The partial-file leak, and the first test for `DownloadTooLarge`
+
+`download_to_file_bounded`'s streaming refusal returned after creating and partially filling the
+file, with no `remove_file`. So did the mid-stream write error and the chunk error from a dropped
+connection — three returns, no cleanup, and a truncated body left on disk that a later
+`is_installed` check finds as convincing as a refused one. The body half is now
+`stream_to_file`, so every failure leaves through one cleanup path in the caller.
+
+**`PolicyError::DownloadTooLarge` had no test anywhere.** It was written, shipped, used by one
+caller and never exercised. There are four now, against a minimal loopback HTTP server in the test
+module (extending the `respond_once` helper `get_text` already used, rather than adding a mock
+harness). They cover something the one-line doc comment had not recorded: **the `content-length`
+pre-check often does not run at all.** It uses `Option::zip`, so a response with no
+`content-length` — a chunked one, or HTTP/1.0 with `Connection: close` — skips it entirely, and the
+running total in the streaming loop is the check that actually guarantees the bound. That is
+correct behaviour, since a header is a claim and a body may be longer than its own header says, but
+it was undocumented. The tests exercise both shapes, plus a body exactly on its limit (the normal
+case, since every real bound is an exact pinned length) and an unbounded download of any length.
+
+### Verified against the real network
+
+- `cargo test -p kw-sidecar --test real_install -- --ignored` — the pinned whisper sidecar
+  downloads, verifies and unpacks under both new bounds.
+- `cargo test -p kw-transcription-core --test local_dictation -- --ignored` — a real whisper model
+  under the exact-size download bound.
+- `cargo test -p kw-transcription-core --test subtitle_export -- --ignored` — a sidecar *and* a
+  model, so both new bounds in one run.
+
+None of them refused a legitimate install, which was the risk worth checking: a bound that refuses
+one is worse than no bound.
+
+### Filed, not fixed
+
+**KNEG-106** (Low). `extract_tar_xz` decompresses the whole tar into a `Vec<u8>` before looking at
+an entry, because `lzma-rs` decompresses into a `Write` and exposes no streaming `Read`.
+`max_bytes` bounds what reaches `dest` and cannot bound that buffer, so a `.tar.xz` remains a
+memory bomb whatever ceiling is passed — independent of the output ceiling it now honours. Behind a
+mandatory digest, and the only pinned `tar-xz` assets are ffmpeg on Linux at ~100 MB compressed and
+~300 MB extracted. Needs a streaming LZMA2 reader; the function's doc comment now says so.
+
+---
+
 ## 2026-08-31 (whisper pins) — six digests measured, and three pin tables become one
 
 `crates/transcription-core/src/models.rs` had carried, since it was written, a `PINNED` table with

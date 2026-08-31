@@ -621,7 +621,35 @@ impl NetworkPolicy {
             .await
     }
 
-    /// Stream a URL to a file, aborting before more than `max_bytes` are written.
+    /// Stream a URL to a file, aborting before more than `max_bytes` are
+    /// written, and deleting the partial file if it aborts.
+    ///
+    /// `max_bytes` is a *pinned length*, not a guess. The two callers pass a
+    /// figure somebody measured — `Asset::size_bytes` from
+    /// `config/sidecars.json`, or `SherpaModel::expected_size_bytes` — so the
+    /// bound is exact and the digest check that follows would have failed on
+    /// anything else anyway. Do not pass a rounded or declared figure: an
+    /// upstream re-upload one byte over the pin would then be reported as a
+    /// refused download rather than as a changed asset. (That is the mistake
+    /// KNEG-101 fixed one layer up, where `download_gguf` compared a finished
+    /// download against a declared size that was 7.4% wrong for eighteen
+    /// models.)
+    ///
+    /// **Two checks, and the first one often does not run.** `content-length`
+    /// is compared against `max_bytes` before the file is created, so an
+    /// over-long body is refused without a byte reaching disk. That check is
+    /// skipped entirely when the response carries no `content-length` — a
+    /// chunked response, or HTTP/1.0 with `Connection: close` — because
+    /// `Option::zip` yields `None` and the comparison cannot be made. The
+    /// running total in the streaming loop is what holds in that case, and it
+    /// is the check that actually guarantees the bound: a `content-length`
+    /// header is a claim by the server, and a body may be longer than its own
+    /// header says.
+    ///
+    /// Neither check is a substitute for the digest. This bounds *how much
+    /// disk a hostile or broken mirror can fill before it is rejected*, which
+    /// is the window a digest cannot cover, because a digest can only be
+    /// computed once the bytes are already written.
     pub async fn download_to_file_bounded(
         &self,
         purpose: RequestPurpose,
@@ -642,8 +670,6 @@ impl NetworkPolicy {
         max_bytes: Option<u64>,
         progress: &mut (dyn FnMut(u64, Option<u64>) + Send),
     ) -> Result<Download, PolicyError> {
-        use tokio::io::AsyncWriteExt as _;
-
         const MAX_HOPS: u8 = 5;
 
         let mut current = url.to_owned();
@@ -693,11 +719,68 @@ impl NetworkPolicy {
         };
 
         let total = response.content_length();
+        // Checked before the file is created, so a body that declares itself
+        // over the limit never puts a byte on disk. `Option::zip` yields `None`
+        // when the response carries no `content-length` at all, which skips
+        // this check rather than failing it -- see the doc comment on
+        // `download_to_file_bounded`. The running total in `stream_to_file` is
+        // what holds in that case, and it is the check that actually
+        // guarantees the bound.
         if total.zip(max_bytes).is_some_and(|(total, max)| total > max) {
             return Err(PolicyError::DownloadTooLarge {
                 limit: max_bytes.unwrap_or(0),
             });
         }
+
+        match Self::stream_to_file(response, destination, max_bytes, total, progress).await {
+            Ok(written) => Ok(Download {
+                bytes: written,
+                final_url: current,
+                hops,
+            }),
+            Err(err) => {
+                // Every failure after the file was created, not only a refused
+                // ceiling: a truncated body from a dropped connection is just
+                // as convincing to a later `is_installed` check as a refused
+                // one, and neither is the file that was asked for.
+                //
+                // Best-effort. A failed removal must not replace the error
+                // that caused it, which is the one the caller needs, so it is
+                // logged and the original error is returned.
+                match tokio::fs::remove_file(destination).await {
+                    Ok(()) => {}
+                    Err(remove) if remove.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(remove) => tracing::warn!(
+                        path = %destination.display(),
+                        error = %remove,
+                        "could not remove the partial download"
+                    ),
+                }
+                Err(err)
+            }
+        }
+    }
+
+    /// The body half of [`Self::download_to_file_inner`]: create the file,
+    /// stream into it, and report how many bytes landed.
+    ///
+    /// Split out so that *every* way this can fail leaves through one cleanup
+    /// path in the caller. Inline, each `?` was its own partial-file leak — the
+    /// streaming size refusal, the mid-stream write error, and the chunk error
+    /// from a dropped connection, three separate returns and no `remove_file`
+    /// after any of them.
+    ///
+    /// The file is closed by the time this returns, in every arm, which is what
+    /// makes the caller's `remove_file` work on Windows.
+    async fn stream_to_file(
+        response: reqwest::Response,
+        destination: &std::path::Path,
+        max_bytes: Option<u64>,
+        total: Option<u64>,
+        progress: &mut (dyn FnMut(u64, Option<u64>) + Send),
+    ) -> Result<u64, PolicyError> {
+        use tokio::io::AsyncWriteExt as _;
+
         let mut file = tokio::fs::File::create(destination)
             .await
             .map_err(|source| PolicyError::Write {
@@ -708,6 +791,9 @@ impl NetworkPolicy {
         let mut written: u64 = 0;
         let mut stream = response;
         while let Some(chunk) = stream.chunk().await? {
+            // Before the write, so the byte that would cross the limit is
+            // never written -- the bound is on what reaches disk, not on what
+            // is noticed afterwards.
             if max_bytes.is_some_and(|max| written.saturating_add(chunk.len() as u64) > max) {
                 return Err(PolicyError::DownloadTooLarge {
                     limit: max_bytes.unwrap_or(0),
@@ -728,11 +814,7 @@ impl NetworkPolicy {
             source,
         })?;
 
-        Ok(Download {
-            bytes: written,
-            final_url: current,
-            hops,
-        })
+        Ok(written)
     }
 }
 
@@ -968,6 +1050,194 @@ mod tests {
             !dir.path().join("out.zip").exists(),
             "a refused download must not leave a file behind"
         );
+    }
+
+    // --------------------------------------------------------- download bounds
+    //
+    // The first tests for `PolicyError::DownloadTooLarge`, which had none at
+    // all: the bound was written, shipped, and used by one caller, and nothing
+    // had ever exercised it.
+    //
+    // Served over loopback plaintext, so `SELF_HOSTED` is the purpose -- it is
+    // the only one `allows_plaintext_private`. Which purpose validated the URL
+    // has nothing to do with the mechanism under test; `DOWNLOAD` is the
+    // purpose the real callers pass and it cannot reach a loopback server at
+    // all, which is asserted separately above.
+
+    /// A body of `size` bytes, and whether to declare its length.
+    ///
+    /// Two shapes, because the bound has two checks and only one of them can
+    /// run at a time. `Declared` exercises the `content-length` pre-check;
+    /// `Undeclared` omits the header, so `Option::zip` yields `None`, the
+    /// pre-check is skipped, and the running total in the streaming loop is
+    /// what has to refuse. Undeclared is not a contrived shape: a chunked
+    /// response has no `content-length` either.
+    async fn serve_body(size: usize, declare: bool) -> std::net::SocketAddr {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 1024];
+            let _ = socket.read(&mut buf).await;
+
+            // Without `Content-Length`, `Connection: close` is what tells the
+            // client the body ended -- it reads to EOF.
+            let header = if declare {
+                format!("HTTP/1.1 200 OK\r\nContent-Length: {size}\r\nConnection: close\r\n\r\n")
+            } else {
+                "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n".to_owned()
+            };
+            let _ = socket.write_all(header.as_bytes()).await;
+            // Written in chunks so the streaming check meets more than one.
+            let chunk = vec![b'x'; 4096];
+            let mut sent = 0;
+            while sent < size {
+                let take = std::cmp::min(chunk.len(), size - sent);
+                if socket.write_all(&chunk[..take]).await.is_err() {
+                    break;
+                }
+                sent += take;
+            }
+            let _ = socket.shutdown().await;
+        });
+
+        addr
+    }
+
+    #[tokio::test]
+    async fn a_declared_length_over_the_bound_is_refused_before_the_file_is_created() {
+        let addr = serve_body(64 * 1024, true).await;
+        let dir = tempfile::tempdir().unwrap();
+        let destination = dir.path().join("asset");
+        let policy = NetworkPolicy::new().unwrap();
+        let mut seen = |_written: u64, _total: Option<u64>| {};
+
+        let err = policy
+            .download_to_file_bounded(
+                SELF_HOSTED,
+                &format!("http://{addr}/asset"),
+                &destination,
+                1024,
+                &mut seen,
+            )
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(err, PolicyError::DownloadTooLarge { limit: 1024 }),
+            "{err}"
+        );
+        assert!(
+            !destination.exists(),
+            "the content-length check runs before the file is created, so nothing should exist"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_undeclared_body_over_the_bound_is_refused_mid_stream_and_the_partial_is_deleted() {
+        // The check that actually guarantees the bound. With no
+        // `content-length` the pre-check above cannot run at all, so this is
+        // the whole protection -- and it is the path that used to `return`
+        // after creating and partially filling the file, leaving a truncated
+        // download on disk with no `remove_file`.
+        let addr = serve_body(64 * 1024, false).await;
+        let dir = tempfile::tempdir().unwrap();
+        let destination = dir.path().join("asset");
+        let policy = NetworkPolicy::new().unwrap();
+        let mut high_water = 0_u64;
+        let mut seen = |written: u64, _total: Option<u64>| high_water = written;
+
+        let err = policy
+            .download_to_file_bounded(
+                SELF_HOSTED,
+                &format!("http://{addr}/asset"),
+                &destination,
+                8192,
+                &mut seen,
+            )
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(err, PolicyError::DownloadTooLarge { limit: 8192 }),
+            "{err}"
+        );
+        assert!(
+            !destination.exists(),
+            "a refused download must not leave a partial file behind"
+        );
+        assert!(
+            high_water <= 8192,
+            "the bound is on what reaches disk: {high_water} bytes were written"
+        );
+        // Not vacuous: a partial file really did exist before the refusal, so
+        // the assertion above is about a `remove_file` that had work to do
+        // rather than about a file that was never created.
+        assert!(
+            high_water > 0,
+            "nothing was written at all, so this proves nothing about cleanup"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_body_that_exactly_matches_its_bound_is_not_refused() {
+        // A bound that refuses a legitimate install is worse than no bound, and
+        // the real callers pass an *exact* pinned length -- `Asset::size_bytes`
+        // and `SherpaModel::expected_size_bytes` -- so "exactly the limit" is
+        // the normal case, not an edge one. Asserted for both shapes, because
+        // the two checks are separate comparisons.
+        for declare in [true, false] {
+            let addr = serve_body(16 * 1024, declare).await;
+            let dir = tempfile::tempdir().unwrap();
+            let destination = dir.path().join("asset");
+            let policy = NetworkPolicy::new().unwrap();
+            let mut seen = |_written: u64, _total: Option<u64>| {};
+
+            let download = policy
+                .download_to_file_bounded(
+                    SELF_HOSTED,
+                    &format!("http://{addr}/asset"),
+                    &destination,
+                    16 * 1024,
+                    &mut seen,
+                )
+                .await
+                .unwrap_or_else(|err| panic!("declare={declare}: {err}"));
+
+            assert_eq!(download.bytes, 16 * 1024, "declare={declare}");
+            assert_eq!(
+                std::fs::metadata(&destination).unwrap().len(),
+                16 * 1024,
+                "declare={declare}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn an_unbounded_download_still_takes_a_body_of_any_length() {
+        // `download_to_file` is `download_to_file_inner` with `None`, and the
+        // saturating arithmetic in the streaming check must not turn that into
+        // a refusal.
+        let addr = serve_body(64 * 1024, true).await;
+        let dir = tempfile::tempdir().unwrap();
+        let destination = dir.path().join("asset");
+        let policy = NetworkPolicy::new().unwrap();
+        let mut seen = |_written: u64, _total: Option<u64>| {};
+
+        let download = policy
+            .download_to_file(
+                SELF_HOSTED,
+                &format!("http://{addr}/asset"),
+                &destination,
+                &mut seen,
+            )
+            .await
+            .unwrap();
+        assert_eq!(download.bytes, 64 * 1024);
     }
 
     // -------------------------------------------------------------- get_text
