@@ -530,11 +530,15 @@ session is one pure function, `fault::ends_the_session`, because nothing in this
 a socket in a test. `stop()` was fixed with it: a pump failure used to return early and leave the
 screen stuck on "Recording" with no working button on it.
 
-**Two halves remain open and are not this.** The failure is still silent *while* the meeting runs —
-KNEG-95, which carries a design decision about whether a dead provider stops the recording, falls
-back, or says so in a fourth `MeetingState`. And three of the four clients have still never met a
-real provider error: no key exists for AssemblyAI, Deepgram or Corti. See `docs/BENCH_CHECK.md`
-item 13 and the 2026-08-31 (KNEG-79) entry in `docs/ENGINEERING_LOG.md`.
+**The mid-meeting half closed the same day (KNEG-95),** with the decision it was waiting for: a
+dead provider carries on recording and says so, through a fourth `MeetingState` that changes the
+indicator rather than taking it down. The recording is left running deliberately — the WAV is the
+artefact that cannot be recreated, and the saved note comes from the whole-file pass over it.
+
+**One half remains open and is not this.** Three of the four clients have still never met a real
+provider error: no key exists for AssemblyAI, Deepgram or Corti, so what the tests cover is this
+application's wiring and not any provider's behaviour. See `docs/BENCH_CHECK.md` item 13 and the
+2026-08-31 (KNEG-79) and (KNEG-95) entries in `docs/ENGINEERING_LOG.md`.
 
 ---
 

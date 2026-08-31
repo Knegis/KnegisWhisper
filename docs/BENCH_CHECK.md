@@ -372,9 +372,21 @@ says "seen to match". Everything else about chunk E is green tests.
     provider. Start a meeting on each cloud provider, provoke or wait for a
     refusal, and confirm the sentence on screen names what the provider said.
 
-    Still open and deliberately not closed with it: the same failure is
-    **silent while the meeting is running**. See KNEG-95 and the 2026-08-28
-    entry below.
+    Closed separately the same day (KNEG-95): the same failure is no longer
+    **silent while the meeting is running**. A fourth `MeetingState` changes the
+    indicator to "live transcript stopped — still recording" and puts the
+    provider's sentence on `Settings > Meetings`, and the recording deliberately
+    keeps going.
+
+    **That half needs a person too, and it is the cheaper of the two, because it
+    needs no key.** Start a meeting on `openai-realtime` with something wrong
+    with it, wait, and watch three things: the notification window's second line
+    changes to "live transcript stopped — still recording" within a second or
+    so, the timer keeps counting, and `Settings > Meetings` names what the
+    provider said. Then press Stop and confirm a note is still saved from the
+    whole-file pass. What that proves and nothing else does: the announcement
+    fires from inside the pump's own task, and `announce_transcript_ended` takes
+    an `AppHandle`, so nothing outside a running application can reach it.
 
 ### Still unchecked, and needs a person at the machine
 
@@ -748,8 +760,8 @@ test in this repository. The fixtures still pass. They passed the whole way thro
 **The honest-failure message works at Stop.** The fourth attempt ended with *"Nothing was
 transcribed — no speech was recognised, or the provider returned nothing. The recording is at
 …\meetings60828-135901.wav."* That is the right sentence: it does not claim success, it does
-not blame the user, and it says where the audio is. The gap remains that it arrives at Stop rather
-than at second zero -- **KNEG-95**.
+not blame the user, and it says where the audio is. The gap that it arrived at Stop rather than at
+second zero was **KNEG-95**, and it closed on 2026-08-31 — see below.
 
 **And the more serious defect it exposed: a meeting whose provider dies at second zero looks
 exactly like one that works.** Both sockets closed immediately; the application reported
@@ -767,11 +779,17 @@ audio stream the provider reported: The Realtime Beta API is no longer supported
 in one attempt rather than five attempts. `stop()` also stopped returning early on a pump failure,
 which had left the runtime idle while the screen said "Recording" with no working button on it.
 
-**The half that remains is exactly the sentence above it: it still arrives at Stop rather than at
-second zero.** The indicator stays up, recording continues, and nothing appears on screen while the
-meeting runs. That is **KNEG-95** and it was deliberately not taken here, because it needs a
-decision about whether a dead provider stops the recording, falls back immediately, or carries on
-with a fourth `MeetingState` saying so.
+**The other half closed later the same day (KNEG-95), once the decision it needed was made:** carry
+on recording, and say so. A dead provider now changes the indicator to *"live transcript stopped —
+still recording"* within the second it happens, and `Settings > Meetings` carries the provider's own
+sentence plus what happens next — the recording continues and Stop still transcribes the whole file.
+The recording is left running on purpose: the WAV is what saved this session, and stopping it to
+report a dead provider would destroy the valuable half to fix the misleading half.
+
+**Neither half has been driven by a real provider fault since.** The wiring is what the tests cover,
+and a test of this application is not a test of a provider. The by-hand check that would settle both
+is in item 13 above, and the cheaper half of it needs no key: start `openai-realtime` with something
+wrong with it and watch the indicator change while the timer keeps counting.
 
 ### Still unchecked, and needs a person at the machine
 

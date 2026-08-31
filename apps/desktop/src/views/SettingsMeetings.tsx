@@ -97,6 +97,10 @@ export function SettingsMeetings() {
     void onMeetingState((next) => {
       setState(next);
       if (next === "idle") setSources(null);
+      // The state event carries the state and nothing else, and the sentence
+      // explaining it lives on `MeetingStatus`. Reloading is how it gets here
+      // -- the same thing the outcome listener below does, for the same reason.
+      if (next === "recording-without-transcript") void reload();
     }).then((fn) => unlisteners.push(fn));
     // Replaced rather than appended: every event is a partial, and the windows
     // that produce them overlap by two seconds, so appending would repeat words.
@@ -153,7 +157,12 @@ export function SettingsMeetings() {
 
   const { providers, status } = data;
   const current = state ?? status.state;
-  const recording = current === "recording";
+  // A meeting whose provider died is still recording, so every control that
+  // asks "is a session running" must keep saying yes: Stop and Discard have to
+  // stay on screen, and Start has to stay off it. This was the whole shape of
+  // the bug `stop` had -- a screen with no working button on it.
+  const transcriptEnded = current === "recording-without-transcript";
+  const recording = current === "recording" || transcriptEnded;
   const selectedProvider = providers.find((p) => p.id === selected) ?? null;
   const keytermReview =
     review && selectedProvider
@@ -184,9 +193,11 @@ export function SettingsMeetings() {
           value={
             current === "recording"
               ? "Recording"
-              : current === "finishing"
-                ? "Transcribing the recording…"
-                : "Not recording"
+              : transcriptEnded
+                ? "Recording — the live transcript has stopped"
+                : current === "finishing"
+                  ? "Transcribing the recording…"
+                  : "Not recording"
           }
           detail={
             recording
@@ -196,6 +207,27 @@ export function SettingsMeetings() {
                 : undefined
           }
         />
+        {transcriptEnded ? (
+          /*
+           * The provider's own sentence, which is why `MeetingError::
+           * ProviderFault` carries which of the two sockets died: "the
+           * connection failed" would send someone looking at their network.
+           *
+           * Marked rather than red-texted, the same split `.caveat.warn` was
+           * introduced for: nothing here has failed in a way that needs
+           * repairing right now. The recording is running and the note will
+           * still be produced -- from the whole-file pass, which reads the
+           * complete audio and does not depend on the provider that died.
+           */
+          <p className="caveat warn">
+            <strong>The live transcript stopped.</strong>{" "}
+            {status.transcriptFailure ??
+              "The transcription task ended without saying why."}{" "}
+            Recording continues, and Stop will still transcribe the whole
+            recording — the saved note comes from that pass, not from the
+            lines below.
+          </p>
+        ) : null}
         <Row
           label="System audio"
           value={systemAudioValue(status.systemAudio)}
@@ -352,9 +384,9 @@ export function SettingsMeetings() {
         <section>
           <h2>Live transcript</h2>
           <p className="caveat">
-            Each line is the most recent few seconds, replaced as it is revised.
-            The transcript that gets saved comes from one pass over the whole
-            recording when the meeting ends, so it will read better than this.
+            {transcriptEnded
+              ? "These are the last lines the provider sent before the live transcription stopped. Nothing further will appear here, and the transcript that gets saved comes from one pass over the whole recording when the meeting ends."
+              : "Each line is the most recent few seconds, replaced as it is revised. The transcript that gets saved comes from one pass over the whole recording when the meeting ends, so it will read better than this."}
           </p>
           <Row label="You" value={live.mic ?? "—"} />
           <Row label="Everyone else" value={live.system ?? "—"} />

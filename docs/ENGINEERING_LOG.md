@@ -97,10 +97,14 @@ maintained in place rather than appended to, because its purpose is to be curren
 > `kw_meeting_core::fault::SessionFault` and both `send_audio` and `finish` consult it, so Stop
 > reports the provider's own sentence. `stop()` was fixed with it — a pump failure used to return
 > early, leaving the runtime idle and the screen stuck on "Recording" with no working button.
-> **What is still true:** the failure is invisible *while* the meeting runs (KNEG-95, which carries
-> a design decision this did not take), and three of the four clients have never met a real
-> provider error because no key exists for AssemblyAI, Deepgram or Corti. See the 2026-08-31
-> (KNEG-79) entry below, and `BENCH_CHECK.md` item 13.
+> **The mid-meeting half closed the same day (KNEG-95).** A dead provider now changes the
+> indicator instead of leaving it saying "Recording" — a fourth `MeetingState`, the recording
+> deliberately left running, and the provider's own sentence on `Settings > Meetings`. See the
+> 2026-08-31 (KNEG-95) entry.
+>
+> **What is still true:** three of the four clients have never met a real provider error, because
+> no key exists for AssemblyAI, Deepgram or Corti, so the wiring is what the tests check and not
+> any provider's behaviour. See the 2026-08-31 (KNEG-79) entry below, and `BENCH_CHECK.md` item 13.
 >
 > **Eighteen of the thirty-five local text-generation models could not be installed at all**, and
 > the reason was arithmetic in a config file rather than anything in the download path: upstream's
@@ -167,7 +171,7 @@ badge or before the next merge to `main`.
 | Thing | State | What is missing |
 | --- | --- | --- |
 | Local transcription (Phase 2) | **Driven by hand** | The core leg is closed: 2026-08-28, in the real application window, dictation into Notepad produced correct text repeatedly on both `whisper-tiny` and Parakeet. Four smaller checks remain and are KNEG-47's — the same dictation in VS Code, the caret never leaving the target window, the `KEEP ME` clipboard round trip, and `Control+Super` mid-dictation. |
-| Meeting transcription (Phase 4) | Four clients written, one confirmed | OpenAI Realtime has met a live server; AssemblyAI, Deepgram and Corti are *believed* wire shapes with no key on any machine this project has touched (KNEG-53, KNEG-55-57). Tinfoil is declined on principle, not missing. A dead provider is reported at Stop and still silent mid-meeting (KNEG-95). |
+| Meeting transcription (Phase 4) | Four clients written, one confirmed | OpenAI Realtime has met a live server; AssemblyAI, Deepgram and Corti are *believed* wire shapes with no key on any machine this project has touched (KNEG-53, KNEG-55-57). Tinfoil is declined on principle, not missing. A dead provider is reported at Stop *and* mid-meeting, with the recording deliberately left running (KNEG-79, KNEG-95). |
 | Enterprise reasoning (Bedrock, Azure, Vertex) | `ShapeNotImplemented` | The three request shapes. They refuse honestly rather than falling back, and none has made a live call (KNEG-54). |
 | `storage::import::from_openwhispr` | Reachable | Nothing. `Notes > Upload` exposes it (KNEG-71), and it now refuses a path no file dialog returned (KNEG-80). Nobody has imported a real OpenWhispr database by hand (KNEG-90). |
 | Local API and CLI (Phase 6) | Reachable, exercised by hand | 2026-08-25: the compiled CLI read history out of a running application. The discovery file's permissions are re-read on every status request rather than remembered (KNEG-110), and on Windows carry an explicit protected DACL verified on the live file (KNEG-34). |
@@ -267,6 +271,126 @@ Unchanged from the Phases 1–4 entry, restated here so they are not buried:
   porting matrix. Upstream pins both by commit and verifies neither.
 - ~~**`nircmd`**~~ — **dropped**, as leaned towards: third-tier Windows paste fallback only, and
   `SendInput` works.
+
+---
+
+## 2026-08-31 (KNEG-95) — the lock is the arbiter, and the state leads with the word that is still true
+
+The last of the 2026-08-28 meeting silence. Both OpenAI Realtime sockets closed within milliseconds
+of connecting; the application said **Recording**, kept the indicator up, captured both streams for
+as long as it was left running, and said nothing. KNEG-79 fixed the end of that meeting — Stop now
+reports the provider's own sentence. This is the middle of it.
+
+The shape was the repository owner's to pick, and was picked: **keep recording, and change the
+indicator to say the transcript died.** Not stop the recording, and not fall back to the whole-file
+pass immediately. The argument is the one artefact that cannot be recreated: the WAV is what saved
+the 28 August session, `record` already keeps writing when nothing is consuming the audio — on
+purpose, with a comment saying why — and the saved note comes from the whole-file pass over that
+file rather than from the live partials. Stopping the recording to report a dead provider would
+destroy the valuable half in order to fix the misleading half.
+
+### `MeetingState::RecordingWithoutTranscript`, and why the name matters
+
+The first word is the one that is still true. In the enum, in the JSON on the wire, in a log line
+and on the screen, a reader who sees only the first word is not misled: the microphone is open, the
+file is growing, and the indicator the brief requires is still up. `TranscriptLost` would have been
+shorter and would have invited exactly the wrong inference.
+
+`MeetingState::is_running` came out of `emit_state` at the same time. The tray rule was
+`state != MeetingState::Idle` written inline, which is correct and is also the kind of thing a
+fourth variant walks past. Now there is one place to answer it and a test that asks all four.
+
+### The lock is the arbiter, and that is the whole design
+
+The hard part was never the state. It was deciding **which ending is worth announcing**, because the
+pump ends on every path — including the ordinary one, where Stop closes the recorder and the pump
+drains and returns.
+
+The trap: a provider that faults on the *final* frame ends the pump during `finish_recording`, which
+runs the whole-file pass and can take minutes on a long meeting. An announcement there would
+overwrite `Finishing` with "the transcript died" and leave the user looking at it until the pass
+returned. That is not a narrow race; it is a wide and ordinary one.
+
+`live` is now an `Arc<Mutex<Option<Live>>>`, the pump's own task holds a handle to it, and
+`announce_transcript_ended` decides and emits **while holding that lock**. `stop` and `cancel` take
+the session out under the same lock, so *"there is still a session here"* is exactly *"stopping has
+not begun"*. One fact, not a second flag that could drift out of step with it. Emitting after
+releasing the lock would reopen the same window, which is why the emit is inside it.
+
+**And a second race underneath it, found by asking what `stop` actually holds.** `stop` takes `Live`
+out and then spends the whole-file pass *outside* the lock, and `start` refuses only while a session
+is held — so a second meeting can begin while the first is still finishing. A late pump task would
+then find *a* session, believe it to be its own, and mark a healthy new meeting as having lost its
+transcript. `is_this_session` compares the fault cell with `Arc::ptr_eq` rather than trusting
+presence. The cell is the session's identity because it is already per-session and already shared
+with exactly the task that needs it; a counter would have been a second thing to keep in step.
+
+### `pump.is_finished()`, narrowed to the one case the cell cannot cover
+
+KNEG-95 named `status()` not consulting `pump.is_finished()` as part of the gap, and it is consulted
+now — but the interesting part is what it is *for*. The announcement is written by the pump's own
+task **before that task returns**, so the join handle cannot report finished first. "Finished, and
+nothing announced" therefore means exactly one thing: the task panicked, or it was aborted. There is
+no provider sentence for either, and the screen still must not claim a transcript is being produced.
+Without that ordering the check would be redundant; with it, it is precise.
+
+### One sentence, not two
+
+`live_transcript_ended` is the only formatter. The indicator's sentence mid-meeting and the outcome's
+sentence at Stop are the same string from the same function, and a test asserts the two call sites
+agree rather than trusting that they were written to. A user who reads the indicator and then reads
+the outcome is not told two stories about one failure.
+
+Its `Ok` arm is the one worth reading twice. The pump returns `Ok` when the audio channel closes,
+which at Stop is what is supposed to happen. Reaching it *while a session is still held* means the
+channel closed with no Stop behind it, and `record` has no path that ends by itself — it returns on
+`Finish`, on `Cancel`, and on the command channel disconnecting, all three of which run only after
+`stop` or `cancel` has taken the session. So that arm means the recording thread panicked, and the
+recording has stopped along with the transcription.
+
+**That is the one case where the state is wrong in its first word, and it is reported anyway.** The
+alternative is the silence this whole change exists to end, and the sentence — which is what a
+person actually reads — says the true thing: *"the recording thread stopped, so nothing further is
+being recorded or transcribed."* Written down here rather than left for someone to find.
+
+### Where it shows
+
+The indicator window keeps its red edge, its timer and its Stop button, and changes its second line
+to *"live transcript stopped — still recording"* in amber. Amber rather than red for the same
+reason `.caveat.warn` splits the mark from the prose: the red edge means **recording**, which is
+still true and is the one indicator the brief requires. Painting the line red as well would say the
+recording had failed, when the recording is the half that is working.
+
+The provider's own sentence is too long for a 392x92 panel and goes to `Settings > Meetings`, which
+has room for it, together with what happens next: recording continues, and Stop will still
+transcribe the whole recording. The live-transcript panel there says its lines are the last ones
+rather than the most recent ones, because "replaced as it is revised" stops being true the moment
+nothing more is coming.
+
+### What this did not do
+
+**No provider was faulted to test it.** The unit tests cover the decisions — which state, whose
+session, which sentence — and `announce_transcript_ended` itself is not among them, because it takes
+an `AppHandle` and nothing outside a running application can construct one. The by-hand check is in
+`BENCH_CHECK.md`: start a meeting on a provider configured wrongly and watch the indicator change
+without the recording stopping.
+
+Six mutations, each caught by exactly the test written for it:
+
+```
+live_state ignores a vanished pump          -> a_pump_that_vanished_without_a_word...
+identity check becomes a presence check     -> a_late_ending_cannot_be_pinned_on_the_next_meeting
+any session is my session                   -> a_late_ending_cannot_be_pinned_on_the_next_meeting
+the tray rule forgets the new state         -> every_state_but_idle_is_a_running_session
+stop formats its own sentence again         -> the_indicator_and_the_outcome_use_one_sentence
+the new state serialises under another name -> the_states_serialise_as_the_frontend_reads_them
+```
+
+The `TranscriptSink` trait the KNEG-79 entry predicted this work would want was **not** needed, and
+that entry has been corrected rather than left standing. The decisions that mattered turned out to
+be expressible as free functions over plain values, which is the shape `pump_result`,
+`close_recorder` and `failed_message` already had. `pump` still has no test coverage and still needs
+none: it propagates its `Err` correctly, and what was wrong was what nobody did with it.
 
 ---
 
@@ -1400,18 +1524,29 @@ correctly through `?`, so the fake would have tested a line that was not broken,
 line was in `stop()` — which needs an `AppHandle`, a `Db` and a `NetworkPolicy`, none of which a
 fake provider supplies. The free functions cover what actually changed.
 
-Recorded for whoever does want it, because KNEG-95 will: the obstacle is `pump`'s `app: AppHandle`,
-and the better of the two routes is giving `pump` a small `TranscriptSink` trait — matching what
-`calendar-core` did with `TokenSender` and its test-only `PlaintextLoopbackSender` — rather than
-enabling `tauri`'s `test` feature, which nothing in this workspace uses.
+Recorded for whoever does want it: the obstacle is `pump`'s `app: AppHandle`, and the better of the
+two routes is giving `pump` a small `TranscriptSink` trait — matching what `calendar-core` did with
+`TokenSender` and its test-only `PlaintextLoopbackSender` — rather than enabling `tauri`'s `test`
+feature, which nothing in this workspace uses.
 
-### What stays KNEG-95's, and was deliberately not taken
+**This entry predicted KNEG-95 would need that, and it did not.** Corrected here rather than left
+standing: the decisions KNEG-95 turned out to need — which state to report, whose session an ending
+belongs to, which sentence to use — are all free functions over plain values, the same shape
+`pump_result` and `close_recorder` already had. `pump` is still untested and still does not need to
+be. What a `TranscriptSink` would buy is a test of `pump` itself, which nothing has yet wanted.
 
-**A dead provider is still silent mid-meeting.** The indicator stays up, recording continues, and
-nothing reaches the screen until Stop. No new `MeetingState` variant, no change to whether recording
-continues, `MeetingRuntime::status()` still does not consult `pump.is_finished()`, and no new
-mid-meeting error event. That is a product decision about whether a dead provider stops the
-recording, falls back immediately, or carries on saying so, and it belongs to the repository owner.
+### What stayed KNEG-95's, and was taken later the same day
+
+**A dead provider was still silent mid-meeting when this landed.** The indicator stayed up,
+recording continued, and nothing reached the screen until Stop. No new `MeetingState` variant, no
+change to whether recording continues, `MeetingRuntime::status()` not consulting
+`pump.is_finished()`, and no mid-meeting error event — all deliberate, because the choice between
+stopping the recording, falling back immediately, and carrying on while saying so belonged to the
+repository owner.
+
+That choice was made on 2026-08-31: **carry on, and say so.** Every one of the four items above is
+now done, and the reasoning is in the 2026-08-31 (KNEG-95) entry above — including the two races
+that decision turned out to contain, neither of which was visible from here.
 
 ### What could not be verified, and is not claimed anywhere
 

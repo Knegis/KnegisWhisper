@@ -609,7 +609,7 @@ languageRequired: boolean, sessionLimitSeconds: number | null, };
 /**
  * What a meeting session is doing.
  */
-export type MeetingState = "idle" | "recording" | "finishing";
+export type MeetingState = "idle" | "recording" | "recording-without-transcript" | "finishing";
 
 /**
  * Which captures are actually running.
@@ -628,6 +628,22 @@ systemAudioReason: string | null, };
  * What can be said about the meeting session.
  */
 export type MeetingStatus = { state: MeetingState,
+/**
+ * Why the live transcription stopped, when it has.
+ *
+ * The provider's own sentence, naming which of the two sockets died --
+ * [`kw_meeting_core::MeetingError::ProviderFault`] renders it and
+ * [`live_transcript_ended`] formats it, so this is the same sentence the
+ * outcome at Stop will carry rather than a second wording of it.
+ *
+ * `None` while the transcription is running, and also for the one ending
+ * that has no sentence: a pump task that panicked or was aborted, which
+ * [`live_state`] still reports as
+ * [`MeetingState::RecordingWithoutTranscript`] because a state with no
+ * explanation is closer to the truth than a claim that the transcript is
+ * running.
+ */
+transcriptFailure: string | null,
 /**
  * The provider in use, while there is one.
  */

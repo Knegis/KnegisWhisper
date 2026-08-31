@@ -921,6 +921,19 @@ label:has(> input[type="checkbox"]) {
   color: #fdfdfd;
 }
 
+/*
+ * The second line, when what it carries is not a process name but a fault.
+ *
+ * Amber rather than the red the panel's edge already uses, and the split is the
+ * same one `.caveat.warn` makes: the red edge means *recording*, which is still
+ * true and is the one indicator the brief requires. Painting this line red too
+ * would say the recording had failed, when the recording is the half that is
+ * working.
+ */
+.notify-detail.notify-alert {
+  color: #fbbf24;
+}
+
 .notify-recording {
   /* A red edge, so "recording" reads at a glance and not only in words. An
    * inset shadow rather than a border: the panel is 92px of fixed height and a

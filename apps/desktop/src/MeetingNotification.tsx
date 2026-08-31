@@ -15,6 +15,13 @@
  *
  * Like the overlay, it renders Rust's state and keeps none of its own. Recording
  * is a fact the runtime owns; this window asks and listens.
+ *
+ * Two states put the panel in its recording form, not one. A meeting whose
+ * provider has died is still a meeting recording a room, so the indicator stays
+ * up and the timer keeps counting -- what changes is the second line, because
+ * the transcript is the half that stopped. Falling through to the empty panel
+ * would take the indicator off screen at the exact moment there is more to say,
+ * which is the thing the brief forbids.
  */
 
 import { useEffect, useState } from "react";
@@ -57,7 +64,8 @@ export function MeetingNotification() {
     return () => unlisteners.forEach((fn) => fn());
   }, []);
 
-  const recording = state === "recording";
+  const transcriptEnded = state === "recording-without-transcript";
+  const recording = state === "recording" || transcriptEnded;
 
   // Counted here rather than asked for every second: the runtime owns the
   // session and the clock, and one command a second to render a timer would be
@@ -75,7 +83,21 @@ export function MeetingNotification() {
         <span className="indicator indicator-recording" aria-hidden="true" />
         <span className="notify-body">
           <strong>Recording {clock(elapsed)}</strong>
-          <span className="notify-detail">{whoIsRecorded(sources)}</span>
+          {/*
+           * The provider's own sentence is too long for 392x92 and lives on
+           * Settings > Meetings, which has room for it. What belongs here is
+           * the fact, in the fewest words that stay true: the recording is
+           * fine, the live transcript is not.
+           */}
+          <span
+            className={
+              transcriptEnded ? "notify-detail notify-alert" : "notify-detail"
+            }
+          >
+            {transcriptEnded
+              ? "live transcript stopped — still recording"
+              : whoIsRecorded(sources)}
+          </span>
         </span>
         <button
           type="button"

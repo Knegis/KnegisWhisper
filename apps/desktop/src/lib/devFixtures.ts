@@ -571,6 +571,7 @@ const MEETING_PROVIDERS: MeetingProviderSummary[] = [
 
 let meetingStatus: MeetingStatus = {
   state: "idle",
+  transcriptFailure: null,
   provider: null,
   elapsedSeconds: 0,
   sources: null,
@@ -1528,7 +1529,19 @@ const devConsole = {
     void emit("dictation-state", state);
   },
   meetingState(state: MeetingState) {
-    meetingStatus = { ...meetingStatus, state };
+    // The failure sentence travels with the state rather than being a second
+    // thing to remember to set: `recording-without-transcript` with an empty
+    // detail line is the one rendering of this screen that cannot be reviewed,
+    // because the sentence is most of what it exists to show. The words are the
+    // real ones, from the meeting of 2026-08-28.
+    meetingStatus = {
+      ...meetingStatus,
+      state,
+      transcriptFailure:
+        state === "recording-without-transcript"
+          ? "openai-realtime accepted the connection and then stopped transcribing: on the system audio stream the provider reported: The Realtime Beta API is no longer supported."
+          : null,
+    };
     void emit("meeting-state", state);
   },
   transcript(text: string, isFinal = true) {

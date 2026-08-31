@@ -61,7 +61,7 @@
 //! instead, with the reason, so the limit is visible rather than felt as a bug.
 
 use std::sync::mpsc as sync_mpsc;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use kw_audio_core::meeting::MixFeed;
@@ -128,12 +128,49 @@ const PROMPT_BY_DEFAULT: bool = true;
 pub enum MeetingState {
     Idle,
     Recording,
+    /// Still recording, and the live transcription has stopped.
+    ///
+    /// The state KNEG-95 was filed for. On 2026-08-28 both OpenAI Realtime
+    /// sockets closed within milliseconds of connecting; the application went
+    /// on saying **Recording**, kept the indicator up and captured both streams
+    /// for as long as it was left running. The only clue was an empty live
+    /// transcript, which is also what a quiet room looks like.
+    ///
+    /// **The recording continues, and that is the decision rather than an
+    /// omission.** The WAV is what saved that session: `record` keeps writing
+    /// when nothing is consuming the audio, on purpose and with a comment
+    /// saying why; the whole-file pass at Stop reads the complete audio; and
+    /// the saved note comes from that pass, with the live partials only ever
+    /// its fallback. Stopping the recording to report a dead provider would
+    /// destroy the valuable half in order to fix the misleading half.
+    ///
+    /// So the name leads with `Recording` -- in the enum, in the JSON and in a
+    /// log line, the first word is the one that is still true. The exception is
+    /// named where it is produced: [`live_transcript_ended`]'s `Ok` arm means
+    /// the recorder itself has gone, and there the sentence carries what the
+    /// name cannot.
+    RecordingWithoutTranscript,
     /// The recording has stopped and the whole-file pass is still running.
     ///
     /// A separate state because it can take minutes on a long meeting, and
     /// "Idle" while the transcript is still being produced would look like a
     /// meeting that vanished.
     Finishing,
+}
+
+impl MeetingState {
+    /// Whether a meeting session exists at all.
+    ///
+    /// What the tray asks, extracted so a new variant has one place to be
+    /// classified rather than an inequality to be noticed. Recording *and*
+    /// finishing keep it lit: the microphone is closed once finishing starts,
+    /// but a meeting that still has work to do has not finished, and an idle
+    /// tray would say it had. A dead live transcript changes nothing here --
+    /// the recording is still running, which is exactly what the tray is for.
+    #[must_use]
+    pub const fn is_running(self) -> bool {
+        !matches!(self, Self::Idle)
+    }
 }
 
 /// Which captures are actually running.
@@ -155,6 +192,20 @@ pub struct Sources {
 #[serde(rename_all = "camelCase")]
 pub struct MeetingStatus {
     pub state: MeetingState,
+    /// Why the live transcription stopped, when it has.
+    ///
+    /// The provider's own sentence, naming which of the two sockets died --
+    /// [`kw_meeting_core::MeetingError::ProviderFault`] renders it and
+    /// [`live_transcript_ended`] formats it, so this is the same sentence the
+    /// outcome at Stop will carry rather than a second wording of it.
+    ///
+    /// `None` while the transcription is running, and also for the one ending
+    /// that has no sentence: a pump task that panicked or was aborted, which
+    /// [`live_state`] still reports as
+    /// [`MeetingState::RecordingWithoutTranscript`] because a state with no
+    /// explanation is closer to the truth than a claim that the transcript is
+    /// running.
+    pub transcript_failure: Option<String>,
     /// The provider in use, while there is one.
     pub provider: Option<String>,
     pub elapsed_seconds: f64,
@@ -521,7 +572,15 @@ pub struct MeetingRuntime {
     credentials: Arc<dyn kw_security::CredentialStore>,
     /// Where the local model server is listening, and what it loaded.
     local: crate::local_model::SharedLocal,
-    live: Mutex<Option<Live>>,
+    /// The session in progress.
+    ///
+    /// Behind an `Arc` so the pump's own task can hold it too, and **the lock
+    /// is the arbiter of who gets to announce that the live transcription has
+    /// ended**. [`MeetingRuntime::stop`] and [`MeetingRuntime::cancel`] take
+    /// the session out under it, so "there is still a session here" is exactly
+    /// "stopping has not begun" -- one fact rather than a second flag that
+    /// could drift out of step with it. See [`announce_transcript_ended`].
+    live: Arc<Mutex<Option<Live>>>,
     /// Detection state: what was last seen, and what has been offered.
     watch: Mutex<(Watcher, Vec<Detected>)>,
 }
@@ -540,6 +599,24 @@ struct Live {
     recording_path: std::path::PathBuf,
     sources: Sources,
     started: std::time::Instant,
+    /// Why the live transcription stopped, once it has.
+    ///
+    /// Written by the pump's own task before that task returns, so `pump` above
+    /// cannot report `is_finished` before this is set. That ordering is what
+    /// makes "finished, and nothing here" mean exactly one thing -- see
+    /// [`live_state`].
+    ///
+    /// A `OnceLock` for the reason [`kw_meeting_core::fault::SessionFault`]
+    /// uses one: the first write wins by construction rather than by
+    /// convention, and there is no poisoned-mutex branch to write around this
+    /// workspace's `unwrap_used = "deny"`.
+    ///
+    /// It is also this session's identity. Two sessions can exist at once for a
+    /// moment -- `stop` takes `Live` out and then spends minutes on the
+    /// whole-file pass, during which `start` will happily begin another -- so
+    /// the ending task compares the cell it was given with the one it found
+    /// rather than trusting that a session it can see is its own.
+    transcript_failure: Arc<OnceLock<String>>,
 }
 
 impl std::fmt::Debug for MeetingRuntime {
@@ -730,7 +807,7 @@ impl MeetingRuntime {
             db,
             policy,
             credentials,
-            live: Mutex::new(None),
+            live: Arc::new(Mutex::new(None)),
             local,
             watch: Mutex::new((Watcher::default(), Vec::new())),
         }
@@ -909,14 +986,7 @@ impl MeetingRuntime {
     }
 
     fn emit_state(&self, state: MeetingState) {
-        // Recording *and* finishing keep the tray saying so: the microphone is
-        // closed once finishing starts, but a meeting that still has work to do
-        // has not finished, and an idle tray would say it had.
-        crate::tray::meeting(&self.app, state != MeetingState::Idle);
-
-        if let Err(err) = self.app.emit(STATE_EVENT, state) {
-            tracing::warn!(error = %err, "could not report the meeting state");
-        }
+        emit_state(&self.app, state);
     }
 
     /// Begin a meeting.
@@ -977,13 +1047,25 @@ impl MeetingRuntime {
         ));
         let (audio, commands, sources) = spawn_recorder(path.clone(), system_audio)?;
 
-        let pump = tokio::spawn(pump(
-            provider,
-            session_rate,
-            audio,
-            events_rx,
-            self.app.clone(),
-        ));
+        // The pump announces its own ending, which is the whole of KNEG-95's
+        // fix: until now the failure was detected at second zero and reported
+        // whenever the user happened to press Stop. What it must not announce
+        // is the ending Stop asked for -- and since a provider that faults on
+        // the final frame ends the pump *during* `finish_recording`, which can
+        // run for minutes, that is the common case rather than a rare race.
+        // `announce_transcript_ended` decides it under the `live` lock.
+        let transcript_failure = Arc::new(OnceLock::new());
+        let pump = tokio::spawn({
+            let app = self.app.clone();
+            let live = Arc::clone(&self.live);
+            let mine = Arc::clone(&transcript_failure);
+            async move {
+                let result = pump(provider, session_rate, audio, events_rx, app.clone()).await;
+                let reason = live_transcript_ended(result.as_ref().map(|_| ()));
+                announce_transcript_ended(&live, &app, &mine, reason).await;
+                result
+            }
+        });
 
         *held = Some(Live {
             provider_id: provider_id.to_owned(),
@@ -992,6 +1074,7 @@ impl MeetingRuntime {
             recording_path: path,
             sources: sources.clone(),
             started: std::time::Instant::now(),
+            transcript_failure,
         });
 
         tracing::info!(
@@ -1143,7 +1226,11 @@ impl MeetingRuntime {
 
         match held.as_ref() {
             Some(live) => MeetingStatus {
-                state: MeetingState::Recording,
+                state: live_state(
+                    live.transcript_failure.get().is_some(),
+                    live.pump.is_finished(),
+                ),
+                transcript_failure: live.transcript_failure.get().cloned(),
                 provider: Some(live.provider_id.clone()),
                 elapsed_seconds: live.started.elapsed().as_secs_f64(),
                 sources: Some(live.sources.clone()),
@@ -1154,6 +1241,7 @@ impl MeetingRuntime {
             },
             None => MeetingStatus {
                 state: MeetingState::Idle,
+                transcript_failure: None,
                 provider: None,
                 elapsed_seconds: 0.0,
                 sources: None,
@@ -1371,8 +1459,10 @@ fn pump_result(
         Ok(Ok(transcript)) => Ok(transcript),
         // The provider's own words. Since `MeetingError::ProviderFault` exists
         // that includes what the provider said was wrong, rather than what our
-        // own send call complained about afterwards.
-        Ok(Err(err)) => Err(format!("{err}.")),
+        // own send call complained about afterwards. Through
+        // `live_transcript_ended` so that the sentence the indicator showed
+        // mid-meeting and the sentence the outcome ends with are the same one.
+        Ok(Err(err)) => Err(live_transcript_ended(Err(&err))),
         // A panic in the pump, or the task being aborted. Neither should happen;
         // both used to leave the screen stuck on "Recording" for ever.
         Err(err) => Err(format!("the transcription task failed: {err}.")),
@@ -1388,6 +1478,124 @@ fn failed_message(recording_path: &str, reason: &str) -> String {
     format!(
         "The recording is at {recording_path} but the meeting could not be transcribed: {reason}"
     )
+}
+
+/// Tell the screens and the tray what the session is doing.
+///
+/// A free function because the pump's own task has to emit one too, and it has
+/// an `AppHandle` and nothing else. [`MeetingRuntime::emit_state`] is the same
+/// call with `self.app` filled in.
+fn emit_state(app: &AppHandle, state: MeetingState) {
+    crate::tray::meeting(app, state.is_running());
+
+    if let Err(err) = app.emit(STATE_EVENT, state) {
+        tracing::warn!(error = %err, "could not report the meeting state");
+    }
+}
+
+/// Why the live transcription is no longer running, in the words a screen uses.
+///
+/// One formatter for the two places that need the sentence -- the announcement
+/// the moment it happens, and [`pump_result`] at Stop -- so the indicator and
+/// the outcome cannot describe one failure two ways. Pure, so the sentence can
+/// be checked with no `AppHandle` in sight.
+///
+/// **The `Ok` arm is the one worth reading twice.** The pump returns `Ok` when
+/// the audio channel closes, and at Stop that is exactly what is supposed to
+/// happen -- `close_recorder` drops the sender. Reaching here with `Ok` instead
+/// means the channel closed with no Stop behind it, and `record` has no path
+/// that ends by itself: it returns on `Finish`, on `Cancel`, and on the command
+/// channel disconnecting, all three of which run only after `stop` or `cancel`
+/// has taken the session. So this arm means the recording thread panicked, and
+/// the recording has stopped along with the transcription.
+///
+/// That is the one case where [`MeetingState::RecordingWithoutTranscript`] is
+/// wrong in its first word, and it is reported anyway, because the alternative
+/// is the silence this whole change exists to end -- and because the sentence,
+/// which is what a person actually reads, says the true thing.
+fn live_transcript_ended(outcome: Result<(), &MeetingError>) -> String {
+    match outcome {
+        Ok(()) => {
+            "the recording thread stopped, so nothing further is being recorded or transcribed."
+                .to_owned()
+        }
+        Err(err) => format!("{err}."),
+    }
+}
+
+/// What to say about a session that has not been stopped.
+///
+/// `announced` is whether the pump's ending has been recorded; `pump_finished`
+/// is whether the task has ended at all.
+///
+/// **The second is not redundant, and the ordering is why.** The announcement
+/// is written by the pump's own task *before* it returns, so the join handle
+/// cannot report `is_finished` first. "Finished, and nothing announced" therefore
+/// means exactly one thing: the task panicked, or it was aborted. There is no
+/// sentence for that -- a panic has no provider behind it -- and the screen
+/// should still not claim a transcript is being produced.
+///
+/// KNEG-95 named `status()` not consulting `pump.is_finished()` as part of the
+/// gap. This is that, narrowed to the case the fault cell cannot cover.
+const fn live_state(announced: bool, pump_finished: bool) -> MeetingState {
+    if announced || pump_finished {
+        MeetingState::RecordingWithoutTranscript
+    } else {
+        MeetingState::Recording
+    }
+}
+
+/// Whether the session found under the lock is the one this ending belongs to.
+///
+/// Pure, and the whole of the race it settles. `stop` takes `Live` out and then
+/// spends the whole-file pass -- minutes, on a long meeting -- outside the lock,
+/// and `start` refuses only while a session is *held*, so a second meeting can
+/// begin while the first is still finishing. A pump task that lost the lock to
+/// that `start` would otherwise find a session, believe it to be its own, and
+/// mark a healthy new meeting as having lost its transcript.
+///
+/// Identity is the cell itself rather than a counter, because the cell is
+/// already per-session and already shared with exactly the task that needs it.
+fn is_this_session(found: Option<&Arc<OnceLock<String>>>, mine: &Arc<OnceLock<String>>) -> bool {
+    found.is_some_and(|cell| Arc::ptr_eq(cell, mine))
+}
+
+/// Say that the live transcription has ended, if the meeting is still running.
+///
+/// **The lock is the arbiter.** `stop` and `cancel` take the session out under
+/// it, so holding it while both deciding and emitting is what keeps this from
+/// overwriting `Finishing` with a state the user would then be stuck looking at
+/// until the whole-file pass returned. Emitting after releasing the lock would
+/// reopen exactly that window.
+///
+/// No deadlock with `stop`: it takes the session in one statement and drops the
+/// guard before it awaits this task, so the lock is free by the time it does.
+///
+/// `start` holds the guard across its whole body, and that turns out to be the
+/// other half of the ordering. A provider that refuses on the first chunk ends
+/// the pump while `start` is still running, and this task then waits -- so
+/// `start`'s own `emit_state(Recording)` lands first and this one lands after
+/// it. Blocked on the lock is the correct place for it to be: the answer is the
+/// same one, delivered in an order the screen can follow.
+async fn announce_transcript_ended(
+    live: &Mutex<Option<Live>>,
+    app: &AppHandle,
+    mine: &Arc<OnceLock<String>>,
+    reason: String,
+) {
+    let held = live.lock().await;
+    if !is_this_session(held.as_ref().map(|live| &live.transcript_failure), mine) {
+        // Stop or Discard already took the session, so this ending is the one
+        // that was asked for. `pump_result` reports it from there.
+        return;
+    }
+
+    tracing::error!(
+        %reason,
+        "the live transcription ended while the meeting was still recording"
+    );
+    let _ = mine.set(reason);
+    emit_state(app, MeetingState::RecordingWithoutTranscript);
 }
 
 /// Feed the provider what the recorder forwards, emitting transcript as it comes.
@@ -1658,8 +1866,16 @@ mod tests {
         assert!(segment("x", 0.0, None).source.is_none());
     }
 
+    /* --------------------------------------- the transcript ending mid-meeting */
+
+    /// The four strings the frontend compares against, asserted here because a
+    /// renamed variant is a silent no-match over there rather than a type error.
     #[test]
     fn the_states_serialise_as_the_frontend_reads_them() {
+        assert_eq!(
+            serde_json::to_value(MeetingState::RecordingWithoutTranscript).unwrap(),
+            "recording-without-transcript"
+        );
         assert_eq!(
             serde_json::to_value(MeetingState::Finishing).unwrap(),
             "finishing"
@@ -1676,6 +1892,103 @@ mod tests {
         assert_eq!(json["noteId"], 7);
         assert_eq!(json["gaps"], 2);
         assert_eq!(json["transcriptIsPartials"], true);
+    }
+
+    /// A live transcript that died must not put the tray out.
+    ///
+    /// The recording is still running, so the one indicator the brief actually
+    /// requires has to stay lit. This is the rule `emit_state` asks, in the one
+    /// place a new variant has to answer it.
+    #[test]
+    fn every_state_but_idle_is_a_running_session() {
+        assert!(!MeetingState::Idle.is_running());
+        assert!(MeetingState::Recording.is_running());
+        assert!(MeetingState::RecordingWithoutTranscript.is_running());
+        assert!(MeetingState::Finishing.is_running());
+    }
+
+    #[test]
+    fn a_healthy_session_is_reported_as_recording() {
+        assert_eq!(live_state(false, false), MeetingState::Recording);
+    }
+
+    #[test]
+    fn an_announced_failure_changes_what_the_screen_says() {
+        assert_eq!(
+            live_state(true, false),
+            MeetingState::RecordingWithoutTranscript
+        );
+    }
+
+    /// The backstop, and the reason `pump.is_finished()` is consulted at all.
+    ///
+    /// The announcement is written by the pump's own task before it returns, so
+    /// the handle cannot finish first. A finished pump with nothing announced
+    /// therefore means one thing only: the task panicked, or it was aborted.
+    /// There is no provider sentence for either, and "recording, transcript
+    /// running" would still be the wrong thing to say.
+    #[test]
+    fn a_pump_that_vanished_without_a_word_is_still_not_a_working_transcript() {
+        assert_eq!(
+            live_state(false, true),
+            MeetingState::RecordingWithoutTranscript
+        );
+    }
+
+    /// The mid-meeting sentence and the sentence at Stop are the same sentence.
+    ///
+    /// Two call sites, one formatter -- the point being that a user who reads
+    /// the indicator and then reads the outcome is not told two different
+    /// stories about one failure.
+    #[test]
+    fn the_indicator_and_the_outcome_use_one_sentence() {
+        let fault = MeetingError::ProviderFault {
+            provider: "openai-realtime".to_owned(),
+            detail: "on the system audio stream the provider reported: The Realtime \
+                     Beta API is no longer supported."
+                .to_owned(),
+        };
+
+        let announced = live_transcript_ended(Err(&fault));
+        let at_stop = pump_result(Ok(Err(fault))).unwrap_err();
+        assert_eq!(announced, at_stop);
+        assert!(announced.contains("Realtime Beta API"), "{announced}");
+    }
+
+    /// The `Ok` arm names the recorder, because that is what it means.
+    ///
+    /// `record` has no path that ends by itself, so the audio channel closing
+    /// with no Stop behind it is a panicked recording thread -- and then the
+    /// recording has stopped too, which the state's name cannot say and this
+    /// sentence can.
+    #[test]
+    fn a_pump_that_ran_out_of_audio_says_the_recorder_went() {
+        let reason = live_transcript_ended(Ok(()));
+        assert!(reason.contains("recording thread"), "{reason}");
+        assert!(reason.contains("nothing further"), "{reason}");
+    }
+
+    /// The race `stop` opens, and the reason identity is checked rather than
+    /// presence.
+    ///
+    /// `stop` takes the session out and then spends the whole-file pass outside
+    /// the lock, so `start` can begin a second meeting while the first is still
+    /// finishing. A pump task arriving late would otherwise find *a* session and
+    /// mark a healthy new meeting as having lost its transcript.
+    #[test]
+    fn a_late_ending_cannot_be_pinned_on_the_next_meeting() {
+        let mine: Arc<OnceLock<String>> = Arc::new(OnceLock::new());
+        let next: Arc<OnceLock<String>> = Arc::new(OnceLock::new());
+
+        assert!(is_this_session(Some(&mine), &mine), "its own session");
+        assert!(
+            !is_this_session(Some(&next), &mine),
+            "a session that started while this one was finishing"
+        );
+        assert!(
+            !is_this_session(None, &mine),
+            "stop or cancel already took it, so the ending is the one they asked for"
+        );
     }
 
     #[test]
