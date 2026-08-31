@@ -278,6 +278,63 @@ Unchanged from the Phases 1–4 entry, restated here so they are not buried:
 
 ---
 
+## 2026-08-31 (KNEG-117) — the brute force was the weaker half, and the arithmetic says so
+
+KNEG-88 found one intermittent test in `kw-storage`, and its real content was that a credential
+check had been passing against an empty file. The obvious follow-up was to run the same hunt over
+the whole workspace.
+
+**Run: 40 rounds, 33 binaries, 1,320 runs, every thread count, control passed, nothing found.**
+
+### What that is worth, stated rather than rounded up
+
+Not much, and the arithmetic is why. The `kw-storage` flake fired **twice in four hundred runs of
+that binary** — about 0.5% per run. Forty rounds is forty runs of each binary, so the chance of
+catching something at that rate is about **18%**. A clean result at this depth is closer to "not
+looked at properly" than to "clean", and matching KNEG-88's confidence across the workspace would
+be roughly four hundred rounds — several hours of a machine doing nothing else.
+
+Worth writing down because the temptation is to read 1,320 runs as a big number. It is a big number
+of runs and a small number of *rounds*, and rounds are the unit that matters here.
+
+### So the second half was a search rather than a loop
+
+The defect KNEG-88 found has a shape: **an assertion that something is absent, checked against a
+resource that may not have been fully written.** That is greppable, and unlike the loop it does not
+depend on catching a rare event.
+
+Seventeen candidate sites across the workspace; ten had a positive claim beside the negative and
+were fine. Of the remaining seven, five were false positives of the search (a multi-line
+`assert_eq!` the pattern did not see, or a test whose whole subject is that nothing happened). Two
+were real and both are now hardened:
+
+**`sherpa::the_staged_wav_is_cleaned_up_even_when_the_process_cannot_start`.** It asserted no file
+matching `sherpa-input-` remained. That is trivially true of a run that never staged one — so a
+`transcribe` failing before the write, or a rename of the prefix, would have left it green while
+proving nothing. It was not vacuous today, which is exactly the problem: nothing would have said so
+when it became vacuous. It is a claim about raw audio not being left on disk, which is worth more
+than most. The control is the scratch directory, which now does not exist beforehand, so
+`transcribe` creating it proves the function reached `create_dir_all` — and the WAV write is the
+next statement. Mutating `transcribe` to fail before staging turns it red.
+
+**`discovery::no_temporary_file_is_left_behind`.** "Nothing else is in the directory" is also true
+of an empty directory. One line asserting the discovery file is there turns it from a tautology into
+an observation.
+
+### The lesson, in a form that survives
+
+A negative assertion is only as good as the positive one beside it. Neither of these was broken;
+both were one silent change away from being meaningless, and nothing in the tree would have said so.
+The search that finds them takes minutes. The loop that finds them takes hours and mostly does not.
+
+`tools/flake-hunt/hunt.mjs` also learnt something in the process: its first workspace run reported
+`generated_ipc_types_match_the_rust_types` failing nine times in thirty, which was a Rust type and
+its generated TypeScript being edited while the hunt ran. A false finding that names a real test is
+worse than an ordinary one, so a run whose binaries changed underneath it is now reported as **void**
+rather than as a result.
+
+---
+
 ## 2026-08-31 (KNEG-38) — the ambiguity is real, so it is named rather than resolved
 
 WASAPI loopback from an output device with nothing playing delivers **no callback at all**, not a

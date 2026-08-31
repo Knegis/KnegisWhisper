@@ -510,6 +510,11 @@ mod tests {
         let path = dir.path().join(FILE_NAME);
         write(&path, 8200, &token()).unwrap();
 
+        // The control. "Nothing else is in the directory" is also true of a
+        // directory with nothing in it, so the discovery file being there is
+        // what makes the rest of this an observation rather than a tautology.
+        assert!(path.is_file(), "the discovery file itself is missing");
+
         let leftovers: Vec<_> = fs::read_dir(dir.path())
             .unwrap()
             .flatten()
