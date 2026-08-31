@@ -73,3 +73,8 @@ kw-storage.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+# Only for the `#[ignore]`d HEAD-request test that re-measures the local-LLM
+# sizes against Hugging Face. The application itself never names `reqwest` --
+# `kw-network-policy` is the one crate that does -- but that crate hands back a
+# `reqwest::RequestBuilder`, and building a HEAD request means naming the method.
+reqwest.workspace = true

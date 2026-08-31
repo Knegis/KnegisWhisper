@@ -126,6 +126,9 @@ pub struct DraftModel {
     pub hf_repo: String,
     pub file_name: String,
     pub size_bytes: Option<u64>,
+    /// Whether [`Self::size_bytes`] was measured, on the same terms as
+    /// [`LocalLlmModel::size_measured`].
+    pub size_measured: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -136,6 +139,16 @@ pub struct LocalLlmModel {
     pub file_name: String,
     pub hf_repo: String,
     pub size_bytes: Option<u64>,
+    /// Whether [`Self::size_bytes`] is a measurement of the published file or
+    /// upstream's declaration of it.
+    ///
+    /// The two are not interchangeable, which is why this is a field rather than
+    /// something inferred from the size being present. Upstream declared a size
+    /// for every model and was wrong about eighteen of the thirty-five -- it
+    /// multiplied a base-10 "GB" label by 2^30 -- so a non-null size proves
+    /// nothing on its own. A measured size is checked for exact equality after a
+    /// download; a declared one only within 5%.
+    pub size_measured: bool,
     pub quantization: Option<String>,
     pub context_length: Option<u32>,
     pub recommended: bool,

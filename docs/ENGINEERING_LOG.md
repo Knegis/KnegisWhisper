@@ -81,6 +81,18 @@ maintained in place rather than appended to, because its purpose is to be curren
 > room can see. `BENCH_CHECK.md` item 13 under chunk E already carries this; it predates every task
 > in this run and is shared by all four clients equally.
 >
+> **Eighteen of the thirty-five local text-generation models could not be installed at all**, and
+> the reason was arithmetic in a config file rather than anything in the download path: upstream's
+> `sizeBytes` was a base-10 "GB" label multiplied by 2^30 instead of 10^9, so eighteen models
+> downloaded in full — 101 GB — and were deleted by a 5% size check on arrival. All 39 objects (35
+> models, 4 drafters, 202 GB) are now measured from Hugging Face's `x-linked-size` into
+> `LOCAL_LLM_SIZES` in the registry generator, and a measured size is checked for **exact** equality
+> rather than within 5%. Two related facts worth carrying: `qwen3.5-2b-q4_k_m` was passing the old
+> check by 0.0042 percentage points, about 5.6 KB, and two Gemma models were already 2 240 bytes
+> adrift from their declared size — upstream re-uploads are real, and the `#[ignore]`d
+> `the_measured_sizes_still_match_hugging_face` test in `local_llm.rs` is what catches the next one.
+> See the 2026-08-31 entry on the local-LLM sizes below.
+>
 > **Three smaller items recorded rather than chased**, each detailed in its own entry below: a
 > `kw-storage` test that failed once and passed on re-run during Task 8 (every other full-suite run
 > this session was clean, so intermittent rather than new); `apps/desktop/src-tauri/src/meeting.rs`
@@ -201,6 +213,156 @@ Unchanged from the Phases 1–4 entry, restated here so they are not buried:
   porting matrix. Upstream pins both by commit and verifies neither.
 - ~~**`nircmd`**~~ — **dropped**, as leaned towards: third-tier Windows paste fallback only, and
   `SendInput` works.
+
+---
+
+## 2026-08-31 (local-LLM sizes) — eighteen models nobody could install, and 2^30 ÷ 10^9
+
+`download_gguf` deletes a finished download whose length is more than 5% from the size the registry
+declares. Eighteen of the thirty-five local text-generation models were declared 6.7–7.9% larger
+than the file Hugging Face actually serves, so **all eighteen downloaded in full, failed the check,
+and were deleted** — 101 GB of successful transfer, thrown away on arrival, `Qwen3 32B` and
+`GPT-OSS 20B` among them. There was no way to install any of them, and nothing in the failure said
+so: the message blamed the download for being the wrong length, which reads like a bad connection
+and invites a retry that fails identically.
+
+### Where the numbers came from, measured
+
+Every model and every speculative-decoding drafter — 39 objects, 202 GB — was HEADed at
+`https://huggingface.co/{hfRepo}/resolve/main/{fileName}` on 2026-08-31 and its `x-linked-size`
+read. Hugging Face serves these through LFS: a `resolve/main` request answers **302**, so
+`content-length` describes the redirect and `x-linked-size` carries the object. Four were
+cross-checked against `/api/models/{hfRepo}/tree/main`, which reports the same `lfs.size`. The
+whole set was then re-measured a second time through the shipped code path — `NetworkPolicy` under
+`UserTriggeredModelDownload` — and agreed on all 39.
+
+Pass and fail below are recomputed with `within_tolerance`'s own arithmetic, which divides by
+`expected`, not by `actual`. That matters: it is the difference between reporting what is wrong and
+reporting what the shipped code rejects.
+
+### The root cause is a base-2 conversion of a base-10 label
+
+Upstream's baseline carries a human `size` label per model — `"5.0GB"`, `"2.5GB"` — and its
+`sizeBytes` was produced from that label by multiplying by **2^30 instead of 10^9**.
+
+| model | declared | measured | declared ÷ measured | declared ÷ 2^30 | measured ÷ 10^9 |
+| --- | --- | --- | --- | --- | --- |
+| `qwen3-8b-q4_k_m` | 5 402 263 552 | 5 027 783 488 | 1.074482 | 5.0313 | 5.0278 |
+| `qwen3-8b-q5_k_m` | 6 281 625 600 | 5 851 112 224 | 1.073578 | 5.8502 | 5.8511 |
+| `qwen3-4b-q4_k_m` | 2 684 354 560 | 2 497 280 256 | 1.074911 | 2.5000 | 2.4973 |
+| `qwen3-1.7b-q8_0` | 1 965 555 712 | 1 834 426 016 | 1.071483 | 1.8306 | 1.8344 |
+| `qwen3-32b-q4_k_m` | 21 260 251 955 | 19 762 149 024 | 1.075807 | 19.8002 | 19.7621 |
+| `qwen2.5-1.5b-instruct-q5_k_m` | 1 395 864 371 | 1 285 494 304 | 1.085858 | 1.3000 | 1.2855 |
+| `qwen2.5-3b-instruct-q5_k_m` | 2 620 055 552 | 2 438 740 384 | 1.074348 | 2.4401 | 2.4387 |
+| `qwen2.5-7b-instruct-q4_k_m` | 5 025 128 858 | 4 683 074 240 | 1.073041 | 4.6800 | 4.6831 |
+| `qwen2.5-7b-instruct-q5_k_m` | 5 841 530 470 | 5 444 831 936 | 1.072858 | 5.4403 | 5.4448 |
+| `mistral-nemo-12b-instruct-q4_k_m` | 8 028 321 792 | 7 477 208 320 | 1.073706 | 7.4770 | 7.4772 |
+| `mistral-7b-instruct-v0.3-q4_k_m` | 4 692 635 648 | 4 372 812 000 | 1.073139 | 4.3704 | 4.3728 |
+| `mistral-7b-instruct-v0.3-q5_k_m` | 5 519 900 672 | 5 136 175 328 | 1.074710 | 5.1408 | 5.1362 |
+| `llama-3.2-3b-instruct-q4_k_m` | 2 168 958 976 | 2 019 377 696 | 1.074073 | 2.0200 | 2.0194 |
+| `llama-3.1-8b-instruct-q4_k_m` | 5 282 717 696 | 4 920 739 232 | 1.073562 | 4.9199 | 4.9207 |
+| `gpt-oss-20b-mxfp4` | 12 999 763 968 | 12 109 566 624 | 1.073512 | 12.1070 | 12.1096 |
+| `gemma-4-e4b-it-q4_k_m` | 5 812 137 984 | 5 405 170 144 | 1.075292 | 5.4130 | 5.4052 |
+| `gemma-4-e2b-it-q4_k_m` | 3 711 514 624 | 3 462 680 032 | 1.071862 | 3.4566 | 3.4627 |
+| `gemma-3-12b-it-q4_k_m` | 7 847 624 704 | 7 300 575 264 | 1.074932 | 7.3087 | 7.3006 |
+
+**2^30 ÷ 10^9 = 1.073741824.** Over the eighteen, declared ÷ measured has mean **1.074509**. Drop
+the single outlier and the seventeen remaining average **1.073841**, none of them more than
+**0.210%** from the constant. Read the last two columns as one claim: *declared ÷ 2^30* recovers the
+model's size **in base-10 GB**, to three or four significant figures, in every row.
+
+Two rows are the label itself, unrounded:
+
+- `qwen3-4b-q4_k_m` — label `"2.5GB"`, declared `2 684 354 560` = **2.5 × 2^30**, exactly.
+- `qwen2.5-1.5b-instruct-q5_k_m` — label `"1.3GB"`, declared `1 395 864 371` = **1.3 × 2^30**,
+  exactly. This is the outlier at 7.907%, and it is worse than the rest for a second reason on top
+  of the first: the file is 1.2855 GB, so the two-significant-figure label was already 1.1% high
+  before anything multiplied it. Label rounding and unit confusion compound.
+
+The other sixteen are finer-grained than their own two-digit label — `qwen3-8b-q4_k_m` declares
+5.0313 GiB against a `"5.0GB"` label — so whatever the conversion consumed was a more precise GB
+figure than the label the baseline kept. The residual ±0.2% is not explained; the 7.4% is, and the
+7.4% is the whole defect.
+
+### Three things the measurement found that the theory did not predict
+
+**1. `llama-3.2-1b-instruct-q4_k_m` is the same bug one unit down, and it passes.** Declared
+`847 249 408` = **808 × 2^20**, exactly; the file is `807 694 464` bytes = 807.69 MB, which rounds
+to the 808 **MB** that was then read as MiB. Its ratio is 1.048973 against 2^20 ÷ 10^6 =
+**1.048576**. It survives only because the mebibyte error is 4.86% and the gibibyte error is 7.37%,
+and the tolerance is 5%. One model was saved by its own smallness.
+
+**2. The three `qwen3.5-*` models are not this bug at all, and one of them passes by 5.6 KB.** Their
+declared sizes are *smaller* than the real files (95.2–95.5% of them) and are not round in any base
+— `5 889 811 552` for a 6 169 341 984-byte file. Each bartowski repo has a single upload
+(2026-05-19, checked through `/api/models/…/commits/main`), so these are not stale figures from a
+re-upload; where they came from is unknown. What matters is the margin:
+
+| model | difference ÷ expected | margin below the 5% tolerance |
+| --- | --- | --- |
+| `qwen3.5-2b-q4_k_m` | **4.9958%** | 0.0042 pp — about 5.6 KB |
+| `qwen3.5-4b-q4_k_m` | 4.9198% | 0.08 pp |
+| `qwen3.5-9b-q4_k_m` | 4.7460% | 0.25 pp |
+
+`qwen3.5-9b-q4_k_m` is the **recommended** model, and `qwen3.5-2b-q4_k_m` was four kilobytes of
+upstream metadata away from joining the eighteen. The set that worked was not a set that was right;
+it was a set that had not yet drifted far enough to fail.
+
+**3. Two models that looked exact were 2 240 bytes short — the same 2 240 in both.**
+`gemma-4-31b-it-q4_k_m` and `gemma-4-26b-a4b-it-q4_k_m`, both from bartowski, both declared exactly
+2 240 bytes below what is served. That is the re-upload case, live and already present: two files
+whose length changed by a GGUF metadata block since somebody measured them. It is the reason the
+`#[ignore]`d re-measurement test below is not a formality.
+
+**Eleven** models matched to the byte, and all four drafters — fifteen of the thirty-nine objects.
+They are the ones somebody actually measured: all five `lfm2*`, the four Gemma QAT builds with their
+drafters, `gemma-3-4b-it` and `gemma-3-1b-it`. Six of the seventeen that *passed* did not match: the
+three `qwen3.5-*`, `llama-3.2-1b`, and the two bartowski Gemma 4 builds 2 240 bytes adrift.
+
+### The fix, and where the numbers now live
+
+`LOCAL_LLM_SIZES` in `tools/integration-audit/generate-provider-registry.mjs`, keyed by model id,
+carrying `sizeBytes` and `draftSizeBytes` for all 35 models and all 4 drafters. It sits beside
+`SHERPA_PINS` and is built on the same reasoning: `config/upstream-integration-baseline.json` is a
+frozen record of what upstream had and must not gain fields we invented, and
+`config/provider-registry.json` is generated, so a fix hand-edited into it dies at the next
+regeneration — which is exactly what happened to the Parakeet digests in `f17a5fd`. A pin naming an
+id the baseline does not have is a `die()`, as is a drafter pin on a model with no drafter.
+
+**The pins are measurements, and they are the weaker kind.** `tools/sidecar-pin/pin.mjs` downloads
+the asset and records bytes on disk, which is why it can also pin a SHA-256. These are what the
+publisher's own object size says over HTTP. The difference is deliberate and it is a cost decision:
+202 GB of downloading to confirm a length that Hugging Face already states is not justified for a
+size pin. The doc comment says so in those words, so that nobody later reads the table as the
+stronger thing and adds a `sha256` next to it. A digest belongs to bytes somebody hashed.
+
+### Exact equality, and what it costs
+
+The registry now carries `sizeMeasured` per model and per drafter, and `download_gguf` reads it
+through a three-state `SizeCheck`: `Exact` for a measured size, `Approximate` (the old 5%) for a
+declared one, `Unknown` for no size at all.
+
+**Why exactness became safe:** a tolerance is the right answer to a *rounded* number and the wrong
+answer to a *measured* one. Against a figure read from the publisher's own object size there is
+nothing left to round — the file either has that many bytes or is not that file. The 5% window was
+simultaneously wide enough to hide this defect for the seventeen models it passed and too narrow to
+install the eighteen it failed, which is what a tolerance around an unmeasured number always is.
+
+**What it costs:** an upstream re-upload now fails the install loudly instead of passing silently.
+Taken deliberately — a silent pass means the user runs weights nobody here ever measured — and it
+is not a hypothetical cost, because two models had already drifted by 2 240 bytes. What keeps it
+survivable is `the_measured_sizes_still_match_hugging_face` in `local_llm.rs`: `#[ignore]`d, 39 HEAD
+requests, no bodies, about six seconds, and it re-measures the committed table against the live
+files. It passed on all 39 at the time of writing. The `Approximate` arm is kept, and a unit test
+asserts nothing is currently using it — a model added before it is measured is degraded rather than
+broken, and the test is where that shows up.
+
+### Not verified
+
+Nobody has installed any of the eighteen through the screen. `BENCH_CHECK.md` carries it as a
+by-hand item. What is verified is that the sizes are right and that the check accepts them; that a
+20 GB download completes, renames, and starts a server is a separate claim and this run did not make
+it.
 
 ---
 
