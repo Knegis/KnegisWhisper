@@ -351,7 +351,9 @@ recording has stopped along with the transcription.
 **That is the one case where the state is wrong in its first word, and it is reported anyway.** The
 alternative is the silence this whole change exists to end, and the sentence — which is what a
 person actually reads — says the true thing: *"the recording thread stopped, so nothing further is
-being recorded or transcribed."* Written down here rather than left for someone to find.
+being recorded or transcribed."* Filed as **KNEG-116** (Low) rather than left in a comment: a fifth
+state for a case reachable only by a panic, and untestable without one, was more machinery than the
+fact justified — and that is a judgement somebody should be able to revisit.
 
 ### Where it shows
 

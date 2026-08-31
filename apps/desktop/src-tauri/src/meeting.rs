@@ -1512,7 +1512,10 @@ fn emit_state(app: &AppHandle, state: MeetingState) {
 /// That is the one case where [`MeetingState::RecordingWithoutTranscript`] is
 /// wrong in its first word, and it is reported anyway, because the alternative
 /// is the silence this whole change exists to end -- and because the sentence,
-/// which is what a person actually reads, says the true thing.
+/// which is what a person actually reads, says the true thing. Filed as
+/// KNEG-116 rather than left here: a fifth state for a case reachable only by a
+/// panic was more machinery than the fact justified, and that is a judgement
+/// somebody should be able to revisit.
 fn live_transcript_ended(outcome: Result<(), &MeetingError>) -> String {
     match outcome {
         Ok(()) => {
