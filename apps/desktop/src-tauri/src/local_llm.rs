@@ -674,6 +674,21 @@ impl SizeCheck {
 /// exactly as `VerifiedBy::Size` already does for whisper models.
 ///
 /// How strict that length check is, and why, is [`SizeCheck`].
+///
+/// **The download is bounded only under [`SizeCheck::Exact`].** A bound refuses
+/// the transfer mid-flight, so it has to be a figure that cannot be wrong on
+/// the high side, and only a measured one is. `Approximate` is upstream's
+/// declaration held to 5%: bounding *that* is the bug KNEG-101 fixed, one layer
+/// earlier — eighteen models were declared 6.7–7.9% larger than the file
+/// Hugging Face serves, and the version of this function that compared a
+/// finished download against the declared figure deleted all eighteen after
+/// downloading 101 GB. A bound would have refused them faster and just as
+/// wrongly. `Approximate`'s tolerance therefore stays a post-download check and
+/// never becomes a bound.
+///
+/// So the strong case gets both protections and the weak case gets the one it
+/// can support. That is the same shape as `models::install` for whisper models,
+/// and for the same reason.
 async fn download_gguf(
     policy: &NetworkPolicy,
     url: &str,
@@ -689,15 +704,17 @@ async fn download_gguf(
     // interrupted six-gigabyte download never looks like an installed model.
     let partial = destination.with_extension("partial");
 
-    policy
-        .download_to_file(
-            kw_network_policy::RequestPurpose::UserTriggeredModelDownload,
-            url,
-            &partial,
-            progress,
-        )
-        .await
-        .map_err(|e| e.to_string())?;
+    let purpose = kw_network_policy::RequestPurpose::UserTriggeredModelDownload;
+    match size {
+        SizeCheck::Exact(expected) => policy
+            .download_to_file_bounded(purpose, url, &partial, expected, progress)
+            .await
+            .map_err(|e| e.to_string())?,
+        SizeCheck::Approximate(_) | SizeCheck::Unknown => policy
+            .download_to_file(purpose, url, &partial, progress)
+            .await
+            .map_err(|e| e.to_string())?,
+    };
 
     let actual = std::fs::metadata(&partial)
         .map_err(|e| e.to_string())?

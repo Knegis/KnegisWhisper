@@ -106,6 +106,18 @@ pub struct Installed {
 ///
 /// Replaces any previous install of the same sidecar. Leaves nothing behind on
 /// failure except a temporary directory that the next attempt overwrites.
+///
+/// **Both bounds come from the manifest.** The download is capped at
+/// [`Asset::size_bytes`], which is exact — `tools/sidecar-pin/pin.mjs` takes it
+/// from `stat` after a full download, never from `content-length` — and the
+/// extraction at [`Asset::max_extracted_size_bytes`].
+///
+/// The digest is the stronger guarantee and it comes first in importance, not
+/// in time. That is the whole point of the download bound: `integrity::verify`
+/// cannot run until the bytes are on disk, so a hostile or broken mirror gets
+/// one window in which to fill the disk, and this closes it. The extraction
+/// ceiling is defence in depth behind a digest that has already matched — a
+/// pinned archive can still be a bomb if whoever pinned it was wrong.
 pub async fn install(
     policy: &NetworkPolicy,
     spec: &SidecarSpec,
@@ -121,10 +133,11 @@ pub async fn install(
     let archive = staging.join("asset");
 
     let download = policy
-        .download_to_file(
+        .download_to_file_bounded(
             RequestPurpose::UserTriggeredModelDownload,
             &asset.url,
             &archive,
+            asset.size_bytes,
             &mut |written, total| progress(Progress::Downloading { written, total }),
         )
         .await?;
@@ -135,12 +148,13 @@ pub async fn install(
     progress(Progress::Extracting);
     let unpacked = staging.join("files");
     create_dir(&unpacked)?;
-    let files = extract(
+    let files = extract_with_limit(
         &archive,
         asset.archive,
         asset.payload_dir(),
         asset.executable_name(),
         &unpacked,
+        asset.max_extracted_size_bytes,
     )?;
 
     let executable = unpacked.join(asset.executable_name());

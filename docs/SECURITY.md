@@ -172,11 +172,54 @@ with `Notes > Upload`'s pick-then-review-then-confirm flow, which export's singl
 not need); or a capability restricting which paths these three commands will accept, independent
 of whatever the renderer claims. See `docs/BENCH_CHECK.md`'s Task 12 entry.
 
-## Sidecars
+## Sidecars and downloaded models
 
-Explicitly allowlisted; the frontend cannot spawn a process. Downloads are pinned by version and
-verified by digest. Temporary files are created with restrictive permissions, and temporary audio
-is deleted automatically.
+Explicitly allowlisted; the frontend cannot spawn a process. Sidecar downloads are pinned by
+version and verified by digest — `kw_sidecar::manifest::Asset` cannot represent an executable
+without one, so an unpinned binary does not deserialize rather than skipping verification.
+Temporary files are created with restrictive permissions, and temporary audio is deleted
+automatically.
+
+### What is bounded, and what is ceilinged
+
+A **bound** caps the download before the bytes reach disk. A **ceiling** caps what an archive may
+write when it is unpacked. They answer different exposures, and neither is the digest.
+
+The digest is the strongest check and it is also the *last* one: `kw_sidecar::integrity::verify`
+cannot run until the file is on disk. So a hostile or broken mirror gets one window in which to
+fill the disk with something that will be rejected afterwards, and the download bound is what
+closes that window. The extraction ceiling then sits behind a digest that has already matched,
+because a pinned archive can still be a decompression bomb if whoever pinned it was wrong.
+
+| asset class | download bound | extraction ceiling |
+| --- | --- | --- |
+| Sidecar binaries (whisper, llama, ffmpeg, yt-dlp, sherpa) | `sizeBytes`, exact | `maxExtractedSizeBytes` |
+| Parakeet/sherpa ASR models | `expectedSizeBytes`, exact | `maxExtractedSizeBytes` |
+| Whisper `.bin` models | `expectedSizeBytes`, exact | none — not an archive |
+| Local text-generation GGUFs | `sizeBytes` where measured; none where declared | none — not an archive |
+
+**A bound is only ever an exact figure.** Every bound above comes from a measurement:
+`tools/sidecar-pin/pin.mjs` and `tools/model-pin/pin.mjs` take the length from `stat` after a full
+download, never from `content-length`, because a truncated body agrees with its own header. A
+*declared* length cannot bound a transfer — the true length may be on either side of it, so a
+bound built from one refuses legitimate installs. That is not hypothetical: eighteen of
+thirty-five local GGUFs were declared 6.7–7.9% larger than the file Hugging Face serves
+(KNEG-101), and a bound on those figures would have refused all eighteen mid-transfer. The
+eighteen are measured now; a model added to the registry before anybody measures it is downloaded
+unbounded and checked against its declared size afterwards, which is degraded rather than broken.
+
+**A ceiling is a judgement, and says so where it is written.** `maxExtractedSizeBytes` is the
+measured extracted total plus headroom, not a measurement — `withHeadroom` in
+`tools/sidecar-pin/pin.mjs` states the rule and `SHERPA_PINS` in
+`tools/integration-audit/generate-provider-registry.mjs` records the reasoning for its two
+hand-chosen figures. Headroom errs high on purpose: being wrong high costs protection, being wrong
+low refuses a legitimate install.
+
+Two gaps are recorded rather than implied. Neither has a `maxExtractedSizeBytes` because neither
+is an archive: a whisper `.bin` and a GGUF are downloaded and never unpacked, so the only thing an
+unverified one can produce is bad output. And `extract_tar_xz` holds the whole decompressed tar in
+memory before reading an entry, so a `.tar.xz` is a memory bomb independent of any output ceiling
+(KNEG-106, behind a mandatory digest, two pinned assets).
 
 ## Logging
 
