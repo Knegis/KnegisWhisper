@@ -63,6 +63,7 @@
  *   node tools/model-pin/pin.mjs --file <path> [--id <model-id>]
  *   node tools/model-pin/pin.mjs --verify [--only <model-id>]
  *   node tools/model-pin/pin.mjs --verify-stated [--only <model-id>]
+ *   node tools/model-pin/pin.mjs --revisions
  *
  *   # Measure and assert in one step — this is the acceptance run:
  *   node tools/model-pin/pin.mjs \
@@ -94,6 +95,21 @@
  * only the first can catch bytes that disagree with the claim. They are two
  * commands rather than one flag because a tool that reports "verified" should
  * never be vague about which of those it did.
+ *
+ * ## What `--revisions` measures
+ *
+ * Which commit each Hugging Face repository's `main` points at right now, for
+ * all 37 the registry names -- one request each, no bodies. It prints a
+ * pasteable `HF_REVISIONS` table, and it exists for the same reason every
+ * other mode here does: **a revision that was typed rather than read is not a
+ * pin.**
+ *
+ * This is a measuring verb, not a checking one. It reports what upstream says
+ * today and never compares that to what is committed; `--verify-stated` is
+ * where a disagreement becomes an exit code. Keeping the two apart is the same
+ * separation `--verify` and `--verify-stated` already have, and for the same
+ * reason: a run that both measures and asserts can always be misread as having
+ * asserted the thing it measured.
  *
  * This used to be two files. The whisper pins lived in a `PINNED` table in
  * `crates/transcription-core/src/models.rs`, so this tool parsed a Rust
@@ -466,9 +482,9 @@ export function statedTargets(reg = registry()) {
   return targets;
 }
 
-/** One repository tree, as JSON. Bounded redirects, same as `download`. */
-async function tree(repo) {
-  let current = `https://huggingface.co/api/models/${repo}/tree/main?expand=true&recursive=true`;
+/** One Hugging Face API document, as JSON. Bounded redirects, same as `download`. */
+async function apiJson(url) {
+  let current = url;
   for (let hop = 0; hop < 6; hop += 1) {
     const response = await fetch(current, { redirect: "manual" });
     if (response.status >= 300 && response.status < 400) {
@@ -480,7 +496,33 @@ async function tree(repo) {
     if (!response.ok) die(`${current} returned HTTP ${response.status}`);
     return response.json();
   }
-  return die(`the tree for ${repo} redirected more than five times`);
+  return die(`${url} redirected more than five times`);
+}
+
+/**
+ * One repository tree at a named revision, as JSON.
+ *
+ * The revision is a parameter rather than the constant `main` it used to be,
+ * because the answer to "what does this repository hold" is only meaningful
+ * once you say *when*. `--verify-stated` passes the committed commit; nothing
+ * asks for `main` any more.
+ */
+async function tree(repo, revision) {
+  return apiJson(
+    `https://huggingface.co/api/models/${repo}/tree/${revision}?expand=true&recursive=true`
+  );
+}
+
+/**
+ * What a repository's `main` points at right now, and when it last changed.
+ *
+ * `sha` is the commit that goes into `HF_REVISIONS`. `lastModified` is context
+ * rather than part of the pin: it is the difference between "nothing has
+ * touched this since 2024" and "this moved last week", which is what tells a
+ * reader whether a pin one commit behind is stale or simply older.
+ */
+async function modelInfo(repo) {
+  return apiJson(`https://huggingface.co/api/models/${repo}`);
 }
 
 /**
@@ -506,7 +548,11 @@ export async function verifyStated(only) {
   for (const target of targets) {
     if (trees.has(target.repo)) continue;
     console.error(`reading ${target.repo} …`);
-    trees.set(target.repo, await tree(target.repo));
+    // `main` for now. The next commit pins these to the committed revision,
+    // which is the whole point of KNEG-103; passing it explicitly here keeps
+    // this mode reading exactly what it read before `tree` gained the
+    // parameter, rather than reading `tree/undefined`.
+    trees.set(target.repo, await tree(target.repo, "main"));
   }
 
   const wrong = [];
@@ -550,6 +596,115 @@ export async function verifyStated(only) {
   );
 }
 
+/* --------------------------------------------------------------- revisions */
+
+/**
+ * A Hugging Face download URL, split into repository / revision / path.
+ *
+ * Exported because the same three parts are what
+ * `tools/integration-audit/generate-provider-registry.mjs` rewrites when it
+ * pins a whisper URL, and two regexes for one URL shape is how they drift.
+ * Returns `null` for anything that is not a Hugging Face `resolve` URL, which
+ * a caller must handle rather than assume away -- nothing in the registry is
+ * hosted elsewhere today, and that is a fact about today.
+ */
+export function parseHfUrl(url) {
+  const match = /^https:\/\/huggingface\.co\/([^/]+\/[^/]+)\/resolve\/([^/]+)\/(.+)$/.exec(
+    String(url)
+  );
+  if (!match) return null;
+  return { repo: match[1], revision: match[2], path: match[3] };
+}
+
+/**
+ * Every Hugging Face repository the registry downloads from, once each.
+ *
+ * Both families, because both are served by the same host under the same
+ * branch pointer: whisper URLs are stored whole and parsed back apart, GGUF
+ * URLs are composed from `hfRepo` and so are read directly. The `from` string
+ * is carried so a repository that cannot be read names the models that would
+ * stop installing, rather than only itself.
+ */
+export function hfRepos(reg = registry()) {
+  const found = new Map();
+  const add = (repo, from) => {
+    const seen = found.get(repo);
+    if (seen) {
+      if (!seen.includes(from)) seen.push(from);
+      return;
+    }
+    found.set(repo, [from]);
+  };
+
+  for (const model of reg.localAsr?.whisper ?? []) {
+    const parsed = parseHfUrl(model.downloadUrl);
+    if (parsed) add(parsed.repo, `whisper/${model.id}`);
+  }
+  for (const provider of reg.localLlm ?? []) {
+    for (const model of provider.models ?? []) {
+      if (model.hfRepo) add(model.hfRepo, `localLlm/${model.id}`);
+      if (model.draft?.hfRepo) add(model.draft.hfRepo, `localLlm/${model.id} (drafter)`);
+    }
+  }
+
+  return [...found.entries()]
+    .map(([repo, from]) => ({ repo, from }))
+    .sort((a, b) => (a.repo < b.repo ? -1 : a.repo > b.repo ? 1 : 0));
+}
+
+/**
+ * Read every repository's current `main` commit and print a pasteable table.
+ *
+ * Measures; never asserts. A repository that has moved past the committed
+ * revision is not this mode's news to break on -- upstream publishing is
+ * normal, and a tool that exits non-zero for it would be crying wolf weekly.
+ * `--verify-stated` is where a real disagreement becomes an exit code.
+ */
+export async function revisions() {
+  const repos = hfRepos();
+  if (repos.length === 0) {
+    die(
+      "no Hugging Face repositories were found in the registry at all. That is not a pass -- " +
+        "see the header of this file for where the registry is read from."
+    );
+  }
+
+  const rows = [];
+  for (const { repo, from } of repos) {
+    console.error(`reading ${repo} …`);
+    const info = await modelInfo(repo);
+    if (typeof info.sha !== "string" || !/^[0-9a-f]{40}$/.test(info.sha)) {
+      die(`${repo} returned no usable commit sha (got ${JSON.stringify(info.sha)}).`);
+    }
+    rows.push({
+      repo,
+      revision: info.sha,
+      // Date only. The time of day a publisher pushed is not context anybody
+      // reading a pin table needs, and a shorter string keeps the table
+      // scannable down the column that matters.
+      lastModified: String(info.lastModified ?? "").slice(0, 10) || null,
+      usedBy: from,
+    });
+  }
+
+  console.error("");
+  console.error("As the HF_REVISIONS table in tools/integration-audit/generate-provider-registry.mjs:");
+  console.error("");
+  for (const row of rows) {
+    console.error(`  "${row.repo}": {`);
+    console.error(`    revision: "${row.revision}",`);
+    console.error(`    lastModified: ${row.lastModified ? `"${row.lastModified}"` : "null"},`);
+    console.error(`  },`);
+  }
+  console.error("");
+  console.error(
+    `model-pin --revisions: read ${rows.length} repository/repositories. These are what ` +
+      `upstream points at today; nothing here was compared to what is committed.`
+  );
+
+  console.log(JSON.stringify(rows, null, 2));
+}
+
 /* -------------------------------------------------------------------- main */
 
 /** `ggml-tiny.bin` from a whisper URL — a label, never part of a pin. */
@@ -575,13 +730,19 @@ async function main(argv) {
     return;
   }
 
+  if (options.revisions) {
+    await revisions();
+    return;
+  }
+
   const hasUrl = typeof options.url === "string";
   const hasFile = typeof options.file === "string";
   if (hasUrl === hasFile) {
     die(
       "exactly one of --url <url> or --file <path> is required. See the header of this file " +
-        "for examples, --verify to re-measure the committed pins, or --verify-stated to " +
-        "re-read the GGUF pins from Hugging Face without downloading them."
+        "for examples, --verify to re-measure the committed pins, --verify-stated to " +
+        "re-read the GGUF pins from Hugging Face without downloading them, or --revisions " +
+        "to read what each repository's main points at today."
     );
   }
 
