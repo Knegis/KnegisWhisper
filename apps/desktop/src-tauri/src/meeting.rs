@@ -297,9 +297,20 @@ pub enum MeetingOutcome {
         /// partials were saved instead.
         transcript_is_partials: bool,
     },
-    /// Nothing was said, so there is nothing to keep.
+    /// Nothing was transcribed, and what the two captures delivered.
+    ///
+    /// The captures are here because "nothing was said" is only one of the
+    /// things that end up on this arm, and until KNEG-38 the screen could not
+    /// tell them apart. A microphone that delivered audible audio and produced
+    /// no transcript is not a quiet room; a system capture that delivered
+    /// nothing at all is the ordinary shape of a call where nobody else spoke,
+    /// *and* the shape of a loopback that never worked. Naming which happened
+    /// is possible; separating the last two is not, and
+    /// [`crate::meeting::Delivered`] says so rather than guessing.
     NothingTranscribed {
         recording_path: String,
+        mic: Delivered,
+        system: Delivered,
     },
     Cancelled,
     Failed {
@@ -332,6 +343,71 @@ enum RecorderCommand {
     Cancel,
 }
 
+/// What a capture actually delivered over a meeting, as opposed to whether it
+/// opened.
+///
+/// **The distinction KNEG-38 is about.** WASAPI loopback from an output device
+/// with nothing playing delivers **no callback at all**, not a stream of zeros.
+/// So at the API a capture that never worked and a call where nobody else spoke
+/// are the same thing, and for a meeting recording that difference is the whole
+/// point. `MeetingOutcome::NothingTranscribed` was where both landed, together
+/// with a third case that is neither.
+///
+/// This does not make the first two distinguishable — nothing this side can,
+/// and claiming otherwise would be the invention the rest of this file refuses.
+/// What it does is *name* which of them happened, separate the third, and say
+/// on screen why the first two look alike.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "kebab-case")]
+#[ts(export)]
+pub enum Delivered {
+    /// Never opened. [`Sources`] carries the reason.
+    NotCaptured,
+    /// Opened, and no callback ever arrived.
+    ///
+    /// On Windows this is what an idle output device produces, so it is the
+    /// ordinary shape of a call where the other participants said nothing —
+    /// and it is also what a capture that silently failed produces.
+    Nothing,
+    /// Delivered, and every sample was exactly zero.
+    ///
+    /// Distinct from [`Delivered::Nothing`]: something *was* playing, or the
+    /// endpoint was producing buffers, and the content was digital silence.
+    /// Muting at the application level looks like this; an idle device does
+    /// not.
+    Silence,
+    /// Delivered, and at least one sample was not zero.
+    ///
+    /// The one that changes an outcome. Audio was captured and nothing was
+    /// transcribed from it, which is not a quiet room and should not be
+    /// reported as one.
+    Audio,
+}
+
+impl Delivered {
+    /// Fold one drained block into the running answer.
+    ///
+    /// Monotone by construction — `Nothing` to `Silence` to `Audio`, never
+    /// back — so a single audible block over an hour of quiet still reports
+    /// `Audio`. That is the direction that matters: the question is whether
+    /// anything was ever heard, not whether the last few seconds were.
+    #[must_use]
+    fn plus(self, block: &[f32]) -> Self {
+        match self {
+            Self::NotCaptured | Self::Audio => self,
+            Self::Nothing | Self::Silence => {
+                if block.iter().any(|sample| *sample != 0.0) {
+                    Self::Audio
+                } else if block.is_empty() {
+                    self
+                } else {
+                    Self::Silence
+                }
+            }
+        }
+    }
+}
+
 /// What the recorder produced.
 #[derive(Debug)]
 struct Finished {
@@ -340,6 +416,10 @@ struct Finished {
     /// Samples that exceeded full scale and were clamped by the encoder. See
     /// [`MixFeed`] on why this is counted rather than corrected.
     clipped: u64,
+    /// What the microphone actually delivered. See [`Delivered`].
+    mic_delivered: Delivered,
+    /// What the system-audio capture actually delivered. See [`Delivered`].
+    system_delivered: Delivered,
 }
 
 /// How the recorder thread ended, written by the thread itself on its way out.
@@ -479,8 +559,21 @@ fn record(
 
     let mut mixer = MixFeed::new();
 
+    // What each capture has actually delivered so far. Started from what was
+    // opened rather than from `Nothing`, so a source that was never asked for
+    // is never reported as one that fell silent.
+    let mut mic_delivered = Delivered::Nothing;
+    let mut system_delivered = if system.is_some() {
+        Delivered::Nothing
+    } else {
+        Delivered::NotCaptured
+    };
+
     // A closure so the tick and the final drain cannot diverge.
-    let drain_once = |writer: &mut WavWriter, mixer: &mut MixFeed| {
+    let drain_once = |writer: &mut WavWriter,
+                      mixer: &mut MixFeed,
+                      mic_delivered: &mut Delivered,
+                      system_delivered: &mut Delivered| {
         // Downmixed and brought to one rate here, because the two devices need
         // not agree: a 44.1 kHz microphone and a 48 kHz output endpoint is an
         // ordinary pairing, and mixing them without a common rate would drift.
@@ -500,6 +593,12 @@ fn record(
                 track.sample_rate,
             )
         });
+
+        // Folded from the per-source blocks rather than from the mix, because
+        // the mix is the sum: a silent system feed under a live microphone is
+        // indistinguishable there, and telling those apart is the point.
+        *mic_delivered = mic_delivered.plus(&mic_mono);
+        *system_delivered = system_delivered.plus(&system_mono);
 
         mixer.push_a(&mic_mono);
         mixer.push_b(&system_mono);
@@ -524,7 +623,12 @@ fn record(
     loop {
         match commands.recv_timeout(DRAIN_INTERVAL) {
             Ok(RecorderCommand::Finish { reply }) => {
-                let _ = drain_once(&mut writer, &mut mixer);
+                let _ = drain_once(
+                    &mut writer,
+                    &mut mixer,
+                    &mut mic_delivered,
+                    &mut system_delivered,
+                );
                 let tail = mixer.flush();
                 if let Err(err) = writer.append(&tail) {
                     tracing::error!(error = %err, "could not append the last of the recording");
@@ -542,6 +646,8 @@ fn record(
                         ) as f64
                             / 1_000.0,
                         clipped,
+                        mic_delivered,
+                        system_delivered,
                     });
                 let _ = reply.send(result);
                 return;
@@ -556,7 +662,14 @@ fn record(
                 return;
             }
             Err(sync_mpsc::RecvTimeoutError::Timeout) => {
-                if drain_once(&mut writer, &mut mixer).is_err() {
+                if drain_once(
+                    &mut writer,
+                    &mut mixer,
+                    &mut mic_delivered,
+                    &mut system_delivered,
+                )
+                .is_err()
+                {
                     // Nothing is reading the audio, which means the pump has
                     // gone. Keep writing the file: the recording is still worth
                     // having even if the transcript is not coming.
@@ -1407,6 +1520,8 @@ impl MeetingRuntime {
                 },
                 None => MeetingOutcome::NothingTranscribed {
                     recording_path: path,
+                    mic: finished.mic_delivered,
+                    system: finished.system_delivered,
                 },
             };
         }
@@ -2023,6 +2138,57 @@ mod tests {
         assert_eq!(json["noteId"], 7);
         assert_eq!(json["gaps"], 2);
         assert_eq!(json["transcriptIsPartials"], true);
+    }
+
+    /* --------------------------------------------------- what was delivered */
+
+    /// An empty block is not silence, and that is the whole distinction.
+    ///
+    /// WASAPI loopback from an idle output device produces no callback, so the
+    /// drain finds nothing to fold. Reading that as "a block of silence" would
+    /// collapse the two cases KNEG-38 exists to keep apart before anything
+    /// downstream could see them.
+    #[test]
+    fn nothing_delivered_is_not_the_same_as_silence_delivered() {
+        assert_eq!(Delivered::Nothing.plus(&[]), Delivered::Nothing);
+        assert_eq!(Delivered::Nothing.plus(&[0.0, 0.0]), Delivered::Silence);
+    }
+
+    /// Once something has been heard, it stays heard.
+    ///
+    /// The question is whether anything was ever audible over the meeting, not
+    /// whether the last few seconds were. An hour of silence after one spoken
+    /// word must still report `Audio`, or a meeting that went quiet at the end
+    /// would be reported as one nobody spoke in.
+    #[test]
+    fn hearing_something_once_is_not_undone_by_silence_after_it() {
+        let heard = Delivered::Nothing.plus(&[0.0, 0.2, 0.0]);
+        assert_eq!(heard, Delivered::Audio);
+        assert_eq!(heard.plus(&[0.0; 16]), Delivered::Audio);
+        assert_eq!(heard.plus(&[]), Delivered::Audio);
+    }
+
+    /// A source that was never opened is never reported as one that fell
+    /// silent.
+    ///
+    /// `NotCaptured` is a different answer from `Nothing`, and the difference
+    /// is whether there is anything to look into: a meeting recorded without
+    /// system audio has a reason on `Sources` and no defect behind it.
+    #[test]
+    fn a_source_that_was_not_captured_stays_that_way() {
+        assert_eq!(Delivered::NotCaptured.plus(&[]), Delivered::NotCaptured);
+        assert_eq!(
+            Delivered::NotCaptured.plus(&[0.0, 0.5]),
+            Delivered::NotCaptured
+        );
+    }
+
+    /// Silence then sound is `Audio`; the fold only ever moves one way.
+    #[test]
+    fn the_fold_only_moves_towards_having_heard_something() {
+        let quiet = Delivered::Nothing.plus(&[0.0; 8]);
+        assert_eq!(quiet, Delivered::Silence);
+        assert_eq!(quiet.plus(&[0.0, -0.4]), Delivered::Audio);
     }
 
     /// A live transcript that died must not put the tray out.

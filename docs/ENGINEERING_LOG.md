@@ -278,6 +278,63 @@ Unchanged from the Phases 1–4 entry, restated here so they are not buried:
 
 ---
 
+## 2026-08-31 (KNEG-38) — the ambiguity is real, so it is named rather than resolved
+
+WASAPI loopback from an output device with nothing playing delivers **no callback at all**, not a
+stream of zeros. So *"nobody else spoke"* and *"the loopback never worked"* produce byte-for-byte
+the same nothing, and both arrived on screen as `MeetingOutcome::NothingTranscribed` — along with a
+third case that is neither of them.
+
+### What could be separated, and what could not
+
+Nothing this side can separate the first two. Any code claiming to would be inventing evidence, and
+the label already said so honestly: *"no speech was recognised, or the provider returned nothing"*.
+
+The third case was hiding in there and **can** be separated: audio was captured, it was audible, and
+none of it was transcribed. That is not a quiet meeting. It was being reported as one.
+
+So `Delivered` is a four-way answer per capture — `NotCaptured`, `Nothing`, `Silence`, `Audio` —
+folded in the recorder's drain loop as the blocks go past. The outcome carries one for the
+microphone and one for the system audio, and the sentence branches on them:
+
+* **either side heard something** — *"and none of it produced a transcript — so this is a
+  transcription problem rather than a quiet meeting."* First in the ordering, because it is the only
+  branch that should send anybody looking for a cause.
+* **everything delivered was digital silence** — nothing was said within reach.
+* **nothing was delivered at all** — *"this is what a meeting nobody spoke in looks like, and also
+  what a capture that did not work looks like. They cannot be told apart from here."*
+
+The last one is the honest version of the thing this issue asked for. The bench check's wording was
+*"zero samples must read as nobody else spoke rather than a failure"*, and reading it that way would
+be a guess in the other direction. What the screen now does is say which of the two it is looking at
+— having ruled out the third — and explain why they look alike.
+
+### An empty block is not a block of silence, and that is the whole fold
+
+`Delivered::plus` distinguishes an empty slice from a slice of zeros. Collapsing them — the obvious
+thing, since both contain no sound — would destroy the distinction before anything downstream could
+see it. It is also the first thing the tests check.
+
+The fold is monotone: `Nothing` to `Silence` to `Audio`, never back. A meeting that goes quiet for
+its last half hour has still heard something, and the question is whether anything was ever audible
+rather than whether the end was.
+
+And it folds the **per-source** blocks, not the mix. The mix is the sum, where a silent system feed
+under a live microphone is invisible, and telling those apart is the point.
+
+### `NotCaptured` is not `Nothing`
+
+A meeting recorded without system audio has a reason on `Sources` and no defect behind it. Starting
+that tally at `NotCaptured` rather than `Nothing` is what stops the screen reporting a capture that
+was never asked for as one that fell silent.
+
+### Still on the by-hand list
+
+With the speakers muted, confirm the sentence a real meeting produces. Everything above is measured
+in unit tests against synthetic blocks; no meeting has been recorded since it landed.
+
+---
+
 ## 2026-08-31 (KNEG-116) — asking the thread instead of inferring from its silence, and a state name that stops lying
 
 `pump` returns `Ok` when its audio channel closes. At Stop that is exactly right. Reaching it while
@@ -3266,7 +3323,9 @@ than a green tick over a path I could not actually drive.
   `Control+Alt`.
 - **WASAPI loopback from an idle output device delivers no callback at all**, not silence. The probe
   says so honestly, but at the API "capture is broken" and "the far end was quiet" look identical.
-  Chunk E should decide what that means before a meeting recording does.
+  Chunk E should decide what that means before a meeting recording does. *(Chunk E shipped without
+  it; settled on 2026-08-31 as KNEG-38 — the two are named rather than separated, because they
+  cannot be separated, and the third case hiding with them can be and now is.)*
 
 ### What the run left on the machine
 

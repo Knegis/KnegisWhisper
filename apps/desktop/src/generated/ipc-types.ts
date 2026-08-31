@@ -628,6 +628,24 @@ export type Sources = { microphone: boolean, systemAudio: boolean,
 systemAudioReason: string | null, };
 
 /**
+ * What a capture actually delivered over a meeting, as opposed to whether it
+ * opened.
+ *
+ * **The distinction KNEG-38 is about.** WASAPI loopback from an output device
+ * with nothing playing delivers **no callback at all**, not a stream of zeros.
+ * So at the API a capture that never worked and a call where nobody else spoke
+ * are the same thing, and for a meeting recording that difference is the whole
+ * point. `MeetingOutcome::NothingTranscribed` was where both landed, together
+ * with a third case that is neither.
+ *
+ * This does not make the first two distinguishable — nothing this side can,
+ * and claiming otherwise would be the invention the rest of this file refuses.
+ * What it does is *name* which of them happened, separate the third, and say
+ * on screen why the first two look alike.
+ */
+export type Delivered = "not-captured" | "nothing" | "silence" | "audio";
+
+/**
  * What can be said about the meeting session.
  */
 export type MeetingStatus = { state: MeetingState,
@@ -695,7 +713,7 @@ gaps: number,
  * True when the whole-file pass failed and the overlapping live
  * partials were saved instead.
  */
-transcriptIsPartials: boolean, } | { "outcome": "nothing-transcribed", recordingPath: string, } | { "outcome": "cancelled" } | { "outcome": "failed", message: string, };
+transcriptIsPartials: boolean, } | { "outcome": "nothing-transcribed", recordingPath: string, mic: Delivered, system: Delivered, } | { "outcome": "cancelled" } | { "outcome": "failed", message: string, };
 
 /**
  * An offer to record a meeting that appears to be happening.

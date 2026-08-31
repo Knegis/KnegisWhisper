@@ -23,6 +23,7 @@ import type {
   ClientAvailability,
   ConfigReview,
   ConnectOutcome,
+  Delivered,
   Detected,
   DictationOutcome,
   DiscoveryPermissions,
@@ -498,25 +499,19 @@ export function meetingOutcomeLabel(outcome: MeetingOutcome): string {
       return parts.join(" ");
     }
     case "nothing-transcribed":
-      // Still not a failure, and still not one named cause — but a narrower
-      // set of causes than this used to cover, and the sentence says which.
+      // Still not a failure, and still not one named cause. What changed with
+      // KNEG-38 is that the *captures* are no longer part of the ambiguity:
+      // the recorder now reports what each one actually delivered, so the one
+      // case that is genuinely a fault can be separated from the two that are
+      // not.
       //
-      // A provider that *reports* a fault no longer arrives here. All four
-      // cloud clients now record an error frame, a close frame's reason, a
-      // dead transport, or an unreadable first frame into `SessionFault`, and
+      // A provider that *reports* a fault does not arrive here at all. All four
+      // cloud clients record an error frame, a close frame's reason, a dead
+      // transport or an unreadable first frame into `SessionFault`, and
       // `send_audio` and `finish` turn that into an `Err`, so a rejected
       // session-config frame ends the meeting as `failed` carrying what the
-      // provider said. That was the confusion this comment used to describe
-      // and it is gone.
-      //
-      // What still lands here is genuinely ambiguous and is meant to be: a
-      // quiet room, and a provider that accepted the session, said nothing was
-      // wrong, and produced no transcript anyway — a silently misconfigured
-      // session, or a system-audio loopback with no samples in it. Nothing
-      // this side can separate those, so the sentence names both rather than
-      // picking one. Saying "failed" would send somebody hunting a fault that
-      // may not exist.
-      return `Nothing was transcribed — no speech was recognised, or the provider returned nothing without reporting a fault. The recording is at ${outcome.recordingPath}.`;
+      // provider said.
+      return `Nothing was transcribed. ${deliveryLabel(outcome.mic, outcome.system)} The recording is at ${outcome.recordingPath}.`;
     case "cancelled":
       return "Discarded. The recording was deleted.";
     case "failed":
@@ -541,6 +536,57 @@ export function detectedLabel(d: Detected): string {
 }
 
 /* ------------------------------------------------------------------ meetings */
+
+/**
+ * What the two captures delivered, in a sentence, when nothing was transcribed.
+ *
+ * **The ambiguity KNEG-38 named, narrowed rather than pretended away.** WASAPI
+ * loopback from an output device with nothing playing delivers no callback at
+ * all, not silence — so *"nobody else spoke"* and *"the loopback never
+ * worked"* produce byte-for-byte the same nothing, and no amount of code this
+ * side separates them. What can be separated is the third case, which used to
+ * be folded in with them: audio was captured and none of it was transcribed.
+ * That one is a fault, and it now says so.
+ *
+ * The order matters. Audible audio with no transcript is reported first
+ * wherever it happened, because it is the only branch that should send anybody
+ * looking for a cause.
+ */
+export function deliveryLabel(mic: Delivered, system: Delivered): string {
+  if (mic === "audio" || system === "audio") {
+    const which =
+      mic === "audio" && system === "audio"
+        ? "Both the microphone and the other participants were"
+        : mic === "audio"
+          ? "The microphone was"
+          : "The other participants were";
+    return `${which} recorded with audible sound in the recording, and none of it produced a transcript — so this is a transcription problem rather than a quiet meeting.`;
+  }
+
+  if (mic === "silence" || system === "silence") {
+    return "Everything captured was digital silence, so nothing was said within reach of the microphone or the system audio.";
+  }
+
+  // Neither delivered anything. On Windows that is what an output device with
+  // nothing playing produces, so it is the ordinary shape of a call nobody
+  // spoke in -- and it is indistinguishable from a capture that never worked.
+  // Said plainly rather than resolved, because it cannot be resolved from here.
+  if (system === "nothing" && mic === "nothing") {
+    return "Neither capture delivered any audio. An output device with nothing playing delivers no audio at all rather than silence, so this is what a meeting nobody spoke in looks like — and also what a capture that did not work looks like. They cannot be told apart from here.";
+  }
+
+  if (system === "nothing") {
+    return "The other participants' audio never arrived. An output device with nothing playing delivers no audio at all rather than silence, so this is what nobody else speaking looks like — and also what a system-audio capture that did not work looks like. They cannot be told apart from here.";
+  }
+
+  if (mic === "nothing") {
+    return "The microphone never delivered any audio, which is worth looking at: unlike system audio, a working microphone produces a stream whether or not anybody is speaking into it.";
+  }
+
+  // Only the microphone was asked for, and it delivered nothing audible.
+  return "No speech was recognised in what was captured.";
+}
+
 
 /**
  * Whether a session is on the machine right now, so Stop and Discard belong on

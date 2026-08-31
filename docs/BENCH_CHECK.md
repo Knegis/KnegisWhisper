@@ -291,9 +291,17 @@ the Teams row in [PLATFORM_SUPPORT.md](PLATFORM_SUPPORT.md) is the only one that
 says "seen to match". Everything else about chunk E is green tests.
 
 1. **Record a meeting.** Play a video, start a meeting from `Settings > Meetings`,
-   speak, stop. Confirm two transcript streams with the right source on each, a
-   note with the transcript and duration, and — with the speakers muted — that
-   zero system-audio samples reads as *nobody else spoke* rather than a failure.
+   speak, stop. Confirm two transcript streams with the right source on each, and
+   a note with the transcript and duration.
+
+   Then, **with the speakers muted**, record a short one and read the sentence. As
+   of 2026-08-31 (KNEG-38) the outcome names what each capture delivered, and the
+   thing to check is that it says the right one of three: audible audio with no
+   transcript (a fault), digital silence, or nothing delivered at all — which is
+   what an idle output device produces and is therefore *both* "nobody else spoke"
+   and "the capture did not work", stated as such rather than guessed at. All
+   three branches are unit-tested against synthetic blocks; none has been read off
+   a real meeting.
 2. **A meeting longer than thirty minutes**, to prove the old in-memory cap is
    gone and the recording on disk is complete.
 3. **Run `meeting_detect_probe` three times**: nothing open, the client open, and
