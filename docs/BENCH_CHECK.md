@@ -491,8 +491,10 @@ of chunk F is green tests and code review; none of it has touched real hardware 
 
 1. **Import a local audio file and a local video file** through `Notes > Upload`. Confirms ffmpeg
    actually strips both to 16 kHz mono WAV on this machine, that the resulting note is transcribed
-   by whatever provider is configured, and that a file with spaces or non-ASCII characters in its
-   path does not crash the pipeline the way whisper's own binary is known to on such paths.
+   by whatever provider is configured. The path-character half of this item is **answered as of
+   2026-08-31**: `ffmpeg` handles a space and a non-ASCII character in the input path, the output
+   path and its own directory, so the pipeline does not inherit whisper's constraint. What remains
+   is the rest of the item — that a real file lands as a real note.
 2. ~~**Paste a URL and import it.**~~ **Withdrawn on 2026-08-27, not performed.** URL import was
    disabled before anyone ran this check: `media_import_url` is no longer a registered command and
    `Notes > Upload` has no URL field, so there is nothing to paste into. Struck rather than deleted,
@@ -1133,11 +1135,18 @@ reader of this file alone had no way to know any of it happened.
    Windows' 24 MB, per `config/sidecars.json`'s `sherpa` entry, because `onnxruntime` is statically
    linked into each executable rather than shared from one `.dll`) — nobody has extracted either and
    counted what actually lands on disk the way Windows was.
-3. **A non-ASCII model path.** `docs/PLATFORM_SUPPORT.md`'s "Known environment constraints" section
-   records that a non-ASCII or space character in the user data path crashes the native whisper *and*
-   parakeet binaries, worked around by relocating the model cache to `%ProgramData%`. That workaround
-   predates this run and was carried forward, not exercised here against a real non-ASCII Windows
-   account with a Parakeet model actually installed.
+3. **A non-ASCII model path — measured 2026-08-31, and the claim was three-quarters wrong.**
+   `docs/PLATFORM_SUPPORT.md` had recorded that a non-ASCII *or space* character in the user data
+   path crashes the native whisper *and* parakeet binaries. Measured against both real binaries: a
+   space is fine everywhere, the binaries' own directory is fine with either character, and only a
+   file they open by path — the model, and the audio — fails on non-ASCII. Both exit 127.
+   `cargo run -p kw-storage --example native_path_probe` re-runs it.
+
+   **What still needs a person, and it is now the only part left:** a real Windows account whose
+   *own name* is non-ASCII. Everything above was measured with awkward directory names under an
+   ASCII profile, which exercises the binaries but not the relocation the profile name triggers.
+   Somebody with a `Håkan` account should confirm models land in `%ProgramData%`, that the screen
+   says so, and that a Parakeet model installed there transcribes.
 
 ## 2026-08-25 — phases 2 and 6
 

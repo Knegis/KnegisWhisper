@@ -225,9 +225,13 @@ Dropped on import because they exist only to serve OpenWhispr Cloud: the `spaces
 That removes roughly a third of the schema surface.
 
 Two upstream designs to keep: the **FTS5 external-content** table mirroring `notes` through three
-triggers, and the **ASCII-safe cache path fallback** — relocating the model cache when the user
-data path contains non-ASCII or space characters, because the native whisper and parakeet
-binaries crash on such paths.
+triggers, and the **ASCII-safe cache path fallback** — relocating the model cache and the audio
+scratch directory when the user data path contains a non-ASCII character, because the native
+whisper and parakeet binaries cannot open a file under such a path.
+
+The fallback is kept; the *rule* was narrowed on 2026-08-31 after being measured for the first
+time. Upstream's version also rejected spaces and also applied to the binaries' own directory, and
+neither of those is real. See `kw_storage::paths` and `PLATFORM_SUPPORT.md`.
 
 ## Sidecars
 

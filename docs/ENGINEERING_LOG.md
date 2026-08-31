@@ -274,6 +274,76 @@ Unchanged from the Phases 1–4 entry, restated here so they are not buried:
 
 ---
 
+## 2026-08-31 (KNEG-65) — a rule carried from upstream, measured for the first time, and three quarters wrong
+
+`kw_storage::paths` has relocated the model cache away from the user's own directory since the port,
+on a rule written as *"non-ASCII **or space**"* and applied to the binaries' own directory as well
+as to the files they read. Nobody had ever run it. `PLATFORM_SUPPORT.md` said so in as many words:
+*"the fallback has not been exercised here."*
+
+It cost about twenty minutes to find out, and the answer is much narrower:
+
+```text
+                                  a space        a non-ASCII character
+the model file                    loads          FAILS
+the audio file                    transcribes    FAILS
+the binary's own directory        runs           runs
+```
+
+**A space breaks nothing, anywhere.** `whisper-server` loads `ggml-tiny.bin` out of `model space/`
+and `sherpa-onnx-offline` transcribes a wav from `ljud plain/`. So an ordinary Windows account named
+`Ann Marie` was being sent to a machine-wide `%ProgramData%` cache — models shared across every
+account on the machine, and a "fell back" notice on her screen — to avoid a failure that does not
+happen.
+
+**The binaries' own location breaks nothing either.** This was the load-bearing half of the old
+comment: *"`whisper-server` loads its sibling `ggml` libraries relative to its own directory, and
+the native code chokes."* It does not choke. It printed
+`load_backend: loaded CPU backend from ...\Håkan Test\bin\ggml-cpu-cascadelake.dll` and carried on.
+`sherpa-onnx-offline`, `llama-server` and `ffmpeg` all do the same. Four out of four, so `sidecar_dir`
+stopped relocating at all — which is not only tidiness: `%ProgramData%` is a directory an
+unprivileged account may not be able to write to, so the old fallback could turn a cosmetic problem
+into an install failure.
+
+**What is real** is a file the ASR binaries open by path. Both exit 127. `whisper-server` says
+nothing at all after `loading model from ...`; `sherpa-onnx-offline` says `Errors in config!` for a
+model and `Failed to read '...'` for audio. So the fallback stays for `model_cache_dir` and
+`audio_temp_dir`, on evidence rather than on inheritance.
+
+### The decomposition was the whole method
+
+Four confounded variables in one sentence: space against non-ASCII, and the binary's path against
+the files it reads. Testing "a path with a space and a non-ASCII character in it", which is how the
+claim was written and the obvious thing to try, reproduces the failure and teaches nothing — the
+first run did exactly that and looked like a confirmation. Varying one at a time is what turned a
+confirmed folk rule into three findings.
+
+### The probe caught itself being wrong
+
+`crates/storage/examples/native_path_probe.rs` is committed so this can be re-run, in the shape
+`altgr_probe` already set. Its first version used `whisper-server --model X --help`, on the
+assumption that the model is loaded before the usage text is printed. It is not, and the probe
+reported `DIES` for every case **including the control** — which is the only reason the mistake was
+visible at all. A probe with no control would have printed three plausible failures and been
+believed.
+
+The version that ships starts the server and polls the port, because the only honest evidence that a
+model loaded is a server that answers.
+
+### What is still not measured, and is now the only part left
+
+**A real Windows account whose own name is non-ASCII.** Everything above used awkward directory
+names under an ASCII profile, which exercises the binaries but not the relocation a profile name
+triggers. That relocation — models landing in `%ProgramData%`, the screen saying so, a Parakeet
+model installed there transcribing — still needs somebody with a `Håkan` account. It stays in
+`BENCH_CHECK.md` as the remainder rather than being quietly closed with the rest.
+
+Also unmeasured, and named rather than assumed away: no released build exists (KNEG-43), so nobody
+has models in the old location. After a first release, narrowing this rule would move where models
+are looked for and would need a migration; today it moves nothing.
+
+---
+
 ## 2026-08-31 (KNEG-95) — the lock is the arbiter, and the state leads with the word that is still true
 
 The last of the 2026-08-28 meeting silence. Both OpenAI Realtime sockets closed within milliseconds

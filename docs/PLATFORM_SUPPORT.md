@@ -903,8 +903,29 @@ the keypair procedure and `docs/COMPLETION_PLAN.md` phase 9 for what remains.
 
 ## Known environment constraints
 
-- **Non-ASCII or space characters in the user data path** crash the native whisper and parakeet
-  binaries. Upstream works around this by relocating the model cache to `%ProgramData%`; we keep
-  that fallback. It will bite on any Windows account with a non-ASCII username.
+- **A non-ASCII character in the path of a file the native ASR binaries open** stops them opening
+  it. Both `whisper-server` and `sherpa-onnx-offline` exit 127; whisper says nothing at all past
+  `loading model from ...`, sherpa says `Errors in config!` for a model and `Failed to read '...'`
+  for audio. The model cache and the audio scratch directory relocate to `%ProgramData%` when the
+  user data path is affected, which any Windows account with a non-ASCII username will be.
+
+  **Measured 2026-08-31, and it is narrower than this section claimed until then.** The rule was
+  carried from upstream as "non-ASCII **or space**", applied to the binaries' own directory as well
+  as to the files they read. Three quarters of that was not true:
+
+  | | a space in the path | a non-ASCII character |
+  | --- | --- | --- |
+  | the model file | loads, transcribes | **fails** |
+  | the audio file | transcribes | **fails** |
+  | the binary's own directory | runs | runs |
+
+  `whisper-server` loads its sibling `ggml-cpu-*.dll` out of a directory named `Håkan Test`
+  without complaint, and so do `sherpa-onnx-offline`, `llama-server` and `ffmpeg` — four out of
+  four, so `sidecar_dir` no longer relocates at all. `ffmpeg` handles every case, including a
+  non-ASCII input path, which is the media-import half of the same question.
+
+  Re-runnable: `cargo run -p kw-storage --example native_path_probe`. **Still unmeasured:** a real
+  Windows account whose *own name* is non-ASCII, as opposed to a directory underneath an ASCII one.
+  The relocation is what that would exercise, and nobody has an account like it.
 - **`tauri-nspanel` is an unpinned git branch dependency** upstream. We pin it to a revision;
   a branch move would otherwise break macOS builds with no version change.

@@ -1063,12 +1063,22 @@ mod tests {
     }
 
     #[test]
-    fn the_install_directory_follows_the_native_binary_rule() {
-        // whisper-server loads its sibling ggml libraries relative to its own
-        // directory and chokes on a path with a space or non-ASCII character.
+    fn the_install_directory_no_longer_follows_the_model_path_rule() {
+        // It used to, on the stated grounds that whisper-server loads its
+        // sibling ggml libraries relative to its own directory and would choke
+        // on a space or a non-ASCII character. Measured 2026-08-31: it does
+        // not, and neither do sherpa-onnx-offline, llama-server or ffmpeg. So
+        // sidecars stay where the user's data is, whatever the account is
+        // called -- which also means they are not written to %ProgramData%,
+        // where an unprivileged account may not be able to write at all.
         let dir = paths::sidecar_dir();
-        if !dir.fell_back {
-            assert!(kw_storage::paths::is_native_binary_safe(&dir.path));
+        assert!(!dir.fell_back);
+
+        // The model directory is a different question and keeps the rule: a
+        // path reported as usable has to actually be one.
+        let models = paths::model_cache_dir();
+        if !models.fell_back {
+            assert!(kw_storage::paths::is_native_readable(&models.path));
         }
     }
 }

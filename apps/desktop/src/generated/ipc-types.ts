@@ -80,10 +80,13 @@ export type CredentialStoreStatus = { "state": "available", backend: string, } |
  */
 export type ModelCacheStatus = { path: string,
 /**
- * True when the per-user path contained a space or a non-ASCII character,
- * which makes the native whisper and sherpa binaries fail in ways that do
- * not point at the path. Worth surfacing: it means models are shared
- * machine-wide.
+ * True when the per-user path contained a non-ASCII character, which stops
+ * the native whisper and sherpa binaries opening the model at all -- and
+ * does so without saying why, which is what makes it worth relocating for.
+ * Worth surfacing here too: it means models are shared machine-wide.
+ *
+ * A space no longer counts. It never did; see
+ * `kw_storage::paths`'s module documentation for the measurement.
  */
 fellBack: boolean, };
 
@@ -1072,9 +1075,12 @@ cliInstalled: boolean, models: Array<SherpaModelStatus>,
  */
 selected: string | null,
 /**
- * Where models are kept. Shown because the native binaries cannot load
- * from a path with a space or a non-ASCII character in it, so this is
- * sometimes not where a person would expect.
+ * Where models are kept. Shown because the native binaries cannot open a
+ * file whose path holds a non-ASCII character, so this is sometimes not
+ * where a person would expect.
+ *
+ * A space is fine, despite what this comment said until 2026-08-31 — see
+ * `kw_storage::paths` for the measurement.
  */
 modelsDir: string, };
 
