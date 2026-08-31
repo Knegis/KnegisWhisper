@@ -385,35 +385,167 @@ for (const [id, pin] of Object.entries(LOCAL_LLM_SIZES)) {
 }
 
 // --- local ASR ---------------------------------------------------------------
+
+/**
+ * Integrity pins for the six whisper models: a measured digest and the exact
+ * byte count that goes with it.
+ *
+ * Here rather than in Rust, and here rather than in the baseline, for the
+ * reasons `SHERPA_PINS` and `LOCAL_LLM_SIZES` give: the baseline is a frozen
+ * record of what upstream had and must not gain fields we invented, and
+ * `config/provider-registry.json` is generated, so a pin hand-edited into it
+ * dies at the next regeneration. What is new is the third case --
+ * `crates/transcription-core/src/models.rs` used to keep a `PINNED` table of
+ * its own. Three model families with pins in three places was incoherent
+ * enough that `tools/model-pin/pin.mjs` had to **parse Rust** to verify one of
+ * them. It reads this file's output now, as JSON, and `models.rs` reads
+ * `sha256` off `kw_provider_registry::WhisperModel`.
+ *
+ * **These are bytes on disk.** On 2026-08-31 `tools/model-pin/pin.mjs`
+ * downloaded all six in full -- 6,966,596,962 bytes, 6.49 GiB, in one run --
+ * hashing each stream as it passed through to a file and taking the length from
+ * `stat` afterwards, never from `content-length`, because a truncated body
+ * agrees with its own header. That is the standard `tools/sidecar-pin/pin.mjs`
+ * holds and the standard
+ * `LOCAL_LLM_SIZES` above explicitly does **not**: those are the publisher's
+ * stated object sizes read from an HTTP HEAD, which is why that table carries
+ * no digest and says so at length. This one is the stronger thing, and the
+ * distinction is the whole reason both comments exist. Do not read one as the
+ * other.
+ *
+ * `tiny` is the control. Its digest had been committed in `models.rs` since
+ * that file was written, from a download nobody had repeated; the tool
+ * reproduced `be07e048…c6e1b21` and 77,691,713 bytes exactly, on a different
+ * day through different code. That validates the measurement of the other five
+ * at the same time as it re-validates the pin.
+ *
+ * **`expectedSizeBytes` here overrides the baseline's figure**, which is
+ * rounded -- 78,000,000 for a file that is 77,691,713 bytes. That was free to
+ * change: the field has exactly one reader, `models::integrity_for`, and the
+ * settings screen renders `sizeMb` instead (see `SettingsTranscription.tsx`).
+ * `models.rs` used to claim otherwise; the claim was wrong and is corrected
+ * there. `sizeMb` is left rounded, because it is a display estimate and
+ * displaying 77,691,713 bytes to a user helps nobody.
+ *
+ * **What this costs.** Every URL here is `resolve/main` on Hugging Face -- a
+ * branch pointer, not content. Until now a re-upload had to move a file by more
+ * than 5% to be noticed; now any change at all fails the install, loudly, and
+ * the user cannot proceed. That is the same trade `LOCAL_LLM_SIZES` took and it
+ * is taken again deliberately: a silent pass means running weights nobody here
+ * measured. `tools/model-pin/pin.mjs --verify` is what is meant to notice
+ * first, and `.github/workflows/pin-verify.yml` runs it weekly. See KNEG-103.
+ *
+ * A model with no entry here keeps upstream's rounded figure, gets no digest,
+ * and `integrity_for` degrades it to a size check with a 5% tolerance rather
+ * than refusing to install it -- unlike a sherpa model, which cannot be
+ * installed unpinned at all. The difference is deliberate: a whisper model is a
+ * single file from a repository whose other five files were hashed, and a
+ * sherpa model is an archive that gets extracted.
+ *
+ * Never hand-write an entry. Both numbers come out of
+ * `node tools/model-pin/pin.mjs --url <downloadUrl> --id <id>`.
+ */
+const WHISPER_PINS = {
+  tiny: {
+    sha256: "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21",
+    expectedSizeBytes: 77_691_713,
+  },
+  base: {
+    sha256: "60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe",
+    expectedSizeBytes: 147_951_465,
+  },
+  small: {
+    sha256: "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b",
+    expectedSizeBytes: 487_601_967,
+  },
+  medium: {
+    sha256: "6c14d5adee5f86394037b4e4e8b59f1673b6cee10e3cf0b11bbdbee79c156208",
+    expectedSizeBytes: 1_533_763_059,
+  },
+  turbo: {
+    sha256: "1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69",
+    expectedSizeBytes: 1_624_555_275,
+  },
+  large: {
+    sha256: "64d182b440b98d5203c4f9bd541544d84c605196c4f7b845dfa11fb23594d1e2",
+    expectedSizeBytes: 3_095_033_483,
+  },
+};
+
+// Same guard SHERPA_PINS and LOCAL_LLM_SIZES carry, plus one they do not need:
+// half a pin. `models::integrity_for` needs the digest and the length together
+// -- `kw_sidecar::integrity::verify` takes both -- and a digest arriving without
+// a length degrades silently to a size check on a model the screen would still
+// be describing as digest-verified.
+for (const [id, pin] of Object.entries(WHISPER_PINS)) {
+  if (!(id in R.whisperModels)) {
+    die(
+      `WHISPER_PINS has an entry for "${id}", which is not a model in the ` +
+        `baseline's whisperModels. Fix the id, or remove the pin.`
+    );
+  }
+  if (!/^[0-9a-f]{64}$/.test(pin.sha256)) {
+    die(
+      `WHISPER_PINS' digest for "${id}" is not 64 lowercase hex characters. ` +
+        `Sha256Digest::parse rejects it, so integrity_for would quietly fall ` +
+        `back to a size check. Measure it with tools/model-pin/pin.mjs.`
+    );
+  }
+  if (!Number.isInteger(pin.expectedSizeBytes) || pin.expectedSizeBytes <= 0) {
+    die(
+      `WHISPER_PINS pins a digest for "${id}" with no usable expectedSizeBytes. ` +
+        `Both numbers are measured in the same run; do not commit one without ` +
+        `the other.`
+    );
+  }
+}
+
 const whisper = Object.entries(R.whisperModels).map(([id, m]) => ({
   id,
   name: m.name,
   fileName: m.fileName,
   downloadUrl: m.downloadUrl,
+  // The rounded display estimate. Deliberately left as upstream had it.
   sizeMb: m.sizeMb ?? null,
-  expectedSizeBytes: m.expectedSizeBytes ?? null,
+  sha256: WHISPER_PINS[id]?.sha256 ?? null,
+  // The measured length where there is a pin, upstream's rounded declaration
+  // where there is not. One or the other, and the pin always wins -- a digest
+  // beside a rounded length would fail every install.
+  expectedSizeBytes: WHISPER_PINS[id]?.expectedSizeBytes ?? m.expectedSizeBytes ?? null,
   recommended: m.recommended === true,
 }));
 
 /**
  * Integrity pins for the Parakeet archives, measured rather than declared.
  *
- * Project-supplied data with nowhere else to live. Upstream's baseline carries
- * `expectedSizeBytes` for every *whisper* model, which is why those pass
- * straight through below -- and nothing at all for `parakeetModels`, because
- * upstream never pinned them. The baseline is a frozen record of what upstream
- * had and must not gain fields we invented, so the pins belong here, the same
- * reasoning `OWN_CREDENTIAL_SLOTS` is built on.
+ * Project-supplied data with nowhere else to live. Upstream's baseline carries a
+ * rounded `expectedSizeBytes` for every *whisper* model and nothing at all for
+ * `parakeetModels`, because upstream never pinned them. The baseline is a frozen
+ * record of what upstream had and must not gain fields we invented, so the pins
+ * belong here, the same reasoning `OWN_CREDENTIAL_SLOTS` is built on -- and the
+ * same reasoning `WHISPER_PINS` above now follows, which is why the whisper
+ * figures no longer pass straight through either.
  *
  * `f17a5fd` added these three fields straight into `config/provider-registry.json`,
  * which is *generated* by this script -- so running it deleted the security fix
  * and `--check` failed on a clean tree. Putting them here is what makes the pin
  * survive a regeneration.
  *
- * **`sha256` and `expectedSizeBytes` are measurements.** Both byte counts were
- * confirmed against the live release assets' `content-length` on 2026-08-31, and
- * `parakeet-unified`'s also matches the figure `docs/PLATFORM_SUPPORT.md`
- * recorded from a real install. Never hand-write either: re-measure.
+ * **`sha256` and `expectedSizeBytes` are measurements, and both were reproduced
+ * by a full download.** On 2026-08-31 `tools/model-pin/pin.mjs` fetched both
+ * archives end to end -- 464.6 MiB and 478.1 MiB -- hashing as the bytes passed
+ * through and taking the length from `stat` afterwards rather than from
+ * `content-length`, and both digests and both byte counts came back identical to
+ * what is committed below. `parakeet-unified`'s size also matches the figure
+ * `docs/PLATFORM_SUPPORT.md` recorded from a real install.
+ *
+ * Read that for exactly what it is: **the committed digest matches the bytes the
+ * host serves today.** It is not evidence about who built those bytes, and it
+ * says nothing about tomorrow. Both URLs name an asset inside k2-fsa's rolling
+ * `asr-models` release, which the publisher keeps adding to, and an asset can be
+ * replaced under the same name -- so this is the check that would *notice* a
+ * swap, run once, not a guarantee there will never be one. Never hand-write
+ * either number: re-measure with `node tools/model-pin/pin.mjs --verify`.
  *
  * **`maxExtractedSizeBytes` is a judgement.** It is a decompression-bomb
  * ceiling, not a measurement -- the real extracted footprint of

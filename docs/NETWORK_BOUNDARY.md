@@ -195,10 +195,18 @@ the seven-purpose count is a stated constraint.
 
 The executable half is more dangerous, and that is answered by a stronger requirement rather than
 a separate purpose: `kw_sidecar::Asset` cannot be constructed without a pinned SHA-256, so a
-binary only ever reaches this purpose when its exact bytes were decided at review time. Models
-are held to a weaker check — size, with a tolerance, unless a digest happens to be known — and
+binary only ever reaches this purpose when its exact bytes were decided at review time. A model is
+held to a *weaker rule* — a digest where one is known, a size within a tolerance otherwise — and
 which check applied is reported to the caller rather than implied, because wrong weights produce
 bad transcripts while wrong code produces a compromised machine.
+
+**As of 2026-08-31 every model this application can install is in fact digest-pinned**: all six
+whisper models and both installable Parakeet archives were downloaded and hashed, and their pins
+are in the registry generator. So the weaker rule is what the *type system* permits, not what the
+shipped registry contains. It stays weaker on purpose — a whisper model added to the baseline
+before somebody spends the bandwidth degrades to a size check rather than becoming uninstallable,
+which is the opposite of the sherpa rule (`MissingPin`, refuse) and deliberate. The local-LLM
+GGUFs remain size-only by policy; see KNEG-45.
 
 ## Plaintext HTTP, and HTTPS to a private address
 

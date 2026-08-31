@@ -2,16 +2,19 @@
 /**
  * Measures a model's SHA-256 and exact byte size, rather than inventing one.
  *
- * `crates/transcription-core/src/models.rs` says, of the six whisper models:
+ * `crates/transcription-core/src/models.rs` used to say, of the six whisper
+ * models:
  *
  *   > Pinning all of them means downloading roughly seven gigabytes once,
  *   > which is a job for a tool rather than something to invent digests for
  *   > here: `tiny` is pinned because it was actually downloaded and hashed
  *   > while this was written, and the rest say plainly that they were not.
  *
- * This is that tool. It exists so the difference between a measured digest and
- * a copied one stays visible: every row it prints was produced by bytes moving
- * through this process, and nothing else it prints claims to have been.
+ * This is that tool, and on 2026-08-31 it did that: all six downloaded and
+ * hashed in one run, `tiny` reproducing the digest `models.rs` had carried
+ * since it was written. It exists so the difference between a measured digest
+ * and a copied one stays visible: every row it prints was produced by bytes
+ * moving through this process, and nothing else it prints claims to have been.
  *
  * ## Why not tools/sidecar-pin
  *
@@ -42,11 +45,13 @@
  * Nothing is ever held in memory — chunks are hashed as they pass through to
  * disk. That is not a nicety here. The largest asset in scope is the Qwen3 32B
  * Q4_K_M GGUF in `config/provider-registry.json`'s `localLlm`, at
- * 21,260,251,955 bytes (about 19.8 GiB); the largest whisper model is
- * `ggml-large-v3.bin` at roughly 3 GB, and the pinned sherpa archives are
- * about 500 MB each. Peak memory is one chunk regardless.
+ * 19,762,149,024 bytes (about 18.4 GiB — the figure here used to be
+ * 21,260,251,955, which was upstream's declaration and wrong by 2^30 ÷ 10^9;
+ * see `98e836b`); the largest whisper model is `ggml-large-v3.bin` at
+ * 3,095,033,483 bytes, and the pinned sherpa archives are about 500 MB each.
+ * Peak memory is one chunk regardless.
  *
- * A download that dies at 19 GiB is not resumed: a partially-fetched file
+ * A download that dies at 18 GiB is not resumed: a partially-fetched file
  * cannot be hashed into a whole-file digest without trusting the part already
  * on disk, and this tool's only job is to not trust things. `--file` is the
  * escape hatch — if the bytes are already on the machine, measure those and
@@ -67,27 +72,21 @@
  *
  * ## What `--verify` reads
  *
- * Committed model pins live in two places today, and `--verify` reads both
- * rather than keeping a third copy that nobody would maintain:
+ * **One file.** `config/provider-registry.json` → `localAsr.whisper[]` and
+ * `localAsr.sherpa[]`. It is generated, so the URL, `sha256` and
+ * `expectedSizeBytes` are read as data, with no parsing and no second copy.
+ * Their source is `WHISPER_PINS` and `SHERPA_PINS` in
+ * `tools/integration-audit/generate-provider-registry.mjs`; a model with a
+ * null `sha256` is skipped, because there is nothing committed to re-measure.
  *
- *   1. `config/provider-registry.json` → `localAsr.sherpa[]`. Generated, so
- *      the URL, `sha256` and `expectedSizeBytes` are read as data with no
- *      parsing. (Their source is `SHERPA_PINS` in
- *      `tools/integration-audit/generate-provider-registry.mjs`.)
- *   2. `crates/transcription-core/src/models.rs` → the `PINNED` table, joined
- *      to `localAsr.whisper[]` by model id for the URL. That table is a Rust
- *      literal, so it is parsed — narrowly, and with the array's own declared
- *      arity used as a checksum on the parse. If the table's shape changes,
- *      this dies loudly rather than verifying nothing and reporting success.
- *
- * Reading Rust from a Node tool is the ugly half of that, and it is ugly
- * because the pins are in two places, not because parsing is hard. The clean
- * fix is a `WHISPER_PINS` table beside `SHERPA_PINS` in the registry
- * generator, so `config/provider-registry.json` carries `sha256` for whisper
- * too and `models.rs` reads it from `kw_provider_registry::WhisperModel`
- * instead of holding its own list. Then step 2 above deletes itself and this
- * tool reads one generated file. That change spans crates and the generator,
- * so it is a proposal here rather than something this file does.
+ * This used to be two files. The whisper pins lived in a `PINNED` table in
+ * `crates/transcription-core/src/models.rs`, so this tool parsed a Rust
+ * literal — narrowly, with the array's declared arity as a checksum, and
+ * dying rather than returning a short list, because a verifier that silently
+ * checks nothing reports success. The header here proposed moving them into
+ * the generator; that is what happened, and `parseWhisperPins` and its five
+ * tests went with it. They were a tripwire for exactly this change and they
+ * fired once, which is all a tripwire owes anybody.
  */
 
 import { createHash } from "node:crypto";
@@ -100,7 +99,6 @@ import { pipeline } from "node:stream/promises";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const REGISTRY = join(REPO_ROOT, "config/provider-registry.json");
-const WHISPER_PIN_SOURCE = join(REPO_ROOT, "crates/transcription-core/src/models.rs");
 
 export function die(message) {
   console.error(`model-pin: ${message}`);
@@ -202,7 +200,7 @@ export async function measureFile(path, label = "file") {
   const reporter = progress(label, stat.size);
   // Iterated rather than piped: there is no destination here, so the chunks
   // are consumed for the hash and dropped. Still one chunk in memory at a
-  // time, which is the property that matters at 20 GiB.
+  // time, which is the property that matters at 18 GiB.
   for await (const chunk of createReadStream(path)) {
     hash.update(chunk);
     reporter.tick(chunk.length);
@@ -304,106 +302,48 @@ function registry() {
 }
 
 /**
- * The `PINNED` rows in `crates/transcription-core/src/models.rs`.
- *
- * A deliberately narrow reader for one literal of one known shape:
- *
- *   const PINNED: [(&str, &str, u64); 1] = [("tiny", "be07…", 77_691_713)];
- *
- * The array's declared length is used as a checksum on the parse. If the table
- * grows a field, becomes a slice of structs, or moves, the count will not
- * match — or the header will not match at all — and this throws rather than
- * returning a short list. A verifier that silently checks nothing is worse
- * than no verifier, because it reports success.
- *
- * Exported for the tests, which is where the shape assumptions are asserted
- * against strings instead of against the network.
- */
-export function parseWhisperPins(source) {
-  const table = source.match(
-    /const\s+PINNED\s*:\s*\[\s*\(\s*&str\s*,\s*&str\s*,\s*u64\s*\)\s*;\s*(\d+)\s*\]\s*=\s*\[([\s\S]*?)\]\s*;/
-  );
-  if (!table) {
-    throw new Error(
-      "no `const PINNED: [(&str, &str, u64); N]` table found. It moved or changed shape — " +
-        "update this reader, or move the whisper pins into the provider registry (see the " +
-        "header of this file)."
-    );
-  }
-
-  const declared = Number(table[1]);
-  const rows = [];
-  const tuple = /\(\s*"([^"]+)"\s*,\s*"([0-9a-fA-F]{64})"\s*,\s*([0-9_]+)\s*,?\s*\)/g;
-  for (const match of table[2].matchAll(tuple)) {
-    rows.push({
-      id: match[1],
-      sha256: match[2].toLowerCase(),
-      sizeBytes: Number(match[3].replace(/_/g, "")),
-    });
-  }
-
-  if (rows.length !== declared) {
-    throw new Error(
-      `the PINNED table declares ${declared} entries and ${rows.length} parsed. One of them is ` +
-        "not a plain (id, 64-hex digest, size) tuple; this reader will not guess at the rest."
-    );
-  }
-  return rows;
-}
-
-/**
  * Every committed model pin, as one list of things to re-measure.
  *
- * Sherpa comes from the generated registry, whisper from the Rust table joined
- * to the registry for its URL. A pin whose id is in neither list is an error,
- * following the same rule `generate-provider-registry.mjs` applies to
- * `SHERPA_PINS`: a pin for a model that does not exist is a typo that would
- * otherwise go unnoticed until somebody wondered why verification never ran.
+ * Both families come out of the generated registry now, read as data. A model
+ * with no `sha256` is skipped rather than reported: today that is only
+ * `localAsr.sherpa`'s two Nemotron streaming models, which nothing can install
+ * and nobody pinned, so there is nothing committed for a measurement to
+ * disagree with. The generator writes an explicit `null` there rather than
+ * omitting the key, which is what makes this a data check and not a guess.
+ *
+ * A pin with a digest and no `expectedSizeBytes` is a `die()`, not a skip. The
+ * generator cannot emit that pair — both `WHISPER_PINS` and `SHERPA_PINS`
+ * carry the two numbers together — so seeing it here means the registry was
+ * hand-edited, and half a pin is the one input that would let this tool report
+ * a pass over a length nobody checked.
  */
-export function pinnedTargets(reg = registry(), rustSource = null) {
+export function pinnedTargets(reg = registry()) {
   const targets = [];
 
-  const whisper = reg.localAsr?.whisper ?? [];
-  const source = rustSource ?? readFileSync(WHISPER_PIN_SOURCE, "utf8");
-  let rows;
-  try {
-    rows = parseWhisperPins(source);
-  } catch (error) {
-    return die(`${WHISPER_PIN_SOURCE}: ${error.message}`);
-  }
-  for (const row of rows) {
-    const model = whisper.find((m) => m.id === row.id);
-    if (!model) {
-      die(
-        `the PINNED table in models.rs pins "${row.id}", which is not a model in the registry's ` +
-          "localAsr.whisper. Fix the id, or remove the pin."
-      );
+  for (const [kind, models] of [
+    ["whisper", reg.localAsr?.whisper ?? []],
+    ["sherpa", reg.localAsr?.sherpa ?? []],
+  ]) {
+    for (const model of models) {
+      if (!model.sha256) continue;
+      if (typeof model.expectedSizeBytes !== "number") {
+        die(
+          `${kind}/${model.id} in the registry has a sha256 and no expectedSizeBytes. The ` +
+            "generator emits both or neither, so config/provider-registry.json has been " +
+            "hand-edited -- fix the pin in generate-provider-registry.mjs and regenerate."
+        );
+      }
+      targets.push({
+        kind,
+        id: model.id,
+        url: model.downloadUrl,
+        sha256: model.sha256.toLowerCase(),
+        // The exact measured length, not a rounded display figure. `sizeMb` is
+        // the rounded one and this tool never reads it.
+        sizeBytes: model.expectedSizeBytes,
+        from: `config/provider-registry.json localAsr.${kind}`,
+      });
     }
-    targets.push({
-      kind: "whisper",
-      id: row.id,
-      url: model.downloadUrl,
-      sha256: row.sha256,
-      // The Rust table's size, not the registry's `expectedSizeBytes`: the
-      // registry figure is rounded for display (78,000,000 for tiny, which is
-      // really 77,691,713) and would never match a measurement.
-      sizeBytes: row.sizeBytes,
-      from: "crates/transcription-core/src/models.rs PINNED",
-    });
-  }
-
-  for (const model of reg.localAsr?.sherpa ?? []) {
-    if (!model.sha256) continue;
-    targets.push({
-      kind: "sherpa",
-      id: model.id,
-      url: model.downloadUrl,
-      sha256: model.sha256.toLowerCase(),
-      // Measured, unlike whisper's: SHERPA_PINS carries the exact size beside
-      // the digest, so this one is the real figure.
-      sizeBytes: model.expectedSizeBytes ?? null,
-      from: "config/provider-registry.json localAsr.sherpa",
-    });
   }
 
   return targets;
@@ -441,7 +381,7 @@ export async function verify(only) {
         wrong.push(
           `${target.kind}/${target.id}: committed ${target.sha256}, measured ${measured.sha256}`
         );
-      } else if (target.sizeBytes !== null && measured.sizeBytes !== target.sizeBytes) {
+      } else if (measured.sizeBytes !== target.sizeBytes) {
         // Reachable even with a matching digest only if the pin's two halves
         // disagree with each other, which is worth saying out loud.
         wrong.push(
@@ -516,12 +456,14 @@ async function main(argv) {
     console.error("");
     console.log(JSON.stringify(pin, null, 2));
 
-    // The two places a model pin actually goes, spelled out on the human
-    // channel. stdout stays a single JSON document so it can be piped.
+    // Where a model pin actually goes, spelled out on the human channel.
+    // stdout stays a single JSON document so it can be piped. One shape for
+    // both tables, because there is one place now: WHISPER_PINS and
+    // SHERPA_PINS in tools/integration-audit/generate-provider-registry.mjs.
+    // A sherpa entry needs a `maxExtractedSizeBytes` alongside, which is a
+    // judgement about a decompression bomb and not something to measure.
     const underscored = String(measured.sizeBytes).replace(/\B(?=(\d{3})+(?!\d))/g, "_");
-    console.error(`\nAs a row in models.rs PINNED:`);
-    console.error(`    ("${label}", "${measured.sha256}", ${underscored}),`);
-    console.error(`\nAs an entry in SHERPA_PINS (generate-provider-registry.mjs):`);
+    console.error(`\nAs an entry in WHISPER_PINS / SHERPA_PINS:`);
     console.error(`  "${label}": {`);
     console.error(`    sha256: "${measured.sha256}",`);
     console.error(`    expectedSizeBytes: ${underscored},`);

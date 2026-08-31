@@ -190,7 +190,21 @@ export interface WhisperModel {
   readonly name: string;
   readonly fileName: string;
   readonly downloadUrl: string;
+  /** A display estimate, rounded. This is the figure the screen shows. */
   readonly sizeMb: number | null;
+  /**
+   * The model file's pinned digest and its expected byte count. Non-null on
+   * all six shipped models, both measured from a real download; a null
+   * \`sha256\` would mean a model added to the registry before anybody
+   * downloaded it, which \`models::integrity_for\` degrades to a size check
+   * rather than hiding.
+   *
+   * With a digest, \`expectedSizeBytes\` is the measured length — what the
+   * integrity check is handed, so it has to be bytes that were there. Without
+   * one it is upstream's rounded declaration, held to a 5% tolerance. It is
+   * never \`sizeMb\` scaled.
+   */
+  readonly sha256: string | null;
   readonly expectedSizeBytes: number | null;
   readonly recommended: boolean;
 }

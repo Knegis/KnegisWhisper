@@ -170,7 +170,21 @@ export interface WhisperModel {
   readonly name: string;
   readonly fileName: string;
   readonly downloadUrl: string;
+  /** A display estimate, rounded. This is the figure the screen shows. */
   readonly sizeMb: number | null;
+  /**
+   * The model file's pinned digest and its expected byte count. Non-null on
+   * all six shipped models, both measured from a real download; a null
+   * `sha256` would mean a model added to the registry before anybody
+   * downloaded it, which `models::integrity_for` degrades to a size check
+   * rather than hiding.
+   *
+   * With a digest, `expectedSizeBytes` is the measured length — what the
+   * integrity check is handed, so it has to be bytes that were there. Without
+   * one it is upstream's rounded declaration, held to a 5% tolerance. It is
+   * never `sizeMb` scaled.
+   */
+  readonly sha256: string | null;
   readonly expectedSizeBytes: number | null;
   readonly recommended: boolean;
 }
@@ -1500,7 +1514,8 @@ export const PROVIDER_REGISTRY = {
         "fileName": "ggml-base.bin",
         "downloadUrl": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin",
         "sizeMb": 142,
-        "expectedSizeBytes": 148000000,
+        "sha256": "60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe",
+        "expectedSizeBytes": 147951465,
         "recommended": true
       },
       {
@@ -1509,7 +1524,8 @@ export const PROVIDER_REGISTRY = {
         "fileName": "ggml-large-v3.bin",
         "downloadUrl": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin",
         "sizeMb": 3000,
-        "expectedSizeBytes": 3140000000,
+        "sha256": "64d182b440b98d5203c4f9bd541544d84c605196c4f7b845dfa11fb23594d1e2",
+        "expectedSizeBytes": 3095033483,
         "recommended": false
       },
       {
@@ -1518,7 +1534,8 @@ export const PROVIDER_REGISTRY = {
         "fileName": "ggml-medium.bin",
         "downloadUrl": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.bin",
         "sizeMb": 1500,
-        "expectedSizeBytes": 1570000000,
+        "sha256": "6c14d5adee5f86394037b4e4e8b59f1673b6cee10e3cf0b11bbdbee79c156208",
+        "expectedSizeBytes": 1533763059,
         "recommended": false
       },
       {
@@ -1527,7 +1544,8 @@ export const PROVIDER_REGISTRY = {
         "fileName": "ggml-small.bin",
         "downloadUrl": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin",
         "sizeMb": 466,
-        "expectedSizeBytes": 488000000,
+        "sha256": "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b",
+        "expectedSizeBytes": 487601967,
         "recommended": false
       },
       {
@@ -1536,7 +1554,8 @@ export const PROVIDER_REGISTRY = {
         "fileName": "ggml-tiny.bin",
         "downloadUrl": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin",
         "sizeMb": 75,
-        "expectedSizeBytes": 78000000,
+        "sha256": "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21",
+        "expectedSizeBytes": 77691713,
         "recommended": false
       },
       {
@@ -1545,7 +1564,8 @@ export const PROVIDER_REGISTRY = {
         "fileName": "ggml-large-v3-turbo.bin",
         "downloadUrl": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin",
         "sizeMb": 1600,
-        "expectedSizeBytes": 1670000000,
+        "sha256": "1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69",
+        "expectedSizeBytes": 1624555275,
         "recommended": false
       }
     ],

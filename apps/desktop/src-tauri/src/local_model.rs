@@ -869,29 +869,38 @@ mod tests {
     #[test]
     fn a_model_reports_which_check_it_can_be_held_to() {
         // "installed" alone would let the UI imply a digest match for a model
-        // that was only size-checked.
+        // that was only size-checked. Every shipped model is pinned now, so the
+        // screen says `digest` for all six -- and the mapping for the weaker
+        // answer is still asserted below, against a model built here, because a
+        // branch nothing exercises is a branch that rots.
         let registry = kw_provider_registry::registry().unwrap();
-        let tiny = registry
-            .local_asr
-            .whisper
-            .iter()
-            .find(|m| m.id == "tiny")
-            .unwrap();
-        let base = registry
-            .local_asr
-            .whisper
-            .iter()
-            .find(|m| m.id == "base")
-            .unwrap();
+        for model in &registry.local_asr.whisper {
+            assert_eq!(
+                VerifiedBy::declared_for(model),
+                VerifiedBy::Digest,
+                "{} is not pinned; see WHISPER_PINS in the registry generator",
+                model.id
+            );
+        }
 
-        assert!(matches!(
-            models::integrity_for(tiny),
-            models::Integrity::Pinned { .. }
-        ));
-        assert!(matches!(
-            models::integrity_for(base),
-            models::Integrity::Size { .. }
-        ));
+        let unmeasured = kw_provider_registry::WhisperModel {
+            id: "not-yet-measured".to_owned(),
+            name: "Not yet measured".to_owned(),
+            file_name: "ggml-not-yet-measured.bin".to_owned(),
+            download_url: "https://huggingface.co/example/resolve/main/x.bin".to_owned(),
+            size_mb: Some(142.0),
+            sha256: None,
+            expected_size_bytes: Some(148_000_000),
+            recommended: false,
+        };
+        assert_eq!(VerifiedBy::declared_for(&unmeasured), VerifiedBy::Size);
+
+        let mut nothing_known = unmeasured;
+        nothing_known.expected_size_bytes = None;
+        assert_eq!(
+            VerifiedBy::declared_for(&nothing_known),
+            VerifiedBy::Nothing
+        );
     }
 
     #[tokio::test]

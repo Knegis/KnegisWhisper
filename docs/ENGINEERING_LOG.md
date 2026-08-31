@@ -216,6 +216,145 @@ Unchanged from the Phases 1–4 entry, restated here so they are not buried:
 
 ---
 
+## 2026-08-31 (whisper pins) — six digests measured, and three pin tables become one
+
+`crates/transcription-core/src/models.rs` had carried, since it was written, a `PINNED` table with
+one row in it and a paragraph explaining why: pinning the other five whisper models "means
+downloading roughly seven gigabytes once, which is a job for a tool rather than something to invent
+digests for here". `tools/model-pin/pin.mjs` (`11f0846`) is that tool. It downloaded all six.
+
+### What was measured
+
+Every model fetched in full from its registry `downloadUrl` on 2026-08-31, hashed as the stream
+passed through to a file, and its length taken from `stat` afterwards — never from
+`content-length`, because a truncated body agrees with its own header. 6,966,596,962 bytes in one
+run — 6.49 GiB, 14 min 33 s of transfer on this connection.
+
+| model | file | SHA-256 | bytes | baseline declared |
+| --- | --- | --- | --- | --- |
+| `tiny` | `ggml-tiny.bin` | `be07e048…c6e1b21` | 77,691,713 | 78,000,000 |
+| `base` | `ggml-base.bin` | `60ed5bc3…ba2efe` | 147,951,465 | 148,000,000 |
+| `small` | `ggml-small.bin` | `1be3a9b2…ea987b` | 487,601,967 | 488,000,000 |
+| `medium` | `ggml-medium.bin` | `6c14d5ad…156208` | 1,533,763,059 | 1,570,000,000 |
+| `turbo` | `ggml-large-v3-turbo.bin` | `1fc70f77…e2bc69` | 1,624,555,275 | 1,670,000,000 |
+| `large` | `ggml-large-v3.bin` | `64d182b4…94d1e2` | 3,095,033,483 | 3,140,000,000 |
+
+**`tiny` is the control, and it reproduced.** `be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21`
+and 77,691,713 bytes, identical to what `models.rs` had committed — a different day, a different
+tool, the same answer. That validates the measurement of the other five in the same run as it
+re-validates the one pin that already existed.
+
+The declared column is the shape of the whole baseline: every figure is a round million or ten
+million, and every one of the six is **high**, by 0.033% to 2.797% — `base` by 48,535 bytes and
+`turbo` by 45,444,725. None of them is a measurement of anything, and the errors do not follow a
+constant, so they are not the unit-confusion bug `98e836b` found in the GGUF sizes. They are
+somebody rounding up.
+
+### An unpredicted finding: Hugging Face states the SHA-256, and it is right
+
+`https://huggingface.co/api/models/ggerganov/whisper.cpp/tree/main?expand=true` returns, per LFS
+object, `lfs.oid` — which *is* the file's SHA-256, because that is what git-lfs keys on. It agreed
+with all six measured digests and all six measured lengths, on the nose. `large`'s row was read
+from that API while its 2.9 GB download was still in flight and predicted
+`64d182b4…94d1e2` / 3,095,033,483 correctly.
+
+That matters for **KNEG-45**, now re-scoped to only the 35 local-LLM GGUFs, declined on the
+grounds that 202 GB of downloading is not justified for a pin. There is a third option between
+"size only" and "bytes we hashed": pin the publisher's stated `lfs.oid`. The cost is **one API call
+per repository**, not per object — `tree/main` lists every file in the repo with its oid and size in
+one response — so the whole 39-object table would be a handful of requests rather than 202 GB.
+Six-for-six agreement over 6.9 GB is real evidence that the metadata is accurate.
+
+**It is a weaker standard and the distinction has to survive.** The oid is a claim by
+huggingface.co, delivered over the same channel as the bytes. It defends against a corrupted
+transfer and against an accidental re-upload; it does not defend against a compromised
+huggingface.co, because one host would serve both halves. A digest measured once and committed to
+*this* repository does defend against that, which is the whole reason `config/sidecars.json`'s rule
+is "a pin is only a pin if it was measured". So: a middle tier, strictly better than a length,
+strictly worse than the strong pin, and it must never be written into a table that reads as the
+strong pin. Recorded as a lead on KNEG-45 rather than done here.
+
+### Three pin tables became one
+
+The pins are `WHISPER_PINS` in `tools/integration-audit/generate-provider-registry.mjs`, beside
+`SHERPA_PINS` and `LOCAL_LLM_SIZES` — **not** an extended `PINNED` array in Rust, which is the
+architecture call worth recording. The argument is not tidiness. Three model families keeping their
+pins in three different places had already produced a concrete absurdity: `model-pin --verify` had
+to **parse Rust from Node** to check the whisper half, with a regex over
+`const PINNED: [(&str, &str, u64); N]` and the array's declared arity as a checksum on the parse.
+That reader worked. It should never have needed to exist.
+
+`models.rs` now reads `sha256` and `expected_size_bytes` off
+`kw_provider_registry::WhisperModel`, the generator emits both, and `--verify` reads one generated
+JSON document for all eight pins. `parseWhisperPins` and its five tests are deleted. They were
+written as a deliberate tripwire for exactly this migration and they fired once, which is what a
+tripwire is for — retiring them is the outcome, not a loss of coverage.
+
+### `expectedSizeBytes` is the measured length now, and one claim was false
+
+The registry's `expectedSizeBytes` for whisper is overridden with the measured figure rather than a
+tolerance being kept around the rounded one. That was free, and the reason `models.rs` gave for not
+doing it was wrong:
+
+> A tolerance rather than a rewrite of the registry, because the rounded figures are also what the
+> settings screen shows.
+
+**They are not.** `apps/desktop/src/views/SettingsTranscription.tsx` formats `sizeMb` — `142 MB`,
+`466 MB` — and never reads `expectedSizeBytes` at all. The field has exactly one consumer in the
+repository, `models::integrity_for`. `sizeMb` stays rounded, because it is a display estimate and
+showing a user 77,691,713 helps nobody. The false sentence is corrected where it was written.
+
+### What is kept although nothing reaches it
+
+`Integrity::Size`, `Verification::SizeOnly`, `SIZE_TOLERANCE` and `within_tolerance` all survive
+with no shipped model reaching them, and each says so where it is defined so nobody removes it as
+dead code. The reason is the same one `98e836b` gave for keeping `SizeCheck::Approximate`: a model
+added to the baseline before somebody spends the bandwidth to hash it — 2.9 GB, for a model the
+size of `large` — should be **degraded, not broken**.
+A tolerance is the right answer to a rounded number and the wrong answer to a measured one, and the
+unmeasured model is the only case that still has a rounded number.
+
+`within_tolerance`'s last consumer outside this module is `SizeCheck::Approximate` in
+`apps/desktop/src-tauri/src/local_llm.rs`; that is named in the doc comment, because "who still
+calls this" is the question a future reader will actually have.
+
+Note the asymmetry with sherpa, which is deliberate: an unpinned sherpa model cannot be installed
+at all (`MissingPin`), an unpinned whisper model degrades to a size check. A sherpa model is an
+archive that gets extracted; a whisper model is one file from a repository whose five siblings were
+hashed.
+
+### What this costs, and it is the same cost twice
+
+All six URLs are `resolve/main` — a branch pointer, not a revision. Until today a re-upload had to
+move a file by more than 5% to be noticed; now any change at all fails the install with an
+integrity error and the user cannot proceed. Identical to the trade `98e836b` took for the GGUF
+sizes, taken again for the same reason: a silent pass means running weights nobody here measured.
+See **KNEG-103**, which now covers a digest-exact surface rather than a size-exact one.
+
+What notices first is `node tools/model-pin/pin.mjs --verify`, and its weekly cost went from about
+1 GB to about **8 GB** — two Parakeet archives plus six whisper models rather than one.
+`.github/workflows/pin-verify.yml` carries the new figure and the `--only` escape hatch if the
+runtime ever becomes the problem.
+
+### Verified, and not
+
+**Verified:** all six digests reproduced by a full download; `tiny` reproduced its previously
+committed pin; a registry invariant test asserts every whisper model resolves to `Integrity::Pinned`
+(mirroring `every_installable_sherpa_model_has_integrity_and_size_limits`); `cargo test -p
+kw-transcription-core --test local_dictation -- --ignored` drives the real round trip — download,
+`Verification::DigestMatched`, server start, correct transcript — through the shipped `install` path
+now that it reads the registry instead of a table in its own file.
+
+**Not verified:** nobody has installed any of the five newly pinned models through the application.
+`BENCH_CHECK.md` carries that as a by-hand item and **KNEG-105** as an issue, with `base` named
+because it is the recommended model and the one a new user presses first. The two
+Parakeet digests were also re-measured today by full download (464.6 MiB and 478.1 MiB) and both
+matched; that upgrades `SHERPA_PINS`' comment from "the byte counts agree with `content-length`" to
+"both digests and both lengths came off the disk", and its comment now says what that does and does
+not prove.
+
+---
+
 ## 2026-08-31 (local-LLM sizes) — eighteen models nobody could install, and 2^30 ÷ 10^9
 
 `download_gguf` deletes a finished download whose length is more than 5% from the size the registry
