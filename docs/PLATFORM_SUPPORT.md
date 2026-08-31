@@ -425,10 +425,42 @@ logged.** What leaves the module is the index of a chord that matched, never a k
 **A modifier-only chord fires on the second modifier going down**, which is what makes it feel
 immediate and also means a key pressed *afterwards* cannot call it back. The documented rule that an
 ordinary key disqualifies a modifier-only chord catches a key already held — somebody mid-word — not
-one pressed a moment later. The consequence measured on 2026-08-26: on a layout where AltGr is
-left-Control plus right-Alt (Nordic, German, and others), binding `Control+Alt` starts a dictation
-every time the user types `@`. The shipped default, `Control+Super`, is unaffected, and nothing
-warns anyone who chooses `Control+Alt`.
+one pressed a moment later.
+
+**The AltGr consequence, measured 2026-08-26 and warned about since 2026-08-31 (KNEG-37).** Windows
+has no AltGr virtual key: the keyboard layout synthesises **left Control plus right Alt**, so on a
+Nordic, German, Polish or most other non-US layout, binding `Control+Alt` starts a dictation every
+time the user types `@ $ € { [`. Nothing downstream can tell that apart from the chord being pressed
+deliberately, so it is not fixable at the hook — what was missing was anyone saying so.
+
+`Settings > Dictation`'s Shortcuts section now carries a caution per colliding binding, and
+`hotkey_set` returns the same sentence the moment the hotkey is saved. Two measurements feed it,
+both re-runnable with `cargo run -p kw-platform --example altgr_probe`:
+
+- **Does this layout have AltGr?** `kw_platform::keyboard_layout` asks `VkKeyScanExW` whether any
+  character needs Control and Alt together, and names the character it found rather than the locale.
+  On the development machine: *"AltGr is present: `'@'` is typed with Control and Alt together."* A
+  layout with none is left alone; a platform that cannot be asked warns anyway and says it could not
+  ask, because silence on a layout that does have AltGr is the defect and a spare sentence is not.
+- **Which chords collide?** `kw_platform::keys::altgr_collision` answers by driving the **real chord
+  matcher** with the keys a real AltGr press sends. That is not a stylistic choice: a predicate
+  reasoning about modifier names would have missed `Control+Shift`, which also fires — AltGr's left
+  Control arrives while Shift is already held, completing the chord before the Alt is pressed.
+
+A **sided** chord avoids it entirely, because AltGr is left Control and right Alt specifically:
+`LeftControl+LeftAlt` and `RightControl+Alt` are both unaffected and `keys::Chord` already parses
+them. No settings field accepts a sided spelling, which is KNEG-35 — so the caution states the
+problem and deliberately does not suggest a remedy that cannot be typed.
+
+**Standard accelerators are not warned about**, and that is a decision rather than an oversight.
+`Control+Alt+D` goes to the system shortcut register rather than to the hook, and whether *that*
+also sees AltGr as Control+Alt has never been measured by this project. Believed, widely, and
+unverified — so not claimed on a screen.
+
+**The shipped default is unaffected by AltGr and not by everything.** `Control+Super` survives every
+AltGr keystroke, and it does fire while reaching for `Ctrl+Win+Left`, because a two-modifier chord
+completes on the way to any longer chord that starts with the same two. That is general, affects the
+default, and is tracked separately (KNEG-115) rather than folded in here.
 
 Push-to-talk on Linux needs read access to `/dev/input`; without it the app reports the
 limitation and falls back to toggle mode rather than silently failing.

@@ -143,8 +143,22 @@ export function acceleratorText(b: Binding): string {
  * Saved and registered are different events and the user needs to tell them
  * apart: a well-formed accelerator that another application already owns is
  * stored successfully and still does nothing.
+ *
+ * A caution is appended rather than replacing the verdict, because both are
+ * true at once and the order matters: the hotkey *did* save and it *is* live,
+ * and the surprise comes after. Leading with the warning would read as a
+ * failure, which this is not -- KNEG-37's `Control+Alt` works perfectly, which
+ * is the problem.
  */
 export function changeLabel(change: HotkeyChange): string {
+  const caution = change.cautions.map((c) => c.reason).join(" ");
+  const withCaution = (verdict: string) =>
+    caution ? `${verdict} ${caution}` : verdict;
+  return withCaution(changeVerdict(change));
+}
+
+/** The saved-and-registered half of [`changeLabel`], without any caution. */
+function changeVerdict(change: HotkeyChange): string {
   if (change.live) {
     // Two mechanisms can make a shortcut live, and the difference is one the
     // user can notice: a hooked chord does not take the keystroke away from

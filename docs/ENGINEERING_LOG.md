@@ -270,6 +270,108 @@ Unchanged from the Phases 1–4 entry, restated here so they are not buried:
 
 ---
 
+## 2026-08-31 (KNEG-37) — asking the matcher instead of describing it, and finding two more
+
+On a Nordic, German or most other non-US layout, `@ $ € { [` are typed with AltGr, and **Windows has
+no AltGr virtual key** — the keyboard layout synthesises left Control plus right Alt. So a
+modifier-only chord of `Control+Alt` fires on every one of those keystrokes. Measured 2026-08-26 by
+injecting exactly that pair and watching a dictation start.
+
+Nothing downstream can separate the two, so this is not fixable at the hook. The fix is that
+something says so, which is what was missing.
+
+### The implementation choice that did all the work
+
+The obvious way to decide whether an accelerator collides with AltGr is to ask whether it names
+both a Control and an Alt. Two or three lines, and it is what the issue's own description suggests.
+
+Instead, `keys::altgr_collision` **drives the real `ChordWatcher`** with the keys a real AltGr press
+sends and reports whether it fired. The argument for it was drift: the matcher is the thing that
+actually decides, several hundred times a second, and a separate predicate reasoning about modifier
+names would be free to disagree with it — silently, in exactly the cases nobody wrote a test for.
+
+It paid for itself immediately, twice.
+
+**`Control+Shift` collides too.** Nobody predicted this and the name-based predicate would have
+called it safe. AltGr's *left Control* arrives while Shift is already held, so the chord is complete
+before the Alt is pressed. A user who binds `Control+Shift` — a far more ordinary choice than
+`Control+Alt` — starts a dictation whenever they type a shifted AltGr character.
+
+**And then the bigger one, which is not this issue.** Driving the same matcher with an ordinary
+three-key shortcut, in the order a person presses it:
+
+```
+Control+Super    while pressing Ctrl+Win+Left  -> FIRES
+Control+Shift    while pressing Ctrl+Shift+D   -> FIRES
+Control+Alt      while pressing Ctrl+Alt+Del   -> FIRES
+```
+
+`Control+Super` is the **shipped default**, and `Ctrl+Win+Left` switches virtual desktop. A
+two-modifier chord completes on the way to any longer chord that begins with the same two — rule 2
+stops the longer chord *matching*, and nothing stops the shorter one *firing* as its prefix. That is
+general, it affects the default, and fixing it means changing when a modifier-only chord fires, so
+it is KNEG-115 rather than something to quietly fold in here.
+
+### Two measurements, not one, and the second one is the layout
+
+Whether a chord collides is a property of the chord. Whether the user can *make* that keystroke is a
+property of their keyboard, and warning a US-layout user about a key they do not have is noise.
+
+`kw_platform::keyboard_layout` asks `VkKeyScanExW` whether any character needs Control and Alt
+together. **Not a locale table:** "Swedish" is not the fact, `'@'` needing Control and Alt is — and
+the character found is carried into the warning, because *"this layout types '@' with Control and
+Alt together"* is a sentence the reader can check against the keyboard in front of them and *"your
+layout has AltGr"* is not. On this machine: present, `'@'`.
+
+Three states rather than a boolean, for the reason `content_protection` has them: a platform that
+cannot be asked must not answer "no". `Absent` suppresses the warning; `Unknown` still warns and
+says it could not tell. Failing open, deliberately — a spare sentence costs a reader a moment, and
+silence on a layout that does have AltGr is the defect.
+
+### What is deliberately not warned about
+
+**Standard accelerators.** `Control+Alt+D` goes to the system shortcut register rather than the
+hook, and whether *that* also sees AltGr as Control+Alt has never been measured by this project.
+Widely believed; unverified here; so not claimed on a screen. It is also the more common binding, so
+leaving it out is a real gap rather than a tidy boundary — stated rather than papered over.
+
+**A remedy.** A sided chord avoids AltGr entirely, because AltGr is *left* Control and *right* Alt
+specifically: `LeftControl+LeftAlt` and `RightControl+Alt` both come back unaffected, and
+`keys::Chord` already parses them. No settings field accepts a sided spelling — that is KNEG-35 — so
+suggesting one would be advice that cannot be followed. The caution states the problem and stops.
+
+### A mutation test that found the wrong reason
+
+Four mutations, to check each part carries weight:
+
+```
+only the bare AltGr press modelled  -> 3 tests fail
+Absent counts as possible           -> 1 test fails
+Alt alone counts as AltGr           -> 1 test fails
+the ModifierOnly guard removed      -> nothing fails
+```
+
+The fourth was the useful one. `a_standard_accelerator_is_not_claimed_about` passed with the guard
+deleted, because `Chord::parse` refuses an ordinary key and had been doing all the excluding. The
+guard was not useless — it excludes an `Invalid` accelerator, and `classify("Control+Alt+")` is
+invalid (empty segment) while `Chord::parse` skips the empty segment and returns a perfectly good
+`Control+Alt`, so without it a shortcut that does nothing at all would collect a warning about what
+else it does. The test simply asserted the right outcome for the wrong reason. Fixed by testing the
+case the guard is actually for, after which removing it fails.
+
+### Where it shows
+
+A third category on the Shortcuts section, beside `conflicts` and `unusable` and not folded into
+either: those two mean the hotkey will not do its job, and a caution means it will, and will also do
+it when nobody asked. `hotkey_set` returns the same sentence, because the moment to learn that
+`Control+Alt` is AltGr is when you press Set. The mark is red and the prose is not —
+`.row-detail.warn` is red *because every string reaching it is a failure*, and this one is the
+opposite: the hotkey is registered, live and working, which is precisely why it fires when you type
+`@`.
+
+`cargo run -p kw-platform --example altgr_probe` re-runs both measurements on any machine.
+---
+
 ## 2026-08-31 (KNEG-36) — the cheap fix would have destroyed the thing worth keeping
 
 `knegiswhisper history list` rendered `id, when, provider, text`. A failed dictation has neither a

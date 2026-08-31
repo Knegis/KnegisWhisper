@@ -182,6 +182,17 @@ export type UnhandledAction = { action: HotkeyAction, reason: string, };
 export type Conflict = { accelerator: string, actions: Array<HotkeyAction>, };
 
 /**
+ * A hotkey that works, and also does something the user did not ask for.
+ *
+ * Deliberately not a [`Conflict`] and not a `problem`. Both of those mean the
+ * hotkey will not do its job; this one will, and will *additionally* fire when
+ * the user is doing something else entirely. Folding it into either would put
+ * "this does not work" and "this works too often" under one word, and the
+ * remedies are opposite.
+ */
+export type Caution = { action: HotkeyAction, accelerator: string, reason: string, };
+
+/**
  * One action's hotkeys, classified, with any problems spelled out.
  */
 export type HotkeyReport = { bindings: Array<Binding>,
@@ -200,7 +211,16 @@ unusable: Array<HotkeyAction>,
  * the reason. Separate because the two need different words: one is the
  * user's to fix and the other is not.
  */
-unhandled: Array<UnhandledAction>, };
+unhandled: Array<UnhandledAction>,
+/**
+ * Hotkeys that work and also fire when the user meant something else.
+ *
+ * A third category, not a third spelling of the first two. `unusable` and
+ * `conflicts` both mean the hotkey will not do its job; a caution means it
+ * will, and will do it at times nobody asked for. Today the only source is
+ * AltGr (KNEG-37).
+ */
+cautions: Array<Caution>, };
 
 /**
  * What happened when we tried to register one accelerator.
@@ -220,7 +240,13 @@ export type HotkeyChange = { binding: Binding, registrations: Array<Registration
 /**
  * True when at least one accelerator for this action is now live.
  */
-live: boolean, };
+live: boolean,
+/**
+ * What this hotkey will *also* do. Returned here as well as from
+ * [`hotkeys`] because the moment to learn that `Control+Alt` is AltGr is
+ * when you press Set, not the next time the screen is opened.
+ */
+cautions: Array<Caution>, };
 
 /* -------------------------------------------------------------- providers */
 /**

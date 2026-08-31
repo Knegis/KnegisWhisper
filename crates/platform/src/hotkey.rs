@@ -354,6 +354,101 @@ impl Binding {
     }
 }
 
+/// A hotkey that works, and also does something the user did not ask for.
+///
+/// Deliberately not a [`Conflict`] and not a `problem`. Both of those mean the
+/// hotkey will not do its job; this one will, and will *additionally* fire when
+/// the user is doing something else entirely. Folding it into either would put
+/// "this does not work" and "this works too often" under one word, and the
+/// remedies are opposite.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct Caution {
+    pub action: HotkeyAction,
+    pub accelerator: String,
+    pub reason: String,
+}
+
+/// Every accelerator in `bindings` that an AltGr keystroke also fires.
+///
+/// **The measured defect (KNEG-37).** On a Nordic, German or most other non-US
+/// layouts, `@ $ EUR { [` are typed with AltGr, and Windows has no AltGr
+/// virtual key -- the layout synthesises **left Control plus right Alt**. A
+/// modifier-only chord that those two keys complete therefore fires on every
+/// such keystroke. Injecting exactly that pair started a dictation on the
+/// 2026-08-26 bench run, and `cargo run -p kw-platform --example altgr_probe`
+/// re-measures both halves on any machine.
+///
+/// **Which chords collide is asked of [`crate::keys::altgr_collision`]**, which
+/// answers by running the real chord matcher over the keys a real AltGr press
+/// sends. Reimplementing "does it name Control and Alt" here would have been
+/// shorter and would have missed `Control+Shift`, which the probe reports and
+/// which nobody predicted: AltGr's left Control arrives while Shift is already
+/// held, so the chord is complete before the Alt is pressed.
+///
+/// **Two filters, and they do different jobs** -- worth stating because a
+/// mutation test found the second one carrying none of the weight it looked
+/// like it carried.
+///
+/// `Chord::parse` is what excludes a *registrable* accelerator: it refuses any
+/// ordinary key, so `Control+Alt+D` never reaches the collision check. That is
+/// deliberate. A chord with an ordinary key goes to the system shortcut
+/// register rather than to the hook, and whether *that* also sees AltGr as
+/// Control+Alt has not been measured by this project -- so it is not claimed
+/// here. The question is its own issue rather than a guess on a screen.
+///
+/// The `ModifierOnly` match excludes an *invalid* one, which is a narrower and
+/// less obvious case: `classify("Control+Alt+")` is `Invalid` (empty segment)
+/// while `Chord::parse` skips the empty segment and happily returns
+/// `Control+Alt`. Without the match, an accelerator that is broken and does
+/// nothing at all would collect a warning about what it also does.
+#[must_use]
+pub fn cautions(bindings: &[Binding], altgr: &crate::keyboard_layout::AltGr) -> Vec<Caution> {
+    use crate::keyboard_layout::AltGr;
+
+    if !altgr.is_possible() {
+        return Vec::new();
+    }
+
+    let mut found = Vec::new();
+    for binding in bindings {
+        for accelerator in &binding.accelerators {
+            let Accelerator::ModifierOnly { accelerator, .. } = accelerator else {
+                continue;
+            };
+            let Ok(chord) = crate::keys::Chord::parse(accelerator) else {
+                continue;
+            };
+            let Some(press) = crate::keys::altgr_collision(&chord) else {
+                continue;
+            };
+
+            // The two sentences differ in what they can promise. One has read
+            // the layout and can name the character; the other is telling
+            // somebody what would happen if their layout has AltGr, and says so
+            // rather than asserting it does.
+            let reason = match altgr {
+                AltGr::Present { example } => format!(
+                    "{accelerator} also fires when you press {press}. This layout types {example:?}                      with Control and Alt together, and Windows sends left Control and right Alt                      for AltGr -- which completes this chord, with nothing downstream able to tell                      that apart from you pressing it deliberately."
+                ),
+                AltGr::Unknown { why } => format!(
+                    "{accelerator} also fires when you press {press}, on any layout with an AltGr                      key -- Nordic, German and most non-US layouts. Windows sends left Control and                      right Alt for AltGr, which completes this chord. Whether this layout has one                      was not determined: {why}"
+                ),
+                // Filtered out above; matched rather than caught by a wildcard
+                // so a fourth variant has to be thought about here.
+                AltGr::Absent => continue,
+            };
+
+            found.push(Caution {
+                action: binding.action,
+                accelerator: accelerator.clone(),
+                reason,
+            });
+        }
+    }
+    found
+}
+
 /// A conflict between two actions bound to the same accelerator.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 pub struct Conflict {
@@ -596,6 +691,112 @@ mod tests {
         assert_eq!(HotkeyAction::from_id("dictation-agent"), None);
         assert_eq!(HotkeyAction::from_id(""), None);
         assert_eq!(HotkeyAction::from_id("Dictation"), None);
+    }
+
+    /* ----------------------------------------------------------- cautions */
+
+    fn bound(action: HotkeyAction, accelerator: &str) -> Binding {
+        Binding::from_stored(action, accelerator)
+    }
+
+    #[test]
+    fn a_layout_with_altgr_gets_a_warning_naming_the_character() {
+        let layout = crate::keyboard_layout::AltGr::Present { example: '@' };
+        let found = cautions(&[bound(HotkeyAction::Dictation, "Control+Alt")], &layout);
+
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].accelerator, "Control+Alt");
+        assert_eq!(found[0].action, HotkeyAction::Dictation);
+        assert!(found[0].reason.contains('@'), "{}", found[0].reason);
+        assert!(found[0].reason.contains("AltGr"), "{}", found[0].reason);
+    }
+
+    /// A layout that was read and has no AltGr gets nothing. This is the whole
+    /// value of reading the layout rather than warning everyone: a US-layout
+    /// user cannot press AltGr, so the warning would be noise.
+    #[test]
+    fn a_layout_without_altgr_is_left_alone() {
+        let layout = crate::keyboard_layout::AltGr::Absent;
+        assert!(cautions(&[bound(HotkeyAction::Dictation, "Control+Alt")], &layout).is_empty());
+    }
+
+    /// A layout nobody could read still warns, and says that it could not.
+    ///
+    /// Failing open here rather than closed: the cost of a warning on a layout
+    /// that turns out not to have AltGr is a sentence someone ignores, and the
+    /// cost of silence on a layout that does is the defect.
+    #[test]
+    fn an_unreadable_layout_warns_anyway_and_admits_it() {
+        let layout = crate::keyboard_layout::AltGr::Unknown {
+            why: "not on this platform".to_owned(),
+        };
+        let found = cautions(&[bound(HotkeyAction::Dictation, "Control+Alt")], &layout);
+        assert_eq!(found.len(), 1);
+        assert!(
+            found[0].reason.contains("not on this platform"),
+            "{}",
+            found[0].reason
+        );
+        // And it must not claim to know a character it never looked one up for.
+        assert!(!found[0].reason.contains('@'), "{}", found[0].reason);
+    }
+
+    /// A registrable accelerator is not examined, and that is a decision.
+    ///
+    /// `Control+Alt+D` goes to the system shortcut register rather than to the
+    /// hook. Whether *that* also sees AltGr as Control+Alt is widely believed
+    /// and has not been measured by this project, so it is not warned about --
+    /// an unmeasured claim on a screen is the thing this repository keeps
+    /// filing issues about. Tracked separately instead.
+    ///
+    /// What enforces it is `Chord::parse` refusing the ordinary key, not the
+    /// `ModifierOnly` match above it. Measured, by deleting the match and
+    /// finding this test still passed.
+    #[test]
+    fn a_standard_accelerator_is_not_claimed_about() {
+        let layout = crate::keyboard_layout::AltGr::Present { example: '@' };
+        assert!(cautions(&[bound(HotkeyAction::Dictation, "Control+Alt+D")], &layout).is_empty());
+        assert!(crate::keys::Chord::parse("Control+Alt+D").is_err());
+    }
+
+    /// An accelerator that does nothing must not be told what else it does.
+    ///
+    /// This is the case the `ModifierOnly` match is actually for.
+    /// `classify("Control+Alt+")` is `Invalid` -- an empty segment, so a key is
+    /// missing -- while `Chord::parse` skips the empty segment and returns a
+    /// perfectly good `Control+Alt`. Warning about the AltGr behaviour of a
+    /// shortcut that is not registered at all would be advice about something
+    /// that never happens, stacked on top of the real problem.
+    #[test]
+    fn an_invalid_accelerator_is_not_also_cautioned() {
+        let layout = crate::keyboard_layout::AltGr::Present { example: '@' };
+        let binding = bound(HotkeyAction::Dictation, "Control+Alt+");
+
+        // The premise, asserted rather than assumed: it really is invalid, and
+        // it really would parse as a chord if anything let it.
+        assert!(matches!(
+            binding.accelerators.first(),
+            Some(Accelerator::Invalid { .. })
+        ));
+        assert!(crate::keys::Chord::parse("Control+Alt+").is_ok());
+
+        assert!(cautions(&[binding], &layout).is_empty());
+    }
+
+    #[test]
+    fn every_colliding_binding_is_reported_not_just_the_first() {
+        let layout = crate::keyboard_layout::AltGr::Present { example: '@' };
+        let found = cautions(
+            &[
+                bound(HotkeyAction::Dictation, "Control+Super"),
+                bound(HotkeyAction::ChatAgent, "Control+Alt"),
+                bound(HotkeyAction::Meeting, "Control+Shift"),
+            ],
+            &layout,
+        );
+        assert_eq!(found.len(), 2, "{found:?}");
+        assert_eq!(found[0].action, HotkeyAction::ChatAgent);
+        assert_eq!(found[1].action, HotkeyAction::Meeting);
     }
 
     #[test]

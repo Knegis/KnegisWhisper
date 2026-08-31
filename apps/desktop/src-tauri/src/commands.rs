@@ -99,6 +99,13 @@ pub struct HotkeyReport {
     /// the reason. Separate because the two need different words: one is the
     /// user's to fix and the other is not.
     pub unhandled: Vec<UnhandledAction>,
+    /// Hotkeys that work and also fire when the user meant something else.
+    ///
+    /// A third category, not a third spelling of the first two. `unusable` and
+    /// `conflicts` both mean the hotkey will not do its job; a caution means it
+    /// will, and will do it at times nobody asked for. Today the only source is
+    /// AltGr (KNEG-37).
+    pub cautions: Vec<hotkey::Caution>,
 }
 
 /// Read the configured hotkeys and say what will actually work.
@@ -119,7 +126,21 @@ pub async fn hotkeys(state: State<'_, AppState>) -> CmdResult<HotkeyReport> {
 /// user's to fix — has nothing to do with Tauri, and leaving it inside the
 /// command is what made it untested.
 fn report_for(bindings: Vec<Binding>) -> HotkeyReport {
+    report_with_layout(bindings, &kw_platform::keyboard_layout::altgr())
+}
+
+/// [`report_for`], with the keyboard layout supplied.
+///
+/// Injected for the reason the parity gate injects `readComponent`: the
+/// interesting half is which accelerators an AltGr layout makes dangerous, and
+/// a test that could only assert it on a machine whose layout happens to have
+/// AltGr would pass here and prove nothing in CI, which is Linux.
+fn report_with_layout(
+    bindings: Vec<Binding>,
+    altgr: &kw_platform::keyboard_layout::AltGr,
+) -> HotkeyReport {
     let conflicts = hotkey::conflicts(&bindings);
+    let cautions = hotkey::cautions(&bindings, altgr);
 
     // Asked of the registration module rather than recomputed, because that is
     // the module that decides. `Binding::is_usable` can only speak about the
@@ -146,6 +167,7 @@ fn report_for(bindings: Vec<Binding>) -> HotkeyReport {
         conflicts,
         unusable,
         unhandled,
+        cautions,
     }
 }
 
@@ -182,6 +204,10 @@ pub struct HotkeyChange {
     pub registrations: Vec<crate::shortcuts::Registration>,
     /// True when at least one accelerator for this action is now live.
     pub live: bool,
+    /// What this hotkey will *also* do. Returned here as well as from
+    /// [`hotkeys`] because the moment to learn that `Control+Alt` is AltGr is
+    /// when you press Set, not the next time the screen is opened.
+    pub cautions: Vec<hotkey::Caution>,
 }
 
 /// Change one action's hotkey.
@@ -226,10 +252,17 @@ pub async fn hotkey_set(
     // with no results rather than inventing a success.
     let mine = reports.into_iter().find(|r| r.action == action);
 
+    let binding = Binding::from_stored(action, &canonical);
+    let cautions = hotkey::cautions(
+        std::slice::from_ref(&binding),
+        &kw_platform::keyboard_layout::altgr(),
+    );
+
     Ok(HotkeyChange {
-        binding: Binding::from_stored(action, &canonical),
+        binding,
         registrations: mine.as_ref().map(|r| r.results.clone()).unwrap_or_default(),
         live: mine.is_some_and(|r| r.is_live()),
+        cautions,
     })
 }
 
@@ -1275,6 +1308,64 @@ mod tests {
 
         // And it counts as unusable, which is the question the interface asks.
         assert!(report.unusable.contains(&HotkeyAction::ChatAgent));
+    }
+
+    /// The report carries the AltGr caution, and does it without asking the
+    /// machine it happens to be running on.
+    ///
+    /// The layout is injected rather than read, which is the point: CI is Linux
+    /// and would answer `Unknown`, and a developer on a US layout would get
+    /// `Absent`. A test whose result depends on the tester's keyboard is a test
+    /// that will be quietly wrong for someone.
+    #[tokio::test]
+    async fn a_hotkey_that_altgr_also_fires_is_reported_as_a_caution() {
+        let s = state().await;
+        settings::set(
+            s.db().pool(),
+            &HotkeyAction::Dictation.settings_key(),
+            &"Control+Alt",
+        )
+        .await
+        .unwrap();
+
+        let bindings = load_bindings(&s).await.unwrap();
+        let swedish = kw_platform::keyboard_layout::AltGr::Present { example: '@' };
+        let report = report_with_layout(bindings.clone(), &swedish);
+
+        assert_eq!(report.cautions.len(), 1, "{:?}", report.cautions);
+        assert_eq!(report.cautions[0].action, HotkeyAction::Dictation);
+
+        // And it is a caution rather than a problem: the hotkey is fine. Saying
+        // otherwise would send someone looking for a typo in an accelerator
+        // that is spelled perfectly and works exactly as written.
+        let dictation = report
+            .bindings
+            .iter()
+            .find(|b| b.action == HotkeyAction::Dictation)
+            .unwrap();
+        assert!(report.conflicts.is_empty());
+        assert!(
+            dictation.problems().iter().all(|p| !p.contains("AltGr")),
+            "the caution must not also be reported as a problem: {:?}",
+            dictation.problems()
+        );
+        // `unusable` does contain it, and that is about the accelerator being
+        // modifier-only rather than about AltGr -- the same is true of the
+        // shipped `Control+Super` default, which works. Asserted so the two are
+        // not confused later: nothing here made this hotkey unusable.
+        assert!(
+            report_with_layout(
+                bindings.clone(),
+                &kw_platform::keyboard_layout::AltGr::Absent
+            )
+            .unusable
+                == report.unusable,
+            "the caution must not change what counts as unusable"
+        );
+
+        // The same bindings on a layout with no AltGr produce nothing at all.
+        let us = kw_platform::keyboard_layout::AltGr::Absent;
+        assert!(report_with_layout(bindings, &us).cautions.is_empty());
     }
 
     #[tokio::test]

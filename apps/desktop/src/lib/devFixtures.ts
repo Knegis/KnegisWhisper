@@ -151,7 +151,21 @@ const BINDINGS: Binding[] = [
       },
     ],
   },
-  { action: "voice-agent", accelerators: [standard("Control+Shift+V")] },
+  {
+    // `Control+Alt` rather than another tidy chord, because this is the one
+    // that renders the caution below -- and a fixture that never shows a
+    // warning is a fixture nobody can check the warning against. On a Nordic
+    // or German layout this really does start dictation every time you type
+    // `@` (KNEG-37).
+    action: "voice-agent",
+    accelerators: [
+      {
+        kind: "modifier-only",
+        accelerator: "Control+Alt",
+        modifiers: ["Control", "Alt"],
+      },
+    ],
+  },
   {
     action: "translation",
     accelerators: [
@@ -171,6 +185,18 @@ const HOTKEYS: HotkeyReport = {
     {
       action: "voice-agent",
       reason: "no voice-agent client is built into this release",
+    },
+  ],
+  // The sentence `hotkey::cautions` builds when the layout was read and found
+  // to have AltGr -- the Present arm, naming the character, because that is
+  // what a Nordic or German user gets and the one worth being able to see
+  // while styling this.
+  cautions: [
+    {
+      action: "voice-agent",
+      accelerator: "Control+Alt",
+      reason:
+        "Control+Alt also fires when you press AltGr. This layout types '@' with Control and Alt together, and Windows sends left Control and right Alt for AltGr -- which completes this chord, with nothing downstream able to tell that apart from you pressing it deliberately.",
     },
   ],
 };
@@ -1045,6 +1071,17 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
         accelerator,
       })),
       live: accelerators.length > 0,
+      // Computed from the accelerator rather than hardcoded, so typing
+      // `Control+Alt` into the field in dev mode produces the warning the real
+      // backend would. The real rule runs the chord matcher over the keys
+      // AltGr sends; this is the shape of its answer, not a second copy of it.
+      cautions: accelerators
+        .filter((a) => /control|ctrl/i.test(a) && /(^|\+)alt/i.test(a))
+        .map((accelerator) => ({
+          action,
+          accelerator,
+          reason: `${accelerator} also fires when you press AltGr. This layout types '@' with Control and Alt together, and Windows sends left Control and right Alt for AltGr -- which completes this chord, with nothing downstream able to tell that apart from you pressing it deliberately.`,
+        })),
     };
     return change;
   },

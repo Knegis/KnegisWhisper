@@ -225,6 +225,64 @@ impl Chord {
     }
 }
 
+/* ------------------------------------------------------------------- AltGr */
+
+/// One way a user can press AltGr, and the keys Windows produces for it.
+///
+/// **There is no AltGr virtual key.** Windows synthesises the combination in
+/// the keyboard layout, sending **left Control and right Alt**, so nothing
+/// downstream -- this hook included -- can tell an AltGr keystroke from someone
+/// deliberately holding those two. That is not a gap in this code; it is what
+/// arrives.
+///
+/// Order is part of each case rather than an accident. Rule 2 says a superset
+/// does not match, so `Control+Alt` fires on a bare AltGr and does *not* fire
+/// when Shift was already held -- the held set is three keys by the time the
+/// chord could complete. Getting that wrong in either direction would produce a
+/// warning that does not match the behaviour, which is worse than none.
+const ALTGR_PRESSES: [(&str, &[Key]); 4] = [
+    ("AltGr", &[Key::LeftControl, Key::RightAlt]),
+    (
+        "Shift held, then AltGr",
+        &[Key::LeftShift, Key::LeftControl, Key::RightAlt],
+    ),
+    (
+        "right Shift held, then AltGr",
+        &[Key::RightShift, Key::LeftControl, Key::RightAlt],
+    ),
+    (
+        "AltGr, then Shift",
+        &[Key::LeftControl, Key::RightAlt, Key::LeftShift],
+    ),
+];
+
+/// Which AltGr keystroke, if any, makes this chord fire.
+///
+/// **Decided by running the real matcher, not by a second set of rules.** The
+/// question "does `Control+Alt` fire on AltGr" has an exact answer that
+/// [`ChordWatcher`] already computes several hundred times a second, and a
+/// separate predicate that reasoned about modifier names would be free to drift
+/// away from it -- silently, because the two would only disagree in the cases
+/// nobody wrote a test for. Feeding the watcher the keys Windows actually sends
+/// cannot drift: if the warning and the behaviour ever disagree, it is because
+/// the behaviour changed, and the same call reports it.
+///
+/// Returns the description of the keystroke, so the warning can say *which*
+/// one rather than "some AltGr combination".
+#[must_use]
+pub fn altgr_collision(chord: &Chord) -> Option<&'static str> {
+    for (description, sequence) in ALTGR_PRESSES {
+        let mut watcher = ChordWatcher::new(vec![chord.clone()]);
+        if sequence
+            .iter()
+            .any(|key| watcher.key_down(*key) != Fired::Nothing)
+        {
+            return Some(description);
+        }
+    }
+    None
+}
+
 /// Whether a name is a key the cross-platform API would know.
 ///
 /// Not exhaustive and does not need to be: it exists so `Control+F5` reports "F5
@@ -529,6 +587,69 @@ mod tests {
 
         w.key_down(Key::RightControl);
         assert_eq!(w.key_down(Key::RightSuper), Fired::Chord(0));
+    }
+
+    /* ------------------------------------------------------------- AltGr */
+
+    /// The measured defect, KNEG-37.
+    ///
+    /// Injecting left Control and right Alt started a dictation on the
+    /// 2026-08-26 bench run, and this is that keystroke fed to the same
+    /// matcher the hook feeds.
+    #[test]
+    fn control_plus_alt_is_what_altgr_sends() {
+        let chord = Chord::parse("Control+Alt").unwrap();
+        assert_eq!(altgr_collision(&chord), Some("AltGr"));
+    }
+
+    /// The one nobody predicted, and the reason this asks the matcher instead
+    /// of asking whether the accelerator names Control and Alt.
+    ///
+    /// AltGr's *left Control* arrives while Shift is already held, so the chord
+    /// is complete before the Alt is pressed. A predicate written from the
+    /// issue's description -- "does it name both Control and Alt" -- would have
+    /// said `Control+Shift` was fine.
+    #[test]
+    fn control_plus_shift_fires_before_the_alt_even_arrives() {
+        let chord = Chord::parse("Control+Shift").unwrap();
+        assert_eq!(altgr_collision(&chord), Some("Shift held, then AltGr"));
+    }
+
+    /// The shipped dictation default is not affected, which is why this was
+    /// filed as a warning rather than as an emergency.
+    #[test]
+    fn the_shipped_default_is_unaffected() {
+        let chord = Chord::parse("Control+Super").unwrap();
+        assert_eq!(altgr_collision(&chord), None);
+    }
+
+    /// Naming a side is the way out, and both sides matter.
+    ///
+    /// AltGr is *left* Control and *right* Alt specifically. Pinning either
+    /// modifier to the other side avoids it entirely -- which is what makes
+    /// KNEG-35 (no settings field accepts a sided spelling) the other half of
+    /// this problem rather than an unrelated tidy-up.
+    #[test]
+    fn a_sided_chord_can_avoid_altgr_or_ask_for_it() {
+        for safe in ["LeftControl+LeftAlt", "RightControl+Alt", "Control+LeftAlt"] {
+            let chord = Chord::parse(safe).unwrap();
+            assert_eq!(altgr_collision(&chord), None, "{safe}");
+        }
+        // And the user who genuinely wants AltGr as a hotkey can say so. This
+        // is not a collision to warn about -- it is the feature -- but the
+        // check reports it, because the keystroke is the same one and pretending
+        // otherwise would need a rule about intent that nothing can know.
+        let deliberate = Chord::parse("LeftControl+RightAlt").unwrap();
+        assert_eq!(altgr_collision(&deliberate), Some("AltGr"));
+    }
+
+    /// A longer chord is not fired by a bare AltGr, because rule 2 holds: two
+    /// keys down cannot satisfy a chord of three.
+    #[test]
+    fn a_three_key_chord_needs_the_third_key_from_somewhere_else() {
+        let chord = Chord::parse("Control+Alt+Shift").unwrap();
+        // Not the bare press -- the one where Shift was already held.
+        assert_eq!(altgr_collision(&chord), Some("Shift held, then AltGr"));
     }
 
     /// Resetting forgets keys the hook never saw released.

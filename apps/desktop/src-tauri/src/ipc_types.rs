@@ -134,6 +134,7 @@ fn render() -> String {
             kw_platform::hotkey::Binding,
             crate::commands::UnhandledAction,
             kw_platform::hotkey::Conflict,
+            kw_platform::hotkey::Caution,
             crate::commands::HotkeyReport,
             crate::shortcuts::Registration,
             crate::commands::HotkeyChange,

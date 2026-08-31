@@ -251,13 +251,19 @@ there is one, keeping `history get 3 > note.txt` clean, and says what happened w
 
 ### Observed, worth knowing, not defects
 
-- **`Control+Alt` is AltGr.** On a Nordic, German or other AltGr layout, Windows generates
-  left-Control + right-Alt for `@ $ € { [`, and the chord matches `EitherSide` on both. Injecting
-  exactly that started a dictation. The chord fires on the *second modifier down*, so the
-  documented rule that "an ordinary key held disqualifies every modifier-only chord" cannot save
-  it — that rule catches a key already held, not one pressed afterwards. The shipped default
-  (`Control+Super`) is unaffected. Anyone binding `Control+Alt` on such a layout should be warned,
-  and nothing warns them.
+- **`Control+Alt` is AltGr.** Warned about since 2026-08-31 (KNEG-37). On a Nordic, German or
+  other AltGr layout, Windows generates left-Control + right-Alt for `@ $ € { [`, and the chord
+  matches `EitherSide` on both. Injecting exactly that started a dictation. The chord fires on the
+  *second modifier down*, so the documented rule that "an ordinary key held disqualifies every
+  modifier-only chord" cannot save it — that rule catches a key already held, not one pressed
+  afterwards. The shipped default (`Control+Super`) is unaffected by this one.
+
+  Not fixable at the hook, so the fix is that something says so: the Shortcuts section carries a
+  caution per colliding binding, and `hotkey_set` returns it the moment the hotkey is saved.
+  `cargo run -p kw-platform --example altgr_probe` re-measures both halves — whether the layout has
+  AltGr (`'@'` needs Control and Alt on this machine) and which chords the real matcher fires on the
+  keys AltGr sends. That second half found **`Control+Shift` collides too**, which nobody predicted:
+  AltGr's left Control lands while Shift is already held, so the chord completes before the Alt.
 - **WASAPI loopback delivers nothing at all from an idle output device** — not silence, no
   callback. With nothing playing the probe reports `captured 0 samples … the callback never fired`,
   which is honest, but for meetings it makes "capture is broken" and "the far end was quiet"

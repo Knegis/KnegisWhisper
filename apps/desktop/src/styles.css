@@ -501,6 +501,22 @@ section {
   font-size: 0.8125rem;
 }
 
+/*
+ * A caveat about a hotkey that works and also does something else.
+ *
+ * The mark is red and the text is not, and the split is the point. `.row-detail
+ * .warn` above is red *because every string reaching it is a failure*; a
+ * caution is the opposite -- `Control+Alt` on a Nordic layout is registered,
+ * live and working, which is exactly why it starts a dictation every time you
+ * type `@`. Red prose would call that broken and send someone looking for a
+ * mistake in an accelerator that is spelled perfectly. A red mark in the margin
+ * says look here without saying it failed.
+ */
+.caveat.warn {
+  border-left-color: var(--error);
+  border-left-width: 3px;
+}
+
 .purposes {
   margin: 0.75rem 0 0;
   padding: 0;
