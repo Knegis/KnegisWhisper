@@ -30,7 +30,16 @@ import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { args, hfRepos, measureFile, parseHfUrl, pinnedTargets, statedTargets } from "./pin.mjs";
+import {
+  args,
+  githubAssetTargets,
+  hfRepos,
+  measureFile,
+  parseGithubAssetUrl,
+  parseHfUrl,
+  pinnedTargets,
+  statedTargets,
+} from "./pin.mjs";
 
 /* -------------------------------------------------------------------- args */
 
@@ -404,5 +413,64 @@ test("hfRepos reads every repository the committed registry downloads from", () 
   for (const { repo, from } of repos) {
     assert.match(repo, /^[^/]+\/[^/]+$/, `${repo} is not an owner/name pair`);
     assert.ok(from.length > 0, `${repo} is named by nothing`);
+  }
+});
+
+/* -------------------------------------------- github release assets */
+
+test("parseGithubAssetUrl splits a release-asset URL into its three parts", () => {
+  assert.deepEqual(
+    parseGithubAssetUrl(
+      "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/a-model.tar.bz2"
+    ),
+    { repo: "k2-fsa/sherpa-onnx", tag: "asr-models", name: "a-model.tar.bz2" }
+  );
+});
+
+test("parseGithubAssetUrl returns null for anything that is not one", () => {
+  // A caller has to handle this rather than assume it away -- `githubAssetTargets`
+  // dies on it, because a pinned model whose host this cannot read would
+  // otherwise be skipped and reported as covered.
+  assert.equal(parseGithubAssetUrl("https://huggingface.co/a/b/resolve/main/c.bin"), null);
+  assert.equal(parseGithubAssetUrl("https://github.com/k2-fsa/sherpa-onnx/releases"), null);
+});
+
+test("githubAssetTargets reads the committed sherpa pins", () => {
+  const targets = githubAssetTargets({
+    localAsr: {
+      sherpa: [
+        {
+          id: "pinned",
+          downloadUrl: "https://github.com/o/r/releases/download/tag/x.tar.bz2",
+          sha256: "A".repeat(64),
+          expectedSizeBytes: 123,
+        },
+        { id: "unpinned", downloadUrl: "https://github.com/o/r/releases/download/tag/y.tar.bz2" },
+      ],
+    },
+  });
+  assert.equal(targets.length, 1, "a model with no digest has nothing to re-read");
+  assert.equal(targets[0].id, "pinned");
+  assert.equal(targets[0].repo, "o/r");
+  assert.equal(targets[0].tag, "tag");
+  assert.equal(targets[0].name, "x.tar.bz2");
+  assert.equal(targets[0].sha256, "a".repeat(64), "lowercased so the comparison cannot miss");
+});
+
+test("githubAssetTargets survives a registry with no sherpa models at all", () => {
+  assert.deepEqual(githubAssetTargets({}), []);
+});
+
+test("the committed registry still carries both sherpa archives as GitHub assets", () => {
+  // The same argument as the 39-object and six-whisper counts: an archive
+  // dropped from SHERPA_PINS would otherwise make --verify-stated check one
+  // asset, or none, and report success.
+  const targets = githubAssetTargets();
+  assert.equal(targets.length, 2, "both Parakeet archives are pinned");
+  for (const target of targets) {
+    assert.match(target.sha256, /^[0-9a-f]{64}$/, `${target.id} has no usable digest`);
+    assert.ok(target.sizeBytes > 0, `${target.id} has no measured size`);
+    assert.equal(target.repo, "k2-fsa/sherpa-onnx");
+    assert.ok(target.name.endsWith(".tar.bz2"), `${target.id} does not name an archive`);
   }
 });

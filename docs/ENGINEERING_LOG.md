@@ -270,6 +270,80 @@ Unchanged from the Phases 1–4 entry, restated here so they are not buried:
 
 ---
 
+## 2026-08-31 (KNEG-112) — asking whether a GitHub asset can be pinned, and finding it cannot
+
+KNEG-103 pinned all 45 Hugging Face URLs to a commit and left two archives behind: the Parakeet
+models, which are assets in k2-fsa's rolling `asr-models` GitHub release. The issue filed for them
+opened with three directions and said, in as many words, that the first task was a question rather
+than a fix and **nobody had looked at any of them.** So this is what looking found.
+
+### (a) Dated immutable tags — dead, measured
+
+k2-fsa publishes plenty of versioned releases: `v1.13.6`, `v1.13.5`, twenty-odd `v1.12.x`, each with
+280–340 assets. It looked promising for about a minute.
+
+They carry **library binaries and no models.** `v1.13.6` has 283 assets and **zero** whose name
+mentions `parakeet` — `sherpa-onnx-1.13.6.aar`, `sherpa-onnx-jvm-1.13.6.jar`, and so on. Every model
+archive lives in `asr-models`, a tag created 2023-11-20 that now holds **498 assets** and is added to
+continuously. There is no dated release to move to because the models were never in one.
+
+### (b) The Hugging Face mirror — real, and a different artifact
+
+`csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8` exists, published by sherpa-onnx's own
+maintainer, so `resolve/{sha}` is available in principle.
+
+It holds the model **unpacked**: a 652 MB `encoder.int8.onnx`, a decoder, a joiner, `tokens.txt` and
+four test wavs. Not the 487 MB `.tar.bz2` this application downloads. Switching would mean replacing
+one archive fetch with a multi-file fetch, discarding the extraction path and with it
+`maxExtractedSizeBytes` — the decompression-bomb ceiling KNEG-100 and KNEG-102 were about — in
+exchange for **no integrity gain**, because the digest is already measured. A rewrite that trades a
+working defence for a URL shape is not an improvement.
+
+### The fourth direction the issue did not know about, which also fails
+
+GitHub gives every release asset an id, and `api.github.com/repos/{repo}/releases/assets/{id}`
+serves that exact upload — measured: `302` to `release-assets.githubusercontent.com`. It looks
+exactly like the `resolve/{sha}` analogue.
+
+**It is not one, and the reason is the whole finding.** Git keeps old commits, which is why pinning
+one costs upstream nothing and keeps us working when `main` moves. GitHub does *not* keep old
+assets: a name cannot be overwritten, so replacing an asset means deleting it and uploading again,
+and the old id goes with the deletion. An id-pinned URL therefore turns a swap into a `404` where
+the name-pinned URL turns it into a digest failure. **Both block the install.** The pin would look
+like KNEG-103's and buy nothing.
+
+*Reasoned, not measured.* Nothing here can make k2-fsa replace an asset to watch what happens to the
+id, so this rests on how GitHub's release API is documented to behave and not on an observation.
+
+### What is actually there, and it is worth having
+
+**GitHub's release API states a `digest` and a `size` per asset.** One request returns all 498. And:
+
+```
+parakeet-tdt-0.6b-v3       sha256:5793d0fd…eafb16bf   487,170,055
+parakeet-unified-en-0.6b   sha256:99f63605…9a76e150   501,350,460
+```
+
+Both digests and both sizes match the committed pins **to the character**. That is the same shape as
+`lfs.oid` — the publisher's stated digest, over the same channel as the bytes — and it is
+independent corroboration of a measurement this project made by downloading, at no bandwidth cost.
+
+`--verify-stated` reads it weekly now, beside the Hugging Face trees. Two hosts, one verb, and the
+success line says which of them was which: for these two the stated digest is **weaker** than how
+they were pinned, since their bytes were hashed here, so agreement means the asset has not been
+swapped and not that the bytes are still what we hashed. Only the download proves the second thing,
+and the download still runs.
+
+### So the URL half is declined, and that is a result
+
+The issue allowed for it: *"the honest answer may be that the digest is all there is, and this
+closes as declined with the reasoning written down — which is a better outcome than an issue that
+sits open implying somebody forgot."* It is, and it does. What changed is that the reasoning is now
+three measurements rather than an assumption, and the gap it leaves is watched weekly instead of
+only at install.
+
+---
+
 ## 2026-08-31 (KNEG-86 / KNEG-85) — the gate that could not check the one thing it was for
 
 `verify-parity.mjs` refuses a `reachable: true` claim unless the component file

@@ -282,9 +282,17 @@ refusal, for a reason that had nothing to do with the user or the download. All 
 URLs now name a commit, measured into `HF_REVISIONS` by `node tools/model-pin/pin.mjs --revisions`
 and held by four generator guards. This is **not** a stronger integrity claim; the digest is still
 what proves the bytes. It removes a class of spurious failure and makes the URL and the digest
-describe the same objects by construction. The two Parakeet archives are the remaining exception:
-they are GitHub release assets in k2-fsa's rolling `asr-models` tag, where an asset can be replaced
-under the same name, and only the weekly re-measurement would notice (KNEG-103).
+describe the same objects by construction.
+
+**The two Parakeet archives are the remaining exception, and it is now a measured one.** They are
+GitHub release assets in k2-fsa's rolling `asr-models` tag, where an asset can be replaced under
+the same name, and there is no immutable URL to move them to: the versioned releases carry library
+binaries and no models, the Hugging Face mirror holds unpacked files rather than the archive, and a
+release-asset id is destroyed when an asset is replaced rather than surviving beside the new one.
+What GitHub does offer is a **stated digest per asset**, which matched both committed pins exactly
+on 2026-08-31 and is re-read weekly by `--verify-stated` alongside the full `--verify` download. So
+a swap is caught twice — cheaply within a week, and unconditionally at install by the digest that
+was measured here (KNEG-112).
 
 **A bound is only ever an exact figure.** Every bound above comes from a measurement:
 `tools/sidecar-pin/pin.mjs` and `tools/model-pin/pin.mjs` take the length from `stat` after a full

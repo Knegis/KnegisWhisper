@@ -104,6 +104,16 @@
  * would be ignored by the second month. It is news about pins worth revisiting,
  * not a defect.
  *
+ * **And the two sherpa archives, which are not on Hugging Face at all.** They
+ * are assets in k2-fsa's rolling `asr-models` GitHub release, and GitHub's
+ * release API states a `digest` and a `size` per asset -- the same shape as
+ * `lfs.oid`, from a different host, one request for all 498 assets. Those two
+ * are *also* downloaded and re-hashed by `--verify`, so this is not how they
+ * are checked; it is an earlier and far cheaper signal that tells a swapped
+ * asset from a damaged download before the 1 GB re-download runs. Measured
+ * 2026-08-31: both stated digests and both stated sizes match the committed
+ * pins exactly. See KNEG-112.
+ *
  * `--verify` re-measures bytes. `--verify-stated` re-reads a claim. Both catch
  * a silent upstream re-upload, which is the failure that matters most here;
  * only the first can catch bytes that disagree with the claim. They are two
@@ -526,6 +536,80 @@ async function apiJson(url) {
 }
 
 /**
+ * A GitHub release-asset download URL, split into repository / tag / name.
+ *
+ * Exported beside [`parseHfUrl`] and for the same reason: one parser per URL
+ * shape, so nothing has to keep two copies of it in step.
+ */
+export function parseGithubAssetUrl(url) {
+  const match =
+    /^https:\/\/github\.com\/([^/]+\/[^/]+)\/releases\/download\/([^/]+)\/(.+)$/.exec(
+      String(url)
+    );
+  if (!match) return null;
+  return { repo: match[1], tag: match[2], name: match[3] };
+}
+
+/**
+ * Every committed sherpa pin, as an asset to look up in a GitHub release.
+ *
+ * `localAsr.sherpa` only. A model with no `sha256` is skipped for the reason
+ * [`pinnedTargets`] gives -- today that is the two Nemotron streaming models,
+ * which nothing can install and nobody pinned.
+ *
+ * **These are bytes this project hashed**, unlike the GGUF pins. Re-reading
+ * what GitHub states about them is strictly weaker than the download
+ * `--verify` does, and is included here anyway because it is the difference
+ * between knowing within seconds and knowing after a gigabyte. The output says
+ * which, rather than letting a reader average the two.
+ */
+export function githubAssetTargets(reg = registry()) {
+  const targets = [];
+  for (const model of reg.localAsr?.sherpa ?? []) {
+    if (!model.sha256) continue;
+    const parsed = parseGithubAssetUrl(model.downloadUrl);
+    if (!parsed) {
+      die(
+        `sherpa/${model.id} is pinned but its downloadUrl is not a GitHub release asset: ` +
+          `${model.downloadUrl}. This mode does not know how to re-read that host.`
+      );
+    }
+    if (typeof model.expectedSizeBytes !== "number") {
+      die(
+        `sherpa/${model.id} has a sha256 and no expectedSizeBytes. The generator emits both or ` +
+          "neither, so config/provider-registry.json has been hand-edited."
+      );
+    }
+    targets.push({
+      id: model.id,
+      repo: parsed.repo,
+      tag: parsed.tag,
+      name: parsed.name,
+      sha256: model.sha256.toLowerCase(),
+      sizeBytes: model.expectedSizeBytes,
+    });
+  }
+  return targets;
+}
+
+/** One GitHub release, by tag, as JSON. */
+async function release(repo, tag) {
+  const url = `https://api.github.com/repos/${repo}/releases/tags/${tag}`;
+  const response = await fetch(url, {
+    headers: { accept: "application/vnd.github+json", "user-agent": "knegiswhisper-model-pin" },
+  });
+  if (response.status === 403 || response.status === 429) {
+    die(
+      `${url} returned HTTP ${response.status}. GitHub rate-limits unauthenticated API calls to ` +
+        "60 an hour per address; this mode needs one. Wait, or set GITHUB_TOKEN in the environment " +
+        "if a run needs more."
+    );
+  }
+  if (!response.ok) die(`${url} returned HTTP ${response.status}`);
+  return response.json();
+}
+
+/**
  * One repository tree at a named revision, as JSON.
  *
  * The revision is a parameter rather than the constant `main` it used to be,
@@ -641,12 +725,60 @@ export async function verifyStated(only) {
     }
   }
 
+  // The sherpa archives, from the other host. One request per release, and
+  // there is exactly one release.
+  const assets = only ? [] : githubAssetTargets();
+  const assetWrong = [];
+  const releases = new Map();
+  for (const target of assets) {
+    const key = `${target.repo}@${target.tag}`;
+    if (!releases.has(key)) {
+      console.error(`reading ${target.repo} release ${target.tag} …`);
+      releases.set(key, await release(target.repo, target.tag));
+    }
+    const found = (releases.get(key).assets ?? []).find((a) => a.name === target.name);
+    if (!found) {
+      assetWrong.push(`${target.id}: ${target.name} is no longer in ${target.repo} ${target.tag}`);
+      continue;
+    }
+    // GitHub states `sha256:<hex>`; the committed pin is bare hex.
+    const stated = String(found.digest ?? "").replace(/^sha256:/, "").toLowerCase();
+    if (!stated) {
+      assetWrong.push(
+        `${target.id}: the release API states no digest for this asset, so there is nothing ` +
+          "to compare -- re-download with --verify instead"
+      );
+    } else if (stated !== target.sha256) {
+      assetWrong.push(`${target.id}: committed ${target.sha256}, stated ${stated}`);
+    }
+    if (typeof found.size === "number" && found.size !== target.sizeBytes) {
+      assetWrong.push(`${target.id}: committed ${target.sizeBytes} bytes, stated ${found.size}`);
+    }
+  }
+
+  if (assetWrong.length > 0) {
+    console.error(
+      `\nmodel-pin --verify-stated: ${assetWrong.length} disagreement(s) over ${assets.length} ` +
+        "GitHub release asset(s)"
+    );
+    for (const line of assetWrong) console.error(`  ${line}`);
+    process.exit(1);
+  }
+
   const measured = targets.filter((t) => t.measured).length;
   console.log(
     `model-pin --verify-stated: ${targets.length} object(s) still match their committed ` +
       `digest and length at the commit they are pinned to (${trees.size} tree request(s); ` +
       `${measured} pinned to bytes hashed here, which this mode does not re-hash).`
   );
+  if (assets.length > 0) {
+    console.log(
+      `model-pin --verify-stated: ${assets.length} GitHub release asset(s) match what the ` +
+        "release API states. All of those are pinned to bytes hashed here, so agreement means " +
+        "the asset has not been swapped -- not that the bytes are still what we hashed. Only " +
+        "--verify proves the second thing."
+    );
+  }
 
   if (moved.length > 0) {
     // Deliberately not a failure. A publisher pushing is not a defect, and the

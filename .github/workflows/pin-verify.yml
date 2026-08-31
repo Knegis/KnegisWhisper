@@ -78,5 +78,13 @@ jobs:
       # past their pinned commit. That is news rather than a defect: pinning a
       # commit is what makes upstream's routine publishing cost us nothing, and
       # a job that went red for it every week would stop being read.
-      - name: Re-read the GGUF pins at their pinned commits
+      #
+      # The same step covers the two Parakeet archives, from the other host:
+      # GitHub's release API states a digest and a size per asset, one request
+      # for all 498 in `asr-models`. Those two are downloaded and re-hashed by
+      # the step above as well, so this is not how they are checked -- it is
+      # what tells a swapped asset from a damaged download before the gigabyte
+      # runs, and it is the only cheap signal available for a URL that cannot
+      # be pinned to anything immutable (KNEG-112).
+      - name: Re-read the stated digests, at Hugging Face and at GitHub
         run: node tools/model-pin/pin.mjs --verify-stated
