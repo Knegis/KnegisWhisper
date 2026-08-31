@@ -560,7 +560,12 @@ dead provider stops the recording, falls back immediately, or carries on with a 
    cues land where the speech does. An import routed to a cloud provider still gets one cue, which
    is correct — no cloud batch provider on this path reports segments.
 4. **`parakeet-tdt-0.6b-v3`** — offered on the same measured layout, still never downloaded.
-5. **Meeting detection firing on a real call.**
+5. **Whether a Parakeet import exports usable cues.** `sherpa::cues` was written on 2026-08-31
+   against one measured run of `sherpa-onnx-offline` over 13.5 s of synthesised speech, and its
+   three cues match whisper's own segmenter on the same audio. What that run does *not* cover:
+   real speech with hesitations, a recording long enough for the 200-character backstop to fire,
+   and a language other than English. Import something long with Parakeet selected, export SRT.
+6. **Meeting detection firing on a real call.**
 
 ---
 

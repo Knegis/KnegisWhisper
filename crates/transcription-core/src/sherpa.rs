@@ -48,7 +48,7 @@ use std::process::Stdio;
 
 use serde::Deserialize;
 
-use crate::local::{Inference, LocalTranscriber};
+use crate::local::{Inference, LocalTranscriber, TimedSegment};
 
 /// The four files sherpa-onnx-offline's transducer model type needs, resolved
 /// to real paths inside one extracted model directory.
@@ -174,13 +174,58 @@ pub fn build_args(
     args
 }
 
-/// What one line of sherpa-onnx-offline's stdout carries. Only the field this
-/// build reads; every other field the real output carries (`timestamps`,
-/// `tokens`, `ys_log_probs`, ...) is left unparsed.
+/// What one line of sherpa-onnx-offline's stdout carries.
+///
+/// Measured on 2026-08-31 against `parakeet-unified-en-0.6b-int8`, 13.5 s of
+/// speech, the same audio the whisper timing measurement used:
+///
+/// ```text
+/// {"lang": "", "emotion": "", "event": "",
+///  "text": "The quick brown fox jumps over the lazy dog. Second sentence, ...",
+///  "timestamps": [0.64, 0.72, 0.72, 0.88, ...],           // 64 entries
+///  "durations": [],
+///  "tokens": [" The", " qu", "ick", " br", "own", ...],   // 64 entries
+///  "ys_log_probs": [...],                                 // 64 entries
+///  "words": []}
+/// ```
+///
+/// Three things that settles, none of which the field names alone said:
+///
+/// * **`timestamps` is per token, not per segment** -- 64 of them for 64
+///   tokens, and the tokens are subword pieces (`" qu"`, `"ick"`). There is no
+///   segmentation in this output at all.
+/// * **`words` and `durations` come back empty** for a transducer model.
+///   `--whisper-enable-segment-timestamps` and
+///   `--whisper-enable-token-timestamps` exist but are Whisper-family options;
+///   Parakeet is a transducer and neither applies. So there is no flag that
+///   fills them in and no offsets to be had -- only onsets.
+/// * `ys_log_probs` is per token as well. Unread: nothing here reports
+///   confidence, and a threshold nobody measured would be worse than silence.
 #[derive(Debug, Deserialize)]
 struct OfflineResult {
     text: Option<String>,
+    /// One onset per token, in seconds from the start of the recording.
+    #[serde(default)]
+    timestamps: Vec<f64>,
+    /// Subword pieces. A leading space marks the start of a word.
+    #[serde(default)]
+    tokens: Vec<String>,
 }
+
+/// The longest cue [`cues`] will build before splitting, in characters.
+///
+/// A backstop, not the rule that does the work -- sentence-final punctuation is.
+/// It exists because a transducer has no decode window to fall back on the way
+/// whisper does: whisper cannot emit a segment longer than 30 seconds of audio
+/// whatever we ask for, and `sherpa-onnx-offline` would happily return a
+/// 57-minute recording with no punctuation in it as one cue.
+///
+/// **A judgement, not a measurement.** 200 characters is generous for one
+/// spoken sentence and short enough that a run of unpunctuated speech still
+/// produces readable cues. Nothing was measured to choose it, and the split it
+/// causes still lands on a real token onset and a word boundary, so being
+/// wrong about the number costs readability and never correctness.
+const MAX_CUE_CHARS: usize = 200;
 
 /// How much of stderr is worth repeating in a refusal.
 const STDERR_LIMIT: usize = 400;
@@ -210,18 +255,30 @@ pub fn interpret(exit_code: Option<i32>, stdout: &[u8], stderr: &str) -> Inferen
         };
     }
 
-    let text = std::str::from_utf8(stdout)
+    let parsed = std::str::from_utf8(stdout)
         .ok()
-        .and_then(|s| serde_json::from_str::<OfflineResult>(s.trim()).ok())
-        .and_then(|r| r.text);
+        .and_then(|s| serde_json::from_str::<OfflineResult>(s.trim()).ok());
 
-    match text {
-        Some(text) => {
+    match parsed {
+        Some(parsed) => {
+            let Some(text) = parsed.text else {
+                return Inference::Rejected {
+                    status: 0,
+                    body: truncate(stderr),
+                };
+            };
             let trimmed = text.trim();
             if trimmed.is_empty() {
-                Inference::Empty
-            } else {
+                return Inference::Empty;
+            }
+            let segments = cues(&parsed.tokens, &parsed.timestamps);
+            if segments.is_empty() {
                 Inference::Text(trimmed.to_owned())
+            } else {
+                Inference::Timed {
+                    text: trimmed.to_owned(),
+                    segments,
+                }
             }
         }
         // A clean exit that did not print the shape this build expects. Real
@@ -232,6 +289,117 @@ pub fn interpret(exit_code: Option<i32>, stdout: &[u8], stderr: &str) -> Inferen
             body: truncate(stderr),
         },
     }
+}
+
+/// Group per-token onsets into subtitle cues.
+///
+/// `sherpa-onnx-offline` reports no segmentation, so this builds it -- which is
+/// the same job whisper.cpp's *server* does for us from its own decoded
+/// timestamp tokens, not a capability being invented. What matters is the rule
+/// it follows:
+///
+/// **Every boundary is a measured token onset.** A cue starts at the onset of
+/// its first token and ends at the onset of its last. Nothing is interpolated,
+/// averaged, or derived from the audio length.
+///
+/// **A cue ends at its last *spoken* token, and a trailing punctuation mark is
+/// not one.** That is not tidiness; it is what the measurement forced. This
+/// model timestamps a sentence-final `"."` at the end of the pause that follows
+/// it rather than where the speech stopped:
+///
+/// ```text
+/// token   'y'   ' do'  'g'    '.'    ' Se'  'cond'
+/// onset   2.32  2.64   2.72   4.08   4.24   4.32
+/// ```
+///
+/// The `"."` sits 1.36 s after `"g"` and 0.16 s before the next word, because
+/// the decoder only emits it once it has seen the silence. Ending a cue on it
+/// would hold every cue on screen through the whole pause -- 1.2 s of dead air
+/// per cue, measured. The last token carrying a letter or digit is the last
+/// thing actually said, so that is the end.
+///
+/// The cost of the remaining honesty, stated rather than hidden: a cue ends
+/// slightly **early**, by the length of that final spoken token, because an
+/// onset is not an offset. `durations` comes back empty for a transducer model
+/// (see [`OfflineResult`]), so a token's extent is not something this output
+/// reports and there is no better end to be had. Against the same audio,
+/// whisper's own segmenter said `0.00-3.00 / 3.68-9.44 / 10.08-12.88` and this
+/// rule gives `0.64-2.72 / 4.24-9.12 / 10.56-12.40`: the same three utterances,
+/// each a fraction of a second tighter.
+///
+/// Splits happen after sentence-final punctuation, or when [`MAX_CUE_CHARS`]
+/// would be exceeded, and **only ever at the start of a word** -- a token with
+/// no leading space continues the current one. That is the same protection
+/// `--split-on-word` gives whisper, except here it is unconditional rather than
+/// a flag, because breaking `"ick"` off `" qu"` could never be wanted.
+///
+/// Returns empty -- meaning *no timings were reported* -- unless there is
+/// exactly one onset per token and at least one of each. All-or-nothing, the
+/// rule `crate::local::interpret` follows for the same reason: a partly timed
+/// transcript would place some cues correctly and the rest by fabrication.
+#[must_use]
+pub fn cues(tokens: &[String], timestamps: &[f64]) -> Vec<TimedSegment> {
+    if tokens.is_empty() || tokens.len() != timestamps.len() {
+        return Vec::new();
+    }
+
+    let mut out: Vec<TimedSegment> = Vec::new();
+    // The cue being accumulated: its text, its start, and the onset of the last
+    // *spoken* token put into it -- which becomes its end. See the doc comment
+    // on why a trailing punctuation token's onset is not an end.
+    let mut text = String::new();
+    let mut start = 0.0_f64;
+    let mut last = 0.0_f64;
+    // Set once a cue has reached a point it may be closed at. Acted on at the
+    // next word start rather than immediately, so `"."` stays with the word it
+    // punctuates instead of opening the following cue.
+    let mut ready = false;
+
+    for (token, &onset) in tokens.iter().zip(timestamps) {
+        let starts_word = token.starts_with(' ');
+        let ends_sentence = token
+            .trim_end()
+            .chars()
+            .next_back()
+            .is_some_and(|c| matches!(c, '.' | '?' | '!' | '。' | '？' | '！'));
+
+        if starts_word && ready && !text.trim().is_empty() {
+            out.push(TimedSegment {
+                text: text.trim().to_owned(),
+                start,
+                // Never before the start: a cue whose only token carried no
+                // letter or digit would otherwise report the previous cue's
+                // end. Not reachable from any measured output -- every cue here
+                // begins with a word -- but the clamp costs nothing and the
+                // alternative is a cue that runs backwards.
+                end: last.max(start),
+            });
+            text.clear();
+            ready = false;
+        }
+
+        if text.is_empty() {
+            start = onset;
+        }
+        text.push_str(token);
+        if token.chars().any(char::is_alphanumeric) {
+            last = onset;
+        }
+
+        // The cap is checked against what the cue already holds, so the token
+        // that crosses it opens the next cue rather than being stranded.
+        ready = ready || ends_sentence || text.chars().count() >= MAX_CUE_CHARS;
+    }
+
+    if !text.trim().is_empty() {
+        out.push(TimedSegment {
+            text: text.trim().to_owned(),
+            start,
+            end: last.max(start),
+        });
+    }
+
+    out
 }
 
 fn truncate(s: &str) -> String {
@@ -352,6 +520,167 @@ impl LocalTranscriber for SherpaOffline {
 )]
 mod tests {
     use super::*;
+
+    /* ---------------------------------------------- the measured output */
+
+    /// The real stdout of one `sherpa-onnx-offline` run, measured on 2026-08-31
+    /// against `parakeet-unified-en-0.6b-int8` over the same 13.5 s of speech
+    /// the whisper timing measurement used.
+    ///
+    /// Verbatim except that `ys_log_probs` is dropped -- 64 floats this build
+    /// does not parse. `text`, `timestamps` and `tokens` are exactly as
+    /// printed, including the empty `words` and `durations` that made a cue
+    /// builder necessary in the first place.
+    const REAL_STDOUT: &str = r##"{"lang": "", "emotion": "", "event": "", "text": "The quick brown fox jumps over the lazy dog. Second sentence, spoken after a pause, so the server has somewhere to cut. Third and last sentence of the probe recording.", "timestamps": [0.64, 0.72, 0.72, 0.88, 0.96, 1.2, 1.28, 1.52, 1.6, 1.6, 1.92, 1.92, 2.16, 2.24, 2.24, 2.32, 2.64, 2.72, 4.08, 4.24, 4.32, 4.56, 4.64, 4.64, 5.52, 5.68, 5.76, 5.76, 6.16, 6.24, 6.48, 6.56, 6.64, 6.64, 7.52, 7.68, 7.84, 7.92, 7.92, 8.32, 8.56, 8.56, 8.64, 8.64, 8.96, 9.12, 9.12, 10.4, 10.56, 10.56, 10.8, 10.88, 10.88, 11.2, 11.2, 11.28, 11.76, 11.84, 11.92, 12.0, 12.24, 12.32, 12.4, 13.52], "durations": [], "tokens": [" The", " qu", "ick", " br", "own", " fo", "x", " j", "um", "ps", " o", "ver", " the", " la", "z", "y", " do", "g", ".", " Se", "cond", " s", "ent", "ence", ",", " sp", "ok", "en", " a", "fter", " a", " p", "a", "use", ",", " so", " the", " ser", "ver", " has", " s", "ome", "wh", "ere", " to", " c", "ut", ".", " Th", "ird", " and", " l", "ast", " s", "ent", "ence", " of", " the", " pro", "be", " rec", "ord", "ing", "."], "words": []}"##;
+
+    #[test]
+    fn the_measured_output_becomes_three_cues() {
+        // The whole point. Against this audio whisper's own segmenter said
+        // 0.00-3.00 / 3.68-9.44 / 10.08-12.88; this rule finds the same three
+        // utterances from per-token onsets alone, each a fraction tighter
+        // because a cue ends at its last token's onset and `durations` is empty.
+        match interpret(Some(0), REAL_STDOUT.as_bytes(), "") {
+            Inference::Timed { segments, text } => {
+                assert_eq!(segments.len(), 3, "{segments:#?}");
+
+                assert_eq!(
+                    segments[0].text,
+                    "The quick brown fox jumps over the lazy dog."
+                );
+                assert!((segments[0].start - 0.64).abs() < 1e-9);
+                // The onset of "g", not of the "." that follows it 1.36 s
+                // later. See `cues`.
+                assert!((segments[0].end - 2.72).abs() < 1e-9, "{:?}", segments[0]);
+
+                assert!(segments[1].text.starts_with("Second sentence,"));
+                assert!(segments[1].text.ends_with("somewhere to cut."));
+                assert!((segments[1].start - 4.24).abs() < 1e-9, "{:?}", segments[1]);
+                assert!((segments[1].end - 9.12).abs() < 1e-9, "{:?}", segments[1]);
+
+                assert_eq!(
+                    segments[2].text,
+                    "Third and last sentence of the probe recording."
+                );
+                assert!(
+                    (segments[2].start - 10.56).abs() < 1e-9,
+                    "{:?}",
+                    segments[2]
+                );
+                assert!((segments[2].end - 12.40).abs() < 1e-9, "{:?}", segments[2]);
+
+                // No cue may outlast the one after it, which is what a
+                // punctuation onset used to cause.
+                for pair in segments.windows(2) {
+                    assert!(pair[0].end <= pair[1].start, "{pair:?}");
+                }
+
+                // The cues reconstruct the transcript, so nothing was dropped
+                // between them.
+                let joined = segments
+                    .iter()
+                    .map(|s| s.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                assert_eq!(joined, text);
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn cues_never_start_inside_a_word() {
+        // The protection `--split-on-word` gives whisper, unconditional here:
+        // splitting `"ick"` off `" qu"` could never be wanted. Every cue must
+        // begin at a token that began a word, which after trimming means no cue
+        // starts with a subword fragment of the previous one.
+        let segments = match interpret(Some(0), REAL_STDOUT.as_bytes(), "") {
+            Inference::Timed { segments, .. } => segments,
+            other => panic!("{other:?}"),
+        };
+        for segment in &segments {
+            let first = segment.text.split_whitespace().next().unwrap_or_default();
+            assert!(
+                first.chars().next().is_some_and(char::is_alphanumeric),
+                "cue starts mid-word: {segment:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_boundary_is_a_reported_onset() {
+        // The rule that makes these cues honest. Nothing is interpolated, so
+        // every start and every end must appear verbatim in `timestamps`.
+        let onsets: Vec<f64> = serde_json::from_str::<serde_json::Value>(REAL_STDOUT)
+            .unwrap()
+            .get("timestamps")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(serde_json::Value::as_f64)
+            .collect();
+
+        let segments = match interpret(Some(0), REAL_STDOUT.as_bytes(), "") {
+            Inference::Timed { segments, .. } => segments,
+            other => panic!("{other:?}"),
+        };
+        for segment in &segments {
+            assert!(
+                onsets.iter().any(|o| (o - segment.start).abs() < 1e-9),
+                "invented start: {segment:?}"
+            );
+            assert!(
+                onsets.iter().any(|o| (o - segment.end).abs() < 1e-9),
+                "invented end: {segment:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_run_with_no_timings_is_still_a_transcript() {
+        // A model family that prints no `timestamps` at all, or a future
+        // release that renames the field. The transcript is still good; there
+        // are simply no cues, and `Text` is how that is said.
+        let body = r#"{"text": "hello there", "timestamps": [], "tokens": []}"#;
+        match interpret(Some(0), body.as_bytes(), "") {
+            Inference::Text(text) => assert_eq!(text, "hello there"),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_mismatched_count_is_refused_rather_than_zipped() {
+        // Three tokens, two onsets. `zip` would silently drop the third and
+        // report two cues that looked fine, which is the failure mode the
+        // all-or-nothing rule exists to prevent.
+        assert!(cues(
+            &[" a".to_owned(), " b".to_owned(), " c".to_owned()],
+            &[0.0, 1.0]
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn an_unpunctuated_run_is_split_by_the_backstop() {
+        // A transducer has no decode window, so without the cap a 57-minute
+        // recording with no punctuation in it would come back as one cue --
+        // exactly the defect this work started from.
+        let word = " abcdefghij".to_owned();
+        let tokens: Vec<String> = (0..60).map(|_| word.clone()).collect();
+        #[allow(clippy::cast_precision_loss)]
+        let onsets: Vec<f64> = (0..60).map(|i| f64::from(i) * 0.5).collect();
+
+        let built = cues(&tokens, &onsets);
+        assert!(built.len() > 1, "{built:#?}");
+        for segment in &built {
+            // The cap is checked against what a cue already holds, so one word
+            // may cross it; nothing may be far past it.
+            assert!(
+                segment.text.chars().count() <= MAX_CUE_CHARS + word.len(),
+                "{segment:?}"
+            );
+        }
+    }
 
     fn layout(dir: &Path) {
         std::fs::write(dir.join("encoder.int8.onnx"), b"e").unwrap();
