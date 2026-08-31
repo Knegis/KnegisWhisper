@@ -31,4 +31,9 @@ kw-sidecar.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+# Both for `tests/subtitle_export.rs` only, which proves a real recording's
+# timings survive all the way out to a subtitle file. Dev-only and no cycle:
+# neither crate depends on this one.
+kw-audio-core.workspace = true
+kw-notes-core.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "fs", "process"] }

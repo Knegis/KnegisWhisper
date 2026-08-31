@@ -371,6 +371,8 @@ pub fn run() -> anyhow::Result<()> {
             commands::history,
             commands::history_delete,
             commands::history_clear,
+            commands::history_enabled,
+            commands::history_set_enabled,
             commands::history_keep_raw_text,
             commands::history_set_keep_raw_text,
             commands::providers,

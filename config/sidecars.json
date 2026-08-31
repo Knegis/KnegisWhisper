@@ -1,5 +1,5 @@
 {
-  "$comment": "Sidecar binaries this application will download and run. Compiled into the binary by crates/sidecar/src/catalog.rs with include_str!, deliberately: a digest pinned in a file the user can edit is not a pin. Every digest below was computed from the actual downloaded asset, not copied from a release note. Re-pinning is a source change, a diff, and a release. To add or move a pin, run tools/sidecar-pin/pin.mjs rather than editing by hand; `--verify` re-measures every published target against what is committed here, which is the only thing that notices a release retagged in place.",
+  "$comment": "Sidecar binaries this application will download and run. Compiled into the binary by crates/sidecar/src/catalog.rs with include_str!, deliberately: a digest pinned in a file the user can edit is not a pin. Every digest below was computed from the actual downloaded asset, not copied from a release note. Re-pinning is a source change, a diff, and a release. To add or move a pin, run tools/sidecar-pin/pin.mjs rather than editing by hand; `--verify` re-measures every published target against what is committed here, which is the only thing that notices a release retagged in place. Every figure here is measured from the real bytes except one: maxExtractedSizeBytes is a decompression-bomb ceiling, and it is the measured extracted total plus 25% rounded up to the next MiB. A judgement, and labelled as one -- see withHeadroom in tools/sidecar-pin/pin.mjs for why one stated rule rather than a number chosen per target, and why the headroom errs high. Measured on 2026-08-31 with --extracted --write; every one of the 21 digests was re-verified in the same run, because the tool refuses to measure an asset whose digest has moved.",
   "schemaVersion": 1,
   "sidecars": [
     {
@@ -27,7 +27,8 @@
           "archive": "zip",
           "sha256": "c2a4b60edb11f7e11a9191ffb50929535527d4d91c9903dbe3e554583bbbc63d",
           "sizeBytes": 8361840,
-          "executableInArchive": "Release/whisper-server.exe"
+          "executableInArchive": "Release/whisper-server.exe",
+          "maxExtractedSizeBytes": 27262976
         },
         "linux-x86_64": {
           "availability": "published",
@@ -35,7 +36,8 @@
           "archive": "tar-gz",
           "sha256": "f4cfc1f969a13805908fb72043ce7cc896eb42e0b8afbe841dc8e7298923b061",
           "sizeBytes": 9503425,
-          "executableInArchive": "whisper-bin-ubuntu-x64/whisper-server"
+          "executableInArchive": "whisper-bin-ubuntu-x64/whisper-server",
+          "maxExtractedSizeBytes": 31457280
         },
         "linux-aarch64": {
           "availability": "published",
@@ -43,7 +45,8 @@
           "archive": "tar-gz",
           "sha256": "94a33318650c57cc3d9a91439e0e3f0b94ba96bacd34203a06db395cf9204e40",
           "sizeBytes": 4572294,
-          "executableInArchive": "whisper-bin-ubuntu-arm64/whisper-server"
+          "executableInArchive": "whisper-bin-ubuntu-arm64/whisper-server",
+          "maxExtractedSizeBytes": 13631488
         },
         "macos-x86_64": {
           "availability": "not-published",
@@ -82,7 +85,8 @@
           "archive": "zip",
           "sha256": "05144ee4d885a778ebaef619f79ca0b8a4edb7f017eaf70086a8781ff003815f",
           "sizeBytes": 17287711,
-          "executableInArchive": "llama-server.exe"
+          "executableInArchive": "llama-server.exe",
+          "maxExtractedSizeBytes": 56623104
         },
         "linux-x86_64": {
           "availability": "published",
@@ -90,7 +94,8 @@
           "archive": "tar-gz",
           "sha256": "4bd11fe0cea35223b240496062900ed9493b46f20a08747d431bfdc2252af2d8",
           "sizeBytes": 15646315,
-          "executableInArchive": "llama-b9763/llama-server"
+          "executableInArchive": "llama-b9763/llama-server",
+          "maxExtractedSizeBytes": 50331648
         },
         "linux-aarch64": {
           "availability": "published",
@@ -98,7 +103,8 @@
           "archive": "tar-gz",
           "sha256": "95abc7cb2805a37ff259fdebfc10dab35057f2bbbf6c8a703fe2246c7f89c78d",
           "sizeBytes": 12665261,
-          "executableInArchive": "llama-b9763/llama-server"
+          "executableInArchive": "llama-b9763/llama-server",
+          "maxExtractedSizeBytes": 39845888
         },
         "macos-x86_64": {
           "availability": "published",
@@ -106,7 +112,8 @@
           "archive": "tar-gz",
           "sha256": "8ce3ef62326d1359958352e56c4926d57ef4345b87b44b16fba263a4f66ef4e3",
           "sizeBytes": 11280969,
-          "executableInArchive": "llama-b9763/llama-server"
+          "executableInArchive": "llama-b9763/llama-server",
+          "maxExtractedSizeBytes": 34603008
         },
         "macos-aarch64": {
           "availability": "published",
@@ -114,7 +121,8 @@
           "archive": "tar-gz",
           "sha256": "7706d1a7630218a3665d8c2d680bb54ab7f101896e9c45caaf5676ef4ce2e2d0",
           "sizeBytes": 10978734,
-          "executableInArchive": "llama-b9763/llama-server"
+          "executableInArchive": "llama-b9763/llama-server",
+          "maxExtractedSizeBytes": 34603008
         }
       }
     },
@@ -139,7 +147,8 @@
           "archive": "zip",
           "sha256": "089e4169e93b2b3f3acbfced3c0704d24276a225641bdda04d796d28b07a2a38",
           "sizeBytes": 145349121,
-          "executableInArchive": "ffmpeg-n8.1.2-34-g9b6c8969e0-win64-lgpl-8.1/bin/ffmpeg.exe"
+          "executableInArchive": "ffmpeg-n8.1.2-34-g9b6c8969e0-win64-lgpl-8.1/bin/ffmpeg.exe",
+          "maxExtractedSizeBytes": 429916160
         },
         "linux-x86_64": {
           "availability": "published",
@@ -147,7 +156,8 @@
           "archive": "tar-xz",
           "sha256": "8c8b2897f2a8093ae2d985f7f1867d218451d4c567c1b2437f86a7c73a950b9f",
           "sizeBytes": 111679252,
-          "executableInArchive": "ffmpeg-n8.1.2-34-g9b6c8969e0-linux64-lgpl-8.1/bin/ffmpeg"
+          "executableInArchive": "ffmpeg-n8.1.2-34-g9b6c8969e0-linux64-lgpl-8.1/bin/ffmpeg",
+          "maxExtractedSizeBytes": 436207616
         },
         "linux-aarch64": {
           "availability": "published",
@@ -155,7 +165,8 @@
           "archive": "tar-xz",
           "sha256": "0c8716a94ac1fe22eb56e7a0cedd0f00c1d8fae712ec19973d679a7a87916743",
           "sizeBytes": 96564568,
-          "executableInArchive": "ffmpeg-n8.1.2-34-g9b6c8969e0-linuxarm64-lgpl-8.1/bin/ffmpeg"
+          "executableInArchive": "ffmpeg-n8.1.2-34-g9b6c8969e0-linuxarm64-lgpl-8.1/bin/ffmpeg",
+          "maxExtractedSizeBytes": 355467264
         },
         "macos-x86_64": {
           "availability": "not-published",
@@ -190,7 +201,8 @@
           "archive": "bare",
           "sha256": "66674953fe251b89f4d08c5f0e35e0728679bd67ab3d7d05c0562af101dd3e7a",
           "sizeBytes": 17840399,
-          "executableInArchive": "yt-dlp.exe"
+          "executableInArchive": "yt-dlp.exe",
+          "maxExtractedSizeBytes": 17840399
         },
         "linux-x86_64": {
           "availability": "published",
@@ -198,7 +210,8 @@
           "archive": "bare",
           "sha256": "58162f9bfdc27458ea47bfcb311cf47028f17d8154a8bf7d689861d46399230a",
           "sizeBytes": 40446224,
-          "executableInArchive": "yt-dlp"
+          "executableInArchive": "yt-dlp",
+          "maxExtractedSizeBytes": 40446224
         },
         "linux-aarch64": {
           "availability": "published",
@@ -206,7 +219,8 @@
           "archive": "bare",
           "sha256": "b16e4dab368a816cd05d477d698a605a6ae87ccee1c8ffd38fa21d7254141fcc",
           "sizeBytes": 40167448,
-          "executableInArchive": "yt-dlp"
+          "executableInArchive": "yt-dlp",
+          "maxExtractedSizeBytes": 40167448
         },
         "macos-x86_64": {
           "availability": "published",
@@ -214,7 +228,8 @@
           "archive": "bare",
           "sha256": "0f192b7ec147ab6288885d6351d9ab67367640029b4377576ef46dd79cf7b202",
           "sizeBytes": 37146048,
-          "executableInArchive": "yt-dlp"
+          "executableInArchive": "yt-dlp",
+          "maxExtractedSizeBytes": 37146048
         },
         "macos-aarch64": {
           "availability": "published",
@@ -222,7 +237,8 @@
           "archive": "bare",
           "sha256": "0f192b7ec147ab6288885d6351d9ab67367640029b4377576ef46dd79cf7b202",
           "sizeBytes": 37146048,
-          "executableInArchive": "yt-dlp"
+          "executableInArchive": "yt-dlp",
+          "maxExtractedSizeBytes": 37146048
         }
       }
     },
@@ -247,7 +263,8 @@
           "archive": "tar-bz2",
           "sha256": "c312b30e55258d291067537ce4a6f90e155f1c16b6a10381a5729924e98b7879",
           "sizeBytes": 24378225,
-          "executableInArchive": "sherpa-onnx-v1.13.4-win-x64-shared-MT-Release/bin/sherpa-onnx-offline.exe"
+          "executableInArchive": "sherpa-onnx-v1.13.4-win-x64-shared-MT-Release/bin/sherpa-onnx-offline.exe",
+          "maxExtractedSizeBytes": 55574528
         },
         "linux-x86_64": {
           "availability": "published",
@@ -255,7 +272,8 @@
           "archive": "tar-bz2",
           "sha256": "c98b4d91edbcba5087e7847e07529337001b834fe352931ff008ac7c5722fa6f",
           "sizeBytes": 384752102,
-          "executableInArchive": "sherpa-onnx-v1.13.4-linux-x64-static/bin/sherpa-onnx-offline"
+          "executableInArchive": "sherpa-onnx-v1.13.4-linux-x64-static/bin/sherpa-onnx-offline",
+          "maxExtractedSizeBytes": 1562378240
         },
         "linux-aarch64": {
           "availability": "published",
@@ -263,7 +281,8 @@
           "archive": "tar-bz2",
           "sha256": "418bda59e5d02b16d309c6c7850d967c5c855e71184ab6ac6a9b1c79456b2d8f",
           "sizeBytes": 337820882,
-          "executableInArchive": "sherpa-onnx-v1.13.4-linux-aarch64-static/bin/sherpa-onnx-offline"
+          "executableInArchive": "sherpa-onnx-v1.13.4-linux-aarch64-static/bin/sherpa-onnx-offline",
+          "maxExtractedSizeBytes": 1151336448
         },
         "macos-x86_64": {
           "availability": "published",
@@ -271,7 +290,8 @@
           "archive": "tar-bz2",
           "sha256": "15cf31d64456ae033c9d81c52df796d9bf003893ed060eb8434012a297945103",
           "sizeBytes": 254918578,
-          "executableInArchive": "sherpa-onnx-v1.13.4-osx-x64-static/bin/sherpa-onnx-offline"
+          "executableInArchive": "sherpa-onnx-v1.13.4-osx-x64-static/bin/sherpa-onnx-offline",
+          "maxExtractedSizeBytes": 1099956224
         },
         "macos-aarch64": {
           "availability": "published",
@@ -279,7 +299,8 @@
           "archive": "tar-bz2",
           "sha256": "b1830ce2f19169070c23c2a44b70e1d416e0265e98870a2f62f7aa94811db342",
           "sizeBytes": 231438974,
-          "executableInArchive": "sherpa-onnx-v1.13.4-osx-arm64-static/bin/sherpa-onnx-offline"
+          "executableInArchive": "sherpa-onnx-v1.13.4-osx-arm64-static/bin/sherpa-onnx-offline",
+          "maxExtractedSizeBytes": 973078528
         }
       }
     }

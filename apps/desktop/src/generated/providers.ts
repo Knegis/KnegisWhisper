@@ -134,6 +134,10 @@ export interface DraftModel {
   readonly hfRepo: string;
   readonly fileName: string;
   readonly sizeBytes: number | null;
+  readonly sizeMeasured: boolean;
+  /** On the same terms as `LocalLlmModel.sha256`. */
+  readonly sha256: string | null;
+  readonly sha256Measured: boolean;
 }
 
 export interface LocalLlmModel {
@@ -142,6 +146,28 @@ export interface LocalLlmModel {
   readonly fileName: string;
   readonly hfRepo: string;
   readonly sizeBytes: number | null;
+  /**
+   * Whether `sizeBytes` was measured against the publisher or copied from
+   * upstream's declaration. Upstream declared a size for every model and was
+   * wrong about eighteen of them, so a non-null size is not on its own a
+   * trustworthy one; the installer holds a measured size to exact equality and
+   * a declared one to 5%.
+   */
+  readonly sizeMeasured: boolean;
+  /**
+   * The object's SHA-256, and whether this project measured it.
+   *
+   * Non-null on all thirty-nine published objects. `sha256Measured` is the
+   * part that matters: **true** means the bytes were downloaded and hashed
+   * here, **false** means this is the publisher's stated `lfs.oid` — a real
+   * digest of the object, but one delivered by the same host that serves the
+   * bytes, so it catches corruption and re-uploads and not a compromised
+   * huggingface.co. Seven of the thirty-nine are measured, one per publishing
+   * organisation. Anything shown to a person about how a model was verified
+   * must read this flag and not just the digest.
+   */
+  readonly sha256: string | null;
+  readonly sha256Measured: boolean;
   readonly quantization: string | null;
   readonly contextLength: number | null;
   readonly recommended: boolean;
@@ -161,7 +187,21 @@ export interface WhisperModel {
   readonly name: string;
   readonly fileName: string;
   readonly downloadUrl: string;
+  /** A display estimate, rounded. This is the figure the screen shows. */
   readonly sizeMb: number | null;
+  /**
+   * The model file's pinned digest and its expected byte count. Non-null on
+   * all six shipped models, both measured from a real download; a null
+   * `sha256` would mean a model added to the registry before anybody
+   * downloaded it, which `models::integrity_for` degrades to a size check
+   * rather than hiding.
+   *
+   * With a digest, `expectedSizeBytes` is the measured length — what the
+   * integrity check is handed, so it has to be bytes that were there. Without
+   * one it is upstream's rounded declaration, held to a 5% tolerance. It is
+   * never `sizeMb` scaled.
+   */
+  readonly sha256: string | null;
   readonly expectedSizeBytes: number | null;
   readonly recommended: boolean;
 }
@@ -171,7 +211,17 @@ export interface SherpaModel {
   readonly name: string;
   readonly downloadUrl: string;
   readonly extractDir: string;
+  /** A display estimate of the *extracted* footprint, not the download. */
   readonly sizeMb: number | null;
+  /**
+   * The archive's pinned digest and exact compressed size, and a ceiling on
+   * what it may extract to. Null on the two Nemotron streaming models, which
+   * nothing can install: sherpa_models::install refuses an unpinned model
+   * rather than downloading something unauthenticated.
+   */
+  readonly sha256: string | null;
+  readonly expectedSizeBytes: number | null;
+  readonly maxExtractedSizeBytes: number | null;
   readonly language: string | null;
   readonly supportedLanguages: readonly string[] | null;
   /** True for the Nemotron streaming runtimes; Parakeet models are batch. */
@@ -965,7 +1015,10 @@ export const PROVIDER_REGISTRY = {
           "name": "Qwen3.5 9B",
           "fileName": "Qwen_Qwen3.5-9B-Q4_K_M.gguf",
           "hfRepo": "bartowski/Qwen_Qwen3.5-9B-GGUF",
-          "sizeBytes": 5889811552,
+          "sizeBytes": 6169341984,
+          "sizeMeasured": true,
+          "sha256": "d784ce9eda1a5a7b51e8f705a9e6310844bf4f173654d115823c775fdea56d43",
+          "sha256Measured": false,
           "quantization": "q4_k_m",
           "contextLength": 262144,
           "recommended": true,
@@ -977,7 +1030,10 @@ export const PROVIDER_REGISTRY = {
           "name": "Qwen3.5 4B",
           "fileName": "Qwen_Qwen3.5-4B-Q4_K_M.gguf",
           "hfRepo": "bartowski/Qwen_Qwen3.5-4B-GGUF",
-          "sizeBytes": 2871743520,
+          "sizeBytes": 3013027808,
+          "sizeMeasured": true,
+          "sha256": "13c16f426047e2de38cd075bdade4a7bcbc8c774384876f677740cda65f8a983",
+          "sha256Measured": false,
           "quantization": "q4_k_m",
           "contextLength": 262144,
           "recommended": false,
@@ -989,7 +1045,10 @@ export const PROVIDER_REGISTRY = {
           "name": "Qwen3.5 2B",
           "fileName": "Qwen_Qwen3.5-2B-Q4_K_M.gguf",
           "hfRepo": "bartowski/Qwen_Qwen3.5-2B-GGUF",
-          "sizeBytes": 1329766560,
+          "sizeBytes": 1396198496,
+          "sizeMeasured": true,
+          "sha256": "57a1085840f497d764a7fc5d346922dbde961efb54cc792ea81d694fd846a1d8",
+          "sha256Measured": false,
           "quantization": "q4_k_m",
           "contextLength": 262144,
           "recommended": false,
@@ -1001,7 +1060,10 @@ export const PROVIDER_REGISTRY = {
           "name": "Qwen3 8B",
           "fileName": "Qwen3-8B-Q4_K_M.gguf",
           "hfRepo": "Qwen/Qwen3-8B-GGUF",
-          "sizeBytes": 5402263552,
+          "sizeBytes": 5027783488,
+          "sizeMeasured": true,
+          "sha256": "d98cdcbd03e17ce47681435b5150e34c1417f50b5c0019dd560e4882c5745785",
+          "sha256Measured": false,
           "quantization": "q4_k_m",
           "contextLength": 131072,
           "recommended": false,
@@ -1013,7 +1075,10 @@ export const PROVIDER_REGISTRY = {
           "name": "Qwen3 8B (Q5)",
           "fileName": "Qwen3-8B-Q5_K_M.gguf",
           "hfRepo": "Qwen/Qwen3-8B-GGUF",
-          "sizeBytes": 6281625600,
+          "sizeBytes": 5851112224,
+          "sizeMeasured": true,
+          "sha256": "068bae163faa96ad48032daf4e071a6a28fe67d8dcc95367609c2ff165e52738",
+          "sha256Measured": false,
           "quantization": "q5_k_m",
           "contextLength": 131072,
           "recommended": false,
@@ -1025,7 +1090,10 @@ export const PROVIDER_REGISTRY = {
           "name": "Qwen3 4B",
           "fileName": "Qwen3-4B-Q4_K_M.gguf",
           "hfRepo": "Qwen/Qwen3-4B-GGUF",
-          "sizeBytes": 2684354560,
+          "sizeBytes": 2497280256,
+          "sizeMeasured": true,
+          "sha256": "7485fe6f11af29433bc51cab58009521f205840f5b4ae3a32fa7f92e8534fdf5",
+          "sha256Measured": false,
           "quantization": "q4_k_m",
           "contextLength": 131072,
           "recommended": false,
@@ -1037,7 +1105,10 @@ export const PROVIDER_REGISTRY = {
           "name": "Qwen3 1.7B",
           "fileName": "Qwen3-1.7B-Q8_0.gguf",
           "hfRepo": "Qwen/Qwen3-1.7B-GGUF",
-          "sizeBytes": 1965555712,
+          "sizeBytes": 1834426016,
+          "sizeMeasured": true,
+          "sha256": "061b54daade076b5d3362dac252678d17da8c68f07560be70818cace6590cb1a",
+          "sha256Measured": false,
           "quantization": "q8_0",
           "contextLength": 131072,
           "recommended": false,
@@ -1049,7 +1120,10 @@ export const PROVIDER_REGISTRY = {
           "name": "Qwen3 32B",
           "fileName": "Qwen3-32B-Q4_K_M.gguf",
           "hfRepo": "Qwen/Qwen3-32B-GGUF",
-          "sizeBytes": 21260251955,
+          "sizeBytes": 19762149024,
+          "sizeMeasured": true,
+          "sha256": "efd971561896866f0e910cce52761ca77b1b138090c7f15fe284676d57d1f689",
+          "sha256Measured": false,
           "quantization": "q4_k_m",
           "contextLength": 131072,
           "recommended": false,
@@ -1061,7 +1135,10 @@ export const PROVIDER_REGISTRY = {
           "name": "Qwen2.5 1.5B",
           "fileName": "qwen2.5-1.5b-instruct-q5_k_m.gguf",
           "hfRepo": "Qwen/Qwen2.5-1.5B-Instruct-GGUF",
-          "sizeBytes": 1395864371,
+          "sizeBytes": 1285494304,
+          "sizeMeasured": true,
+          "sha256": "b46661073c18e5b56a41fa320975f866a00def1ff08feef4718e013258896f8c",
+          "sha256Measured": true,
           "quantization": "q5_k_m",
           "contextLength": 32768,
           "recommended": false,
@@ -1073,7 +1150,10 @@ export const PROVIDER_REGISTRY = {
           "name": "Qwen2.5 3B",
           "fileName": "qwen2.5-3b-instruct-q5_k_m.gguf",
           "hfRepo": "Qwen/Qwen2.5-3B-Instruct-GGUF",
-          "sizeBytes": 2620055552,
+          "sizeBytes": 2438740384,
+          "sizeMeasured": true,
+          "sha256": "2c63dde5f2c9ab1fd64d47dee2d34dade6ba9ff62442d1d20b5342310c982081",
+          "sha256Measured": false,
           "quantization": "q5_k_m",
           "contextLength": 32768,
           "recommended": false,
@@ -1085,7 +1165,10 @@ export const PROVIDER_REGISTRY = {
           "name": "Qwen2.5 7B",
           "fileName": "Qwen2.5-7B-Instruct-Q4_K_M.gguf",
           "hfRepo": "bartowski/Qwen2.5-7B-Instruct-GGUF",
-          "sizeBytes": 5025128858,
+          "sizeBytes": 4683074240,
+          "sizeMeasured": true,
+          "sha256": "65b8fcd92af6b4fefa935c625d1ac27ea29dcb6ee14589c55a8f115ceaaa1423",
+          "sha256Measured": false,
           "quantization": "q4_k_m",
           "contextLength": 128000,
           "recommended": false,
@@ -1097,7 +1180,10 @@ export const PROVIDER_REGISTRY = {
           "name": "Qwen2.5 7B (Q5)",
           "fileName": "Qwen2.5-7B-Instruct-Q5_K_M.gguf",
           "hfRepo": "bartowski/Qwen2.5-7B-Instruct-GGUF",
-          "sizeBytes": 5841530470,
+          "sizeBytes": 5444831936,
+          "sizeMeasured": true,
+          "sha256": "2e998d7e181c8756c5ffc55231b9ee1cdc9d3acec4245d6e27d32bd8e738c474",
+          "sha256Measured": false,
           "quantization": "q5_k_m",
           "contextLength": 128000,
           "recommended": false,
@@ -1116,7 +1202,10 @@ export const PROVIDER_REGISTRY = {
           "name": "Mistral Nemo 12B",
           "fileName": "Mistral-Nemo-12B-Instruct.Q4_K_M.gguf",
           "hfRepo": "mradermacher/Mistral-Nemo-12B-Instruct-GGUF",
-          "sizeBytes": 8028321792,
+          "sizeBytes": 7477208320,
+          "sizeMeasured": true,
+          "sha256": "2046c16c427f5bd6dfb2b08b6b74edcc6102e0e2129cebff38ef7aa746d26f31",
+          "sha256Measured": true,
           "quantization": "q4_k_m",
           "contextLength": 131072,
           "recommended": true,
@@ -1128,7 +1217,10 @@ export const PROVIDER_REGISTRY = {
           "name": "Mistral 7B Instruct v0.3",
           "fileName": "Mistral-7B-Instruct-v0.3-Q4_K_M.gguf",
           "hfRepo": "bartowski/Mistral-7B-Instruct-v0.3-GGUF",
-          "sizeBytes": 4692635648,
+          "sizeBytes": 4372812000,
+          "sizeMeasured": true,
+          "sha256": "1270d22c0fbb3d092fb725d4d96c457b7b687a5f5a715abe1e818da303e562b6",
+          "sha256Measured": false,
           "quantization": "q4_k_m",
           "contextLength": 32768,
           "recommended": false,
@@ -1140,7 +1232,10 @@ export const PROVIDER_REGISTRY = {
           "name": "Mistral 7B Instruct v0.3 (Q5)",
           "fileName": "Mistral-7B-Instruct-v0.3-Q5_K_M.gguf",
           "hfRepo": "bartowski/Mistral-7B-Instruct-v0.3-GGUF",
-          "sizeBytes": 5519900672,
+          "sizeBytes": 5136175328,
+          "sizeMeasured": true,
+          "sha256": "0374072546aaf1257d1e34610edb11b691730d8ef7d44b5629693a2dd8e8d472",
+          "sha256Measured": false,
           "quantization": "q5_k_m",
           "contextLength": 32768,
           "recommended": false,
@@ -1159,7 +1254,10 @@ export const PROVIDER_REGISTRY = {
           "name": "Llama 3.2 1B",
           "fileName": "Llama-3.2-1B-Instruct-Q4_K_M.gguf",
           "hfRepo": "bartowski/Llama-3.2-1B-Instruct-GGUF",
-          "sizeBytes": 847249408,
+          "sizeBytes": 807694464,
+          "sizeMeasured": true,
+          "sha256": "6f85a640a97cf2bf5b8e764087b1e83da0fdb51d7c9fab7d0fece9385611df83",
+          "sha256Measured": false,
           "quantization": "q4_k_m",
           "contextLength": 131072,
           "recommended": false,
@@ -1171,7 +1269,10 @@ export const PROVIDER_REGISTRY = {
           "name": "Llama 3.2 3B",
           "fileName": "Llama-3.2-3B-Instruct-Q4_K_M.gguf",
           "hfRepo": "bartowski/Llama-3.2-3B-Instruct-GGUF",
-          "sizeBytes": 2168958976,
+          "sizeBytes": 2019377696,
+          "sizeMeasured": true,
+          "sha256": "6c1a2b41161032677be168d354123594c0e6e67d2b9227c84f296ad037c728ff",
+          "sha256Measured": false,
           "quantization": "q4_k_m",
           "contextLength": 131072,
           "recommended": true,
@@ -1183,7 +1284,10 @@ export const PROVIDER_REGISTRY = {
           "name": "Llama 3.1 8B",
           "fileName": "Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
           "hfRepo": "bartowski/Meta-Llama-3.1-8B-Instruct-GGUF",
-          "sizeBytes": 5282717696,
+          "sizeBytes": 4920739232,
+          "sizeMeasured": true,
+          "sha256": "7b064f5842bf9532c91456deda288a1b672397a54fa729aa665952863033557c",
+          "sha256Measured": false,
           "quantization": "q4_k_m",
           "contextLength": 131072,
           "recommended": false,
@@ -1202,7 +1306,10 @@ export const PROVIDER_REGISTRY = {
           "name": "GPT-OSS 20B",
           "fileName": "gpt-oss-20b-MXFP4.gguf",
           "hfRepo": "ggml-org/gpt-oss-20b-GGUF",
-          "sizeBytes": 12999763968,
+          "sizeBytes": 12109566624,
+          "sizeMeasured": true,
+          "sha256": "27cd6c432c7672cb812a92f611cf3ba7bbc35928262bb1e1253ff4ee6ae35901",
+          "sha256Measured": true,
           "quantization": "mxfp4",
           "contextLength": 128000,
           "recommended": true,
@@ -1221,7 +1328,10 @@ export const PROVIDER_REGISTRY = {
           "name": "Gemma 4 31B",
           "fileName": "google_gemma-4-31B-it-Q4_K_M.gguf",
           "hfRepo": "bartowski/google_gemma-4-31B-it-GGUF",
-          "sizeBytes": 19598487712,
+          "sizeBytes": 19598489952,
+          "sizeMeasured": true,
+          "sha256": "2959c1b0a4f792493bb0092846ea06aec54547e47be979c282634d938d501b75",
+          "sha256Measured": false,
           "quantization": "q4_k_m",
           "contextLength": 262144,
           "recommended": false,
@@ -1234,6 +1344,9 @@ export const PROVIDER_REGISTRY = {
           "fileName": "gemma-4-31B_q4_0-it.gguf",
           "hfRepo": "google/gemma-4-31B-it-qat-q4_0-gguf",
           "sizeBytes": 17651001568,
+          "sizeMeasured": true,
+          "sha256": "179cfb99212709597eae5929112cfca677e1bbf566178b479ae1da0c4772874b",
+          "sha256Measured": false,
           "quantization": "q4_0",
           "contextLength": 262144,
           "recommended": false,
@@ -1241,7 +1354,10 @@ export const PROVIDER_REGISTRY = {
           "draft": {
             "hfRepo": "unsloth/gemma-4-31B-it-qat-GGUF",
             "fileName": "mtp-gemma-4-31B-it.gguf",
-            "sizeBytes": 279955968
+            "sizeBytes": 279955968,
+            "sizeMeasured": true,
+            "sha256": "3a5e99fd8d0b23afb1fccd1ee0c9ebd1f571d00399c2dae2292d217feeec0f6b",
+            "sha256Measured": false
           }
         },
         {
@@ -1249,7 +1365,10 @@ export const PROVIDER_REGISTRY = {
           "name": "Gemma 4 26B MoE",
           "fileName": "google_gemma-4-26B-A4B-it-Q4_K_M.gguf",
           "hfRepo": "bartowski/google_gemma-4-26B-A4B-it-GGUF",
-          "sizeBytes": 17035037632,
+          "sizeBytes": 17035039872,
+          "sizeMeasured": true,
+          "sha256": "a07f72221e8e3f77455ab0d7f7652d01a9f63c262b954aa6932a53275a0e895a",
+          "sha256Measured": false,
           "quantization": "q4_k_m",
           "contextLength": 262144,
           "recommended": false,
@@ -1262,6 +1381,9 @@ export const PROVIDER_REGISTRY = {
           "fileName": "gemma-4-26B_q4_0-it.gguf",
           "hfRepo": "google/gemma-4-26B-A4B-it-qat-q4_0-gguf",
           "sizeBytes": 14439363584,
+          "sizeMeasured": true,
+          "sha256": "3eca3b8f6d7baf218a7dd6bba5fb59a56ee25fe2d567b6f5f589b4f697eca51d",
+          "sha256Measured": false,
           "quantization": "q4_0",
           "contextLength": 262144,
           "recommended": false,
@@ -1269,7 +1391,10 @@ export const PROVIDER_REGISTRY = {
           "draft": {
             "hfRepo": "unsloth/gemma-4-26B-A4B-it-qat-GGUF",
             "fileName": "mtp-gemma-4-26B-A4B-it.gguf",
-            "sizeBytes": 251939328
+            "sizeBytes": 251939328,
+            "sizeMeasured": true,
+            "sha256": "7272d97595f0d4c74bd7b623492b7dbdaafd8b7c72f329a8270ba4eca68f768a",
+            "sha256Measured": false
           }
         },
         {
@@ -1277,7 +1402,10 @@ export const PROVIDER_REGISTRY = {
           "name": "Gemma 4 E4B",
           "fileName": "google_gemma-4-E4B-it-Q4_K_M.gguf",
           "hfRepo": "bartowski/google_gemma-4-E4B-it-GGUF",
-          "sizeBytes": 5812137984,
+          "sizeBytes": 5405170144,
+          "sizeMeasured": true,
+          "sha256": "d35a3aa7a6d47de237fd488bb6f7f3efd62908d828f85a63da0ee93acdbefe9f",
+          "sha256Measured": false,
           "quantization": "q4_k_m",
           "contextLength": 262144,
           "recommended": false,
@@ -1290,6 +1418,9 @@ export const PROVIDER_REGISTRY = {
           "fileName": "gemma-4-E4B_q4_0-it.gguf",
           "hfRepo": "google/gemma-4-E4B-it-qat-q4_0-gguf",
           "sizeBytes": 5154941280,
+          "sizeMeasured": true,
+          "sha256": "676c35070db6dbe52f93e9c864ee0fba4eddea94b9c875d9cb10daff453fbaee",
+          "sha256Measured": false,
           "quantization": "q4_0",
           "contextLength": 262144,
           "recommended": true,
@@ -1297,7 +1428,10 @@ export const PROVIDER_REGISTRY = {
           "draft": {
             "hfRepo": "unsloth/gemma-4-E4B-it-qat-GGUF",
             "fileName": "mtp-gemma-4-E4B-it.gguf",
-            "sizeBytes": 59678016
+            "sizeBytes": 59678016,
+            "sizeMeasured": true,
+            "sha256": "423074e537504b4f9ec5eafed5c639fac82c96631626efccacdd3c4039b20605",
+            "sha256Measured": false
           }
         },
         {
@@ -1305,7 +1439,10 @@ export const PROVIDER_REGISTRY = {
           "name": "Gemma 4 E2B",
           "fileName": "google_gemma-4-E2B-it-Q4_K_M.gguf",
           "hfRepo": "bartowski/google_gemma-4-E2B-it-GGUF",
-          "sizeBytes": 3711514624,
+          "sizeBytes": 3462680032,
+          "sizeMeasured": true,
+          "sha256": "923c4c86177d2ee173a7f5b4fa3d0ac65f5962ab15e6d6a5bc250aec4fd7bf7e",
+          "sha256Measured": false,
           "quantization": "q4_k_m",
           "contextLength": 262144,
           "recommended": false,
@@ -1318,6 +1455,9 @@ export const PROVIDER_REGISTRY = {
           "fileName": "gemma-4-E2B_q4_0-it.gguf",
           "hfRepo": "google/gemma-4-E2B-it-qat-q4_0-gguf",
           "sizeBytes": 3349516256,
+          "sizeMeasured": true,
+          "sha256": "fa401b55b07ee70a54c6dae3903c783a6e65064312529ea57175cb5f8dec6634",
+          "sha256Measured": true,
           "quantization": "q4_0",
           "contextLength": 262144,
           "recommended": false,
@@ -1325,7 +1465,10 @@ export const PROVIDER_REGISTRY = {
           "draft": {
             "hfRepo": "unsloth/gemma-4-E2B-it-qat-GGUF",
             "fileName": "mtp-gemma-4-E2B-it.gguf",
-            "sizeBytes": 59235648
+            "sizeBytes": 59235648,
+            "sizeMeasured": true,
+            "sha256": "586f2460b909008640981ec34060aa864e03c144fbabfb3173c4335087e4aae0",
+            "sha256Measured": true
           }
         },
         {
@@ -1333,7 +1476,10 @@ export const PROVIDER_REGISTRY = {
           "name": "Gemma 3 12B",
           "fileName": "google_gemma-3-12b-it-Q4_K_M.gguf",
           "hfRepo": "bartowski/google_gemma-3-12b-it-GGUF",
-          "sizeBytes": 7847624704,
+          "sizeBytes": 7300575264,
+          "sizeMeasured": true,
+          "sha256": "fc57f67efa46d711c346e587cbef7d049e95f3df8db2eb2271153343ef0acc7b",
+          "sha256Measured": false,
           "quantization": "q4_k_m",
           "contextLength": 131072,
           "recommended": false,
@@ -1346,6 +1492,9 @@ export const PROVIDER_REGISTRY = {
           "fileName": "google_gemma-3-4b-it-Q4_K_M.gguf",
           "hfRepo": "bartowski/google_gemma-3-4b-it-GGUF",
           "sizeBytes": 2489758112,
+          "sizeMeasured": true,
+          "sha256": "4996030242583a40aa151ff93f49ed787ac8c25e4120c3ae4588b2e2a7d1ae94",
+          "sha256Measured": false,
           "quantization": "q4_k_m",
           "contextLength": 131072,
           "recommended": false,
@@ -1358,6 +1507,9 @@ export const PROVIDER_REGISTRY = {
           "fileName": "google_gemma-3-1b-it-Q4_K_M.gguf",
           "hfRepo": "bartowski/google_gemma-3-1b-it-GGUF",
           "sizeBytes": 806058496,
+          "sizeMeasured": true,
+          "sha256": "12bf0fff8815d5f73a3c9b586bd8fee8e7b248c935de70dec367679873d0f29d",
+          "sha256Measured": true,
           "quantization": "q4_k_m",
           "contextLength": 32768,
           "recommended": false,
@@ -1377,6 +1529,9 @@ export const PROVIDER_REGISTRY = {
           "fileName": "LFM2.5-1.2B-Instruct-Q4_K_M.gguf",
           "hfRepo": "LiquidAI/LFM2.5-1.2B-Instruct-GGUF",
           "sizeBytes": 730895168,
+          "sizeMeasured": true,
+          "sha256": "b1b3de114215d9507409a662a501a631095a479a419584e8a2ded6304b19b4f5",
+          "sha256Measured": false,
           "quantization": "q4_k_m",
           "contextLength": 32768,
           "recommended": true,
@@ -1389,6 +1544,9 @@ export const PROVIDER_REGISTRY = {
           "fileName": "LFM2.5-8B-A1B-Q4_K_M.gguf",
           "hfRepo": "LiquidAI/LFM2.5-8B-A1B-GGUF",
           "sizeBytes": 5155564768,
+          "sizeMeasured": true,
+          "sha256": "4923ec14f06b968b74d663e5949867d2d9c3bf13a20b8be1a9f9af39989b2bb0",
+          "sha256Measured": false,
           "quantization": "q4_k_m",
           "contextLength": 32768,
           "recommended": false,
@@ -1401,6 +1559,9 @@ export const PROVIDER_REGISTRY = {
           "fileName": "LFM2-2.6B-Q4_K_M.gguf",
           "hfRepo": "LiquidAI/LFM2-2.6B-GGUF",
           "sizeBytes": 1563668704,
+          "sizeMeasured": true,
+          "sha256": "384bc877b6c37064982f96885bef69e4475919f5969218ed4e3b9399ae0340df",
+          "sha256Measured": false,
           "quantization": "q4_k_m",
           "contextLength": 32768,
           "recommended": false,
@@ -1413,6 +1574,9 @@ export const PROVIDER_REGISTRY = {
           "fileName": "LFM2.5-350M-Q8_0.gguf",
           "hfRepo": "LiquidAI/LFM2.5-350M-GGUF",
           "sizeBytes": 379217632,
+          "sizeMeasured": true,
+          "sha256": "be036a757295e550098b85e13f6af2735d0fa73b41e1156a40c7d8e8e32a5766",
+          "sha256Measured": false,
           "quantization": "q8_0",
           "contextLength": 32768,
           "recommended": false,
@@ -1425,6 +1589,9 @@ export const PROVIDER_REGISTRY = {
           "fileName": "LFM2.5-230M-Q8_0.gguf",
           "hfRepo": "LiquidAI/LFM2.5-230M-GGUF",
           "sizeBytes": 246598496,
+          "sizeMeasured": true,
+          "sha256": "855be85429300602eda72958547614703541b7d6dd965a8f8f6052b85a7aa935",
+          "sha256Measured": true,
           "quantization": "q8_0",
           "contextLength": 32768,
           "recommended": false,
@@ -1442,7 +1609,8 @@ export const PROVIDER_REGISTRY = {
         "fileName": "ggml-base.bin",
         "downloadUrl": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin",
         "sizeMb": 142,
-        "expectedSizeBytes": 148000000,
+        "sha256": "60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe",
+        "expectedSizeBytes": 147951465,
         "recommended": true
       },
       {
@@ -1451,7 +1619,8 @@ export const PROVIDER_REGISTRY = {
         "fileName": "ggml-large-v3.bin",
         "downloadUrl": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin",
         "sizeMb": 3000,
-        "expectedSizeBytes": 3140000000,
+        "sha256": "64d182b440b98d5203c4f9bd541544d84c605196c4f7b845dfa11fb23594d1e2",
+        "expectedSizeBytes": 3095033483,
         "recommended": false
       },
       {
@@ -1460,7 +1629,8 @@ export const PROVIDER_REGISTRY = {
         "fileName": "ggml-medium.bin",
         "downloadUrl": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.bin",
         "sizeMb": 1500,
-        "expectedSizeBytes": 1570000000,
+        "sha256": "6c14d5adee5f86394037b4e4e8b59f1673b6cee10e3cf0b11bbdbee79c156208",
+        "expectedSizeBytes": 1533763059,
         "recommended": false
       },
       {
@@ -1469,7 +1639,8 @@ export const PROVIDER_REGISTRY = {
         "fileName": "ggml-small.bin",
         "downloadUrl": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin",
         "sizeMb": 466,
-        "expectedSizeBytes": 488000000,
+        "sha256": "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b",
+        "expectedSizeBytes": 487601967,
         "recommended": false
       },
       {
@@ -1478,7 +1649,8 @@ export const PROVIDER_REGISTRY = {
         "fileName": "ggml-tiny.bin",
         "downloadUrl": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin",
         "sizeMb": 75,
-        "expectedSizeBytes": 78000000,
+        "sha256": "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21",
+        "expectedSizeBytes": 77691713,
         "recommended": false
       },
       {
@@ -1487,7 +1659,8 @@ export const PROVIDER_REGISTRY = {
         "fileName": "ggml-large-v3-turbo.bin",
         "downloadUrl": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin",
         "sizeMb": 1600,
-        "expectedSizeBytes": 1670000000,
+        "sha256": "1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69",
+        "expectedSizeBytes": 1624555275,
         "recommended": false
       }
     ],
@@ -1498,6 +1671,9 @@ export const PROVIDER_REGISTRY = {
         "downloadUrl": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-560ms-int8-2026-06-11.tar.bz2",
         "extractDir": "sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-560ms-int8-2026-06-11",
         "sizeMb": 650,
+        "sha256": null,
+        "expectedSizeBytes": null,
+        "maxExtractedSizeBytes": null,
         "language": "multilingual",
         "supportedLanguages": [
           "en",
@@ -1524,6 +1700,9 @@ export const PROVIDER_REGISTRY = {
         "downloadUrl": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemotron-speech-streaming-en-0.6b-560ms-int8-2026-04-25.tar.bz2",
         "extractDir": "sherpa-onnx-nemotron-speech-streaming-en-0.6b-560ms-int8-2026-04-25",
         "sizeMb": 632,
+        "sha256": null,
+        "expectedSizeBytes": null,
+        "maxExtractedSizeBytes": null,
         "language": "en",
         "supportedLanguages": [
           "en"
@@ -1536,6 +1715,9 @@ export const PROVIDER_REGISTRY = {
         "downloadUrl": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2",
         "extractDir": "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8",
         "sizeMb": 680,
+        "sha256": "5793d0fd397c5778d2cf2126994d58e9d56b1be7c04d13c7a15bb1b4eafb16bf",
+        "expectedSizeBytes": 487170055,
+        "maxExtractedSizeBytes": 838860800,
         "language": "multilingual",
         "supportedLanguages": [
           "bg",
@@ -1572,6 +1754,9 @@ export const PROVIDER_REGISTRY = {
         "downloadUrl": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-unified-en-0.6b-int8-non-streaming.tar.bz2",
         "extractDir": "sherpa-onnx-nemo-parakeet-unified-en-0.6b-int8-non-streaming",
         "sizeMb": 631,
+        "sha256": "99f63605b3a85a54c250c0869670a687b7d6598a47bf2421515e1f839a76e150",
+        "expectedSizeBytes": 501350460,
+        "maxExtractedSizeBytes": 786432000,
         "language": "en",
         "supportedLanguages": [
           "en"

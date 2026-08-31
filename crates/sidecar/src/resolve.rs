@@ -203,6 +203,7 @@ mod tests {
             archive: ArchiveKind::Zip,
             sha256: Sha256Digest::parse(DIGEST).unwrap(),
             size_bytes: 10,
+            max_extracted_size_bytes: 10,
             executable_in_archive: exe.to_owned(),
         }
     }

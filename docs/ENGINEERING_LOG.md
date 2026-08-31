@@ -81,6 +81,26 @@ maintained in place rather than appended to, because its purpose is to be curren
 > room can see. `BENCH_CHECK.md` item 13 under chunk E already carries this; it predates every task
 > in this run and is shared by all four clients equally.
 >
+> **Eighteen of the thirty-five local text-generation models could not be installed at all**, and
+> the reason was arithmetic in a config file rather than anything in the download path: upstream's
+> `sizeBytes` was a base-10 "GB" label multiplied by 2^30 instead of 10^9, so eighteen models
+> downloaded in full — 101 GB — and were deleted by a 5% size check on arrival. All 39 objects (35
+> models, 4 drafters, 202 GB) are now measured from Hugging Face's `x-linked-size` into
+> `LOCAL_LLM_PINS` in the registry generator, and a measured size is checked for **exact** equality
+> rather than within 5%. Two related facts worth carrying: `qwen3.5-2b-q4_k_m` was passing the old
+> check by 0.0042 percentage points, about 5.6 KB, and two Gemma models were already 2 240 bytes
+> adrift from their declared size — upstream re-uploads are real, and the `#[ignore]`d
+> `the_measured_sizes_still_match_hugging_face` test in `local_llm.rs` is what catches the next one.
+> See the 2026-08-31 entry on the local-LLM sizes below.
+>
+> **All 39 also carry a SHA-256 as of the same day (KNEG-45), and 32 of them are the publisher's
+> stated `lfs.oid` rather than bytes hashed here.** That is a weaker standard, deliberately taken,
+> and it is carried through the code as a distinct state rather than a footnote:
+> `sha256Measured` in the registry, `DigestCheck::Stated` in Rust, `VerifiedBy::StatedDigest` on
+> the wire, and a different sentence on screen. Seven objects — one per publishing organisation —
+> were downloaded and hashed to test the metadata before any of it was trusted. `node
+> tools/model-pin/pin.mjs --verify-stated` re-reads all 39 in 36 requests and runs weekly.
+>
 > **Three smaller items recorded rather than chased**, each detailed in its own entry below: a
 > `kw-storage` test that failed once and passed on re-run during Task 8 (every other full-suite run
 > this session was clean, so intermittent rather than new); `apps/desktop/src-tauri/src/meeting.rs`
@@ -201,6 +221,598 @@ Unchanged from the Phases 1–4 entry, restated here so they are not buried:
   porting matrix. Upstream pins both by commit and verifies neither.
 - ~~**`nircmd`**~~ — **dropped**, as leaned towards: third-tier Windows paste fallback only, and
   `SendInput` works.
+
+---
+
+## 2026-08-31 (KNEG-45) — 39 GGUFs get a digest, and a second standard gets a name
+
+The GGUFs were the last download path with no digest. Closing that was declined twice on the same
+grounds — 202 GB of downloading is not justified for a pin — and what changed is not the willingness
+to spend it. It is that the pin was available for 36 HTTP requests.
+
+### The lead, and what it took to believe it
+
+The whisper-pins run on the same day found that
+`https://huggingface.co/api/models/{repo}/tree/main?expand=true` returns `lfs.oid` per object, and
+that this **is** the file's SHA-256 — git-lfs is content-addressed on exactly that hash, so the
+pointer file committed in the repository is the digest. It agreed with all six measured whisper
+digests. `ggml-large-v3.bin`'s row was read from the API while its 2.9 GB download was still in
+flight and predicted the answer correctly.
+
+That was one repository. The issue said so, in as many words: *"Nobody has compared an `lfs.oid`
+from a bartowski GGUF repo against a real download."* So the first thing done here was not to write
+code.
+
+**36 tree calls covered all 39 objects.** Every one returned a well-formed 64-hex `lfs.oid`, and
+every one's `lfs.size` matched the byte count already committed from `x-linked-size`. That second
+agreement is worth naming precisely: it is one Hugging Face instrument confirming another, not an
+independent measurement, because both are the same publisher's metadata.
+
+**Then the smallest object from each of the seven publishing organisations was downloaded in full
+and hashed** — bartowski, Qwen, mradermacher, ggml-org, google, unsloth, LiquidAI, 23.6 GiB — by
+`tools/model-pin/pin.mjs`, hashing each stream on its way to disk and taking the length from `stat`.
+All seven digests and all seven lengths matched the stated ones exactly. With whisper's six that is
+**thirteen objects across eight organisations, 30.08 GiB, no disagreement.**
+
+Those seven are not thrown away afterwards. They are committed as `sha256Measured: true`, which
+makes the table honest about itself rather than uniform.
+
+### The distinction, and where it is enforced
+
+`LOCAL_LLM_SIZES` became `LOCAL_LLM_PINS` and every row now carries a digest. Seven carry a flag
+saying this project hashed it.
+
+**What a stated oid buys.** An exact length turns "roughly this file" into "a file of exactly
+6,169,341,984 bytes", which was `KNEG-101` and was a real narrowing. It is still satisfied by *any*
+6,169,341,984 bytes. A digest is satisfied by one file. Corrupted transfer, truncation that
+happened to keep the length, accidental re-upload: all three now fail where they used to install.
+
+**What it does not buy, and this is the sentence the implementation had to keep.** The oid comes
+from the same host as the bytes. A compromised huggingface.co would serve both halves of the
+comparison, and a digest committed to *this* repository is what defends against that. So the two
+are not the same claim and must not be reported as one.
+
+Three places enforce that, rather than one comment asking nicely:
+
+- **The type.** `DigestCheck` has `Measured(String)` and `Stated(String)`, so nothing downstream can
+  reach the digest without having been handed which kind it is. A `String` and a `bool` beside it
+  would have let a caller read one and forget the other.
+- **The wire.** `local_model::VerifiedBy` gained a fourth variant, `StatedDigest`, spelled
+  `"stated-digest"`. The enum's own comment already predicted this: it exists because the frontend
+  used to re-declare a `&'static str`'s values by hand, so *"a fourth state added here would have
+  reached a UI that did not know about it"*. It duly arrived.
+- **The screen.** *checksum verified* and *checksum verified against the publisher's own* are
+  different rows in `verificationLabel`, and the row says it **before** the Install button as well
+  as after, for the reason the size is said before it.
+
+### On overturning a prohibition
+
+The comment being replaced said, in bold: *"do not add a `sha256` here on the strength of it. A
+digest belongs to bytes somebody actually hashed."* Written by the same run that measured the
+whisper pins, and it was right about what it was aimed at — the only alternative then on offer was
+deriving a digest from one download, which pins whatever arrived while looking like a guarantee. It
+still forbids that.
+
+An oid is a different object. It is stated by the publisher *before* any transfer, which is what
+makes it testable against one, and thirteen downloads is what testing it looked like. The rewritten
+comment carries the old prohibition verbatim and says why this is not an instance of it, because a
+rule that quietly disappears when it becomes inconvenient teaches the next reader nothing.
+
+### The check costs a full read of the file
+
+Verification is a second pass: `kw_sidecar::integrity::hash_file` reads the finished download back
+off the disk. For `qwen3-32b-q4_k_m` that is 19.8 GB, so it runs under `spawn_blocking` and emits
+its own progress state. `LocalLlmProgress::Verifying` exists because a progress line that stops
+moving for a minute reads as a hang, not as work.
+
+Two deliberate limits, recorded rather than implied:
+
+- **Length first, then hash.** The length is free — it is already on the filesystem — and a
+  truncated transfer is the common failure, so checking it first turns the common case into a
+  specific message rather than a digest mismatch that could mean anything.
+- **The check happens at install and is not repeated.** `installed: true` afterwards means the path
+  exists. The whisper path *does* re-hash on every status call, and gets away with it because its
+  largest model is 3 GB; re-reading 20 GB every time a settings screen opens is not a trade worth
+  making. A model corrupted after a successful install is therefore not caught. Filed as KNEG-107,
+  not hidden.
+
+### An install is as verified as its weakest half
+
+Five models download a speculative-decoding drafter alongside the GGUF, from a different repository.
+`VerifiedBy::weaker` picks the lower of the two verdicts for the `Done` event, so a drafter riding
+in on a stated oid cannot be reported under the model's measured one. Its ordering is written as
+explicit ranks rather than derived from `PartialOrd`, so reordering the variants for readability
+cannot silently reorder the strengths.
+
+`Done`'s `verifiedBy` is `Option`, and `None` means the files were already on disk and this install
+checked nothing — which is honest where borrowing the previous install's claim would not be.
+
+### `--verify-stated`, and why it is a second verb
+
+`tools/model-pin/pin.mjs --verify` downloads and re-hashes. It cannot cover these 39 objects for the
+reason they went unpinned for so long. `--verify-stated` re-reads the trees instead: 36 requests, no
+bodies, a few seconds, and it fails if any digest or length has moved. The weekly `pin-verify.yml`
+runs it beside the two download-based checks.
+
+Two commands rather than one flag, because a tool that prints "verified" must never be vague about
+which of those it did. Its success line says how many of the objects it checked are pinned to bytes
+hashed here — the ones it is *not* the right instrument for.
+
+For the thirty-two stated pins this is the same standard they were taken at, so agreement means
+"unchanged". For the seven measured ones it is strictly weaker, and the test's doc comment says so:
+agreement means Hugging Face has not re-uploaded, not that the bytes are still what we hashed. Only
+a download proves the second thing.
+
+### Two counts are asserted rather than assumed
+
+`every_local_model_carries_a_digest_the_installer_will_check` asserts 39 objects, zero with no
+digest, and **exactly seven** measured. The last of those is not a lower bound on purpose. If it
+moves, either somebody measured more — good, and the number should follow in the same commit — or a
+pin was quietly downgraded, which is the thing worth catching. The same shape asserts 39 in
+`pin.test.mjs`, so a pin dropped from `LOCAL_LLM_PINS` cannot make `--verify-stated` check 38
+objects and pass.
+
+---
+
+## 2026-08-31 (KNEG-100/102) — a ceiling that lied, four unbounded downloads, and 21 measured archives
+
+`f17a5fd` added two real protections and left them almost unused.
+`NetworkPolicy::download_to_file_bounded` refuses a body larger than a pinned length before it
+reaches disk; `kw_sidecar::extract_with_limit` caps what an archive may write when it is unpacked.
+One caller used either. This pass made both of them true everywhere they belong, and found that
+the extraction half had never worked for four of its five archive kinds.
+
+### The ceiling applied to one archive kind in five (KNEG-102)
+
+`extract_with_limit`'s doc comment said "refusing to write more than `max_bytes` in total". Its
+body threaded `max_bytes` to `TarBz2` alone; `Zip`, `TarGz`, `TarXz` and `Bare` took the argument
+and discarded it. **A ceiling that lies is worse than no ceiling** — it is the difference between a
+caller knowing it is unprotected and a caller believing it is protected. Nothing was exposed by
+it, because the only caller passing a limit installs `.tar.bz2` models. Luck, not design, and the
+luck would have run out at the next commit, which threads limits through the sidecar path — `zip`
+on Windows, `tar.xz` on Linux.
+
+**The header rule is not enough, and this was read rather than assumed.** The `TarBz2` path
+accumulated `entry.size()` and refused before writing. That is exact for a tar: `tar::Entry`'s
+reader is an `io::Take` over the same header size (`tar-0.4.46/src/entry.rs`, `EntryIo::Data`), so
+the bytes cannot disagree with the header. A zip entry's reader is a decompressor over
+`take(compressed_size)` (`zip-2.4.2/src/read.rs`, `make_reader`), and nothing in it holds the
+inflated output to the `uncompressed_size` the central directory declares.
+`a_zip_whose_header_understates_its_output_is_refused_on_the_real_bytes` patches a one-entry zip's
+declared size down to 1 for a 1 MiB payload; the crate hands over all 1 MiB. A header-only ceiling
+would have passed it, which is precisely the decompression bomb the ceiling exists for. So the
+copy is now bounded on the bytes that arrive as well, with the declared-size check kept in front of
+it as the fast refusal that stops an oversized entry landing at all.
+
+**A refusal takes back what it wrote.** `extract_tar_limited` returned `Err` and left every file it
+had already written; so did `extract_tar` and `extract_zip` on a corrupt entry or an unsafe name. A
+half-unpacked directory can look convincing to a later `locate`. The rollback removes its own files
+and then its own directories, deepest first, with `remove_dir` rather than `remove_dir_all` — and
+never `dest`, because for `sherpa_models::install` `dest` is the models *root* and clearing it would
+take every other installed model.
+
+**`InstallError::ExtractedTooLarge`** replaces `Archive { detail: "extracted data exceeds …" }`.
+`tests/tar_bz2_fixture.rs` had asserted on that substring because there was nothing better to match
+on.
+
+One test per `ArchiveKind`, every one overflowing on a *later* entry. The only ceiling test that
+existed used `max_bytes = 1`, which trips on the first entry and so proves nothing about partial
+output. Both sides of the boundary are asserted: an extraction fitting its ceiling exactly succeeds
+for all four archive kinds, because a bound that refuses a legitimate install is worse than no
+bound.
+
+### The extracted footprint of all 21 published sidecar targets, measured
+
+`Asset` had `sha256` and `sizeBytes` and no analogue of the `maxExtractedSizeBytes` the sherpa
+models carry, so there were two options: add the field and measure 21 targets, or bound the
+download only and say the extraction ceiling for sidecars is deliberately absent. The measurement
+turned out cheap — 1.85 GB in total, and `tools/sidecar-pin/pin.mjs` already downloads and indexes
+every archive on `--verify` — so the field exists and is mandatory.
+
+`node tools/sidecar-pin/pin.mjs --extracted --write`, 2026-08-31. Download and extracted are
+measurements; ceiling is the judgement.
+
+| target | archive | download | extracted | ceiling |
+| --- | --- | --- | --- | --- |
+| whisper/windows-x86_64 | zip | 8,361,840 | 21,213,696 | 27,262,976 |
+| whisper/linux-x86_64 | tar-gz | 9,503,425 | 24,527,510 | 31,457,280 |
+| whisper/linux-aarch64 | tar-gz | 4,572,294 | 10,587,134 | 13,631,488 |
+| llama/windows-x86_64 | zip | 17,287,711 | 44,587,872 | 56,623,104 |
+| llama/linux-x86_64 | tar-gz | 15,646,315 | 39,784,422 | 50,331,648 |
+| llama/linux-aarch64 | tar-gz | 12,665,261 | 31,133,878 | 39,845,888 |
+| llama/macos-x86_64 | tar-gz | 11,280,969 | 27,561,662 | 34,603,008 |
+| llama/macos-aarch64 | tar-gz | 10,978,734 | 27,450,446 | 34,603,008 |
+| ffmpeg/windows-x86_64 | zip | 145,349,121 | 343,922,176 | 429,916,160 |
+| ffmpeg/linux-x86_64 | tar-xz | 111,679,252 | 348,784,736 | 436,207,616 |
+| ffmpeg/linux-aarch64 | tar-xz | 96,564,568 | 283,579,184 | 355,467,264 |
+| yt-dlp/windows-x86_64 | bare | 17,840,399 | 17,840,399 | 17,840,399 |
+| yt-dlp/linux-x86_64 | bare | 40,446,224 | 40,446,224 | 40,446,224 |
+| yt-dlp/linux-aarch64 | bare | 40,167,448 | 40,167,448 | 40,167,448 |
+| yt-dlp/macos-x86_64 | bare | 37,146,048 | 37,146,048 | 37,146,048 |
+| yt-dlp/macos-aarch64 | bare | 37,146,048 | 37,146,048 | 37,146,048 |
+| sherpa/windows-x86_64 | tar-bz2 | 24,378,225 | 43,812,352 | 55,574,528 |
+| sherpa/linux-x86_64 | tar-bz2 | 384,752,102 | 1,249,715,232 | 1,562,378,240 |
+| sherpa/linux-aarch64 | tar-bz2 | 337,820,882 | 920,336,696 | 1,151,336,448 |
+| sherpa/macos-x86_64 | tar-bz2 | 254,918,578 | 879,667,336 | 1,099,956,224 |
+| sherpa/macos-aarch64 | tar-bz2 | 231,438,974 | 777,705,592 | 973,078,528 |
+
+Four things this measurement decided rather than assumed:
+
+- **Extracted is not the archive's uncompressed size.** Only the entries inside the payload
+  directory are ever written — the Windows whisper archive carries `main.exe`, `SDL2.dll`,
+  `llama.dll` and a dozen test binaries that are not — so `extractedBytes` mirrors
+  `install::payload_relative` rather than summing the index.
+- **For zip, the entries are inflated rather than read off the central directory.** Same reason the
+  Rust now bounds on real bytes: `uncompressed_size` is a declaration. The tool decompresses each
+  payload entry with `inflateRawSync` and counts what comes out.
+- **The ceiling is one stated rule, not 21 numbers.** Measured + 25%, rounded up to the next MiB
+  (`withHeadroom`). The drift a pinned asset sees between upstream builds is a few percent — a
+  rebuilt binary, an added microarchitecture DLL — not a multiple, and 25% absorbs that while still
+  refusing something that decompresses to several times what was measured. It errs high because
+  being wrong high costs protection and being wrong low refuses a legitimate install, which is the
+  trade `SHERPA_PINS` already records for its two hand-chosen figures.
+- **`Bare`'s ceiling is its download size, with no headroom.** The file is copied verbatim, so
+  headroom above a digest-pinned length could only ever be reached by a different file.
+
+**All 21 digests were re-verified in the same run**, as a side effect worth stating: the tool
+refuses to measure an asset whose digest has moved, because a ceiling derived from unpinned bytes
+pins the wrong number. `--verify` now re-measures the extracted total too and fails when a
+committed ceiling has become too tight to install through — the failure mode
+`docs/PLATFORM_SUPPORT.md` records for the sherpa `sizeMb` figure, caught by CI rather than by a
+user.
+
+### Which downloads got bounded, and which deliberately did not
+
+| caller | download | extraction |
+| --- | --- | --- |
+| `sidecar::install` — all 21 targets | `sizeBytes`, exact | `maxExtractedSizeBytes` |
+| `sherpa_models::install` | already bounded | already limited |
+| `models::install` — whisper `.bin` | `expectedSizeBytes` where `Integrity::Pinned` | n/a |
+| `local_llm::download_gguf` | `sizeBytes` where `SizeCheck::Exact` | n/a |
+| `examples/sherpa_probe.rs` | `expectedSizeBytes` | `maxExtractedSizeBytes` |
+
+**A bound is only ever an exact figure**, and that is the whole reason two of those rows are
+conditional. A bound refuses a transfer mid-flight, so a *declared* length cannot be one: the true
+length may be on either side of it. Bounding `SizeCheck::Approximate` would have reintroduced
+KNEG-101 in a faster form — eighteen GGUFs were declared 6.7–7.9% larger than the file Hugging Face
+serves, and the version of `download_gguf` that compared the *finished* download against that
+figure deleted all eighteen after 101 GB of successful transfer. A bound would have refused them
+sooner and just as wrongly. So `Approximate` and `Integrity::Size` keep their tolerance as a
+post-download check and never become bounds, which leaves an unmeasured model degraded rather than
+broken. Every shipped model reaches the bounded arm today.
+
+### The partial-file leak, and the first test for `DownloadTooLarge`
+
+`download_to_file_bounded`'s streaming refusal returned after creating and partially filling the
+file, with no `remove_file`. So did the mid-stream write error and the chunk error from a dropped
+connection — three returns, no cleanup, and a truncated body left on disk that a later
+`is_installed` check finds as convincing as a refused one. The body half is now
+`stream_to_file`, so every failure leaves through one cleanup path in the caller.
+
+**`PolicyError::DownloadTooLarge` had no test anywhere.** It was written, shipped, used by one
+caller and never exercised. There are four now, against a minimal loopback HTTP server in the test
+module (extending the `respond_once` helper `get_text` already used, rather than adding a mock
+harness). They cover something the one-line doc comment had not recorded: **the `content-length`
+pre-check often does not run at all.** It uses `Option::zip`, so a response with no
+`content-length` — a chunked one, or HTTP/1.0 with `Connection: close` — skips it entirely, and the
+running total in the streaming loop is the check that actually guarantees the bound. That is
+correct behaviour, since a header is a claim and a body may be longer than its own header says, but
+it was undocumented. The tests exercise both shapes, plus a body exactly on its limit (the normal
+case, since every real bound is an exact pinned length) and an unbounded download of any length.
+
+### Verified against the real network
+
+- `cargo test -p kw-sidecar --test real_install -- --ignored` — the pinned whisper sidecar
+  downloads, verifies and unpacks under both new bounds.
+- `cargo test -p kw-transcription-core --test local_dictation -- --ignored` — a real whisper model
+  under the exact-size download bound.
+- `cargo test -p kw-transcription-core --test subtitle_export -- --ignored` — a sidecar *and* a
+  model, so both new bounds in one run.
+
+None of them refused a legitimate install, which was the risk worth checking: a bound that refuses
+one is worse than no bound.
+
+### Filed, not fixed
+
+**KNEG-106** (Low). `extract_tar_xz` decompresses the whole tar into a `Vec<u8>` before looking at
+an entry, because `lzma-rs` decompresses into a `Write` and exposes no streaming `Read`.
+`max_bytes` bounds what reaches `dest` and cannot bound that buffer, so a `.tar.xz` remains a
+memory bomb whatever ceiling is passed — independent of the output ceiling it now honours. Behind a
+mandatory digest, and the only pinned `tar-xz` assets are ffmpeg on Linux at ~100 MB compressed and
+~300 MB extracted. Needs a streaming LZMA2 reader; the function's doc comment now says so.
+
+---
+
+## 2026-08-31 (whisper pins) — six digests measured, and three pin tables become one
+
+`crates/transcription-core/src/models.rs` had carried, since it was written, a `PINNED` table with
+one row in it and a paragraph explaining why: pinning the other five whisper models "means
+downloading roughly seven gigabytes once, which is a job for a tool rather than something to invent
+digests for here". `tools/model-pin/pin.mjs` (`11f0846`) is that tool. It downloaded all six.
+
+### What was measured
+
+Every model fetched in full from its registry `downloadUrl` on 2026-08-31, hashed as the stream
+passed through to a file, and its length taken from `stat` afterwards — never from
+`content-length`, because a truncated body agrees with its own header. 6,966,596,962 bytes in one
+run — 6.49 GiB, 14 min 33 s of transfer on this connection.
+
+| model | file | SHA-256 | bytes | baseline declared |
+| --- | --- | --- | --- | --- |
+| `tiny` | `ggml-tiny.bin` | `be07e048…c6e1b21` | 77,691,713 | 78,000,000 |
+| `base` | `ggml-base.bin` | `60ed5bc3…ba2efe` | 147,951,465 | 148,000,000 |
+| `small` | `ggml-small.bin` | `1be3a9b2…ea987b` | 487,601,967 | 488,000,000 |
+| `medium` | `ggml-medium.bin` | `6c14d5ad…156208` | 1,533,763,059 | 1,570,000,000 |
+| `turbo` | `ggml-large-v3-turbo.bin` | `1fc70f77…e2bc69` | 1,624,555,275 | 1,670,000,000 |
+| `large` | `ggml-large-v3.bin` | `64d182b4…94d1e2` | 3,095,033,483 | 3,140,000,000 |
+
+**`tiny` is the control, and it reproduced.** `be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21`
+and 77,691,713 bytes, identical to what `models.rs` had committed — a different day, a different
+tool, the same answer. That validates the measurement of the other five in the same run as it
+re-validates the one pin that already existed.
+
+The declared column is the shape of the whole baseline: every figure is a round million or ten
+million, and every one of the six is **high**, by 0.033% to 2.797% — `base` by 48,535 bytes and
+`turbo` by 45,444,725. None of them is a measurement of anything, and the errors do not follow a
+constant, so they are not the unit-confusion bug `98e836b` found in the GGUF sizes. They are
+somebody rounding up.
+
+### An unpredicted finding: Hugging Face states the SHA-256, and it is right
+
+`https://huggingface.co/api/models/ggerganov/whisper.cpp/tree/main?expand=true` returns, per LFS
+object, `lfs.oid` — which *is* the file's SHA-256, because that is what git-lfs keys on. It agreed
+with all six measured digests and all six measured lengths, on the nose. `large`'s row was read
+from that API while its 2.9 GB download was still in flight and predicted
+`64d182b4…94d1e2` / 3,095,033,483 correctly.
+
+That matters for **KNEG-45**, now re-scoped to only the 35 local-LLM GGUFs, declined on the
+grounds that 202 GB of downloading is not justified for a pin. There is a third option between
+"size only" and "bytes we hashed": pin the publisher's stated `lfs.oid`. The cost is **one API call
+per repository**, not per object — `tree/main` lists every file in the repo with its oid and size in
+one response — so the whole 39-object table would be a handful of requests rather than 202 GB.
+Six-for-six agreement over 6.9 GB is real evidence that the metadata is accurate.
+
+**It is a weaker standard and the distinction has to survive.** The oid is a claim by
+huggingface.co, delivered over the same channel as the bytes. It defends against a corrupted
+transfer and against an accidental re-upload; it does not defend against a compromised
+huggingface.co, because one host would serve both halves. A digest measured once and committed to
+*this* repository does defend against that, which is the whole reason `config/sidecars.json`'s rule
+is "a pin is only a pin if it was measured". So: a middle tier, strictly better than a length,
+strictly worse than the strong pin, and it must never be written into a table that reads as the
+strong pin.
+
+**Recorded as a lead on KNEG-45 rather than done here — and taken up later the same day.** The lead
+held: see the KNEG-45 entry above, where seven objects across seven publishing organisations were
+downloaded and hashed to test it before any of it was written down as a pin.
+
+### Three pin tables became one
+
+The pins are `WHISPER_PINS` in `tools/integration-audit/generate-provider-registry.mjs`, beside
+`SHERPA_PINS` and `LOCAL_LLM_SIZES` — **not** an extended `PINNED` array in Rust, which is the
+architecture call worth recording. The argument is not tidiness. Three model families keeping their
+pins in three different places had already produced a concrete absurdity: `model-pin --verify` had
+to **parse Rust from Node** to check the whisper half, with a regex over
+`const PINNED: [(&str, &str, u64); N]` and the array's declared arity as a checksum on the parse.
+That reader worked. It should never have needed to exist.
+
+`models.rs` now reads `sha256` and `expected_size_bytes` off
+`kw_provider_registry::WhisperModel`, the generator emits both, and `--verify` reads one generated
+JSON document for all eight pins. `parseWhisperPins` and its five tests are deleted. They were
+written as a deliberate tripwire for exactly this migration and they fired once, which is what a
+tripwire is for — retiring them is the outcome, not a loss of coverage.
+
+### `expectedSizeBytes` is the measured length now, and one claim was false
+
+The registry's `expectedSizeBytes` for whisper is overridden with the measured figure rather than a
+tolerance being kept around the rounded one. That was free, and the reason `models.rs` gave for not
+doing it was wrong:
+
+> A tolerance rather than a rewrite of the registry, because the rounded figures are also what the
+> settings screen shows.
+
+**They are not.** `apps/desktop/src/views/SettingsTranscription.tsx` formats `sizeMb` — `142 MB`,
+`466 MB` — and never reads `expectedSizeBytes` at all. The field has exactly one consumer in the
+repository, `models::integrity_for`. `sizeMb` stays rounded, because it is a display estimate and
+showing a user 77,691,713 helps nobody. The false sentence is corrected where it was written.
+
+### What is kept although nothing reaches it
+
+`Integrity::Size`, `Verification::SizeOnly`, `SIZE_TOLERANCE` and `within_tolerance` all survive
+with no shipped model reaching them, and each says so where it is defined so nobody removes it as
+dead code. The reason is the same one `98e836b` gave for keeping `SizeCheck::Approximate`: a model
+added to the baseline before somebody spends the bandwidth to hash it — 2.9 GB, for a model the
+size of `large` — should be **degraded, not broken**.
+A tolerance is the right answer to a rounded number and the wrong answer to a measured one, and the
+unmeasured model is the only case that still has a rounded number.
+
+`within_tolerance`'s last consumer outside this module is `SizeCheck::Approximate` in
+`apps/desktop/src-tauri/src/local_llm.rs`; that is named in the doc comment, because "who still
+calls this" is the question a future reader will actually have.
+
+Note the asymmetry with sherpa, which is deliberate: an unpinned sherpa model cannot be installed
+at all (`MissingPin`), an unpinned whisper model degrades to a size check. A sherpa model is an
+archive that gets extracted; a whisper model is one file from a repository whose five siblings were
+hashed.
+
+### What this costs, and it is the same cost twice
+
+All six URLs are `resolve/main` — a branch pointer, not a revision. Until today a re-upload had to
+move a file by more than 5% to be noticed; now any change at all fails the install with an
+integrity error and the user cannot proceed. Identical to the trade `98e836b` took for the GGUF
+sizes, taken again for the same reason: a silent pass means running weights nobody here measured.
+See **KNEG-103**, which now covers a digest-exact surface rather than a size-exact one.
+
+What notices first is `node tools/model-pin/pin.mjs --verify`, and its weekly cost went from about
+1 GB to about **8 GB** — two Parakeet archives plus six whisper models rather than one.
+`.github/workflows/pin-verify.yml` carries the new figure and the `--only` escape hatch if the
+runtime ever becomes the problem.
+
+### Verified, and not
+
+**Verified:** all six digests reproduced by a full download; `tiny` reproduced its previously
+committed pin; a registry invariant test asserts every whisper model resolves to `Integrity::Pinned`
+(mirroring `every_installable_sherpa_model_has_integrity_and_size_limits`); `cargo test -p
+kw-transcription-core --test local_dictation -- --ignored` drives the real round trip — download,
+`Verification::DigestMatched`, server start, correct transcript — through the shipped `install` path
+now that it reads the registry instead of a table in its own file.
+
+**Not verified:** nobody has installed any of the five newly pinned models through the application.
+`BENCH_CHECK.md` carries that as a by-hand item and **KNEG-105** as an issue, with `base` named
+because it is the recommended model and the one a new user presses first. The two
+Parakeet digests were also re-measured today by full download (464.6 MiB and 478.1 MiB) and both
+matched; that upgrades `SHERPA_PINS`' comment from "the byte counts agree with `content-length`" to
+"both digests and both lengths came off the disk", and its comment now says what that does and does
+not prove.
+
+---
+
+## 2026-08-31 (local-LLM sizes) — eighteen models nobody could install, and 2^30 ÷ 10^9
+
+`download_gguf` deletes a finished download whose length is more than 5% from the size the registry
+declares. Eighteen of the thirty-five local text-generation models were declared 6.7–7.9% larger
+than the file Hugging Face actually serves, so **all eighteen downloaded in full, failed the check,
+and were deleted** — 101 GB of successful transfer, thrown away on arrival, `Qwen3 32B` and
+`GPT-OSS 20B` among them. There was no way to install any of them, and nothing in the failure said
+so: the message blamed the download for being the wrong length, which reads like a bad connection
+and invites a retry that fails identically.
+
+### Where the numbers came from, measured
+
+Every model and every speculative-decoding drafter — 39 objects, 202 GB — was HEADed at
+`https://huggingface.co/{hfRepo}/resolve/main/{fileName}` on 2026-08-31 and its `x-linked-size`
+read. Hugging Face serves these through LFS: a `resolve/main` request answers **302**, so
+`content-length` describes the redirect and `x-linked-size` carries the object. Four were
+cross-checked against `/api/models/{hfRepo}/tree/main`, which reports the same `lfs.size`. The
+whole set was then re-measured a second time through the shipped code path — `NetworkPolicy` under
+`UserTriggeredModelDownload` — and agreed on all 39.
+
+Pass and fail below are recomputed with `within_tolerance`'s own arithmetic, which divides by
+`expected`, not by `actual`. That matters: it is the difference between reporting what is wrong and
+reporting what the shipped code rejects.
+
+### The root cause is a base-2 conversion of a base-10 label
+
+Upstream's baseline carries a human `size` label per model — `"5.0GB"`, `"2.5GB"` — and its
+`sizeBytes` was produced from that label by multiplying by **2^30 instead of 10^9**.
+
+| model | declared | measured | declared ÷ measured | declared ÷ 2^30 | measured ÷ 10^9 |
+| --- | --- | --- | --- | --- | --- |
+| `qwen3-8b-q4_k_m` | 5 402 263 552 | 5 027 783 488 | 1.074482 | 5.0313 | 5.0278 |
+| `qwen3-8b-q5_k_m` | 6 281 625 600 | 5 851 112 224 | 1.073578 | 5.8502 | 5.8511 |
+| `qwen3-4b-q4_k_m` | 2 684 354 560 | 2 497 280 256 | 1.074911 | 2.5000 | 2.4973 |
+| `qwen3-1.7b-q8_0` | 1 965 555 712 | 1 834 426 016 | 1.071483 | 1.8306 | 1.8344 |
+| `qwen3-32b-q4_k_m` | 21 260 251 955 | 19 762 149 024 | 1.075807 | 19.8002 | 19.7621 |
+| `qwen2.5-1.5b-instruct-q5_k_m` | 1 395 864 371 | 1 285 494 304 | 1.085858 | 1.3000 | 1.2855 |
+| `qwen2.5-3b-instruct-q5_k_m` | 2 620 055 552 | 2 438 740 384 | 1.074348 | 2.4401 | 2.4387 |
+| `qwen2.5-7b-instruct-q4_k_m` | 5 025 128 858 | 4 683 074 240 | 1.073041 | 4.6800 | 4.6831 |
+| `qwen2.5-7b-instruct-q5_k_m` | 5 841 530 470 | 5 444 831 936 | 1.072858 | 5.4403 | 5.4448 |
+| `mistral-nemo-12b-instruct-q4_k_m` | 8 028 321 792 | 7 477 208 320 | 1.073706 | 7.4770 | 7.4772 |
+| `mistral-7b-instruct-v0.3-q4_k_m` | 4 692 635 648 | 4 372 812 000 | 1.073139 | 4.3704 | 4.3728 |
+| `mistral-7b-instruct-v0.3-q5_k_m` | 5 519 900 672 | 5 136 175 328 | 1.074710 | 5.1408 | 5.1362 |
+| `llama-3.2-3b-instruct-q4_k_m` | 2 168 958 976 | 2 019 377 696 | 1.074073 | 2.0200 | 2.0194 |
+| `llama-3.1-8b-instruct-q4_k_m` | 5 282 717 696 | 4 920 739 232 | 1.073562 | 4.9199 | 4.9207 |
+| `gpt-oss-20b-mxfp4` | 12 999 763 968 | 12 109 566 624 | 1.073512 | 12.1070 | 12.1096 |
+| `gemma-4-e4b-it-q4_k_m` | 5 812 137 984 | 5 405 170 144 | 1.075292 | 5.4130 | 5.4052 |
+| `gemma-4-e2b-it-q4_k_m` | 3 711 514 624 | 3 462 680 032 | 1.071862 | 3.4566 | 3.4627 |
+| `gemma-3-12b-it-q4_k_m` | 7 847 624 704 | 7 300 575 264 | 1.074932 | 7.3087 | 7.3006 |
+
+**2^30 ÷ 10^9 = 1.073741824.** Over the eighteen, declared ÷ measured has mean **1.074509**. Drop
+the single outlier and the seventeen remaining average **1.073841**, none of them more than
+**0.210%** from the constant. Read the last two columns as one claim: *declared ÷ 2^30* recovers the
+model's size **in base-10 GB**, to three or four significant figures, in every row.
+
+Two rows are the label itself, unrounded:
+
+- `qwen3-4b-q4_k_m` — label `"2.5GB"`, declared `2 684 354 560` = **2.5 × 2^30**, exactly.
+- `qwen2.5-1.5b-instruct-q5_k_m` — label `"1.3GB"`, declared `1 395 864 371` = **1.3 × 2^30**,
+  exactly. This is the outlier at 7.907%, and it is worse than the rest for a second reason on top
+  of the first: the file is 1.2855 GB, so the two-significant-figure label was already 1.1% high
+  before anything multiplied it. Label rounding and unit confusion compound.
+
+The other sixteen are finer-grained than their own two-digit label — `qwen3-8b-q4_k_m` declares
+5.0313 GiB against a `"5.0GB"` label — so whatever the conversion consumed was a more precise GB
+figure than the label the baseline kept. The residual ±0.2% is not explained; the 7.4% is, and the
+7.4% is the whole defect.
+
+### Three things the measurement found that the theory did not predict
+
+**1. `llama-3.2-1b-instruct-q4_k_m` is the same bug one unit down, and it passes.** Declared
+`847 249 408` = **808 × 2^20**, exactly; the file is `807 694 464` bytes = 807.69 MB, which rounds
+to the 808 **MB** that was then read as MiB. Its ratio is 1.048973 against 2^20 ÷ 10^6 =
+**1.048576**. It survives only because the mebibyte error is 4.86% and the gibibyte error is 7.37%,
+and the tolerance is 5%. One model was saved by its own smallness.
+
+**2. The three `qwen3.5-*` models are not this bug at all, and one of them passes by 5.6 KB.** Their
+declared sizes are *smaller* than the real files (95.2–95.5% of them) and are not round in any base
+— `5 889 811 552` for a 6 169 341 984-byte file. Each bartowski repo has a single upload
+(2026-05-19, checked through `/api/models/…/commits/main`), so these are not stale figures from a
+re-upload; where they came from is unknown. What matters is the margin:
+
+| model | difference ÷ expected | margin below the 5% tolerance |
+| --- | --- | --- |
+| `qwen3.5-2b-q4_k_m` | **4.9958%** | 0.0042 pp — about 5.6 KB |
+| `qwen3.5-4b-q4_k_m` | 4.9198% | 0.08 pp |
+| `qwen3.5-9b-q4_k_m` | 4.7460% | 0.25 pp |
+
+`qwen3.5-9b-q4_k_m` is the **recommended** model, and `qwen3.5-2b-q4_k_m` was four kilobytes of
+upstream metadata away from joining the eighteen. The set that worked was not a set that was right;
+it was a set that had not yet drifted far enough to fail.
+
+**3. Two models that looked exact were 2 240 bytes short — the same 2 240 in both.**
+`gemma-4-31b-it-q4_k_m` and `gemma-4-26b-a4b-it-q4_k_m`, both from bartowski, both declared exactly
+2 240 bytes below what is served. That is the re-upload case, live and already present: two files
+whose length changed by a GGUF metadata block since somebody measured them. It is the reason the
+`#[ignore]`d re-measurement test below is not a formality.
+
+**Eleven** models matched to the byte, and all four drafters — fifteen of the thirty-nine objects.
+They are the ones somebody actually measured: all five `lfm2*`, the four Gemma QAT builds with their
+drafters, `gemma-3-4b-it` and `gemma-3-1b-it`. Six of the seventeen that *passed* did not match: the
+three `qwen3.5-*`, `llama-3.2-1b`, and the two bartowski Gemma 4 builds 2 240 bytes adrift.
+
+### The fix, and where the numbers now live
+
+`LOCAL_LLM_SIZES` in `tools/integration-audit/generate-provider-registry.mjs`, keyed by model id,
+carrying `sizeBytes` and `draftSizeBytes` for all 35 models and all 4 drafters. It sits beside
+`SHERPA_PINS` and is built on the same reasoning: `config/upstream-integration-baseline.json` is a
+frozen record of what upstream had and must not gain fields we invented, and
+`config/provider-registry.json` is generated, so a fix hand-edited into it dies at the next
+regeneration — which is exactly what happened to the Parakeet digests in `f17a5fd`. A pin naming an
+id the baseline does not have is a `die()`, as is a drafter pin on a model with no drafter.
+
+**The pins are measurements, and they are the weaker kind.** `tools/sidecar-pin/pin.mjs` downloads
+the asset and records bytes on disk, which is why it can also pin a SHA-256. These are what the
+publisher's own object size says over HTTP. The difference is deliberate and it is a cost decision:
+202 GB of downloading to confirm a length that Hugging Face already states is not justified for a
+size pin. The doc comment says so in those words, so that nobody later reads the table as the
+stronger thing and adds a `sha256` next to it. A digest belongs to bytes somebody hashed.
+
+### Exact equality, and what it costs
+
+The registry now carries `sizeMeasured` per model and per drafter, and `download_gguf` reads it
+through a three-state `SizeCheck`: `Exact` for a measured size, `Approximate` (the old 5%) for a
+declared one, `Unknown` for no size at all.
+
+**Why exactness became safe:** a tolerance is the right answer to a *rounded* number and the wrong
+answer to a *measured* one. Against a figure read from the publisher's own object size there is
+nothing left to round — the file either has that many bytes or is not that file. The 5% window was
+simultaneously wide enough to hide this defect for the seventeen models it passed and too narrow to
+install the eighteen it failed, which is what a tolerance around an unmeasured number always is.
+
+**What it costs:** an upstream re-upload now fails the install loudly instead of passing silently.
+Taken deliberately — a silent pass means the user runs weights nobody here ever measured — and it
+is not a hypothetical cost, because two models had already drifted by 2 240 bytes. What keeps it
+survivable is `the_measured_sizes_still_match_hugging_face` in `local_llm.rs`: `#[ignore]`d, 39 HEAD
+requests, no bodies, about six seconds, and it re-measures the committed table against the live
+files. It passed on all 39 at the time of writing. The `Approximate` arm is kept, and a unit test
+asserts nothing is currently using it — a model added before it is measured is degraded rather than
+broken, and the test is where that shows up.
+
+### Not verified
+
+Nobody has installed any of the eighteen through the screen. `BENCH_CHECK.md` carries it as a
+by-hand item. What is verified is that the sizes are right and that the check accepts them; that a
+20 GB download completes, renames, and starts a server is a separate claim and this run did not make
+it.
 
 ---
 

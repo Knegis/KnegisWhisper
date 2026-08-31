@@ -154,6 +154,10 @@ export interface DraftModel {
   readonly hfRepo: string;
   readonly fileName: string;
   readonly sizeBytes: number | null;
+  readonly sizeMeasured: boolean;
+  /** On the same terms as \`LocalLlmModel.sha256\`. */
+  readonly sha256: string | null;
+  readonly sha256Measured: boolean;
 }
 
 export interface LocalLlmModel {
@@ -162,6 +166,28 @@ export interface LocalLlmModel {
   readonly fileName: string;
   readonly hfRepo: string;
   readonly sizeBytes: number | null;
+  /**
+   * Whether \`sizeBytes\` was measured against the publisher or copied from
+   * upstream's declaration. Upstream declared a size for every model and was
+   * wrong about eighteen of them, so a non-null size is not on its own a
+   * trustworthy one; the installer holds a measured size to exact equality and
+   * a declared one to 5%.
+   */
+  readonly sizeMeasured: boolean;
+  /**
+   * The object's SHA-256, and whether this project measured it.
+   *
+   * Non-null on all thirty-nine published objects. \`sha256Measured\` is the
+   * part that matters: **true** means the bytes were downloaded and hashed
+   * here, **false** means this is the publisher's stated \`lfs.oid\` — a real
+   * digest of the object, but one delivered by the same host that serves the
+   * bytes, so it catches corruption and re-uploads and not a compromised
+   * huggingface.co. Seven of the thirty-nine are measured, one per publishing
+   * organisation. Anything shown to a person about how a model was verified
+   * must read this flag and not just the digest.
+   */
+  readonly sha256: string | null;
+  readonly sha256Measured: boolean;
   readonly quantization: string | null;
   readonly contextLength: number | null;
   readonly recommended: boolean;
@@ -181,7 +207,21 @@ export interface WhisperModel {
   readonly name: string;
   readonly fileName: string;
   readonly downloadUrl: string;
+  /** A display estimate, rounded. This is the figure the screen shows. */
   readonly sizeMb: number | null;
+  /**
+   * The model file's pinned digest and its expected byte count. Non-null on
+   * all six shipped models, both measured from a real download; a null
+   * \`sha256\` would mean a model added to the registry before anybody
+   * downloaded it, which \`models::integrity_for\` degrades to a size check
+   * rather than hiding.
+   *
+   * With a digest, \`expectedSizeBytes\` is the measured length — what the
+   * integrity check is handed, so it has to be bytes that were there. Without
+   * one it is upstream's rounded declaration, held to a 5% tolerance. It is
+   * never \`sizeMb\` scaled.
+   */
+  readonly sha256: string | null;
   readonly expectedSizeBytes: number | null;
   readonly recommended: boolean;
 }
@@ -191,7 +231,17 @@ export interface SherpaModel {
   readonly name: string;
   readonly downloadUrl: string;
   readonly extractDir: string;
+  /** A display estimate of the *extracted* footprint, not the download. */
   readonly sizeMb: number | null;
+  /**
+   * The archive's pinned digest and exact compressed size, and a ceiling on
+   * what it may extract to. Null on the two Nemotron streaming models, which
+   * nothing can install: sherpa_models::install refuses an unpinned model
+   * rather than downloading something unauthenticated.
+   */
+  readonly sha256: string | null;
+  readonly expectedSizeBytes: number | null;
+  readonly maxExtractedSizeBytes: number | null;
   readonly language: string | null;
   readonly supportedLanguages: readonly string[] | null;
   /** True for the Nemotron streaming runtimes; Parakeet models are batch. */

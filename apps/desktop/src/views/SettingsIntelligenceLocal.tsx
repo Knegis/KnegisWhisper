@@ -10,11 +10,18 @@
  * So every model shows its size before the button, progress shows bytes while
  * it runs, and the server's five-minute idle stop is stated rather than being a
  * surprise when a chat is slow after lunch.
+ *
+ * The same rule now covers the other thing that is easy to leave implied: **how
+ * the bytes will be checked.** Every row says so before the button, and *checksum
+ * verified* and *checksum verified against the publisher's own* are different
+ * sentences because they are different guarantees. See `LOCAL_LLM_PINS` in
+ * `tools/integration-audit/generate-provider-registry.mjs`.
  */
 
 import { useCallback, useEffect, useState } from "react";
 
 import { Row } from "../components/Row";
+import { verificationLabel } from "../lib/labels";
 import {
   getLocalLlmStatus,
   installLocalLlm,
@@ -49,8 +56,16 @@ function progressLabel(p: LocalLlmProgress): string {
       return `Downloading the drafter for ${p.id} — ${of(p.written, p.total)}`;
     case "extracting":
       return "Unpacking the server…";
+    case "verifying":
+      // Named because it is not instant: the check reads the whole file back,
+      // and the largest model here is 20 GB.
+      return `Checking ${p.id} against its checksum…`;
     case "done":
-      return `${p.id} is installed.`;
+      // `null` means the files were already on disk, so this install checked
+      // nothing and must not borrow the previous one's claim.
+      return p.verifiedBy === null
+        ? `${p.id} was already installed.`
+        : `${p.id} is installed — ${verificationLabel(p.verifiedBy)}.`;
     case "stopped-when-idle":
       return "The server stopped itself after being idle. The next request will reload it.";
   }
@@ -92,10 +107,18 @@ export function SettingsIntelligenceLocal() {
         {m.supportsThinking ? " · thinking" : ""}
         {m.recommended ? " · recommended" : ""}
       </em>
+      <em className="row-detail">
+        {/* Before the button, for the same reason the size is: a guarantee
+            nobody was told about is a guarantee nobody can weigh. */}
+        {verificationLabel(m.verifiedBy)}
+      </em>
       {m.draft ? (
         <em className="row-detail">
           has a speculative-decoding drafter, {size(m.draft.sizeBytes)}
           {m.draft.installed ? " (installed)" : " — downloaded with the model"}
+          {m.draft.verifiedBy === m.verifiedBy
+            ? ""
+            : ` — ${verificationLabel(m.draft.verifiedBy)}`}
         </em>
       ) : null}
       {m.installed ? (

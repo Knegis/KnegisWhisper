@@ -40,3 +40,34 @@ jobs:
       # needs an install step to run it.
       - name: Verify pinned sidecar targets
         run: node tools/sidecar-pin/pin.mjs --verify
+
+      # The same job for model files. Roughly 8 GB a week: two Parakeet
+      # archives at about 500 MB each and, since 2026-08-31, all six whisper
+      # models (6.49 GiB) rather than `tiny` alone. It was 1 GB before that.
+      #
+      # The price is worth paying here more than anywhere else in this
+      # workflow. The sidecars hang off dated release tags; every one of these
+      # eight is fetched from a reference that moves -- HuggingFace
+      # `resolve/main`, a branch pointer, and k2-fsa's rolling `asr-models`
+      # release -- and the whisper pins are now digest-exact, so a re-upload
+      # stops an install dead instead of passing a size check. This job is what
+      # turns that into a Monday-morning failure somebody reads rather than a
+      # user's failed download. See KNEG-103.
+      #
+      # If the runtime becomes a problem, `--only <id>` narrows it; rotating
+      # subsets would be the cheap fix, at the cost of the seven-day bound.
+      - name: Verify pinned model files
+        run: node tools/model-pin/pin.mjs --verify
+
+      # The 39 local-LLM GGUFs, which are pinned to a digest but cannot be
+      # re-downloaded: they total 202 GB. This re-reads Hugging Face's
+      # `lfs.oid` for each -- 36 requests, no bodies, a few seconds -- and
+      # fails if any object's digest or length has moved.
+      #
+      # Cheaper than everything above it and, for the failure this workflow
+      # exists to catch, just as effective: 32 of the 39 pins *are* the stated
+      # oid, so re-reading it is the same standard they were taken at. For the
+      # seven that were hashed here it is weaker, and the tool says so in its
+      # own output rather than leaving the reader to assume otherwise.
+      - name: Re-read the stated GGUF digests
+        run: node tools/model-pin/pin.mjs --verify-stated

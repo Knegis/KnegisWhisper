@@ -697,10 +697,16 @@ const LOCAL_LLM: LocalLlmStatus = {
       recommended: true,
       supportsThinking: false,
       installed: false,
+      // The ordinary case: thirty-two of the thirty-nine published objects are
+      // checked against the publisher's stated digest, not one measured here.
+      verifiedBy: "stated-digest",
       draft: {
         fileName: "qwen2.5-0.5b-instruct-q4.gguf",
         sizeBytes: 352_000_000,
         installed: false,
+        // Deliberately stronger than its model's, so the screen's "the drafter
+        // differs" branch is rendered by a fixture rather than only in theory.
+        verifiedBy: "digest",
       },
     },
     {
@@ -713,6 +719,7 @@ const LOCAL_LLM: LocalLlmStatus = {
       recommended: false,
       supportsThinking: false,
       installed: false,
+      verifiedBy: "digest",
       draft: null,
     },
     {
@@ -725,6 +732,10 @@ const LOCAL_LLM: LocalLlmStatus = {
       recommended: false,
       supportsThinking: true,
       installed: false,
+      // The degraded case: a model added to the registry before anybody measured
+      // or pinned it. Nothing ships in this state, and the screen still has to
+      // say so plainly rather than leaving the row silent.
+      verifiedBy: "size",
       draft: null,
     },
   ],
@@ -840,6 +851,20 @@ const CALENDAR: CalendarStatus = {
 };
 
 /* ------------------------------------------------------- history and notes */
+
+/**
+ * The two history switches, held rather than returned as constants.
+ *
+ * The Dictation screen reloads after writing either one, so a constant would
+ * make the checkbox snap back and hide the thing worth looking at here: with
+ * `historyEnabled` off, "Keep the text before cleanup" is disabled and says why.
+ *
+ * `historyEnabled` starts on and `keepRawText` starts on. Only the first matches
+ * the real default -- keeping the raw text is off in a real install, and it is on
+ * here so the invented history below can show a `rawText` row.
+ */
+let historyEnabled = true;
+let keepRawText = true;
 
 const HISTORY: Transcription[] = [
   {
@@ -1053,10 +1078,22 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
   },
   history_delete: () => true,
   history_clear: () => HISTORY.length,
+  // Clearing is not switching off and switching off is not clearing, which is
+  // the point the two adjacent controls have to make. `history_clear` reports a
+  // count and leaves the fixture list alone; this pair moves a flag and never
+  // touches a row.
+  history_enabled: () => historyEnabled,
+  history_set_enabled: (a) => {
+    historyEnabled = arg<boolean>(a, "enabled") ?? historyEnabled;
+    return null;
+  },
   // On, so the invented history above can show a `rawText` row. The real
   // default is off -- see `KEEP_RAW_TEXT_KEY`.
-  history_keep_raw_text: () => true,
-  history_set_keep_raw_text: () => null,
+  history_keep_raw_text: () => keepRawText,
+  history_set_keep_raw_text: (a) => {
+    keepRawText = arg<boolean>(a, "enabled") ?? keepRawText;
+    return null;
+  },
 
   /* notes */
   notes_list: (a) => {

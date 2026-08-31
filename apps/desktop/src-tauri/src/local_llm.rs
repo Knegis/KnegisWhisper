@@ -364,6 +364,13 @@ pub struct LocalLlmModelStatus {
     pub recommended: bool,
     pub supports_thinking: bool,
     pub installed: bool,
+    /// What integrity check this model can be held to, on the same terms the
+    /// whisper screen already states. Shown before the button, for the reason
+    /// the size is: a guarantee nobody was told about is a guarantee nobody can
+    /// weigh. All thirty-five carry a digest; seven of the thirty-nine objects
+    /// carry one this project measured, and the rest are the publisher's stated
+    /// `lfs.oid`, which is a different claim.
+    pub verified_by: crate::local_model::VerifiedBy,
     /// Whether this model has a speculative-decoding drafter, and whether that
     /// drafter is installed. Absent for the models without one.
     pub draft: Option<DraftStatus>,
@@ -376,6 +383,10 @@ pub struct DraftStatus {
     pub file_name: String,
     pub size_bytes: Option<f64>,
     pub installed: bool,
+    /// On the same terms as [`LocalLlmModelStatus::verified_by`]. Reported
+    /// separately because a drafter is a different object in a different
+    /// repository, and one of the two can be the weaker of the pair.
+    pub verified_by: crate::local_model::VerifiedBy,
 }
 
 /// What the Intelligence > Local screen needs, with no network access.
@@ -425,8 +436,23 @@ pub enum LocalLlmProgress {
         total: Option<f64>,
     },
     Extracting,
+    /// Hashing a finished download.
+    ///
+    /// Its own state because it is not instant. The check reads the whole file
+    /// back, and the largest model here is 20 GB, so a rename that used to be
+    /// the last thing to happen now has a minute of work in front of it. A
+    /// progress line that stops moving reads as a hang.
+    Verifying {
+        id: String,
+    },
     Done {
         id: String,
+        /// What was actually checked, or `None` when the files were already on
+        /// disk and this install re-checked nothing.
+        ///
+        /// The weaker of the model's verdict and its drafter's, where there is a
+        /// drafter; see [`crate::local_model::VerifiedBy::weaker`].
+        verified_by: Option<crate::local_model::VerifiedBy>,
     },
     /// The idle timer fired. Not an install event, but it arrives on the same
     /// channel because it changes the same screen.
@@ -474,10 +500,18 @@ pub async fn local_llm_status(llm: State<'_, Arc<LocalLlm>>) -> Result<LocalLlmS
                 recommended: m.recommended,
                 supports_thinking: m.supports_thinking,
                 installed: gguf_path(&m.file_name).exists(),
+                verified_by: verified_by(
+                    SizeCheck::of(m.size_bytes, m.size_measured),
+                    &DigestCheck::of(m.sha256.as_deref(), m.sha256_measured),
+                ),
                 draft: m.draft.as_ref().map(|d| DraftStatus {
                     file_name: d.file_name.clone(),
                     size_bytes: d.size_bytes.map(|b| b as f64),
                     installed: gguf_path(&d.file_name).exists(),
+                    verified_by: verified_by(
+                        SizeCheck::of(d.size_bytes, d.size_measured),
+                        &DigestCheck::of(d.sha256.as_deref(), d.sha256_measured),
+                    ),
                 }),
             })
         })
@@ -546,11 +580,12 @@ pub async fn local_llm_install(
     let dir = paths::model_cache_dir().path;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
 
-    download_gguf(
+    let checked = download_gguf(
         &llm.policy,
         &gguf_url(&model.hf_repo, &model.file_name),
         &gguf_path(&model.file_name),
-        model.size_bytes,
+        SizeCheck::of(model.size_bytes, model.size_measured),
+        &DigestCheck::of(model.sha256.as_deref(), model.sha256_measured),
         &mut |written, total| {
             emit(LocalLlmProgress::Model {
                 id: model_id.clone(),
@@ -558,16 +593,23 @@ pub async fn local_llm_install(
                 total: total.map(|t| t as f64),
             });
         },
+        &mut || {
+            emit(LocalLlmProgress::Verifying {
+                id: model_id.clone(),
+            });
+        },
     )
     .await?;
 
     // --- the drafter, if this model has one ---
+    let mut verdict = checked;
     if let Some(draft) = &model.draft {
-        download_gguf(
+        let draft_checked = download_gguf(
             &llm.policy,
             &gguf_url(&draft.hf_repo, &draft.file_name),
             &gguf_path(&draft.file_name),
-            draft.size_bytes,
+            SizeCheck::of(draft.size_bytes, draft.size_measured),
+            &DigestCheck::of(draft.sha256.as_deref(), draft.sha256_measured),
             &mut |written, total| {
                 emit(LocalLlmProgress::Draft {
                     id: model_id.clone(),
@@ -575,60 +617,309 @@ pub async fn local_llm_install(
                     total: total.map(|t| t as f64),
                 });
             },
+            &mut || {
+                emit(LocalLlmProgress::Verifying {
+                    id: model_id.clone(),
+                });
+            },
         )
         .await?;
+
+        // The install is as verified as its weakest half. `None` from either
+        // means that half was already on disk and this install checked nothing
+        // about it, so it cannot strengthen the verdict and must not weaken it
+        // either -- the other half's claim is still true.
+        verdict = match (verdict, draft_checked) {
+            (Some(model), Some(draft)) => Some(model.weaker(draft)),
+            (Some(one), None) | (None, Some(one)) => Some(one),
+            (None, None) => None,
+        };
     }
 
-    emit(LocalLlmProgress::Done { id: model_id });
+    emit(LocalLlmProgress::Done {
+        id: model_id,
+        verified_by: verdict,
+    });
     Ok(())
 }
 
-/// Download one GGUF, verified by size where the registry declares one.
+/// How strictly a finished download is held to the length the registry carries.
 ///
-/// **Size, not digest.** The registry carries no SHA-256 for these files and
-/// inventing one from a download would pin whatever arrived rather than what the
-/// publisher built — a pin that verifies nothing while looking like it does. The
-/// honest position is that a GGUF is checked by length and the screen says so,
-/// exactly as `VerifiedBy::Size` already does for whisper models.
+/// Three states, because the registry's byte counts have three provenances and
+/// they are not equally trustworthy. `config/provider-registry.json` says which
+/// one each number is with a `sizeMeasured` flag; the measurements themselves
+/// are `LOCAL_LLM_PINS` in
+/// `tools/integration-audit/generate-provider-registry.mjs`, beside the digests
+/// [`DigestCheck`] reads.
+///
+/// **Why exactness became safe.** Until the sizes were measured, every model was
+/// checked within 5%, and it had to be: upstream's figures were *derived* from a
+/// two-significant-figure "GB" label rather than observed, and eighteen of the
+/// thirty-five were 6.7–7.9% high because that base-10 label had been multiplied
+/// by 2^30 instead of 10^9. A tolerance is the right answer to a rounded number
+/// and the wrong answer to a measured one — it was wide enough to hide the
+/// defect and still not wide enough to install those eighteen, which downloaded
+/// in full and were deleted on arrival. Against a figure read from the
+/// publisher's own object size there is nothing left to round, so the file
+/// either has that many bytes or is not that file.
+///
+/// **What exactness costs.** A publisher who re-uploads a model — bartowski
+/// re-quantising against a newer llama.cpp, say — now fails the install loudly
+/// instead of passing silently. That is the trade taken deliberately: a silent
+/// pass means the user runs weights nobody in this project ever measured, and a
+/// loud failure means somebody re-runs the measurement. The `#[ignore]`d
+/// `the_measured_sizes_still_match_hugging_face` test below is how that gets
+/// noticed before a user meets it. Two models were already 2 240 bytes adrift
+/// from their declared size when this was measured, so the case is not
+/// hypothetical.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SizeCheck {
+    /// Measured against the publisher's own object size, so the download must
+    /// match it to the byte.
+    Exact(u64),
+    /// Upstream's declaration, never measured. Held to
+    /// [`kw_transcription_core::models::within_tolerance`]'s 5%, which is what
+    /// every model used to get. Reached only by a model added to the registry
+    /// without being measured.
+    Approximate(u64),
+    /// The registry carries no length. Nothing to check, and nothing is claimed.
+    Unknown,
+}
+
+impl SizeCheck {
+    /// Read the check out of a registry entry.
+    ///
+    /// A size flagged as measured but absent is read as [`Self::Unknown`] rather
+    /// than trusted: the generator cannot produce that pair, and if it ever did,
+    /// the safe reading of "measured, value missing" is that nothing is known.
+    fn of(size_bytes: Option<u64>, measured: bool) -> Self {
+        match (size_bytes, measured) {
+            (Some(bytes), true) => Self::Exact(bytes),
+            (Some(bytes), false) => Self::Approximate(bytes),
+            (None, _) => Self::Unknown,
+        }
+    }
+
+    /// Whether a finished download of `actual` bytes is the file that was asked
+    /// for, and if not, why — phrased in the terms the check was made in.
+    ///
+    /// "about 5 027 783 488" and "exactly 5 027 783 488" are different claims and
+    /// the message must not blur them. The first invites the reader to shrug at a
+    /// small difference; under [`Self::Exact`] there is no such thing as a small
+    /// difference.
+    fn verify(self, actual: u64) -> Result<(), String> {
+        match self {
+            Self::Exact(expected) if actual != expected => Err(format!(
+                "the download is {actual} bytes and this model measures exactly {expected}. \
+                 Nothing was installed."
+            )),
+            Self::Approximate(expected)
+                if !kw_transcription_core::models::within_tolerance(actual, expected) =>
+            {
+                Err(format!(
+                    "the download is {actual} bytes and the registry expects about {expected}. \
+                     Nothing was installed."
+                ))
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
+/// Whether a finished download hashes to the digest the registry carries, and
+/// which of two standards that digest meets.
+///
+/// Separate from [`SizeCheck`] rather than folded into it, because the two are
+/// orthogonal and each has its own reason to be absent. A cross product of five
+/// states would have hidden that; two enums composed at the call site do not.
+///
+/// **Why a digest at all, when the size is already exact.** An exact length
+/// turns "roughly this file" into "a file of exactly 6 169 341 984 bytes", which
+/// is a real narrowing and was the whole of `KNEG-101`. It is still satisfied by
+/// any 6 169 341 984 bytes. A digest is satisfied by one file. That is the gap
+/// `KNEG-45` recorded and this closes.
+///
+/// **The two standards, and why they are one enum with two variants rather than
+/// a `String` and a `bool`.** Nothing downstream may reach the digest without
+/// having been handed which kind it is; that is the only structural defence
+/// against a stated oid being reported as a measured one, and the flag exists
+/// precisely because that difference is easy to lose in a sentence.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DigestCheck {
+    /// A digest **this project measured**: the object was downloaded once,
+    /// hashed here, and the result committed to this repository. Seven of the
+    /// thirty-nine objects, one per publishing organisation.
+    Measured(String),
+    /// The **publisher's stated** digest -- Hugging Face's `lfs.oid`, which is a
+    /// true SHA-256 of the object because git-lfs is content-addressed on it.
+    ///
+    /// Checked exactly as strictly as [`Self::Measured`]. What differs is what
+    /// may be claimed afterwards: this digest arrived over the same channel as
+    /// the bytes, so it catches corruption, truncation and an accidental
+    /// re-upload, and it does not catch a compromised huggingface.co.
+    Stated(String),
+    /// The registry carries no digest. Reached only by a model added without
+    /// being pinned; every object shipped today carries one, asserted by
+    /// `every_local_model_carries_a_digest_the_installer_will_check`.
+    Absent,
+}
+
+impl DigestCheck {
+    /// Read the check out of a registry entry.
+    ///
+    /// A `measured` flag with no digest behind it is read as [`Self::Absent`]
+    /// rather than trusted, the same way [`SizeCheck::of`] reads a measured size
+    /// that is missing: the generator cannot produce that pair, and if it ever
+    /// did, the safe reading of "measured, value missing" is that nothing is
+    /// known.
+    fn of(sha256: Option<&str>, measured: bool) -> Self {
+        match (sha256, measured) {
+            (Some(digest), true) => Self::Measured(digest.to_owned()),
+            (Some(digest), false) => Self::Stated(digest.to_owned()),
+            (None, _) => Self::Absent,
+        }
+    }
+
+    /// Hash the file at `path` and compare, phrasing any refusal in the terms the
+    /// check was made in.
+    ///
+    /// Blocking, and deliberately called through `spawn_blocking`: this reads up
+    /// to 20 GB back off the disk.
+    fn verify(&self, path: &std::path::Path) -> Result<(), String> {
+        let expected = match self {
+            Self::Measured(digest) | Self::Stated(digest) => digest,
+            Self::Absent => return Ok(()),
+        };
+
+        let actual = kw_sidecar::integrity::hash_file(path).map_err(|e| e.to_string())?;
+        if actual == *expected {
+            return Ok(());
+        }
+
+        // Two messages, because the two point at different next steps. A measured
+        // digest that disagrees means this repository's pin is stale or the bytes
+        // are wrong, and somebody has to re-measure. A stated one that disagrees
+        // means Hugging Face's own metadata and Hugging Face's own bytes
+        // disagree, which is a transfer fault far more often than anything else.
+        Err(match self {
+            Self::Measured(_) => format!(
+                "the download hashes to {actual}, and the digest measured for this model is                  {expected}. Nothing was installed. Re-measure the pin before assuming the                  download was at fault."
+            ),
+            Self::Stated(_) => format!(
+                "the download hashes to {actual}, and Hugging Face states {expected} for this                  object. Nothing was installed. The transfer was most likely corrupted; try                  again."
+            ),
+            Self::Absent => unreachable!("returned above"),
+        })
+    }
+}
+
+/// What may honestly be said about a file that passed both checks.
+///
+/// The digest decides it where there is one, because a digest subsumes a length:
+/// a file that hashes correctly is the right length by construction. Only with
+/// no digest at all does the size become the strongest thing that was checked.
+const fn verified_by(size: SizeCheck, digest: &DigestCheck) -> crate::local_model::VerifiedBy {
+    use crate::local_model::VerifiedBy;
+    match digest {
+        DigestCheck::Measured(_) => VerifiedBy::Digest,
+        DigestCheck::Stated(_) => VerifiedBy::StatedDigest,
+        DigestCheck::Absent => match size {
+            SizeCheck::Exact(_) | SizeCheck::Approximate(_) => VerifiedBy::Size,
+            SizeCheck::Unknown => VerifiedBy::Nothing,
+        },
+    }
+}
+
+/// Download one GGUF and verify it, returning what was actually checked.
+///
+/// **Size and digest.** Both, for every object shipped today. How strict the
+/// length check is, and why, is [`SizeCheck`]; which of two standards the digest
+/// meets, and what that costs, is [`DigestCheck`].
+///
+/// The order is length first, then hash. The length is free -- it is already on
+/// the filesystem -- and a truncated transfer is the common failure, so checking
+/// it first turns the common case into an immediate, specific message instead of
+/// a digest mismatch that could mean anything.
+///
+/// **The check happens at install, and is not repeated.** `installed: true` on
+/// the status screen afterwards means the path exists, not that it was hashed
+/// again; re-reading up to 20 GB every time a settings screen opens is not a
+/// trade worth making, and the whisper path gets away with it only because its
+/// largest model is 3 GB. So a file corrupted *after* a successful install is
+/// not caught here. Recorded rather than hidden, and filed as KNEG-107.
+///
+/// **The download is bounded only under [`SizeCheck::Exact`].** A bound refuses
+/// the transfer mid-flight, so it has to be a figure that cannot be wrong on
+/// the high side, and only a measured one is. `Approximate` is upstream's
+/// declaration held to 5%: bounding *that* is the bug KNEG-101 fixed, one layer
+/// earlier — eighteen models were declared 6.7–7.9% larger than the file
+/// Hugging Face serves, and the version of this function that compared a
+/// finished download against the declared figure deleted all eighteen after
+/// downloading 101 GB. A bound would have refused them faster and just as
+/// wrongly. `Approximate`'s tolerance therefore stays a post-download check and
+/// never becomes a bound.
+///
+/// So the strong case gets both protections and the weak case gets the one it
+/// can support. That is the same shape as `models::install` for whisper models,
+/// and for the same reason.
 async fn download_gguf(
     policy: &NetworkPolicy,
     url: &str,
     destination: &std::path::Path,
-    expected_bytes: Option<u64>,
+    size: SizeCheck,
+    digest: &DigestCheck,
     progress: &mut (dyn FnMut(u64, Option<u64>) + Send),
-) -> Result<(), String> {
+    verifying: &mut (dyn FnMut() + Send),
+) -> Result<Option<crate::local_model::VerifiedBy>, String> {
+    // Already there, so nothing was downloaded and nothing was re-checked. The
+    // screen only offers Install for a model it believes is absent, so this is a
+    // re-entry guard rather than the ordinary path -- and `None` says "no claim"
+    // rather than repeating the claim the last install earned.
     if destination.exists() {
-        return Ok(());
+        return Ok(None);
     }
 
     // Downloaded beside the destination and renamed on success, so an
     // interrupted six-gigabyte download never looks like an installed model.
     let partial = destination.with_extension("partial");
 
-    policy
-        .download_to_file(
-            kw_network_policy::RequestPurpose::UserTriggeredModelDownload,
-            url,
-            &partial,
-            progress,
-        )
-        .await
-        .map_err(|e| e.to_string())?;
+    let purpose = kw_network_policy::RequestPurpose::UserTriggeredModelDownload;
+    match size {
+        SizeCheck::Exact(expected) => policy
+            .download_to_file_bounded(purpose, url, &partial, expected, progress)
+            .await
+            .map_err(|e| e.to_string())?,
+        SizeCheck::Approximate(_) | SizeCheck::Unknown => policy
+            .download_to_file(purpose, url, &partial, progress)
+            .await
+            .map_err(|e| e.to_string())?,
+    };
 
-    if let Some(expected) = expected_bytes {
-        let actual = std::fs::metadata(&partial)
-            .map_err(|e| e.to_string())?
-            .len();
-        if !kw_transcription_core::models::within_tolerance(actual, expected) {
+    let actual = std::fs::metadata(&partial)
+        .map_err(|e| e.to_string())?
+        .len();
+    if let Err(refusal) = size.verify(actual) {
+        let _ = std::fs::remove_file(&partial);
+        return Err(refusal);
+    }
+
+    if !matches!(digest, DigestCheck::Absent) {
+        verifying();
+        let hashing = digest.clone();
+        let path = partial.clone();
+        // Off the async runtime: hashing 20 GB is minutes of blocking work, and
+        // doing it on a worker thread would stall every other task on it.
+        let outcome = tauri::async_runtime::spawn_blocking(move || hashing.verify(&path))
+            .await
+            .map_err(|e| e.to_string())?;
+        if let Err(refusal) = outcome {
             let _ = std::fs::remove_file(&partial);
-            return Err(format!(
-                "the download is {actual} bytes and the registry expects about {expected}. \
-                 Nothing was installed."
-            ));
+            return Err(refusal);
         }
     }
 
-    std::fs::rename(&partial, destination).map_err(|e| e.to_string())
+    std::fs::rename(&partial, destination).map_err(|e| e.to_string())?;
+    Ok(Some(verified_by(size, digest)))
 }
 
 #[tauri::command]
@@ -764,6 +1055,501 @@ mod tests {
     #[test]
     fn an_untouched_endpoint_is_not_immediately_stale() {
         assert_eq!(LocalEndpoint::default().idle_for(), Duration::ZERO);
+    }
+
+    /// A measured size is held to the byte; a declared one is not.
+    ///
+    /// The third assertion is the defect, as arithmetic: a base-10 "5 GB" label
+    /// multiplied by 2^30 rather than 10^9 declares 6.9% more bytes than the file
+    /// has, which is outside the tolerance. Eighteen models were declared that
+    /// way, downloaded in full, and deleted on arrival.
+    #[test]
+    fn a_measured_size_is_held_to_the_byte_and_a_declared_one_to_five_percent() {
+        let bytes = 5_000_000_000_u64;
+
+        let measured = SizeCheck::of(Some(bytes), true);
+        assert!(measured.verify(bytes).is_ok());
+        assert!(measured.verify(bytes - 1).is_err());
+        assert!(measured.verify(bytes + 1).is_err());
+
+        let declared = SizeCheck::of(Some(bytes), false);
+        assert!(declared.verify(bytes - 1).is_ok());
+
+        let double_converted = SizeCheck::of(Some(5 * 1024 * 1024 * 1024), false);
+        assert!(double_converted.verify(bytes).is_err());
+
+        // A flag with no number behind it claims nothing.
+        assert_eq!(SizeCheck::of(None, true), SizeCheck::Unknown);
+        assert!(SizeCheck::Unknown.verify(1).is_ok());
+    }
+
+    /// Every registry entry the installer can download resolves to a real check.
+    ///
+    /// Two of the three states are acceptable — a measured size held to the byte,
+    /// a declared one held to 5% — and [`SizeCheck::Unknown`] is not: it means
+    /// several gigabytes are written into the model directory with nothing having
+    /// looked at them. It would take a registry that lost the field rather than a
+    /// model somebody forgot to measure, which is why it is asserted rather than
+    /// assumed.
+    ///
+    /// The second assertion is the weaker one on purpose. Every model and every
+    /// drafter is measured today; a new one added before it is measured is
+    /// *degraded*, not broken, and this is where that shows up. Resolve it by
+    /// measuring the model into `LOCAL_LLM_PINS` — or, if it genuinely cannot be
+    /// measured, by naming it here and saying why.
+    #[test]
+    fn every_local_model_carries_a_size_the_installer_will_check() {
+        let registry = kw_provider_registry::registry().expect("registry");
+
+        let mut checks: Vec<(String, SizeCheck)> = Vec::new();
+        for provider in &registry.local_llm {
+            for model in &provider.models {
+                checks.push((
+                    model.id.clone(),
+                    SizeCheck::of(model.size_bytes, model.size_measured),
+                ));
+                if let Some(draft) = &model.draft {
+                    checks.push((
+                        format!("{} (drafter)", model.id),
+                        SizeCheck::of(draft.size_bytes, draft.size_measured),
+                    ));
+                }
+            }
+        }
+
+        assert!(
+            checks.len() >= 35,
+            "expected every registry model and drafter, got {}",
+            checks.len()
+        );
+
+        let unchecked: Vec<&str> = checks
+            .iter()
+            .filter(|(_, c)| *c == SizeCheck::Unknown)
+            .map(|(id, _)| id.as_str())
+            .collect();
+        assert!(
+            unchecked.is_empty(),
+            "these would install unverified: {unchecked:?}"
+        );
+
+        let unmeasured: Vec<&str> = checks
+            .iter()
+            .filter(|(_, c)| matches!(c, SizeCheck::Approximate(_)))
+            .map(|(id, _)| id.as_str())
+            .collect();
+        assert!(
+            unmeasured.is_empty(),
+            "these still ride on upstream's declared size, which was wrong for \
+             eighteen models: {unmeasured:?}. Measure them into LOCAL_LLM_PINS in \
+             tools/integration-audit/generate-provider-registry.mjs."
+        );
+    }
+
+    /// Every committed size still matches the file Hugging Face serves.
+    ///
+    /// `#[ignore]`d because it reaches the network, but it downloads nothing:
+    /// one HEAD per object, no bodies, a few seconds in total. Run it:
+    ///
+    /// ```text
+    /// cargo test -p knegiswhisper local_llm -- --ignored --nocapture
+    /// ```
+    ///
+    /// This is the whole reason exact equality is safe to require. A committed
+    /// measurement rots the moment a publisher re-uploads, and a rotted one is
+    /// worse than a tolerance because it fails at the end of a twenty-gigabyte
+    /// download in front of a user. This is the same measurement the pins were
+    /// taken with, so a re-upload shows up here first.
+    ///
+    /// `x-linked-size` rather than `content-length`: Hugging Face serves these
+    /// through LFS and answers a `resolve/main` request with a 302 to a CDN, so
+    /// `content-length` describes the redirect while `x-linked-size` carries the
+    /// object. The fallback is used only on a 200, where there is no redirect for
+    /// `content-length` to be measuring.
+    #[tokio::test]
+    #[ignore = "sends one HEAD request per model to huggingface.co; run with --ignored"]
+    async fn the_measured_sizes_still_match_hugging_face() {
+        let registry = kw_provider_registry::registry().expect("registry");
+        let policy = NetworkPolicy::new().expect("the shared client builds");
+
+        let mut targets: Vec<(String, String, u64)> = Vec::new();
+        for provider in &registry.local_llm {
+            for model in &provider.models {
+                if let (Some(bytes), true) = (model.size_bytes, model.size_measured) {
+                    targets.push((
+                        model.id.clone(),
+                        gguf_url(&model.hf_repo, &model.file_name),
+                        bytes,
+                    ));
+                }
+                if let Some(draft) = &model.draft {
+                    if let (Some(bytes), true) = (draft.size_bytes, draft.size_measured) {
+                        targets.push((
+                            format!("{} (drafter)", model.id),
+                            gguf_url(&draft.hf_repo, &draft.file_name),
+                            bytes,
+                        ));
+                    }
+                }
+            }
+        }
+        assert!(
+            !targets.is_empty(),
+            "nothing is pinned, so nothing is checked"
+        );
+
+        let mut wrong: Vec<String> = Vec::new();
+        for (id, url, committed) in &targets {
+            let response = policy
+                .request(
+                    kw_network_policy::RequestPurpose::UserTriggeredModelDownload,
+                    reqwest::Method::HEAD,
+                    url,
+                )
+                .expect("the boundary allows huggingface.co")
+                .send()
+                .await
+                .expect("huggingface.co answers a HEAD");
+
+            let status = response.status();
+            let served = response
+                .headers()
+                .get("x-linked-size")
+                .or_else(|| {
+                    status
+                        .is_success()
+                        .then(|| response.headers().get(reqwest::header::CONTENT_LENGTH))
+                        .flatten()
+                })
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.parse::<u64>().ok());
+
+            match served {
+                Some(bytes) if bytes == *committed => {
+                    println!("{id}: {bytes} bytes, unchanged");
+                }
+                Some(bytes) => wrong.push(format!(
+                    "{id}: committed {committed}, served {bytes} (status {status})"
+                )),
+                None => wrong.push(format!(
+                    "{id}: no size header at all (status {status}) — the file may have moved"
+                )),
+            }
+        }
+
+        assert!(
+            wrong.is_empty(),
+            "{} of {} sizes have changed upstream; re-measure into LOCAL_LLM_PINS:\n{}",
+            wrong.len(),
+            targets.len(),
+            wrong.join("\n")
+        );
+    }
+
+    /// The two digest standards are checked equally and reported differently.
+    ///
+    /// That pairing is the whole design. A stated `lfs.oid` is a real SHA-256 of
+    /// the object, so there is no reason to hold it more loosely than one this
+    /// project measured — and every reason not to *describe* the two the same
+    /// way, because only the measured one is independent of whoever serves the
+    /// bytes.
+    #[test]
+    fn a_stated_digest_is_checked_as_strictly_as_a_measured_one_and_named_apart() {
+        use crate::local_model::VerifiedBy;
+
+        let digest = "a".repeat(64);
+        let measured = DigestCheck::of(Some(&digest), true);
+        let stated = DigestCheck::of(Some(&digest), false);
+
+        assert_eq!(measured, DigestCheck::Measured(digest.clone()));
+        assert_eq!(stated, DigestCheck::Stated(digest.clone()));
+
+        // Same file, same comparison, different claim.
+        assert_eq!(
+            verified_by(SizeCheck::Exact(1), &measured),
+            VerifiedBy::Digest
+        );
+        assert_eq!(
+            verified_by(SizeCheck::Exact(1), &stated),
+            VerifiedBy::StatedDigest
+        );
+        assert_ne!(
+            crate::local_model::VerifiedBy::Digest.as_str(),
+            crate::local_model::VerifiedBy::StatedDigest.as_str()
+        );
+
+        // A flag with no digest behind it claims nothing, exactly as
+        // `SizeCheck::of(None, true)` claims nothing.
+        assert_eq!(DigestCheck::of(None, true), DigestCheck::Absent);
+
+        // With no digest, the size is the strongest thing that was checked.
+        assert_eq!(
+            verified_by(SizeCheck::Exact(1), &DigestCheck::Absent),
+            VerifiedBy::Size
+        );
+        assert_eq!(
+            verified_by(SizeCheck::Unknown, &DigestCheck::Absent),
+            VerifiedBy::Nothing
+        );
+    }
+
+    /// A digest that disagrees refuses the file, and says which pin to distrust.
+    #[test]
+    fn a_wrong_digest_refuses_the_file_in_the_terms_it_was_pinned_in() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("weights.gguf");
+        std::fs::write(&path, b"not the model").expect("write");
+
+        // sha256("not the model"), so the happy path is a real hash and not a
+        // tautology about two constants.
+        let real = kw_sidecar::integrity::hash_file(&path).expect("hash");
+        assert!(DigestCheck::Stated(real.clone()).verify(&path).is_ok());
+        assert!(DigestCheck::Measured(real).verify(&path).is_ok());
+        assert!(DigestCheck::Absent.verify(&path).is_ok());
+
+        let wrong = "b".repeat(64);
+        let measured = DigestCheck::Measured(wrong.clone())
+            .verify(&path)
+            .expect_err("a wrong digest must refuse");
+        let stated = DigestCheck::Stated(wrong)
+            .verify(&path)
+            .expect_err("a wrong digest must refuse");
+
+        // Both say nothing was installed; each points at its own next step.
+        assert!(measured.contains("Nothing was installed"), "{measured}");
+        assert!(stated.contains("Nothing was installed"), "{stated}");
+        assert!(measured.contains("Re-measure"), "{measured}");
+        assert!(stated.contains("Hugging Face states"), "{stated}");
+    }
+
+    /// The weaker of two verdicts wins, so a drafter cannot be rounded up.
+    #[test]
+    fn an_install_is_only_as_verified_as_its_weakest_half() {
+        use crate::local_model::VerifiedBy::{Digest, Nothing, Size, StatedDigest};
+
+        assert_eq!(Digest.weaker(StatedDigest), StatedDigest);
+        assert_eq!(StatedDigest.weaker(Digest), StatedDigest);
+        assert_eq!(StatedDigest.weaker(Size), Size);
+        assert_eq!(Size.weaker(Nothing), Nothing);
+        assert_eq!(Digest.weaker(Digest), Digest);
+        assert_eq!(Nothing.weaker(Digest), Nothing);
+    }
+
+    /// Every registry entry the installer can download carries a digest.
+    ///
+    /// The mirror of `every_local_model_carries_a_size_the_installer_will_check`,
+    /// and the assertion that closes KNEG-45: [`DigestCheck::Absent`] means
+    /// several gigabytes are written into the model directory with only a byte
+    /// count having looked at them, which is where this path was before
+    /// 2026-08-31.
+    ///
+    /// The second assertion is the weaker one on purpose, exactly as it is for
+    /// the sizes. Thirty-two of the thirty-nine objects ride on the publisher's
+    /// stated `lfs.oid` rather than a digest measured here; that is a deliberate
+    /// cost decision — measuring all of them is 202 GB of downloading — so it is
+    /// asserted as a *count* rather than forbidden. If that count moves, either
+    /// somebody measured more of them, which is good and this number should
+    /// follow, or a pin was quietly downgraded, which is not.
+    #[test]
+    fn every_local_model_carries_a_digest_the_installer_will_check() {
+        let registry = kw_provider_registry::registry().expect("registry");
+
+        let mut checks: Vec<(String, DigestCheck)> = Vec::new();
+        for provider in &registry.local_llm {
+            for model in &provider.models {
+                checks.push((
+                    model.id.clone(),
+                    DigestCheck::of(model.sha256.as_deref(), model.sha256_measured),
+                ));
+                if let Some(draft) = &model.draft {
+                    checks.push((
+                        format!("{} (drafter)", model.id),
+                        DigestCheck::of(draft.sha256.as_deref(), draft.sha256_measured),
+                    ));
+                }
+            }
+        }
+
+        assert_eq!(
+            checks.len(),
+            39,
+            "expected every registry model and drafter, got {}",
+            checks.len()
+        );
+
+        let unpinned: Vec<&str> = checks
+            .iter()
+            .filter(|(_, c)| *c == DigestCheck::Absent)
+            .map(|(id, _)| id.as_str())
+            .collect();
+        assert!(
+            unpinned.is_empty(),
+            "these would install with only a byte count having looked at them: \
+             {unpinned:?}. Pin them into LOCAL_LLM_PINS in \
+             tools/integration-audit/generate-provider-registry.mjs."
+        );
+
+        let measured = checks
+            .iter()
+            .filter(|(_, c)| matches!(c, DigestCheck::Measured(_)))
+            .count();
+        assert_eq!(
+            measured, 7,
+            "seven objects were downloaded and hashed on 2026-08-31, one per \
+             publishing organisation. If this changed, say which way in the \
+             commit: measuring more is progress, measuring fewer is a downgrade."
+        );
+    }
+
+    /// Every committed digest still matches what Hugging Face states.
+    ///
+    /// `#[ignore]`d because it reaches the network, but it downloads no weights:
+    /// one `tree` call per repository — 36 requests for 39 objects, because a
+    /// tree lists every file in the repo at once — and a few seconds in total.
+    /// Run it:
+    ///
+    /// ```text
+    /// cargo test -p knegiswhisper local_llm -- --ignored --nocapture
+    /// ```
+    ///
+    /// The companion to `the_measured_sizes_still_match_hugging_face`, and the
+    /// same argument: a committed pin rots the moment a publisher re-uploads, and
+    /// a rotted digest fails at the end of a twenty-gigabyte download in front of
+    /// a user. This is cheaper than the size check it sits beside *and* strictly
+    /// stronger, because `lfs.size` comes back in the same response.
+    ///
+    /// **What it does and does not prove.** It compares this repository's pin
+    /// against Hugging Face's current statement. For the thirty-two stated
+    /// digests that is the same standard they were pinned to, so agreement means
+    /// "unchanged". For the seven measured ones it is weaker than how they were
+    /// pinned — those bytes were hashed here — so agreement means Hugging Face
+    /// has not re-uploaded, not that the bytes are still what we hashed. Only a
+    /// download proves that, and `tools/model-pin/pin.mjs --url` is how.
+    #[tokio::test]
+    #[ignore = "sends one tree request per repository to huggingface.co; run with --ignored"]
+    async fn the_stated_digests_still_match_hugging_face() {
+        use std::collections::HashMap;
+
+        let registry = kw_provider_registry::registry().expect("registry");
+        let policy = NetworkPolicy::new().expect("the shared client builds");
+
+        // (label, repo, file, committed digest, committed size)
+        let mut targets: Vec<(String, String, String, String, Option<u64>)> = Vec::new();
+        for provider in &registry.local_llm {
+            for model in &provider.models {
+                if let Some(digest) = &model.sha256 {
+                    targets.push((
+                        model.id.clone(),
+                        model.hf_repo.clone(),
+                        model.file_name.clone(),
+                        digest.clone(),
+                        model.size_bytes,
+                    ));
+                }
+                if let Some(draft) = &model.draft {
+                    if let Some(digest) = &draft.sha256 {
+                        targets.push((
+                            format!("{} (drafter)", model.id),
+                            draft.hf_repo.clone(),
+                            draft.file_name.clone(),
+                            digest.clone(),
+                            draft.size_bytes,
+                        ));
+                    }
+                }
+            }
+        }
+        assert!(
+            !targets.is_empty(),
+            "nothing is pinned, so nothing is checked"
+        );
+
+        // One request per repository, not per object: three of the repos here
+        // hold two objects each.
+        let mut trees: HashMap<String, serde_json::Value> = HashMap::new();
+        for (_, repo, _, _, _) in &targets {
+            if trees.contains_key(repo) {
+                continue;
+            }
+            let url = format!(
+                "https://huggingface.co/api/models/{repo}/tree/main?expand=true&recursive=true"
+            );
+            let body = policy
+                .request(
+                    kw_network_policy::RequestPurpose::UserTriggeredModelDownload,
+                    reqwest::Method::GET,
+                    &url,
+                )
+                .expect("the boundary allows huggingface.co")
+                .send()
+                .await
+                .expect("huggingface.co answers a tree request")
+                .json::<serde_json::Value>()
+                .await
+                .expect("the tree is JSON");
+            trees.insert(repo.clone(), body);
+        }
+        println!(
+            "{} tree requests for {} objects",
+            trees.len(),
+            targets.len()
+        );
+
+        let mut wrong: Vec<String> = Vec::new();
+        for (label, repo, file, committed, committed_size) in &targets {
+            let entry = trees
+                .get(repo)
+                .and_then(|t| t.as_array())
+                .and_then(|entries| {
+                    entries
+                        .iter()
+                        .find(|e| e.get("path").and_then(|p| p.as_str()) == Some(file.as_str()))
+                });
+
+            let Some(entry) = entry else {
+                wrong.push(format!(
+                    "{label}: {file} is no longer in {repo} — the file has moved or been renamed"
+                ));
+                continue;
+            };
+
+            // `lfs.oid` is the object's SHA-256: git-lfs is content-addressed on
+            // it. A file served without an `lfs` block is not stored in LFS at
+            // all, which for a multi-gigabyte GGUF would itself be the news.
+            let stated = entry
+                .get("lfs")
+                .and_then(|l| l.get("oid"))
+                .and_then(|o| o.as_str());
+            match stated {
+                Some(oid) if oid == committed => {}
+                Some(oid) => wrong.push(format!("{label}: committed {committed}, stated {oid}")),
+                None => wrong.push(format!(
+                    "{label}: no lfs.oid in the tree entry — it may no longer be an LFS object"
+                )),
+            }
+
+            // Free, because it arrived in the same response, and it is the same
+            // figure `the_measured_sizes_still_match_hugging_face` HEADs for.
+            let size = entry
+                .get("lfs")
+                .and_then(|l| l.get("size"))
+                .and_then(|s| s.as_u64());
+            if let (Some(stated), Some(committed)) = (size, *committed_size) {
+                if stated != committed {
+                    wrong.push(format!(
+                        "{label}: committed {committed} bytes, stated {stated}"
+                    ));
+                }
+            }
+        }
+
+        assert!(
+            wrong.is_empty(),
+            "{} of {} objects have changed upstream; re-measure into LOCAL_LLM_PINS:\n{}",
+            wrong.len(),
+            targets.len(),
+            wrong.join("\n")
+        );
     }
 
     /// The install progress states cross the boundary tagged and camelCased.

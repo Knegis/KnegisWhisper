@@ -61,6 +61,12 @@ jobs:
       - name: Parity gate self-tests
         run: node --test tools/integration-audit/verify-parity.test.mjs
 
+      # Six of these cover the pin reader refusing to parse a table whose shape
+      # has changed. That is the case worth guarding: a verifier that silently
+      # checks nothing does not fail, it reports success.
+      - name: Model pin self-tests
+        run: node --test tools/model-pin/pin.test.mjs
+
       # The baseline is generated from an OpenWhispr checkout that CI does not
       # have, so --check cannot run here. Assert instead that it is valid JSON
       # and still pinned to the commit the manifest claims.

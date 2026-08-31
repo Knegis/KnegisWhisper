@@ -238,7 +238,11 @@ Nothing here needs a developer. All of it is buttons, one sentence spoken aloud,
    that the tidied text comes back; nobody has read it.
 5. **Install a local LLM** under `Settings > Local models`, hold a chat, and leave it idle for five
    minutes to see it stop. Sizes reach 5.9 GB — the smallest is the point of the check, not the
-   largest.
+   largest. **Note, 2026-08-31:** the smallest models were never the broken ones. Eighteen of the
+   thirty-five had a declared size 6.7–7.9% off the real file and were deleted after downloading in
+   full; every model that matched was one of the small `lfm2*` or Gemma QAT builds. Doing this check
+   with `lfm2.5-230m-q8_0` would have proved nothing about the other eighteen — see item 7 under the
+   2026-08-28 round-two list.
 6. **Press `Control+Super`** once with the default restored, and watch what the Start menu does to
    focus while a dictation is running. The hook deliberately does not consume the keystroke, which
    is the right choice and has a consequence nobody has looked at.
@@ -465,6 +469,28 @@ of.
 filler words through Parakeet with cleanup on, and confirm the row shows both versions — and that a
 dictation cleanup did *not* change shows only one.
 
+**3. `history.enabled` was the same defect one row down.** Fixed 2026-08-31.
+Not found by this run — found by fixing finding 2 and then reading the three controls the History
+section offered. `DbHistory::enabled` is read before every row is written and defaults to on, and
+there was no command, no IPC wrapper and no control anywhere: the only way to stop the application
+writing down everything dictated was to edit SQLite by hand. Meanwhile the screen offered *Clear
+history* and, as of finding 2, a toggle that stores **more** of it. Third instance of one pattern —
+the four hotkeys that registered and dispatched nowhere, `keep_raw_text` above, this — and each time
+the tests passed, because a test can set the value directly.
+
+Surface only, and that was checked before any of it was written: `Dictation::write_history` in
+`kw_app_core` gates every write on `enabled()`, `DbHistory` is the only production implementation of
+`History`, and every other `transcriptions::record` call site is a test. Nothing bypasses the
+switch. `history_enabled` / `history_set_enabled`, and a toggle above the keep-raw one — which is
+now disabled while history is off, because with no rows being written there is nothing for a second
+version to go on. Switching history off stops new rows and removes nothing; the row's detail text
+says so in both states rather than leaving it to be discovered next to a button called *Clear
+history*.
+
+**Still unchecked:** nobody has switched it off and dictated. Switch it off, dictate, and confirm no
+new entry appears and the entries already listed are untouched. Switch it back on and confirm the
+next dictation is written without a relaunch — the sink reads the setting per row, so it should be.
+
 ### Added by the live Teams meeting, same day
 
 **Verified:** `meeting-stream:local` produces a **live** transcript during recording, not only a
@@ -554,30 +580,109 @@ dead provider stops the recording, falls back immediately, or carries on with a 
 
 1. **`Settings > Meetings`, re-read** — still carried over from an earlier paste. AssemblyAI and
    Corti should now name the missing key rather than reading "ready to use".
-2. **Whether dictation and import now recover from a dead local server on their own.** Written on
-   2026-08-31 and covered by tests that reach the decision but not the round trip: kill
-   `whisper-server` from Task Manager while the app holds its port, then dictate. Expected: one
-   `the local model server has gone; starting it again`, one `the local model server was started
-   again`, and a transcript — not a failure. Then repeat with a media import, which is the case
-   that matters, because a recording being imported usually cannot be made again. The remaining
-   half of KNEG-96 — *why* the child exits unattended — is untouched by that fix and needs the
-   first two log lines after a restart to tell the two candidates apart.
-3. **Whether a long import is transcribed in full — answered, and the diagnosis here was wrong.**
-   The Swedish import *was* transcribed in full: 39,142 characters for 3,401 seconds. It produced
-   one segment at `00:00:00` because the server was started with `--no-timestamps` and so reported
-   no timings at all — not because `media.rs` failed to divide it. Measured on 2026-08-31 and fixed
-   by capping the segment length instead; the table is in
-   [PLATFORM_SUPPORT.md](PLATFORM_SUPPORT.md#local-asr-whisper-server-timings). **Still needs a
-   person:** import a long recording through a *local* model and export it as SRT, and check the
-   cues land where the speech does. An import routed to a cloud provider still gets one cue, which
-   is correct — no cloud batch provider on this path reports segments.
+2. **Whether dictation and import now recover from a dead local server — the mechanism is
+   verified, the wiring is not.** `local_dictation.rs` now stops the real server, confirms the
+   health check reports it gone, starts it again on the same port, and transcribes through the
+   revived one. It also probed a *busy* server 5,235 times mid-transcription with **zero** false
+   negatives, which was the risk worth checking: a working server judged gone would have had a
+   second one started on top of it. Both measurements are in
+   [PLATFORM_SUPPORT.md](PLATFORM_SUPPORT.md#local-asr-the-health-check-and-a-busy-server), along
+   with the surprise — a dead port costs the **full two-second timeout**, not a fast refusal.
+   **Still needs a person:** the Tauri leg. Kill `whisper-server` from Task Manager while the app
+   holds its port, then dictate, and confirm the two log lines appear and a transcript arrives. The
+   remaining half of KNEG-96 — *why* the child exits unattended — is untouched by that fix.
+3. **Whether a long import is transcribed in full — answered, verified end to end, and the
+   diagnosis here was wrong.** The Swedish import *was* transcribed in full: 39,142 characters for
+   3,401 seconds. It produced one segment at `00:00:00` because the server was started with
+   `--no-timestamps` and so reported no timings at all — not because `media.rs` failed to divide
+   it. Fixed by capping the segment length; the measurement is in
+   [PLATFORM_SUPPORT.md](PLATFORM_SUPPORT.md#local-asr-whisper-server-timings).
+
+   **Verified 2026-08-31** by `crates/transcription-core/tests/subtitle_export.rs`, which builds a
+   78-second recording, runs it through the real server with the *shipped* `build_args`, and
+   exports a real subtitle file. **20 cues from `00:00:00` to `00:01:17`**, each 3–5 seconds, text
+   correct. The same test through the installed Parakeet model gives 20 cues with finer boundaries
+   (`00:00:23,920` against whisper's `00:00:23,000`), non-overlapping, from per-token onsets.
+
+   An import routed to a **cloud** provider still gets one cue, which is correct — no cloud batch
+   provider on this path reports segments. **Still needs a person** only for the screen: press
+   *Import* on a real file and export from the note, since nothing here has been through
+   `NotesUpload`.
 4. **`parakeet-tdt-0.6b-v3`** — offered on the same measured layout, still never downloaded.
-5. **Whether a Parakeet import exports usable cues.** `sherpa::cues` was written on 2026-08-31
-   against one measured run of `sherpa-onnx-offline` over 13.5 s of synthesised speech, and its
-   three cues match whisper's own segmenter on the same audio. What that run does *not* cover:
-   real speech with hesitations, a recording long enough for the 200-character backstop to fire,
-   and a language other than English. Import something long with Parakeet selected, export SRT.
+5. **Whether a Parakeet import exports usable cues — verified for a long recording.** See item 3:
+   `subtitle_export.rs` runs the real `sherpa-onnx-offline` against the installed
+   `parakeet-unified-en-0.6b` over 78 seconds and gets 20 non-overlapping cues spanning the
+   recording. Point it at a model with `KW_SHERPA_MODEL_DIR` and `KW_SHERPA_EXECUTABLE`.
+   **Still uncovered:** real speech with hesitations, a recording long enough for the
+   200-character backstop to fire, and any language other than English.
 6. **Meeting detection firing on a real call.**
+7. **Whether a previously-uninstallable local LLM now installs through the screen — nobody has
+   pressed the button.** Until 2026-08-31, eighteen of the thirty-five models in
+   `Settings > Local models` downloaded in full and were then deleted, because their declared size
+   was a base-10 "GB" figure multiplied by 2^30 and `download_gguf` rejects anything more than 5%
+   from the declared length. All 39 objects are now measured from Hugging Face and held to **exact**
+   equality; the arithmetic and the evidence are in
+   [ENGINEERING_LOG.md](ENGINEERING_LOG.md) under 2026-08-31.
+
+   All 39 also carry a **SHA-256** as of 2026-08-31, so the install now hashes what it downloaded
+   before renaming it into place.
+
+   **What is verified:** the committed sizes and digests match what Hugging Face states — `cargo
+   test -p knegiswhisper local_llm -- --ignored` checks all 39 of each and passed on all 39, as
+   does `node tools/model-pin/pin.mjs --verify-stated` — and seven objects, one per publishing
+   organisation, were downloaded in full and hashed, agreeing exactly. Unit tests prove every model
+   resolves to a real size check and a real digest check rather than to "nothing declared".
+
+   **What is not:** no GGUF has been downloaded *through the application* since either change.
+   Press *Install (1.3 GB)* on `qwen2.5-1.5b-instruct-q5_k_m` — the smallest of the eighteen and
+   the worst offender of them, at 7.9% — and confirm the download renames into place instead of
+   being deleted, that the row then shows *Use this model*, and that pressing it starts a server
+   that answers. **Two things on screen are part of the check.** The size on the button reads the
+   measured figure, so *Install (1.3 GB)* where it used to say 1.4 GB is the size fix visible
+   without instrumentation. And the row should read *checksum verified against the publisher's own*
+   before the install and *… is installed — checksum verified against the publisher's own* after
+   it, with a *Checking … against its checksum…* line in between; that phrase, rather than the
+   bare *checksum verified* the whisper models get, is the digest fix visible without
+   instrumentation. Nothing has rendered `VerifiedBy::StatedDigest` outside a dev fixture.
+
+   A drafter is a second progress bar after the first, and nobody has seen that either.
+   `gemma-4-e2b-it-qat-q4_0` is the cheapest way to reach it (3.3 GB plus a 59 MB drafter) — its
+   size was already correct, so it exercises the drafter path and not the fix.
+
+   **The thing to watch for is the opposite failure.** Exact equality means an upstream re-upload
+   now fails at the *end* of the download rather than passing quietly. Two Gemma models were already
+   2 240 bytes adrift from their old declared size, so this is not hypothetical. If an install fails
+   with "the download is N bytes and this model measures exactly M", the pin is stale, not the
+   connection — re-run the ignored tests and re-measure into `LOCAL_LLM_PINS`. The same is true of a
+   failure naming a digest: since 2026-08-31 an upstream re-upload trips the hash as well as the
+   length, and `node tools/model-pin/pin.mjs --verify-stated` tells the two apart in seconds —
+   agreement there means the bytes were corrupted in transfer, disagreement means the pin is
+   stale.
+8. **Whether a newly digest-pinned whisper model installs through the screen — nobody has pressed
+   the button on any of the five.** Until 2026-08-31 only `tiny` carried a digest; the other five
+   were size-checked with a 5% tolerance. All six now carry a SHA-256 and an exact length measured
+   by downloading them, so `Settings > Transcription > Local` holds every one of them to
+   `kw_sidecar::integrity::verify` and the row's *Verified by* reads `digest` rather than `size`.
+   See [ENGINEERING_LOG.md](ENGINEERING_LOG.md) under 2026-08-31 (whisper pins).
+
+   **What is verified:** all six digests were reproduced from a real download by
+   `tools/model-pin/pin.mjs`, and `tiny`'s round trip — download, digest match, server start, real
+   transcription — is exercised end to end by `cargo test -p kw-transcription-core --test
+   local_dictation -- --ignored`. **What is not:** the other five have never been installed by any
+   route, through the screen or otherwise. `base` is the *recommended* model and the one a new user
+   will press first.
+
+   Press *Install* on `base` (142 MB) and confirm three things: the progress bar reaches
+   `Verifying`, the row afterwards says the check was a **digest** and not a size, and the model
+   then loads and transcribes. `small` (466 MB) is the cheapest second data point. `large` is 2.9 GB
+   and proves nothing the others do not.
+
+   **The thing to watch for is the same opposite failure as item 7, and it is sharper here.** These
+   six are fetched from HuggingFace `resolve/main`, a branch pointer, and the check is now a digest
+   rather than a 5% window — so *any* upstream re-upload, of any size, stops the install dead with
+   an integrity error. `node tools/model-pin/pin.mjs --verify` re-measures all eight model pins
+   (about 8 GB) and is what should be run before believing the download is at fault; the weekly
+   `pin-verify.yml` job runs it unattended. See KNEG-103, and KNEG-105 for this item.
 
 ---
 

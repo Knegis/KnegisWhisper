@@ -511,6 +511,20 @@ pub struct DbHistory {
 }
 
 /// The settings key that switches history off.
+///
+/// On by default, and read per dictation by [`DbHistory::enabled`], so switching
+/// it off stops the next thing said from being written down rather than taking
+/// effect after a relaunch.
+///
+/// **Switching it off writes nothing new and removes nothing.** Rows already in
+/// the table stay until `history_clear` deletes them. The distinction matters
+/// because the two controls sit next to each other on the Dictation screen and
+/// sound alike; the screen says which is which, and so does this.
+///
+/// Until 2026-08-31 nothing could set this key. The gate was honoured on every
+/// write and the only way past it was to edit SQLite by hand -- the third
+/// instance of the same pattern in this repo, after the four hotkeys that
+/// registered and dispatched nowhere and `keep_raw_text` below.
 pub const HISTORY_ENABLED_KEY: &str = "history.enabled";
 
 /// The settings key that keeps the pre-cleanup transcript.
@@ -1092,7 +1106,9 @@ mod tests {
     #[tokio::test]
     async fn history_is_on_unless_switched_off() {
         // A user who has never opened settings expects to find what they just
-        // dictated.
+        // dictated. The command layer defaults to `true` for the same key, and
+        // the two defaults have to stay equal or the screen reports the
+        // opposite of what the sink is doing.
         let db = Db::open_in_memory().await.unwrap();
         let history = DbHistory::new(db.clone());
         assert!(history.enabled().await);
@@ -1100,7 +1116,50 @@ mod tests {
         kw_storage::settings::set(db.pool(), HISTORY_ENABLED_KEY, &false)
             .await
             .unwrap();
+        // Read per dictation, so the next one is not written down -- no
+        // relaunch. Until 2026-08-31 this was the only way to get here, because
+        // nothing in the application could write the key.
         assert!(!history.enabled().await);
+
+        kw_storage::settings::set(db.pool(), HISTORY_ENABLED_KEY, &true)
+            .await
+            .unwrap();
+        // Back on. A switch that only goes one way is not a switch, and the one
+        // this replaced went neither.
+        assert!(history.enabled().await);
+    }
+
+    #[tokio::test]
+    async fn switching_history_off_removes_nothing_already_written() {
+        // The claim the Dictation screen makes in words next to the toggle, and
+        // the whole difference between it and Clear history. Off stops new
+        // rows; it is not a delete.
+        let db = Db::open_in_memory().await.unwrap();
+        let history = DbHistory::new(db.clone());
+
+        let id = history
+            .record(HistoryEntry {
+                text: "said before it was switched off".to_owned(),
+                raw_text: None,
+                provider: None,
+                model: None,
+                duration_ms: None,
+                error: None,
+                failed: false,
+            })
+            .await
+            .expect("an id");
+
+        kw_storage::settings::set(db.pool(), HISTORY_ENABLED_KEY, &false)
+            .await
+            .unwrap();
+
+        assert!(!history.enabled().await);
+        let row = transcriptions::get(db.pool(), id).await.unwrap();
+        assert_eq!(
+            row.map(|r| r.text).as_deref(),
+            Some("said before it was switched off"),
+        );
     }
 
     #[tokio::test]

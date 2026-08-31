@@ -919,12 +919,21 @@ export type Availability = { "state": "installable" } | { "state": "not-publishe
 /**
  * How firmly a model's identity can be established.
  *
- * Three states rather than a boolean, and an enum rather than a string. It was
+ * Four states rather than a boolean, and an enum rather than a string. It was
  * a `&'static str` whose three values the frontend re-declared by hand as a
  * union; nothing held the two in step, so a fourth state added here would have
- * reached a UI that did not know about it. Now it cannot.
+ * reached a UI that did not know about it. Now it cannot -- and the fourth
+ * state duly arrived, as [`Self::StatedDigest`].
+ *
+ * Shared between the whisper models and the local-LLM GGUFs, which need
+ * different subsets of it: whisper reaches [`Self::Digest`] on all six and
+ * [`Self::StatedDigest`] on none, and the GGUFs are the other way round for
+ * thirty-two of thirty-nine objects. A variant unreachable on one path is kept
+ * rather than split into two enums, for the reason
+ * `models::Verification::SizeOnly` is kept: it is still the honest answer for a
+ * model somebody adds tomorrow.
  */
-export type VerifiedBy = "digest" | "size" | "nothing";
+export type VerifiedBy = "digest" | "stated-digest" | "size" | "nothing";
 
 /**
  * One model on offer.
@@ -1031,7 +1040,13 @@ modelsDir: string, };
 /**
  * A drafter alongside the main model.
  */
-export type DraftStatus = { fileName: string, sizeBytes: number | null, installed: boolean, };
+export type DraftStatus = { fileName: string, sizeBytes: number | null, installed: boolean,
+/**
+ * On the same terms as [`LocalLlmModelStatus::verified_by`]. Reported
+ * separately because a drafter is a different object in a different
+ * repository, and one of the two can be the weaker of the pair.
+ */
+verifiedBy: VerifiedBy, };
 
 /**
  * One local model on offer.
@@ -1046,6 +1061,15 @@ provider: string,
  * download that can be six gigabytes.
  */
 sizeBytes: number | null, quantization: string | null, contextLength: number | null, recommended: boolean, supportsThinking: boolean, installed: boolean,
+/**
+ * What integrity check this model can be held to, on the same terms the
+ * whisper screen already states. Shown before the button, for the reason
+ * the size is: a guarantee nobody was told about is a guarantee nobody can
+ * weigh. All thirty-five carry a digest; seven of the thirty-nine objects
+ * carry one this project measured, and the rest are the publisher's stated
+ * `lfs.oid`, which is a different claim.
+ */
+verifiedBy: VerifiedBy,
 /**
  * Whether this model has a speculative-decoding drafter, and whether that
  * drafter is installed. Absent for the models without one.
@@ -1080,7 +1104,15 @@ idleStopMinutes: number, };
  * `local_model` already has one of those and a TypeScript file cannot hold
  * two declarations of the same name. `ipc_types` refuses the collision.
  */
-export type LocalLlmProgress = { "stage": "server", written: number, total: number | null, } | { "stage": "model", id: string, written: number, total: number | null, } | { "stage": "draft", id: string, written: number, total: number | null, } | { "stage": "extracting" } | { "stage": "done", id: string, } | { "stage": "stopped-when-idle" };
+export type LocalLlmProgress = { "stage": "server", written: number, total: number | null, } | { "stage": "model", id: string, written: number, total: number | null, } | { "stage": "draft", id: string, written: number, total: number | null, } | { "stage": "extracting" } | { "stage": "verifying", id: string, } | { "stage": "done", id: string,
+/**
+ * What was actually checked, or `None` when the files were already on
+ * disk and this install re-checked nothing.
+ *
+ * The weaker of the model's verdict and its drafter's, where there is a
+ * drafter; see [`crate::local_model::VerifiedBy::weaker`].
+ */
+verifiedBy: VerifiedBy | null, } | { "stage": "stopped-when-idle" };
 
 /* -------------------------------------------------------------- local api */
 /**

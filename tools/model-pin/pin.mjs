@@ -1,0 +1,664 @@
+#!/usr/bin/env node
+/**
+ * Measures a model's SHA-256 and exact byte size, rather than inventing one.
+ *
+ * `crates/transcription-core/src/models.rs` used to say, of the six whisper
+ * models:
+ *
+ *   > Pinning all of them means downloading roughly seven gigabytes once,
+ *   > which is a job for a tool rather than something to invent digests for
+ *   > here: `tiny` is pinned because it was actually downloaded and hashed
+ *   > while this was written, and the rest say plainly that they were not.
+ *
+ * This is that tool, and on 2026-08-31 it did that: all six downloaded and
+ * hashed in one run, `tiny` reproducing the digest `models.rs` had carried
+ * since it was written. It exists so the difference between a measured digest
+ * and a copied one stays visible: every row it prints was produced by bytes
+ * moving through this process, and nothing else it prints claims to have been.
+ *
+ * ## Why not tools/sidecar-pin
+ *
+ * `sidecar-pin` measures the same two numbers but cannot measure a model. It
+ * builds its URL from `--repo/--release/--asset`, so it can only reach a
+ * GitHub release; and once the bytes are down it demands exactly one
+ * executable inside the archive, dying on zero and on two. A model is neither
+ * of those things. It lives on Hugging Face, it is not an archive, and it
+ * contains no executable — it is data, and this tool hashes a file.
+ *
+ * The parts worth copying were copied: no dependencies, streaming, manual
+ * redirects, a temp file removed in a `finally`, progress on stderr and
+ * pasteable JSON on stdout.
+ *
+ * ## The size comes off the disk
+ *
+ * `sizeBytes` is `statSync(target).size` after the stream has closed, never
+ * the `content-length` header, for the reason `sidecar-pin` gives: **a
+ * truncated body would agree with the header and disagree with itself.** That
+ * is also the whole reason this tool downloads rather than sending a HEAD
+ * request. A HEAD would return both numbers in a millisecond and neither of
+ * them would be evidence: the digest would be absent and the size would be a
+ * claim by the server about bytes nobody counted. Everything this tool reports
+ * is measured downstream of the hash, from the file that was actually written.
+ *
+ * ## Size
+ *
+ * Nothing is ever held in memory — chunks are hashed as they pass through to
+ * disk. That is not a nicety here. The largest asset in scope is the Qwen3 32B
+ * Q4_K_M GGUF in `config/provider-registry.json`'s `localLlm`, at
+ * 19,762,149,024 bytes (about 18.4 GiB — the figure here used to be
+ * 21,260,251,955, which was upstream's declaration and wrong by 2^30 ÷ 10^9;
+ * see `98e836b`); the largest whisper model is `ggml-large-v3.bin` at
+ * 3,095,033,483 bytes, and the pinned sherpa archives are about 500 MB each.
+ * Peak memory is one chunk regardless.
+ *
+ * A download that dies at 18 GiB is not resumed: a partially-fetched file
+ * cannot be hashed into a whole-file digest without trusting the part already
+ * on disk, and this tool's only job is to not trust things. `--file` is the
+ * escape hatch — if the bytes are already on the machine, measure those and
+ * skip the network entirely.
+ *
+ * ## Usage
+ *
+ *   node tools/model-pin/pin.mjs --url <url> [--id <model-id>] [--keep <path>]
+ *   node tools/model-pin/pin.mjs --file <path> [--id <model-id>]
+ *   node tools/model-pin/pin.mjs --verify [--only <model-id>]
+ *   node tools/model-pin/pin.mjs --verify-stated [--only <model-id>]
+ *
+ *   # Measure and assert in one step — this is the acceptance run:
+ *   node tools/model-pin/pin.mjs \
+ *     --url https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin \
+ *     --id tiny \
+ *     --expect-sha256 be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21 \
+ *     --expect-size 77691713
+ *
+ * ## What `--verify` reads
+ *
+ * **One file.** `config/provider-registry.json` → `localAsr.whisper[]` and
+ * `localAsr.sherpa[]`. It is generated, so the URL, `sha256` and
+ * `expectedSizeBytes` are read as data, with no parsing and no second copy.
+ * Their source is `WHISPER_PINS` and `SHERPA_PINS` in
+ * `tools/integration-audit/generate-provider-registry.mjs`; a model with a
+ * null `sha256` is skipped, because there is nothing committed to re-measure.
+ *
+ * ## What `--verify-stated` reads, and why it is a different verb
+ *
+ * The same file, `localLlm[].models[]` and their drafters -- the 39 GGUF
+ * objects. It does **not** download them: 202 GB is why they were never
+ * digest-pinned in the first place. It reads Hugging Face's
+ * `/api/models/{repo}/tree/main?expand=true`, which returns every object's
+ * `lfs.oid` and `lfs.size` in one response per repository, and compares those
+ * against what is committed.
+ *
+ * `--verify` re-measures bytes. `--verify-stated` re-reads a claim. Both catch
+ * a silent upstream re-upload, which is the failure that matters most here;
+ * only the first can catch bytes that disagree with the claim. They are two
+ * commands rather than one flag because a tool that reports "verified" should
+ * never be vague about which of those it did.
+ *
+ * This used to be two files. The whisper pins lived in a `PINNED` table in
+ * `crates/transcription-core/src/models.rs`, so this tool parsed a Rust
+ * literal — narrowly, with the array's declared arity as a checksum, and
+ * dying rather than returning a short list, because a verifier that silently
+ * checks nothing reports success. The header here proposed moving them into
+ * the generator; that is what happened, and `parseWhisperPins` and its five
+ * tests went with it. They were a tripwire for exactly this change and they
+ * fired once, which is all a tripwire owes anybody.
+ */
+
+import { createHash } from "node:crypto";
+import { createWriteStream, readFileSync, createReadStream, rmSync, statSync } from "node:fs";
+import { mkdir } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { pipeline } from "node:stream/promises";
+
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
+const REGISTRY = join(REPO_ROOT, "config/provider-registry.json");
+
+export function die(message) {
+  console.error(`model-pin: ${message}`);
+  process.exit(1);
+}
+
+/* -------------------------------------------------------------------- args */
+
+/**
+ * Parse `--flag value` pairs and bare `--flag` switches.
+ *
+ * Same shape as `sidecar-pin`'s, deliberately: two pin tools that disagree
+ * about how a command line works is a papercut nobody needs. Exported so the
+ * tests can reach it — the CLI below only runs when this file is the entry
+ * point.
+ */
+export function args(argv) {
+  const out = {};
+  for (let i = 0; i < argv.length; i += 1) {
+    const token = argv[i];
+    if (!token.startsWith("--")) continue;
+    const name = token.slice(2);
+    const next = argv[i + 1];
+    if (next === undefined || next.startsWith("--")) {
+      out[name] = true;
+    } else {
+      out[name] = next;
+      i += 1;
+    }
+  }
+  return out;
+}
+
+/* ---------------------------------------------------------------- progress */
+
+/** Human-readable bytes, for the stderr channel only. Never for a pin. */
+function human(bytes) {
+  if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(2)} GiB`;
+  if (bytes >= 1024 ** 2) return `${(bytes / 1024 ** 2).toFixed(1)} MiB`;
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
+  return `${bytes} B`;
+}
+
+/**
+ * Periodic progress on stderr, so stdout stays a clean JSON document.
+ *
+ * Throttled on both time and share: a 20 GiB download is millions of chunks,
+ * and a CI log with millions of lines in it is not a log. Five seconds keeps
+ * a slow link talking; one percent keeps a fast one from printing the same
+ * number forty times. Together they cap a download of any size at about a
+ * hundred lines. Plain lines rather than a carriage-return spinner, because
+ * this runs unattended more often than not.
+ */
+function progress(label, totalBytes) {
+  const started = Date.now();
+  let seen = 0;
+  let lastPrint = started;
+  let lastShare = 0;
+
+  return {
+    tick(length) {
+      seen += length;
+      const now = Date.now();
+      if (now - lastPrint < 5000) return;
+      const share = totalBytes ? (seen / totalBytes) * 100 : null;
+      if (share !== null && share - lastShare < 1) return;
+      lastPrint = now;
+      if (share !== null) lastShare = share;
+      const rate = seen / Math.max(1, (now - started) / 1000);
+      const of = share === null ? "" : ` of ${human(totalBytes)} (${share.toFixed(1)}%)`;
+      console.error(`  ${label}: ${human(seen)}${of} at ${human(rate)}/s`);
+    },
+    done() {
+      const seconds = Math.max(0.001, (Date.now() - started) / 1000);
+      console.error(`  ${label}: ${human(seen)} in ${seconds.toFixed(1)}s`);
+    },
+  };
+}
+
+/* -------------------------------------------------------------- measuring */
+
+/**
+ * Hash a file already on disk, streaming it past a hash.
+ *
+ * The `--file` path, and the only path that involves no network. Reports the
+ * same two numbers from the same two places as the download path does: the
+ * digest from the bytes that went through the hash, the size from `stat`.
+ */
+export async function measureFile(path, label = "file") {
+  let stat;
+  try {
+    stat = statSync(path);
+  } catch (error) {
+    return die(`cannot read ${path}: ${error.message}`);
+  }
+  if (!stat.isFile()) die(`${path} is not a file`);
+
+  const hash = createHash("sha256");
+  const reporter = progress(label, stat.size);
+  // Iterated rather than piped: there is no destination here, so the chunks
+  // are consumed for the hash and dropped. Still one chunk in memory at a
+  // time, which is the property that matters at 18 GiB.
+  for await (const chunk of createReadStream(path)) {
+    hash.update(chunk);
+    reporter.tick(chunk.length);
+  }
+  reporter.done();
+
+  return {
+    path,
+    sha256: hash.digest("hex"),
+    // From `stat`, for the same reason the download path does not read
+    // `content-length`: the number reported is the number of bytes that were
+    // there, not a number something else said would be there.
+    sizeBytes: statSync(path).size,
+    resolvedFrom: null,
+  };
+}
+
+/**
+ * Download `url`, streaming to disk, and return its digest and observed size.
+ *
+ * Redirects are followed explicitly and counted. Hugging Face always redirects
+ * a `resolve/` URL to a CDN host, so refusing redirects outright would make
+ * this tool unable to do its job — but a redirect chain that does not
+ * terminate is how a download ends up somewhere unintended, so it is bounded.
+ *
+ * Note what a `resolve/main` URL is: a pointer at a branch, not at content.
+ * The bytes behind it can change without the URL changing, which is precisely
+ * the case `--verify` exists to notice.
+ */
+export async function download(url, label, keepAt = null) {
+  const target = keepAt ?? join(tmpdir(), `model-pin-${process.pid}-${label.replace(/[^\w.-]/g, "_")}`);
+  if (keepAt) await mkdir(dirname(target), { recursive: true });
+  let current = url;
+
+  for (let hop = 0; hop < 6; hop += 1) {
+    const response = await fetch(current, { redirect: "manual" });
+
+    if (response.status >= 300 && response.status < 400) {
+      const next = response.headers.get("location");
+      if (!next) die(`${current} redirected with no Location header`);
+      current = new URL(next, current).toString();
+      continue;
+    }
+
+    if (!response.ok) {
+      die(`${current} returned HTTP ${response.status}`);
+    }
+
+    // Read only to size the progress bar. It is never reported as the pin.
+    const declared = Number(response.headers.get("content-length")) || null;
+
+    const hash = createHash("sha256");
+    const reporter = progress(label, declared);
+    const out = createWriteStream(target);
+    await pipeline(
+      response.body,
+      async function* (chunks) {
+        for await (const chunk of chunks) {
+          hash.update(chunk);
+          reporter.tick(chunk.length);
+          yield chunk;
+        }
+      },
+      out
+    );
+    reporter.done();
+
+    const sizeBytes = statSync(target).size;
+    // The size on disk, not `content-length`: a truncated body would agree
+    // with the header and disagree with itself. When the two differ, say so —
+    // the pin is still the measured number, but a mismatch is worth a line in
+    // the log rather than a silent shrug.
+    if (declared !== null && declared !== sizeBytes) {
+      console.error(
+        `  warning: content-length said ${declared} and ${sizeBytes} bytes arrived. ` +
+          "The pin below is the measured size."
+      );
+    }
+
+    return {
+      path: target,
+      sha256: hash.digest("hex"),
+      sizeBytes,
+      resolvedFrom: current === url ? null : current,
+    };
+  }
+
+  return die(`${url} redirected more than five times`);
+}
+
+/* ---------------------------------------------------------- pin discovery */
+
+function registry() {
+  try {
+    return JSON.parse(readFileSync(REGISTRY, "utf8"));
+  } catch (error) {
+    return die(`cannot read ${REGISTRY}: ${error.message}`);
+  }
+}
+
+/**
+ * Every committed model pin, as one list of things to re-measure.
+ *
+ * Both families come out of the generated registry now, read as data. A model
+ * with no `sha256` is skipped rather than reported: today that is only
+ * `localAsr.sherpa`'s two Nemotron streaming models, which nothing can install
+ * and nobody pinned, so there is nothing committed for a measurement to
+ * disagree with. The generator writes an explicit `null` there rather than
+ * omitting the key, which is what makes this a data check and not a guess.
+ *
+ * A pin with a digest and no `expectedSizeBytes` is a `die()`, not a skip. The
+ * generator cannot emit that pair — both `WHISPER_PINS` and `SHERPA_PINS`
+ * carry the two numbers together — so seeing it here means the registry was
+ * hand-edited, and half a pin is the one input that would let this tool report
+ * a pass over a length nobody checked.
+ */
+export function pinnedTargets(reg = registry()) {
+  const targets = [];
+
+  for (const [kind, models] of [
+    ["whisper", reg.localAsr?.whisper ?? []],
+    ["sherpa", reg.localAsr?.sherpa ?? []],
+  ]) {
+    for (const model of models) {
+      if (!model.sha256) continue;
+      if (typeof model.expectedSizeBytes !== "number") {
+        die(
+          `${kind}/${model.id} in the registry has a sha256 and no expectedSizeBytes. The ` +
+            "generator emits both or neither, so config/provider-registry.json has been " +
+            "hand-edited -- fix the pin in generate-provider-registry.mjs and regenerate."
+        );
+      }
+      targets.push({
+        kind,
+        id: model.id,
+        url: model.downloadUrl,
+        sha256: model.sha256.toLowerCase(),
+        // The exact measured length, not a rounded display figure. `sizeMb` is
+        // the rounded one and this tool never reads it.
+        sizeBytes: model.expectedSizeBytes,
+        from: `config/provider-registry.json localAsr.${kind}`,
+      });
+    }
+  }
+
+  return targets;
+}
+
+/* ------------------------------------------------------------------ verify */
+
+/**
+ * Re-measure every committed pin and report disagreements.
+ *
+ * Same contract as `sidecar-pin --verify`: non-zero exit on any disagreement,
+ * a line naming what was committed against what was measured. For a model the
+ * stakes differ from a binary — wrong weights make bad transcripts, not a
+ * compromised machine — but the failure this catches is the same one: bytes
+ * that changed at a URL that did not.
+ */
+export async function verify(only) {
+  const targets = pinnedTargets().filter((t) => !only || t.id === only);
+
+  if (targets.length === 0) {
+    die(
+      only
+        ? `no committed pin for a model with id "${only}".`
+        : "no committed model pins were found at all. That is not a pass — see the header of " +
+            "this file for where pins are read from."
+    );
+  }
+
+  const wrong = [];
+  for (const target of targets) {
+    console.error(`${target.kind} / ${target.id}`);
+    const measured = await download(target.url, `${target.kind}-${target.id}`);
+    try {
+      if (measured.sha256 !== target.sha256) {
+        wrong.push(
+          `${target.kind}/${target.id}: committed ${target.sha256}, measured ${measured.sha256}`
+        );
+      } else if (measured.sizeBytes !== target.sizeBytes) {
+        // Reachable even with a matching digest only if the pin's two halves
+        // disagree with each other, which is worth saying out loud.
+        wrong.push(
+          `${target.kind}/${target.id}: committed ${target.sizeBytes} bytes, measured ${measured.sizeBytes}`
+        );
+      }
+    } finally {
+      rmSync(measured.path, { force: true });
+    }
+  }
+
+  if (wrong.length > 0) {
+    console.error(`\nmodel-pin --verify: ${wrong.length} of ${targets.length} model(s) disagree`);
+    for (const line of wrong) console.error(`  ${line}`);
+    process.exit(1);
+  }
+  console.log(`model-pin --verify: ${targets.length} model(s) match the committed pins.`);
+}
+
+
+/**
+ * Every committed GGUF pin, as things to re-read rather than re-download.
+ *
+ * `localLlm` only. The whisper and sherpa pins are bytes this project hashed,
+ * so re-reading a publisher's claim is not how they are checked -- `--verify`
+ * is. Included here would make a weaker check look like it covered them.
+ *
+ * A digest with no size, or a size with no digest, is a `die()` and not a
+ * skip, for the reason `pinnedTargets` gives: the generator emits `sha256`,
+ * `sha256Measured` and `sizeBytes` together, so half a pin means
+ * `config/provider-registry.json` was hand-edited, and half a pin is the one
+ * input that would let this report a pass over something nobody checked.
+ */
+export function statedTargets(reg = registry()) {
+  const targets = [];
+
+  const add = (id, object) => {
+    if (!object.sha256 && object.sizeBytes === null) return;
+    if (!object.sha256 || typeof object.sizeBytes !== "number") {
+      die(
+        `localLlm/${id} has ${object.sha256 ? "a sha256 and no sizeBytes" : "a sizeBytes and no sha256"}. ` +
+          "The generator emits both or neither, so config/provider-registry.json has been " +
+          "hand-edited -- fix the pin in generate-provider-registry.mjs and regenerate."
+      );
+    }
+    targets.push({
+      id,
+      repo: object.hfRepo,
+      file: object.fileName,
+      sha256: object.sha256.toLowerCase(),
+      sizeBytes: object.sizeBytes,
+      // Which standard this pin already met. A measured pin is *stronger* than
+      // what this mode can check, so agreement here means "upstream has not
+      // re-uploaded" and not "the bytes are still what we hashed".
+      measured: object.sha256Measured === true,
+    });
+  };
+
+  for (const provider of reg.localLlm ?? []) {
+    for (const model of provider.models ?? []) {
+      add(model.id, model);
+      if (model.draft) add(`${model.id} (drafter)`, model.draft);
+    }
+  }
+
+  return targets;
+}
+
+/** One repository tree, as JSON. Bounded redirects, same as `download`. */
+async function tree(repo) {
+  let current = `https://huggingface.co/api/models/${repo}/tree/main?expand=true&recursive=true`;
+  for (let hop = 0; hop < 6; hop += 1) {
+    const response = await fetch(current, { redirect: "manual" });
+    if (response.status >= 300 && response.status < 400) {
+      const next = response.headers.get("location");
+      if (!next) die(`${current} redirected with no Location header`);
+      current = new URL(next, current).toString();
+      continue;
+    }
+    if (!response.ok) die(`${current} returned HTTP ${response.status}`);
+    return response.json();
+  }
+  return die(`the tree for ${repo} redirected more than five times`);
+}
+
+/**
+ * Re-read every committed GGUF pin from Hugging Face and report disagreements.
+ *
+ * Non-zero exit on any disagreement, the same contract `--verify` has. One
+ * request per repository, so 39 objects cost 36 requests and a few seconds --
+ * which is the point: this can run weekly where re-downloading 202 GB cannot.
+ */
+export async function verifyStated(only) {
+  const targets = statedTargets().filter((t) => !only || t.id === only);
+
+  if (targets.length === 0) {
+    die(
+      only
+        ? `no committed GGUF pin for a model with id "${only}".`
+        : "no committed GGUF pins were found at all. That is not a pass -- see the header of " +
+            "this file for where pins are read from."
+    );
+  }
+
+  const trees = new Map();
+  for (const target of targets) {
+    if (trees.has(target.repo)) continue;
+    console.error(`reading ${target.repo} …`);
+    trees.set(target.repo, await tree(target.repo));
+  }
+
+  const wrong = [];
+  for (const target of targets) {
+    const entries = trees.get(target.repo);
+    const entry = Array.isArray(entries)
+      ? entries.find((e) => e.path === target.file)
+      : undefined;
+
+    if (!entry) {
+      wrong.push(`${target.id}: ${target.file} is no longer in ${target.repo}`);
+      continue;
+    }
+    // `lfs.oid` is the object's SHA-256, because git-lfs is content-addressed
+    // on it. No `lfs` block at all on a multi-gigabyte GGUF would itself be
+    // the news, so it is reported rather than skipped.
+    const oid = entry.lfs?.oid;
+    if (!oid) {
+      wrong.push(`${target.id}: no lfs.oid in its tree entry — it may no longer be an LFS object`);
+    } else if (oid.toLowerCase() !== target.sha256) {
+      wrong.push(`${target.id}: committed ${target.sha256}, stated ${oid}`);
+    }
+    if (typeof entry.lfs?.size === "number" && entry.lfs.size !== target.sizeBytes) {
+      wrong.push(`${target.id}: committed ${target.sizeBytes} bytes, stated ${entry.lfs.size}`);
+    }
+  }
+
+  if (wrong.length > 0) {
+    console.error(
+      `\nmodel-pin --verify-stated: ${wrong.length} disagreement(s) over ${targets.length} object(s)`
+    );
+    for (const line of wrong) console.error(`  ${line}`);
+    process.exit(1);
+  }
+
+  const measured = targets.filter((t) => t.measured).length;
+  console.log(
+    `model-pin --verify-stated: ${targets.length} object(s) match what Hugging Face states ` +
+      `(${trees.size} tree request(s); ${measured} pinned to bytes hashed here, which this ` +
+      `mode does not re-hash).`
+  );
+}
+
+/* -------------------------------------------------------------------- main */
+
+/** `ggml-tiny.bin` from a whisper URL — a label, never part of a pin. */
+function labelFor(options) {
+  if (typeof options.id === "string") return options.id;
+  const from = typeof options.url === "string" ? options.url : String(options.file ?? "model");
+  const last = from.split(/[/\\]/).pop() ?? "model";
+  return last.split("?")[0] || "model";
+}
+
+async function main(argv) {
+  const options = args(argv);
+
+  const only = typeof options.only === "string" ? options.only : null;
+
+  if (options.verify) {
+    await verify(only);
+    return;
+  }
+
+  if (options["verify-stated"]) {
+    await verifyStated(only);
+    return;
+  }
+
+  const hasUrl = typeof options.url === "string";
+  const hasFile = typeof options.file === "string";
+  if (hasUrl === hasFile) {
+    die(
+      "exactly one of --url <url> or --file <path> is required. See the header of this file " +
+        "for examples, --verify to re-measure the committed pins, or --verify-stated to " +
+        "re-read the GGUF pins from Hugging Face without downloading them."
+    );
+  }
+
+  const label = labelFor(options);
+  const keep = typeof options.keep === "string" ? resolve(options.keep) : null;
+
+  console.error(hasUrl ? `downloading ${options.url} …` : `hashing ${options.file} …`);
+  const measured = hasUrl
+    ? await download(options.url, label, keep)
+    : await measureFile(options.file, label);
+
+  try {
+    // Deterministic on purpose: four fields, all of them stable across runs.
+    // `resolvedFrom` is deliberately not in here — Hugging Face resolves to a
+    // per-request presigned CDN URL carrying an expiry and a signature, which
+    // is a fact about this download rather than about the model. It goes on
+    // the human channel, reduced to the host that actually served the bytes.
+    const pin = {
+      id: label,
+      ...(hasUrl ? { url: options.url } : { file: resolve(options.file) }),
+      sha256: measured.sha256,
+      sizeBytes: measured.sizeBytes,
+    };
+
+    if (measured.resolvedFrom) {
+      console.error(`  served by ${new URL(measured.resolvedFrom).host}`);
+    }
+
+    console.error("");
+    console.log(JSON.stringify(pin, null, 2));
+
+    // Where a model pin actually goes, spelled out on the human channel.
+    // stdout stays a single JSON document so it can be piped. One shape for
+    // both tables, because there is one place now: WHISPER_PINS and
+    // SHERPA_PINS in tools/integration-audit/generate-provider-registry.mjs.
+    // A sherpa entry needs a `maxExtractedSizeBytes` alongside, which is a
+    // judgement about a decompression bomb and not something to measure.
+    const underscored = String(measured.sizeBytes).replace(/\B(?=(\d{3})+(?!\d))/g, "_");
+    console.error(`\nAs an entry in WHISPER_PINS / SHERPA_PINS:`);
+    console.error(`  "${label}": {`);
+    console.error(`    sha256: "${measured.sha256}",`);
+    console.error(`    expectedSizeBytes: ${underscored},`);
+    console.error(`  },`);
+
+    if (keep) console.error(`\nkept the download at ${keep}`);
+
+    // Measure-and-assert, which is what makes a first pin checkable in the
+    // same run that produces it rather than in a later one.
+    const failures = [];
+    if (typeof options["expect-sha256"] === "string") {
+      const expected = options["expect-sha256"].toLowerCase();
+      if (expected !== measured.sha256) {
+        failures.push(`expected sha256 ${expected}, measured ${measured.sha256}`);
+      }
+    }
+    if (typeof options["expect-size"] === "string") {
+      const expected = Number(options["expect-size"].replace(/[_,]/g, ""));
+      if (expected !== measured.sizeBytes) {
+        failures.push(`expected ${expected} bytes, measured ${measured.sizeBytes}`);
+      }
+    }
+    if (failures.length > 0) {
+      console.error("");
+      for (const line of failures) console.error(`model-pin: ${line}`);
+      process.exitCode = 1;
+    } else if (options["expect-sha256"] || options["expect-size"]) {
+      console.error(`\nmodel-pin: ${label} matches what was expected.`);
+    }
+  } finally {
+    // The temp file always goes. A `--keep` destination is not a temp file and
+    // is left where it was asked for.
+    if (!keep && hasUrl) rmSync(measured.path, { force: true });
+  }
+}
+
+const isMain =
+  process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url));
+if (isMain) {
+  await main(process.argv.slice(2));
+}
