@@ -274,6 +274,71 @@ Unchanged from the Phases 1–4 entry, restated here so they are not buried:
 
 ---
 
+## 2026-08-31 (KNEG-114) — the control the gate asked for, and the hole the gate turned out to have
+
+`meetings.detect` holds the allow and deny lists deciding which running applications count as a
+meeting. Every link existed except the last one: the key is read by `Detector`, a command writes it,
+a getter reads it, both are registered, both have IPC wrappers, both have dev fixtures — and no
+screen called either. The lists were settable only by editing SQLite by hand. The fourth instance
+of that pattern, and the first found by `tools/settings-audit/scan.mjs` rather than by a person
+reading a screen.
+
+The control is two textareas in the Detection section of `Settings > Meetings`, under the list of
+running applications — deliberately, because the name to type is the one each detection there
+reports. `parseKeyterms` became `onePerLine` and now serves all three fields, since keyterms and
+both lists are the same thing on screen and are normalised the same way in Rust.
+
+### The mutation the fix was supposed to fail, and did not
+
+The habit is to break the fix and watch the gate go red. Replacing the call and leaving the import
+in place kept it **green**.
+
+The check was `new RegExp(`\\b${wrapper}\\b`).test(component)` against the whole file, so an
+import satisfied it. Every one of the nineteen reachable keys had been passing on a test that a
+screen could satisfy by importing a function and never calling it. Nothing was wrong in the tree —
+the finding is that the tree being clean had stopped being evidence, which is the exact failure
+`scan.test.mjs`'s own header warns about two paragraphs before this code.
+
+### The obvious tightening was wrong, and the tree is what said so
+
+Requiring an open parenthesis after the name separates `setMeetingDetectLists({` from
+`setMeetingDetectLists,` in an import list. It also reported `localApi.enabled` as having no way in,
+because `IntegrationsApi.tsx` writes:
+
+```tsx
+void guard(api.running ? stopLocalApi : startLocalApi);
+```
+
+which is a real call by reference with no parenthesis anywhere near the name. **A gate that invents
+an unreachable setting is worse than one that misses a reachable one** — the first sends someone
+to build a control that already exists, and erodes trust in every other line the gate prints.
+
+So the import statements are stripped and the mention is then taken at face value. It cannot tell a
+name in a comment from a name in use; that is written down at the function rather than left to be
+rediscovered.
+
+Two things worth separating: I predicted in the first draft of that doc comment that *"no declared
+surface passes a wrapper by reference"*, and the very next run refuted it. The prediction was cheap
+and running it was cheap; writing the prediction down is what made the refutation visible instead of
+silently shipping a false accusation.
+
+### One test was passing for a reason that had just expired
+
+`an unreachable key must say why` deleted the note from `meetings.detect` — the only key
+declared unreachable. Making it reachable would have left that test green forever without exercising
+anything. It now sets `reachable: false` on a key itself rather than borrowing whichever one the
+backlog happens to hold, so it survives the backlog emptying.
+
+### Not closed by this
+
+Whether the command *works* when called. It has still never been driven — not by a screen, not by
+hand. The round trip through `kw_storage::settings` is the same one every other meeting setting
+uses, and `kw_platform::meeting_detect::detect` has tests for allowing, blocking, duplicate spellings
+and blank entries; what has not happened is a person typing a name into the box and watching the
+offer appear. That is part of KNEG-51.
+
+---
+
 ## 2026-08-31 (KNEG-65) — a rule carried from upstream, measured for the first time, and three quarters wrong
 
 `kw_storage::paths` has relocated the model cache away from the user's own directory since the port,
@@ -688,9 +753,11 @@ job beside the parity gate and the domain scanner.
 deciding which running applications count as a meeting — has a `#[tauri::command]` that writes it,
 registered in `generate_handler!`, with an IPC wrapper and a dev fixture, and **no screen calls
 it**. Everything except the control exists. Filed as KNEG-114 and declared `reachable: false` with
-a note, so the gate stays green while the gap stays visible — the same treatment the parity gate
+a note, so the gate stayed green while the gap stayed visible — the same treatment the parity gate
 gives its unreachable integrations, and for the same reason: a backlog printed on success is read,
-and a red gate that is red every day is not.
+and a red gate that is red every day is not. **Closed on 2026-08-31**; the backlog is now empty, and
+the attempt to break the new control found that this check had been satisfied by an import all
+along — see the KNEG-114 entry above.
 
 ### Two design decisions that decide whether it means anything
 
@@ -727,9 +794,10 @@ to hold; it falls out of asking the right question.
 ### Reachability is resolved to a component, not to a string
 
 A key claiming `reachable: true` names a surface in `config/ui-surfaces.json`, and that surface's
-component must call the IPC wrapper for one of the key's writers. Naming a screen is not enough —
-which is precisely how `meetings.detect` is broken, and is the reason that key fails the check
-while every other meeting setting passes. Two surfaces were added to the registry to make this
+component must use the IPC wrapper for one of the key's writers. Naming a screen is not enough —
+which is precisely how `meetings.detect` was broken, and was the reason that key failed the check
+while every other meeting setting passed. (*Use*, not *call*: what "not enough" means was itself too
+weak until KNEG-114 — an import counted. See that entry.) Two surfaces were added to the registry to make this
 sayable, `Dictation > Shortcuts` and `Dictation > History`, both real sections of `Dictation.tsx`
 that had never been declared because no integration entry happened to name them.
 
@@ -1223,7 +1291,7 @@ refresh. Every later call failed outright rather than updating anything.
 
 But the gap it appeared to cover is real and now has nothing covering it: the installed whisper
 sidecar dates from 2026-08-25 and the pinned archive has since gained `bench.exe` and `command.exe`,
-so it is measurably behind. Filed as **KNEG-114** with the rename measurement, rather than solved
+so it is measurably behind. Filed as **KNEG-113** with the rename measurement, rather than solved
 here by a scheme whose cleanup story is unresolved — a displaced directory still cannot be deleted
 while the old executable runs, so it has to survive until a launch where nothing holds it.
 

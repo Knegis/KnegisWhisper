@@ -63,7 +63,7 @@ whisper path never did. Fixed by giving it the same guard.
 
 **Skipping loses nothing.** The unconditional call looked like a way to keep the sidecar current,
 and never was — it can only succeed when no server is running, which is only the first install, when
-there is nothing to refresh. Keeping a sidecar current after that is **KNEG-114**, which is a real
+there is nothing to refresh. Keeping a sidecar current after that is **KNEG-113**, which is a real
 gap and a different one: the installed whisper sidecar dates from 2026-08-25 and the pinned archive
 has since gained `bench.exe` and `command.exe`, so it is measurably behind.
 
@@ -678,11 +678,15 @@ next dictation is written without a relaunch — the sink reads the setting per 
 KNEG-104).** `tools/settings-audit/scan.mjs` enumerates every settings key the backend reads and
 fails when one of them names no `#[tauri::command]` that writes it, when that command is
 unregistered, or when the screen it claims never calls the writer. The fourth:
-`meetings.detect` — the allow and deny lists deciding which applications count as a meeting — has
+`meetings.detect` — the allow and deny lists deciding which applications count as a meeting — had
 the command, the registration, the IPC wrapper and a dev fixture, and **no control on
 `Settings > Meetings`**. Found by the gate rather than by anyone reading a screen, which is the
-first time that has happened for this defect class. Filed as KNEG-114 and declared unreachable in
-`config/settings-keys.json` rather than hidden, so it prints on every successful run.
+first time that has happened for this defect class. **Fixed on 2026-08-31 (KNEG-114)**: the two
+lists are edited in the Detection section, under the running applications they act on, and the
+gate's backlog is now empty. Breaking the new control on purpose is what showed the check had
+been satisfied by an *import* since it was written — tightened, and the tightening in turn caught
+red-handed inventing an unreachable setting, because `IntegrationsApi.tsx` calls its wrapper by
+reference. See `docs/ENGINEERING_LOG.md` § 2026-08-31 (KNEG-114).
 
 ### Added by the live Teams meeting, same day
 

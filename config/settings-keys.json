@@ -111,8 +111,8 @@
     "meetings.detect": {
       "what": "The allow and deny lists deciding which running applications count as a meeting.",
       "writtenBy": ["meeting_set_detect_lists"],
-      "reachable": false,
-      "note": "The command exists, is registered, has an IPC wrapper and a dev fixture, and no screen calls it -- so the lists are settable only by editing SQLite by hand. This is the fourth instance of the pattern this gate was written to catch, and it was found by the gate rather than by a person reading a screen. KNEG-114."
+      "ui": "Settings > Meetings",
+      "reachable": true
     },
     "meetings.language": {
       "what": "The language hint sent to the meeting transcription provider.",
