@@ -260,6 +260,45 @@ pub async fn history_clear(state: State<'_, AppState>) -> CmdResult<u64> {
         .map_err(|e| fail("could not clear history", e))
 }
 
+/// Whether dictation history is being written at all.
+///
+/// Read from settings rather than from the running session, for the same reason
+/// as `history_keep_raw_text` below: `DbHistory::enabled` reads it per
+/// dictation, so there is no cached copy that could disagree with the stored
+/// one. The default here is `true` because the default there is `true` -- two
+/// defaults for one key is how a screen comes to report the opposite of what the
+/// sink is doing.
+#[tauri::command]
+pub async fn history_enabled(state: State<'_, AppState>) -> CmdResult<bool> {
+    Ok(kw_storage::settings::get_or(
+        state.db().pool(),
+        crate::dictation::HISTORY_ENABLED_KEY,
+        true,
+    )
+    .await
+    .unwrap_or(true))
+}
+
+/// Start, or stop, writing dictation history.
+///
+/// Stopping is not deleting. Rows already written stay exactly where they are;
+/// `history_clear` above is the only thing that removes them. The two controls
+/// sit next to each other on the Dictation screen and sound alike, so the screen
+/// spells the difference out rather than leaving it to be found out.
+///
+/// Takes effect on the next dictation, not after a relaunch: the sink reads the
+/// setting each time it is about to write a row.
+#[tauri::command]
+pub async fn history_set_enabled(state: State<'_, AppState>, enabled: bool) -> CmdResult<()> {
+    kw_storage::settings::set(
+        state.db().pool(),
+        crate::dictation::HISTORY_ENABLED_KEY,
+        &enabled,
+    )
+    .await
+    .map_err(|e| fail("could not save the setting", e))
+}
+
 /// Whether the pre-cleanup transcript is kept alongside the cleaned one.
 ///
 /// Read from settings rather than from the running session, because

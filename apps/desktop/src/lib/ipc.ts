@@ -540,11 +540,31 @@ export async function clearHistory(): Promise<number> {
 }
 
 /**
+ * Whether each dictation is written down at all.
+ *
+ * On by default, and read by the sink before every row, so switching it off
+ * applies to the next thing said rather than after a relaunch.
+ *
+ * Off is not empty. It stops new rows and deletes none of the old ones --
+ * `clearHistory` above is the only thing that removes what is already stored.
+ */
+export async function getHistoryEnabled(): Promise<boolean> {
+  return invoke<boolean>("history_enabled");
+}
+
+export async function setHistoryEnabled(enabled: boolean): Promise<void> {
+  return invoke<void>("history_set_enabled", { enabled });
+}
+
+/**
  * Whether the pre-cleanup transcript is kept beside the cleaned one.
  *
  * Off by default. Switched on, a history row that carries a `rawText` is proof
  * cleanup changed something on that dictation -- which is otherwise only
  * answerable by dictating the same sentence twice.
+ *
+ * Subordinate to `getHistoryEnabled`: with history off there are no rows for a
+ * second version to be kept on.
  */
 export async function getKeepRawText(): Promise<boolean> {
   return invoke<boolean>("history_keep_raw_text");

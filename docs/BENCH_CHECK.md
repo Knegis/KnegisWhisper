@@ -465,6 +465,28 @@ of.
 filler words through Parakeet with cleanup on, and confirm the row shows both versions — and that a
 dictation cleanup did *not* change shows only one.
 
+**3. `history.enabled` was the same defect one row down.** Fixed 2026-08-31.
+Not found by this run — found by fixing finding 2 and then reading the three controls the History
+section offered. `DbHistory::enabled` is read before every row is written and defaults to on, and
+there was no command, no IPC wrapper and no control anywhere: the only way to stop the application
+writing down everything dictated was to edit SQLite by hand. Meanwhile the screen offered *Clear
+history* and, as of finding 2, a toggle that stores **more** of it. Third instance of one pattern —
+the four hotkeys that registered and dispatched nowhere, `keep_raw_text` above, this — and each time
+the tests passed, because a test can set the value directly.
+
+Surface only, and that was checked before any of it was written: `Dictation::write_history` in
+`kw_app_core` gates every write on `enabled()`, `DbHistory` is the only production implementation of
+`History`, and every other `transcriptions::record` call site is a test. Nothing bypasses the
+switch. `history_enabled` / `history_set_enabled`, and a toggle above the keep-raw one — which is
+now disabled while history is off, because with no rows being written there is nothing for a second
+version to go on. Switching history off stops new rows and removes nothing; the row's detail text
+says so in both states rather than leaving it to be discovered next to a button called *Clear
+history*.
+
+**Still unchecked:** nobody has switched it off and dictated. Switch it off, dictate, and confirm no
+new entry appears and the entries already listed are untouched. Switch it back on and confirm the
+next dictation is written without a relaunch — the sink reads the setting per row, so it should be.
+
 ### Added by the live Teams meeting, same day
 
 **Verified:** `meeting-stream:local` produces a **live** transcript during recording, not only a
