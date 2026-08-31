@@ -274,6 +274,55 @@ Unchanged from the Phases 1–4 entry, restated here so they are not buried:
 
 ---
 
+## 2026-08-31 (KNEG-106) — the backpressure is the bound, and the first test for it was measuring the scheduler
+
+`extract_tar_xz` filled a `Vec<u8>` with the entire decompressed tar before looking at one entry,
+because `lzma_rs::xz_decompress` writes into a `Write` and offers no streaming `Read`. The
+`max_bytes` ceiling counts bytes reaching `dest`, and the `Vec` was full before the first one got
+there, so a `.tar.xz` was a memory bomb no ceiling could touch.
+
+The fix is the option the issue called honest: run the decompressor on its own thread writing into
+a `sync_channel`, and read from the other end. A full channel blocks the producer, so the bytes in
+flight cannot exceed the channel's depth however large the archive decompresses to. **The
+backpressure is the bound** — there is no separate check that could fall out of step with it.
+
+### Two things it does not bound, both said out loud
+
+`lzma-rs` allocates an LZMA2 dictionary whose size the xz header declares, inside the decompressor
+and outside the channel. A few megabytes for any real archive, and not attacker-chosen here anyway,
+since `extract` runs only after a mandatory SHA-256 matched. "Streaming" reads as "constant memory"
+and it is constant *plus a header-declared dictionary*, so the comment says which.
+
+And a decompression failure arriving after the consumer stops is not reported: dropping the reader
+closes the channel and ends the producer. `extract_tar_gz` and `extract_tar_bz2` already have
+exactly that property — their decoders are driven by the tar reader and stop when it does — so
+this matches the module rather than adding a hole. A consumer that reads to the end always sees the
+error, because it travels in-band as the last item rather than through a side channel.
+
+### The first test was measuring the scheduler
+
+It ran a producer and a consumer concurrently, counted how far the producer got ahead, and asserted
+the gap stayed under the bound. It passed. Then the mutation harness widened the channel to a
+hundred thousand blocks — **sixty-four gigabytes of queue** — and it passed again, because a
+consumer that keeps up keeps the observed gap small whatever the queue can hold.
+
+Two of three mutations sailed through. The replacement lets **nothing** read at all and asserts the
+producer cannot finish a stream twice the bound, with a one-second timeout in the safe direction:
+expiring is the pass, and only the producer *finishing* fails it, so a slow machine cannot cause a
+red. An unbounded channel finishes it in milliseconds.
+
+The second miss was subtler. Replacing `buf.chunks(BLOCK)` with `buf.chunks(usize::MAX)` — which
+moves the unbounded buffer out of the `Vec` and into `BlockWriter`, where it is just as unbounded
+and much harder to see — changed nothing observable, because a producer fed exactly one block at a
+time behaves identically either way. It needed its own test writing a single oversized slice, not a
+second assertion in the first one. Three mutations, three tests, each caught by the one written for
+it.
+
+The lesson is the one this repository keeps relearning in a new costume: a test that passes is not
+evidence until something has made it fail.
+
+---
+
 ## 2026-08-31 (KNEG-35) — one table, two readers, and a sentence with a hole in it
 
 `keys.rs` has expressed `RightControl+Super` since the hook was written — the headline capability
@@ -2198,12 +2247,14 @@ one is worse than no bound.
 
 ### Filed, not fixed
 
-**KNEG-106** (Low). `extract_tar_xz` decompresses the whole tar into a `Vec<u8>` before looking at
+**KNEG-106** (Low). `extract_tar_xz` decompressed the whole tar into a `Vec<u8>` before looking at
 an entry, because `lzma-rs` decompresses into a `Write` and exposes no streaming `Read`.
-`max_bytes` bounds what reaches `dest` and cannot bound that buffer, so a `.tar.xz` remains a
-memory bomb whatever ceiling is passed — independent of the output ceiling it now honours. Behind a
+`max_bytes` bounds what reaches `dest` and could not bound that buffer, so a `.tar.xz` was a memory
+bomb whatever ceiling was passed — independent of the output ceiling it now honours. Behind a
 mandatory digest, and the only pinned `tar-xz` assets are ffmpeg on Linux at ~100 MB compressed and
-~300 MB extracted. Needs a streaming LZMA2 reader; the function's doc comment now says so.
+~300 MB extracted. **Fixed the same day**: a bounded channel between the decompressor and the tar
+reader. See the KNEG-106 entry above — the interesting part is that the first test for the bound
+passed against a sixty-four-gigabyte queue.
 
 ---
 

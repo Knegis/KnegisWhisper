@@ -311,11 +311,17 @@ measured extracted total plus headroom, not a measurement — `withHeadroom` in
 hand-chosen figures. Headroom errs high on purpose: being wrong high costs protection, being wrong
 low refuses a legitimate install.
 
-Two gaps are recorded rather than implied. Neither has a `maxExtractedSizeBytes` because neither
-is an archive: a whisper `.bin` and a GGUF are downloaded and never unpacked, so the only thing an
-unverified one can produce is bad output. And `extract_tar_xz` holds the whole decompressed tar in
-memory before reading an entry, so a `.tar.xz` is a memory bomb independent of any output ceiling
-(KNEG-106, behind a mandatory digest, two pinned assets).
+One gap is recorded rather than implied. Neither a whisper `.bin` nor a GGUF has a
+`maxExtractedSizeBytes`, because neither is an archive: both are downloaded and never unpacked, so
+the only thing an unverified one can produce is bad output.
+
+`extract_tar_xz` used to hold the whole decompressed tar in memory before reading an entry, which
+made a `.tar.xz` a memory bomb independent of any output ceiling. **Closed on 2026-08-31
+(KNEG-106):** the decompressor runs on its own thread writing into a bounded channel, so the bytes
+in flight are capped at one megabyte however large the archive decompresses to. What that does
+*not* cover is `lzma-rs`'s own LZMA2 dictionary, whose size the xz header declares and which is
+allocated inside the decompressor — a few megabytes for any real archive, and not attacker-chosen
+here, because extraction only runs after a mandatory SHA-256 matched.
 
 ## Logging
 

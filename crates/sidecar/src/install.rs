@@ -425,44 +425,388 @@ fn extract_tar_gz(
     )
 }
 
+/// A streaming [`io::Read`] over `lzma-rs`, which only decompresses into a
+/// [`io::Write`].
+///
+/// **Why this exists.** `lzma_rs::xz_decompress` takes a `Write` and offers no
+/// streaming reader, so the obvious code fills a `Vec` with the entire
+/// decompressed tar before looking at a single entry. That is a memory bomb no
+/// output ceiling can bound, because `max_bytes` counts what reaches `dest` and
+/// the `Vec` is full before the first byte gets there. KNEG-106.
+///
+/// **How it is bounded, and it is the only mechanism here.** The decompressor
+/// runs on its own thread and hands blocks to a [`mpsc::sync_channel`] of
+/// [`CAPACITY`]. A full channel blocks the producer. So the bytes in flight
+/// cannot exceed [`IN_FLIGHT_LIMIT`] however large the archive decompresses to
+/// — the backpressure *is* the bound, and there is no second check to keep in
+/// step with it. Which means the test for it has to be hard to fool, and the
+/// first one was not: it watched a producer race a live consumer, and passed
+/// with the channel widened to sixty-four gigabytes. It was measuring the
+/// scheduler. What replaced it lets nothing read at all.
+///
+/// **What it does not bound.** `lzma-rs` allocates an LZMA2 dictionary whose
+/// size the xz header declares, inside the decompressor and outside this
+/// channel. A few megabytes for every real archive, and not attacker-chosen
+/// here in any case: `extract` runs only after `integrity::verify` matched a
+/// mandatory SHA-256, so the bytes are the pinned bytes. Said out loud because
+/// "streaming" would otherwise read as "constant memory", and it is constant
+/// plus a header-declared dictionary.
+///
+/// **A failure arriving after the consumer stops is not reported.** Dropping the
+/// reader closes the channel, which ends the producer, and any error it was
+/// about to report goes with it. [`extract_tar_gz`] and [`extract_tar_bz2`] have
+/// exactly that property already — their decoders are driven by the tar reader
+/// and stop when it does — so this matches the module rather than adding a new
+/// hole. What a consumer that reads to the end always sees is the error, because
+/// it is delivered in-band as the last item rather than through a side channel.
+mod xz_stream {
+    use std::fs;
+    use std::io::{self, Write as _};
+    use std::path::Path;
+    use std::sync::mpsc;
+
+    /// Bytes per block handed to the channel.
+    ///
+    /// 64 KiB: large enough that a multi-hundred-megabyte archive is thousands
+    /// of handoffs rather than millions, small enough that the bound below is a
+    /// megabyte rather than something worth thinking about.
+    const BLOCK: usize = 64 * 1024;
+
+    /// The most decompressed data that can be in flight at once.
+    ///
+    /// One megabyte, and this is the number that was chosen: the queue depth
+    /// below is derived from it rather than the other way round, so the bound
+    /// is stated and the plumbing follows. A test asserts the mechanism really
+    /// holds to it, which is why it is a constant and not a sentence.
+    pub(super) const IN_FLIGHT_LIMIT: usize = 1024 * 1024;
+
+    /// Blocks the channel holds before the producer blocks.
+    ///
+    /// Two fewer than the bound allows: one block can sit in the producer's
+    /// partial buffer and one in the consumer's cursor while the rest are
+    /// queued, so the queue is the bound minus what is in hand at either end.
+    const CAPACITY: usize = IN_FLIGHT_LIMIT / BLOCK - 2;
+
+    /// Accumulates into blocks and hands them over, blocking when the channel
+    /// is full.
+    struct BlockWriter {
+        tx: mpsc::SyncSender<io::Result<Vec<u8>>>,
+        block: Vec<u8>,
+    }
+
+    impl BlockWriter {
+        fn hand_over(&mut self) -> io::Result<()> {
+            if self.block.is_empty() {
+                return Ok(());
+            }
+            let block = std::mem::take(&mut self.block);
+            self.tx.send(Ok(block)).map_err(|_| {
+                // The consumer has gone: the tar reader found everything it
+                // needed, or the budget was exceeded and extraction was
+                // abandoned. Ending the decompressor is the right answer, and
+                // an error out of `write` is how it is asked to end.
+                io::Error::new(io::ErrorKind::BrokenPipe, "the reader stopped")
+            })
+        }
+    }
+
+    impl io::Write for BlockWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            // Chunked rather than extended wholesale: `write` may be handed a
+            // slice larger than BLOCK, and appending it whole would put the
+            // producer's own buffer outside the bound this module exists to
+            // hold.
+            for chunk in buf.chunks(BLOCK) {
+                self.block.extend_from_slice(chunk);
+                if self.block.len() >= BLOCK {
+                    self.hand_over()?;
+                }
+            }
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            self.hand_over()
+        }
+    }
+
+    /// The consumer end: a plain `Read` over the blocks as they arrive.
+    pub(super) struct XzReader {
+        rx: mpsc::Receiver<io::Result<Vec<u8>>>,
+        current: io::Cursor<Vec<u8>>,
+        done: bool,
+    }
+
+    impl io::Read for XzReader {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            // A zero-length request is answered without touching the channel.
+            // Otherwise the loop below would take a block, fail to put any of
+            // it into an empty buffer, and go round again for ever.
+            if buf.is_empty() {
+                return Ok(0);
+            }
+
+            loop {
+                let taken = self.current.read(buf)?;
+                if taken > 0 {
+                    return Ok(taken);
+                }
+                if self.done {
+                    return Ok(0);
+                }
+                match self.rx.recv() {
+                    Ok(Ok(block)) => self.current = io::Cursor::new(block),
+                    Ok(Err(err)) => {
+                        self.done = true;
+                        return Err(err);
+                    }
+                    // Both ends of the producer dropped: the stream ended.
+                    Err(_) => {
+                        self.done = true;
+                        return Ok(0);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Start decompressing `archive` on a thread and return the reading end.
+    ///
+    /// The join handle is dropped deliberately. The thread ends when the
+    /// channel closes, which happens whether the consumer reads to the end or
+    /// abandons it, so there is nothing to wait for and waiting would mean
+    /// holding a handle through a call that can abandon the reader.
+    pub(super) fn open(archive: &Path) -> io::Result<XzReader> {
+        let file = fs::File::open(archive)?;
+        let (tx, rx) = mpsc::sync_channel::<io::Result<Vec<u8>>>(CAPACITY);
+
+        std::thread::Builder::new()
+            .name("kw-xz-decompress".to_owned())
+            .spawn(move || {
+                let mut reader = io::BufReader::new(file);
+                let mut writer = BlockWriter {
+                    tx: tx.clone(),
+                    block: Vec::with_capacity(BLOCK),
+                };
+
+                let outcome = lzma_rs::xz_decompress(&mut reader, &mut writer)
+                    .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err.to_string()))
+                    .and_then(|()| writer.flush());
+
+                if let Err(err) = outcome {
+                    // In-band, as the last item, so a consumer reading to the
+                    // end is told why the stream stopped instead of seeing a
+                    // short one. Ignored if the consumer has already gone,
+                    // which is the case that produced the error to begin with.
+                    let _ = tx.send(Err(err));
+                }
+            })?;
+
+        Ok(XzReader {
+            rx,
+            current: io::Cursor::new(Vec::new()),
+            done: false,
+        })
+    }
+
+    #[cfg(test)]
+    #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+    mod tests {
+        use super::*;
+        use std::io::Read as _;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        /// Nothing reading means the producer stops at the bound.
+        ///
+        /// This is the whole mechanism, so it is the test that has to be
+        /// hard to fool. The first version counted how far the producer got
+        /// ahead of a consumer running concurrently and asserted the gap stayed
+        /// small — which passed with the channel widened to sixty-four
+        /// **gigabytes** of queue, because a fast consumer kept the observed gap
+        /// small anyway. It was measuring the scheduler.
+        ///
+        /// Nothing reads here at all. The timeout is in the safe direction:
+        /// expiring means the producer was still blocked, which is the pass,
+        /// and only the producer *finishing* fails it. A slow machine cannot
+        /// cause a failure; an unbounded channel finishes in milliseconds.
+        #[test]
+        fn nothing_reading_means_the_producer_stops_at_the_bound() {
+            let (tx, rx) = mpsc::sync_channel::<io::Result<Vec<u8>>>(CAPACITY);
+            let (done_tx, done_rx) = mpsc::channel::<usize>();
+
+            std::thread::spawn(move || {
+                let mut writer = BlockWriter {
+                    tx,
+                    block: Vec::with_capacity(BLOCK),
+                };
+                let payload = vec![0_u8; BLOCK];
+                let mut wrote = 0_usize;
+                while wrote < IN_FLIGHT_LIMIT * 2 {
+                    if writer.write_all(&payload).is_err() {
+                        break;
+                    }
+                    wrote += BLOCK;
+                }
+                let _ = done_tx.send(wrote);
+            });
+
+            match done_rx.recv_timeout(std::time::Duration::from_secs(1)) {
+                // Still blocked with a full channel, which is the bound doing
+                // its job.
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Ok(wrote) => panic!(
+                    "the producer wrote {wrote} bytes with nothing reading, so the channel is \
+                     not applying backpressure and the buffer is unbounded again"
+                ),
+                Err(other) => panic!("the producer ended unexpectedly: {other}"),
+            }
+
+            // Held until here on purpose: dropping it earlier would release the
+            // producer and the test would be measuring a closed channel.
+            drop(rx);
+        }
+
+        /// One oversized `write` is still broken into blocks.
+        ///
+        /// `lzma-rs` decides how much it hands over at a time, and appending it
+        /// whole would move the buffering problem out of the `Vec` and into
+        /// `BlockWriter` — where it would be just as unbounded and much harder
+        /// to see. The bound above cannot catch this on its own: a producer fed
+        /// exactly one block at a time behaves identically either way, which is
+        /// why this is a second test and not a second assertion.
+        #[test]
+        fn one_oversized_write_is_still_broken_into_blocks() {
+            let (tx, rx) = mpsc::sync_channel::<io::Result<Vec<u8>>>(CAPACITY);
+
+            std::thread::spawn(move || {
+                let mut writer = BlockWriter {
+                    tx,
+                    block: Vec::with_capacity(BLOCK),
+                };
+                let _ = writer.write_all(&vec![3_u8; IN_FLIGHT_LIMIT * 4]);
+                let _ = writer.flush();
+            });
+
+            let mut biggest = 0_usize;
+            let mut total = 0_usize;
+            while let Ok(Ok(block)) = rx.recv() {
+                biggest = biggest.max(block.len());
+                total += block.len();
+            }
+
+            assert_eq!(total, IN_FLIGHT_LIMIT * 4, "every byte came back out");
+            assert!(
+                biggest <= BLOCK,
+                "a block of {biggest} bytes went through, over the {BLOCK} cap"
+            );
+        }
+
+        /// Every byte written comes back out, in order, through the pipe.
+        #[test]
+        fn the_pipe_delivers_the_stream_unchanged() {
+            let (tx, rx) = mpsc::sync_channel::<io::Result<Vec<u8>>>(CAPACITY);
+            let written: Vec<u8> = (0..200_000_u32).map(|i| (i % 251) as u8).collect();
+            let expected = written.clone();
+
+            std::thread::spawn(move || {
+                let mut writer = BlockWriter {
+                    tx,
+                    block: Vec::with_capacity(BLOCK),
+                };
+                let _ = writer.write_all(&written);
+                let _ = writer.flush();
+            });
+
+            let mut reader = XzReader {
+                rx,
+                current: io::Cursor::new(Vec::new()),
+                done: false,
+            };
+            let mut read_back = Vec::new();
+            reader
+                .read_to_end(&mut read_back)
+                .expect("the pipe delivered the stream");
+
+            assert_eq!(read_back, expected);
+        }
+
+        /// A consumer that stops early ends the producer rather than leaving a
+        /// thread blocked on a channel nobody will drain. The budget being
+        /// exceeded mid-archive is exactly this case.
+        #[test]
+        fn abandoning_the_reader_ends_the_decompressor() {
+            let (tx, rx) = mpsc::sync_channel::<io::Result<Vec<u8>>>(CAPACITY);
+            let wrote = Arc::new(AtomicUsize::new(0));
+
+            let producer = {
+                let wrote = Arc::clone(&wrote);
+                std::thread::spawn(move || {
+                    let mut writer = BlockWriter {
+                        tx,
+                        block: Vec::with_capacity(BLOCK),
+                    };
+                    let payload = vec![0_u8; BLOCK];
+                    // Would never finish against a channel nobody drains, so
+                    // the test hanging is itself the failure this asserts
+                    // against.
+                    for _ in 0..100_000 {
+                        if writer.write_all(&payload).is_err() {
+                            break;
+                        }
+                        wrote.fetch_add(BLOCK, Ordering::SeqCst);
+                    }
+                })
+            };
+
+            {
+                let mut reader = XzReader {
+                    rx,
+                    current: io::Cursor::new(Vec::new()),
+                    done: false,
+                };
+                let mut buffer = vec![0_u8; 1024];
+                let _ = reader.read(&mut buffer);
+            }
+
+            producer.join().expect("the producer thread ended");
+            assert!(
+                wrote.load(Ordering::SeqCst) < 100_000 * BLOCK,
+                "the producer ran to completion, so it was never blocked"
+            );
+        }
+    }
+}
+
 /// Decompress a `.tar.xz` with `lzma-rs` (pure Rust, decode-only -- see the
-/// `lzma-rs` comment in the root `Cargo.toml`), then read the result as a tar
-/// the same way `extract_tar_gz` does.
+/// `lzma-rs` comment in the root `Cargo.toml`), streaming it into the tar
+/// reader the same way `extract_tar_gz` does.
 ///
-/// `lzma-rs` decompresses into a `Write` rather than exposing a streaming
-/// `Read`, so the whole tar is held in memory instead of being streamed
-/// entry-by-entry the way the gzip path is. ffmpeg's tar.xz is the only
-/// pinned use of this today and is small enough that a hand-rolled streaming
-/// adapter is not worth building.
-///
-/// **The `max_bytes` ceiling does not cover this buffer.** It bounds what is
-/// written to `dest`, and the `Vec` below is filled before a single entry is
-/// looked at — so a `.tar.xz` remains a memory bomb whatever ceiling is
-/// passed, independently of the output ceiling this function now honours.
-/// Fixing that means a streaming LZMA2 reader; tracked as KNEG-106.
+/// `lzma-rs` decompresses into a `Write` and offers no streaming `Read`, so
+/// this went through [`xz_stream`] rather than through a `Vec` holding the
+/// whole decompressed tar. That `Vec` was a memory bomb the `max_bytes` ceiling
+/// could not touch -- the ceiling counts bytes reaching `dest`, and the buffer
+/// was full before the first one got there. Fixed 2026-08-31 (KNEG-106); see
+/// [`xz_stream`] for what is bounded and what is not.
 fn extract_tar_xz(
     archive: &Path,
     payload_dir: &str,
     dest: &Path,
     budget: &mut Budget<'_>,
 ) -> Result<usize, InstallError> {
-    let file = fs::File::open(archive).map_err(|source| InstallError::Io {
+    let reader = xz_stream::open(archive).map_err(|source| InstallError::Io {
         action: "open",
         path: archive.to_path_buf(),
         source,
     })?;
-    let mut reader = io::BufReader::new(file);
-    let mut decompressed = Vec::new();
-    lzma_rs::xz_decompress(&mut reader, &mut decompressed).map_err(|err| {
-        InstallError::Archive {
-            archive: archive.to_path_buf(),
-            kind: ArchiveKind::TarXz,
-            detail: err.to_string(),
-        }
-    })?;
 
+    // A decompression failure now reaches this as a read error part-way through
+    // the tar, so it comes back as `Archive` from `extract_tar` rather than
+    // being raised here before the tar is touched. Same variant, same archive,
+    // and the `lzma-rs` message is still in the detail -- it travels in-band as
+    // the last item on the channel.
     extract_tar(
-        io::Cursor::new(decompressed),
+        reader,
         ArchiveKind::TarXz,
         archive,
         payload_dir,
