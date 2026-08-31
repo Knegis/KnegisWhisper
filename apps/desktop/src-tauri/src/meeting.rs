@@ -531,6 +531,13 @@ struct Live {
     provider_id: String,
     commands: sync_mpsc::Sender<RecorderCommand>,
     pump: tokio::task::JoinHandle<Result<MeetingTranscript, MeetingError>>,
+    /// Where the WAV is being written.
+    ///
+    /// Kept here as well as in `Finished` because the two paths that never
+    /// reach a `Finished` -- the recorder thread having stopped, and its not
+    /// answering -- still have to tell the user where the audio went. The
+    /// recording is the artefact that cannot be recreated.
+    recording_path: std::path::PathBuf,
     sources: Sources,
     started: std::time::Instant,
 }
@@ -968,7 +975,7 @@ impl MeetingRuntime {
             "{}.wav",
             chrono::Utc::now().format("%Y%m%d-%H%M%S")
         ));
-        let (audio, commands, sources) = spawn_recorder(path, system_audio)?;
+        let (audio, commands, sources) = spawn_recorder(path.clone(), system_audio)?;
 
         let pump = tokio::spawn(pump(
             provider,
@@ -982,6 +989,7 @@ impl MeetingRuntime {
             provider_id: provider_id.to_owned(),
             commands,
             pump,
+            recording_path: path,
             sources: sources.clone(),
             started: std::time::Instant::now(),
         });
@@ -1000,40 +1008,102 @@ impl MeetingRuntime {
     }
 
     /// Stop, transcribe the recording, and keep a note.
+    ///
+    /// **Everything below the `take` runs, whatever goes wrong.** This used to
+    /// `?` out of three places -- the recorder thread having stopped, the
+    /// recorder not answering, and the pump failing -- each of which left `Live`
+    /// already taken and skipped the whole tail: no `OUTCOME_EVENT`, no
+    /// `MeetingState::Idle`, no `meeting_window::set_visible(false)`, no
+    /// `watch.forget`. The runtime was idle and the screen still said
+    /// "Recording", with nothing left to press: `guard` in `useRefresh.ts` does
+    /// not reload when a mutation throws, so the frontend stayed on `finishing`,
+    /// where `SettingsMeetings.tsx` renders no Stop or Discard and disables
+    /// Start. Only restarting the application cleared it.
+    ///
+    /// A failure is an outcome now, not an early return -- `MeetingOutcome::
+    /// Failed`, naming the WAV, which is already on disk by the time any of this
+    /// can go wrong and is the one artefact that cannot be recreated.
     pub async fn stop(&self) -> Result<MeetingOutcome, String> {
         let Some(live) = self.live.lock().await.take() else {
             return Err("no meeting is being recorded".to_owned());
         };
+        let Live {
+            provider_id,
+            commands,
+            pump,
+            recording_path,
+            ..
+        } = live;
 
         self.emit_state(MeetingState::Finishing);
 
-        let (reply_tx, reply_rx) = sync_mpsc::channel();
-        live.commands
-            .send(RecorderCommand::Finish { reply: reply_tx })
-            .map_err(|_| "the recording thread had already stopped".to_owned())?;
-        let finished = reply_rx
-            .recv()
-            .map_err(|_| "the recording thread did not answer".to_owned())??;
+        let outcome = self
+            .finish_recording(&provider_id, &commands, pump, &recording_path)
+            .await;
 
-        // The recorder has dropped its sender, so the pump sees the channel close
-        // and finishes the provider. No second signal to get out of step.
-        let transcript = live
-            .pump
-            .await
-            .map_err(|e| format!("the transcription task failed: {e}"))?
-            .map_err(|e| e.to_string())?;
-
-        let outcome = self.keep(&live.provider_id, finished, transcript).await;
         self.emit_state(MeetingState::Idle);
         crate::meeting_window::set_visible(&self.app, false);
         // Recording one Zoom call must not stop the next being offered, even if
         // Zoom never quit in between.
-        self.watch.lock().await.0.forget(&live.provider_id);
+        self.watch.lock().await.0.forget(&provider_id);
 
         if let Err(err) = self.app.emit(OUTCOME_EVENT, &outcome) {
             tracing::warn!(error = %err, "could not report the meeting outcome");
         }
         Ok(outcome)
+    }
+
+    /// Close the recorder, wait for the pump, and turn both into one outcome.
+    ///
+    /// Split out of [`MeetingRuntime::stop`] precisely so that `stop`'s tail
+    /// runs on every path through here. Nothing in this function returns an
+    /// `Err`: every failure it can meet becomes a `MeetingOutcome`.
+    async fn finish_recording(
+        &self,
+        provider_id: &str,
+        commands: &sync_mpsc::Sender<RecorderCommand>,
+        pump: tokio::task::JoinHandle<Result<MeetingTranscript, MeetingError>>,
+        recording_path: &std::path::Path,
+    ) -> MeetingOutcome {
+        let path = recording_path.display().to_string();
+        let closed = close_recorder(commands);
+
+        // Awaited on every path, including the two failures above it. The
+        // recorder thread has gone either way, so it has dropped its audio
+        // sender, the pump sees the channel close, finishes the provider and
+        // returns. Aborting instead would leave two sockets open until the
+        // process noticed.
+        let live_transcript = pump_result(pump.await);
+
+        let finished = match closed {
+            Ok(finished) => finished,
+            Err(reason) => {
+                tracing::error!(provider = provider_id, %reason, "the recording could not be closed");
+                return MeetingOutcome::Failed {
+                    message: failed_message(&path, &reason),
+                };
+            }
+        };
+
+        match live_transcript {
+            Ok(transcript) => self.keep(provider_id, finished, transcript, None).await,
+            Err(reason) => {
+                // Still `keep`, rather than returning here. The whole-file local
+                // pass has not run yet and it is what produces the saved note --
+                // the live transcript is only ever its fallback. A cloud
+                // provider that died at second zero costs the live transcript,
+                // not the meeting. Skipping the pass entirely, which is what the
+                // old `?` did, was a pure loss.
+                tracing::error!(provider = provider_id, %reason, "the live transcription failed");
+                self.keep(
+                    provider_id,
+                    finished,
+                    MeetingTranscript::default(),
+                    Some(&reason),
+                )
+                .await
+            }
+        }
     }
 
     /// Abandon the meeting and delete the recording.
@@ -1096,11 +1166,19 @@ impl MeetingRuntime {
     }
 
     /// Transcribe the recording properly and write the note.
+    ///
+    /// `live_failure` carries why the streaming transcription stopped, when it
+    /// did. It changes two things and nothing else: an empty result becomes
+    /// `Failed` naming the provider's own words rather than `NothingTranscribed`
+    /// -- which is the sentence a genuinely quiet room gets, and the confusion
+    /// KNEG-79 is about -- and a note that *was* produced says in its own text
+    /// that the live half failed.
     async fn keep(
         &self,
         provider_id: &str,
         finished: Finished,
         transcript: MeetingTranscript,
+        live_failure: Option<&str>,
     ) -> MeetingOutcome {
         let path = finished.path.display().to_string();
 
@@ -1134,8 +1212,19 @@ impl MeetingRuntime {
         };
 
         if segments.is_empty() {
-            return MeetingOutcome::NothingTranscribed {
-                recording_path: path,
+            // The distinction this whole change exists for. An empty result used
+            // to become `NothingTranscribed` whatever caused it, and that is
+            // what a quiet room produces -- so a provider that rejected the
+            // session and a room with nobody talking arrived on screen as the
+            // same sentence. A provider that said something was wrong now says
+            // it here instead.
+            return match live_failure {
+                Some(reason) => MeetingOutcome::Failed {
+                    message: failed_message(&path, reason),
+                },
+                None => MeetingOutcome::NothingTranscribed {
+                    recording_path: path,
+                },
             };
         }
 
@@ -1151,6 +1240,17 @@ impl MeetingRuntime {
                 "\n\n(The whole-recording pass did not complete, so this is the live transcript. \
                  Its windows overlap, so some phrases repeat.)",
             );
+        }
+        if let Some(reason) = live_failure {
+            // Said in the note rather than only in a log, for the same reason
+            // `from_partials` is: a transcript that came about differently from
+            // how the reader expects should say so. This one is the good case --
+            // the whole-recording pass ran afterwards over the complete audio,
+            // so nothing is missing from what follows.
+            content.push_str(&format!(
+                "\n\n(The live transcription stopped early: {reason} This note is the \
+                 whole-recording pass, which ran afterwards over the complete audio.)"
+            ));
         }
         if transcript.gaps > 0 {
             content.push_str(&format!(
@@ -1228,6 +1328,60 @@ impl MeetingRuntime {
             }
         }
     }
+}
+
+/// Ask the recorder to stop, and wait for what it wrote.
+///
+/// A free function taking the command channel rather than a `MeetingRuntime`
+/// method, for the reason `resolve_key_ref` is one: it can then be reasoned
+/// about, and its three failures named, with no `AppHandle` in sight. Each of
+/// those three used to be a `?` in `stop`.
+fn close_recorder(commands: &sync_mpsc::Sender<RecorderCommand>) -> Result<Finished, String> {
+    let (reply_tx, reply_rx) = sync_mpsc::channel();
+    if commands
+        .send(RecorderCommand::Finish { reply: reply_tx })
+        .is_err()
+    {
+        return Err("the recording thread had already stopped".to_owned());
+    }
+    match reply_rx.recv() {
+        Ok(result) => result,
+        Err(_) => Err("the recording thread did not answer".to_owned()),
+    }
+}
+
+/// What awaiting the pump produced: the live transcript, or one sentence saying
+/// why there is not one.
+///
+/// A free function so the sentence can be checked with no `AppHandle`, no `Db`
+/// and no `NetworkPolicy` in sight -- the same reason `resolve_key_ref` is one,
+/// and the reason there is no fake `MeetingTranscriptionProvider` here. `pump`
+/// itself already propagates its `Err` correctly; what was wrong was what
+/// `stop` did with it.
+fn pump_result(
+    joined: Result<Result<MeetingTranscript, MeetingError>, tokio::task::JoinError>,
+) -> Result<MeetingTranscript, String> {
+    match joined {
+        Ok(Ok(transcript)) => Ok(transcript),
+        // The provider's own words. Since `MeetingError::ProviderFault` exists
+        // that includes what the provider said was wrong, rather than what our
+        // own send call complained about afterwards.
+        Ok(Err(err)) => Err(format!("{err}.")),
+        // A panic in the pump, or the task being aborted. Neither should happen;
+        // both used to leave the screen stuck on "Recording" for ever.
+        Err(err) => Err(format!("the transcription task failed: {err}.")),
+    }
+}
+
+/// The sentence a meeting that could not be transcribed ends with.
+///
+/// The recording leads, because it is the artefact that cannot be recreated and
+/// the note can be rebuilt from it by hand. Same shape as the one failure
+/// message that already existed, in `keep`, for a note that could not be saved.
+fn failed_message(recording_path: &str, reason: &str) -> String {
+    format!(
+        "The recording is at {recording_path} but the meeting could not be transcribed: {reason}"
+    )
 }
 
 /// Feed the provider what the recorder forwards, emitting transcript as it comes.
@@ -1516,6 +1670,75 @@ mod tests {
         assert_eq!(json["noteId"], 7);
         assert_eq!(json["gaps"], 2);
         assert_eq!(json["transcriptIsPartials"], true);
+    }
+
+    #[test]
+    fn a_pump_that_finished_hands_its_transcript_straight_back() {
+        let transcript = MeetingTranscript {
+            duration_seconds: 12.0,
+            reconnects: 1,
+            ..MeetingTranscript::default()
+        };
+        assert_eq!(pump_result(Ok(Ok(transcript.clone()))).unwrap(), transcript);
+    }
+
+    #[tokio::test]
+    async fn a_provider_fault_becomes_a_sentence_rather_than_taking_stop_out_early() {
+        // `stop` used to `?` here. That left `Live` already taken, the runtime
+        // idle, and the screen on "Recording" with no working button on it --
+        // `guard` in `useRefresh.ts` does not reload when a mutation throws, so
+        // the frontend stayed on `finishing`, where Stop and Discard are not
+        // rendered and Start is disabled. Only a restart cleared it.
+        //
+        // The words are the real ones, from the meeting of 2026-08-28.
+        let reason = pump_result(Ok(Err(MeetingError::ProviderFault {
+            provider: "openai-realtime".to_owned(),
+            detail: "on the system audio stream the provider reported: The Realtime Beta API \
+                     is no longer supported."
+                .to_owned(),
+        })))
+        .unwrap_err();
+
+        assert!(reason.contains("openai-realtime"), "{reason}");
+        assert!(reason.contains("Realtime Beta API"), "{reason}");
+        assert!(
+            reason.contains("system audio"),
+            "which of the two sockets died is part of the answer: {reason}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_pump_that_panicked_is_a_sentence_too_rather_than_a_stuck_screen() {
+        let handle: tokio::task::JoinHandle<Result<MeetingTranscript, MeetingError>> =
+            tokio::spawn(async { panic!("the pump panicked") });
+        let reason = pump_result(handle.await).unwrap_err();
+        assert!(reason.contains("the transcription task failed"), "{reason}");
+    }
+
+    #[test]
+    fn a_failed_meeting_still_says_where_the_recording_is() {
+        // The WAV is the artefact that cannot be recreated -- a note can be
+        // rebuilt from it by hand, and the meeting cannot be held again. Same
+        // shape as the failure message `keep` already had for a note that could
+        // not be saved.
+        let message = failed_message(
+            "C:/x/20260828-135901.wav",
+            "openai-realtime accepted the connection and then stopped transcribing: boom.",
+        );
+        assert!(message.starts_with("The recording is at "), "{message}");
+        assert!(message.contains("20260828-135901.wav"), "{message}");
+        assert!(message.contains("stopped transcribing"), "{message}");
+    }
+
+    #[test]
+    fn a_recorder_that_has_already_stopped_is_reported_rather_than_waited_for() {
+        // The channel's receiver is dropped with the thread, which is what a
+        // recorder that died looks like from here. This was the first of `stop`'s
+        // three `?`s.
+        let (commands, receiver) = sync_mpsc::channel::<RecorderCommand>();
+        drop(receiver);
+        let reason = close_recorder(&commands).unwrap_err();
+        assert!(reason.contains("already stopped"), "{reason}");
     }
 
     #[test]
