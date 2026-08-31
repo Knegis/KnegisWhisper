@@ -145,11 +145,36 @@ pub enum MeetingState {
     /// destroy the valuable half in order to fix the misleading half.
     ///
     /// So the name leads with `Recording` -- in the enum, in the JSON and in a
-    /// log line, the first word is the one that is still true. The exception is
-    /// named where it is produced: [`live_transcript_ended`]'s `Ok` arm means
-    /// the recorder itself has gone, and there the sentence carries what the
-    /// name cannot.
+    /// log line, the first word is the one that is still true.
+    ///
+    /// The one case where it would not have been is now [`MeetingState::
+    /// Stalled`], which is KNEG-116. Until 2026-08-31 a recorder thread that
+    /// panicked also landed here, and the first word was false; the sentence
+    /// beside it said the true thing and the name did not.
     RecordingWithoutTranscript,
+    /// Nothing is being recorded, and nothing asked for that.
+    ///
+    /// The recording thread ended with no Stop and no Discard behind it, which
+    /// in practice means it panicked: `record` returns on `Finish`, on `Cancel`
+    /// and on its command channel disconnecting, and all three of those run
+    /// only after the session has been taken.
+    ///
+    /// **A running session, deliberately.** [`MeetingState::is_running`] stays
+    /// true so Stop and Discard remain on screen: whatever was captured before
+    /// the thread went is on disk, and the whole-file pass can still read it.
+    /// A state that hid those buttons would throw the recording away to report
+    /// that the recording stopped.
+    ///
+    /// Named for what is true rather than for what failed. It is not a variant
+    /// of `Recording`, because the thing that word describes has stopped, and
+    /// that mattered enough to be filed separately (KNEG-116) rather than left
+    /// as a comment on the state above.
+    ///
+    /// **No recorder thread has ever been seen to panic in this project.** The
+    /// case is reached by reading `record`'s exits, and now by
+    /// [`RecorderEnd`], which is the thread saying so itself rather than the
+    /// caller inferring it.
+    Stalled,
     /// The recording has stopped and the whole-file pass is still running.
     ///
     /// A separate state because it can take minutes on a long meeting, and
@@ -317,38 +342,86 @@ struct Finished {
     clipped: u64,
 }
 
+/// How the recorder thread ended, written by the thread itself on its way out.
+///
+/// **Inferring this from the audio channel closing was the whole of KNEG-116.**
+/// `pump` returns `Ok` when its channel closes, which at Stop is exactly right
+/// and at any other time means the thread went. That reading was true and not
+/// specific enough: it could not tell a thread that returned on purpose from
+/// one that unwound, so a panicked recorder was reported with a state whose
+/// first word claimed a recording that had stopped.
+///
+/// A `Drop` guard rather than a line on each return path. `record` has five
+/// exits and **a panic is not one of them**, so anything written at the returns
+/// would miss the only case worth a name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RecorderEnd {
+    /// Returned: `Finish`, `Cancel`, or the command channel disconnecting.
+    OnPurpose,
+    /// Unwound. Nothing is recording, and nothing asked for that.
+    Panicked,
+}
+
+/// Writes [`RecorderEnd`] as the recorder thread leaves, however it leaves.
+///
+/// **The drop order is load-bearing, and it is the same trick `Live::
+/// transcript_failure` relies on.** This guard is the first binding in
+/// `record`, and `audio` is a parameter; bindings drop in reverse order of
+/// declaration, so the guard drops before the sender does. The cell is
+/// therefore already written by the time the pump observes its channel close,
+/// which is what makes reading the two together meaningful rather than a race.
+struct RecorderExit(Arc<OnceLock<RecorderEnd>>);
+
+impl Drop for RecorderExit {
+    fn drop(&mut self) {
+        let _ = self.0.set(if std::thread::panicking() {
+            RecorderEnd::Panicked
+        } else {
+            RecorderEnd::OnPurpose
+        });
+    }
+}
+
+/// What [`spawn_recorder`] hands back.
+///
+/// A named type because the tuple grew a fourth member and clippy is right that
+/// four is where one stops reading it: the audio stream, the command channel,
+/// what actually opened, and the thread's own account of how it ended.
+type Recorder = (
+    mpsc::UnboundedReceiver<Drained>,
+    sync_mpsc::Sender<RecorderCommand>,
+    Sources,
+    Arc<OnceLock<RecorderEnd>>,
+);
+
 /// Start the capture thread.
 ///
 /// Returns the audio channel and the command channel. Both captures are started
 /// here, on the thread, because `cpal::Stream` is not `Send`.
-fn spawn_recorder(
-    path: std::path::PathBuf,
-    system: bool,
-) -> Result<
-    (
-        mpsc::UnboundedReceiver<Drained>,
-        sync_mpsc::Sender<RecorderCommand>,
-        Sources,
-    ),
-    String,
-> {
+fn spawn_recorder(path: std::path::PathBuf, system: bool) -> Result<Recorder, String> {
     let (audio_tx, audio_rx) = mpsc::unbounded_channel::<Drained>();
     let (command_tx, command_rx) = sync_mpsc::channel::<RecorderCommand>();
     // The thread reports whether it got its devices before anything else
     // happens, so a failure to open the microphone is a failure to start rather
     // than a meeting that records nothing.
     let (ready_tx, ready_rx) = sync_mpsc::channel::<Result<Sources, String>>();
+    // The thread's own account of how it ended, rather than the caller's
+    // inference from a closed channel. See [`RecorderEnd`].
+    let ended = Arc::new(OnceLock::new());
 
     std::thread::Builder::new()
         .name("kw-meeting".to_owned())
-        .spawn(move || record(path, system, audio_tx, command_rx, ready_tx))
+        .spawn({
+            let ended = Arc::clone(&ended);
+            move || record(path, system, audio_tx, command_rx, ready_tx, &ended)
+        })
         .map_err(|e| format!("could not start the recording thread: {e}"))?;
 
     let sources = ready_rx
         .recv()
         .map_err(|_| "the recording thread stopped before it started".to_owned())??;
 
-    Ok((audio_rx, command_tx, sources))
+    Ok((audio_rx, command_tx, sources, ended))
 }
 
 /// The recorder thread.
@@ -358,7 +431,12 @@ fn record(
     audio: mpsc::UnboundedSender<Drained>,
     commands: sync_mpsc::Receiver<RecorderCommand>,
     ready: sync_mpsc::Sender<Result<Sources, String>>,
+    ended: &Arc<OnceLock<RecorderEnd>>,
 ) {
+    // First, so it is the last local dropped and therefore runs before `audio`
+    // does. Every `return` below and every unwind goes through it.
+    let _exit = RecorderExit(Arc::clone(ended));
+
     let mic = match Capture::start(None) {
         Ok(capture) => capture,
         Err(err) => {
@@ -599,6 +677,16 @@ struct Live {
     recording_path: std::path::PathBuf,
     sources: Sources,
     started: std::time::Instant,
+    /// How the recorder thread ended, once it has.
+    ///
+    /// Written by the thread itself rather than inferred from its audio channel
+    /// closing, which is KNEG-116: the two look identical from outside and mean
+    /// different things. Read beside `transcript_failure` by [`live_state`],
+    /// because "is anything still being recorded" and "is anything still being
+    /// transcribed" are separate questions and were being answered by one
+    /// signal.
+    recorder_end: Arc<OnceLock<RecorderEnd>>,
+
     /// Why the live transcription stopped, once it has.
     ///
     /// Written by the pump's own task before that task returns, so `pump` above
@@ -1045,7 +1133,7 @@ impl MeetingRuntime {
             "{}.wav",
             chrono::Utc::now().format("%Y%m%d-%H%M%S")
         ));
-        let (audio, commands, sources) = spawn_recorder(path.clone(), system_audio)?;
+        let (audio, commands, sources, recorder_end) = spawn_recorder(path.clone(), system_audio)?;
 
         // The pump announces its own ending, which is the whole of KNEG-95's
         // fix: until now the failure was detected at second zero and reported
@@ -1059,9 +1147,14 @@ impl MeetingRuntime {
             let app = self.app.clone();
             let live = Arc::clone(&self.live);
             let mine = Arc::clone(&transcript_failure);
+            let ended = Arc::clone(&recorder_end);
             async move {
                 let result = pump(provider, session_rate, audio, events_rx, app.clone()).await;
-                let reason = live_transcript_ended(result.as_ref().map(|_| ()));
+                // Read after the pump has ended, which is after the audio
+                // channel closed, which is after the recorder's own guard ran.
+                // See [`RecorderExit`] for why that ordering holds.
+                let reason =
+                    live_transcript_ended(result.as_ref().map(|_| ()), ended.get().copied());
                 announce_transcript_ended(&live, &app, &mine, reason).await;
                 result
             }
@@ -1071,6 +1164,7 @@ impl MeetingRuntime {
             provider_id: provider_id.to_owned(),
             commands,
             pump,
+            recorder_end,
             recording_path: path,
             sources: sources.clone(),
             started: std::time::Instant::now(),
@@ -1229,6 +1323,7 @@ impl MeetingRuntime {
                 state: live_state(
                     live.transcript_failure.get().is_some(),
                     live.pump.is_finished(),
+                    live.recorder_end.get().copied(),
                 ),
                 transcript_failure: live.transcript_failure.get().cloned(),
                 provider: Some(live.provider_id.clone()),
@@ -1462,7 +1557,9 @@ fn pump_result(
         // own send call complained about afterwards. Through
         // `live_transcript_ended` so that the sentence the indicator showed
         // mid-meeting and the sentence the outcome ends with are the same one.
-        Ok(Err(err)) => Err(live_transcript_ended(Err(&err))),
+        // The recorder is irrelevant on this arm: the error came from the
+        // provider, and it is what the user needs to read.
+        Ok(Err(err)) => Err(live_transcript_ended(Err(&err), None)),
         // A panic in the pump, or the task being aborted. Neither should happen;
         // both used to leave the screen stuck on "Recording" for ever.
         Err(err) => Err(format!("the transcription task failed: {err}.")),
@@ -1516,13 +1613,34 @@ fn emit_state(app: &AppHandle, state: MeetingState) {
 /// KNEG-116 rather than left here: a fifth state for a case reachable only by a
 /// panic was more machinery than the fact justified, and that is a judgement
 /// somebody should be able to revisit.
-fn live_transcript_ended(outcome: Result<(), &MeetingError>) -> String {
-    match outcome {
-        Ok(()) => {
+fn live_transcript_ended(
+    outcome: Result<(), &MeetingError>,
+    recorder: Option<RecorderEnd>,
+) -> String {
+    match (outcome, recorder) {
+        // The thread's own account, which is the sentence this used to have to
+        // hedge. Before KNEG-116 every `Ok` arm read "the recording thread
+        // stopped" whether it had returned or unwound, because a closed audio
+        // channel looks the same either way.
+        (Ok(()), Some(RecorderEnd::Panicked)) => {
+            "the recording thread stopped unexpectedly, so nothing further is being recorded \
+             or transcribed. What was captured before it stopped is still on disk, and Stop \
+             will transcribe it."
+                .to_owned()
+        }
+        (Ok(()), Some(RecorderEnd::OnPurpose)) => {
+            "the recording finished, so nothing further is being recorded or transcribed."
+                .to_owned()
+        }
+        // The guard has not run yet. Reachable only in the instant between the
+        // sender dropping and the thread's frame unwinding past it, and the
+        // old wording is right for exactly that: something ended, and this does
+        // not yet know what.
+        (Ok(()), None) => {
             "the recording thread stopped, so nothing further is being recorded or transcribed."
                 .to_owned()
         }
-        Err(err) => format!("{err}."),
+        (Err(err), _) => format!("{err}."),
     }
 }
 
@@ -1540,7 +1658,17 @@ fn live_transcript_ended(outcome: Result<(), &MeetingError>) -> String {
 ///
 /// KNEG-95 named `status()` not consulting `pump.is_finished()` as part of the
 /// gap. This is that, narrowed to the case the fault cell cannot cover.
-const fn live_state(announced: bool, pump_finished: bool) -> MeetingState {
+const fn live_state(
+    announced: bool,
+    pump_finished: bool,
+    recorder: Option<RecorderEnd>,
+) -> MeetingState {
+    // First, because it is the strongest claim available: the thread said so
+    // itself. `announced` and `pump_finished` are both about the transcription,
+    // and neither can tell whether anything is still being recorded.
+    if matches!(recorder, Some(RecorderEnd::Panicked)) {
+        return MeetingState::Stalled;
+    }
     if announced || pump_finished {
         MeetingState::RecordingWithoutTranscript
     } else {
@@ -1907,19 +2035,56 @@ mod tests {
         assert!(!MeetingState::Idle.is_running());
         assert!(MeetingState::Recording.is_running());
         assert!(MeetingState::RecordingWithoutTranscript.is_running());
+        // Especially this one. Whatever was captured before the thread went is
+        // on disk, and a state that hid Stop would throw it away in order to
+        // report that the recording stopped.
+        assert!(MeetingState::Stalled.is_running());
         assert!(MeetingState::Finishing.is_running());
     }
 
     #[test]
     fn a_healthy_session_is_reported_as_recording() {
-        assert_eq!(live_state(false, false), MeetingState::Recording);
+        assert_eq!(live_state(false, false, None), MeetingState::Recording);
+    }
+
+    /// A recorder that returned on purpose is not a stalled meeting.
+    ///
+    /// Reachable while a session is held only in the instant `stop` has asked
+    /// the thread to finish and has not yet taken the session. Reporting that
+    /// as `Stalled` would put a failure on screen for a Stop the user pressed.
+    #[test]
+    fn a_recorder_that_left_on_purpose_is_not_a_failure() {
+        assert_eq!(
+            live_state(false, false, Some(RecorderEnd::OnPurpose)),
+            MeetingState::Recording
+        );
     }
 
     #[test]
     fn an_announced_failure_changes_what_the_screen_says() {
         assert_eq!(
-            live_state(true, false),
+            live_state(true, false, None),
             MeetingState::RecordingWithoutTranscript
+        );
+    }
+
+    /// KNEG-116 in one assertion: the word that led the state was false.
+    ///
+    /// A panicked recorder ends the audio channel, the pump returns `Ok`, and
+    /// before this the answer was `RecordingWithoutTranscript` — whose first
+    /// word claims the one thing that had definitely stopped. The recorder's
+    /// own report is what makes the difference sayable.
+    #[test]
+    fn a_recorder_that_panicked_is_not_still_recording() {
+        assert_eq!(
+            live_state(false, false, Some(RecorderEnd::Panicked)),
+            MeetingState::Stalled
+        );
+        // And it wins over the transcription signals, because those are about
+        // the transcript and this is about whether anything is being captured.
+        assert_eq!(
+            live_state(true, true, Some(RecorderEnd::Panicked)),
+            MeetingState::Stalled
         );
     }
 
@@ -1933,7 +2098,7 @@ mod tests {
     #[test]
     fn a_pump_that_vanished_without_a_word_is_still_not_a_working_transcript() {
         assert_eq!(
-            live_state(false, true),
+            live_state(false, true, None),
             MeetingState::RecordingWithoutTranscript
         );
     }
@@ -1952,7 +2117,7 @@ mod tests {
                 .to_owned(),
         };
 
-        let announced = live_transcript_ended(Err(&fault));
+        let announced = live_transcript_ended(Err(&fault), None);
         let at_stop = pump_result(Ok(Err(fault))).unwrap_err();
         assert_eq!(announced, at_stop);
         assert!(announced.contains("Realtime Beta API"), "{announced}");
@@ -1960,15 +2125,57 @@ mod tests {
 
     /// The `Ok` arm names the recorder, because that is what it means.
     ///
-    /// `record` has no path that ends by itself, so the audio channel closing
-    /// with no Stop behind it is a panicked recording thread -- and then the
-    /// recording has stopped too, which the state's name cannot say and this
-    /// sentence can.
+    /// Three sentences, not one, and the difference is the whole of KNEG-116:
+    /// the thread saying *how* it left is a different fact from its channel
+    /// having closed, and only one of the three is a failure.
     #[test]
-    fn a_pump_that_ran_out_of_audio_says_the_recorder_went() {
-        let reason = live_transcript_ended(Ok(()));
-        assert!(reason.contains("recording thread"), "{reason}");
-        assert!(reason.contains("nothing further"), "{reason}");
+    fn what_ended_the_recorder_changes_what_is_said_about_it() {
+        let unknown = live_transcript_ended(Ok(()), None);
+        assert!(unknown.contains("recording thread"), "{unknown}");
+        assert!(unknown.contains("nothing further"), "{unknown}");
+
+        let panicked = live_transcript_ended(Ok(()), Some(RecorderEnd::Panicked));
+        assert!(panicked.contains("unexpectedly"), "{panicked}");
+        // The recording is the artefact that cannot be recreated, so the
+        // sentence has to say it survived and how to get it.
+        assert!(panicked.contains("still on disk"), "{panicked}");
+        assert!(panicked.contains("Stop"), "{panicked}");
+
+        let on_purpose = live_transcript_ended(Ok(()), Some(RecorderEnd::OnPurpose));
+        assert!(!on_purpose.contains("unexpectedly"), "{on_purpose}");
+
+        // All three are distinct: a formatter that collapsed two of them would
+        // pass every assertion above.
+        assert_ne!(unknown, panicked);
+        assert_ne!(unknown, on_purpose);
+        assert_ne!(panicked, on_purpose);
+    }
+
+    /// The guard writes the reason, and writes a different one when unwinding.
+    ///
+    /// The mechanism the rest of this rests on, tested on a real thread rather
+    /// than reasoned about: a `Drop` impl that reads `std::thread::panicking()`
+    /// is easy to write backwards and impossible to see is backwards.
+    #[test]
+    fn the_recorder_guard_can_tell_a_panic_from_a_return() {
+        let calm: Arc<OnceLock<RecorderEnd>> = Arc::new(OnceLock::new());
+        {
+            let _exit = RecorderExit(Arc::clone(&calm));
+        }
+        assert_eq!(calm.get().copied(), Some(RecorderEnd::OnPurpose));
+
+        let panicked: Arc<OnceLock<RecorderEnd>> = Arc::new(OnceLock::new());
+        let cell = Arc::clone(&panicked);
+        let joined = std::thread::spawn(move || {
+            let _exit = RecorderExit(cell);
+            #[allow(clippy::panic)]
+            {
+                panic!("the recorder went");
+            }
+        })
+        .join();
+        assert!(joined.is_err(), "the thread was supposed to unwind");
+        assert_eq!(panicked.get().copied(), Some(RecorderEnd::Panicked));
     }
 
     /// The race `stop` opens, and the reason identity is checked rather than

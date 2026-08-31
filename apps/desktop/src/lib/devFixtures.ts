@@ -1530,17 +1530,23 @@ const devConsole = {
   },
   meetingState(state: MeetingState) {
     // The failure sentence travels with the state rather than being a second
-    // thing to remember to set: `recording-without-transcript` with an empty
-    // detail line is the one rendering of this screen that cannot be reviewed,
-    // because the sentence is most of what it exists to show. The words are the
-    // real ones, from the meeting of 2026-08-28.
+    // thing to remember to set: either failure state with an empty detail line
+    // is a rendering of this screen that cannot be reviewed, because the
+    // sentence is most of what it exists to show.
+    //
+    // The `recording-without-transcript` words are the real ones, from the
+    // meeting of 2026-08-28. The `stalled` words are **not** real: no recorder
+    // thread has ever been seen to panic, and this is the sentence the code
+    // would produce, not one anybody has read on a screen (KNEG-116).
     meetingStatus = {
       ...meetingStatus,
       state,
       transcriptFailure:
         state === "recording-without-transcript"
           ? "openai-realtime accepted the connection and then stopped transcribing: on the system audio stream the provider reported: The Realtime Beta API is no longer supported."
-          : null,
+          : state === "stalled"
+            ? "the recording thread stopped unexpectedly, so nothing further is being recorded or transcribed. What was captured before it stopped is still on disk, and Stop will transcribe it."
+            : null,
     };
     void emit("meeting-state", state);
   },

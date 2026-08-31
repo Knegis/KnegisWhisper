@@ -278,6 +278,72 @@ Unchanged from the Phases 1–4 entry, restated here so they are not buried:
 
 ---
 
+## 2026-08-31 (KNEG-116) — asking the thread instead of inferring from its silence, and a state name that stops lying
+
+`pump` returns `Ok` when its audio channel closes. At Stop that is exactly right. Reaching it while
+a session is still held means the recording thread went without being asked — `record` returns on
+`Finish`, on `Cancel` and on its command channel disconnecting, and all three run only after the
+session has been taken. So that arm meant a panicked recorder, and the state reported was
+`RecordingWithoutTranscript`, whose first word was the one thing that had definitely stopped.
+
+KNEG-95 chose to report it anyway, on the grounds that it was strictly less wrong than the plain
+`Recording` it replaced, and filed the rest.
+
+### The fix is to stop inferring
+
+A closed channel and a dead thread look identical from outside, and they are not the same fact. So
+the thread says which, itself: a `Drop` guard reading `std::thread::panicking()`, writing
+`RecorderEnd::OnPurpose` or `RecorderEnd::Panicked` into a `OnceLock` the runtime already holds.
+
+A guard rather than a line at each return, because `record` has five exits and **a panic is not one
+of them** — anything written at the returns would miss the only case worth naming.
+
+**The drop order is load-bearing.** The guard is the first binding in `record` and `audio` is a
+parameter; bindings drop in reverse order of declaration, so the guard runs before the sender does.
+The cell is therefore written before the pump can observe its channel closing. That is the same
+ordering trick `Live::transcript_failure` already depends on, and it is why reading the two together
+is meaningful rather than a race.
+
+### A fifth state, now that there is something to distinguish
+
+`MeetingState::Stalled`: nothing is being recorded and nothing asked for that. `is_running()` stays
+true, deliberately — whatever was captured before the thread went is on disk, and a state that hid
+Stop would throw the recording away in order to report that the recording stopped.
+
+Named for what is true, which is the rule KNEG-95 set for its own state and the rule this one was
+filed for breaking.
+
+### The compiler could not catch what adding it broke
+
+`tsc --noEmit` passed with `stalled` added to the union and both screens still asking
+`state === "recording" || state === "recording-without-transcript"`. **Adding a member to a string
+union does not break a `===` comparison.** So the notification window and `Settings > Meetings`
+compiled cleanly and would both have answered *not recording* — offering "Start recording" for a
+session that was still held, with a WAV still growing on disk. That is the precise defect KNEG-95
+exists to fix, reintroduced by a state added to fix a neighbour of it.
+
+`labels.meetingIsLive` is an exhaustive `switch` with a `never` in the default arm. A sixth state
+now fails to compile there, rather than quietly losing a button somewhere else. `meetingStateLabel`
+sits beside it for the same reason.
+
+That is worth separating from the rest: the type system was consulted, said yes, and was wrong to.
+It was not asked the question it can answer until the switch existed to ask it.
+
+### Verified
+
+`the_recorder_guard_can_tell_a_panic_from_a_return` runs a real thread into a real panic rather than
+reasoning about `std::thread::panicking()`, which is easy to write backwards and impossible to see
+is backwards. The rest is pure: three distinct sentences, asserted distinct from each other, because
+a formatter that collapsed two of them would pass every individual assertion.
+
+### Still not observed
+
+No recorder thread has ever been seen to panic in this project. The case is reached by reading
+`record`'s exits. What changed is that it is now reached by the thread saying so, and that the
+screen says the true thing when it does.
+
+---
+
 ## 2026-08-31 (KNEG-96) — between "died during startup" and "we killed it" there was no observer at all
 
 The local whisper server went away twice in one afternoon on 2026-08-28, unused, and the record
@@ -753,12 +819,16 @@ channel closed with no Stop behind it, and `record` has no path that ends by its
 `stop` or `cancel` has taken the session. So that arm means the recording thread panicked, and the
 recording has stopped along with the transcription.
 
-**That is the one case where the state is wrong in its first word, and it is reported anyway.** The
-alternative is the silence this whole change exists to end, and the sentence — which is what a
-person actually reads — says the true thing: *"the recording thread stopped, so nothing further is
-being recorded or transcribed."* Filed as **KNEG-116** (Low) rather than left in a comment: a fifth
-state for a case reachable only by a panic, and untestable without one, was more machinery than the
-fact justified — and that is a judgement somebody should be able to revisit.
+**That is the one case where the state is wrong in its first word, and it was reported anyway.** The
+alternative was the silence this whole change exists to end, and the sentence — which is what a
+person actually reads — said the true thing. Filed as **KNEG-116** (Low) rather than left in a
+comment: a fifth state for a case reachable only by a panic, and untestable without one, was more
+machinery than the fact justified — and that is a judgement somebody should be able to revisit.
+
+**Revisited the same day, and it was the wrong call.** The fifth state was the smaller half; the
+larger one was that the case had to be *inferred* at all. `MeetingState::Stalled` now exists, and
+the recorder thread reports how it ended rather than the runtime guessing from a closed channel.
+See the KNEG-116 entry.
 
 ### Where it shows
 

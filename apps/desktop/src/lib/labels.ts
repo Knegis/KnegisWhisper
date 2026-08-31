@@ -34,6 +34,7 @@ import type {
   MediaImportProgress,
   MediaImportSource,
   MeetingOutcome,
+  MeetingState,
   NonActivating,
   RelocatedCredential,
   ShortcutHookStatus,
@@ -537,6 +538,70 @@ export function detectedLabel(d: Detected): string {
   return d.inCall
     ? `in a call — detected as ${d.evidence}`
     : `open, but not detectably in a call, so recording is not offered for it — detected as ${d.evidence}`;
+}
+
+/* ------------------------------------------------------------------ meetings */
+
+/**
+ * Whether a session is on the machine right now, so Stop and Discard belong on
+ * screen.
+ *
+ * **An exhaustive switch, and the `never` at the end is the point.** Adding a
+ * member to a string union does not break a `===` comparison, so when `stalled`
+ * was added for KNEG-116 both screens went on asking `state === "recording" ||
+ * state === "recording-without-transcript"`, compiled without a murmur, and
+ * answered *no*. A meeting whose recorder had died would have shown "Start
+ * recording" with a session still held and a WAV still on disk — the exact
+ * defect KNEG-95 was filed for, reintroduced by a state added to fix a
+ * neighbour of it.
+ *
+ * `tsc` cannot catch the comparison. It can catch this, and does: a sixth state
+ * fails to compile here rather than quietly losing a button somewhere else.
+ *
+ * `finishing` is not live. The recording has stopped and the whole-file pass is
+ * running; there is nothing to stop and nothing to discard.
+ */
+export function meetingIsLive(state: MeetingState): boolean {
+  switch (state) {
+    case "recording":
+    case "recording-without-transcript":
+    case "stalled":
+      return true;
+    case "finishing":
+    case "idle":
+      return false;
+    default: {
+      const unhandled: never = state;
+      return unhandled;
+    }
+  }
+}
+
+/**
+ * What the status row says about a running or finishing meeting.
+ *
+ * Beside [`meetingIsLive`] because the two answer about the same set and would
+ * drift if they lived apart.
+ */
+export function meetingStateLabel(state: MeetingState): string {
+  switch (state) {
+    case "recording":
+      return "Recording";
+    case "recording-without-transcript":
+      return "Recording — the live transcript has stopped";
+    // Leads with what is true. "Recording" would be the one word this state
+    // exists to stop saying.
+    case "stalled":
+      return "Stopped unexpectedly — nothing is being recorded";
+    case "finishing":
+      return "Transcribing the recording…";
+    case "idle":
+      return "Not recording";
+    default: {
+      const unhandled: never = state;
+      return unhandled;
+    }
+  }
 }
 
 /* ------------------------------------------------------------------ updater */

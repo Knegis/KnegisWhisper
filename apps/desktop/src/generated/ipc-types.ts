@@ -612,7 +612,7 @@ languageRequired: boolean, sessionLimitSeconds: number | null, };
 /**
  * What a meeting session is doing.
  */
-export type MeetingState = "idle" | "recording" | "recording-without-transcript" | "finishing";
+export type MeetingState = "idle" | "recording" | "recording-without-transcript" | "stalled" | "finishing";
 
 /**
  * Which captures are actually running.
