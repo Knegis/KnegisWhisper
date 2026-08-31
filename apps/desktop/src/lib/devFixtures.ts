@@ -751,7 +751,10 @@ const LOCAL_API: LocalApiStatus = {
   port: 8749,
   discoveryPath:
     "C:\\Users\\dev\\AppData\\Roaming\\KnegisWhisper\\local-api.json",
-  discoveryPermissions: { state: "owner-only" },
+  /* Windows paths, so the Windows state. This used to say "owner-only", which
+   * only a Unix machine can produce and which both screens render with a
+   * literal `0600` that could never appear beside a `C:\` path. */
+  discoveryPermissions: { state: "owner-and-administrators" },
 };
 
 /* ------------------------------------------------------ cli, mcp and import */
@@ -765,7 +768,10 @@ const CLI: CliStatus = {
   discoveryPath:
     "C:\\Users\\dev\\AppData\\Roaming\\KnegisWhisper\\local-api.json",
   localApiRunning: true,
-  discoveryPermissions: { state: "owner-only" },
+  /* Same file, same machine, so the same state as `LOCAL_API` above. The two
+   * screens read one file; a fixture where they disagreed would hide exactly
+   * the drift `discoveryPermissionsLabel` exists to prevent. */
+  discoveryPermissions: { state: "owner-and-administrators" },
 };
 
 const MCP: McpStatus = {

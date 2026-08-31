@@ -1125,20 +1125,27 @@ verifiedBy: VerifiedBy | null, } | { "stage": "stopped-when-idle" };
  * `local_model.rs`'s `VerifiedBy` already follow for their own core types.
  *
  * This type exists because of one specific defect.
- * `Permissions::is_as_expected()` returns `true` for `InheritedFromProfile`
+ * `Permissions::is_as_expected()` returned `true` for `InheritedFromProfile`
  * — correct as "the best this build currently achieves on this platform",
- * read by a screen that only has the boolean as "verified restricted", which
- * it is not: nothing was checked, it is simply what a file under
+ * read by a screen that only had the boolean as "verified restricted", which
+ * it was not: nothing was checked, it was simply what a file under
  * `%USERPROFILE%` gets by default, and two other trustees turned up in that
  * default on a real machine. See `docs/BENCH_CHECK.md`, 2026-08-26 finding 2.
- * `Integrations > CLI` switches on `state` and gives `InheritedFromProfile`
- * its own honest sentence rather than a green tick that reuses the boolean.
+ * That helper has since been deleted; this type and its
+ * [`Self::is_confirmed`] are what replaced it.
  */
-export type DiscoveryPermissions = { "state": "owner-only" } | { "state": "inherited-from-profile" } | { "state": "wider",
+export type DiscoveryPermissions = { "state": "owner-only" } | { "state": "owner-and-administrators" } | { "state": "inherited-from-profile" } | { "state": "wider",
 /**
  * Octal, e.g. `"644"`, matching how a person would type it to `chmod`.
  */
-mode: string, } | { "state": "unknown", reason: string, };
+mode: string, } | { "state": "extra-trustees",
+/**
+ * How many, not which. A trustee name is one of this machine's
+ * account or group names, and this value is rendered on a screen that
+ * ends up in screenshots and bug reports. The names go to the
+ * application log instead.
+ */
+count: number, } | { "state": "still-inheriting" } | { "state": "grants-everyone" } | { "state": "incomplete" } | { "state": "directory-not-restricted" } | { "state": "unknown", reason: string, };
 
 /**
  * What the settings screen shows about the local API.
@@ -1165,7 +1172,7 @@ discoveryPath: string | null,
  *
  * This used to carry a second field, `discovery_permissions_as_expected:
  * Option<bool>`, derived from `Permissions::is_as_expected()`. That
- * boolean is `true` for `InheritedFromProfile`, so the settings screen
+ * boolean was `true` for `InheritedFromProfile`, so the settings screen
  * warned only when it was `false` and stayed silent on an inherited ACL
  * -- reassuring where nothing had been verified. Removed rather than
  * redefined: a screen that reads the real state has no use for a second,

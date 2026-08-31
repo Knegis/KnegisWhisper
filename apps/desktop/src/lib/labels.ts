@@ -643,13 +643,23 @@ export function appleCalendarSupportLabel(support: AppleCalendarSupport): Stated
 /**
  * The discovery file's real permission state, said plainly.
  *
- * The one rule this exists to enforce: `inherited-from-profile` never reads as
- * a pass. It is the platform's default, not a restriction anything here
- * verified, and a bench check found exactly that gap — the backend's own
- * `is_as_expected()` returns `true` for it, which is correct as "the best
- * this build currently achieves" and wrong read as "checked and confirmed".
- * Every other case names its evidence too, the same discipline
- * `captureExclusionLabel` already follows for `unknown`.
+ * The one rule this exists to enforce: a state nothing checked never reads as
+ * a pass. That line is checked versus unchecked, not strict versus lax —
+ * `owner-and-administrators` deliberately lets administrators read the file
+ * and is still a pass, because the access list was read back entry by entry
+ * and an administrator can take ownership of anything regardless;
+ * `inherited-from-profile` may well be perfectly restrictive and is still not,
+ * because nothing looked. A bench check found the original of that mistake:
+ * the backend's `is_as_expected()` returned `true` for the inherited case,
+ * correct as "the best this build currently achieves" and wrong read as
+ * "checked and confirmed". Every case here names its evidence, the same
+ * discipline `captureExclusionLabel` follows for `unknown`.
+ *
+ * The wording is per-state and per-platform on purpose. `owner-only` says
+ * `0600`, which is a Unix fact and is only ever produced on Unix.
+ * `owner-and-administrators` is the Windows result and names administrators,
+ * because they really can read it and a sentence that left them out would be
+ * the overstatement this whole vocabulary exists to avoid.
  *
  * `inherited-from-profile`'s `caveat` used to be a paragraph of JSX,
  * hand-written identically in both `Integrations > API` and
@@ -666,18 +676,57 @@ export function discoveryPermissionsLabel(p: DiscoveryPermissions): Stated {
         text: "Restricted to your user account",
         detail: "verified by reading the file's mode back: 0600",
       };
+    case "owner-and-administrators":
+      return {
+        text: "Restricted to you, the system and administrators",
+        detail:
+          "verified by reading the file's access list back: your account, NT AUTHORITY\\SYSTEM and BUILTIN\\Administrators, nobody else, and nothing inherited from the folder above",
+        caveat:
+          "An administrator on this machine can still read the token. That is deliberate: an administrator can take ownership of any file and grant themselves access anyway, so leaving them out would look stricter without being stricter.",
+      };
     case "inherited-from-profile":
       return {
         text: "Not independently restricted",
         detail:
-          "it inherits your profile directory's permissions, which normally allow your account and administrators. Nothing here verified that inheritance, and it is not the same as this file having been locked down on its own",
+          "it has whatever permissions the folder holding it happens to give. Nothing here narrowed them and nothing here read them back, so this is not the same as the file having been locked down on its own",
         caveat:
-          "This is not the same as the file having been locked down on its own. Anything that can read files your profile can read — which, on this platform, includes administrators — can use the local API.",
+          "Anything that can read files in that folder can use the local API. This build has no way to narrow permissions on this platform, so what the folder allows is what the token allows.",
       };
     case "wider":
       return {
         text: "More readable than intended",
         detail: `mode ${p.mode} — anything that can read it can use the local API`,
+      };
+    case "extra-trustees":
+      return {
+        text: "Readable by accounts you did not choose",
+        detail: `the access list grants ${p.count} account${p.count === 1 ? "" : "s"} or group${p.count === 1 ? "" : "s"} beyond your own, the system and administrators — each of them can read the token and drive the local API`,
+        caveat:
+          "Which accounts is in the application log rather than on this screen, so a screenshot of this page does not carry your machine's account and group names.",
+      };
+    case "still-inheriting":
+      return {
+        text: "Inheriting its permissions from the folder above",
+        detail:
+          "the accounts it grants are the right ones today, but they come from the folder rather than from the file, so they change whenever the folder's do — without anything here being asked",
+      };
+    case "grants-everyone":
+      return {
+        text: "Readable by every account on this machine",
+        detail:
+          "the access list grants an everyone-style group, or there is no access list at all — which permits everything rather than nothing. Any process on this machine can use the local API",
+      };
+    case "incomplete":
+      return {
+        text: "Not the permissions that were applied",
+        detail:
+          "nothing unexpected is in the access list, but what was asked for is not all there. The application may be unable to rewrite this file on its next start",
+      };
+    case "directory-not-restricted":
+      return {
+        text: "In a folder anything can write to",
+        detail:
+          "the file's own permissions are right, but anything that can write to the folder can delete it and put its own file there — and whatever reads it next would get that port and that token instead",
       };
     case "unknown":
       return {

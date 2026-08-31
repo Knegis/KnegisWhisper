@@ -58,7 +58,7 @@
       "surfaceId": "integrations.cli",
       "component": "apps/desktop/src/views/IntegrationsCli.tsx",
       "built": true,
-      "note": "Shows the compiled knegiswhisper binary's location (a real check next to this running application and on PATH, never assumed), the discovery file's path, and the discovery file's real permission state as a tagged union with evidence -- InheritedFromProfile renders its own honest sentence rather than the boolean is_as_expected() would collapse it to. See docs/BENCH_CHECK.md, 2026-08-26 finding 2."
+      "note": "Shows the compiled knegiswhisper binary's location (a real check next to this running application and on PATH, never assumed), the discovery file's path, and the discovery file's real permission state as a tagged union with evidence -- ten states, each with its own sentence in discoveryPermissionsLabel, rather than the boolean is_as_expected() would collapse them to. That boolean has been deleted; DiscoveryPermissions::is_confirmed() draws the line at checked versus unchecked, so owner-and-administrators passes (the access list was read back) and inherited-from-profile does not (nothing looked). See docs/BENCH_CHECK.md, 2026-08-26 finding 2."
     },
     "Integrations > MCP": {
       "surfaceId": "integrations.mcp",
