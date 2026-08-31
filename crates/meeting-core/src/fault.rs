@@ -512,6 +512,62 @@ mod tests {
         assert_eq!(preview("  PONG  "), "PONG");
     }
 
+    /// Four copies of one decision is exactly how one gets missed.
+    ///
+    /// There is no way to ask a `Box<dyn MeetingTranscriptionProvider>` whether
+    /// it consults its fault cell. The four `Connection` types are private, the
+    /// four constructors live in `apps/desktop/src-tauri`, and nothing in this
+    /// workspace can open a socket in a test — so this reads the four modules'
+    /// own source, compiled in with `include_str!`, the same device
+    /// `kw_network_policy` uses for `forbidden-domains.json`.
+    ///
+    /// It is a text match and it will not catch a client that consults the cell
+    /// and then ignores the answer; the two tests at the bottom of each socket
+    /// module are what check that, one client at a time. What this catches is
+    /// the failure mode the change actually risks: three of these four files
+    /// were byte-identical apart from a missing field, this is a
+    /// security-relevant decision applied four times by hand, and a fifth client
+    /// will be written by copying one of them.
+    #[test]
+    fn all_four_cloud_clients_record_a_fault_and_consult_it_at_both_ends() {
+        const CLIENTS: [(&str, &str); 4] = [
+            ("openai_socket.rs", include_str!("openai_socket.rs")),
+            ("assemblyai_socket.rs", include_str!("assemblyai_socket.rs")),
+            ("deepgram_socket.rs", include_str!("deepgram_socket.rs")),
+            ("corti_socket.rs", include_str!("corti_socket.rs")),
+        ];
+
+        for (name, source) in CLIENTS {
+            assert!(
+                source.contains("fault: SessionFault"),
+                "{name} has no session fault cell"
+            );
+            // `source` rather than `AudioSource::Mic` in the pattern on purpose:
+            // it is the reader task's own loop variable, so these match the
+            // production call sites and not the hand-recorded faults in each
+            // module's own tests.
+            for (method, what) in [
+                ("fault.reported(source,", "an error frame the provider sent"),
+                ("fault.closed(source,", "a close frame's code and reason"),
+                ("fault.transport(source,", "a transport failure"),
+                ("fault.unreadable(source,", "a frame it could not read"),
+            ] {
+                assert!(
+                    source.contains(method),
+                    "{name} never records {what} -- `{method}` appears nowhere in it"
+                );
+            }
+            assert_eq!(
+                source.matches("self.fault.take()").count(),
+                2,
+                "{name} must consult the cell in exactly two places: `send_audio`, so a \
+                 provider that reported an error and kept the socket open still fails the \
+                 next chunk, and `finish`, so a fault arriving after the last chunk is not \
+                 lost"
+            );
+        }
+    }
+
     #[test]
     fn a_preview_is_capped_and_stays_on_a_character_boundary() {
         // Provider bytes are untrusted; a megabyte of them must not reach a log
