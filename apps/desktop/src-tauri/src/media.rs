@@ -91,6 +91,7 @@ use std::sync::{Arc, RwLock};
 
 use kw_network_policy::{NetworkPolicy, RequestPurpose};
 use kw_security::CredentialStore;
+use kw_sidecar::process::Health as _;
 use kw_sidecar::{Catalog, RealFs, SearchPath};
 use kw_storage::Db;
 use kw_transcription_core::local::WhisperServer;
@@ -168,10 +169,43 @@ pub struct MediaImportResult {
     pub text: String,
     pub provider: String,
     pub model: Option<String>,
+    /// The transcript divided into timed utterances, when the engine timed it.
+    ///
+    /// **Empty means no timings were reported**, not "the recording was one
+    /// utterance". Only the local whisper server reports them, and only because
+    /// this path asks (`WhisperServer::timed`); a cloud provider answers with
+    /// prose, so an import routed to one still has no cues. The screen writes
+    /// one segment spanning the recording in that case and says as much.
+    pub segments: Vec<ImportedSegment>,
     /// Computed from the converted WAV, not asked of the source file, so it
     /// reflects what was actually transcribed.
     pub duration_ms: u64,
     pub source: MediaImportSource,
+}
+
+/// One timed utterance of an imported transcript.
+///
+/// A local mirror of `kw_transcription_core::local::TimedSegment` because that
+/// crate has no `ts-rs` dependency and should not gain one to cross an IPC
+/// boundary it knows nothing about. The field names match
+/// `kw_notes_core::transcript::Segment`, which is what the screen writes into.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportedSegment {
+    pub text: String,
+    /// Seconds from the start of the recording.
+    pub timestamp: f64,
+    pub end_timestamp: f64,
+}
+
+impl From<&kw_transcription_core::local::TimedSegment> for ImportedSegment {
+    fn from(segment: &kw_transcription_core::local::TimedSegment) -> Self {
+        Self {
+            text: segment.text.clone(),
+            timestamp: segment.start,
+            end_timestamp: segment.end,
+        }
+    }
 }
 
 /// Progress of installing a media-import sidecar, or of running an import
@@ -563,6 +597,12 @@ pub struct MediaImportRuntime {
     /// reach the same local engine. Resolving one of them to whisper and the
     /// other to sherpa would make `Transport::Local` mean two things.
     local_sherpa: crate::local_asr::Selection,
+    /// How to start the whisper server again if it has gone.
+    ///
+    /// Held for the same reason `local_port` is, and it matters more here than
+    /// in dictation: a dictation whose server has died can be spoken again, and
+    /// an imported recording generally cannot.
+    local_revive: Arc<dyn crate::local_model::Revive>,
     /// Where downloaded sidecars live. Held rather than read from
     /// `kw_storage::paths` at each use, so a test can point it at an empty
     /// directory -- see [`MediaImportRuntime::rooted`].
@@ -585,6 +625,7 @@ impl MediaImportRuntime {
         local_port: LocalPort,
         local_model: Arc<RwLock<Option<String>>>,
         local_sherpa: crate::local_asr::Selection,
+        local_revive: Arc<dyn crate::local_model::Revive>,
         db: Db,
     ) -> Result<Self, String> {
         Self::rooted(
@@ -593,6 +634,7 @@ impl MediaImportRuntime {
             local_port,
             local_model,
             local_sherpa,
+            local_revive,
             db,
             kw_storage::paths::sidecar_dir().path,
         )
@@ -615,6 +657,7 @@ impl MediaImportRuntime {
         local_port: LocalPort,
         local_model: Arc<RwLock<Option<String>>>,
         local_sherpa: crate::local_asr::Selection,
+        local_revive: Arc<dyn crate::local_model::Revive>,
         db: Db,
         sidecar_root: PathBuf,
     ) -> Result<Self, String> {
@@ -626,6 +669,7 @@ impl MediaImportRuntime {
             local_port,
             local_model,
             local_sherpa,
+            local_revive,
             db,
             sidecar_root,
         })
@@ -717,14 +761,57 @@ impl MediaImportRuntime {
         Ok(())
     }
 
-    fn local_server(&self) -> Option<WhisperServer> {
-        let port = self.local_port.read().ok().and_then(|held| *held)?;
+    /// The whisper server to send an import to, starting a new one if the
+    /// recorded server has gone.
+    ///
+    /// The same rule dictation follows, and for a stronger reason: an import is
+    /// often the only copy of a recording, so failing it against a dead port
+    /// spends something that cannot be spent twice.
+    async fn whisper_server(&self) -> Result<Option<WhisperServer>, MediaImportError> {
+        let recorded = self.local_port.read().ok().and_then(|held| *held);
+        let Some(port) = recorded else {
+            return Ok(None);
+        };
+
+        let answering = kw_sidecar::HttpHealth::new(
+            self.policy.clone(),
+            kw_transcription_core::local::HEALTH_PATH,
+        )
+        .is_ready(port)
+        .await;
+
+        let port = if answering {
+            port
+        } else {
+            tracing::warn!(
+                port,
+                "the local model server has gone; starting it again for this import"
+            );
+            let started = self.local_revive.revive().await.map_err(|err| {
+                MediaImportError::Transcription {
+                    detail: format!(
+                        "the local model server on 127.0.0.1:{port} has gone and could not be \
+                         started again: {err}"
+                    ),
+                }
+            })?;
+            tracing::info!(port = started, "the local model server was started again");
+            started
+        };
+
         let model = self.local_model.read().ok().and_then(|held| held.clone());
-        Some(WhisperServer::new(self.policy.clone(), port, model))
+        // `.timed()`: an import becomes a note that can be exported as SRT or
+        // WebVTT, and without timings that export is one cue spanning the whole
+        // recording. Dictation does not ask, because it wants a line of text and
+        // the timings cost about 45% more wall clock -- measured, see
+        // `kw_transcription_core::local`'s module doc.
+        Ok(Some(
+            WhisperServer::new(self.policy.clone(), port, model).timed(),
+        ))
     }
 
     /// The local engine for an import: the same one dictation would use.
-    fn local_engine(
+    async fn local_engine(
         &self,
     ) -> Result<Option<Box<dyn kw_transcription_core::local::LocalTranscriber>>, MediaImportError>
     {
@@ -732,7 +819,8 @@ impl MediaImportRuntime {
             Some(Ok(offline)) => Ok(Some(Box::new(offline))),
             Some(Err(detail)) => Err(MediaImportError::RouteUnresolved { detail }),
             None => Ok(self
-                .local_server()
+                .whisper_server()
+                .await?
                 .map(|w| Box::new(w) as Box<dyn kw_transcription_core::local::LocalTranscriber>)),
         }
     }
@@ -773,7 +861,15 @@ impl MediaImportRuntime {
         let transport = self.route_transport().await?;
 
         let executor = Executor::new(&self.policy, self.credentials.as_ref());
-        let local = self.local_engine()?;
+        // Resolved only for a local route, for the reason `dictation.rs` gives
+        // at the same fork: the executor reads the local engine in its
+        // `Transport::Local` arm and nowhere else, and building one anyway made
+        // an unbuildable sherpa selection fail an import bound for a provider.
+        let local = if matches!(transport, Transport::Local) {
+            self.local_engine().await?
+        } else {
+            None
+        };
         let executor = match &local {
             Some(engine) => executor.with_local(engine.as_ref()),
             None => executor,
@@ -860,6 +956,7 @@ impl MediaImportRuntime {
         let (transcript, duration_ms) = outcome?;
         emit_progress(app, MediaImportProgress::Done);
         Ok(MediaImportResult {
+            segments: transcript.segments.iter().map(Into::into).collect(),
             text: transcript.text,
             provider: transcript.provider,
             model: transcript.model,
@@ -893,6 +990,7 @@ impl MediaImportRuntime {
         let (transcript, duration_ms) = outcome?;
         emit_progress(app, MediaImportProgress::Done);
         Ok(MediaImportResult {
+            segments: transcript.segments.iter().map(Into::into).collect(),
             text: transcript.text,
             provider: transcript.provider,
             model: transcript.model,
@@ -1018,6 +1116,9 @@ mod tests {
             // No sherpa model selected: these tests are about import, not about
             // which local engine an import lands on.
             Arc::new(RwLock::new(None)),
+            // Nor about reviving one. No port is recorded above, so nothing
+            // here should ever ask.
+            Arc::new(crate::local_model::RefusesToRevive),
             Db::open_in_memory().await.unwrap(),
             root.path().to_path_buf(),
         )

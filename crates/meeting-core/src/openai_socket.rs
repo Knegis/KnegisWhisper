@@ -181,7 +181,7 @@ impl OpenAiRealtime {
         let (mut sink, stream) = socket.split();
 
         let model = config.model.as_deref().unwrap_or(DEFAULT_MODEL);
-        let update = openai::session_update(model, config.language.as_deref());
+        let update = openai::session_update(model, config.language.as_deref(), config.sample_rate);
         sink.send(Message::Text(update.to_string()))
             .await
             .map_err(|err| MeetingError::Disconnected {

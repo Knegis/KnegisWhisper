@@ -453,6 +453,91 @@ pub async fn local_server_start(
     Ok(port)
 }
 
+/* ------------------------------------------------------------------- revive */
+
+/// Something that can bring the local model server back after it has gone.
+///
+/// A trait rather than an `Arc<LocalTranscription>` because the two callers --
+/// dictation and media import -- want one sentence's worth of capability
+/// ("start the remembered model, tell me the port"), and neither should be able
+/// to reach the installer, the reaper or the catalogue through it.
+///
+/// This exists because `d489471` taught [`LocalTranscription::start_model`] to
+/// notice a server that had gone and start a new one, and taught nothing else.
+/// Pressing "Use for dictation" recovered; *dictating* did not, and neither did
+/// a media import -- the path where it matters most, because a recording being
+/// imported is usually one that cannot be made again. Recorded as KNEG-96.
+#[async_trait::async_trait]
+pub trait Revive: Send + Sync + std::fmt::Debug {
+    /// Start the model the user last chose, and answer with its port.
+    async fn revive(&self) -> Result<u16, String>;
+}
+
+/// The real [`Revive`]: whatever the user last dictated with.
+///
+/// Deliberately the *persisted* choice rather than the one held in memory. By
+/// the time anyone asks, [`LocalTranscription::forget_port`] has cleared the
+/// in-memory model alongside the port -- they go together on purpose, since a
+/// model name without a server is the claim that caused this defect. The
+/// persisted choice is the only durable answer to *which* model, and it is the
+/// same one [`resume_last_used`] reads, so reviving mid-dictation cannot bring
+/// back a different model than a relaunch would.
+struct ReviveRemembered {
+    local: Arc<LocalTranscription>,
+    db: kw_storage::Db,
+}
+
+impl std::fmt::Debug for ReviveRemembered {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ReviveRemembered").finish_non_exhaustive()
+    }
+}
+
+#[async_trait::async_trait]
+impl Revive for ReviveRemembered {
+    async fn revive(&self) -> Result<u16, String> {
+        match model_to_resume(&self.db).await {
+            Resume::Model(model_id) => self.local.start_model(&model_id).await,
+            // Neither of these is an ordinary failure: something asked to
+            // revive a server for a route that should not have been reaching
+            // one. Say which contradiction it was rather than reporting a
+            // missing server, which is the true-but-useless answer.
+            Resume::NotRouted => Err(
+                "dictation is not routed to a local model, so there is nothing to start".to_owned(),
+            ),
+            Resume::NoneRemembered => Err(
+                "no local model is remembered. Choose one under Settings > Transcription > Local."
+                    .to_owned(),
+            ),
+        }
+    }
+}
+
+/// The handle dictation and media import revive the server through.
+#[must_use]
+pub fn revive_handle(local: &Arc<LocalTranscription>, db: &kw_storage::Db) -> Arc<dyn Revive> {
+    Arc::new(ReviveRemembered {
+        local: Arc::clone(local),
+        db: db.clone(),
+    })
+}
+
+/// A [`Revive`] that never does, for tests about something else.
+///
+/// Named for what it does rather than `Stub`, so a test that revives by
+/// accident reads as wrong at the call site.
+#[cfg(test)]
+#[derive(Debug)]
+pub struct RefusesToRevive;
+
+#[cfg(test)]
+#[async_trait::async_trait]
+impl Revive for RefusesToRevive {
+    async fn revive(&self) -> Result<u16, String> {
+        Err("this test does not start a local model server".to_owned())
+    }
+}
+
 /// Bring back the local server the user was last dictating with.
 ///
 /// Called once at startup. The route survives a restart and the process does
@@ -650,6 +735,45 @@ mod tests {
 
     async fn db() -> kw_storage::Db {
         kw_storage::Db::open_in_memory().await.unwrap()
+    }
+
+    /* -------------------------------------------------------- reviving */
+
+    #[tokio::test]
+    async fn reviving_a_route_that_is_not_local_says_so() {
+        // Reached only through a contradiction: a whisper port was recorded, so
+        // a server ran, but the route no longer sends anything to it. Reporting
+        // a missing server here would be true and useless -- the cure is not to
+        // start one.
+        let db = db().await;
+        let revive = revive_handle(&Arc::new(local()), &db);
+
+        let err = revive.revive().await.unwrap_err();
+        assert!(err.contains("not routed"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn reviving_with_no_remembered_model_names_the_screen() {
+        // The route is local and nothing says which model. There is no safe
+        // guess: starting the smallest, or the first in the catalogue, would
+        // transcribe with a model the user did not choose and report it as
+        // though they had.
+        let db = db().await;
+        kw_storage::settings::set(
+            db.pool(),
+            crate::dictation::ROUTE_SETTINGS_KEY,
+            &kw_transcription_core::RouteSettings {
+                use_local_whisper: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        let revive = revive_handle(&Arc::new(local()), &db);
+
+        let err = revive.revive().await.unwrap_err();
+        assert!(err.contains("Settings > Transcription > Local"), "{err}");
     }
 
     #[tokio::test]

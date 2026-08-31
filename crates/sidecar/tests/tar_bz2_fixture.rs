@@ -21,7 +21,7 @@
 
 use std::fs;
 
-use kw_sidecar::{extract, ArchiveKind};
+use kw_sidecar::{extract, extract_with_limit, ArchiveKind};
 
 const FIXTURE: &[u8] = include_bytes!("fixtures/sherpa-sample.tar.bz2");
 
@@ -53,4 +53,18 @@ fn a_real_bzip2_stream_from_the_bzip2_cli_extracts_correctly() {
         !dest.join("unrelated-file").exists(),
         "an entry outside the payload directory must be skipped, not extracted"
     );
+}
+
+#[test]
+fn extraction_stops_before_an_entry_would_exceed_the_output_limit() {
+    let dir = tempfile::tempdir().unwrap();
+    let archive = dir.path().join("sherpa.tar.bz2");
+    fs::write(&archive, FIXTURE).unwrap();
+    let dest = dir.path().join("out");
+    fs::create_dir_all(&dest).unwrap();
+
+    let err =
+        extract_with_limit(&archive, ArchiveKind::TarBz2, "sherpa-bin", "", &dest, 1).unwrap_err();
+    assert!(err.to_string().contains("extracted data exceeds"), "{err}");
+    assert!(!dest.join("sherpa-onnx-offline").exists());
 }

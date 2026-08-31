@@ -1053,6 +1053,10 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
   },
   history_delete: () => true,
   history_clear: () => HISTORY.length,
+  // On, so the invented history above can show a `rawText` row. The real
+  // default is off -- see `KEEP_RAW_TEXT_KEY`.
+  history_keep_raw_text: () => true,
+  history_set_keep_raw_text: () => null,
 
   /* notes */
   notes_list: (a) => {
@@ -1366,6 +1370,10 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
       model: "gpt-4o-transcribe",
       durationMs: 184_000,
       source: { kind: "audio" },
+      // A cloud provider answers with prose and reports no timings, so the
+      // screen writes its one honest fallback cue. Left empty on purpose:
+      // these two fixtures exist to show both halves.
+      segments: [],
     }) satisfies MediaImportResult,
   media_import_video: () =>
     ({
@@ -1374,6 +1382,14 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
       model: "whisper-large-v3-turbo-q5",
       durationMs: 921_000,
       source: { kind: "video" },
+      // The local server does report timings, one per utterance.
+      segments: [
+        {
+          text: "Recorded walkthrough of the meeting detector.",
+          timestamp: 0,
+          endTimestamp: 3.4,
+        },
+      ],
     }) satisfies MediaImportResult,
   /* calendars */
   calendar_status: () => CALENDAR,

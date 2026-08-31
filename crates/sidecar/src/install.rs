@@ -168,11 +168,23 @@ pub fn extract(
     executable_name: &str,
     dest: &Path,
 ) -> Result<usize, InstallError> {
+    extract_with_limit(archive, kind, payload_dir, executable_name, dest, u64::MAX)
+}
+
+/// Unpack an archive while refusing to write more than `max_bytes` in total.
+pub fn extract_with_limit(
+    archive: &Path,
+    kind: ArchiveKind,
+    payload_dir: &str,
+    executable_name: &str,
+    dest: &Path,
+    max_bytes: u64,
+) -> Result<usize, InstallError> {
     match kind {
         ArchiveKind::Zip => extract_zip(archive, payload_dir, dest),
         ArchiveKind::TarGz => extract_tar_gz(archive, payload_dir, dest),
         ArchiveKind::TarXz => extract_tar_xz(archive, payload_dir, dest),
-        ArchiveKind::TarBz2 => extract_tar_bz2(archive, payload_dir, dest),
+        ArchiveKind::TarBz2 => extract_tar_bz2(archive, payload_dir, dest, max_bytes),
         ArchiveKind::Bare => extract_bare(archive, executable_name, dest),
     }
 }
@@ -273,19 +285,76 @@ fn extract_tar_xz(archive: &Path, payload_dir: &str, dest: &Path) -> Result<usiz
 /// decompressed tar in memory first. sherpa-onnx's binary bundles are the
 /// pinned use of this and are large enough (tens of megabytes) that the
 /// difference matters.
-fn extract_tar_bz2(archive: &Path, payload_dir: &str, dest: &Path) -> Result<usize, InstallError> {
+fn extract_tar_bz2(
+    archive: &Path,
+    payload_dir: &str,
+    dest: &Path,
+    max_bytes: u64,
+) -> Result<usize, InstallError> {
     let file = fs::File::open(archive).map_err(|source| InstallError::Io {
         action: "open",
         path: archive.to_path_buf(),
         source,
     })?;
-    extract_tar(
+    extract_tar_limited(
         bzip2_rs::DecoderReader::new(file),
         ArchiveKind::TarBz2,
         archive,
         payload_dir,
         dest,
+        max_bytes,
     )
+}
+
+fn extract_tar_limited<R: io::Read>(
+    reader: R,
+    kind: ArchiveKind,
+    archive: &Path,
+    payload_dir: &str,
+    dest: &Path,
+    max_bytes: u64,
+) -> Result<usize, InstallError> {
+    let mut tar = tar::Archive::new(reader);
+    let entries = tar.entries().map_err(|err| InstallError::Archive {
+        archive: archive.to_path_buf(),
+        kind,
+        detail: err.to_string(),
+    })?;
+    let mut written = 0_usize;
+    let mut total = 0_u64;
+    for entry in entries {
+        let mut entry = entry.map_err(|err| InstallError::Archive {
+            archive: archive.to_path_buf(),
+            kind,
+            detail: err.to_string(),
+        })?;
+        if !entry.header().entry_type().is_file() {
+            continue;
+        }
+        let name = entry
+            .path()
+            .map_err(|err| InstallError::Archive {
+                archive: archive.to_path_buf(),
+                kind,
+                detail: err.to_string(),
+            })?
+            .to_string_lossy()
+            .into_owned();
+        let Some(relative) = payload_relative(&name, payload_dir)? else {
+            continue;
+        };
+        total = total
+            .checked_add(entry.size())
+            .filter(|n| *n <= max_bytes)
+            .ok_or_else(|| InstallError::Archive {
+                archive: archive.to_path_buf(),
+                kind,
+                detail: format!("extracted data exceeds the {max_bytes}-byte limit"),
+            })?;
+        write_entry(&dest.join(relative), &mut entry)?;
+        written += 1;
+    }
+    Ok(written)
 }
 
 /// The part of `extract_tar_gz`, `extract_tar_xz` and `extract_tar_bz2` that

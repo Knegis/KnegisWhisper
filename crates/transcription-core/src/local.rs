@@ -12,11 +12,46 @@
 //!   mostly-silent thirty-second window pass the repetition check and emit
 //!   training-data boilerplate — "Thank you for watching", and its equivalents
 //!   in other languages — as if it were speech.
-//! - `--no-timestamps`. whisper.cpp turned token timestamps on for every
-//!   request, which enables the server's sixty-character segment wrap.
-//!   `split_on_word` is off, so the wrap lands on a token boundary and breaks
-//!   words in half. We join segments into one string and never read per-token
-//!   timings, so turning timestamps off removes the wrap with them.
+//! - The segment length cap, [`MAX_SEGMENT_CHARS`]. This replaced
+//!   `--no-timestamps` on 2026-08-31 and the reason is measured -- see
+//!   **Timings** below.
+//!
+//! # Timings, and why `--no-timestamps` went
+//!
+//! `--no-timestamps` was ported from upstream because whisper.cpp's server wraps
+//! segments at sixty characters when timestamps are on, and with `split_on_word`
+//! off that wrap lands on a token boundary and breaks words in half. Turning
+//! timestamps off removed the wrap.
+//!
+//! It also removed every timing, which is not what anybody wanted. Measured on
+//! this machine against `ggml-tiny` on 2026-08-31: with `--no-timestamps`,
+//! `response_format=verbose_json` returns **one** segment for the whole
+//! recording carrying no `start` and no `end` at all. That is why a 57-minute
+//! import exported as a single subtitle cue at `00:00:00` -- not because the
+//! import failed to divide it, but because there was nothing to divide.
+//!
+//! The cure is not `split_on_word`. Neither it nor `max_len` is honoured as a
+//! request field -- all three shapes came back identical -- and `--max-len 0`
+//! changes nothing either, because the server reads 0 as 60. An explicit
+//! [`MAX_SEGMENT_CHARS`] does what was wanted:
+//!
+//! | server flags | `json` | `verbose_json` |
+//! | --- | --- | --- |
+//! | `--no-timestamps` | 0.63-0.65 s | one segment, no timings |
+//! | `--max-len 1000` | 0.66-0.70 s | 0.95-1.01 s, one segment per utterance with real `start`/`end` |
+//!
+//! Three runs each over 13.5 s of speech. Two things that decides:
+//!
+//! * **The wrap is gone, so nothing needs splitting on words.** A cap far above
+//!   what a 30-second window can hold means the segment boundaries fall where
+//!   whisper's own timestamps fall -- at utterance ends. The `\n` that remains in
+//!   `text` is a paragraph break between utterances, not a break inside one, and
+//!   [`interpret`] collapses it. The result is **byte-identical** to what
+//!   `--no-timestamps` produced, which was checked rather than assumed.
+//! * **The cost lands only where it is asked for.** Timestamps cost 3-7% on the
+//!   `json` path, which dictation uses. `verbose_json` costs about 45% more,
+//!   because it carries per-word timings and probabilities, and only media
+//!   import asks for it -- see [`WhisperServer::timed`].
 //!
 //! What is *not* ported: upstream converts every input with ffmpeg before
 //! sending, because it accepts arbitrary media. `kw_audio_core` produces 16 kHz
@@ -36,6 +71,18 @@ use serde::Deserialize;
 /// logprob -1.0.
 pub const DECODER_FIELDS: [(&str, &str); 2] =
     [("entropy_thold", "2.8"), ("logprob_thold", "-1.25")];
+
+/// The longest segment `whisper-server` may emit, in characters.
+///
+/// Deliberately far above what one 30-second decode window can hold -- roughly
+/// 450 characters of ordinary speech, and under 800 even for a dense language --
+/// so it never actually cuts anything. It is set only because the server treats
+/// `0` as 60 and would otherwise wrap mid-utterance; see the module doc.
+///
+/// Not a per-request field. It and `split_on_word` are start-time flags, which
+/// was measured by sending both as form fields and getting a byte-identical
+/// response back.
+pub const MAX_SEGMENT_CHARS: u32 = 1000;
 
 /// The path `whisper-server` serves inference on. Its own default, restated so
 /// the argument list and the request cannot drift apart.
@@ -116,9 +163,11 @@ pub fn build_args(options: &ServerOptions) -> Vec<String> {
             .unwrap_or_else(|| "auto".to_owned()),
     );
 
-    // See the module comment: this is about mid-word breaks, not about
-    // timestamps being unwanted.
-    args.push("--no-timestamps".to_owned());
+    // See the module comment. This used to be `--no-timestamps`, which removed
+    // the mid-utterance wrap and every timing with it; capping the segment
+    // length removes the wrap and keeps the timings.
+    args.push("--max-len".to_owned());
+    args.push(MAX_SEGMENT_CHARS.to_string());
 
     if let Some(vad) = &options.vad {
         args.push("--vad".to_owned());
@@ -152,19 +201,60 @@ pub fn model_is_present(model_path: &str) -> bool {
 }
 
 /// What `/inference` said.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Inference {
-    /// A transcript. Already trimmed.
+    /// A transcript with no timings. Already trimmed.
     Text(String),
+    /// A transcript the engine divided into timed utterances.
+    ///
+    /// Produced only by `response_format=verbose_json` against a server that
+    /// was started with timestamps on, and asked for only by the paths that can
+    /// use it -- see [`WhisperServer::timed`]. Never synthesised: a response
+    /// whose segments carry no `start` and `end` comes back as [`Self::Text`],
+    /// so this variant cannot claim a timing that did not arrive.
+    Timed {
+        /// The whole transcript, collapsed to one line as [`Self::Text`] is.
+        text: String,
+        /// In order, and never empty.
+        segments: Vec<TimedSegment>,
+    },
     /// The request succeeded and produced nothing usable.
     Empty,
     /// The server rejected it.
     Rejected { status: u16, body: String },
 }
 
+/// One timed utterance of a local transcript.
+///
+/// Seconds from the start of the recording, which is what
+/// `kw_notes_core::transcript::Segment` wants and what SRT and WebVTT need.
+///
+/// `Serialize` only. This crate has no `ts-rs` dependency and should not gain
+/// one for a type the desktop crate can name in its own IPC struct.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TimedSegment {
+    pub text: String,
+    pub start: f64,
+    pub end: f64,
+}
+
 #[derive(Debug, Deserialize)]
 struct InferenceBody {
     text: Option<String>,
+    /// Present for `verbose_json` only, and then whether or not the server was
+    /// started with timestamps on.
+    #[serde(default)]
+    segments: Vec<SegmentBody>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SegmentBody {
+    text: Option<String>,
+    /// Absent when the server ran with `--no-timestamps`, which is the whole
+    /// reason these are `Option`: a missing timing must not become `0.0`.
+    start: Option<f64>,
+    end: Option<f64>,
 }
 
 /// How much of an error body is worth repeating.
@@ -185,28 +275,62 @@ pub fn interpret(status: u16, body: &str) -> Inference {
         };
     }
 
-    match serde_json::from_str::<InferenceBody>(body) {
-        Ok(parsed) => match parsed.text {
-            // Leading space and trailing newline are how whisper.cpp returns
-            // every transcript, so trimming is not optional tidying.
-            Some(text) => {
-                let trimmed = text.trim();
-                if trimmed.is_empty() {
-                    Inference::Empty
-                } else {
-                    Inference::Text(trimmed.to_owned())
-                }
-            }
-            None => Inference::Rejected {
-                status,
-                body: truncate(body),
-            },
-        },
-        Err(_) => Inference::Rejected {
-            status,
-            body: truncate(body),
-        },
+    let rejected = || Inference::Rejected {
+        status,
+        body: truncate(body),
+    };
+
+    let Ok(parsed) = serde_json::from_str::<InferenceBody>(body) else {
+        return rejected();
+    };
+    let Some(text) = parsed.text else {
+        return rejected();
+    };
+
+    // Leading space and trailing newline are how whisper.cpp returns every
+    // transcript, so trimming is not optional tidying. The interior newlines are
+    // new: they mark the utterance boundaries that came back with the timings,
+    // and collapsing them is what keeps this byte-identical to what
+    // `--no-timestamps` used to return.
+    let text = collapse(&text);
+    if text.is_empty() {
+        return Inference::Empty;
     }
+
+    let segments = timed_segments(&parsed.segments);
+    if segments.is_empty() {
+        return Inference::Text(text);
+    }
+    Inference::Timed { text, segments }
+}
+
+/// Whitespace runs to single spaces, then trimmed.
+fn collapse(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// The segments that carry a real timing, in order.
+///
+/// Empty unless **every** segment has both a `start` and an `end`. All-or-
+/// nothing on purpose: a response where some utterances are timed and others
+/// are not would produce a transcript whose later cues are silently wrong,
+/// which is worse than one with no cues at all. `--no-timestamps` returns one
+/// segment with neither field, so that shape lands here and is discarded.
+fn timed_segments(bodies: &[SegmentBody]) -> Vec<TimedSegment> {
+    let mut out = Vec::with_capacity(bodies.len());
+    for body in bodies {
+        let (Some(start), Some(end)) = (body.start, body.end) else {
+            return Vec::new();
+        };
+        let Some(text) = body.text.as_deref().map(collapse) else {
+            return Vec::new();
+        };
+        if text.is_empty() {
+            continue;
+        }
+        out.push(TimedSegment { text, start, end });
+    }
+    out
 }
 
 fn truncate(body: &str) -> String {
@@ -250,6 +374,8 @@ pub struct WhisperServer {
     policy: NetworkPolicy,
     port: u16,
     model: Option<String>,
+    /// Whether to ask for per-utterance timings. See [`Self::timed`].
+    timed: bool,
 }
 
 impl WhisperServer {
@@ -259,7 +385,25 @@ impl WhisperServer {
             policy,
             port,
             model,
+            timed: false,
         }
+    }
+
+    /// Ask for per-utterance timings, at about 45% more wall clock.
+    ///
+    /// A builder on the server rather than a parameter on
+    /// [`LocalTranscriber::transcribe`], because whether timings are wanted is a
+    /// property of what the caller is building -- a subtitle track or a line of
+    /// dictated text -- and not of one request. Adding a parameter would have
+    /// put the question to five implementors, four of which cannot answer it.
+    ///
+    /// Off by default, so a caller gets the cheap answer unless it says
+    /// otherwise. Dictation and meetings want one line of text; media import
+    /// wants cues, and pays for them. The measurement is in the module doc.
+    #[must_use]
+    pub const fn timed(mut self) -> Self {
+        self.timed = true;
+        self
     }
 
     #[must_use]
@@ -284,7 +428,10 @@ impl LocalTranscriber for WhisperServer {
         let mut form = reqwest::multipart::Form::new()
             .part("file", part)
             .text("language", language.unwrap_or("auto").to_owned())
-            .text("response_format", "json");
+            .text(
+                "response_format",
+                if self.timed { "verbose_json" } else { "json" },
+            );
 
         for (name, value) in DECODER_FIELDS {
             form = form.text(name, value);
@@ -327,7 +474,8 @@ impl LocalTranscriber for WhisperServer {
 fn describe_send_failure(port: u16, err: &reqwest::Error) -> String {
     if err.is_connect() {
         return format!(
-            "nothing is listening on 127.0.0.1:{port}. The local model server is not running --              start it again under Settings > Transcription > Local."
+            "nothing is listening on 127.0.0.1:{port}. The local model server is not \
+             running -- start it again under Settings > Transcription > Local."
         );
     }
     if err.is_timeout() {
@@ -404,12 +552,114 @@ mod tests {
     }
 
     #[test]
-    fn timestamps_are_turned_off() {
-        // Not cosmetic: with timestamps on, the server's 60-character wrap lands
-        // on a token boundary and breaks words in half.
-        assert!(build_args(&options())
-            .iter()
-            .any(|a| a == "--no-timestamps"));
+    fn the_segment_length_is_capped_rather_than_timestamps_turned_off() {
+        // The cap is what removes the server's 60-character mid-utterance wrap
+        // now. `--no-timestamps` also removed it and took every timing with it,
+        // which is why a 57-minute import exported as one subtitle cue.
+        let args = build_args(&options());
+        assert!(!args.iter().any(|a| a == "--no-timestamps"));
+        assert_eq!(
+            find(&args, "--max-len").as_deref(),
+            Some(MAX_SEGMENT_CHARS.to_string().as_str())
+        );
+    }
+
+    /* ------------------------------------- what the server actually answers */
+
+    /// `verbose_json` from a server started with the cap, measured on
+    /// 2026-08-31 against `ggml-tiny`. Trimmed to the fields this code reads;
+    /// the real response also carries `tokens`, `words`, `temperature`,
+    /// `avg_logprob` and `no_speech_prob` per segment.
+    const TIMED_BODY: &str = r#"{
+      "task":"transcribe","language":"english","duration":13.524999618530273,
+      "text":" The quick brown fox jumps over the lazy dog.\n Second sentence, spoken after a pause, so the server has somewhere to cut.\n Third and last sentence of the probe recording.\n",
+      "segments":[
+        {"id":0,"text":" The quick brown fox jumps over the lazy dog.","start":0.0,"end":3.0},
+        {"id":1,"text":" Second sentence, spoken after a pause, so the server has somewhere to cut.","start":3.68,"end":9.44},
+        {"id":2,"text":" Third and last sentence of the probe recording.","start":10.08,"end":12.88}
+      ]}"#;
+
+    /// The same request against a server started with `--no-timestamps`: one
+    /// segment for the whole recording, carrying neither `start` nor `end`.
+    /// Measured in the same session, and the shape that produced the defect.
+    const UNTIMED_BODY: &str = r#"{
+      "task":"transcribe","language":"english","duration":13.524999618530273,
+      "text":" The quick brown fox jumps over the lazy dog. Second sentence, spoken after a pause, so the server has somewhere to cut. Third and last sentence of the probe recording.\n",
+      "segments":[
+        {"id":0,"text":" The quick brown fox jumps over the lazy dog. Second sentence, spoken after a pause, so the server has somewhere to cut. Third and last sentence of the probe recording."}
+      ]}"#;
+
+    #[test]
+    fn a_timed_response_is_read_as_timed() {
+        match interpret(200, TIMED_BODY) {
+            Inference::Timed { text, segments } => {
+                assert_eq!(segments.len(), 3);
+                assert_eq!(segments[0].start, 0.0);
+                assert_eq!(segments[0].end, 3.0);
+                assert_eq!(segments[2].start, 10.08);
+                assert_eq!(
+                    segments[1].text,
+                    "Second sentence, spoken after a pause, so the server has somewhere to cut."
+                );
+                // The interior newlines are utterance boundaries and are
+                // collapsed, so a caller that only wants the prose gets exactly
+                // what it got before timings existed.
+                assert!(!text.contains('\n'));
+                assert!(text.starts_with("The quick brown fox"));
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_untimed_response_is_not_dressed_up_as_one_segment() {
+        // The defect, as a test. A single segment spanning the whole recording
+        // with no `start` and no `end` is not a timing, and turning it into
+        // `0.0 -> duration` is what made a 57-minute import export as one cue.
+        // It must come back as plain text so nothing downstream believes there
+        // are cues to write.
+        match interpret(200, UNTIMED_BODY) {
+            Inference::Text(text) => {
+                assert!(text.starts_with("The quick brown fox"));
+                assert!(text.ends_with("probe recording."));
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_two_shapes_agree_on_the_prose() {
+        // Measured as byte-identical against the real server, and asserted here
+        // so a future change to `collapse` cannot quietly alter dictation.
+        let timed = match interpret(200, TIMED_BODY) {
+            Inference::Timed { text, .. } => text,
+            other => panic!("{other:?}"),
+        };
+        let untimed = match interpret(200, UNTIMED_BODY) {
+            Inference::Text(text) => text,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(timed, untimed);
+    }
+
+    #[test]
+    fn a_partly_timed_response_is_refused_wholesale() {
+        // Half a set of cues is worse than none: the untimed ones would have to
+        // be placed somewhere, and any choice is a fabricated timestamp.
+        let body = r#"{"text":"a b","segments":[
+            {"text":"a","start":0.0,"end":1.0},
+            {"text":"b"}
+        ]}"#;
+        assert!(matches!(interpret(200, body), Inference::Text(_)));
+    }
+
+    #[test]
+    fn timings_are_only_asked_for_when_wanted() {
+        // The request field is the only difference, and it costs about 45% more
+        // wall clock -- so the default must be the cheap one.
+        let policy = kw_network_policy::NetworkPolicy::new().unwrap();
+        assert!(!WhisperServer::new(policy.clone(), 8178, None).timed);
+        assert!(WhisperServer::new(policy, 8178, None).timed().timed);
     }
 
     #[test]

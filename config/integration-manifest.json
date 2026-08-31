@@ -653,7 +653,7 @@
       "ui": "Settings > Meetings",
       "reachable": true,
       "frontend": "apps/desktop/src/views/SettingsMeetings.tsx",
-      "note": "Two WebSockets, one per capture, because this provider labels no speakers and one socket would make AudioSource on every event a guess. 24 kHz only, which is why the meeting pipeline resamples per session. Sixty-minute server cap, so a longer meeting reconnects and MeetingTranscript::reconnects says how often. Keyterms are accepted and ignored upstream, so none are sent. Request shaping and the event grammar are covered by fixtures; no live call has been made -- see docs/PLATFORM_SUPPORT.md."
+      "note": "Two WebSockets, one per capture, because this provider labels no speakers and one socket would make AudioSource on every event a guess. 24 kHz only, which is why the meeting pipeline resamples per session. Sixty-minute server cap, so a longer meeting reconnects and MeetingTranscript::reconnects says how often. Keyterms are accepted and ignored upstream, so none are sent. **Verified live on 2026-08-28**: a real meeting transcribed through this client, microphone and system audio, against OpenAI's GA Realtime API. The first cloud meeting client in this project to meet a server. Getting there took five live attempts and five fixes -- the retired beta header, transcription_session.update -> session.update, the session.created/updated event names, the required session.type, and the audio config moving under audio.input. Every one was named by the server itself once the close reason stopped being discarded; see docs/BENCH_CHECK.md."
     },
     "meeting-stream:tinfoil-realtime": {
       "status": "temporarily-deferred",

@@ -407,7 +407,7 @@ Same machine and build. Four items were outstanding; all four were exercised.
 
 | What | Evidence |
 | --- | --- |
-| **A dead local server now repairs itself** | The four failing dictations were a port held for a process that had gone. After the fix, *Use for dictation* started a real server and dictation worked |
+| **A dead local server repairs itself *when the button is pressed*** | The four failing dictations were a port held for a process that had gone. After the fix, *Use for dictation* started a real server and dictation worked. The link exercised is the button, and only the button: `start_model` learnt to health-check the recorded port and nothing else did, so dictating and importing still failed against a dead port until 2026-08-31 — see KNEG-96 |
 | **The chat connection test passes** | `openai/chat pass — replied "OK"`, with the same key that produced `400 Unsupported parameter: 'max_tokens'` before the probe was taught to ask `params::shape_for` |
 | **Dictation cleanup genuinely changes the text** | Proven with Parakeet, below. The first attempt could not tell, and the reason is worth keeping |
 | **The Parakeet selector works end to end** | Installed the CLI and `parakeet-unified-en-0.6b` through the screen, selected it, and dictated through it. The runtime had been proven by a test; the screen, the commands and the engine switch had never been used by anyone until now |
@@ -443,7 +443,7 @@ once, near the top of the whisper block — far above the control that started i
 `InstallProgress::Model` already carries the model id, so the line now renders on the row whose
 button was pressed, for both engines. Fixed.
 
-**2. `keep_raw_text` is opt-in with nothing to opt in with.** Open.
+**2. `keep_raw_text` was opt-in with nothing to opt in with.** Fixed 2026-08-31.
 `kw_app_core::dictation` stores the pre-cleanup transcript as `Transcription.raw_text`, but only
 when `keep_raw_text` is true and only when it differs from the cleaned text — which would answer
 "did cleanup change anything" exactly, and permanently. It is hardcoded `false` at
@@ -452,6 +452,18 @@ no command and no UI, and nothing renders `rawText`, which is already in the IPC
 history. Had it been reachable, this run would not have needed a second transcriber to answer the
 question. Same class as the four hotkeys that registered and dispatched nowhere: a capability that
 exists, is described, and has no way in.
+
+Now reachable. Keeping the raw text moved from a `bool` fixed when `Dictation` was built to
+`History::keep_raw_text`, asked of the sink per dictation — the same shape `History::enabled`
+already had, and the reason a change now applies to the next thing said rather than after a
+relaunch. `Settings` key `history.keepRawText`, off by default, with the toggle and the second line
+on `Dictation`'s History section. The trait's default is `false`, so an implementation that does not
+answer keeps one copy rather than two: a second copy of a person's speech is opted into, never out
+of.
+
+**Still unchecked:** nobody has switched it on and dictated. Turn it on, dictate a sentence with
+filler words through Parakeet with cleanup on, and confirm the row shows both versions — and that a
+dictation cleanup did *not* change shows only one.
 
 ### Added by the live Teams meeting, same day
 
@@ -480,6 +492,54 @@ Worth noting what this cost: the client was written against documentation, marke
 fixtures, no live call* in the manifest, and shipped correct-for-its-time. The failure was not a
 coding mistake. It is what "unverified" means, and it took ten minutes of a real meeting to find.
 
+**Removing the header was right, confirmed nine minutes later**: the socket opened and stayed
+open. The same attempt named the next mismatch, which is the method working --
+
+```
+Invalid value: 'tra...ate'. Supported values are: 'session.update', 'session.close',
+'input_audio_buffer.append', ...
+```
+
+`transcription_session.update` became `session.update`; the session events gained `session.created`
+/ `session.updated`, and the client now accepts both spellings. `input_audio_buffer.append` is
+still valid, so the audio frames were never the problem. **The session payload is still
+unconfirmed** -- the server has objected only to type names so far, and guessing at a nested shape
+is harder to read back from an error than a wrong name, so it was left alone.
+
+Then `Missing required parameter: 'session.type'.` -- GA wants the session object to name itself
+`transcription` even though the endpoint already carries `intent=transcription`. Added.
+
+Then `Unknown parameter: 'session.input_audio_format'.` -- a different kind of answer from the
+three before it. Those were names; this one says a field that had always sat at the top of
+`session` is not known there at all, which means the audio family has moved and
+`input_audio_transcription` and `turn_detection` are its siblings. All three were relocated under
+`audio.input` in one step rather than one per round trip: relocating one and leaving two behind
+would buy two more meetings' worth of attempts to learn what that message already implies. The
+sample rate now comes from the session config, already checked against the capability table, rather
+than a constant that could disagree with the audio being sent. **Inferred as a group and not
+verified.**
+
+**It works.** The sixth attempt transcribed a real meeting through `openai-realtime`, microphone
+and system audio, live. The `audio.input` shape inferred as a group was right. This is the first
+cloud meeting client in this project to meet a real server, and `meeting-stream:openai-realtime`
+moves from *written against fixtures* to verified in the manifest and in
+`docs/PLATFORM_SUPPORT.md`.
+
+Five round trips, each about two minutes, each ending in the server naming the next thing. None of
+it would have been possible before the close reason was kept.
+
+**What this says about the other three.** AssemblyAI, Deepgram and Corti are in exactly the state
+this client was in yesterday: written from documentation, covered by fixtures, marked *no live
+call*. Every single one of the five faults here was a shape that had been correct when written and
+had since changed or been misread — not one was a coding mistake, and not one was catchable by any
+test in this repository. The fixtures still pass. They passed the whole way through.
+
+**The honest-failure message works at Stop.** The fourth attempt ended with *"Nothing was
+transcribed — no speech was recognised, or the provider returned nothing. The recording is at
+…\meetings60828-135901.wav."* That is the right sentence: it does not claim success, it does
+not blame the user, and it says where the audio is. The gap remains that it arrives at Stop rather
+than at second zero -- **KNEG-95**.
+
 **And the more serious defect it exposed: a meeting whose provider dies at second zero looks
 exactly like one that works.** Both sockets closed immediately; the application reported
 **Recording**, kept the indicator up, captured both streams for as long as it was left running, and
@@ -494,10 +554,30 @@ dead provider stops the recording, falls back immediately, or carries on with a 
 
 1. **`Settings > Meetings`, re-read** — still carried over from an earlier paste. AssemblyAI and
    Corti should now name the missing key rather than reading "ready to use".
-2. **Whether a long import is transcribed in full.** The Swedish import produced one segment at
-   `00:00:00`; `media.rs` chunks nothing.
-3. **`parakeet-tdt-0.6b-v3`** — offered on the same measured layout, still never downloaded.
-4. **Meeting detection firing on a real call.**
+2. **Whether dictation and import now recover from a dead local server on their own.** Written on
+   2026-08-31 and covered by tests that reach the decision but not the round trip: kill
+   `whisper-server` from Task Manager while the app holds its port, then dictate. Expected: one
+   `the local model server has gone; starting it again`, one `the local model server was started
+   again`, and a transcript — not a failure. Then repeat with a media import, which is the case
+   that matters, because a recording being imported usually cannot be made again. The remaining
+   half of KNEG-96 — *why* the child exits unattended — is untouched by that fix and needs the
+   first two log lines after a restart to tell the two candidates apart.
+3. **Whether a long import is transcribed in full — answered, and the diagnosis here was wrong.**
+   The Swedish import *was* transcribed in full: 39,142 characters for 3,401 seconds. It produced
+   one segment at `00:00:00` because the server was started with `--no-timestamps` and so reported
+   no timings at all — not because `media.rs` failed to divide it. Measured on 2026-08-31 and fixed
+   by capping the segment length instead; the table is in
+   [PLATFORM_SUPPORT.md](PLATFORM_SUPPORT.md#local-asr-whisper-server-timings). **Still needs a
+   person:** import a long recording through a *local* model and export it as SRT, and check the
+   cues land where the speech does. An import routed to a cloud provider still gets one cue, which
+   is correct — no cloud batch provider on this path reports segments.
+4. **`parakeet-tdt-0.6b-v3`** — offered on the same measured layout, still never downloaded.
+5. **Whether a Parakeet import exports usable cues.** `sherpa::cues` was written on 2026-08-31
+   against one measured run of `sherpa-onnx-offline` over 13.5 s of synthesised speech, and its
+   three cues match whisper's own segmenter on the same audio. What that run does *not* cover:
+   real speech with hesitations, a recording long enough for the 200-character backstop to fire,
+   and a language other than English. Import something long with Parakeet selected, export SRT.
+6. **Meeting detection firing on a real call.**
 
 ---
 

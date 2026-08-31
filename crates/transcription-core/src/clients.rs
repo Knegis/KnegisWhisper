@@ -306,6 +306,8 @@ pub fn interpret(
     }
 
     Ok(crate::executor::Transcript {
+        // Provider clients answer with prose. See `Transcript::segments`.
+        segments: Vec::new(),
         text: text.trim().to_owned(),
         provider: provider.to_owned(),
         model: model.map(str::to_owned),

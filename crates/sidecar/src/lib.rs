@@ -52,7 +52,7 @@ pub mod reap;
 pub mod resolve;
 
 pub use catalog::{Catalog, SCHEMA_VERSION};
-pub use install::{extract, install, InstallError, Installed, Progress};
+pub use install::{extract, extract_with_limit, install, InstallError, Installed, Progress};
 pub use integrity::IntegrityError;
 pub use manifest::{
     ArchiveKind, Asset, Availability, DigestError, PortRange, Sha256Digest, SidecarSpec, Source,

@@ -264,7 +264,12 @@ impl LocalWindowProvider {
             })?;
 
         match inference {
-            Inference::Text(text) if !text.trim().is_empty() => {
+            // Timings are not asked for here, but the text is the same text
+            // either way -- one window's transcript, placed in the meeting by
+            // `start_seconds` rather than by anything the server said. An
+            // or-pattern rather than a second arm, because a copy of this body
+            // would be a second place for the live-sink rule to drift.
+            Inference::Text(text) | Inference::Timed { text, .. } if !text.trim().is_empty() => {
                 let event = TranscriptEvent {
                     text,
                     is_final,
@@ -283,7 +288,7 @@ impl LocalWindowProvider {
             }
             // A window of silence between sentences, which is most windows in a
             // meeting. Not an event, and not an error.
-            Inference::Text(_) | Inference::Empty => {}
+            Inference::Text(_) | Inference::Timed { .. } | Inference::Empty => {}
             Inference::Rejected { status, body } => {
                 return Err(MeetingError::Rejected {
                     provider: PROVIDER_ID.to_owned(),

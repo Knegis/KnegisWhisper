@@ -204,6 +204,59 @@ Unchanged from the Phases 1–4 entry, restated here so they are not buried:
 
 ---
 
+## 2026-08-31 (KNEG-96) — the half of the self-heal that was missing
+
+`d489471` taught `LocalTranscription::start_model` to health-check the port it had recorded and
+start a new server when nothing answered. That was the right fix for the symptom in front of it —
+pressing *Use for dictation* handed back a dead port — and it left the two paths that actually
+carry audio untouched. `RouteTranscriber::local_server` and `MediaImportRuntime::local_server` were
+the same three lines: read the recorded port, build a `WhisperServer`, send. Neither asked whether
+anything was listening.
+
+So the state that produced four failed dictations on 2026-08-28 was half cured. The button
+recovered; **dictating did not, and neither did importing** — the worse of the two, because a
+dictation whose server has died can be spoken again and an imported recording generally cannot.
+Both now health-check the recorded port and start the remembered model again when it has gone.
+
+### `Revive` is a trait, and the choice is the persisted one
+
+- **A trait rather than an `Arc<LocalTranscription>`.** The two callers want one sentence's worth of
+  capability — *start the remembered model, tell me the port* — and handing them the runtime would
+  hand them the installer, the reaper and the catalogue as well.
+- **Required, not `Option`.** A build that forgets to supply it is a build where a lost server
+  silently stays lost, which is the defect. Requiring the field makes forgetting a compile error —
+  the lesson from `key_ref: None`, which flipped a manifest entry to reachable for a client that
+  could not connect.
+- **The *persisted* model, not the in-memory one.** By the time anyone revives, `forget_port` has
+  cleared the model alongside the port; they go together on purpose, since a model name with no
+  server behind it is the claim that caused this. The persisted choice is also what startup reads,
+  so reviving mid-dictation cannot bring back a different model than a relaunch would.
+- **Three named states instead of `Option<u16>`.** `Recorded::{Absent, Live, Gone}`, produced by a
+  pure `classify(recorded, answering)` so the reading can be tested without a server — the half that
+  was wrong. "No server was ever started" and "a server was started and has gone" had been getting
+  the same answer: the recorded number, handed to a transcription that then failed against it.
+
+### A second defect, found by the fix rather than by a bench run
+
+The local engine was being resolved on **every** dictation, before anything looked at the transport,
+and the executor consults it only in its `Transport::Local` arm. Harmless-looking, and it meant a
+sherpa model that was selected but could not be built failed a dictation **bound for a cloud
+provider** — `local_engine` returns `Err` for that case and the `?` ran first. Resolving the engine
+only for a local route fixes it and removes a loopback health check from every cloud dictation at
+the same time. No test caught this because no test paired a broken local selection with a remote
+transport.
+
+### Written, not verified
+
+The decision is covered by five new tests (1310 passing). The round trip is not: nothing here has
+killed a real `whisper-server` and dictated. Listed as a by-hand item in `BENCH_CHECK.md`, and the
+row that used to read *a dead local server now repairs itself* has been narrowed to the link the
+2026-08-28 run actually exercised — the button.
+
+**And the underlying question is still open.** Why the child exits unattended is not answered by
+any of this; it has now happened three times. KNEG-96 carries the two candidates and how to tell
+them apart from the first two log lines after a restart.
+
 ## 2026-08-27 (merged security fixes) — six fixes, a stronger merge, and a broken gate
 
 Six fixes landed on `dev` through PRs #7–#14, authored outside this session, after the plan closed:

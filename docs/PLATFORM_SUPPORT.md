@@ -173,7 +173,7 @@ epistemic states sit inside the "unverified" claims below, and they are not inte
 | Provider | Client | Verified |
 | --- | --- | --- |
 | Local windowed model | repeated `/inference` passes over the local `whisper-server` | ⚠️ built, never run by a person |
-| OpenAI Realtime | two WebSockets, one per capture | ⚠️ request shaping and the event grammar against fixtures. **No live call.** A key exists on this machine and has not been used |
+| OpenAI Realtime | two WebSockets, one per capture | ✅ **Verified live, 2026-08-28.** A real meeting transcribed, microphone and system audio, against the GA API. Five live attempts were needed first: the client had been written against the beta shape, which OpenAI has retired — see `docs/BENCH_CHECK.md` |
 | AssemblyAI Realtime | two WebSockets, one per capture | ⚠️ request shaping and the event grammar against fixtures, and most of the wire shape **believed rather than confirmed** -- see below. **No live call and no key for this provider exists on any machine this project has touched.** |
 | Deepgram Realtime | two WebSockets, one per capture | ⚠️ request shaping and the event grammar against fixtures, and most of the wire shape **believed rather than confirmed** -- see below. **No live call and no Deepgram key exists on any machine this project has touched.** |
 | Corti Realtime | two WebSockets, one per capture, authenticated by an OAuth2 client-credentials exchange first | ⚠️ request shaping and the event grammar against fixtures. Two different epistemic states, not one: the **token exchange is reused from working, tested code**, not believed -- `kw_transcription_core::clients::corti_token_endpoint`/`corti_token_request`/`interpret_token` already exist and are already tested for batch Corti transcription. The **socket wire, by contrast, was invented with no vendor source at all** -- weaker than "believed," see below. **No live call and no Corti credential exists on any machine this project has touched.** |
@@ -516,10 +516,12 @@ sherpa-onnx-offline \
 which is what both probe runs actually invoked (`--num-threads` only, since
 `kw_transcription_core::sherpa::build_args` omits it -- like whisper's own
 `threads` field -- unless a caller chooses a value). A clean run prints one
-line of JSON to stdout per input file, `{"text": "...", ...}` among fields
-this build does not read (`timestamps`, `tokens`, `ys_log_probs`, `words`);
+line of JSON to stdout per input file, `{"text": "...", ...}`.
 `sherpa::interpret` parses that shape the same way `local::interpret` parses
-whisper-server's JSON.
+whisper-server's JSON. `timestamps` and `tokens` are read as of 2026-08-31 --
+see **What the transducer reports** below. `ys_log_probs` is still unread
+(nothing here reports confidence, and a threshold nobody measured would be
+worse than silence) and `durations` and `words` come back empty.
 
 There is **no persistent server**: `sherpa-onnx-offline` is a one-shot CLI
 that reads one WAV path and exits, unlike `whisper-server`'s HTTP endpoint on
@@ -606,6 +608,101 @@ ship the "static" build (see `config/sidecars.json`'s `sherpa` entry), which
 statically links `onnxruntime` into every one of those ~23 executables rather
 than sharing one `onnxruntime.dll` beside them the way the Windows "shared"
 build does.
+
+### What the transducer reports
+
+Measured 2026-08-31, `parakeet-unified-en-0.6b-int8`, the same 13.5 s of speech
+the whisper timing measurement below used. Verbatim, with the three long arrays
+elided:
+
+```text
+{"lang": "", "emotion": "", "event": "",
+ "text": "The quick brown fox jumps over the lazy dog. Second sentence, ...",
+ "timestamps": [0.64, 0.72, 0.72, 0.88, ...],            // 64 entries
+ "durations": [],
+ "tokens": [" The", " qu", "ick", " br", "own", ...],    // 64 entries
+ "ys_log_probs": [...],                                  // 64 entries
+ "words": []}
+```
+
+Three things the field names alone did not say, and each one changed the design:
+
+1. **`timestamps` is per token, not per segment** — 64 for 64 tokens, and the
+   tokens are subword pieces (`" qu"`, `"ick"`). There is **no segmentation in
+   this output at all**, so `sherpa::cues` builds it. That is the same job
+   whisper.cpp's *server* does for us from its own decoded timestamp tokens.
+2. **`words` and `durations` are empty** for a transducer model.
+   `--whisper-enable-segment-timestamps` and `--whisper-enable-token-timestamps`
+   exist on this CLI but are Whisper-family options; Parakeet is a transducer and
+   neither applies. So there is no flag that fills them in, and **only onsets are
+   available — never offsets**.
+3. **A sentence-final `"."` is timestamped at the end of the pause that follows
+   it**, not where the speech stopped:
+
+   ```text
+   token   'y'   ' do'  'g'    '.'    ' Se'  'cond'
+   onset   2.32  2.64   2.72   4.08   4.24   4.32
+   ```
+
+   The `"."` sits 1.36 s after `"g"` and 0.16 s before the next word, because the
+   decoder emits it only once it has seen the silence. Ending a cue on it would
+   hold every cue on screen through the whole pause — 1.2 s of dead air per cue.
+   So a cue ends at its last token carrying a letter or digit.
+
+Against the same audio, whisper's own segmenter reported
+`0.00-3.00 / 3.68-9.44 / 10.08-12.88` and this rule gives
+`0.64-2.72 / 4.24-9.12 / 10.56-12.40` — the same three utterances, each a
+fraction of a second tighter, because an onset is not an offset.
+
+**Every boundary is a reported onset.** Nothing is interpolated or derived from
+the audio length, and a test asserts each cue's start and end appear verbatim in
+`timestamps`. Cues split after sentence-final punctuation, or at a 200-character
+backstop that exists because a transducer has no decode window the way whisper
+does — and only ever at a word start, which is the protection `--split-on-word`
+gives whisper, unconditional here.
+
+## Local ASR: whisper-server timings
+
+Measured on 2026-08-31, Windows 11 Pro 26200, against `ggml-tiny` and 13.5 s of
+synthesised speech, by starting the pinned `whisper-server.exe` by hand on a
+spare port and posting the same WAV to `/inference` under each configuration.
+
+**The question.** A 3,401-second Swedish import exported as a single subtitle
+cue at `00:00:00`, and the recorded suspicion was that `media.rs` failed to
+divide it. That was wrong. The server had not been asked for any timings, so
+there was nothing to divide.
+
+| server flags | `response_format=json` | `response_format=verbose_json` |
+| --- | --- | --- |
+| `--no-timestamps` (as shipped until 2026-08-31) | 0.63 / 0.65 / 0.65 s | **one** segment for the whole recording, carrying neither `start` nor `end` |
+| `--max-len 1000` | 0.66 / 0.66 / 0.70 s | 0.95 / 0.95 / 1.01 s, **one segment per utterance** with real `start` and `end` |
+
+Three runs each, `curl -w %{time_total}`.
+
+**What was ruled out.** Neither `split_on_word` nor `max_len` is honoured as a
+request field: sending `max_len=0` and `split_on_word=true` as form fields
+returned byte-identical responses to sending neither. They are start-time flags.
+`--max-len 0` at start time also changes nothing, because whisper.cpp's server
+reads `0` as `60` — which is where the sixty-character mid-utterance wrap that
+`--no-timestamps` was ported to remove actually comes from. An explicit cap far
+above what a 30-second decode window can hold removes the wrap by never
+reaching it.
+
+**What this fixed and what it did not.**
+
+- Media import now asks for `verbose_json` (`WhisperServer::timed`) and gets one
+  cue per utterance. Dictation and meetings still ask for `json`.
+- Dictation's output is **unchanged**, which was checked rather than assumed: the
+  `\n` that now separates utterances in `text` is collapsed by
+  `local::interpret`, and the result is byte-identical to what `--no-timestamps`
+  returned for the same audio.
+- **A cloud provider still reports no timings**, so an import routed to one gets
+  the single honest fallback cue the screen writes. Only the local whisper server
+  is fixed.
+- **`sherpa-onnx-offline` already prints `timestamps` and `words` on stdout** and
+  `sherpa::interpret` does not read them — see the sherpa section above, which
+  has listed those as unread fields since the probe. That is now a gap with a
+  known cure rather than an unexamined one.
 
 ## GPU acceleration
 

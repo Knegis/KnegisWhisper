@@ -190,6 +190,9 @@ pub enum PolicyError {
         #[source]
         source: std::io::Error,
     },
+
+    #[error("download exceeded its pinned {limit}-byte limit")]
+    DownloadTooLarge { limit: u64 },
 }
 
 /// Vendor hosts that must never be contacted, parsed once from
@@ -614,6 +617,31 @@ impl NetworkPolicy {
         // Tauri command.
         progress: &mut (dyn FnMut(u64, Option<u64>) + Send),
     ) -> Result<Download, PolicyError> {
+        self.download_to_file_inner(purpose, url, destination, None, progress)
+            .await
+    }
+
+    /// Stream a URL to a file, aborting before more than `max_bytes` are written.
+    pub async fn download_to_file_bounded(
+        &self,
+        purpose: RequestPurpose,
+        url: &str,
+        destination: &std::path::Path,
+        max_bytes: u64,
+        progress: &mut (dyn FnMut(u64, Option<u64>) + Send),
+    ) -> Result<Download, PolicyError> {
+        self.download_to_file_inner(purpose, url, destination, Some(max_bytes), progress)
+            .await
+    }
+
+    async fn download_to_file_inner(
+        &self,
+        purpose: RequestPurpose,
+        url: &str,
+        destination: &std::path::Path,
+        max_bytes: Option<u64>,
+        progress: &mut (dyn FnMut(u64, Option<u64>) + Send),
+    ) -> Result<Download, PolicyError> {
         use tokio::io::AsyncWriteExt as _;
 
         const MAX_HOPS: u8 = 5;
@@ -665,6 +693,11 @@ impl NetworkPolicy {
         };
 
         let total = response.content_length();
+        if total.zip(max_bytes).is_some_and(|(total, max)| total > max) {
+            return Err(PolicyError::DownloadTooLarge {
+                limit: max_bytes.unwrap_or(0),
+            });
+        }
         let mut file = tokio::fs::File::create(destination)
             .await
             .map_err(|source| PolicyError::Write {
@@ -675,6 +708,11 @@ impl NetworkPolicy {
         let mut written: u64 = 0;
         let mut stream = response;
         while let Some(chunk) = stream.chunk().await? {
+            if max_bytes.is_some_and(|max| written.saturating_add(chunk.len() as u64) > max) {
+                return Err(PolicyError::DownloadTooLarge {
+                    limit: max_bytes.unwrap_or(0),
+                });
+            }
             file.write_all(&chunk)
                 .await
                 .map_err(|source| PolicyError::Write {

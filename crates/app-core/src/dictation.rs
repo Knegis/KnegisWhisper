@@ -175,6 +175,23 @@ pub trait History: Send + Sync {
     /// Whether history is switched on. Checked before anything is written.
     async fn enabled(&self) -> bool;
 
+    /// Whether the pre-cleanup transcript is kept alongside the cleaned one.
+    ///
+    /// Asked of the sink rather than held on [`Dictation`], for two reasons.
+    /// It is the same kind of question as [`Self::enabled`] -- what this store
+    /// keeps -- and it is read per dictation, so switching it on takes effect at
+    /// once. It used to be a `bool` fixed when `Dictation` was built and
+    /// hardcoded `false` at the only real call site, which made it a capability
+    /// with no way in: the field existed, the column existed, the IPC type
+    /// carried it, and nothing could ever set it.
+    ///
+    /// **Defaults to `false`,** so an implementation that does not answer keeps
+    /// one copy of what someone said rather than two. Storing a second copy of
+    /// a person's speech is the kind of thing to be opted into, not out of.
+    async fn keep_raw_text(&self) -> bool {
+        false
+    }
+
     /// Write a row and return its id.
     async fn record(&self, entry: HistoryEntry) -> Option<i64>;
 }
@@ -208,8 +225,6 @@ pub struct Dictation {
     history: Arc<dyn History>,
     sink: Arc<dyn StateSink>,
     state: std::sync::Mutex<SessionState>,
-    /// Whether the pre-cleanup transcript is kept in history.
-    keep_raw_text: bool,
 }
 
 impl std::fmt::Debug for Dictation {
@@ -221,7 +236,6 @@ impl std::fmt::Debug for Dictation {
 }
 
 impl Dictation {
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         recorder: Arc<dyn Recorder>,
         transcriber: Arc<dyn Transcriber>,
@@ -229,7 +243,6 @@ impl Dictation {
         inserter: Arc<dyn Inserter>,
         history: Arc<dyn History>,
         sink: Arc<dyn StateSink>,
-        keep_raw_text: bool,
     ) -> Self {
         Self {
             recorder,
@@ -239,7 +252,6 @@ impl Dictation {
             history,
             sink,
             state: std::sync::Mutex::new(SessionState::Idle),
-            keep_raw_text,
         }
     }
 
@@ -367,7 +379,7 @@ impl Dictation {
         let history_id = self
             .write_history(HistoryEntry {
                 text: cleaned.clone(),
-                raw_text: self.raw_for_history(&raw, &cleaned),
+                raw_text: self.raw_for_history(&raw, &cleaned).await,
                 provider: Some(transcribed.provider),
                 model: transcribed.model,
                 duration_ms: Some(duration),
@@ -386,9 +398,14 @@ impl Dictation {
     /// The pre-cleanup transcript, if it is worth keeping.
     ///
     /// Only when the user asked for it *and* cleanup actually changed something;
-    /// storing an identical copy is pure duplication of user speech.
-    fn raw_for_history(&self, raw: &str, cleaned: &str) -> Option<String> {
-        (self.keep_raw_text && raw != cleaned).then(|| raw.to_owned())
+    /// storing an identical copy is pure duplication of user speech. The second
+    /// half of that is why this is worth having at all: a row that carries a raw
+    /// text is a row where cleanup demonstrably did something.
+    async fn raw_for_history(&self, raw: &str, cleaned: &str) -> Option<String> {
+        if raw == cleaned {
+            return None;
+        }
+        self.history.keep_raw_text().await.then(|| raw.to_owned())
     }
 
     /// Record a failure and return the outcome.
@@ -407,7 +424,10 @@ impl Dictation {
             None => (String::new(), None, None, None),
         };
 
-        let raw_text = raw.and_then(|r| self.raw_for_history(&r, &text));
+        let raw_text = match raw {
+            Some(raw) => self.raw_for_history(&raw, &text).await,
+            None => None,
+        };
 
         let history_id = self
             .write_history(HistoryEntry {
@@ -602,6 +622,7 @@ mod tests {
     #[derive(Default)]
     struct FakeHistory {
         on: AtomicBool,
+        keep_raw: AtomicBool,
         rows: Mutex<Vec<HistoryEntry>>,
     }
 
@@ -618,6 +639,10 @@ mod tests {
     impl History for FakeHistory {
         async fn enabled(&self) -> bool {
             self.on.load(Ordering::SeqCst)
+        }
+
+        async fn keep_raw_text(&self) -> bool {
+            self.keep_raw.load(Ordering::SeqCst)
         }
 
         async fn record(&self, entry: HistoryEntry) -> Option<i64> {
@@ -658,6 +683,11 @@ mod tests {
         let recorder = Arc::new(recorder);
         let transcriber = Arc::new(transcriber);
         let inserter = Arc::new(inserter);
+        // Set on the sink now that keeping the raw text is the sink's business
+        // rather than a value fixed when the session is built. The nineteen
+        // callers of `harness` are unchanged, which is the point of putting it
+        // here rather than in their argument lists.
+        history.keep_raw.store(keep_raw, Ordering::SeqCst);
         let history = Arc::new(history);
         let sink = Arc::new(FakeSink::default());
 
@@ -668,7 +698,6 @@ mod tests {
             Arc::clone(&inserter) as Arc<dyn Inserter>,
             Arc::clone(&history) as Arc<dyn History>,
             Arc::clone(&sink) as Arc<dyn StateSink>,
-            keep_raw,
         );
 
         Harness {
@@ -683,6 +712,36 @@ mod tests {
 
     fn route() -> Transport {
         Transport::Local
+    }
+
+    /// A [`History`] that answers nothing but `record`, to exercise the trait's
+    /// default rather than `FakeHistory`'s override.
+    #[derive(Default)]
+    struct BareHistory {
+        rows: Mutex<Vec<HistoryEntry>>,
+    }
+
+    #[async_trait::async_trait]
+    impl History for BareHistory {
+        async fn enabled(&self) -> bool {
+            true
+        }
+
+        async fn record(&self, entry: HistoryEntry) -> Option<i64> {
+            let mut rows = self.rows.lock().unwrap();
+            rows.push(entry);
+            Some(rows.len() as i64)
+        }
+    }
+
+    #[tokio::test]
+    async fn a_history_that_does_not_answer_keeps_one_copy() {
+        // The trait's default, and it must be the private one. An
+        // implementation that forgets to answer should store one copy of what
+        // someone said, not two -- a second copy of a person's speech is opted
+        // into, never out of.
+        let history = BareHistory::default();
+        assert!(!history.keep_raw_text().await);
     }
 
     /* ------------------------------------------------------- the happy path */
