@@ -25,6 +25,9 @@ flate2.workspace = true
 lzma-rs.workspace = true
 bzip2-rs.workspace = true
 kw-network-policy.workspace = true
+# The one mechanism that narrows a file's permissions, shared with
+# `kw-local-api`'s discovery file. See `pid.rs`'s `restrict`.
+kw-security.workspace = true
 async-trait.workspace = true
 reqwest.workspace = true
 

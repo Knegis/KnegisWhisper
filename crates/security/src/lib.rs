@@ -4,6 +4,20 @@
 //! Windows Credential Manager, Linux Secret Service — one entry per key. Never
 //! in SQLite, never in `localStorage`, never in a `.env` file.
 //!
+//! **One secret cannot live there**, and [`file_acl`] is about that one. The
+//! local API's bearer token has to be readable by a separate process — the CLI,
+//! the MCP server — that has no way to ask the keychain on this application's
+//! behalf, so it goes in `~/.knegiswhisper/local-api.json` and *the file's
+//! permissions are the access control*. `file_acl` narrows them and, more to
+//! the point, reads them back: a token in a file whose sharing was never
+//! checked is the same class of claim as a capture-exclusion flag reported
+//! `active` without asking the window.
+//!
+//! `file_acl`'s second caller, `kw_sidecar::pid`, is not storing a secret at
+//! all — a PID is public. It is protected for **integrity** rather than
+//! confidentiality: a record another local user could rewrite is a request to
+//! signal a process of their choosing.
+//!
 //! The central idea is the [`KeyRef`]: route resolution and provider dispatch
 //! deal only in *references* to credentials, and only this crate can turn a
 //! reference into a secret. Two things follow. A test never needs a real
@@ -14,8 +28,10 @@
 
 use std::fmt;
 
+pub mod file_acl;
 pub mod token;
 
+pub use file_acl::{PathKind, Permissions};
 pub use token::{LocalApiToken, TokenError};
 
 /// Service name under which every credential is filed.

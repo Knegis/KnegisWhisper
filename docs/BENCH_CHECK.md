@@ -58,12 +58,14 @@ distinguish sides. The second is refused with a message blaming the user's spell
 alias — the same shape as the `Ctrl` defect already recorded in `ENGINEERING_LOG.md`. Same class as
 the four dead hotkeys: a capability that exists, is documented, and has no way in.
 
-**2. The local API token file gets no permissions of its own on Windows, and the comment saying
-what it inherits is wrong on a real machine.** `discovery::restrict_file` is a no-op under
-`cfg(not(unix))` and returns `Permissions::InheritedFromProfile`, with a comment reading "the file
-inherits the profile directory's ACL, which normally grants this user and the administrators
-group". On this machine `icacls` says otherwise — every entry is inherited (`(I)`) and two of them
-are neither the user nor administrators:
+**2. The local API token file got no permissions of its own on Windows, and the comment saying
+what it inherited was wrong on a real machine. Fixed 2026-08-31 — the measurement below is the
+"before", and the "after" is at the end of this finding.** `discovery::restrict_file` was a no-op
+under `cfg(not(unix))` and returned `Permissions::InheritedFromProfile`, with a comment reading
+"the file inherits the profile directory's ACL, which normally grants this user and the
+administrators group". `icacls` said otherwise — every entry inherited (`(I)`) and two of them
+neither the user nor administrators. Measured three times on the same machine (2026-08-26,
+2026-08-31, and again immediately before the fix landed), identical every time:
 
 ```
 Jobbdator\CodexSandboxUsers:(I)(M,DC)
@@ -73,10 +75,10 @@ BUILTIN\Administrators:(I)(F)
 AzureAD\AxelKarlsson:(I)(F)
 ```
 
-A member of that group can read the bearer token and drive the local API — notes, transcriptions,
-deletions. That fact stands: Windows applies no DACL of its own, so the file is only ever as
-protected as the user profile directory happens to be, and this measurement is real evidence that
-"happens to be" can include trustees nobody chose.
+A member of that group could read the bearer token and drive the local API — notes, transcriptions,
+deletions. Windows applied no DACL of its own, so the file was only ever as protected as the user
+profile directory happened to be, and this measurement is real evidence that "happens to be" can
+include trustees nobody chose.
 
 **Corrected 2026-08-27 — the rest of this finding described the application hiding that fact from
 the user, and that has since been fixed.** It used to read, present tense, that
@@ -85,20 +87,71 @@ the user, and that has since been fixed.** It used to read, present tense, that
 otherwise stayed silent under a sentence naming trustees nothing had read — accurate when this
 finding was written. Task 14 fixed it: the settings screen no longer carries
 `discoveryPermissionsAsExpected` at all, and the desktop layer's own
-`DiscoveryPermissions::is_confirmed()` — deliberately narrower than
-`kw_local_api::Permissions::is_as_expected()`, which still returns `true` for `InheritedFromProfile`
-and is no longer read by anything user-facing — treats only `OwnerOnly` as confirmed. Both the
-startup warning (`LocalApiRuntime::start`) and the two screens that render this state
+`DiscoveryPermissions::is_confirmed()` replaced it. `kw_local_api::Permissions::is_as_expected()`,
+which returned `true` for `InheritedFromProfile`, was deleted outright in the 2026-08-31 fix below.
+Both the startup warning (`LocalApiRuntime::start`) and the two screens that render this state
 (`Integrations > Local API`, `Integrations > CLI`) go through that one decision, and
-`InheritedFromProfile` now renders "Not independently restricted" with a caveat naming
-administrators by name, on both.
+`InheritedFromProfile` renders "Not independently restricted" with a caveat naming administrators
+by name, on both. The line `is_confirmed()` draws is **checked versus unchecked**, not strict
+versus lax — which is why the Windows state below passes it while `InheritedFromProfile`, which may
+well be perfectly restrictive, does not.
 
-What is still open, and untouched by that fix: the DACL itself. The fix for *that* is an explicit
-owner-only DACL through `SetNamedSecurityInfoW` with `PROTECTED_DACL_SECURITY_INFORMATION` so the
-profile's ACL stops being inherited, then reading the DACL back and reporting `OwnerOnly` only if
-what came back is what was asked for — the same read-back discipline the Unix branch of this very
-function already applies. `discovery::restrict_file` is still a no-op under `cfg(not(unix))` today;
-only the *reporting* of the gap was fixed, not the gap.
+**Closed 2026-08-31 (KNEG-34).** The DACL itself is now applied and read back, through
+`kw_security::file_acl`, at all four call sites — the discovery file and its directory, and
+`kw_sidecar::pid`'s record and directory. The grant is the process's token user,
+`NT AUTHORITY\SYSTEM` and `BUILTIN\Administrators`, applied with
+`PROTECTED_DACL_SECURITY_INFORMATION` so the profile's entries stop being inherited, then read back
+entry by entry through `GetNamedSecurityInfoW`.
+
+**Not owner-only**, which is a deliberate narrowing of what the fix claims: an administrator can
+take ownership of any object and re-grant themselves, so excluding them is theatre, and the project
+brief forbids attempting to bypass administrator controls. What was worth removing was the
+*unexpected* trustees and the inheritance handing them down, and that is what "confirmed" now
+means. The settings label still says an administrator can read the token.
+
+After, from a real `discovery::write` into a directory under `%USERPROFILE%`, both paths measured
+with `icacls` from outside the process:
+
+```
+C:\Users\AxelKarlsson\.knegiswhisper-acltest2
+    AzureAD\AxelKarlsson:(OI)(CI)(F)
+    NT AUTHORITY\SYSTEM:(OI)(CI)(F)
+    BUILTIN\Administrators:(OI)(CI)(F)
+
+C:\Users\AxelKarlsson\.knegiswhisper-acltest2\local-api.json
+    AzureAD\AxelKarlsson:(F)
+    NT AUTHORITY\SYSTEM:(F)
+    BUILTIN\Administrators:(F)
+```
+
+Three trustees, no `(I)` on any of them, on both. `discovery::read` still succeeds afterwards, so
+the application has not locked itself out. Two further facts came out of the same run:
+
+- **The DACL survives `fs::rename` within one directory** — previously reasoned, now measured, and
+  asserted by a `#[cfg(windows)]` test. The read-back in `discovery::write` was moved to *after*
+  the rename regardless, because verifying the temporary described a path that no longer existed
+  by the time the verdict reached the caller.
+- **A file created inside an already-protected directory inherits exactly the three trustees but
+  not `SE_DACL_PROTECTED`**, so it reports `StillInheriting` until the file's own DACL is applied.
+  That is why both are still restricted rather than the directory being trusted to have covered
+  the file.
+
+**Two things this did not close, both recorded rather than fixed, and both filed (KNEG-110,
+KNEG-111):**
+
+1. **The verdict is a snapshot taken when the API starts.** `local_api_status` reports what the
+   write measured; nothing re-reads the DACL while the application runs. During this run a trustee
+   was added to a protected directory by something outside the application, between the write's
+   read-back and the next `icacls`, and the application would not have noticed until its next
+   start. (That particular ACE was an artifact of the sandboxed harness the measurement ran under —
+   it did not reproduce when `discovery::write` created the directory itself, which is what the
+   application does — but the *general* fact that a protected DACL can be widened after the fact is
+   real.)
+2. **The `windows-latest` CI job is still off for every trigger but `workflow_dispatch`**, so none
+   of this Win32 code is compiled by CI, let alone run. The pure classifier is, because
+   `file_acl::classify` takes plain Rust facts and the measured DACL above is a fixture in its test
+   module. The three Win32 calls are covered by two `#[cfg(windows)]` tests and by
+   `cargo run -p kw-security --example dacl_probe`, and by nothing that runs unattended.
 
 **3. `knegiswhisper history list` hides failures.** The table renders `id, when, provider, text`.
 A failed dictation has neither a provider nor text, so it prints as two dashes and says nothing —

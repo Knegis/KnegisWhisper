@@ -147,12 +147,16 @@ impl LocalApiRuntime {
         let permissions =
             discovery::write(&self.discovery_path, port, &token).map_err(|err| err.to_string())?;
 
-        // Deliberately not `!permissions.is_as_expected()`: that helper also
-        // accepts `InheritedFromProfile`, which is merely this platform's
-        // profile-directory default and was never verified as a restriction.
-        // A log line that stays silent on it is the same defect this file's
-        // user-facing report exists to avoid -- see `DiscoveryPermissions`'s
-        // doc comment and docs/BENCH_CHECK.md, 2026-08-26 finding 2.
+        // `is_confirmed()` and nothing else: it is the one place the checked /
+        // unchecked line is drawn, and both this warning and the two settings
+        // screens go through it so they cannot drift apart. It replaced
+        // `kw_local_api::Permissions::is_as_expected()`, which accepted
+        // `InheritedFromProfile` -- a platform default nothing had verified --
+        // and which no longer exists. See docs/BENCH_CHECK.md finding 2.
+        //
+        // On Windows this now goes quiet, because there is a mechanism there
+        // and it is read back. That is the point of the change, not a side
+        // effect of it: the warning was correct while the DACL was a no-op.
         if !DiscoveryPermissions::from(&permissions).is_confirmed() {
             // Worth a warning: the token is the whole access control, so a file
             // that is not a verified restriction is a real weakening rather
@@ -215,14 +219,14 @@ impl LocalApiRuntime {
 /// `local_model.rs`'s `VerifiedBy` already follow for their own core types.
 ///
 /// This type exists because of one specific defect.
-/// `Permissions::is_as_expected()` returns `true` for `InheritedFromProfile`
+/// `Permissions::is_as_expected()` returned `true` for `InheritedFromProfile`
 /// — correct as "the best this build currently achieves on this platform",
-/// read by a screen that only has the boolean as "verified restricted", which
-/// it is not: nothing was checked, it is simply what a file under
+/// read by a screen that only had the boolean as "verified restricted", which
+/// it was not: nothing was checked, it was simply what a file under
 /// `%USERPROFILE%` gets by default, and two other trustees turned up in that
 /// default on a real machine. See `docs/BENCH_CHECK.md`, 2026-08-26 finding 2.
-/// `Integrations > CLI` switches on `state` and gives `InheritedFromProfile`
-/// its own honest sentence rather than a green tick that reuses the boolean.
+/// That helper has since been deleted; this type and its
+/// [`Self::is_confirmed`] are what replaced it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[serde(
     tag = "state",
@@ -230,18 +234,48 @@ impl LocalApiRuntime {
     rename_all_fields = "camelCase"
 )]
 pub enum DiscoveryPermissions {
-    /// Verified by reading the file's mode back: owner read/write only.
+    /// Unix. Verified by reading the file's mode back: owner read/write only.
     OwnerOnly,
-    /// Windows. Inherits the profile directory's ACL. **Not** a verified
-    /// restriction — nothing here checked what that ACL actually grants,
-    /// only that no narrower one was applied.
+    /// Windows. Verified by reading the file's access list back: this
+    /// application's user, `NT AUTHORITY\SYSTEM`, `BUILTIN\Administrators`,
+    /// nobody else, and nothing inherited. An administrator can still read it
+    /// — they can take ownership of anything — and the label says so.
+    OwnerAndAdministrators,
+    /// Nothing was applied and nothing was read back, because the platform has
+    /// neither mechanism. Reachable only on a target that is neither Unix nor
+    /// Windows; on Windows this used to be the answer and no longer is.
     InheritedFromProfile,
-    /// The mode was set and read back wider than intended.
+    /// Unix. The mode was set and read back wider than intended.
     Wider {
         /// Octal, e.g. `"644"`, matching how a person would type it to `chmod`.
         mode: String,
     },
-    /// The mode could not be set or could not be read back.
+    /// Windows. The access list grants accounts or groups beyond the three
+    /// that were asked for.
+    ExtraTrustees {
+        /// How many, not which. A trustee name is one of this machine's
+        /// account or group names, and this value is rendered on a screen that
+        /// ends up in screenshots and bug reports. The names go to the
+        /// application log instead.
+        count: u32,
+    },
+    /// Windows. The right three, but still inherited from the directory above
+    /// — so what the file grants is whatever that directory grants, and it can
+    /// change without anything here being asked.
+    StillInheriting,
+    /// Windows. The access list grants a group meaning "everyone on this
+    /// machine", or there is no access list at all — which grants everything
+    /// to everybody rather than nothing to anybody.
+    GrantsEveryone,
+    /// Windows. Nothing unexpected in the list, but what was asked for is not
+    /// all there.
+    Incomplete,
+    /// The file's own permissions are right and the directory holding it is
+    /// not restricted, so it can be deleted and replaced by anything that can
+    /// write there. For a file whose contents *are* the access control, that
+    /// is worse than it being readable.
+    DirectoryNotRestricted,
+    /// The permissions could not be applied, or could not be read back.
     Unknown { reason: String },
 }
 
@@ -249,10 +283,20 @@ impl From<&Permissions> for DiscoveryPermissions {
     fn from(permissions: &Permissions) -> Self {
         match permissions {
             Permissions::OwnerOnly => Self::OwnerOnly,
+            Permissions::OwnerAndAdministrators => Self::OwnerAndAdministrators,
             Permissions::InheritedFromProfile => Self::InheritedFromProfile,
             Permissions::Wider { mode } => Self::Wider {
                 mode: format!("{mode:o}"),
             },
+            // `u32` rather than `usize`: `ts-rs` renders both as `number`, and
+            // a count of trustees that needs 64 bits is not a thing.
+            Permissions::ExtraTrustees { count } => Self::ExtraTrustees {
+                count: u32::try_from(*count).unwrap_or(u32::MAX),
+            },
+            Permissions::StillInheriting => Self::StillInheriting,
+            Permissions::GrantsEveryone => Self::GrantsEveryone,
+            Permissions::Incomplete => Self::Incomplete,
+            Permissions::DirectoryNotRestricted => Self::DirectoryNotRestricted,
             Permissions::Unknown { reason } => Self::Unknown {
                 reason: reason.clone(),
             },
@@ -261,18 +305,24 @@ impl From<&Permissions> for DiscoveryPermissions {
 }
 
 impl DiscoveryPermissions {
-    /// Whether this is a *verified* restriction, not merely "the best this
-    /// platform's default gives you". Only [`Self::OwnerOnly`] qualifies:
-    /// [`Self::InheritedFromProfile`] is deliberately excluded even though
-    /// `kw_local_api::Permissions::is_as_expected()` accepts it, because
-    /// nothing here confirmed what that inherited ACL actually grants. Both
-    /// the user-facing report (`local_api_status`) and the startup warning
-    /// (`LocalApiRuntime::start`) go through this one decision, so there is
-    /// exactly one place that draws the line rather than two that could
-    /// drift apart. See docs/BENCH_CHECK.md, 2026-08-26 finding 2.
+    /// Whether this state was **checked**, not merely asked for.
+    ///
+    /// The line is checked versus unchecked — not strict versus lax.
+    /// [`Self::OwnerAndAdministrators`] is on the confirmed side even though
+    /// administrators can read the file, because that grant is deliberate
+    /// (an administrator can take ownership of anything, so excluding them
+    /// buys nothing) and because the list was read back entry by entry.
+    /// [`Self::InheritedFromProfile`] is on the other side even though it may
+    /// well be fine, because *nothing looked* — which is the whole reason this
+    /// method exists separately from the boolean it replaced.
+    ///
+    /// Both the user-facing report (`local_api_status`) and the startup
+    /// warning (`LocalApiRuntime::start`) go through this one decision, so
+    /// there is exactly one place that draws the line rather than two that
+    /// could drift. See docs/BENCH_CHECK.md, 2026-08-26 finding 2.
     #[must_use]
     pub const fn is_confirmed(&self) -> bool {
-        matches!(self, Self::OwnerOnly)
+        matches!(self, Self::OwnerOnly | Self::OwnerAndAdministrators)
     }
 }
 
@@ -295,7 +345,7 @@ pub struct LocalApiStatus {
     ///
     /// This used to carry a second field, `discovery_permissions_as_expected:
     /// Option<bool>`, derived from `Permissions::is_as_expected()`. That
-    /// boolean is `true` for `InheritedFromProfile`, so the settings screen
+    /// boolean was `true` for `InheritedFromProfile`, so the settings screen
     /// warned only when it was `false` and stayed silent on an inherited ACL
     /// -- reassuring where nothing had been verified. Removed rather than
     /// redefined: a screen that reads the real state has no use for a second,
@@ -502,56 +552,121 @@ mod tests {
         );
     }
 
+    /// Every `Permissions` variant, paired with what it must convert to.
+    ///
+    /// A `const` list rather than a loop over the enum, because Rust has no
+    /// way to enumerate one: adding a variant to `kw_security::Permissions`
+    /// makes the `From` impl fail to compile, and this table is where the
+    /// author is then reminded to say what it means here too.
+    fn every_variant() -> Vec<(Permissions, DiscoveryPermissions)> {
+        vec![
+            (Permissions::OwnerOnly, DiscoveryPermissions::OwnerOnly),
+            (
+                Permissions::OwnerAndAdministrators,
+                DiscoveryPermissions::OwnerAndAdministrators,
+            ),
+            (
+                Permissions::InheritedFromProfile,
+                DiscoveryPermissions::InheritedFromProfile,
+            ),
+            (
+                Permissions::Wider { mode: 0o644 },
+                DiscoveryPermissions::Wider {
+                    mode: "644".to_owned(),
+                },
+            ),
+            (
+                Permissions::ExtraTrustees { count: 2 },
+                DiscoveryPermissions::ExtraTrustees { count: 2 },
+            ),
+            (
+                Permissions::StillInheriting,
+                DiscoveryPermissions::StillInheriting,
+            ),
+            (
+                Permissions::GrantsEveryone,
+                DiscoveryPermissions::GrantsEveryone,
+            ),
+            (Permissions::Incomplete, DiscoveryPermissions::Incomplete),
+            (
+                Permissions::DirectoryNotRestricted,
+                DiscoveryPermissions::DirectoryNotRestricted,
+            ),
+            (
+                Permissions::Unknown {
+                    reason: "no chmod on this filesystem".to_owned(),
+                },
+                DiscoveryPermissions::Unknown {
+                    reason: "no chmod on this filesystem".to_owned(),
+                },
+            ),
+        ]
+    }
+
     #[test]
     fn discovery_permissions_carries_every_variant_without_collapsing_it() {
-        // The property this type exists for: `InheritedFromProfile` must
-        // convert to its own tag, never to `OwnerOnly` -- collapsing the two
-        // is exactly the boolean-shaped defect this replaces.
-        assert_eq!(
-            DiscoveryPermissions::from(&Permissions::OwnerOnly),
-            DiscoveryPermissions::OwnerOnly
-        );
-        assert_eq!(
-            DiscoveryPermissions::from(&Permissions::InheritedFromProfile),
-            DiscoveryPermissions::InheritedFromProfile
-        );
+        // The property this type exists for: every state converts to its own
+        // tag. Collapsing two into one is exactly the boolean-shaped defect
+        // this replaced.
+        for (core, expected) in every_variant() {
+            assert_eq!(
+                DiscoveryPermissions::from(&core),
+                expected,
+                "{core:?} must keep its own tag"
+            );
+        }
+
         assert_ne!(
             DiscoveryPermissions::from(&Permissions::InheritedFromProfile),
             DiscoveryPermissions::OwnerOnly,
-            "an inherited ACL must never present as a verified restriction"
+            "an unchecked inherited ACL must never present as a verified restriction"
         );
-        assert_eq!(
-            DiscoveryPermissions::from(&Permissions::Wider { mode: 0o644 }),
-            DiscoveryPermissions::Wider {
-                mode: "644".to_owned()
-            }
-        );
-        assert_eq!(
-            DiscoveryPermissions::from(&Permissions::Unknown {
-                reason: "no chmod on this filesystem".to_owned()
-            }),
-            DiscoveryPermissions::Unknown {
-                reason: "no chmod on this filesystem".to_owned()
-            }
+        assert_ne!(
+            DiscoveryPermissions::from(&Permissions::OwnerAndAdministrators),
+            DiscoveryPermissions::OwnerOnly,
+            "Windows grants administrators on purpose, and must not read as owner-only"
         );
     }
 
     #[test]
-    fn only_owner_only_is_a_confirmed_restriction() {
-        // The decision both the startup warning and the user-facing status
-        // now share. `InheritedFromProfile` must land on the "not confirmed"
-        // side even though `Permissions::is_as_expected()` treats it as
-        // acceptable -- that is the whole point of this method existing
-        // separately from that helper.
+    fn a_confirmed_restriction_is_one_that_was_checked_not_one_that_is_strict() {
+        // Renamed from `only_owner_only_is_a_confirmed_restriction`, which
+        // argued a line this no longer draws. `OwnerAndAdministrators` lets
+        // administrators read the file and is still confirmed, because the
+        // list was read back entry by entry and an administrator can take
+        // ownership of anything regardless. `InheritedFromProfile` may well be
+        // perfectly restrictive and is still not confirmed, because nothing
+        // looked. Strictness is not the axis; evidence is.
         assert!(DiscoveryPermissions::OwnerOnly.is_confirmed());
+        assert!(DiscoveryPermissions::OwnerAndAdministrators.is_confirmed());
+
         assert!(!DiscoveryPermissions::InheritedFromProfile.is_confirmed());
         assert!(!DiscoveryPermissions::Wider {
             mode: "644".to_owned()
         }
         .is_confirmed());
+        assert!(!DiscoveryPermissions::ExtraTrustees { count: 2 }.is_confirmed());
+        assert!(!DiscoveryPermissions::StillInheriting.is_confirmed());
+        assert!(!DiscoveryPermissions::GrantsEveryone.is_confirmed());
+        assert!(!DiscoveryPermissions::Incomplete.is_confirmed());
+        assert!(!DiscoveryPermissions::DirectoryNotRestricted.is_confirmed());
         assert!(!DiscoveryPermissions::Unknown {
             reason: "no chmod on this filesystem".to_owned()
         }
         .is_confirmed());
+    }
+
+    #[test]
+    fn the_two_confirmed_decisions_cannot_drift_apart() {
+        // `kw_security::Permissions::is_confirmed` and this type's are two
+        // definitions of one line, which is the shape of the original defect.
+        // They are kept honest by assertion rather than by hope.
+        for (core, converted) in every_variant() {
+            assert_eq!(
+                core.is_confirmed(),
+                converted.is_confirmed(),
+                "{core:?} is judged differently on the two sides of the boundary"
+            );
+        }
     }
 }

@@ -19,3 +19,34 @@ thiserror.workspace = true
 tracing.workspace = true
 serde.workspace = true
 url.workspace = true
+
+# Applying and reading back a file's DACL, for `file_acl`. The
+# workspace-pinned version, matching `kw-platform` -- deliberately not
+# `windows-sys`, which keyring pulls in transitively at a version keyring
+# chooses and moves when keyring bumps.
+#
+# Every module this crate names is listed. Cargo unifies features across a
+# build, so relying on another crate happening to enable `Win32_Foundation`
+# would be a dependency on nothing declared anywhere.
+[target.'cfg(windows)'.dependencies.windows]
+workspace = true
+features = [
+    # WIN32_ERROR, LocalFree, CloseHandle, HANDLE, HLOCAL
+    "Win32_Foundation",
+    # ACL, PSID, the *_SECURITY_INFORMATION constants, GetAce, CopySid,
+    # CreateWellKnownSid, GetSecurityDescriptorControl, GetTokenInformation
+    "Win32_Security",
+    # GetNamedSecurityInfoW, SetNamedSecurityInfoW, SetEntriesInAclW,
+    # ConvertSidToStringSidW, SE_FILE_OBJECT, EXPLICIT_ACCESS_W
+    "Win32_Security_Authorization",
+    # FILE_ALL_ACCESS
+    "Win32_Storage_FileSystem",
+    # ACCESS_ALLOWED_ACE_TYPE, ACCESS_DENIED_ACE_TYPE -- in SystemServices in
+    # this version, not in Win32_Security where they read as if they belong
+    "Win32_System_SystemServices",
+    # OpenProcessToken, GetCurrentProcess
+    "Win32_System_Threading",
+]
+
+[dev-dependencies]
+tempfile.workspace = true

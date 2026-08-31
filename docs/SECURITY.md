@@ -117,31 +117,77 @@ per start, compared with a constant-time comparison after a length check. Non-lo
 addresses are rejected even if the token matches. Request bodies are capped.
 
 The discovery file carries the port and token and is deleted on shutdown. Its permissions differ
-by platform, and this document used to claim `0600` everywhere, which was false:
+by platform, and this document used to claim `0600` everywhere, which was false. The mechanism is
+`kw_security::file_acl`, shared with `kw_sidecar::pid`, and it is **applied and then read back** on
+both platforms — some filesystems ignore mode bits, a DACL on a network redirector does not behave
+like one in a home directory, and a token in a file whose sharing was never checked is the same
+class of claim as a capture-exclusion flag reported `active` without asking the window.
 
-- **Unix:** `0600`, set and then **read back** — some filesystems ignore mode bits, and a token in
-  a world-readable file is worth knowing about before it is used. The containing directory is
-  `0700`.
-- **Windows:** *nothing is applied.* The file inherits whatever ACL the profile directory carries,
-  and `Permissions::InheritedFromProfile` reports that rather than claiming owner-only. **That is
-  an honest report of an unmet requirement, not a mechanism.** Measured on one real machine
-  (2026-08-26) the inherited ACL granted Modify to a local group that was neither the user nor the
-  administrators — see [BENCH_CHECK.md](BENCH_CHECK.md) — so on Windows, treat the token as
-  readable by anyone the profile directory lets in. That fact still stands; closing it means an
-  explicit owner-only DACL through `SetNamedSecurityInfoW` with `PROTECTED_DACL_SECURITY_INFORMATION`,
-  then reading the DACL back and reporting `OwnerOnly` only if it matches — the discipline the Unix
-  path already uses. Not done yet: `discovery::restrict_file` is still a no-op on Windows.
-  **Corrected 2026-08-27:** this paragraph used to go on to say that `Permissions::is_as_expected`
-  returned `true` for `InheritedFromProfile` and so `Integrations > Local API` showed no warning and
-  a sentence naming trustees nothing had read — true when written, and fixed by Task 14, which is
-  before this correction. The desktop layer now has its own `DiscoveryPermissions::is_confirmed()`,
-  which — unlike `kw_local_api::Permissions::is_as_expected()`, which still returns `true` for
-  `InheritedFromProfile` and is no longer read by anything user-facing — treats only `OwnerOnly` as
-  confirmed. Both the startup log warning and the two settings screens (`Integrations > Local API`
-  and `Integrations > CLI`) go through that one decision and now warn on `InheritedFromProfile`,
-  rendering "Not independently restricted" with a caveat naming administrators by name. The
-  unmet-requirement fact above is what that warning is about; only the claim that the application
-  hid it was wrong, and only that claim has been removed here.
+- **Unix:** `0600` on the file, `0700` on the containing directory, both read back.
+- **Windows:** an explicit DACL granting **the process's token user**, `NT AUTHORITY\SYSTEM` and
+  `BUILTIN\Administrators`, and nobody else, applied with
+  `PROTECTED_DACL_SECURITY_INFORMATION` so the profile directory's entries stop being inherited,
+  and then read back entry by entry through `GetNamedSecurityInfoW`. The containing directory gets
+  the same three, inheritable.
+
+  **Not owner-only, on purpose.** An administrator can take ownership of any object and re-grant
+  themselves anything, so a DACL that excludes them is theatre that breaks backup and repair
+  tooling for nothing. What a confirmed Windows result claims is narrower and true: the
+  *unexpected* trustees are gone and the inheritance that handed them down is off, both verified.
+  The settings label says an administrator can still read the token, because they can.
+
+  The grant is derived from `OpenProcessToken`/`TokenUser` rather than from the object's owner. On
+  a machine whose policy makes `BUILTIN\Administrators` the owner of what an elevated process
+  creates, an owner-derived DACL would omit the user and a later non-elevated run could not read
+  its own file. Ownership is never taken and the SACL is never touched.
+
+  **Measured on the machine that found the defect (2026-08-31).** Before, and unchanged across
+  three measurements since 2026-08-26, `~/.knegiswhisper/local-api.json` inherited Modify for two
+  trustees that were neither the user nor administrators — see
+  [BENCH_CHECK.md](BENCH_CHECK.md) finding 2 for the `icacls` output. After a real
+  `discovery::write` into a directory under `%USERPROFILE%`:
+
+  ```
+  C:\Users\AxelKarlsson\.knegiswhisper-acltest2
+      AzureAD\AxelKarlsson:(OI)(CI)(F)
+      NT AUTHORITY\SYSTEM:(OI)(CI)(F)
+      BUILTIN\Administrators:(OI)(CI)(F)
+
+  C:\Users\AxelKarlsson\.knegiswhisper-acltest2\local-api.json
+      AzureAD\AxelKarlsson:(F)
+      NT AUTHORITY\SYSTEM:(F)
+      BUILTIN\Administrators:(F)
+  ```
+
+  Three trustees, no `(I)` on any of them, on both. The application can still read the file it
+  wrote.
+
+Two orderings in `discovery::write` are load-bearing. The **directory is restricted before the
+temporary file is created**, so the temporary inherits a protected list and the token's bytes never
+touch disk under the loose one; the empty temporary is then restricted in its own right before the
+token is written into it, which closes the same window on Unix, where a `0700` directory does not
+stop a `0644` file inside it. And the **read-back happens after the rename**, against the path the
+caller is told about — verifying the temporary described a path that no longer existed by the time
+the verdict was returned. Measured: a rename within one directory keeps the file object and its
+whole security descriptor, `SE_DACL_PROTECTED` included.
+
+The directory's verdict gates the file's (`file_acl::combine`). A perfectly restricted file inside
+a directory another user may delete children of can be deleted and replaced, and a client then
+reads an attacker's port and token — for this file, worse than being readable.
+
+**The verdict is a snapshot taken when the API starts, not a live reading.** `local_api_status`
+reports what the write measured; nothing re-checks the DACL while the application runs. Something
+with write access to the parent can add a trustee afterwards and the screen will not say so until
+the next start. Recorded as a known limitation rather than fixed here.
+
+**Corrected 2026-08-27:** this section used to go on to say that `Permissions::is_as_expected`
+returned `true` for `InheritedFromProfile` and so `Integrations > Local API` showed no warning and
+a sentence naming trustees nothing had read — true when written, and fixed by Task 14. That helper
+has since been deleted outright; `DiscoveryPermissions::is_confirmed()` is the one decision both
+the startup warning and both settings screens go through. It draws the line at **checked versus
+unchecked**, not strict versus lax: the Windows state passes because the list was read back, and
+`InheritedFromProfile` — now reachable only on a target that is neither Unix nor Windows — does not,
+because nothing looked.
 
 The MCP server talks to the desktop application through this authenticated local API. Streamable
 HTTP is available but disabled by default; stdio is the normal transport. Destructive MCP tools
