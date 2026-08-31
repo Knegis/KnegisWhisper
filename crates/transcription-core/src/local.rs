@@ -327,7 +327,8 @@ impl LocalTranscriber for WhisperServer {
 fn describe_send_failure(port: u16, err: &reqwest::Error) -> String {
     if err.is_connect() {
         return format!(
-            "nothing is listening on 127.0.0.1:{port}. The local model server is not running --              start it again under Settings > Transcription > Local."
+            "nothing is listening on 127.0.0.1:{port}. The local model server is not \
+             running -- start it again under Settings > Transcription > Local."
         );
     }
     if err.is_timeout() {

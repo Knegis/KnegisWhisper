@@ -167,6 +167,11 @@ pub fn run() -> anyhow::Result<()> {
 
             let shared = local.shared();
 
+            // How dictation and media import start the server again when it has
+            // gone out from under them. Built here because it needs both the
+            // runtime and the database, and neither path holds the other.
+            let revive = local_model::revive_handle(&local, &db);
+
             // The other local engine. No process and no port -- a selection and
             // a one-shot CLI -- so there is nothing to reap and nothing to
             // start, only a remembered choice to read back. See `local_asr`'s
@@ -190,6 +195,7 @@ pub fn run() -> anyhow::Result<()> {
                     std::sync::Arc::clone(&shared.port),
                     std::sync::Arc::clone(&shared.model),
                     asr.selection(),
+                    std::sync::Arc::clone(&revive),
                     db.clone(),
                 )
                 .map_err(|e| anyhow::anyhow!(e))
@@ -225,6 +231,7 @@ pub fn run() -> anyhow::Result<()> {
                     transcription_port: shared.port,
                     transcription_model: shared.model,
                     transcription_sherpa: sherpa_selection,
+                    transcription_revive: revive,
                     generation: llm_endpoint,
                 },
                 // Off until `reasoning::apply_at_startup` fills it, and off

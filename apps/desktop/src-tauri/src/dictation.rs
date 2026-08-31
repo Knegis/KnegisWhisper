@@ -28,6 +28,8 @@ use kw_app_core::dictation::{
 use kw_network_policy::NetworkPolicy;
 use kw_platform::insertion::{SystemClipboard, TextInserter};
 use kw_security::CredentialStore;
+use kw_sidecar::process::Health as _;
+use kw_sidecar::HttpHealth;
 use kw_storage::{transcriptions, Db};
 use kw_transcription_core::local::{LocalTranscriber, WhisperServer};
 use kw_transcription_core::{Executor, Transport};
@@ -197,6 +199,12 @@ pub struct RouteTranscriber {
     local_port: LocalPort,
     local_model: Arc<RwLock<Option<String>>>,
     local_sherpa: crate::local_asr::Selection,
+    /// How to start the whisper server again when the recorded one has gone.
+    ///
+    /// Not `Option`: a build that forgets to supply it is a build where a lost
+    /// server silently stays lost, which is the defect this field exists to fix.
+    /// Making it required means forgetting is a compile error instead.
+    revive: Arc<dyn crate::local_model::Revive>,
 }
 
 impl std::fmt::Debug for RouteTranscriber {
@@ -213,6 +221,7 @@ impl RouteTranscriber {
         local_port: LocalPort,
         local_model: Arc<RwLock<Option<String>>>,
         local_sherpa: crate::local_asr::Selection,
+        revive: Arc<dyn crate::local_model::Revive>,
     ) -> Self {
         Self {
             policy,
@@ -220,13 +229,79 @@ impl RouteTranscriber {
             local_port,
             local_model,
             local_sherpa,
+            revive,
         }
     }
 
-    fn local_server(&self) -> Option<WhisperServer> {
-        let port = self.local_port.read().ok().and_then(|held| *held)?;
+    /// The whisper server to send audio to, starting a new one if the
+    /// recorded server has gone.
+    ///
+    /// Called only for [`Transport::Local`]. The health check is a loopback
+    /// round trip and the recovery starts a process, and someone dictating to a
+    /// cloud provider should pay for neither.
+    async fn whisper_server(&self) -> Result<Option<WhisperServer>, String> {
+        let recorded = self.local_port.read().ok().and_then(|held| *held);
+        let answering = match recorded {
+            Some(port) => {
+                HttpHealth::new(
+                    self.policy.clone(),
+                    kw_transcription_core::local::HEALTH_PATH,
+                )
+                .is_ready(port)
+                .await
+            }
+            None => false,
+        };
+
+        let port = match classify(recorded, answering) {
+            Recorded::Absent => return Ok(None),
+            Recorded::Live(port) => port,
+            Recorded::Gone(dead) => {
+                tracing::warn!(
+                    port = dead,
+                    "the local model server has gone; starting it again"
+                );
+                let port = self.revive.revive().await.map_err(|err| {
+                    format!(
+                        "the local model server on 127.0.0.1:{dead} has gone and could not be \
+                         started again: {err}"
+                    )
+                })?;
+                tracing::info!(port, "the local model server was started again");
+                port
+            }
+        };
+
         let model = self.local_model.read().ok().and_then(|held| held.clone());
-        Some(WhisperServer::new(self.policy.clone(), port, model))
+        Ok(Some(WhisperServer::new(self.policy.clone(), port, model)))
+    }
+}
+
+/// What a recorded whisper port turned out to be.
+///
+/// Three states rather than `Option<u16>`, because "no server was ever started"
+/// and "a server was started and has since gone" call for different answers and
+/// used to get the same one: the recorded number, handed to a transcription that
+/// then failed against a port with nothing behind it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Recorded {
+    /// Nothing is recorded. No local server has run this session.
+    Absent,
+    /// Something answered on the recorded port.
+    Live(u16),
+    /// A port is recorded and nothing answers: the child has gone.
+    Gone(u16),
+}
+
+/// Read a recorded port and a health-check result as one of three states.
+///
+/// Separated from the round trip that produces `answering` so the reading can be
+/// tested without a server, which is the half that was wrong.
+const fn classify(recorded: Option<u16>, answering: bool) -> Recorded {
+    match recorded {
+        None => Recorded::Absent,
+        Some(port) if answering => Recorded::Live(port),
+        Some(port) => Recorded::Gone(port),
     }
 }
 
@@ -257,11 +332,27 @@ impl Transcriber for RouteTranscriber {
     ) -> Result<Transcribed, DictationError> {
         let executor = Executor::new(&self.policy, self.credentials.as_ref());
 
-        // Attached only when an engine is actually available. Without this the
+        // Resolved only for a local route. The executor consults the local
+        // engine in its `Transport::Local` arm and nowhere else, so building one
+        // for a dictation bound for a provider bought nothing and cost two
+        // things: a loopback health check on every cloud dictation, and — worse
+        // — a *cloud* dictation failing outright when a sherpa model was
+        // selected but could not be built, because that error was raised before
+        // anything looked at the transport.
+        //
+        // Attached only when an engine is actually available. Without that the
         // executor answers `LocalNotAvailable`, which is the honest state — a
         // local route with no server is not something to paper over.
-        let local = local_engine(&self.local_sherpa, self.local_server())
-            .map_err(DictationError::Transcription)?;
+        let local = match transport {
+            Transport::Local => {
+                let whisper = self
+                    .whisper_server()
+                    .await
+                    .map_err(DictationError::Transcription)?;
+                local_engine(&self.local_sherpa, whisper).map_err(DictationError::Transcription)?
+            }
+            _ => None,
+        };
         let executor = match &local {
             Some(engine) => executor.with_local(engine.as_ref()),
             None => executor,
@@ -543,6 +634,9 @@ pub struct LocalTargets {
     /// Which sherpa model is selected, if any. Outranks the whisper server --
     /// see `local_asr`'s module doc on why there is only ever one local engine.
     pub transcription_sherpa: crate::local_asr::Selection,
+    /// How to start the whisper server again if it has gone. See
+    /// `local_model::Revive`.
+    pub transcription_revive: Arc<dyn crate::local_model::Revive>,
     /// Where the llama server is listening, if it is.
     pub generation: crate::local_llm::LocalEndpoint,
 }
@@ -585,6 +679,7 @@ impl DictationRuntime {
             transcription_port: local_port,
             transcription_model: local_model,
             transcription_sherpa: local_sherpa,
+            transcription_revive: local_revive,
             generation: local_llm,
         } = local;
 
@@ -599,6 +694,7 @@ impl DictationRuntime {
                 local_port,
                 local_model,
                 local_sherpa,
+                local_revive,
             )),
             Arc::new(ModelCleanup::new(
                 policy,
@@ -951,6 +1047,33 @@ pub fn on_hotkey(app: &AppHandle) {
 )]
 mod tests {
     use super::*;
+
+    /* ------------------------------------------- the recorded local port */
+
+    #[test]
+    fn no_recorded_port_means_no_local_engine() {
+        // The state a user who dictates to a cloud provider is in for the whole
+        // session. Nothing to check and nothing to start.
+        assert_eq!(classify(None, false), Recorded::Absent);
+        // `answering` cannot be true without a port, but if a future caller
+        // manages it the answer is still "there is no server".
+        assert_eq!(classify(None, true), Recorded::Absent);
+    }
+
+    #[test]
+    fn a_recorded_port_that_answers_is_used_as_it_stands() {
+        assert_eq!(classify(Some(8178), true), Recorded::Live(8178));
+    }
+
+    #[test]
+    fn a_recorded_port_that_answers_nothing_is_gone_not_live() {
+        // The defect this file's `whisper_server` exists to fix, in one line.
+        // On 2026-08-28 the application held 8178 with no listener and no
+        // process behind it, and every dictation was sent there anyway --
+        // `start_model` had learnt to notice this and the dictation path had
+        // not. The port travels with the state so the message can name it.
+        assert_eq!(classify(Some(8178), false), Recorded::Gone(8178));
+    }
 
     #[tokio::test]
     async fn history_is_on_unless_switched_off() {

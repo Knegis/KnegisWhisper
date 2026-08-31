@@ -407,7 +407,7 @@ Same machine and build. Four items were outstanding; all four were exercised.
 
 | What | Evidence |
 | --- | --- |
-| **A dead local server now repairs itself** | The four failing dictations were a port held for a process that had gone. After the fix, *Use for dictation* started a real server and dictation worked |
+| **A dead local server repairs itself *when the button is pressed*** | The four failing dictations were a port held for a process that had gone. After the fix, *Use for dictation* started a real server and dictation worked. The link exercised is the button, and only the button: `start_model` learnt to health-check the recorded port and nothing else did, so dictating and importing still failed against a dead port until 2026-08-31 — see KNEG-96 |
 | **The chat connection test passes** | `openai/chat pass — replied "OK"`, with the same key that produced `400 Unsupported parameter: 'max_tokens'` before the probe was taught to ask `params::shape_for` |
 | **Dictation cleanup genuinely changes the text** | Proven with Parakeet, below. The first attempt could not tell, and the reason is worth keeping |
 | **The Parakeet selector works end to end** | Installed the CLI and `parakeet-unified-en-0.6b` through the screen, selected it, and dictated through it. The runtime had been proven by a test; the screen, the commands and the engine switch had never been used by anyone until now |
@@ -542,10 +542,18 @@ dead provider stops the recording, falls back immediately, or carries on with a 
 
 1. **`Settings > Meetings`, re-read** — still carried over from an earlier paste. AssemblyAI and
    Corti should now name the missing key rather than reading "ready to use".
-2. **Whether a long import is transcribed in full.** The Swedish import produced one segment at
+2. **Whether dictation and import now recover from a dead local server on their own.** Written on
+   2026-08-31 and covered by tests that reach the decision but not the round trip: kill
+   `whisper-server` from Task Manager while the app holds its port, then dictate. Expected: one
+   `the local model server has gone; starting it again`, one `the local model server was started
+   again`, and a transcript — not a failure. Then repeat with a media import, which is the case
+   that matters, because a recording being imported usually cannot be made again. The remaining
+   half of KNEG-96 — *why* the child exits unattended — is untouched by that fix and needs the
+   first two log lines after a restart to tell the two candidates apart.
+3. **Whether a long import is transcribed in full.** The Swedish import produced one segment at
    `00:00:00`; `media.rs` chunks nothing.
-3. **`parakeet-tdt-0.6b-v3`** — offered on the same measured layout, still never downloaded.
-4. **Meeting detection firing on a real call.**
+4. **`parakeet-tdt-0.6b-v3`** — offered on the same measured layout, still never downloaded.
+5. **Meeting detection firing on a real call.**
 
 ---
 
