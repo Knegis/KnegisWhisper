@@ -817,7 +817,11 @@ wrong with it and watch the indicator change while the timer keeps counting.
    with the surprise — a dead port costs the **full two-second timeout**, not a fast refusal.
    **Still needs a person:** the Tauri leg. Kill `whisper-server` from Task Manager while the app
    holds its port, then dictate, and confirm the two log lines appear and a transcript arrives. The
-   remaining half of KNEG-96 — *why* the child exits unattended — is untouched by that fix.
+   remaining half of KNEG-96 — *why* the child exits unattended — is untouched by that fix, and
+   is not answerable without another occurrence. What changed on 2026-08-31 is that the next one
+   will explain itself: a watcher notices the child going away without being asked and logs the exit
+   status, how long it ran, and the tail of its diagnostics. Between "died during startup" and "we
+   killed it" there had been no observer at all.
 3. **Whether a long import is transcribed in full — answered, verified end to end, and the
    diagnosis here was wrong.** The Swedish import *was* transcribed in full: 39,142 characters for
    3,401 seconds. It produced one segment at `00:00:00` because the server was started with

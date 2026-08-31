@@ -147,12 +147,16 @@ maintained in place rather than appended to, because its purpose is to be curren
 > application start, `dacl_probe` reports `SE_DACL_PROTECTED` set and exactly three access entries,
 > none inherited. `Jobbdator\CodexSandboxUsers` is gone from the real token file.
 >
-> **Three smaller items recorded rather than chased**, each detailed in its own entry below: a
-> `kw-storage` test that failed once and passed on re-run during Task 8 (every other full-suite run
-> this session was clean, so intermittent rather than new); `apps/desktop/src-tauri/src/meeting.rs`
-> at ~1600+ lines, noted repeatedly and deliberately not restructured; and `SherpaModel` in the
-> provider registry carrying no SHA-256 for its model archives, unlike `WhisperModel` and unlike the
-> sidecar binaries in `config/sidecars.json`.
+> **Three smaller items recorded rather than chased.** The `kw-storage` test that failed once and
+> passed on re-run during Task 8 was **found on 2026-08-31**:
+> `import::tests::no_plaintext_token_appears_anywhere_in_the_target_file`, twice in four hundred
+> runs and only under eight threads. The assertion that fired was the positive control — meaning
+> the two "no plaintext token here" assertions beside it had just passed against a database file
+> whose rows were still in the write-ahead log. Fixed by reading every file the database is made
+> of, which is also the stronger claim. See the KNEG-88 entry. The remaining two:
+> `apps/desktop/src-tauri/src/meeting.rs` at ~1600+ lines, noted repeatedly and deliberately not
+> restructured; and `SherpaModel` in the provider registry carrying no SHA-256 for its model
+> archives, unlike `WhisperModel` and unlike the sidecar binaries in `config/sidecars.json`.
 
 Maintained in place. If something here becomes false, edit it rather than adding a note.
 
@@ -271,6 +275,137 @@ Unchanged from the Phases 1–4 entry, restated here so they are not buried:
   porting matrix. Upstream pins both by commit and verifies neither.
 - ~~**`nircmd`**~~ — **dropped**, as leaned towards: third-tier Windows paste fallback only, and
   `SendInput` works.
+
+---
+
+## 2026-08-31 (KNEG-96) — between "died during startup" and "we killed it" there was no observer at all
+
+The local whisper server went away twice in one afternoon on 2026-08-28, unused, and the record
+could not say whether it had crashed, been killed, or exited cleanly. `start` reports a child that
+dies *during* startup, and `stop` ends one deliberately. Between those two, nothing was watching:
+the only trace of a death was a later connection refused with no explanation attached to it.
+
+This does not reproduce the exit. It makes the next one explain itself: a watcher task polls the
+child every five seconds and, when it finds it gone without `stop` having been called, logs the
+exit status, how long it had been running, and the tail of its diagnostics — then clears the PID
+record.
+
+### It deliberately does not restart anything
+
+The transcription and import paths already health-check the recorded port and revive the remembered
+model themselves (`2fe5825`). A second thing that restarted servers would race them. What was
+missing was never recovery; it was an explanation, and conflating the two would have produced a
+supervisor nobody asked for.
+
+### stdout is still thrown away, and that is the reason the tail is safe to log
+
+`start` sends stdout to `Stdio::null()` precisely because it can carry recognised text. stderr
+carries the loader and model diagnostics — which is exactly what a post-mortem needs, and is
+already shown to the user by `ProcessError::ExitedDuringStartup`. The distinction was already made
+in the code; this relies on it rather than re-deciding it.
+
+### Two ways to get this wrong, both closed
+
+The child handle moved behind an `Arc<tokio::sync::Mutex<..>>`, because `stop` needs it too and a
+watcher parked in `wait()` would hold it for the life of the process. Polling instead, at five
+seconds: this is a post-mortem, not a supervisor, and nothing acts on the answer.
+
+And `stop` sets a flag **before** it kills. Without it, every deliberate model switch would log an
+unexplained death — which is precisely the noise that makes a real one easy to scroll past. The flag
+is read again on the far side of `try_wait`, because `stop` can set it while the lock is held.
+
+### What a test can see
+
+A log line is not assertable, so the tests watch the PID record instead: same code path, same
+trigger, and a record naming a dead process is independently the thing that makes a reused process
+id look like a live server. Three mutations — removing the watcher, making it notice and say
+nothing, and dropping the flag from `stop` — each caught by the test written for it.
+
+### Still open underneath it
+
+**Why the server exits.** That needs the next occurrence, and until one happens the two candidates
+this issue names are still both live. What has changed is that the next occurrence will say which.
+
+---
+
+## 2026-08-31 (KNEG-88) — the flake was the control, and the control was the only honest thing in the test
+
+One line in the carry-forward: *"a `kw-storage` test failed once and passed on re-run"*. The report
+did not say **which** test, which is half of why answering it needed a session rather than a minute.
+
+`tools/flake-hunt/hunt.mjs`, written for this and committed: build the test binaries, ask **cargo**
+which they are, run a control, then run them repeatedly with the thread count cycling through 1, 2,
+4, 8 and 16. Four hundred rounds. It named the test:
+
+```
+kw_storage-... :: import::tests::no_plaintext_token_appears_anywhere_in_the_target_file
+  failed 2 time(s), at --test-threads=8
+```
+
+Two in four hundred, and only ever under eight threads — which is to say, only ever on a machine
+busy enough to matter.
+
+### Which assertion, and why that is the whole finding
+
+Eighty more runs to catch the message. It was not either of the two security assertions. It was the
+**positive control**:
+
+```
+panicked at crates/storage/src/import.rs:1035: the slot reference should be there
+```
+
+The test greps the bytes of `kw.db` for a refresh token and an access token and asserts neither is
+there, then asserts a slot reference *is*. When the control fired, the main database file contained
+**nothing** — the import had committed, `Db::close` had returned, and the rows were still in the
+write-ahead log. So both "no plaintext token here" assertions had just passed against an empty file.
+
+That is a false green in the exact place a false green is worst: a test whose whole purpose is to
+prove a credential did not reach disk. And the only reason it was visible at all is that somebody
+wrote the third assertion. **The flake was the control doing its job.**
+
+### The fix is also the stronger claim
+
+SQLite in WAL mode is three files, and a committed row can be in any of them. Greping only `kw.db`
+was never what the test's name says: a refresh token sitting in `kw.db-wal` is exactly as leaked as
+one in `kw.db`, and the old test would not have seen it. `every_database_file` reads the main file,
+the `-wal` and the `-shm`. The negatives get stronger and the control becomes deterministic in one
+change, because the row is now found wherever it actually is.
+
+### Not left resting on a 0.5% event
+
+A regression test that reproduces two runs in four hundred is not a regression test. Holding the
+database open forces the same state every time — nothing has closed, so nothing has checkpointed —
+and `a_row_that_is_only_in_the_wal_is_still_found` asserts the helper finds a row the main file does
+not have. Its first assertion is the *premise*: if SQLite ever checkpoints eagerly enough to put the
+row in the main file, the test says so rather than passing. Reverting the helper to the main file
+alone fails it every time.
+
+### `Db::close` was overstating itself
+
+Its comment read *"Called on shutdown so the WAL is checkpointed rather than left for the next
+launch to recover."* Measured: not always. SQLite checkpoints when the last connection closes and
+skips it if it cannot take the lock. Nothing in the application depends on it, because the WAL is
+recovered on the next open — but a test did, silently, and the comment now says which.
+
+### What the hunter's own control caught
+
+Its first version reported **100% failures with no output** under every thread count, including what
+should have been the control. Each binary path carried a trailing carriage return — the producer
+translated newlines, the consumer stripped only the line feed — so nothing was executed at all. A
+harness that fails everything is measuring itself; the same mistake in the other direction would
+have printed a clean result and been believed. The committed tool runs a control first and **refuses
+to report clean unless it passed**.
+
+And the detector has a control of its own: a deliberately unreliable test was planted in
+`crates/storage/src/settings.rs`, the hunter run against it, and it named the test and the thread
+counts it failed under — then removed. A flake hunter that has never caught a flake is a script
+that prints "clean".
+
+### The reporting gap, which was the fixable half of the original report
+
+The tool parses libtest's own `test <name> ... FAILED` lines and reports the name, the count and the
+thread counts. A non-zero exit with no named test — a crash, a binary that would not start — is
+reported as exactly that rather than counted as clean.
 
 ---
 
