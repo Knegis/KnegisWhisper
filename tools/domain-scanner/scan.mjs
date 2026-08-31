@@ -27,8 +27,18 @@ import { fileURLToPath } from "node:url";
 
 const DEFAULT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
-/** Directories never worth walking. `dist` is handled via builtAssetPaths. */
-const PRUNE = new Set([".git", "node_modules", "target", ".vite", "gen"]);
+/**
+ * Directories never worth walking. `dist` is handled via builtAssetPaths.
+ *
+ * `.claude` holds git worktrees, which are whole extra checkouts of this
+ * repository. Walking them scanned every file two or three times over and made
+ * the count depend on how many agents happened to be running -- 215 files on a
+ * fresh checkout, 288 with three worktrees present. Worse than the noise: a
+ * forbidden domain in somebody's in-progress branch would fail this gate in the
+ * main checkout, which is a confusing way to learn about it. They are excluded
+ * from git by `.git/info/exclude`; this excludes them from the walk.
+ */
+const PRUNE = new Set([".git", ".claude", "node_modules", "target", ".vite", "gen"]);
 
 /**
  * Convert a glob to a RegExp.
