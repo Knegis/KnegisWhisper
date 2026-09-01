@@ -459,10 +459,17 @@ export function keytermReviewLabel(
  * Told before the click rather than only after it: `validate` is checked
  * here, live, so the warning is visible while there is still time to type a
  * language in, not just as the text of the error `meeting_start` returns.
+ *
+ * It said "Set one below" until 2026-09-01, and this caveat renders *underneath*
+ * the Language field it is talking about, so it pointed the reader away from the
+ * control. Found the first time a provider with `language_detection: false` was
+ * actually selected by a person -- `corti-realtime` has had the flag since the
+ * client landed and nobody had ever reached the screen with it chosen.
  */
 export function languageRequiredWarning(review: ConfigReview): string | null {
   return review.languageRequired
-    ? "This provider cannot detect the language on its own. Set one below, or starting will be refused."
+    ? "This provider cannot detect the language on its own. Fill in the Language field above " +
+        '(for example "en"), or starting will be refused.'
     : null;
 }
 
