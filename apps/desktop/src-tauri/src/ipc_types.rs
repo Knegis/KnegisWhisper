@@ -179,8 +179,10 @@ fn render() -> String {
             crate::meeting::MeetingStatus,
             crate::meeting::MeetingOutcome,
             crate::meeting::Offer,
+            kw_platform::meeting_detect::CallSignal,
             kw_platform::meeting_detect::Detected,
             kw_platform::meeting_detect::Lists,
+            kw_platform::microphone::MicrophoneSupport,
         ],
         "notes" => [
             kw_notes_core::notes::Note,

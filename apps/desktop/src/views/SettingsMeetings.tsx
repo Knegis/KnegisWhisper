@@ -55,6 +55,8 @@ import {
   languageRequiredWarning,
   meetingOutcomeLabel,
   sourcesLabel,
+  microphoneDetail,
+  microphoneValue,
   systemAudioValue,
 } from "../lib/labels";
 import { useRefresh } from "../lib/useRefresh";
@@ -288,6 +290,18 @@ export function SettingsMeetings() {
               ? `${status.systemAudio.mechanism} — ${status.systemAudio.device}`
               : status.systemAudio.reason
           }
+        />
+        {/*
+          * Reported next to system audio because it is the same kind of fact
+          * and the same kind of trap: where this is anything but "Watching",
+          * every "not in a call" further down is an absence of evidence rather
+          * than evidence of absence, and the user is the only one who can tell
+          * that from the screen.
+          */}
+        <Row
+          label="Microphone activity"
+          value={microphoneValue(status.microphone)}
+          detail={microphoneDetail(status.microphone)}
         />
 
         {usable.length === 0 ? (

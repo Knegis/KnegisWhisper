@@ -36,7 +36,9 @@ import type {
   MediaImportSource,
   MeetingOutcome,
   MeetingState,
+  MicrophoneSupport,
   NonActivating,
+  Offer,
   RelocatedCredential,
   ShortcutHookStatus,
   Sources,
@@ -520,19 +522,90 @@ export function meetingOutcomeLabel(outcome: MeetingOutcome): string {
 }
 
 /**
- * What a detected meeting application means, and whether it can be offered.
+ * What a detected meeting application means, and how sure the detector is.
  *
- * The distinction is measured, not chosen. `meeting_detect_probe` found
- * `ms-teams.exe` running with no call in progress, because new Teams runs the
- * call inside its own process — so there is no separate signal to offer on, and
- * offering on "the client is open" would prompt on every launch for anyone whose
- * Teams starts with Windows. Saying so here is what keeps that a known limit
- * rather than a bug somebody has to work out.
+ * Every branch is measured, not chosen, and the two in-call branches are not
+ * equally strong. `CptHost.exe` cannot exist unless a Zoom call is running. A
+ * held microphone can also be Teams running its own audio test, or a call the
+ * user placed that nobody joined — so it says which one it saw, and a user
+ * looking at a wrong answer can tell which signal was wrong.
+ *
+ * The "not in a call" wording no longer promises that recording will never be
+ * offered. It was true for the whole of the three weeks Teams had no in-call
+ * signal at all; since 2026-09-01 it has one, and a sentence that outlived its
+ * measurement is the thing this project keeps finding in its own docs.
  */
 export function detectedLabel(d: Detected): string {
-  return d.inCall
-    ? `in a call — detected as ${d.evidence}`
-    : `open, but not detectably in a call, so recording is not offered for it — detected as ${d.evidence}`;
+  switch (d.signal) {
+    case "call-process":
+      return `in a call — ${d.evidence} only runs during one`;
+    case "microphone":
+      return `in a call — ${d.evidence} is using a microphone, which is also true of a test call`;
+    case "none":
+      return `open, and not using a microphone, so nothing here says a call is in progress — detected as ${d.evidence}`;
+  }
+}
+
+/**
+ * Why an offer window appeared, in the words it says out loud.
+ *
+ * The offer is the one place a wrong detection costs the user something: a
+ * window over their work, about a meeting they are not in. So it names the
+ * signal rather than asserting a meeting, and the microphone wording admits
+ * what it cannot rule out.
+ */
+export function offerReason(o: Offer): string {
+  switch (o.signal) {
+    case "call-process":
+      return `${o.evidence} is running, and it only runs during a call`;
+    case "microphone":
+      return `${o.name} is using your microphone — that is usually a call, but a test call looks the same`;
+    case "none":
+      // `consider` never offers on this, so reaching it means the backend
+      // offered something it said was not a call. Say so rather than inventing
+      // a reason that sounds plausible.
+      return `detected as ${o.evidence}, but nothing said a call was in progress`;
+  }
+}
+
+/**
+ * Whether microphone activity can be read at all, in three words.
+ *
+ * The question behind every "not in a call" above. Where this says anything but
+ * "Watching", that line is reporting a measurement nobody took.
+ */
+export function microphoneValue(m: MicrophoneSupport | null): string {
+  if (m === null) return "Not checked yet";
+  switch (m.state) {
+    case "available":
+      // Zero endpoints is not a failure and is not a working signal either: a
+      // machine with no microphone has nothing to watch, and every "not in a
+      // call" on the screen above is then an absence of evidence.
+      return m.endpoints === 0 ? "No microphone to watch" : "Watching";
+    case "failed":
+      return "Could not be read";
+    case "unsupported":
+      return "Not supported here";
+  }
+}
+
+/**
+ * The detail line under {@link microphoneValue}.
+ */
+export function microphoneDetail(m: MicrophoneSupport | null): string {
+  if (m === null) {
+    return "The first detection poll has not run yet.";
+  }
+  switch (m.state) {
+    case "available":
+      return m.endpoints === 0
+        ? `${m.mechanism} — but no capture device is active, so nothing can be seen holding one`
+        : `${m.mechanism} — ${m.endpoints} active capture device${m.endpoints === 1 ? "" : "s"}`;
+    case "failed":
+      return `${m.mechanism} — ${m.reason}`;
+    case "unsupported":
+      return m.reason;
+  }
 }
 
 /* ------------------------------------------------------------------ meetings */

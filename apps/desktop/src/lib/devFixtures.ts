@@ -576,18 +576,29 @@ let meetingStatus: MeetingStatus = {
   elapsedSeconds: 0,
   sources: null,
   systemAudio: DIAGNOSTICS.systemAudio,
+  // What this machine reported on 2026-09-01, so the harness shows the state a
+  // Windows user actually has rather than an invented one.
+  microphone: {
+    state: "available",
+    mechanism: "IAudioSessionManager2 over every active capture endpoint",
+    endpoints: 1,
+  },
   detected: [
+    // Teams open and idle: the case that was indistinguishable from a call
+    // until the microphone signal, and is now the one that must NOT offer.
     {
       provider: "meeting-detect:teams",
       name: "Microsoft Teams",
       evidence: "ms-teams.exe",
       inCall: false,
+      signal: "none",
     },
     {
       provider: "meeting-detect:zoom",
       name: "Zoom",
       evidence: "CptHost.exe",
       inCall: true,
+      signal: "call-process",
     },
   ],
   promptOnDetect: true,
@@ -1564,6 +1575,17 @@ const devConsole = {
       provider: "meeting-detect:zoom",
       name,
       evidence: "CptHost.exe",
+      signal: "call-process",
+    } satisfies Offer);
+  },
+  /** The other offer, and the one worth looking at: it appeared on the weaker
+   * signal, so the window has to say so rather than claiming a meeting. */
+  micOffer(name = "Microsoft Teams") {
+    void emit("meeting-offer", {
+      provider: "meeting-detect:teams",
+      name,
+      evidence: "ms-teams.exe",
+      signal: "microphone",
     } satisfies Offer);
   },
   clearOffer() {

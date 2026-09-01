@@ -37,7 +37,7 @@ import {
   type Offer,
   type Sources,
 } from "./lib/ipc";
-import { meetingIsLive } from "./lib/labels";
+import { meetingIsLive, offerReason } from "./lib/labels";
 
 /** Which provider a detected application should be recorded with. */
 const RECORD_WITH = "local";
@@ -140,9 +140,7 @@ export function MeetingNotification() {
         <span className="indicator" aria-hidden="true" />
         <span className="notify-body">
           <strong>{offer.name} meeting in progress</strong>
-          <span className="notify-detail">
-            {problem ?? `detected as ${offer.evidence}`}
-          </span>
+          <span className="notify-detail">{problem ?? offerReason(offer)}</span>
         </span>
         <button
           type="button"

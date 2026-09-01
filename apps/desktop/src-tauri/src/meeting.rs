@@ -73,7 +73,8 @@ use kw_meeting_core::{
 };
 use kw_network_policy::NetworkPolicy;
 use kw_overlay::CaptureExclusion;
-use kw_platform::meeting_detect::{self, Detected, Lists};
+use kw_platform::meeting_detect::{self, CallSignal, Detected, Lists};
+use kw_platform::microphone::MicrophoneSupport;
 use kw_storage::Db;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter as _, Manager as _, State};
@@ -244,6 +245,13 @@ pub struct MeetingStatus {
     /// What this platform can do about system audio, whether or not a meeting is
     /// running.
     pub system_audio: SystemAudioSupport,
+    /// Whether microphone activity can be read, from the last poll.
+    ///
+    /// `None` until the first poll has run. Reported rather than folded into
+    /// `detected`, because "Teams is open and not in a call" and "Teams is open
+    /// and nobody looked" are the same sentence with opposite meanings, and on
+    /// Linux and macOS it is always the second one.
+    pub microphone: Option<MicrophoneSupport>,
     /// Meeting applications seen running at the last poll.
     ///
     /// Everything found, not only what would prompt: the screen shows "Teams is
@@ -271,6 +279,14 @@ pub struct Offer {
     pub name: String,
     /// The process that gave it away, so the offer can say why it appeared.
     pub evidence: String,
+    /// Which signal fired, so the offer can say how sure it is.
+    ///
+    /// Never [`CallSignal::None`]: `consider` only offers on a call. Carried as
+    /// the enum rather than as a sentence because the wording belongs on the
+    /// screen, and because a microphone is the weaker of the two -- an offer
+    /// that appeared because Teams was running its own audio test should say
+    /// that is what it saw.
+    pub signal: CallSignal,
 }
 
 impl From<&Detected> for Offer {
@@ -279,6 +295,7 @@ impl From<&Detected> for Offer {
             provider: detected.provider.to_owned(),
             name: detected.name.to_owned(),
             evidence: detected.evidence.clone(),
+            signal: detected.signal,
         }
     }
 }
@@ -719,9 +736,11 @@ impl Watcher {
             detected.iter().map(|d| d.provider.to_owned()).collect();
         self.offered.retain(|provider| live.contains(provider));
 
-        // Only a meeting actually in progress. See the module documentation: new
-        // Teams has no in-call process, so prompting on "the client is open"
-        // would fire on every launch for most corporate machines.
+        // Only a meeting actually in progress. Prompting on "the client is open"
+        // would fire on every launch for most corporate machines -- and for
+        // Teams, which has no in-call process, it would fire from login until
+        // shutdown. What makes Teams offerable at all is the microphone signal
+        // measured on 2026-09-01; see `meeting_detect`'s module documentation.
         //
         // And the first one *not already offered*, not simply the first. Finding
         // the first in-call provider and then discarding it for being a repeat
@@ -729,7 +748,7 @@ impl Watcher {
         // all -- silently, which is the part that matters. A test caught it.
         let candidate = detected
             .iter()
-            .find(|d| d.in_call && !self.offered.contains(d.provider))?;
+            .find(|d| d.in_call() && !self.offered.contains(d.provider))?;
 
         self.offered.insert(candidate.provider.to_owned());
         Some(Offer::from(candidate))
@@ -756,6 +775,23 @@ impl Watcher {
     }
 }
 
+/// What the last detection poll saw.
+///
+/// A struct rather than the tuple this was, because it grew a third member and
+/// `held.2` is not a name.
+#[derive(Debug, Default)]
+struct WatchState {
+    /// Which providers have already been offered.
+    watcher: Watcher,
+    /// Everything running at the last poll, offerable or not.
+    detected: Vec<Detected>,
+    /// Whether microphone activity could be read at the last poll.
+    ///
+    /// `None` before the first one. Not defaulted to "unsupported": that would
+    /// be a measurement, and no poll has happened yet.
+    microphone: Option<MicrophoneSupport>,
+}
+
 /* -------------------------------------------------------------- the runtime */
 
 /// One meeting at a time, and everything it needs.
@@ -778,7 +814,7 @@ pub struct MeetingRuntime {
     /// could drift out of step with it. See [`announce_transcript_ended`].
     live: Arc<Mutex<Option<Live>>>,
     /// Detection state: what was last seen, and what has been offered.
-    watch: Mutex<(Watcher, Vec<Detected>)>,
+    watch: Mutex<WatchState>,
 }
 
 /// A meeting in progress.
@@ -1015,7 +1051,7 @@ impl MeetingRuntime {
             credentials,
             live: Arc::new(Mutex::new(None)),
             local,
-            watch: Mutex::new((Watcher::default(), Vec::new())),
+            watch: Mutex::new(WatchState::default()),
         }
     }
 
@@ -1038,16 +1074,20 @@ impl MeetingRuntime {
             .await
             .unwrap_or(PROMPT_BY_DEFAULT);
 
-        let detected = meeting_detect::detect(&meeting_detect::running(), &lists);
+        // Both readings from one process table, so the capture list and the
+        // process list are the same instant.
+        let survey = meeting_detect::survey();
+        let detected = meeting_detect::detect(&survey.running, &survey.capturing, &lists);
 
         let offer = {
             let mut held = self.watch.lock().await;
-            held.1 = detected.clone();
+            held.detected = detected.clone();
+            held.microphone = Some(survey.microphone);
             // `consider` runs whether or not prompting is on, so its
             // already-offered bookkeeping stays correct if the setting is turned
             // on mid-call -- otherwise switching it on would immediately prompt
             // for a meeting that started an hour ago.
-            let offer = held.0.consider(&detected);
+            let offer = held.watcher.consider(&detected);
             if prompt {
                 offer
             } else {
@@ -1340,7 +1380,7 @@ impl MeetingRuntime {
         crate::meeting_window::set_visible(&self.app, false);
         // Recording one Zoom call must not stop the next being offered, even if
         // Zoom never quit in between.
-        self.watch.lock().await.0.forget(&provider_id);
+        self.watch.lock().await.watcher.forget(&provider_id);
 
         if let Err(err) = self.app.emit(OUTCOME_EVENT, &outcome) {
             tracing::warn!(error = %err, "could not report the meeting outcome");
@@ -1411,7 +1451,7 @@ impl MeetingRuntime {
         live.pump.abort();
         self.emit_state(MeetingState::Idle);
         crate::meeting_window::set_visible(&self.app, false);
-        self.watch.lock().await.0.forget(&live.provider_id);
+        self.watch.lock().await.watcher.forget(&live.provider_id);
 
         if let Err(err) = self.app.emit(OUTCOME_EVENT, MeetingOutcome::Cancelled) {
             tracing::warn!(error = %err, "could not report the cancellation");
@@ -1423,7 +1463,10 @@ impl MeetingRuntime {
     pub async fn status(&self) -> MeetingStatus {
         let held = self.live.lock().await;
         let system_audio = kw_audio_core::system_audio::support();
-        let detected = self.watch.lock().await.1.clone();
+        let (detected, microphone) = {
+            let held = self.watch.lock().await;
+            (held.detected.clone(), held.microphone.clone())
+        };
         let prompt_on_detect =
             kw_storage::settings::get_or(self.db.pool(), PROMPT_KEY, PROMPT_BY_DEFAULT)
                 .await
@@ -1448,6 +1491,7 @@ impl MeetingRuntime {
                 elapsed_seconds: live.started.elapsed().as_secs_f64(),
                 sources: Some(live.sources.clone()),
                 system_audio,
+                microphone,
                 detected,
                 prompt_on_detect,
                 notification_excluded,
@@ -1459,6 +1503,7 @@ impl MeetingRuntime {
                 elapsed_seconds: 0.0,
                 sources: None,
                 system_audio,
+                microphone,
                 detected,
                 prompt_on_detect,
                 notification_excluded,
@@ -2776,12 +2821,38 @@ mod tests {
     }
 
     fn detected(provider: &'static str, in_call: bool) -> Detected {
-        Detected {
+        // `CallProcess` for the in-call cases because these tests are about the
+        // offer bookkeeping and not about which signal fired. The signal that
+        // gets Teams here at all is exercised in `kw_platform::meeting_detect`,
+        // against the real rules.
+        Detected::new(
             provider,
-            name: "Something",
-            evidence: format!("{provider}.exe"),
-            in_call,
-        }
+            "Something",
+            format!("{provider}.exe"),
+            if in_call {
+                CallSignal::CallProcess
+            } else {
+                CallSignal::None
+            },
+        )
+    }
+
+    #[test]
+    fn an_offer_carries_the_signal_that_produced_it() {
+        // The offer window says why it appeared, and "Teams is holding your
+        // microphone" and "Zoom started a call process" are different claims
+        // with different chances of being wrong. Losing the distinction between
+        // `Detected` and `Offer` would leave the window with nothing to say.
+        let mut watcher = Watcher::default();
+        let mic = Detected::new(
+            "teams",
+            "Microsoft Teams",
+            "ms-teams.exe".to_owned(),
+            CallSignal::Microphone,
+        );
+        let offer = watcher.consider(&[mic]).expect("a call is offered");
+        assert_eq!(offer.signal, CallSignal::Microphone);
+        assert_eq!(offer.evidence, "ms-teams.exe");
     }
 
     #[test]

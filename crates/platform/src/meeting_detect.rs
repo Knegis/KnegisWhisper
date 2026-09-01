@@ -125,16 +125,22 @@ pub struct Detected {
     /// application is open.
     ///
     /// The difference between "in a meeting" and "has Zoom installed", and the
-    /// reason a caller can choose to prompt only on the stronger signal. Always
-    /// [`CallSignal::means_call`] of [`Self::signal`]; never set directly.
-    pub in_call: bool,
+    /// reason a caller can choose to prompt only on the stronger signal.
+    ///
+    /// **Private, unlike every other field here**, and serialised all the same
+    /// so a screen can read `inCall` without knowing about signals. It is
+    /// [`CallSignal::means_call`] of [`Self::signal`] and nothing else, and the
+    /// only way to keep two serialised fields carrying one fact from drifting is
+    /// to make the second one impossible to set. Read it with [`Self::in_call`].
+    in_call: bool,
     /// Which signal made [`Self::in_call`] true, and how strong it is.
     pub signal: CallSignal,
 }
 
 impl Detected {
     /// The only constructor, so `in_call` is always the signal's own answer.
-    fn new(
+    #[must_use]
+    pub fn new(
         provider: &'static str,
         name: &'static str,
         evidence: String,
@@ -147,6 +153,12 @@ impl Detected {
             in_call: signal.means_call(),
             signal,
         }
+    }
+
+    /// Whether something says a call is in progress.
+    #[must_use]
+    pub const fn in_call(&self) -> bool {
+        self.in_call
     }
 }
 
@@ -503,11 +515,11 @@ mod tests {
         // Windows `Zoom.exe` runs whenever the client is open; `CptHost.exe`
         // exists only during a call.
         let open = detect(&processes(&["Zoom.exe"]), &quiet(), &none());
-        assert!(!open[0].in_call, "the client being open is not a call");
+        assert!(!open[0].in_call(), "the client being open is not a call");
 
         let calling = detect(&processes(&["Zoom.exe", "CptHost.exe"]), &quiet(), &none());
         assert_eq!(calling.len(), 1, "one entry per provider: {calling:?}");
-        assert!(calling[0].in_call, "the stronger evidence wins");
+        assert!(calling[0].in_call(), "the stronger evidence wins");
         assert_eq!(calling[0].evidence, "cpthost.exe");
     }
 
@@ -529,7 +541,7 @@ mod tests {
         assert_eq!(found[0].provider, GENERIC);
         assert_eq!(found[0].evidence, "mycompanyphone.exe");
         assert!(
-            !found[0].in_call,
+            !found[0].in_call(),
             "a name the user chose says the program runs, not that a call is happening"
         );
     }
@@ -653,7 +665,7 @@ mod tests {
     fn teams_is_in_a_call_when_it_holds_the_microphone_and_not_when_it_does_not() {
         let idle = detect(&processes(&["ms-teams.exe"]), &quiet(), &none());
         assert_eq!(idle.len(), 1);
-        assert!(!idle[0].in_call, "an open client is not a call");
+        assert!(!idle[0].in_call(), "an open client is not a call");
         assert_eq!(idle[0].signal, CallSignal::None);
 
         let calling = detect(
@@ -662,7 +674,7 @@ mod tests {
             &none(),
         );
         assert_eq!(calling.len(), 1);
-        assert!(calling[0].in_call, "holding the microphone is a call");
+        assert!(calling[0].in_call(), "holding the microphone is a call");
         assert_eq!(calling[0].signal, CallSignal::Microphone);
         assert_eq!(calling[0].evidence, "ms-teams.exe");
     }
@@ -756,14 +768,14 @@ mod tests {
             block: Vec::new(),
         };
         let idle = detect(&processes(&["mycompanyphone.exe"]), &quiet(), &lists);
-        assert!(!idle[0].in_call, "running is not calling");
+        assert!(!idle[0].in_call(), "running is not calling");
 
         let calling = detect(
             &processes(&["mycompanyphone.exe"]),
             &processes(&["mycompanyphone.exe"]),
             &lists,
         );
-        assert!(calling[0].in_call);
+        assert!(calling[0].in_call());
         assert_eq!(calling[0].signal, CallSignal::Microphone);
     }
 
@@ -799,7 +811,7 @@ mod tests {
         {
             for found in detect(&processes(&every), &capturing, &lists) {
                 assert_eq!(
-                    found.in_call,
+                    found.in_call(),
                     found.signal.means_call(),
                     "{found:?} disagrees with itself"
                 );
