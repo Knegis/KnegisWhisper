@@ -425,7 +425,8 @@ because modifier-only combinations do not work there.
 | --- | --- |
 | Windows modifier-only | **verified.** One `WH_KEYBOARD_LL` hook on one thread, in-process, not one child per key. `cargo run -p kw-platform --example keyhook_probe` installs it, injects two presses, and asserts it fires exactly twice. |
 | Windows right-side modifiers | **Built and reachable** since 2026-08-31 (KNEG-35). `RightControl+Super` and `RightControl+RightShift` both classify as `ModifierOnly` and go to the keyboard hook, which is the only mechanism that can see a side at all. The spellings come from one table, `keys::SIDED_MODIFIERS`, read by `Chord::parse` and by `hotkey::classify`, so the set each accepts cannot drift from the other. A side combined with an *ordinary* key (`RightControl+D`) is refused, because neither mechanism can take it — the register cannot see the side and the hook only matches modifiers — and the refusal names both ways out. **Never driven from the screen:** the hook path is measured by `keyhook_probe` and the classifier by unit tests, and nobody has typed one into `Dictation > Shortcuts` (KNEG-47). |
-| Windows mouse buttons, push-to-talk | Not built. Both need a second hook (`WH_MOUSE_LL`) or key-up routing, and neither has a consumer yet. |
+| Windows mouse buttons 4/5 | **Built and measured** since 2026-09-01 (KNEG-64). A second hook, `WH_MOUSE_LL`, on the same thread as the keyboard one, installed only when a button is actually bound — that hook sits in the path of every mouse *move* on the machine, so it is not carried for nothing. `Mouse4` and `Mouse5` classify as `Accelerator::MouseButton`, a third classification rather than a modifier-only chord with an odd spelling. `cargo run -p kw-platform --example mousehook_probe` measures both halves: the raw encoding (the button number is in `mouseData`'s **high** word — 1 for `XBUTTON1`, 2 for `XBUTTON2` — while `SendInput` takes the same numbers in the *low* word) and the shipped hook firing once per press and once per release for the right index, with mouse movement and a wheel notch as the control. **Never driven from a real mouse:** every press in the probe is injected, and nobody has pressed a physical side button (KNEG-47's mouse twin). |
+| Windows push-to-talk | **Built** since 2026-09-01 (KNEG-64), per action, and **off by default**. `hotkey.<action>.mode` is `toggle` or `hold`; the shipped value is `toggle` for all five and deliberately stays that way — holding is one of the candidate answers to KNEG-115, and shipping it as the default would settle that open question in passing. The hook path is measured (`keyhook_probe` reports two presses **and two releases** for two injected chords); the plugin path — push-to-talk on an ordinary accelerator like `Control+Shift+D` — routes `ShortcutState::Released` through the same decision and is **believed, not run**. |
 | macOS, Linux | Not built, and the reason is reported rather than the capability being silently absent: macOS needs a `CGEventTap` and the Accessibility permission that goes with it, and Wayland's global-shortcuts portal takes only chords the compositor can register. |
 
 **An accelerator being live is only half of a working hotkey.** Of the five actions
@@ -491,6 +492,66 @@ unverified — so not claimed on a screen.
 AltGr keystroke, and it does fire while reaching for `Ctrl+Win+Left`, because a two-modifier chord
 completes on the way to any longer chord that starts with the same two. That is general, affects the
 default, and is tracked separately (KNEG-115) rather than folded in here.
+
+### Mouse buttons: three of the five are refused, and that is the feature
+
+Only `Mouse4` and `Mouse5` — the two side buttons — can be bound. Left, right and middle are refused
+by name, with the reason on screen. The hook does not swallow the event, exactly as the keyboard
+hook does not, so binding the left button would start the action on **every click in every
+application** while the click still went through; an application that does that is indistinguishable
+from a broken mouse. The two side buttons are the only ones with no universal meaning to destroy.
+
+They are not *free*, either, and the settings screen says so rather than leaving it to be found:
+because the click is not consumed, `Mouse4` still means Back and `Mouse5` still means Forward in
+every browser on the machine. That sentence is why `Accelerator::MouseButton` is its own variant
+rather than being folded into `ModifierOnly` — a hooked chord costs nothing elsewhere, and a hooked
+mouse button costs whatever that button already did.
+
+A mouse button cannot be combined with a modifier. `Control+Mouse4` is refused, and the refusal says
+that no mechanism could hold it rather than implying a different spelling would: the shortcut
+register cannot see a mouse button at all, and the hook's chord matcher only ever matches modifier
+keys.
+
+### Push-to-talk makes "insufficient speech" a routine outcome, not a rare one
+
+This is the honest consequence and it belongs here rather than in a user's discovery. Under a
+toggle, a recording ends when the user presses again, so it is almost always long enough to hold
+speech. Under a hold it ends when the key comes up — and **a hold shorter than a syllable produces a
+recording shorter than a syllable.** The audio gate then refuses to send it, correctly, and the
+outcome reads *"Nothing was sent: insufficient speech."* Every mistimed tap, every accidental
+prefix, every "I let go too early" ends that way. Someone who reads that line as a fault will go
+looking for a fault that is not there.
+
+It is also, for the same reason, part of why push-to-talk is a candidate answer to KNEG-115: an
+accidental `Control+Super` on the way into `Ctrl+Win+Left` brackets a few hundred milliseconds
+rather than bracketing everything the user does before the next accidental press. A toggle turns
+that keystroke into a recording of the interval, transcribed and pasted; a hold turns it into an
+empty recording that is discarded. **That trade is not made for anyone here.** The mode exists, its
+default is unchanged, and KNEG-115 stays open.
+
+The release edge is the whole of the mechanism: `keys::ChordWatcher::key_up` returns a `Fired` now
+instead of `()`, and `shortcuts::act` is the single pure function that decides what a press or a
+release means given the mode. `DictationRuntime::toggle` is unchanged — in `Hold` a press finds the
+session idle and starts it, and a release finds it recording and finishes it, which is what `toggle`
+already did.
+
+One thing worth knowing about the implementation, because it is the kind of bug that only shows up
+under a short hold: the press and the release are handled by **one spawned task**, not two. `toggle`
+decides by reading the session state, and a press only sets `Recording` after the microphone is
+actually open; two independently spawned tasks have no order between them, so a release arriving
+during that window would find `Idle` and either leave the microphone open with nothing to close it
+or start a second recording. The press therefore starts, waits on a per-press channel for the key to
+come up, and finishes. That is reasoned rather than measured — the window exists and the design
+removes it.
+
+Two ways the release can fail to arrive, and they are handled differently. **Re-registering the
+hotkeys** — which happens on every settings change — tears down the hook that was watching the key,
+so `Hooks::install` ends any hold in progress before dropping it; the alternative is somebody who
+changed a setting mid-hold being left recording with nothing to stop them. A **lost key-up** (a
+locked session) is not detectable, so the recording runs to the maximum-length cap rather than for
+ever, and `ChordWatcher::reset` deliberately does **not** synthesise a release: a watcher that has
+lost track of the keyboard cannot also claim the key came up, and inventing one would stop a
+dictation on a key the user is still holding.
 
 Push-to-talk on Linux needs read access to `/dev/input`; without it the app reports the
 limitation and falls back to toggle mode rather than silently failing.
@@ -595,11 +656,54 @@ see **What the transducer reports** below. `ys_log_probs` is still unread
 (nothing here reports confidence, and a threshold nobody measured would be
 worse than silence) and `durations` and `words` come back empty.
 
-There is **no persistent server**: `sherpa-onnx-offline` is a one-shot CLI
-that reads one WAV path and exits, unlike `whisper-server`'s HTTP endpoint on
-a port. `SherpaOffline::transcribe` writes the audio to a temp file and spawns
+There is **no persistent server for the offline CLI**: `sherpa-onnx-offline`
+reads one WAV path and exits, unlike `whisper-server`'s HTTP endpoint on a
+port. `SherpaOffline::transcribe` writes the audio to a temp file and spawns
 a fresh child per request rather than holding a `port` the way `WhisperServer`
 does.
+
+### The streaming server, and a protocol that had to be measured
+
+`sherpa-onnx-online-websocket-server` — a different binary out of the same
+archive, already extracted beside the CLI — *is* a persistent server, and since
+2026-09-01 it is the runtime behind the `local-streaming` meeting provider.
+It is not an HTTP endpoint, so there is no `/health` to probe: readiness is a
+real WebSocket handshake, because a bare TCP connect answers "something is
+listening" and a half-initialised server answers that too.
+
+**The wire format is undocumented and one documented fact about it is wrong.**
+`crates/meeting-core/examples/sherpa_ws_probe.rs` measured both directions
+against the real binaries, with the reference client reproducing the model's
+own `test_wavs/trans.txt` first as the control:
+
+| | measured |
+| --- | --- |
+| sample format | **`f32` little-endian** |
+| frame | BINARY, 8000 samples, then a short tail |
+| client end marker | TEXT `Done` |
+| server end marker | TEXT `Done!`, and it never closes the socket |
+| transcript `text` | **cumulative** within a segment — replace, never append |
+| a malformed frame | **no reply at all** |
+
+`sherpa-onnx-online-websocket-client --help` says *"16-bit samples"*. As `f32`
+the values are speech inside ±1; as `i16` they are noise. A client written
+from the documentation would connect, send, and transcribe nothing.
+
+The last row decides how faults are reported. There is **no error frame**, so
+`kw_meeting_core::fault::FaultKind::Reported` is unreachable for this provider
+and a client claiming to surface "what the provider said was wrong" would be
+describing a channel that does not exist. That is the inverse of the four
+cloud clients, which is why it was measured rather than assumed.
+
+**Verified on 2026-09-01:** a real meeting was recorded through it in the
+application window and the words arrived **as they were spoken** — which is the
+whole difference from the windowed provider beside it, and the reason this one
+is allowed to use the word "streaming".
+
+**What that run did not cover:** *Stop and transcribe*, and the note it saves.
+`meeting.rs`'s `keep` runs a whole-file pass rather than keeping the live
+partials, so words appearing on screen says nothing about what ends up in the
+note.
 
 **A real bug this measurement caught.** `config/provider-registry.json`'s
 `sizeMb` for a sherpa model (631 for Parakeet Unified EN 0.6B) is **the

@@ -37,6 +37,7 @@ const enterpriseIds = registry.enterprise.map((p) => p.id);
 const localLlmIds = registry.localLlm.map((p) => p.id);
 const whisperIds = registry.localAsr.whisper.map((m) => m.id);
 const sherpaIds = registry.localAsr.sherpa.map((m) => m.id);
+const diarizationIds = registry.localAsr.diarization.map((m) => m.id);
 
 // Credential slots come from the registry's own list, not from the provider
 // lists. Deriving them from providers gave nine; there are fifteen, because
@@ -247,9 +248,11 @@ export interface SherpaModel {
   readonly sizeMb: number | null;
   /**
    * The archive's pinned digest and exact compressed size, and a ceiling on
-   * what it may extract to. Null on the two Nemotron streaming models, which
-   * nothing can install: sherpa_models::install refuses an unpinned model
-   * rather than downloading something unauthenticated.
+   * what it may extract to. Nullable in the type because sherpa_models::install
+   * refuses an unpinned model rather than downloading something
+   * unauthenticated -- but as of 2026-09-01 all four carry all three: the two
+   * Nemotron streaming models were the last unpinned pair and both were
+   * measured that day.
    */
   readonly sha256: string | null;
   readonly expectedSizeBytes: number | null;
@@ -258,6 +261,33 @@ export interface SherpaModel {
   readonly supportedLanguages: readonly string[] | null;
   /** True for the Nemotron streaming runtimes; Parakeet models are batch. */
   readonly streaming: boolean;
+}
+
+/** Which half of a speaker-diarization run a model does. */
+export type DiarizationRole = "segmentation" | "embedding";
+
+/**
+ * One of the two models a speaker-diarization run needs.
+ *
+ * Not a SherpaModel despite coming from the same publisher: only one of the two
+ * is an archive, neither declares a language the way an ASR model does, and
+ * neither is streaming.
+ */
+export interface DiarizationModel {
+  readonly id: DiarizationModelId;
+  readonly name: string;
+  readonly downloadUrl: string;
+  /** Null for the embedding model, a single .onnx with nothing to extract. */
+  readonly extractDir: string | null;
+  /** Null for the segmentation model, which is an archive. Exactly one of
+   *  this and extractDir is set. */
+  readonly fileName: string | null;
+  readonly sizeMb: number | null;
+  readonly role: DiarizationRole | null;
+  readonly sha256: string | null;
+  readonly expectedSizeBytes: number | null;
+  /** Null for the embedding model: nothing extracts it. */
+  readonly maxExtractedSizeBytes: number | null;
 }
 
 export interface ProviderRegistry {
@@ -269,6 +299,7 @@ export interface ProviderRegistry {
   readonly localAsr: {
     readonly whisper: readonly WhisperModel[];
     readonly sherpa: readonly SherpaModel[];
+    readonly diarization: readonly DiarizationModel[];
   };
 }
 `;
@@ -357,6 +388,12 @@ const rendered = [
     "Local sherpa-onnx models (Parakeet batch, Nemotron streaming).",
   ),
   idUnion(
+    "DiarizationModelId",
+    "DIARIZATION_MODEL_IDS",
+    diarizationIds,
+    "The two models a speaker-diarization run needs, one of each role.",
+  ),
+  idUnion(
     "CredentialSlot",
     "CREDENTIAL_SLOTS",
     credentialSlots,
@@ -396,4 +433,7 @@ mkdirSync(dirname(OUT), { recursive: true });
 writeFileSync(OUT, rendered, "utf8");
 console.log(`wrote ${OUT}`);
 console.log(`  ${transcriptionIds.length} transcription, ${reasoningIds.length} reasoning, ${enterpriseIds.length} enterprise, ${localLlmIds.length} local LLM providers`);
-console.log(`  ${whisperIds.length} whisper, ${sherpaIds.length} sherpa models, ${credentialSlots.length} credential slots`);
+console.log(
+  `  ${whisperIds.length} whisper, ${sherpaIds.length} sherpa, ` +
+    `${diarizationIds.length} diarization models, ${credentialSlots.length} credential slots`
+);

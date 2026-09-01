@@ -554,9 +554,9 @@
       ],
       "backend": "crates/transcription-core",
       "ui": "Settings > Transcription > Local",
-      "reachable": false,
-      "runtime": "online",
-      "note": "Still unreachable, but not for the reason previously recorded: Task 17 pinned sherpa-onnx and gave install::extract a tar.bz2 reader, so the archive format is no longer the blocker, and Task 18 measured and implemented the offline CLI contract for the Parakeet family (kw_transcription_core::sherpa, proven end to end against both pinned Parakeet models). This model is not Parakeet, though: it is one of the two Nemotron models, which are streaming over sherpa-onnx-online-websocket-server's own bespoke WebSocket protocol rather than the sherpa-onnx-offline CLI that was measured. Nobody has written or tested a client for that protocol, and the offline path was not attempted against this model -- it is not offline-shaped, so there is no evidence either way about whether it would apply. Deferred with the reason stated, per docs/BUILD_PLAN.md chunk B4 and docs/PLATFORM_SUPPORT.md's 'Local ASR: sherpa-onnx' section."
+      "reachable": true,
+      "runtime": null,
+      "note": "Reachable since 2026-09-01. Both blockers this entry ever had are gone, and they were different blockers: first there was no client for sherpa's streaming WebSocket protocol (KNEG-84 wrote one, measured against the real server), and then there was no pin (KNEG-118 downloaded and hashed it here: sha256 c6bf5e0d..., 475,271,763 bytes, extracting to 14 files and 684,574,872 bytes). Downloaded twice by accident, and both runs produced the same digest -- an unplanned reproducibility control. Reachable the same way as its English sibling: install it under Settings > Transcription > Local and choose 'Use for meetings', which writes meetings.streamModel for meeting-stream:local-streaming to read. Driven on the real server the same day and it transcribed its own German sample (test_wavs/de.wav) over an identical protocol: cumulative text, is_final and is_eof both turning true on the last frame, then TEXT Done!. So 'the same wire as its English sibling' is measured rather than inferred, which matters because that inference was the only thing this entry rested on. It is the only multilingual option in the local streaming path: fifteen languages against the English model's one. What is NOT verified: a meeting through it. The probe drove the server with a WAV; nobody has recorded with it, and no language other than German has been tried."
     },
     "local-asr:nemotron-speech-streaming-en-0.6b": {
       "status": "ported-with-new-rust-implementation",
@@ -569,9 +569,9 @@
       ],
       "backend": "crates/transcription-core",
       "ui": "Settings > Transcription > Local",
-      "reachable": false,
-      "runtime": "online",
-      "note": "Still unreachable, but not for the reason previously recorded: Task 17 pinned sherpa-onnx and gave install::extract a tar.bz2 reader, so the archive format is no longer the blocker, and Task 18 measured and implemented the offline CLI contract for the Parakeet family (kw_transcription_core::sherpa, proven end to end against both pinned Parakeet models). This model is not Parakeet, though: it is one of the two Nemotron models, which are streaming over sherpa-onnx-online-websocket-server's own bespoke WebSocket protocol rather than the sherpa-onnx-offline CLI that was measured. Nobody has written or tested a client for that protocol, and the offline path was not attempted against this model -- it is not offline-shaped, so there is no evidence either way about whether it would apply. Deferred with the reason stated, per docs/BUILD_PLAN.md chunk B4 and docs/PLATFORM_SUPPORT.md's 'Local ASR: sherpa-onnx' section."
+      "reachable": true,
+      "runtime": null,
+      "note": "Reachable since 2026-09-01, and this is the model the streaming protocol was measured against. Pinned in config/provider-registry.json from bytes that moved through a real machine (sha256 78e2b79f..., 463,945,051 bytes, extracting to 9 files). It installs on the same screen as the Parakeet pair and is chosen for meetings rather than dictation, because it is a streaming model: Settings > Transcription > Local offers 'Use for meetings', which writes meetings.streamModel, and meeting-stream:local-streaming reads it. The protocol was measured on 2026-09-01 with crates/meeting-core/examples/sherpa_ws_probe.rs against the real server and the real reference client, both directions, with the reference client reproducing the model's own test_wavs/trans.txt first as the control. Three facts are in no documentation and one contradicts it: samples are f32 little-endian (the reference client's --help says 16-bit), the transcript text is cumulative per segment, and the server never closes the socket. A malformed frame draws no reply at all, so this provider has no error channel and fault::FaultKind::Reported is unreachable for it. A real meeting was recorded through it on 2026-09-01 and the words arrived as spoken. What is NOT verified: the saved note, which comes from a separate whole-file pass rather than from the live partials."
     },
     "local-asr:parakeet-tdt-0.6b-v3": {
       "status": "ported-with-new-rust-implementation",
@@ -687,6 +687,19 @@
       "reachable": true,
       "frontend": "apps/desktop/src/views/SettingsMeetings.tsx",
       "note": "Repeated short passes over the local whisper-server, not the sherpa-onnx WebSocket server upstream used -- that runtime is blocked, see chunk B4. Named 'Local windowed model' so it is not mistaken for word-by-word streaming."
+    },
+    "meeting-stream:local-streaming": {
+      "status": "ported-with-new-rust-implementation",
+      "name": "Local streaming model",
+      "phase": 4,
+      "upstream": [
+        "src/helpers/parakeetWsServer.js"
+      ],
+      "backend": "crates/meeting-core/src/nemotron_socket.rs",
+      "ui": "Settings > Meetings",
+      "reachable": true,
+      "frontend": "apps/desktop/src/views/SettingsMeetings.tsx",
+      "note": "New relative to meeting-stream:local, and what that entry's note said was blocked. sherpa-onnx-online-websocket-server on loopback, two sockets, one per capture -- words as they are recognised rather than a five-second window three seconds late. The protocol was measured on 2026-09-01 with crates/meeting-core/examples/sherpa_ws_probe.rs against the real server and the real reference client, both directions, with the reference client reproducing the model's own test_wavs/trans.txt first as the control. Three facts are in no documentation and one contradicts it: samples are f32 little-endian (the reference client's --help says 16-bit), the transcript text is cumulative per segment, and the server never closes the socket. A malformed frame draws no reply at all, so this provider has no error channel and fault::FaultKind::Reported is unreachable for it. Reachable: pick a streaming model under Settings > Transcription > Local (it writes meetings.streamModel) and choose 'Local streaming model' on Settings > Meetings. The server is started when a meeting starts, not at launch. **Run against a real meeting on 2026-09-01** and the words arrive as they are spoken, which is the whole difference from meeting-stream:local. What that run did not cover: Stop and transcribe, and the saved note -- the live transcript and the saved one come from different passes, so words on screen say nothing about what ends up in the note."
     },
     "credential:openai": {
       "status": "ported-with-new-rust-implementation",
@@ -917,44 +930,30 @@
       "note": "New relative to upstream: baseline.secretKeys has no entry for Deepgram. meeting-stream:deepgram-realtime minted its realtime token from api.openwhispr.com, a removed vendor service (vendor:openwhispr-realtime-token-broker), rather than asking the user for a key. This slot exists so a direct client can authenticate itself instead. Reachable: Settings > Providers lists every provider-kind slot the registry declares, including this one, with no frontend change needed. No Deepgram meeting client exists yet -- see meeting-stream:deepgram-realtime -- so nothing consumes the stored key today."
     },
     "diarization-model:3dspeaker-campplus-en": {
-      "status": "temporarily-deferred",
+      "status": "ported-with-new-rust-implementation",
       "name": "CAM++ Speaker Embedding (English)",
       "phase": 8,
       "upstream": [
         "src/helpers/diarization.js",
         "src/helpers/diarizationPolicy.js"
       ],
-      "deferral": {
-        "why": "Needs ONNX Runtime plus three models, and the dictation and meeting slices must be reliable before speaker attribution is worth having.",
-        "dependencies": [
-          "ort crate (ONNX Runtime)",
-          "sherpa-onnx-diarize sidecar",
-          "silero_vad.onnx (hardcoded upstream, absent from the registry)"
-        ],
-        "interface": "meeting_core::diarization::Diarizer",
-        "expectedPhase": 8
-      },
-      "note": "Note added 2026-08-27, in the whole-branch review's fix wave: this entry has carried `temporarily-deferred` with a `deferral` block since before this plan began, but no top-level `note` explaining why -- unlike every other deferred entry in this file. The reason is docs/BUILD_PLAN.md's chunk I: none of diarization's work (the `ort` crate, the sherpa-onnx-diarize sidecar, silero_vad.onnx, or a port of diarizationPolicy.js) was attempted across the 19 tasks in this plan or the one added mid-run. This entry sits outside both the ACTIVE-status audit's scope (it never claimed a working implementation, so there was nothing to overclaim) and the parity gate's `USER_CONFIGURABLE` set, so no gate would ever have caught the missing note on its own."
+      "note": "Measured and built 2026-09-01 (KNEG-73a). This entry carried a `deferral` block naming three dependencies -- the `ort` crate, a `sherpa-onnx-diarize` sidecar, and silero_vad.onnx -- and all three were wrong. The pinned sherpa release already ships sherpa-onnx-offline-speaker-diarization beside the offline transcription CLI this project drives for Parakeet, that binary links ONNX Runtime itself, and the pyannote segmentation model does its own voice-activity detection, so no separate VAD model is involved. The implementation is therefore the same shape as kw_transcription_core::sherpa: a pure half (kw_meeting_core::diarization -- build_args, interpret, assign) and a thin Command half. Both models are pinned by measurement, and both digests are re-readable by tools/model-pin/pin.mjs --verify and --verify-stated. WHAT IS MEASURED: the CLI's argument set, its output shape, that a failure and a silent recording produce byte-identical stdout so the exit status is the only discriminator, that speaker labels are cluster indices which are not dense from zero, and that turns overlap and can nest. WHAT IS NOT: whether the speaker turns are right in a real meeting. One voice cannot be confused with another, so the integration test's one-speaker control proves the flags and the renumbering and nothing about attribution -- that is a by-hand check. AND ONE LIMIT WORTH READING: the embedding model is language-sensitive where the segmentation model is not, measured by running the same Chinese reference recording through an English and a Chinese embedding model and getting three speakers against four. Only the English model is pinned, so English is the measured case. REACHABLE since 2026-09-01 (KNEG-124): Settings > Meetings > Speaker labels installs both models, reports which of the runtime and the two models is missing rather than one 'not ready', and carries the two measured caveats -- the 8%-of-the-recording cost and that the speaker model is English-only. The consumer is meeting.rs's whole-recording pass, which now keeps Inference::Timed's segments instead of discarding them; a note whose labels could not be produced says so rather than arriving unlabelled and silent.",
+      "backend": "crates/meeting-core",
+      "ui": "Settings > Meetings",
+      "reachable": true
     },
     "diarization-model:sherpa-onnx-pyannote-segmentation-3-0": {
-      "status": "temporarily-deferred",
+      "status": "ported-with-new-rust-implementation",
       "name": "Pyannote Segmentation 3.0",
       "phase": 8,
       "upstream": [
         "src/helpers/diarization.js",
         "src/helpers/diarizationPolicy.js"
       ],
-      "deferral": {
-        "why": "Needs ONNX Runtime plus three models, and the dictation and meeting slices must be reliable before speaker attribution is worth having.",
-        "dependencies": [
-          "ort crate (ONNX Runtime)",
-          "sherpa-onnx-diarize sidecar",
-          "silero_vad.onnx (hardcoded upstream, absent from the registry)"
-        ],
-        "interface": "meeting_core::diarization::Diarizer",
-        "expectedPhase": 8
-      },
-      "note": "Note added 2026-08-27, in the whole-branch review's fix wave: this entry has carried `temporarily-deferred` with a `deferral` block since before this plan began, but no top-level `note` explaining why -- unlike every other deferred entry in this file. The reason is docs/BUILD_PLAN.md's chunk I: none of diarization's work (the `ort` crate, the sherpa-onnx-diarize sidecar, silero_vad.onnx, or a port of diarizationPolicy.js) was attempted across the 19 tasks in this plan or the one added mid-run. This entry sits outside both the ACTIVE-status audit's scope (it never claimed a working implementation, so there was nothing to overclaim) and the parity gate's `USER_CONFIGURABLE` set, so no gate would ever have caught the missing note on its own."
+      "note": "Measured and built 2026-09-01 (KNEG-73a). This entry carried a `deferral` block naming three dependencies -- the `ort` crate, a `sherpa-onnx-diarize` sidecar, and silero_vad.onnx -- and all three were wrong. The pinned sherpa release already ships sherpa-onnx-offline-speaker-diarization beside the offline transcription CLI this project drives for Parakeet, that binary links ONNX Runtime itself, and the pyannote segmentation model does its own voice-activity detection, so no separate VAD model is involved. The implementation is therefore the same shape as kw_transcription_core::sherpa: a pure half (kw_meeting_core::diarization -- build_args, interpret, assign) and a thin Command half. Both models are pinned by measurement, and both digests are re-readable by tools/model-pin/pin.mjs --verify and --verify-stated. WHAT IS MEASURED: the CLI's argument set, its output shape, that a failure and a silent recording produce byte-identical stdout so the exit status is the only discriminator, that speaker labels are cluster indices which are not dense from zero, and that turns overlap and can nest. WHAT IS NOT: whether the speaker turns are right in a real meeting. One voice cannot be confused with another, so the integration test's one-speaker control proves the flags and the renumbering and nothing about attribution -- that is a by-hand check. AND ONE LIMIT WORTH READING: the embedding model is language-sensitive where the segmentation model is not, measured by running the same Chinese reference recording through an English and a Chinese embedding model and getting three speakers against four. Only the English model is pinned, so English is the measured case. REACHABLE since 2026-09-01 (KNEG-124): Settings > Meetings > Speaker labels installs both models, reports which of the runtime and the two models is missing rather than one 'not ready', and carries the two measured caveats -- the 8%-of-the-recording cost and that the speaker model is English-only. The consumer is meeting.rs's whole-recording pass, which now keeps Inference::Timed's segments instead of discarding them; a note whose labels could not be produced says so rather than arriving unlabelled and silent.",
+      "backend": "crates/meeting-core",
+      "ui": "Settings > Meetings",
+      "reachable": true
     },
     "calendar:google": {
       "status": "ported-with-new-rust-implementation",

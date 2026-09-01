@@ -19,6 +19,98 @@ unchecked rather than left implied.
 
 ---
 
+## 2026-09-01 — two protocols measured, and what that is *not*
+
+A probe day rather than a bench run. Nothing was clicked; two mechanisms were measured against real
+binaries with a control on every run. Recorded here because both settled questions the docs had
+been carrying as beliefs, and because each ends with a by-hand check that the measurement does
+**not** cover.
+
+### Verified
+
+| Claim | Evidence |
+| --- | --- |
+| **An audio-session listener separates Teams-in-a-call from Teams-idle** | `mic_users_probe`, three runs on one Teams install: not running (1 capture endpoint), open and idle (1 endpoint, `ms-teams.exe` **absent** from the capture list), in a real call (2 endpoints, `ms-teams.exe` **present**). Every run carried a cross-process control — a second process opened a capture stream and had to appear — so the middle row is a measured absence rather than a broken enumeration |
+| **sherpa's streaming WebSocket protocol, both directions** | `sherpa_ws_probe` against the real `sherpa-onnx-online-websocket-server` and the real reference client. Samples are **`f32` little-endian**, frames are 8000 samples then a short tail, the client's end marker is `Done` and the server's is `Done!`, `text` is cumulative per segment, and the server never closes the socket |
+| **That server has no error channel** | `--fault` sent an unparseable TEXT frame and a three-byte BINARY frame before the audio. The server answered neither and the transcript came back **byte-identical to the clean run** — the odd-length frame did not even break sample alignment |
+| **The control ran first, both times** | The reference client against the real server reproduced the model's own `test_wavs/trans.txt`; only then did our client produce the same transcript; only then was the fault run meaningful |
+| **The shipped client transcribes against the real server** | `crates/meeting-core/tests/nemotron_stream.rs`, `--ignored`, driving `LocalStreaming` — the type the application builds — against a real server on a real model. Audio fed in 4096-byte pieces, which is neither the frame size nor a divisor of it, so `Pending` and its tail are exercised rather than skipped. One event out, not one per update, and its text is the model's own reference transcript |
+| **A server killed mid-session reaches the caller as an error** | The same file's second test. **The failure this provider is most exposed to**: its only fault channel is transport-level, so a wrong path here produces a quiet transcript rather than a failure |
+| **A real meeting on `Local streaming model`, and the words arrive as they are spoken** | Driven by the repo owner in the application window, same day. This is what the provider exists for and what `Local windowed model` cannot do — that one is a five-second window every three seconds, arriving three seconds behind the room. Reported as *"words appear as I speak"* |
+
+### Findings
+
+1. **The reference client's `--help` is wrong about the sample format.** It says *"16-bit
+   samples"*; the wire carries `f32`. As `i16` the same bytes are noise. A client written from that
+   sentence would connect, complete a handshake, send every frame successfully and transcribe
+   nothing — with no error anywhere, because this server reports none. **A defect with no symptom
+   pointing at its cause**, which is the whole return on the afternoon.
+
+2. **The parsing fixture was not what it said it was.** `nemotron.rs`'s `RECORDED` array carried
+   a comment claiming it was verbatim off the wire, and it was uppercase — copied from the model's
+   `test_wavs/trans.txt`. The server emits properly-cased text. **Nothing in that crate could have
+   caught it**, because a parser does not care about case; it took the integration test against the
+   real server, whose first run failed on the casing. Corrected to the real frames, which also
+   revealed that the server repeats an unchanged update — so a revision that changes nothing has
+   to still be a revision, and there is now a test saying so.
+
+3. **A probe can pass its control and still be unreadable.** `mic_users_probe`'s first real run
+   printed `nothing is capturing` and `PASS`. Both true, both useless: nothing in the output said
+   whether Teams had been *open* at the time, and "Teams is running and not capturing" and "Teams
+   is not installed" print the same words while meaning opposite things. Fixed by having the probe
+   report what `meeting_detect::detect` itself sees running. A control proves the instrument works;
+   it does not prove the sample was in the machine.
+
+### Findings from the first real run
+
+**Three prerequisites, and the screen only names the last one.** Getting from a fresh install to a
+running streaming meeting needs a model installed, that model chosen *for meetings*, and a language
+typed in — and only the third produces a message. The first two produce a provider that is
+selectable and then refuses at `start`. Worth knowing before the next person tries it.
+
+**The wrong Nemotron model is the one that looks obvious.** `nemotron-3.5-asr-streaming-0.6b` sorts
+first and is unpinned, so *Install* on it answers *"has no pinned compressed size; refusing an
+unauthenticated install"* — correct behaviour (KNEG-118), and an odd first impression. The
+pinned one is `nemotron-speech-streaming-en-0.6b`.
+
+**The language caveat pointed the wrong way** and was fixed in `af5e5dc`: it said *"Set one
+below"* while rendering underneath the field it meant. `corti-realtime` has carried
+`language_detection: false` since its client landed, so that sentence had existed for days without
+anyone reaching a screen where it rendered.
+
+### Still unchecked, and needs a person at the machine
+
+1. **The offer window appearing during a real Teams call.** The signal is measured and the wiring
+   is tested. Neither is a window on screen. Join a call and watch.
+
+2. **~~A meeting recorded through `Local streaming model`.~~ Done, same day** — the live path
+   works and the words arrive as spoken.
+
+   **_Stop and transcribe_ was then run too, and found a defect.** The note saved, and said *"the
+   whole-recording pass did not complete, so the saved transcript is the live one"*. The fallback
+   working and disclosing itself is the good half; why it fired is the bad half.
+   `transcribe_whole` built a `WhisperServer` directly, so it failed on any machine with a sherpa
+   model selected — which is the documented one-local-engine state and the state this machine was
+   in. Every meeting on such a machine had been saving partials. **Not caused by the streaming
+   provider**: `meeting-stream:local` did it too, and has since `keep` was written. Fixed in
+   `ebe715a` by routing through `dictation::local_engine`, the rule dictation already used.
+
+   **Still open, and now a different check:** a note from a whole-recording pass that actually
+   runs. The unit test proves the rule; it cannot prove a note.
+
+3. **The same meeting with the streaming server killed mid-call.** Narrowed rather than open: the
+   client's own behaviour is now covered by
+   `a_server_that_dies_mid_session_reaches_the_caller_as_an_error`, which kills a real server
+   mid-stream and requires the next `send_audio` to fail. What is unchecked is the rest of the
+   chain — whether that error reaches `MeetingOutcome::Failed` and the screen rather than being
+   turned back into an empty transcript somewhere above it.
+
+4. **A streaming model installed through the screen.** `nemotron-speech-streaming-en-0.6b` was
+   downloaded by `tools/model-pin/pin.mjs` on the command line, not by pressing *Install*. The
+   install path is the one the Parakeet models proved; this model has never been through it.
+
+---
+
 ## 2026-08-31 (later) — the first press of *Install*, and two things it found
 
 Two by-hand checks run on the machine against a debug build. One passed, one failed, and the failure
@@ -63,9 +155,15 @@ whisper path never did. Fixed by giving it the same guard.
 
 **Skipping loses nothing.** The unconditional call looked like a way to keep the sidecar current,
 and never was — it can only succeed when no server is running, which is only the first install, when
-there is nothing to refresh. Keeping a sidecar current after that is **KNEG-113**, which is a real
-gap and a different one: the installed whisper sidecar dates from 2026-08-25 and the pinned archive
-has since gained `bench.exe` and `command.exe`, so it is measurably behind.
+there is nothing to refresh. Keeping a sidecar current after that was **KNEG-113**, a real gap and a
+different one: the installed whisper sidecar dated from 2026-08-25 and the pinned archive had since
+gained `bench.exe` and `command.exe`, so it was measurably behind and nothing would ever have said
+so. **Closed 2026-09-01.** `install` now writes a `.kw-install.json` naming the pinned digest into
+the directory it promotes, `Settings > Transcription > Local` reports whether the installed binary
+is that build — `unknown` where no record exists, which is what this machine still reports — and an
+**Update the server binary** button stops the server, replaces it and starts it again. See
+`docs/ENGINEERING_LOG.md` § 2026-09-01 (KNEG-113). **The button itself has not been pressed on real
+hardware**; see *Still unchecked* below.
 
 **2. There is no chat, and two documents told a person to hold one.** The instruction "install a
 local LLM and hold a chat" names a screen that does not exist. The application has thirteen views
@@ -77,6 +175,27 @@ GGUF is `Settings > Local models` → *Use this model*, then `Settings > Intelli
 model** route, then dictate. `reasoning.rs` already wires the two screens together and says so on
 screen — *"no local model is running. Start one under Local models."* — so the path is built and
 only its name was wrong. Both instructions are corrected.
+
+### Still unchecked, and needs a person at the machine
+
+1. **The server binary refreshed from the screen (KNEG-113, added 2026-09-01).** The button exists,
+   the freshness decision is tested and mutation-checked, and the Windows file-locking facts it is
+   built on were re-measured on 2026-09-01 by
+   `cargo run -p kw-sidecar --example running_exe_lock_probe`. The install underneath it was run
+   against the real network the same day —
+   `cargo test -p kw-sidecar --test real_install -- --ignored` downloads the pinned archive, and
+   now also asserts the record beside the install names the pinned digest and that a junk
+   `whisper.incoming` in the way is cleared rather than fatal. None of that is a press.
+
+   This machine is the right one to press it on: `sidecars/whisper` still holds the 2026-08-25
+   files and no record, so the row should read *not known whether this is the build this version
+   pins*. With `tiny` resumed, press **Update the server binary** under
+   `Settings > Transcription > Local` and confirm four things — the directory gains `bench.exe` and
+   `command.exe`, the row turns to *the build this version of the application pins*, the week-old
+   `sidecars/whisper.incoming` is gone, and a dictation still works afterwards.
+
+   The fourth is the one that cannot be inferred: stopping and restarting the server around an
+   install is exercised by nobody, because it is reachable only through an `AppHandle`.
 
 ---
 

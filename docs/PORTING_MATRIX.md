@@ -16,7 +16,7 @@ Already React 19 / TypeScript, and platform-independent.
 | Meeting provider tables | `meetingStreamingProviders.js`, `realtimeTokenProviders.js` | Drop the managed-mode branches. |
 | Chat / reasoning / dictation routing | `chatRouting.js`, `reasoningRouting.js`, `dictationStreamingRouting.js` | With the fail-closed changes below. |
 | Transcript formatting | `transcriptFormatter.js`, `transcriptText.js` | txt / md / json / srt / vtt. |
-| Diarization clustering policy | `diarizationPolicy.js` (63) | Deliberately Electron-free upstream, for testability. |
+| Diarization clustering policy | `diarizationPolicy.js` (63) | Deliberately Electron-free upstream, for testability. **Not ported — the file is not in this repository, only this line count is.** `kw_meeting_core::diarization::assign` is a rule written from scratch and labelled invented, which is a different claim from ported. |
 | Hotkey list parsing | `hotkeyList.js` | Comma-separated accelerators with a comma-key escape rule. |
 | Smart spacing | `smartSpacing.js` | |
 | Note search query builder | `noteSearch.js` | |
@@ -60,7 +60,9 @@ Five long-lived local servers, all loopback with a port drawn from a fixed range
 | Qdrant | 6333–6350 | latest | Phase 8. |
 | local API | 8200–8219 | in-repo | Ported to `axum`. |
 
-Plus 17 one-shot or streaming children: `sherpa-onnx-diarize`, `ffmpeg`, `yt-dlp`,
+Plus 17 one-shot or streaming children: `sherpa-onnx-diarize` (upstream's name; this project
+uses `sherpa-onnx-offline-speaker-diarization` out of the sherpa archive it already installs, and
+never built a separate sidecar), `ffmpeg`, `yt-dlp`,
 `meeting-aec-helper`, `macos-audio-tap`, `windows-system-audio-helper`,
 `linux-system-audio-helper`, `macos-globe-listener`, `windows-key-listener` (one process **per
 watched key**), `linux-key-listener`, three `*-text-monitor`, three `*-fast-paste`, `nircmd`,

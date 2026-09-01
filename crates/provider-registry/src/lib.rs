@@ -250,10 +250,55 @@ pub struct SherpaModel {
     pub streaming: bool,
 }
 
+/// Which half of a diarization run a model does.
+///
+/// Two files, two jobs, and neither works alone: the segmentation model finds
+/// where speech is and where it changes, the embedding model turns each stretch
+/// into a voice fingerprint to cluster. The CLI takes one of each and refuses
+/// without both.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, TS)]
+#[serde(rename_all = "kebab-case")]
+pub enum DiarizationRole {
+    Segmentation,
+    Embedding,
+}
+
+/// One of the two models a speaker-diarization run needs.
+///
+/// Not a [`SherpaModel`] despite coming from the same publisher: only one of
+/// the two is an archive, neither declares a language the way an ASR model
+/// does, and neither is `streaming`. Sharing the struct would mean three fields
+/// that are always meaningless for one of them.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiarizationModel {
+    pub id: String,
+    pub name: String,
+    pub download_url: String,
+    /// `None` for the embedding model, which is a single `.onnx` file with
+    /// nothing to extract.
+    pub extract_dir: Option<String>,
+    /// `None` for the segmentation model, which is an archive. Exactly one of
+    /// this and `extract_dir` is set, which is what decides the install path;
+    /// the generator refuses to emit a model declaring both or neither.
+    pub file_name: Option<String>,
+    pub size_mb: Option<f64>,
+    pub role: Option<DiarizationRole>,
+    /// SHA-256 of the download, required before installation.
+    pub sha256: Option<String>,
+    pub expected_size_bytes: Option<u64>,
+    /// `None` for the embedding model: a ceiling on extraction would describe a
+    /// step that does not happen to it.
+    pub max_extracted_size_bytes: Option<u64>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct LocalAsr {
     pub whisper: Vec<WhisperModel>,
     pub sherpa: Vec<SherpaModel>,
+    /// The two speaker-diarization models. Empty until 2026-09-01, when both
+    /// were pinned -- see `kw_meeting_core::diarization`.
+    pub diarization: Vec<DiarizationModel>,
 }
 
 /// What a credential slot is for.

@@ -37,6 +37,10 @@ export type WhisperModelId = (typeof WHISPER_MODEL_IDS)[number];
 export const SHERPA_MODEL_IDS = ["nemotron-3.5-asr-streaming-0.6b", "nemotron-speech-streaming-en-0.6b", "parakeet-tdt-0.6b-v3", "parakeet-unified-en-0.6b"] as const;
 export type SherpaModelId = (typeof SHERPA_MODEL_IDS)[number];
 
+/** The two models a speaker-diarization run needs, one of each role. */
+export const DIARIZATION_MODEL_IDS = ["3dspeaker-campplus-en", "sherpa-onnx-pyannote-segmentation-3-0"] as const;
+export type DiarizationModelId = (typeof DIARIZATION_MODEL_IDS)[number];
+
 /** OS credential-store slots, in registry order. Twenty: twelve providers, five per-feature custom endpoints and three enterprise connectors. */
 export const CREDENTIAL_SLOTS = ["openai", "anthropic", "gemini", "groq", "berget", "xai", "mistral", "openrouter", "tinfoil", "corti", "note-formatting-custom", "translation-custom", "dictation-agent-custom", "dictation-agent-vision-custom", "chat-agent-custom", "bedrock", "azure", "vertex", "assemblyai", "deepgram"] as const;
 export type CredentialSlot = (typeof CREDENTIAL_SLOTS)[number];
@@ -227,9 +231,11 @@ export interface SherpaModel {
   readonly sizeMb: number | null;
   /**
    * The archive's pinned digest and exact compressed size, and a ceiling on
-   * what it may extract to. Null on the two Nemotron streaming models, which
-   * nothing can install: sherpa_models::install refuses an unpinned model
-   * rather than downloading something unauthenticated.
+   * what it may extract to. Nullable in the type because sherpa_models::install
+   * refuses an unpinned model rather than downloading something
+   * unauthenticated -- but as of 2026-09-01 all four carry all three: the two
+   * Nemotron streaming models were the last unpinned pair and both were
+   * measured that day.
    */
   readonly sha256: string | null;
   readonly expectedSizeBytes: number | null;
@@ -238,6 +244,33 @@ export interface SherpaModel {
   readonly supportedLanguages: readonly string[] | null;
   /** True for the Nemotron streaming runtimes; Parakeet models are batch. */
   readonly streaming: boolean;
+}
+
+/** Which half of a speaker-diarization run a model does. */
+export type DiarizationRole = "segmentation" | "embedding";
+
+/**
+ * One of the two models a speaker-diarization run needs.
+ *
+ * Not a SherpaModel despite coming from the same publisher: only one of the two
+ * is an archive, neither declares a language the way an ASR model does, and
+ * neither is streaming.
+ */
+export interface DiarizationModel {
+  readonly id: DiarizationModelId;
+  readonly name: string;
+  readonly downloadUrl: string;
+  /** Null for the embedding model, a single .onnx with nothing to extract. */
+  readonly extractDir: string | null;
+  /** Null for the segmentation model, which is an archive. Exactly one of
+   *  this and extractDir is set. */
+  readonly fileName: string | null;
+  readonly sizeMb: number | null;
+  readonly role: DiarizationRole | null;
+  readonly sha256: string | null;
+  readonly expectedSizeBytes: number | null;
+  /** Null for the embedding model: nothing extracts it. */
+  readonly maxExtractedSizeBytes: number | null;
 }
 
 export interface ProviderRegistry {
@@ -249,6 +282,7 @@ export interface ProviderRegistry {
   readonly localAsr: {
     readonly whisper: readonly WhisperModel[];
     readonly sherpa: readonly SherpaModel[];
+    readonly diarization: readonly DiarizationModel[];
   };
 }
 
@@ -1722,9 +1756,9 @@ export const PROVIDER_REGISTRY = {
         "downloadUrl": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-560ms-int8-2026-06-11.tar.bz2",
         "extractDir": "sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-560ms-int8-2026-06-11",
         "sizeMb": 650,
-        "sha256": null,
-        "expectedSizeBytes": null,
-        "maxExtractedSizeBytes": null,
+        "sha256": "c6bf5e0df765f9d5b43bc9e0536d4b4b3e7d40bdf5ecf13e45f134c51c05ae3a",
+        "expectedSizeBytes": 475271763,
+        "maxExtractedSizeBytes": 838860800,
         "language": "multilingual",
         "supportedLanguages": [
           "en",
@@ -1813,6 +1847,32 @@ export const PROVIDER_REGISTRY = {
           "en"
         ],
         "streaming": false
+      }
+    ],
+    "diarization": [
+      {
+        "id": "3dspeaker-campplus-en",
+        "name": "CAM++ Speaker Embedding (English)",
+        "downloadUrl": "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_campplus_sv_en_voxceleb_16k.onnx",
+        "extractDir": null,
+        "fileName": "3dspeaker_speech_campplus_sv_en_voxceleb_16k.onnx",
+        "sizeMb": 28.2,
+        "role": "embedding",
+        "sha256": "357a834f702b80161e5b981182c038e18553c1f2ca752ed6cec2052365d4129b",
+        "expectedSizeBytes": 29596978,
+        "maxExtractedSizeBytes": null
+      },
+      {
+        "id": "sherpa-onnx-pyannote-segmentation-3-0",
+        "name": "Pyannote Segmentation 3.0",
+        "downloadUrl": "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-segmentation-models/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2",
+        "extractDir": "sherpa-onnx-pyannote-segmentation-3-0",
+        "fileName": null,
+        "sizeMb": 6.6,
+        "role": "segmentation",
+        "sha256": "24615ee884c897d9d2ba09bb4d30da6bb1b15e685065962db5b02e76e4996488",
+        "expectedSizeBytes": 6958444,
+        "maxExtractedSizeBytes": 33554432
       }
     ]
   }

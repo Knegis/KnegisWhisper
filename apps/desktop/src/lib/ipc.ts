@@ -48,6 +48,8 @@ import type {
   Delivered,
   Detected,
   Diagnostics,
+  DiarizationModelStatus,
+  DiarizationStatus,
   Dispatch,
   DiscoveryPermissions,
   DraftStatus,
@@ -59,8 +61,10 @@ import type {
   Folder,
   Format,
   GateReason,
+  GgufIntegrity,
   HotkeyAction,
   HotkeyChange,
+  HotkeyMode,
   HotkeyReport,
   ImportPickKind,
   ImportReport,
@@ -102,7 +106,9 @@ import type {
   ReasoningModelSummary,
   ReasoningProviderSummary,
   ReasoningStatus,
+  RecheckOutcome,
   Registration,
+  RefreshOutcome,
   RelocatedCredential,
   RouteReport,
   SearchHit,
@@ -110,6 +116,7 @@ import type {
   ShortcutHookStatus,
   SherpaModelStatus,
   SherpaStatus,
+  SidecarFreshness,
   SidecarStatus,
   SkipReason,
   Sources,
@@ -118,6 +125,7 @@ import type {
   SystemAudioSupport,
   TableReport,
   TokenStatus,
+  UsedFor,
   TranscriptEvent,
   Transcription,
   UnhandledAction,
@@ -154,6 +162,8 @@ export type {
   Delivered,
   Detected,
   Diagnostics,
+  DiarizationModelStatus,
+  DiarizationStatus,
   Dispatch,
   DiscoveryPermissions,
   DraftStatus,
@@ -164,8 +174,10 @@ export type {
   ExportedTranscript,
   Folder,
   GateReason,
+  GgufIntegrity,
   HotkeyAction,
   HotkeyChange,
+  HotkeyMode,
   HotkeyReport,
   ImportPickKind,
   ImportReport,
@@ -204,7 +216,9 @@ export type {
   ReasoningModelSummary,
   ReasoningProviderSummary,
   ReasoningStatus,
+  RecheckOutcome,
   Registration,
+  RefreshOutcome,
   RelocatedCredential,
   RouteReport,
   SearchHit,
@@ -212,6 +226,7 @@ export type {
   ShortcutHookStatus,
   SherpaModelStatus,
   SherpaStatus,
+  SidecarFreshness,
   SidecarStatus,
   Sources,
   SyncOutcome,
@@ -219,6 +234,7 @@ export type {
   SystemAudioSupport,
   TableReport,
   TokenStatus,
+  UsedFor,
   TranscriptEvent,
   Transcription,
   UnhandledAction,
@@ -261,6 +277,21 @@ export async function setHotkey(
   accelerators: string,
 ): Promise<HotkeyChange> {
   return invoke<HotkeyChange>("hotkey_set", { action, accelerators });
+}
+
+/**
+ * Choose whether an action toggles on each press or runs while the key is held.
+ *
+ * Its own command rather than a second argument to `setHotkey`, because the two
+ * are separate settings keys and separate controls: rebinding a key is not
+ * choosing push-to-talk. Returns the same `HotkeyChange` so the row can say what
+ * became of the binding either way.
+ */
+export async function setHotkeyMode(
+  action: HotkeyAction,
+  mode: HotkeyMode,
+): Promise<HotkeyChange> {
+  return invoke<HotkeyChange>("hotkey_set_mode", { action, mode });
 }
 
 /** Fired when a registered hotkey is pressed. Mirrors `shortcuts::HotkeyFired`. */
@@ -352,6 +383,34 @@ export async function dismissMeetingOffer(): Promise<void> {
 
 export async function setMeetingPrompt(enabled: boolean): Promise<void> {
   return invoke("meeting_set_prompt", { enabled });
+}
+
+/** The two diarization models, and whether speaker labels can run. */
+export async function getDiarizationStatus(): Promise<DiarizationStatus> {
+  return invoke<DiarizationStatus>("diarization_status");
+}
+
+/**
+ * Install one of the two models, and the sherpa runtime with the first of
+ * them.
+ *
+ * Resolves when the install finishes. Progress arrives on the
+ * `diarization://install` event, which this wrapper does not subscribe to —
+ * the screen decides whether it wants the detail.
+ */
+export async function installDiarizationModel(modelId: string): Promise<void> {
+  return invoke("diarization_install_model", { modelId });
+}
+
+/**
+ * Turn speaker labels on or off.
+ *
+ * Rejects when turning on something that cannot run, with a message naming
+ * which half is missing. Accepting it and skipping silently at save time is
+ * how somebody comes to believe the feature is on for three meetings.
+ */
+export async function setDiarizationEnabled(enabled: boolean): Promise<void> {
+  return invoke("diarization_set_enabled", { enabled });
 }
 
 export async function getMeetingDetectLists(): Promise<DetectLists> {
@@ -816,6 +875,17 @@ export async function stopLocalServer(): Promise<void> {
   return invoke<void>("local_server_stop");
 }
 
+/**
+ * Replace the installed server binary with the one this build pins.
+ *
+ * Stops the running server, installs, and starts it again. The outcome says
+ * whether it came back -- see `RefreshOutcome`, which reports that separately
+ * from the replacement because they can go different ways.
+ */
+export async function refreshLocalServer(): Promise<RefreshOutcome> {
+  return invoke<RefreshOutcome>("local_server_refresh");
+}
+
 /* ---------------------------------------------------- local ASR (sherpa) */
 
 /** The sherpa models, what is installed, and which one is selected. */
@@ -837,6 +907,22 @@ export async function installSherpaModel(modelId: string): Promise<void> {
 /** Send dictation to one installed sherpa model. */
 export async function useSherpaModel(modelId: string): Promise<void> {
   return invoke<void>("sherpa_use_model", { modelId });
+}
+
+/**
+ * Record meetings with one installed streaming model.
+ *
+ * A separate call writing a separate setting, not a second use of
+ * {@link useSherpaModel}: the two engines run different models, and one
+ * selection would mean choosing a Parakeet model for dictation silently
+ * changed what a meeting recorded with.
+ *
+ * Does not start the server. That happens when a meeting starts, because a
+ * 630 MB model loaded by a settings click is a cost the click did not
+ * advertise.
+ */
+export async function useSherpaStreamModel(modelId: string): Promise<void> {
+  return invoke<void>("sherpa_use_stream_model", { modelId });
 }
 
 export async function onInstallProgress(
@@ -869,6 +955,25 @@ export async function startLocalLlm(modelId: string): Promise<number> {
 
 export async function stopLocalLlm(): Promise<void> {
   return invoke<void>("local_llm_stop");
+}
+
+/**
+ * Hash an installed model against its pinned digest.
+ *
+ * **Slow, on purpose, and only when asked.** Everything else the screen reports
+ * about an installed file compares two integers against a record written when it
+ * was downloaded; this reads the whole file back, which is a minute or more for
+ * the largest models. It is the only thing that proves the bytes.
+ *
+ * Resolves with the finding rather than rejecting on one: a file that does not
+ * match its digest is an answer, not a transport failure, and the two must not
+ * arrive through the same channel. It rejects only when the check could not be
+ * made at all.
+ */
+export async function recheckLocalLlmModel(
+  modelId: string,
+): Promise<RecheckOutcome> {
+  return invoke<RecheckOutcome>("local_llm_recheck_model", { modelId });
 }
 
 /**

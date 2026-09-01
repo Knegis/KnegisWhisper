@@ -710,6 +710,50 @@ impl NetworkPolicy {
         Ok(self.client.request(method, url))
     }
 
+    /// The WebSocket address of a sidecar this application started, on loopback.
+    ///
+    /// [`Self::loopback`]'s argument, unchanged: this is not egress, so it is
+    /// not one of the seven purposes. `sherpa-onnx-online-websocket-server` is a
+    /// process we spawned, bound to `127.0.0.1` by `crate::port`, and a socket
+    /// to it is closer to an IPC call than to a network request.
+    ///
+    /// What keeps that honest is the signature, and it is stricter than
+    /// [`Self::loopback`]'s: this takes **a port and nothing else**. There is no
+    /// path argument to smuggle an authority through, no URL to aim somewhere,
+    /// and no way for a later change to widen it without changing the type. The
+    /// returned address is built here and parsed back, so a caller receives a
+    /// [`Url`] it could not have constructed itself out of user input.
+    ///
+    /// `ws://`, not `wss://`, and deliberately: the peer is a local process with
+    /// no certificate, and requiring TLS would mean either shipping one or
+    /// turning verification off. Plaintext to `127.0.0.1` does not cross a
+    /// network interface — which is the same reason
+    /// `RequestPurpose::ExplicitlyConfiguredSelfHostedEndpoint` is the only
+    /// purpose allowed plaintext to a private address, and this is narrower
+    /// still because the host is not the caller's to choose.
+    ///
+    /// # Errors
+    ///
+    /// Only if the address this function wrote does not parse back to the
+    /// loopback host and the port it was given, which would mean the constant
+    /// above had been edited into something else.
+    pub fn loopback_websocket(&self, port: u16) -> Result<Url, PolicyError> {
+        let address = format!("ws://{}:{port}/", std::net::Ipv4Addr::LOCALHOST);
+        let url = Url::parse(&address).map_err(PolicyError::InvalidUrl)?;
+
+        // Read back rather than trusted. The same check `loopback` makes, and
+        // here it guards against this function itself being wrong rather than
+        // against its caller.
+        if url.scheme() != "ws" || url.host_str() != Some("127.0.0.1") || url.port() != Some(port) {
+            return Err(PolicyError::NotALoopbackPath {
+                path: address,
+                reason: "that is not a loopback WebSocket address",
+            });
+        }
+
+        Ok(url)
+    }
+
     /// Stream a URL to a file, following redirects one validated hop at a time.
     ///
     /// The client is built with `Policy::none()` because a silently followed

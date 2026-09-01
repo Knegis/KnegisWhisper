@@ -53,6 +53,7 @@ import type {
   Format,
   HotkeyAction,
   HotkeyChange,
+  HotkeyMode,
   HotkeyReport,
   ImportReport,
   InputDevice,
@@ -140,7 +141,11 @@ const standard = (accelerator: string): Accelerator => ({
 });
 
 const BINDINGS: Binding[] = [
-  { action: "dictation", accelerators: [standard("Control+Shift+D")] },
+  {
+    action: "dictation",
+    accelerators: [standard("Control+Shift+D")],
+    mode: "toggle",
+  },
   {
     action: "chat-agent",
     accelerators: [
@@ -150,6 +155,7 @@ const BINDINGS: Binding[] = [
         modifiers: ["Control", "Super"],
       },
     ],
+    mode: "toggle",
   },
   {
     // `Control+Alt` rather than another tidy chord, because this is the one
@@ -165,14 +171,30 @@ const BINDINGS: Binding[] = [
         modifiers: ["Control", "Alt"],
       },
     ],
+    // The one fixture that is held rather than toggled, so the mode control and
+    // the sentence under it are visible in dev mode without anyone changing a
+    // setting. A fixture where every row reads the same is a fixture that
+    // cannot show a difference.
+    mode: "hold",
   },
   {
     action: "translation",
     accelerators: [
       { kind: "invalid", input: "Ctrl+Shft+T", reason: "unknown key `Shft`" },
     ],
+    mode: "toggle",
   },
-  { action: "meeting", accelerators: [standard("Control+Shift+V")] },
+  {
+    action: "meeting",
+    accelerators: [
+      standard("Control+Shift+V"),
+      // A mouse binding, for the same reason the `Control+Alt` row above is a
+      // caution: the third classification has to be visible somewhere without
+      // anybody owning a five-button mouse.
+      { kind: "mouse-button", accelerator: "Mouse4", alsoDoes: "Back" },
+    ],
+    mode: "toggle",
+  },
 ];
 
 const HOTKEYS: HotkeyReport = {
@@ -636,6 +658,16 @@ const ROUTE: RouteReport = {
 const LOCAL_MODELS: LocalStatus = {
   availability: { state: "installable" },
   serverInstalled: true,
+  // `stale` rather than `current`, so the branch that only appears when the
+  // installed binary has fallen behind is one somebody can look at. The
+  // `unknown` branch is the commoner one in the wild -- it is what every
+  // install made before records existed reports -- but a fixture can only show
+  // one, and this is the one nothing else in the app renders.
+  serverFreshness: {
+    state: "stale",
+    installed: "6cdbf1cfd7bc4d0eaa6a4a2f6cfe83b2e0cb0e2c1b9dbb1f5f0e1a4d3c2b1a09",
+    expected: "c2a4b60edb11f7e11a9191ffb50929535527d4d91c9903dbe3e554583bbbc63d",
+  },
   models: [
     {
       id: "whisper-large-v3-turbo-q5",
@@ -693,7 +725,7 @@ const SHERPA: SherpaStatus = {
       sizeMb: 630,
       language: "en",
       installed: true,
-      notOffered: null,
+      usedFor: "dictation",
     },
     {
       id: "parakeet-tdt-0.6b-v3",
@@ -701,19 +733,23 @@ const SHERPA: SherpaStatus = {
       sizeMb: 660,
       language: null,
       installed: false,
-      notOffered: null,
+      usedFor: "dictation",
     },
     {
-      id: "nemotron-streaming-en",
-      name: "Nemotron Streaming EN",
-      sizeMb: 480,
+      // The measured one. Installed and chosen for meetings in the harness,
+      // because "a streaming model that cannot be used" was the state this
+      // screen showed until 2026-09-01 and a fixture still showing it would
+      // keep that dead branch alive in the only place anyone looks at it.
+      id: "nemotron-speech-streaming-en-0.6b",
+      name: "Nemotron Speech Streaming EN 0.6B",
+      sizeMb: 442,
       language: "en",
-      installed: false,
-      notOffered:
-        "streaming model — it is served over sherpa-onnx's own WebSocket protocol, and no client for that protocol has been written",
+      installed: true,
+      usedFor: "meetings",
     },
   ],
   selected: "parakeet-unified-en-0.6b",
+  selectedStream: "nemotron-speech-streaming-en-0.6b",
   modelsDir: "C:\\ProgramData\\KnegisWhisper\\models\\sherpa",
 };
 
@@ -734,14 +770,21 @@ const LOCAL_LLM: LocalLlmStatus = {
       contextLength: 32768,
       recommended: true,
       supportsThinking: false,
-      installed: false,
+      // Installed and still agreeing with the record written when it was
+      // downloaded. The screen must not call this "verified": two integers
+      // agreeing is not a hash, and the caveat on this state is what says so.
+      integrity: { state: "unchanged-since-install", verifiedBy: "stated-digest" },
       // The ordinary case: thirty-two of the thirty-nine published objects are
       // checked against the publisher's stated digest, not one measured here.
       verifiedBy: "stated-digest",
       draft: {
         fileName: "qwen2.5-0.5b-instruct-q4.gguf",
         sizeBytes: 352_000_000,
-        installed: false,
+        // A drafter can rot on its own, so it carries its own state. This one
+        // has been written to since it was installed and its length has not
+        // moved, which is the case the screen has to describe without calling
+        // the file bad.
+        integrity: { state: "changed", recordedBytes: 352_000_000, bytes: 352_000_000 },
         // Deliberately stronger than its model's, so the screen's "the drafter
         // differs" branch is rendered by a fixture rather than only in theory.
         verifiedBy: "digest",
@@ -756,7 +799,10 @@ const LOCAL_LLM: LocalLlmStatus = {
       contextLength: 131072,
       recommended: false,
       supportsThinking: false,
-      installed: false,
+      // The state every GGUF on a real machine is in the day this ships: the
+      // file is there and nothing beside it says what was checked. It is
+      // rendered as neither good news nor bad, which is the whole point.
+      integrity: { state: "unrecorded" },
       verifiedBy: "digest",
       draft: null,
     },
@@ -769,7 +815,7 @@ const LOCAL_LLM: LocalLlmStatus = {
       contextLength: null,
       recommended: false,
       supportsThinking: true,
-      installed: false,
+      integrity: { state: "not-installed" },
       // The degraded case: a model added to the registry before anybody measured
       // or pinned it. Nothing ships in this state, and the screen still has to
       // say so plainly rather than leaving the row silent.
@@ -1077,7 +1123,11 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
     const action = arg<HotkeyAction>(a, "action") ?? "dictation";
     const accelerators = arg<string[]>(a, "accelerators") ?? [];
     const change: HotkeyChange = {
-      binding: { action, accelerators: accelerators.map(standard) },
+      binding: {
+        action,
+        accelerators: accelerators.map(standard),
+        mode: "toggle",
+      },
       registrations: accelerators.map((accelerator) => ({
         state: "registered" as const,
         accelerator,
@@ -1094,6 +1144,26 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
           accelerator,
           reason: `${accelerator} also fires when you press AltGr. This layout types '@' with Control and Alt together, and Windows sends left Control and right Alt for AltGr -- which completes this chord, with nothing downstream able to tell that apart from you pressing it deliberately.`,
         })),
+    };
+    return change;
+  },
+  // Echoes the mode back rather than remembering it: this file exists so a
+  // screen can be looked at without a backend, and a fixture that kept state
+  // would start being a second implementation to keep in step.
+  hotkey_set_mode: (a) => {
+    const action = arg<HotkeyAction>(a, "action") ?? "dictation";
+    const mode = arg<HotkeyMode>(a, "mode") ?? "toggle";
+    const change: HotkeyChange = {
+      binding: {
+        action,
+        accelerators: [standard("Control+Shift+D")],
+        mode,
+      },
+      registrations: [
+        { state: "registered" as const, accelerator: "Control+Shift+D" },
+      ],
+      live: true,
+      cautions: [],
     };
     return change;
   },
@@ -1354,6 +1424,11 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
   local_model_install: () => "whisper-large-v3-turbo-q5",
   local_server_start: () => 8178,
   local_server_stop: () => null,
+  local_server_refresh: () => ({
+    files: 37,
+    restarted: "whisper-large-v3-turbo-q5",
+    restartError: null,
+  }),
 
   /* local text generation */
   local_llm_status: () => LOCAL_LLM,

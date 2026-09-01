@@ -27,7 +27,7 @@ when you configure them with your own credentials, and requests go straight to t
 > | 5 — Calendars | Built. `calendar-core`, loopback PKCE, tokens held by reference, and `Integrations > Calendar`. No calendar code has answered a real request. |
 > | 6 — Local API and CLI | Complete. Off by default, started from the settings screen, which re-reads the discovery file's real permissions rather than remembering them. The `knegiswhisper` CLI is tested against it as a compiled binary, exit codes included. |
 > | 7 — MCP and the integration screens | Built. A `knegiswhisper-mcp` stdio server with thirteen tools, `Integrations > MCP`, `Integrations > CLI`, and [agent skills](docs/agent-skills/) for both. No MCP client has ever connected. |
-> | 8 — Media import | Built. ffmpeg and yt-dlp sidecars behind `Notes > Upload`; subtitle export is verified end to end against the real transcription server. Diarization and semantic search are not started. |
+> | 8 — Media import | Built. ffmpeg and yt-dlp sidecars behind `Notes > Upload`; subtitle export is verified end to end against the real transcription server. Speaker diarization is built and reachable through `Settings > Meetings`, measured against the real CLI — though whether its speaker turns are right in a real meeting is unproven. Semantic search is not started. |
 > | 9 — Release | The workflow exists and has never been dispatched. No keypair. |
 > | 10 — Agent features | Not started. There is no chat screen; the local LLM's only consumer today is dictation cleanup. |
 >

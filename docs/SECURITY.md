@@ -243,6 +243,20 @@ without one, so an unpinned binary does not deserialize rather than skipping ver
 Temporary files are created with restrictive permissions, and temporary audio is deleted
 automatically.
 
+**The digest that was checked is now written down** (2026-09-01, KNEG-113). Until then it was
+verified against the download and then forgotten, so an installed sidecar could be proved to exist
+and never to be the one this build pins — the machine this was written on ran a `whisper` sidecar
+a week behind its own manifest and nothing would ever have said so. `install` writes a
+`.kw-install.json` into the directory it promotes, and `kw_sidecar::record::freshness` compares it
+against the pinned digest.
+
+**Read it as a staleness check and not as a tamper check.** It proves the directory was produced by
+extracting the archive with that digest. Nothing re-hashes an installed executable, and the record
+is an ordinary file that anything able to write to the directory could rewrite — so it detects a
+sidecar left behind by an older release, not one substituted by an attacker who already has write
+access there. An install made before the record existed reports `Unknown`, which is neither
+`Current` nor `Stale`, for the same reason `VerifiedBy::StatedDigest` is not `Digest`.
+
 ### What is bounded, and what is ceilinged
 
 A **bound** caps the download before the bytes reach disk. A **ceiling** caps what an archive may

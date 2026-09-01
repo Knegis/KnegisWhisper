@@ -38,6 +38,7 @@ import {
   parseGithubAssetUrl,
   parseHfUrl,
   pinnedTargets,
+  registry,
   statedTargets,
 } from "./pin.mjs";
 
@@ -205,15 +206,19 @@ test("the committed registry still carries pins for all six whisper models", () 
   // measure. A pin dropped from WHISPER_PINS would otherwise make `--verify`
   // quietly check five models and pass.
   //
-  // The sherpa count went 2 -> 3 on 2026-09-01 when
-  // `nemotron-speech-streaming-en-0.6b` was measured for KNEG-84. Raised rather
-  // than loosened to `>= 2`: a count is the only thing here that notices a pin
-  // going missing, and a lower bound would notice nothing.
+  // The sherpa count went 2 -> 3 -> 4 on 2026-09-01: first
+  // `nemotron-speech-streaming-en-0.6b` for KNEG-84, then
+  // `nemotron-3.5-asr-streaming-0.6b` for KNEG-118 the same day. Raised each
+  // time rather than loosened to `>= 2`: a count is the only thing here that
+  // notices a pin going *missing*, and a lower bound would notice nothing.
+  //
+  // Four is now every sherpa model the registry declares, so the next change to
+  // this number is either a new model or a regression.
   const targets = pinnedTargets();
   const whisper = targets.filter((t) => t.kind === "whisper");
   const sherpa = targets.filter((t) => t.kind === "sherpa");
   assert.equal(whisper.length, 6, "every whisper model is pinned");
-  assert.equal(sherpa.length, 3, "two Parakeet archives and one Nemotron are pinned");
+  assert.equal(sherpa.length, 4, "both Parakeet archives and both Nemotron archives are pinned");
   for (const t of targets) {
     assert.match(t.sha256, /^[0-9a-f]{64}$/, `${t.id} has no usable digest`);
     assert.ok(t.url?.startsWith("https://"), `${t.id} has no https URL`);
@@ -462,24 +467,71 @@ test("githubAssetTargets reads the committed sherpa pins", () => {
   assert.equal(targets[0].sha256, "a".repeat(64), "lowercased so the comparison cannot miss");
 });
 
-test("githubAssetTargets survives a registry with no sherpa models at all", () => {
+test("githubAssetTargets survives a registry with no models at all", () => {
   assert.deepEqual(githubAssetTargets({}), []);
 });
 
-test("the committed registry still carries every sherpa archive as a GitHub asset", () => {
-  // The same argument as the 39-object and six-whisper counts: an archive
-  // dropped from SHERPA_PINS would otherwise make --verify-stated check one
-  // asset, or none, and report success.
+test("the committed registry still carries every k2-fsa asset as a GitHub asset", () => {
+  // The same argument as the 39-object and six-whisper counts: a pin dropped
+  // from its table would otherwise make --verify-stated check one asset, or
+  // none, and report success.
   //
-  // Three since 2026-09-01, not two. The third is
-  // `nemotron-speech-streaming-en-0.6b`, measured for KNEG-84 because the
-  // streaming protocol could not be measured without a streaming model.
+  // By id rather than by count, since 2026-09-01. It asserted `length === 4`
+  // and there are six; bumping the literal would have kept it green and
+  // stopped it saying anything, because a count cannot tell a model that was
+  // replaced from one that is still there. The four sherpa ASR archives were
+  // measured earlier that day (KNEG-84 needed a streaming model to measure the
+  // protocol against, KNEG-118 because somebody tried to install the other
+  // one); the two diarization models were measured the same day for KNEG-73a.
   const targets = githubAssetTargets();
-  assert.equal(targets.length, 3, "two Parakeet archives and one Nemotron are pinned");
+  assert.deepEqual(
+    targets.map((t) => t.id).sort(),
+    [
+      "3dspeaker-campplus-en",
+      "nemotron-3.5-asr-streaming-0.6b",
+      "nemotron-speech-streaming-en-0.6b",
+      "parakeet-tdt-0.6b-v3",
+      "parakeet-unified-en-0.6b",
+      "sherpa-onnx-pyannote-segmentation-3-0",
+    ],
+    "every pinned k2-fsa model is re-readable from its release"
+  );
   for (const target of targets) {
     assert.match(target.sha256, /^[0-9a-f]{64}$/, `${target.id} has no usable digest`);
     assert.ok(target.sizeBytes > 0, `${target.id} has no measured size`);
     assert.equal(target.repo, "k2-fsa/sherpa-onnx");
+  }
+
+  // Not every asset is an archive any more, and that is a real difference
+  // rather than an exception: the speaker embedding model is a single `.onnx`
+  // that nothing extracts, which is why it carries no extraction ceiling.
+  const embedding = targets.find((t) => t.id === "3dspeaker-campplus-en");
+  assert.ok(embedding.name.endsWith(".onnx"), embedding.name);
+  for (const target of targets.filter((t) => t.id !== "3dspeaker-campplus-en")) {
     assert.ok(target.name.endsWith(".tar.bz2"), `${target.id} does not name an archive`);
   }
+});
+
+test("the two diarization models are one segmentation and one embedding", () => {
+  // A run passes one of each, so two of the same kind is a registry that
+  // describes an install which cannot work. The generator refuses to emit
+  // that; this is the check that the committed file is what the generator
+  // would emit.
+  const { localAsr } = registry();
+  assert.deepEqual(
+    localAsr.diarization.map((m) => m.role).sort(),
+    ["embedding", "segmentation"]
+  );
+  for (const model of localAsr.diarization) {
+    assert.match(model.sha256, /^[0-9a-f]{64}$/, `${model.id} is unpinned`);
+    assert.ok(model.expectedSizeBytes > 0, `${model.id} has no measured size`);
+  }
+
+  // Only the archive carries an extraction ceiling. A ceiling on the bare
+  // `.onnx` would describe a step that does not happen to it, and a missing
+  // one on the archive would be the decompression-bomb hole KNEG-100 closed.
+  const byRole = Object.fromEntries(localAsr.diarization.map((m) => [m.role, m]));
+  assert.ok(byRole.segmentation.maxExtractedSizeBytes > 0);
+  assert.equal(byRole.embedding.maxExtractedSizeBytes, null);
+  assert.equal(byRole.embedding.extractDir, null);
 });

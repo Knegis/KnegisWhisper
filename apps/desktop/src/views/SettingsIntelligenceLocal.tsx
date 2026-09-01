@@ -16,22 +16,36 @@
  * verified* and *checksum verified against the publisher's own* are different
  * sentences because they are different guarantees. See `LOCAL_LLM_PINS` in
  * `tools/integration-audit/generate-provider-registry.mjs`.
+ *
+ * And it covers the third thing, which is *when*. A row used to say "Installed"
+ * and mean only that a path existed — so a model corrupted months after a clean
+ * install looked exactly like one checked five minutes ago. `ggufIntegrityLabel`
+ * now says which of those it is, with a fourth answer for the models installed
+ * before any of this existed: nothing is recorded about them, and that is
+ * rendered as nothing rather than as either good news or bad. The **Check the
+ * bytes** button is the only thing on this screen that actually hashes a file,
+ * and it says how long that will take before it starts. KNEG-107.
  */
 
 import { useCallback, useEffect, useState } from "react";
 
 import { Row } from "../components/Row";
-import { verificationLabel } from "../lib/labels";
+import {
+  ggufIntegrityLabel,
+  recheckOutcomeLabel,
+  verificationLabel,
+} from "../lib/labels";
 import {
   getLocalLlmStatus,
   installLocalLlm,
   onLocalLlmProgress,
+  recheckLocalLlmModel,
   startLocalLlm,
   stopLocalLlm,
   type LocalLlmModelStatus,
   type LocalLlmProgress,
 } from "../lib/ipc";
-import { useRefresh } from "../lib/useRefresh";
+import { message, useRefresh } from "../lib/useRefresh";
 
 /** Bytes, at a scale a person reads. */
 function size(bytes: number | null): string {
@@ -75,6 +89,22 @@ export function SettingsIntelligenceLocal() {
   const load = useCallback(() => getLocalLlmStatus(), []);
   const { data, error, reload, guard } = useRefresh(load);
   const [progress, setProgress] = useState<string | null>(null);
+  /**
+   * What the last re-hash found, and the caveat that came with it.
+   *
+   * Kept beside the row rather than folded into `progress`, because a mismatch
+   * is a finding somebody has to read and decide about — putting it in the line
+   * that install progress overwrites would let the most important sentence on
+   * this screen be replaced by "Downloading…".
+   */
+  const [checked, setChecked] = useState<{
+    id: string;
+    text: string;
+    detail: string;
+    caveat?: string | undefined;
+  } | null>(null);
+  /** Which model is being hashed, so its button can say so and not restart. */
+  const [checking, setChecking] = useState<string | null>(null);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -97,53 +127,121 @@ export function SettingsIntelligenceLocal() {
 
   const running = data.port !== null;
 
-  const modelRow = (m: LocalLlmModelStatus) => (
-    <li key={m.id}>
-      <code>{m.id}</code> {m.name}
-      <em className="row-detail">
-        {m.provider} · {size(m.sizeBytes)}
-        {m.quantization ? ` · ${m.quantization}` : ""}
-        {m.contextLength ? ` · ${(m.contextLength / 1024).toFixed(0)}k context` : ""}
-        {m.supportsThinking ? " · thinking" : ""}
-        {m.recommended ? " · recommended" : ""}
-      </em>
-      <em className="row-detail">
-        {/* Before the button, for the same reason the size is: a guarantee
-            nobody was told about is a guarantee nobody can weigh. */}
-        {verificationLabel(m.verifiedBy)}
-      </em>
-      {m.draft ? (
+  /**
+   * Hash one model's files, on request.
+   *
+   * Not routed through `guard`, which is for mutations whose only interesting
+   * outcome is "it worked or it threw". A re-check has a third outcome that is
+   * neither — the file does not match — and that one has to reach the screen as
+   * a finding rather than as a red error line.
+   */
+  const recheck = async (id: string) => {
+    setChecking(id);
+    setChecked(null);
+    try {
+      const outcome = await recheckLocalLlmModel(id);
+      setChecked({ id, ...recheckOutcomeLabel(outcome) });
+      // The record beside the file has just been rewritten or removed, so the
+      // row's own state is now stale.
+      await reload();
+    } catch (e) {
+      setChecked({
+        id,
+        text: "The check could not be made",
+        detail: message(e),
+      });
+    } finally {
+      setChecking(null);
+    }
+  };
+
+  const modelRow = (m: LocalLlmModelStatus) => {
+    const installed = m.integrity.state !== "not-installed";
+    const state = ggufIntegrityLabel(m.integrity);
+    const draftState = m.draft ? ggufIntegrityLabel(m.draft.integrity) : null;
+
+    return (
+      <li key={m.id}>
+        <code>{m.id}</code> {m.name}
         <em className="row-detail">
-          has a speculative-decoding drafter, {size(m.draft.sizeBytes)}
-          {m.draft.installed ? " (installed)" : " — downloaded with the model"}
-          {m.draft.verifiedBy === m.verifiedBy
-            ? ""
-            : ` — ${verificationLabel(m.draft.verifiedBy)}`}
+          {m.provider} · {size(m.sizeBytes)}
+          {m.quantization ? ` · ${m.quantization}` : ""}
+          {m.contextLength ? ` · ${(m.contextLength / 1024).toFixed(0)}k context` : ""}
+          {m.supportsThinking ? " · thinking" : ""}
+          {m.recommended ? " · recommended" : ""}
         </em>
-      ) : null}
-      {m.installed ? (
-        <button
-          type="button"
-          onClick={() => {
-            void guard(() => startLocalLlm(m.id));
-          }}
-        >
-          {data.runningModel === m.id ? "Restart" : "Use this model"}
-        </button>
-      ) : (
-        <button
-          type="button"
-          onClick={() => {
-            // Said before it starts, because the number is the decision.
-            setProgress(`Starting a ${size(m.sizeBytes)} download…`);
-            void guard(() => installLocalLlm(m.id));
-          }}
-        >
-          Install ({size(m.sizeBytes)})
-        </button>
-      )}
-    </li>
-  );
+        <em className="row-detail">
+          {/* Before the button, for the same reason the size is: a guarantee
+              nobody was told about is a guarantee nobody can weigh. */}
+          {verificationLabel(m.verifiedBy)}
+        </em>
+        {installed ? (
+          <em className="row-detail">
+            {state.text} — {state.detail}
+          </em>
+        ) : null}
+        {m.draft ? (
+          <em className="row-detail">
+            has a speculative-decoding drafter, {size(m.draft.sizeBytes)}
+            {m.draft.integrity.state === "not-installed"
+              ? " — downloaded with the model"
+              : ` (${draftState?.text.toLowerCase() ?? ""})`}
+            {m.draft.verifiedBy === m.verifiedBy
+              ? ""
+              : ` — ${verificationLabel(m.draft.verifiedBy)}`}
+          </em>
+        ) : null}
+        {installed ? (
+          <>
+            <button
+              type="button"
+              onClick={() => {
+                void guard(() => startLocalLlm(m.id));
+              }}
+            >
+              {data.runningModel === m.id ? "Restart" : "Use this model"}
+            </button>
+            <button
+              type="button"
+              disabled={checking !== null}
+              onClick={() => {
+                void recheck(m.id);
+              }}
+            >
+              {/* The cost is in the label, exactly as the download size is: this
+                  reads the whole file back, and a button that looks free but
+                  takes a minute on a 20 GB model reads as a hang. */}
+              {checking === m.id
+                ? "Reading the whole file…"
+                : `Check the bytes (reads ${size(m.sizeBytes)})`}
+            </button>
+          </>
+        ) : (
+          <button
+            type="button"
+            onClick={() => {
+              // Said before it starts, because the number is the decision.
+              setProgress(`Starting a ${size(m.sizeBytes)} download…`);
+              void guard(() => installLocalLlm(m.id));
+            }}
+          >
+            Install ({size(m.sizeBytes)})
+          </button>
+        )}
+        {checked?.id === m.id ? (
+          <>
+            <em className="row-detail">
+              {checked.text} — {checked.detail}
+            </em>
+            {checked.caveat ? <p className="caveat">{checked.caveat}</p> : null}
+          </>
+        ) : null}
+        {installed && state.caveat ? (
+          <p className="caveat">{state.caveat}</p>
+        ) : null}
+      </li>
+    );
+  };
 
   return (
     <div className="view">

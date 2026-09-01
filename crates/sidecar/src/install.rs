@@ -26,6 +26,7 @@ use kw_network_policy::{NetworkPolicy, RequestPurpose};
 
 use crate::integrity;
 use crate::manifest::{is_plain_file_name, ArchiveKind, Asset, SidecarSpec};
+use crate::record;
 
 /// Why an install did not finish.
 #[derive(Debug, thiserror::Error)]
@@ -78,6 +79,49 @@ pub enum InstallError {
          the manifest names the wrong path inside it."
     )]
     ExecutableMissing { expected: String },
+
+    /// The install directory could not be replaced because something is using
+    /// it. On Windows that is nearly always the sidecar itself still running.
+    ///
+    /// Typed rather than left as [`Self::Io`], which is what it was. A caller
+    /// that wants to stop the sidecar and try again had nothing to match on,
+    /// and the user got "could not remove …: Access is denied (os error 5)"
+    /// with no hint that the cure is in their hands. **Measured on 2026-09-01
+    /// with `cargo run -p kw-sidecar --example running_exe_lock_probe`**: on
+    /// Windows, `remove_dir_all` of a directory holding a running executable
+    /// fails with os error 5, reported against the `.exe`, while the same call
+    /// on the same directory with the process stopped succeeds.
+    #[error(
+        "{path} could not be replaced because something is still using it. If {sidecar} is \\
+         running, stop it and try again."
+    )]
+    InUse {
+        sidecar: String,
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+
+    /// Every candidate staging directory is present and cannot be cleared.
+    ///
+    /// This used to be an ordinary [`Self::Io`] on the single `{name}.incoming`
+    /// path, and it was a **permanently stuck install**: one leftover directory
+    /// nothing could delete — a file held open by a virus scanner, a
+    /// hand-created directory with the wrong owner — and every future install
+    /// of that sidecar failed at the first line, for ever, with no way for the
+    /// user to get past it from inside the application. Now the install moves
+    /// to the next staging name and only gives up when it has run out. See
+    /// KNEG-113.
+    #[error(
+        "none of the {attempts} staging directories for {sidecar} under {root} could be \\
+         cleared. The last attempt said: {last}. Remove {root} by hand and try again."
+    )]
+    NoStagingDirectory {
+        sidecar: String,
+        root: PathBuf,
+        attempts: usize,
+        last: String,
+    },
 }
 
 /// How far along an install is.
@@ -104,8 +148,28 @@ pub struct Installed {
 
 /// Download, verify, and unpack a sidecar into `root`.
 ///
-/// Replaces any previous install of the same sidecar. Leaves nothing behind on
-/// failure except a temporary directory that the next attempt overwrites.
+/// Replaces any previous install of the same sidecar, and writes a
+/// [`record::InstallRecord`] beside the files saying which pinned archive they
+/// came from — that record is the only thing that ever makes an *installed*
+/// sidecar's identity knowable, since [`crate::locate`] proves existence and
+/// nothing more.
+///
+/// Leaves nothing behind on failure except a staging directory that a later
+/// attempt clears or steps past. Two rules govern that directory, and both are
+/// there because the single-name, hard-erroring version made one stuck install
+/// permanent:
+///
+/// - A staging directory is used only when it was **absent, or emptied by this
+///   call**. Never merely because it could be written to: whatever a previous
+///   attempt left there did not finish verifying, and promoting it would put
+///   unverified bytes where the sidecar goes.
+/// - Failing to clear one is not fatal. [`take_staging`] moves to the next
+///   name, and only [`STAGING_ATTEMPTS`] exhausted names are an error.
+///
+/// **Replacing the install directory is different and stays fatal**, because
+/// `rename` cannot land on a directory that is still there. When it fails for
+/// permissions the error is [`InstallError::InUse`], which is the caller's cue
+/// to stop the sidecar and try again.
 ///
 /// **Both bounds come from the manifest.** The download is capped at
 /// [`Asset::size_bytes`], which is exact — `tools/sidecar-pin/pin.mjs` takes it
@@ -126,9 +190,7 @@ pub async fn install(
     // See `NetworkPolicy::download_to_file`: held across awaits, so `Send`.
     progress: &mut (dyn FnMut(Progress) + Send),
 ) -> Result<Installed, InstallError> {
-    let staging = root.join(format!("{}.incoming", spec.name));
-    remove_dir(&staging)?;
-    create_dir(&staging)?;
+    let staging = take_staging(root, &spec.name)?;
 
     let archive = staging.join("asset");
 
@@ -168,19 +230,178 @@ pub async fn install(
     // Swap into place only now that the install is known good, so a failure
     // never leaves a half-replaced directory where a working one used to be.
     let final_dir = spec.install_dir(root);
-    remove_dir(&final_dir)?;
-    fs::rename(&unpacked, &final_dir).map_err(|source| InstallError::Io {
-        action: "move into place",
-        path: final_dir.clone(),
-        source,
-    })?;
-    remove_dir(&staging)?;
+    promote(spec, asset, &unpacked, &final_dir)?;
+
+    // Best effort, and deliberately not `?`. The install has succeeded: the
+    // user has the sidecar they asked for, and a staging directory that will
+    // not go away is a few tens of megabytes rather than a failure. It used to
+    // be `remove_dir(&staging)?`, which turned a file some scanner still had
+    // open into a reported install failure for an install that had already
+    // worked. `take_staging` routes around whatever is left here next time.
+    sweep_staging(root, &spec.name);
 
     Ok(Installed {
         executable: final_dir.join(asset.executable_name()),
         files,
         source_url: download.final_url,
     })
+}
+
+/// How many staging directories are tried before an install gives up.
+///
+/// Ten rather than one, and rather than unbounded. One is the number that made
+/// a single undeletable leftover a permanent failure; unbounded would fill the
+/// disk with `.incoming.N` directories on a root that has become unwritable for
+/// some quite different reason. Ten is enough that a real install always finds
+/// one and few enough that the failure message is still worth printing.
+const STAGING_ATTEMPTS: usize = 10;
+
+/// The nth candidate staging directory for a sidecar.
+///
+/// The zeroth keeps the historical `{name}.incoming` name, so an install on a
+/// machine with a leftover from an older build reuses it rather than stepping
+/// past it and leaving it there for ever.
+fn staging_path(root: &Path, name: &str, attempt: usize) -> PathBuf {
+    if attempt == 0 {
+        root.join(format!("{name}.incoming"))
+    } else {
+        root.join(format!("{name}.incoming.{attempt}"))
+    }
+}
+
+/// Find a staging directory that is certainly empty, and create it.
+///
+/// **The one rule: never build on top of a directory whose contents are
+/// unknown.** Whatever is in a leftover staging directory came from a download
+/// that did not finish, and promoting it would put unverified files where the
+/// sidecar goes. So a candidate is used only when it was absent or this call
+/// removed it — never merely because `create_dir_all` succeeded on it.
+fn take_staging(root: &Path, name: &str) -> Result<PathBuf, InstallError> {
+    let mut last: Option<io::Error> = None;
+
+    for attempt in 0..STAGING_ATTEMPTS {
+        let candidate = staging_path(root, name, attempt);
+        match fs::remove_dir_all(&candidate) {
+            Ok(()) => {}
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+            Err(err) => {
+                tracing::warn!(
+                    path = %candidate.display(),
+                    error = %err,
+                    "a staging directory could not be cleared; trying the next one"
+                );
+                last = Some(err);
+                continue;
+            }
+        }
+        match fs::create_dir_all(&candidate) {
+            Ok(()) => return Ok(candidate),
+            Err(err) => {
+                last = Some(err);
+                continue;
+            }
+        }
+    }
+
+    Err(InstallError::NoStagingDirectory {
+        sidecar: name.to_owned(),
+        root: root.to_path_buf(),
+        attempts: STAGING_ATTEMPTS,
+        last: last.map_or_else(|| "nothing".to_owned(), |err| err.to_string()),
+    })
+}
+
+/// Remove every staging directory this sidecar could be using.
+///
+/// Called after a successful promote. Silent by design — see the call site.
+fn sweep_staging(root: &Path, name: &str) {
+    for attempt in 0..STAGING_ATTEMPTS {
+        let path = staging_path(root, name, attempt);
+        if let Err(err) = fs::remove_dir_all(&path) {
+            if err.kind() != io::ErrorKind::NotFound {
+                tracing::debug!(
+                    path = %path.display(),
+                    error = %err,
+                    "a staging directory outlived the install that made it"
+                );
+            }
+        }
+    }
+}
+
+/// Put a verified staging payload where the sidecar lives.
+///
+/// The record is written **into the staging directory**, not into the final
+/// one, so it is carried across by the same `rename` as the files it describes.
+/// There is no moment at which the install directory exists without its record,
+/// or holds a record left over from a different extraction. See
+/// [`crate::record`].
+///
+/// Separated from [`install`] so the sequence can be tested: everything above
+/// it needs a network, and this is the part that decides what an installed
+/// sidecar will later be able to say about itself.
+fn promote(
+    spec: &SidecarSpec,
+    asset: &Asset,
+    unpacked: &Path,
+    final_dir: &Path,
+) -> Result<(), InstallError> {
+    record::write(unpacked, &record::InstallRecord::of(spec, asset)).map_err(|source| {
+        InstallError::Io {
+            action: "record the install in",
+            path: unpacked.to_path_buf(),
+            source,
+        }
+    })?;
+
+    replace_dir(final_dir, &spec.name)?;
+
+    fs::rename(unpacked, final_dir).map_err(|source| InstallError::Io {
+        action: "move into place",
+        path: final_dir.to_path_buf(),
+        source,
+    })
+}
+
+/// Clear the install directory so the new one can be renamed onto it.
+///
+/// A hard error, unlike the staging directories, and it has to be: `rename`
+/// onto an existing directory fails on Windows, so there is nowhere else for
+/// the install to go. What changed is the *shape* of the error — see
+/// [`replace_failure`].
+fn replace_dir(dir: &Path, sidecar: &str) -> Result<(), InstallError> {
+    match fs::remove_dir_all(dir) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(source) => Err(replace_failure(dir, sidecar, source)),
+    }
+}
+
+/// Which error a failure to clear the install directory deserves.
+///
+/// A refusal that looks like a permission problem becomes
+/// [`InstallError::InUse`], with the one sentence the user can act on, because
+/// on Windows this is nearly always the sidecar's own executable still running
+/// out of the directory — measured on 2026-09-01, `os error 5` against the
+/// `.exe`, by `examples/running_exe_lock_probe.rs`. Anything else stays a plain
+/// [`InstallError::Io`]: a full disk and a running server are not the same
+/// advice.
+///
+/// Its own function so the mapping can be tested without arranging for the
+/// operating system to deny anything.
+fn replace_failure(dir: &Path, sidecar: &str, source: io::Error) -> InstallError {
+    if source.kind() == io::ErrorKind::PermissionDenied {
+        return InstallError::InUse {
+            sidecar: sidecar.to_owned(),
+            path: dir.to_path_buf(),
+            source,
+        };
+    }
+    InstallError::Io {
+        action: "remove",
+        path: dir.to_path_buf(),
+        source,
+    }
 }
 
 /// Unpack `archive` into `dest`, returning how many files were written.
@@ -1049,18 +1270,6 @@ fn create_dir(path: &Path) -> Result<(), InstallError> {
     })
 }
 
-fn remove_dir(path: &Path) -> Result<(), InstallError> {
-    match fs::remove_dir_all(path) {
-        Ok(()) => Ok(()),
-        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(source) => Err(InstallError::Io {
-            action: "remove",
-            path: path.to_path_buf(),
-            source,
-        }),
-    }
-}
-
 /// Set the executable bit on Unix. A no-op on Windows, where it is the
 /// extension that decides.
 ///
@@ -1805,5 +2014,268 @@ mod tests {
             extract(&archive, ArchiveKind::Zip, "Release", "", &dest).unwrap(),
             2
         );
+    }
+
+    /* ------------------------------------------- staging, promote, record */
+
+    const PINNED: &str = "c2a4b60edb11f7e11a9191ffb50929535527d4d91c9903dbe3e554583bbbc63d";
+
+    fn test_asset() -> Asset {
+        Asset {
+            url: "https://example.invalid/whisper-bin-x64.zip".to_owned(),
+            archive: ArchiveKind::Zip,
+            sha256: crate::Sha256Digest::parse(PINNED).unwrap(),
+            size_bytes: 10,
+            max_extracted_size_bytes: 10,
+            executable_in_archive: "Release/whisper-server.exe".to_owned(),
+        }
+    }
+
+    fn test_spec() -> SidecarSpec {
+        let mut targets = std::collections::BTreeMap::new();
+        targets.insert(
+            crate::Target::WindowsX8664,
+            crate::Availability::Published(test_asset()),
+        );
+        SidecarSpec {
+            name: "whisper".to_owned(),
+            description: "a test sidecar".to_owned(),
+            source: crate::Source {
+                repo: "ggml-org/whisper.cpp".to_owned(),
+                release: "b4938".to_owned(),
+                pinned_because: "reviewed".to_owned(),
+            },
+            transport: crate::manifest::Transport::Loopback {
+                port_range: crate::PortRange {
+                    first: 8178,
+                    last: 8188,
+                },
+            },
+            command_fragments: vec!["whisper-server".to_owned()],
+            targets,
+        }
+    }
+
+    /// A staging directory that looks like a finished extraction.
+    fn staged(root: &Path) -> PathBuf {
+        let unpacked = root.join("whisper.incoming").join("files");
+        fs::create_dir_all(&unpacked).unwrap();
+        fs::write(unpacked.join("whisper-server.exe"), b"MZ").unwrap();
+        fs::write(unpacked.join("ggml.dll"), b"MZ").unwrap();
+        unpacked
+    }
+
+    #[test]
+    fn a_promoted_install_can_say_which_archive_it_came_from() {
+        // The whole of KNEG-113 in one assertion. Before this, an installed
+        // sidecar could only be proved to *exist*; nothing on disk said which
+        // build it was, so nothing could ever notice it had fallen behind.
+        let dir = tempfile::tempdir().unwrap();
+        let unpacked = staged(dir.path());
+        let final_dir = dir.path().join("whisper");
+
+        promote(&test_spec(), &test_asset(), &unpacked, &final_dir).unwrap();
+
+        let installation = crate::locate(
+            "whisper",
+            &test_asset(),
+            &crate::SearchPath {
+                bundled: None,
+                downloaded: dir.path().to_path_buf(),
+            },
+            &crate::RealFs,
+        );
+        assert!(installation.is_installed());
+        assert_eq!(
+            record::freshness(
+                &installation,
+                &record::read(&final_dir),
+                "whisper",
+                &test_asset().sha256,
+            ),
+            record::Freshness::Current
+        );
+    }
+
+    #[test]
+    fn the_record_is_written_into_staging_before_anything_is_replaced() {
+        // Ordering, and it is the whole reason a record can be trusted. Written
+        // into staging, it is carried across by the same rename as the files it
+        // describes. Written to the install directory *after* the rename, a
+        // crash between the two steps would leave an install whose record
+        // described the one it replaced -- worse than no record, because it
+        // reads as a measurement.
+        //
+        // Observed by making the promote fail at the replace step: a plain file
+        // where the install directory should be, which `remove_dir_all` will
+        // not clear. The record has to be in staging by the time that happens.
+        let dir = tempfile::tempdir().unwrap();
+        let unpacked = staged(dir.path());
+        let blocked = dir.path().join("whisper");
+        fs::write(&blocked, b"not a directory").unwrap();
+
+        assert!(promote(&test_spec(), &test_asset(), &unpacked, &blocked).is_err());
+        assert!(
+            unpacked.join(record::RECORD_FILE).is_file(),
+            "the record has to be written before the replace is attempted"
+        );
+    }
+
+    #[test]
+    fn a_promote_leaves_no_copy_of_the_payload_in_staging() {
+        let dir = tempfile::tempdir().unwrap();
+        let unpacked = staged(dir.path());
+        let final_dir = dir.path().join("whisper");
+
+        promote(&test_spec(), &test_asset(), &unpacked, &final_dir).unwrap();
+
+        assert!(!unpacked.exists(), "staging kept a copy of the payload");
+        assert!(final_dir.join(record::RECORD_FILE).is_file());
+    }
+
+    #[test]
+    fn promoting_over_an_older_install_replaces_it_record_and_all() {
+        let dir = tempfile::tempdir().unwrap();
+        let final_dir = dir.path().join("whisper");
+        fs::create_dir_all(&final_dir).unwrap();
+        fs::write(final_dir.join("whisper-server.exe"), b"old").unwrap();
+        fs::write(final_dir.join("left-over.dll"), b"old").unwrap();
+
+        let unpacked = staged(dir.path());
+        promote(&test_spec(), &test_asset(), &unpacked, &final_dir).unwrap();
+
+        assert_eq!(
+            fs::read(final_dir.join("whisper-server.exe")).unwrap(),
+            b"MZ"
+        );
+        assert!(
+            !final_dir.join("left-over.dll").exists(),
+            "the old directory was merged into rather than replaced"
+        );
+    }
+
+    #[test]
+    fn a_free_staging_name_is_the_plain_one() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(
+            take_staging(dir.path(), "whisper").unwrap(),
+            dir.path().join("whisper.incoming")
+        );
+    }
+
+    #[test]
+    fn a_leftover_staging_directory_is_emptied_and_reused() {
+        // The state the machine this was written on is in: a complete extracted
+        // copy sitting in `whisper.incoming` from an install that failed at the
+        // promote step. Reusing the name matters -- stepping past it would
+        // leave it there for ever -- and so does emptying it, because its
+        // contents came from a run that never finished.
+        let dir = tempfile::tempdir().unwrap();
+        let leftover = dir.path().join("whisper.incoming");
+        fs::create_dir_all(leftover.join("files")).unwrap();
+        fs::write(leftover.join("files").join("half.dll"), b"junk").unwrap();
+
+        let taken = take_staging(dir.path(), "whisper").unwrap();
+        assert_eq!(taken, leftover);
+        assert_eq!(fs::read_dir(&taken).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn a_staging_name_that_cannot_be_cleared_is_stepped_past_rather_than_fatal() {
+        // This is the permanently-stuck install. One `{name}.incoming` that
+        // will not go away used to fail every future install of that sidecar at
+        // the first line, with nothing the user could do from inside the
+        // application. A plain file with the directory's name is the portable
+        // way to make `remove_dir_all` and `create_dir_all` both refuse.
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("whisper.incoming"), b"not a directory").unwrap();
+
+        let taken = take_staging(dir.path(), "whisper").unwrap();
+        assert_eq!(taken, dir.path().join("whisper.incoming.1"));
+        assert!(taken.is_dir());
+    }
+
+    #[test]
+    fn an_install_gives_up_only_when_every_staging_name_is_blocked() {
+        let dir = tempfile::tempdir().unwrap();
+        for attempt in 0..STAGING_ATTEMPTS {
+            fs::write(staging_path(dir.path(), "whisper", attempt), b"blocked").unwrap();
+        }
+
+        match take_staging(dir.path(), "whisper") {
+            Err(InstallError::NoStagingDirectory {
+                sidecar,
+                attempts,
+                last,
+                ..
+            }) => {
+                assert_eq!(sidecar, "whisper");
+                assert_eq!(attempts, STAGING_ATTEMPTS);
+                // The operating system's own words. Swallowing them and
+                // reporting the placeholder would leave whoever is stuck with
+                // nothing to look up.
+                assert_ne!(last, "nothing", "the last failure was not reported");
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_sweep_clears_every_staging_name_and_leaves_the_install_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let install = dir.path().join("whisper");
+        fs::create_dir_all(&install).unwrap();
+        fs::write(install.join("whisper-server.exe"), b"MZ").unwrap();
+        for attempt in 0..STAGING_ATTEMPTS {
+            fs::create_dir_all(staging_path(dir.path(), "whisper", attempt)).unwrap();
+        }
+
+        sweep_staging(dir.path(), "whisper");
+
+        for attempt in 0..STAGING_ATTEMPTS {
+            assert!(!staging_path(dir.path(), "whisper", attempt).exists());
+        }
+        assert!(install.join("whisper-server.exe").is_file());
+    }
+
+    #[test]
+    fn a_directory_held_open_is_reported_as_in_use_and_names_the_sidecar() {
+        // The mapping only, not the operating system: arranging a real denial
+        // needs a running executable, which
+        // `examples/running_exe_lock_probe.rs` does and a unit test should not.
+        // What is asserted here is that a denial becomes the error a caller can
+        // match on and a user can act on, rather than a bare os error 5.
+        let err = replace_failure(
+            Path::new("/data/sidecars/whisper"),
+            "whisper",
+            io::Error::from(io::ErrorKind::PermissionDenied),
+        );
+        match &err {
+            InstallError::InUse { sidecar, path, .. } => {
+                assert_eq!(sidecar, "whisper");
+                assert!(path.ends_with("whisper"));
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(err.to_string().contains("stop it and try again"), "{err}");
+    }
+
+    #[test]
+    fn a_full_disk_is_not_reported_as_a_running_sidecar() {
+        // The advice differs, so the error has to. Every non-permission failure
+        // stays a plain `Io`.
+        let err = replace_failure(
+            Path::new("/data/sidecars/whisper"),
+            "whisper",
+            io::Error::from(io::ErrorKind::OutOfMemory),
+        );
+        assert!(matches!(err, InstallError::Io { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn clearing_an_install_directory_that_is_not_there_is_not_a_failure() {
+        // The first install on a new machine.
+        let dir = tempfile::tempdir().unwrap();
+        replace_dir(&dir.path().join("whisper"), "whisper").unwrap();
     }
 }

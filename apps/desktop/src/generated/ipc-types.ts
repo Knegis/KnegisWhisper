@@ -161,14 +161,48 @@ systemAudio: SystemAudioSupport, };
 export type HotkeyAction = "dictation" | "chat-agent" | "voice-agent" | "translation" | "meeting";
 
 /**
+ * Whether a hotkey toggles on each press or acts for as long as it is held.
+ *
+ * # The default is `Toggle`, and that is deliberate, not inertia
+ *
+ * Push-to-talk is one of the answers to **KNEG-115** — a two-modifier chord
+ * fires on the way into any longer shortcut, and a chord that acts on release
+ * cannot fire as a prefix in the damaging way, because the accidental press
+ * and the accidental release bracket almost no audio instead of bracketing
+ * everything the user did in between. That makes `Hold` a candidate for the
+ * shipped default, and **shipping it as the default here would settle KNEG-115
+ * in passing**, which is exactly the failure that issue is about. The mode
+ * exists; the default is unchanged; the choice stays with the repo owner.
+ *
+ * # What holding costs, said here rather than found out
+ *
+ * A hold shorter than a syllable produces a recording shorter than a syllable.
+ * The audio gate then reports `InsufficientSpeech` and nothing is transcribed
+ * — which is correct behaviour and is also, under push-to-talk, a **routine**
+ * outcome rather than the rare one it is under a toggle. Every mistimed tap,
+ * every accidental prefix, every "I let go too early" ends that way. A user
+ * who reads `InsufficientSpeech` as a fault will go looking for one.
+ */
+export type HotkeyMode = "toggle" | "hold";
+
+/**
  * What an accelerator string can be registered as.
  */
-export type Accelerator = { "kind": "standard", accelerator: string, } | { "kind": "modifier-only", accelerator: string, modifiers: Array<string>, } | { "kind": "invalid", input: string, reason: string, };
+export type Accelerator = { "kind": "standard", accelerator: string, } | { "kind": "modifier-only", accelerator: string, modifiers: Array<string>, } | { "kind": "mouse-button", accelerator: string,
+/**
+ * What the click still does elsewhere, because the hook does not
+ * consume it. `Back` or `Forward`.
+ */
+alsoDoes: string, } | { "kind": "invalid", input: string, reason: string, };
 
 /**
  * One action's configured hotkeys, classified.
  */
-export type Binding = { action: HotkeyAction, accelerators: Array<Accelerator>, };
+export type Binding = { action: HotkeyAction, accelerators: Array<Accelerator>,
+/**
+ * Whether these accelerators toggle or are held. See [`HotkeyMode`].
+ */
+mode: HotkeyMode, };
 
 /**
  * An action nothing in the application handles, and the sentence saying so.
@@ -1078,6 +1112,21 @@ export type Availability = { "state": "installable" } | { "state": "not-publishe
 export type VerifiedBy = "digest" | "stated-digest" | "size" | "nothing";
 
 /**
+ * Whether the installed server binary is the build this version pins.
+ *
+ * The wire form of [`kw_sidecar::Freshness`]. A separate type for the reason
+ * [`Availability`] is one: the crate's enum carries `Sha256Digest` and a
+ * structured reason, neither of which should become a TypeScript shape that
+ * then has to be kept in step across the boundary.
+ *
+ * **`Unknown` is not a rounded-down `Stale`.** An install this application did
+ * not record cannot be compared with anything, and the screen says exactly
+ * that rather than picking whichever of the other two answers reads better.
+ * The machine this was written on is in that state right now.
+ */
+export type SidecarFreshness = { "state": "not-installed" } | { "state": "current" } | { "state": "stale", installed: string, expected: string, } | { "state": "unknown", why: string, };
+
+/**
  * One model on offer.
  */
 export type ModelStatus = { id: string, name: string, sizeMb: number | null, recommended: boolean, installed: boolean,
@@ -1099,6 +1148,16 @@ availability: Availability,
  * Whether the server binary is installed.
  */
 serverInstalled: boolean,
+/**
+ * Whether the installed one is the build this version pins.
+ *
+ * Separate from `server_installed`, and it has to be: "a `whisper-server.exe`
+ * is there" and "it is *our* `whisper-server.exe`" are different claims,
+ * and until KNEG-113 only the first was ever made. The screen showed
+ * *Installed* for a binary two releases behind the manifest and nothing
+ * anywhere would have said so.
+ */
+serverFreshness: SidecarFreshness,
 /**
  * The models on offer, and what is known about each.
  */
@@ -1123,6 +1182,26 @@ runningModel: string | null,
 installDir: string, installDirFellBack: boolean, };
 
 /**
+ * What a refresh of the server binary did.
+ */
+export type RefreshOutcome = {
+/**
+ * How many files the replacement unpacked. Reported for the reason
+ * [`kw_sidecar::Installed::files`] is: one would mean the sibling `ggml`
+ * libraries were missed and the server will not start.
+ */
+files: number,
+/**
+ * The model the server was running before, now running again.
+ */
+restarted: string | null,
+/**
+ * Why it could not be started again, when it could not. Not an error —
+ * the replacement succeeded — but not something to leave unsaid either.
+ */
+restartError: string | null, };
+
+/**
  * Progress of an install, as reported to the frontend.
  */
 export type InstallProgress = { "stage": "server", written: number, total: number | null, } | { "stage": "model", id: string, written: number, total: number | null, } | { "stage": "verifying" } | { "stage": "extracting" } | { "stage": "done",
@@ -1130,6 +1209,15 @@ export type InstallProgress = { "stage": "server", written: number, total: numbe
  * What the model on disk was actually checked against.
  */
 verifiedBy: VerifiedBy, };
+
+/**
+ * What a model can be used for.
+ *
+ * Two engines, and a model runs on exactly one of them. Not a boolean, for the
+ * reason every other three-state answer in this codebase is not a boolean: the
+ * screen needs to name the use, not just permit it.
+ */
+export type UsedFor = "dictation" | "meetings";
 
 /**
  * Why a model this build knows about is not on offer.
@@ -1148,9 +1236,9 @@ export type SherpaModelStatus = { id: string, name: string, sizeMb: number | nul
  */
 installed: boolean,
 /**
- * `None` when the model can be installed and used.
+ * Which engine it runs on, and therefore which button it gets.
  */
-notOffered: string | null, };
+usedFor: UsedFor, };
 
 /**
  * Everything the sherpa half of the screen needs, with no network access.
@@ -1172,6 +1260,14 @@ cliInstalled: boolean, models: Array<SherpaModelStatus>,
  */
 selected: string | null,
 /**
+ * Which streaming model meetings are set to use, if any.
+ *
+ * A separate setting from `selected`, not a second reading of it: the two
+ * engines run different models and choosing one for dictation must not
+ * silently change what a meeting records with.
+ */
+selectedStream: string | null,
+/**
  * Where models are kept. Shown because the native binaries cannot open a
  * file whose path holds a non-ASCII character, so this is sometimes not
  * where a person would expect.
@@ -1181,11 +1277,64 @@ selected: string | null,
  */
 modelsDir: string, };
 
+/**
+ * Which half of a diarization run a model does.
+ *
+ * Two files, two jobs, and neither works alone: the segmentation model finds
+ * where speech is and where it changes, the embedding model turns each stretch
+ * into a voice fingerprint to cluster. The CLI takes one of each and refuses
+ * without both.
+ */
+export type DiarizationRole = "segmentation" | "embedding";
+
+export type DiarizationModelStatus = { id: string, name: string, role: DiarizationRole | null, sizeMb: number | null, installed: boolean, };
+
+export type DiarizationStatus = {
+/**
+ * Whether the sherpa sidecar can be installed on this platform at all.
+ */
+availability: Availability, cliInstalled: boolean, models: Array<DiarizationModelStatus>,
+/**
+ * The setting, which is a different fact from whether it can run.
+ */
+enabled: boolean,
+/**
+ * Both models present **and** the CLI installed. `enabled` without this is
+ * a setting that will be skipped, and the screen has to be able to say
+ * which of the two is missing rather than showing one green tick.
+ */
+ready: boolean, modelsDir: string, };
+
 /* -------------------------------------------------- local text generation */
+/**
+ * What the Intelligence > Local screen may say about one GGUF.
+ *
+ * Four answers, and the third is the reason this is not a boolean. See the
+ * module documentation for what each one is worth.
+ */
+export type GgufIntegrity = { "state": "not-installed" } | { "state": "unchanged-since-install", verifiedBy: VerifiedBy, } | { "state": "unrecorded" } | { "state": "changed", recordedBytes: number, bytes: number, };
+
+/**
+ * What a re-hash of an installed model found.
+ *
+ * Its own type rather than a `Result<(), String>` because **a file that does
+ * not match its digest is a finding, not a failure**. Returning it as an error
+ * would put it through the same red line a dropped connection uses, and the two
+ * deserve entirely different sentences: one says try again, the other says the
+ * bytes on this disk are not the bytes that were downloaded.
+ */
+export type RecheckOutcome = { "outcome": "matched", verifiedBy: VerifiedBy, } | { "outcome": "mismatched", fileName: string, expected: string, actual: string, } | { "outcome": "nothing-pinned" } | { "outcome": "not-installed" };
+
 /**
  * A drafter alongside the main model.
  */
-export type DraftStatus = { fileName: string, sizeBytes: number | null, installed: boolean,
+export type DraftStatus = { fileName: string, sizeBytes: number | null,
+/**
+ * On the same terms as [`LocalLlmModelStatus::integrity`], and tracked
+ * apart from it because a drafter is a separate file that can rot on its
+ * own.
+ */
+integrity: GgufIntegrity,
 /**
  * On the same terms as [`LocalLlmModelStatus::verified_by`]. Reported
  * separately because a drafter is a different object in a different
@@ -1205,7 +1354,18 @@ provider: string,
  * `None` when the registry does not say. Shown before anyone commits to a
  * download that can be six gigabytes.
  */
-sizeBytes: number | null, quantization: string | null, contextLength: number | null, recommended: boolean, supportsThinking: boolean, installed: boolean,
+sizeBytes: number | null, quantization: string | null, contextLength: number | null, recommended: boolean, supportsThinking: boolean,
+/**
+ * Whether the file is on disk and, if it is, what is still known about it.
+ *
+ * This replaced an `installed: bool`, and the replacement is the whole of
+ * KNEG-107. A boolean over `path.exists()` cannot tell a file that was
+ * hashed at install and has not moved since from one nothing has ever
+ * looked at, and it rendered both as "installed" — so a GGUF corrupted
+ * months after a successful install was loaded without complaint. The
+ * states, and exactly what each is worth, are [`GgufIntegrity`].
+ */
+integrity: GgufIntegrity,
 /**
  * What integrity check this model can be held to, on the same terms the
  * whisper screen already states. Shown before the button, for the reason
@@ -1216,8 +1376,8 @@ sizeBytes: number | null, quantization: string | null, contextLength: number | n
  */
 verifiedBy: VerifiedBy,
 /**
- * Whether this model has a speculative-decoding drafter, and whether that
- * drafter is installed. Absent for the models without one.
+ * This model's speculative-decoding drafter, and what is known about it.
+ * `None` for the models without one.
  */
 draft: DraftStatus | null, };
 

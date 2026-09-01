@@ -1064,10 +1064,18 @@ for (const repo of Object.keys(HF_REVISIONS)) {
  * against and the pin is what makes downloading one legitimate. Same standard as
  * the two above: the bytes moved through this machine and were hashed here.
  *
- * **`nemotron-3.5-asr-streaming-0.6b`, the multilingual one, is still absent.**
- * Not an oversight: nothing has downloaded it, so there is nothing to pin, and
- * it stays uninstallable until something does. One model was enough to settle
- * the protocol, which is what the download was for.
+ * **`nemotron-3.5-asr-streaming-0.6b`, the multilingual one, is measured too**
+ * (2026-09-01, later the same day). It was absent because nothing had
+ * downloaded it and one model was enough to settle the protocol; it was
+ * downloaded because somebody tried to install it three times. Both Nemotron
+ * models are pinned now and every sherpa model in this registry is
+ * installable.
+ *
+ * Its digest carries a control the others do not: it was downloaded **twice**,
+ * because the first run was invoked without a path for `--keep` and discarded
+ * the archive before the extracted size could be measured. The two independent
+ * downloads produced the same SHA-256, which is a reproducibility check nobody
+ * planned and is worth more than the minute it cost.
  */
 const SHERPA_PINS = {
   "parakeet-tdt-0.6b-v3": {
@@ -1089,6 +1097,20 @@ const SHERPA_PINS = {
     sha256: "78e2b79fcf7271553a74402a76b771b09ea40117a39566a79f52235b23db6358",
     expectedSizeBytes: 463_945_051,
     maxExtractedSizeBytes: 750 * 1024 * 1024,
+  },
+  // Measured 2026-09-01, and twice: see the note above about the two downloads
+  // agreeing. Extracted total 14 files, 684,574,872 bytes (652.9 MiB), nearly
+  // all of it one 657 MB encoder -- the multilingual model is a fifteen-language
+  // encoder where its English sibling is one.
+  //
+  // 800 MiB rather than the 750 the two above take, and not for symmetry with
+  // `parakeet-tdt`: 750 MiB over a 652.9 MiB footprint is 15% of headroom where
+  // the others have 19%, and the stated rule here is that this figure errs high
+  // because being wrong low rejects a legitimate install.
+  "nemotron-3.5-asr-streaming-0.6b": {
+    sha256: "c6bf5e0df765f9d5b43bc9e0536d4b4b3e7d40bdf5ecf13e45f134c51c05ae3a",
+    expectedSizeBytes: 475_271_763,
+    maxExtractedSizeBytes: 800 * 1024 * 1024,
   },
 };
 
@@ -1116,6 +1138,108 @@ for (const id of Object.keys(SHERPA_PINS)) {
     die(
       `SHERPA_PINS has an entry for "${id}", which is not a model in the ` +
         `baseline's parakeetModels. Fix the id, or remove the pin.`
+    );
+  }
+}
+
+/**
+ * The two speaker-diarization models, measured 2026-09-01.
+ *
+ * Here rather than in the baseline for the reason `SHERPA_PINS` gives: the
+ * baseline is a frozen record of what upstream had, and upstream pinned
+ * nothing. `role` is here for a second reason -- it is not a fact about the
+ * upstream registry at all, it is which of the two jobs a file does, and
+ * deriving it from "the one with an extractDir" would be a rule that breaks the
+ * first time a model ships differently.
+ *
+ * **Both digests are measurements.** `tools/model-pin/pin.mjs` fetched each
+ * end to end, hashing as the bytes passed through and taking the length from
+ * `stat` afterwards. Read that for what it is: the committed digest matches the
+ * bytes k2-fsa's release serves today. Re-measure with `--verify`.
+ *
+ * **Only the segmentation model is an archive**, so only it carries a
+ * `maxExtractedSizeBytes`. Its real extracted footprint was measured at
+ * 7,566,812 bytes across 11 files; 32 MiB leaves the same kind of headroom the
+ * sherpa ceilings take, and errs high for the same reason -- being wrong low
+ * rejects a legitimate install. The embedding model is a bare `.onnx` that is
+ * never extracted, and a ceiling on it would describe a step that does not
+ * happen.
+ *
+ * **There is one embedding model and it is English.** Measured the same day:
+ * the segmentation model is language-independent, and the embedding model is
+ * not. The release's Chinese four-speaker reference came back as three voices
+ * through this English model and as four through the language-matched Chinese
+ * one, same audio and same segmentation. So this pair is measured for English
+ * meetings and nothing else, which
+ * `crates/meeting-core/src/diarization.rs` says out loud and the screen that
+ * offers it repeats.
+ */
+const DIARIZATION_PINS = {
+  "sherpa-onnx-pyannote-segmentation-3-0": {
+    role: "segmentation",
+    sha256: "24615ee884c897d9d2ba09bb4d30da6bb1b15e685065962db5b02e76e4996488",
+    expectedSizeBytes: 6_958_444,
+    maxExtractedSizeBytes: 32 * 1024 * 1024,
+  },
+  "3dspeaker-campplus-en": {
+    role: "embedding",
+    sha256: "357a834f702b80161e5b981182c038e18553c1f2ca752ed6cec2052365d4129b",
+    expectedSizeBytes: 29_596_978,
+    maxExtractedSizeBytes: null,
+  },
+};
+
+const diarization = Object.entries(R.diarizationModels).map(([id, m]) => ({
+  id,
+  name: m.name,
+  downloadUrl: m.downloadUrl,
+  // Null rather than absent for the embedding model, which is a single file
+  // and has nothing to extract -- the same shape-does-not-change rule the
+  // sherpa pins follow.
+  extractDir: m.extractDir ?? null,
+  // The other half of the same either/or: the embedding model is one file and
+  // the baseline names it, the segmentation model is an archive and does not.
+  // Derived from neither -- reading the last path segment of a URL would be a
+  // rule that works until a publisher adds a query string.
+  fileName: m.fileName ?? null,
+  sizeMb: m.sizeMb ?? null,
+  role: DIARIZATION_PINS[id]?.role ?? null,
+  sha256: DIARIZATION_PINS[id]?.sha256 ?? null,
+  expectedSizeBytes: DIARIZATION_PINS[id]?.expectedSizeBytes ?? null,
+  maxExtractedSizeBytes: DIARIZATION_PINS[id]?.maxExtractedSizeBytes ?? null,
+}));
+
+for (const id of Object.keys(DIARIZATION_PINS)) {
+  if (!(id in R.diarizationModels)) {
+    die(
+      `DIARIZATION_PINS has an entry for "${id}", which is not a model in the ` +
+        `baseline's diarizationModels. Fix the id, or remove the pin.`
+    );
+  }
+}
+
+// An archive or a single file, never both and never neither. `extractDir`
+// decides which install path runs, so a model declaring both would be a
+// coin toss and one declaring neither could not be installed at all.
+for (const model of diarization) {
+  if (Boolean(model.extractDir) === Boolean(model.fileName)) {
+    die(
+      `diarization/${model.id} must declare exactly one of extractDir (an archive) ` +
+        `or fileName (a single file); it declares ` +
+        `${model.extractDir ? "both" : "neither"}.`
+    );
+  }
+}
+
+// Two roles, exactly one model each. A run needs one of each and the CLI
+// refuses without both, so a registry holding two segmentation models and no
+// embedding one would be a screen offering an install that cannot work.
+for (const role of ["segmentation", "embedding"]) {
+  const found = diarization.filter((m) => m.role === role);
+  if (found.length !== 1) {
+    die(
+      `diarization needs exactly one ${role} model and the registry has ` +
+        `${found.length}. A diarization run passes one of each.`
     );
   }
 }
@@ -1191,7 +1315,7 @@ const registry = {
   reasoning,
   enterprise,
   localLlm,
-  localAsr: { whisper, sherpa },
+  localAsr: { whisper, sherpa, diarization },
 };
 
 const rendered = JSON.stringify(registry, null, 2) + "\n";
@@ -1218,7 +1342,7 @@ const counts = {
   reasoning: `${reasoning.length} providers / ${reasoning.reduce((n, p) => n + p.models.length, 0)} models`,
   enterprise: `${enterprise.length} providers / ${enterprise.reduce((n, p) => n + p.models.length, 0)} models`,
   localLlm: `${localLlm.length} providers / ${localLlm.reduce((n, p) => n + p.models.length, 0)} models`,
-  localAsr: `${whisper.length} whisper / ${sherpa.length} sherpa`,
+  localAsr: `${whisper.length} whisper / ${sherpa.length} sherpa / ${diarization.length} diarization`,
 };
 console.log(`wrote ${OUT}`);
 for (const [k, v] of Object.entries(counts)) {

@@ -200,8 +200,6 @@ deferred for a genuine resource or scope reason.
 | Integration | Phase | Why | Degradation |
 | --- | --- | --- | --- |
 | `search:semantic` | 8 | Qdrant + MiniLM + ONNX Runtime is a large dependency for a feature the app must work without anyway. | FTS5 keyword search stays fully functional; the UI hides semantic ranking rather than failing. |
-| `diarization-model:sherpa-onnx-pyannote-segmentation-3-0` | 8 | Needs ONNX Runtime and three models; dictation and meetings must be reliable first. | Transcripts have no speaker labels. |
-| `diarization-model:3dspeaker-campplus-en` | 8 | As above. | As above. |
 | `platform:aec` | 4 | No Rust equivalent to WebRTC's audio processing module exists that is not itself a C++ binding, and there is no C++ toolchain on this development machine. | Meetings still record and transcribe correctly; on speakers the far-end voice is transcribed twice instead of once, and on headphones there is nothing to cancel. |
 | `meeting-stream:tinfoil-realtime` | 4 | Declined on principle, not resource-blocked — see "the `ACTIVE`-status audit" above. | Every other meeting-stream provider is unaffected; this one is refused rather than approximated. |
 | `transcription:tinfoil` | 3 | Same principled refusal as above, for the batch client. | The other six transcription providers are unaffected. |
@@ -223,6 +221,13 @@ streaming model exists.
 **`openwhisprCloudModels` is excluded from the baseline**, not silently dropped: it has zero
 readers upstream and is recorded under `registry.droppedFromBaseline` with the reason
 `removed-vendor-service`.
+
+**The seventh meeting provider is measured, not ported.** `meeting-stream:local-streaming`
+(2026-09-01) has no upstream counterpart that could be read: `parakeetWsServer.js` is not in this
+checkout and sherpa-onnx's WebSocket protocol is undocumented, so the wire format came from a probe
+against the real server. It is the only client here whose format was established by measurement,
+and the only one where a documented fact turned out to be wrong — the reference client's `--help`
+says 16-bit samples and the wire carries `f32`. See `crates/meeting-core/src/nemotron.rs`.
 
 **Meeting-provider capabilities are honest about asymmetry.** There is no formal capability
 object upstream, so `MeetingProviderCapabilities` is new work. It must encode the real

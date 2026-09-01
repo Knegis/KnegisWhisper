@@ -27,7 +27,9 @@ import type {
   Detected,
   DictationOutcome,
   DiscoveryPermissions,
+  GgufIntegrity,
   HotkeyChange,
+  HotkeyMode,
   ImportReport,
   InstallProgress,
   KeytermSupport,
@@ -39,15 +41,20 @@ import type {
   MicrophoneSupport,
   NonActivating,
   Offer,
+  RecheckOutcome,
   RelocatedCredential,
   ShortcutHookStatus,
+  SidecarFreshness,
   Sources,
   SyncOutcome,
   SystemAudioSupport,
   TokenStatus,
+  UsedFor,
   UpdateCheckResult,
   VerifiedBy,
 } from "./ipc";
+
+import type { DiarizationRole } from "../generated/providers";
 
 /**
  * A state and, where there is one, what backs it up.
@@ -131,8 +138,47 @@ export function acceleratorLabel(
               ? `Uses only modifier keys, so it runs through ${hook.mechanism} rather than the system shortcut register. It works, and other applications still see the same keys.`
               : `Uses only modifier keys, which does nothing here. ${hook.reason}`,
       };
+    // A third mechanism, so a third case, and it must not borrow the
+    // modifier-only sentence. A hooked chord takes nothing away from anything
+    // else; a hooked mouse button leaves the click going Back in every browser
+    // on the machine, and that is the part a user needs before pressing it
+    // rather than after.
+    case "mouse-button":
+      return {
+        text: a.accelerator,
+        problem:
+          hook === undefined
+            ? "A mouse button. Whether that works here is still being checked."
+            : hook.state === "available"
+              ? `A mouse button, watched by ${hook.mechanism}. The click is not swallowed, so wherever the pointer is that button still does ${a.alsoDoes}.`
+              : `A mouse button, which does nothing here. ${hook.reason}`,
+      };
     case "invalid":
       return { text: a.input, problem: a.reason };
+  }
+}
+
+/**
+ * Whether an action toggles or is held, in the words a control needs.
+ *
+ * The `detail` is the cost, not a restatement of the name. Push-to-talk turns
+ * "nothing was sent: insufficient speech" from a rare outcome into the ordinary
+ * one for every mistimed tap, and somebody who has not been told that will read
+ * it as a fault.
+ */
+export function hotkeyModeLabel(mode: HotkeyMode): Stated {
+  switch (mode) {
+    case "toggle":
+      return {
+        text: "Toggle",
+        detail: "press once to start, again to stop",
+      };
+    case "hold":
+      return {
+        text: "Hold to talk",
+        detail:
+          "recording lasts while the key is down. A short hold records almost nothing, so “insufficient speech” becomes a routine outcome rather than a rare one.",
+      };
   }
 }
 
@@ -236,6 +282,129 @@ export function verificationLabel(verifiedBy: VerifiedBy): string {
     case "nothing":
       return "not verified";
   }
+}
+
+/**
+ * What is still known about an installed GGUF, without overstating it.
+ *
+ * Four states, and the reason there are four rather than two is the whole of
+ * KNEG-107. The field this replaced was a boolean over `path.exists()`, so a
+ * file hashed at install and untouched since rendered identically to one nobody
+ * has ever looked at — and a model corrupted months later rendered that way too.
+ *
+ * The rule this file opens with does the rest of the work here. **`unrecorded`
+ * is not a warning.** Every GGUF installed before the record existed is in that
+ * state, including whatever is on this machine right now, and rendering it as
+ * either "verified" or "corrupt" would be the same overclaim in opposite
+ * directions. It gets the neutral treatment `unknown` gets everywhere else.
+ *
+ * `unchanged-since-install` is deliberately not called "verified", and carries
+ * the caveat rather than burying it: two integers agreeing is not a hash. The
+ * one thing that proves the bytes is `recheckLocalLlmModel`, and the caveat is
+ * what points a reader at it.
+ */
+export function ggufIntegrityLabel(integrity: GgufIntegrity): Stated {
+  switch (integrity.state) {
+    case "not-installed":
+      return { text: "Not installed", detail: "there is nothing on disk yet" };
+    case "unchanged-since-install":
+      return {
+        text: "Unchanged since it was installed",
+        detail: `${verificationLabel(
+          integrity.verifiedBy,
+        )} when it was downloaded, and its length and timestamp still match what was recorded then`,
+        caveat:
+          "That is two numbers agreeing, not a checksum. A file rewritten in place, keeping both its length and its timestamp, would still read as unchanged. Re-checking hashes the whole file, which is the only thing that proves the bytes.",
+      };
+    case "unrecorded":
+      return {
+        text: "Installed, never recorded",
+        detail:
+          "the file is here, and nothing beside it says what was checked when it arrived — every model installed before this application began keeping a record reads this way",
+        caveat:
+          "This is not a sign that anything is wrong. It is the honest answer: nothing is known about these bytes either way. Re-checking hashes the file and settles it.",
+      };
+    case "changed":
+      return {
+        text: "Changed since it was installed",
+        detail:
+          integrity.recordedBytes === integrity.bytes
+            ? `still ${integrity.bytes.toLocaleString()} bytes, but its timestamp has moved — something wrote to it, or it was restored from a copy`
+            : `it was ${integrity.recordedBytes.toLocaleString()} bytes when it was checked and is ${integrity.bytes.toLocaleString()} now`,
+        caveat:
+          "The bytes may still be the right ones; a restore moves a timestamp without changing a file. Re-checking hashes it and says which.",
+      };
+  }
+}
+
+/**
+ * What a re-hash found.
+ *
+ * `nothing-pinned` is here for the same reason `unrecorded` is above: "there was
+ * nothing to check" must not be rendered as "checked, and fine". Nothing this
+ * build ships can reach it, and it still gets its own sentence.
+ */
+export function recheckOutcomeLabel(outcome: RecheckOutcome): Stated {
+  switch (outcome.outcome) {
+    case "matched":
+      return {
+        text: "The bytes on disk are the bytes that were downloaded",
+        detail: `hashed just now — ${verificationLabel(outcome.verifiedBy)}`,
+      };
+    case "mismatched":
+      return {
+        text: `${outcome.fileName} does not match the checksum it is pinned to`,
+        detail: `pinned ${outcome.expected}, found ${outcome.actual}`,
+        caveat:
+          "The file was left where it is. Either it has been damaged or replaced since it was installed, or the checksum this build carries for it has gone stale — reinstalling the model is what settles that, and deleting gigabytes on a guess is not something this screen will do for you.",
+      };
+    case "nothing-pinned":
+      return {
+        text: "Nothing to check against",
+        detail:
+          "no checksum is pinned for this model, so hashing it would prove nothing",
+      };
+    case "not-installed":
+      return {
+        text: "Not installed",
+        detail: "there is nothing on disk to hash",
+      };
+  }
+}
+
+/**
+ * Whether the installed server binary is the one this build pins.
+ *
+ * `unknown` is the case this function exists for, and it must not read as
+ * either of its neighbours. An install this application did not record cannot
+ * be compared with anything: calling it out of date would claim a comparison
+ * nobody made, and calling it current would excuse a binary the manifest may
+ * well have moved past. So the sentence says *not known* and then says why.
+ *
+ * The digests are shown short. Both are in `SidecarFreshness` in full, for a
+ * bug report; twelve characters is enough to tell two builds apart on screen
+ * and a 64-character hex string in a settings row is unreadable.
+ */
+export function freshnessLabel(freshness: SidecarFreshness): string | undefined {
+  switch (freshness.state) {
+    case "not-installed":
+      // The row already says "Not installed". A second sentence saying the same
+      // thing is noise.
+      return undefined;
+    case "current":
+      return "the build this version of the application pins";
+    case "stale":
+      return `a different build from the one this version pins — installed ${short(
+        freshness.installed,
+      )}, pinned ${short(freshness.expected)}`;
+    case "unknown":
+      return `it is not known whether this is the build this version pins: ${freshness.why}`;
+  }
+}
+
+/** Enough of a digest to tell two builds apart, and no more. */
+function short(digest: string): string {
+  return `${digest.slice(0, 12)}…`;
 }
 
 export function bytes(written: number, total: number | null): string {
@@ -458,10 +627,17 @@ export function keytermReviewLabel(
  * Told before the click rather than only after it: `validate` is checked
  * here, live, so the warning is visible while there is still time to type a
  * language in, not just as the text of the error `meeting_start` returns.
+ *
+ * It said "Set one below" until 2026-09-01, and this caveat renders *underneath*
+ * the Language field it is talking about, so it pointed the reader away from the
+ * control. Found the first time a provider with `language_detection: false` was
+ * actually selected by a person -- `corti-realtime` has had the flag since the
+ * client landed and nobody had ever reached the screen with it chosen.
  */
 export function languageRequiredWarning(review: ConfigReview): string | null {
   return review.languageRequired
-    ? "This provider cannot detect the language on its own. Set one below, or starting will be refused."
+    ? "This provider cannot detect the language on its own. Fill in the Language field above " +
+        '(for example "en"), or starting will be refused.'
     : null;
 }
 
@@ -486,10 +662,18 @@ export function meetingOutcomeLabel(outcome: MeetingOutcome): string {
       const minutes = Math.round(outcome.durationSeconds / 60);
       const parts = [`Saved as note ${outcome.noteId} (${minutes} min).`];
       if (outcome.transcriptIsPartials) {
-        // Said plainly rather than left for the reader to notice repeated
-        // phrases and wonder.
+        // Said plainly rather than left for the reader to notice and wonder.
+        //
+        // It asserted "and some phrases repeat" until 2026-09-01. That is true
+        // of `Local windowed model`, whose five-second windows overlap by two,
+        // and **not** true of `Local streaming model`, which revises one event
+        // per utterance in place. Naming a symptom the reader then does not
+        // find is its own way of being untrustworthy, so this now says what is
+        // certain -- which pass produced the text -- and leaves the reader to
+        // judge the text.
         parts.push(
-          "The whole-recording pass did not complete, so the saved transcript is the live one and some phrases repeat.",
+          "The whole-recording pass did not complete, so the saved transcript is the running one " +
+            "from during the meeting rather than a single pass over the finished audio.",
         );
       }
       if (outcome.gaps > 0) {
@@ -543,6 +727,82 @@ export function detectedLabel(d: Detected): string {
       return `in a call — ${d.evidence} is using a microphone, which is also true of a test call`;
     case "none":
       return `open, and not using a microphone, so nothing here says a call is in progress — detected as ${d.evidence}`;
+  }
+}
+
+/**
+ * What one diarization model is for, in the words of the row that offers it.
+ *
+ * Two models, two jobs, and neither works alone — so the row has to say which
+ * one this is rather than presenting two similar downloads and letting the
+ * reader guess why both are needed.
+ *
+ * Exhaustive with no `default`, so a third role is a build failure here rather
+ * than a row that silently says nothing.
+ */
+export function diarizationRoleDetail(role: DiarizationRole | null): string {
+  switch (role) {
+    case "segmentation":
+      return "finds where speech is and where the voice changes";
+    case "embedding":
+      return "turns each stretch into a voice fingerprint, so they can be grouped";
+    case null:
+      return "";
+  }
+}
+
+/**
+ * Why speaker labels cannot be switched on yet, or nothing when they can.
+ *
+ * Both halves are named separately because the remedies differ: a missing
+ * runtime arrives with the first model, and a missing model has to be chosen.
+ * "Not ready" on its own would leave a person pressing the same button twice.
+ */
+export function diarizationBlocker(status: {
+  cliInstalled: boolean;
+  models: readonly { installed: boolean }[];
+}): string | null {
+  const missing = status.models.filter((m) => !m.installed).length;
+  if (missing > 0) {
+    return missing === status.models.length
+      ? "Install both models below. The first one brings the runtime with it."
+      : "One of the two models is still missing, and a run needs both.";
+  }
+  if (!status.cliInstalled) {
+    return "The sherpa runtime is not installed.";
+  }
+  return null;
+}
+
+/**
+ * What a local model is for, as the button that selects it.
+ *
+ * Two engines, and a model runs on exactly one: `sherpa-onnx-offline` reads a
+ * WAV at a time and `sherpa-onnx-online-websocket-server` emits words as they
+ * are recognised. Offering the wrong one would start a server that accepts a
+ * socket and transcribes nothing.
+ *
+ * Exhaustive with no `default`, so a third engine is a build failure here
+ * rather than a button that silently says the wrong thing.
+ */
+export function useForLabel(used: UsedFor, inUse: boolean): string {
+  switch (used) {
+    case "dictation":
+      return inUse ? "In use for dictation" : "Use for dictation";
+    case "meetings":
+      return inUse ? "In use for meetings" : "Use for meetings";
+  }
+}
+
+/**
+ * The one-line note under a local model, saying which engine it runs on.
+ */
+export function useForDetail(used: UsedFor): string {
+  switch (used) {
+    case "dictation":
+      return "offline model — dictation";
+    case "meetings":
+      return "streaming model — meetings, word by word";
   }
 }
 

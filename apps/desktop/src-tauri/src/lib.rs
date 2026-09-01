@@ -16,9 +16,11 @@ mod calendar;
 mod commands;
 mod diagnostics;
 mod dictation;
+mod gguf_check;
 mod integrations;
 // Test-only: it renders `apps/desktop/src/generated/ipc-types.ts` and asserts
 // the committed copy still matches the Rust types. Nothing at runtime calls it.
+mod diarization;
 #[cfg(test)]
 mod ipc_types;
 mod local_api;
@@ -30,6 +32,7 @@ mod meeting;
 mod meeting_window;
 mod overlay;
 mod reasoning;
+mod sherpa_stream;
 mod shortcuts;
 mod state;
 mod tray;
@@ -161,9 +164,20 @@ pub fn run() -> anyhow::Result<()> {
                     .context("could not load config/sidecars.json")?,
             );
 
+            // The streaming model server behind the `local-streaming` meeting
+            // provider. Not started here -- a 630 MB model held from launch for
+            // a user who never records a meeting is a cost nobody asked for --
+            // but reaped here, beside the others, before any port is allocated.
+            let stream = std::sync::Arc::new(
+                sherpa_stream::SherpaStream::new()
+                    .map_err(|e| anyhow::anyhow!(e))
+                    .context("could not load config/sidecars.json")?,
+            );
+
             // Before anything asks for a port: a previous run that crashed may
             // have left a server holding one.
             tauri::async_runtime::block_on(local.reap_stale());
+            tauri::async_runtime::block_on(stream.reap_stale());
 
             let shared = local.shared();
 
@@ -302,11 +316,15 @@ pub fn run() -> anyhow::Result<()> {
                 meeting_policy,
                 meeting_credentials,
                 local.shared(),
+                // So the whole-recording pass uses the engine dictation uses.
+                asr.selection(),
+                std::sync::Arc::clone(&stream),
             ));
             // Polls the process table while idle and offers to record a meeting
             // in progress. There is no path from it to `start` without a click.
             meetings.watch();
             app.manage(meetings);
+            app.manage(std::sync::Arc::clone(&stream));
 
             // Calendars. Nothing here reaches the network either: connecting an
             // account and syncing one are both explicit clicks on
@@ -373,6 +391,7 @@ pub fn run() -> anyhow::Result<()> {
             commands::settings_keys,
             commands::hotkeys,
             commands::hotkey_set,
+            commands::hotkey_set_mode,
             commands::history,
             commands::history_delete,
             commands::history_clear,
@@ -415,9 +434,14 @@ pub fn run() -> anyhow::Result<()> {
             local_model::local_model_install,
             local_model::local_server_start,
             local_model::local_server_stop,
+            local_model::local_server_refresh,
             local_asr::sherpa_status,
             local_asr::sherpa_install_model,
             local_asr::sherpa_use_model,
+            local_asr::sherpa_use_stream_model,
+            diarization::diarization_status,
+            diarization::diarization_install_model,
+            diarization::diarization_set_enabled,
             local_api::local_api_status,
             local_api::local_api_start,
             local_api::local_api_stop,
@@ -427,6 +451,7 @@ pub fn run() -> anyhow::Result<()> {
             local_llm::local_llm_install,
             local_llm::local_llm_start,
             local_llm::local_llm_stop,
+            local_llm::local_llm_recheck_model,
             media::media_import_status,
             media::media_import_install_sidecar,
             media::media_import_audio,

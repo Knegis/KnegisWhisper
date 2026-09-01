@@ -14,7 +14,7 @@ use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 
 use kw_notes_core::{notes, transcript};
-use kw_platform::hotkey::{self, Binding, HotkeyAction};
+use kw_platform::hotkey::{self, Binding, HotkeyAction, HotkeyMode};
 use kw_provider_probe::{ProbeAudio, ProbeReport};
 use kw_storage::{settings, transcriptions};
 use serde::{Deserialize, Serialize};
@@ -188,7 +188,22 @@ pub async fn load_bindings(state: &AppState) -> CmdResult<Vec<Binding>> {
         .await
         .map_err(|e| fail("could not read a hotkey setting", e))?;
 
-        bindings.push(Binding::from_stored(action, &stored));
+        // The shipped default, spelled by the type rather than written out
+        // here, so the one place that decides what ships is `HotkeyMode`'s
+        // `Default` and the reasoning next to it.
+        let mode: String = settings::get_or(
+            state.db().pool(),
+            &action.mode_settings_key(),
+            HotkeyMode::default().id().to_owned(),
+        )
+        .await
+        .map_err(|e| fail("could not read a hotkey mode setting", e))?;
+
+        bindings.push(Binding::from_stored(
+            action,
+            &stored,
+            HotkeyMode::from_stored(&mode),
+        ));
     }
 
     Ok(bindings)
@@ -245,8 +260,56 @@ pub async fn hotkey_set(
     // Every action is re-registered rather than just this one, because
     // `unregister_all` is the only way to drop the previous binding for this
     // action and it drops the others with it.
-    let bindings = load_bindings(&state).await?;
-    let reports = crate::shortcuts::register_all(&app, &bindings, &hooks);
+    reapply(&app, &state, &hooks, action).await
+}
+
+/// Change whether one action is toggled or held.
+///
+/// A separate command from [`hotkey_set`] because it writes a separate key, and
+/// the two change for different reasons — rebinding a key is not choosing
+/// push-to-talk. It re-registers everything for the same reason `hotkey_set`
+/// does: the mode is read at registration time by both the hook path and the
+/// plugin path, so a mode saved and not applied until the next launch would be a
+/// setting that lies about having taken effect.
+#[tauri::command]
+pub async fn hotkey_set_mode(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    action: String,
+    mode: String,
+    hooks: State<'_, std::sync::Arc<crate::shortcuts::Hooks>>,
+) -> CmdResult<HotkeyChange> {
+    let action = HotkeyAction::from_id(&action)
+        .ok_or_else(|| format!("{action:?} is not a hotkey action"))?;
+
+    // Refused rather than defaulted. `HotkeyMode::from_stored` falls back for a
+    // value already on disk, which is recovery; a value arriving from the
+    // renderer is a request, and answering an unrecognised request with "toggle,
+    // then" would report success for something that did not happen.
+    let mode =
+        HotkeyMode::from_id(mode.trim()).ok_or_else(|| format!("{mode:?} is not a hotkey mode"))?;
+
+    settings::set(state.db().pool(), &action.mode_settings_key(), &mode.id())
+        .await
+        .map_err(|e| fail("could not save the hotkey mode", e))?;
+
+    reapply(&app, &state, &hooks, action).await
+}
+
+/// Re-register every hotkey and report what became of `action`'s.
+///
+/// Shared by the two writers above so they cannot come to disagree about what a
+/// change achieved. Every action is re-registered rather than just this one,
+/// because `unregister_all` is the only way to drop the previous binding for one
+/// action and it drops the others with it.
+async fn reapply(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    hooks: &std::sync::Arc<crate::shortcuts::Hooks>,
+    action: HotkeyAction,
+) -> CmdResult<HotkeyChange> {
+    let bindings = load_bindings(state).await?;
+    let reports = crate::shortcuts::register_all(app, &bindings, hooks);
     let live = reports.iter().filter(|r| r.is_live()).count();
     tracing::info!(live, total = reports.len(), "hotkeys re-registered");
 
@@ -256,7 +319,18 @@ pub async fn hotkey_set(
     // with no results rather than inventing a success.
     let mine = reports.into_iter().find(|r| r.action == action);
 
-    let binding = Binding::from_stored(action, &canonical);
+    // Read back out of what was just loaded rather than rebuilt from the
+    // argument. Rebuilding was fine while the only thing a writer changed was
+    // the accelerator; with two keys behind one binding, rebuilding from one of
+    // them means the returned binding disagrees with the one that was
+    // registered about the other.
+    let binding = bindings
+        .into_iter()
+        .find(|b| b.action == action)
+        .unwrap_or_else(|| {
+            Binding::from_stored(action, action.default_accelerator(), HotkeyMode::default())
+        });
+
     let mut cautions = hotkey::cautions(
         std::slice::from_ref(&binding),
         &kw_platform::keyboard_layout::altgr(),

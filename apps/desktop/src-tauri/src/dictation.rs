@@ -312,7 +312,15 @@ const fn classify(recorded: Option<u16>, answering: bool) -> Recorded {
 /// selected but cannot be built is an error rather than a quiet fall through to
 /// whisper -- audio going somewhere the screen did not name is the failure this
 /// ordering exists to prevent.
-fn local_engine(
+///
+/// **`pub(crate)` since 2026-09-01, because a second caller needed the same
+/// rule and had been getting a different one.** `meeting.rs`'s whole-recording
+/// pass asked `WhisperServer` directly, so on a machine where a sherpa model was
+/// selected -- the documented "one local engine" state, and the one this
+/// project ships people into -- the pass failed with "the local model server is
+/// not running" and every meeting fell back to its live partials. Reusing this
+/// is the fix; a second copy of the rule would have been the bug again.
+pub(crate) fn local_engine(
     sherpa: &crate::local_asr::Selection,
     whisper: Option<WhisperServer>,
 ) -> Result<Option<Box<dyn LocalTranscriber>>, String> {
@@ -1027,13 +1035,49 @@ pub fn insertion_supported() -> bool {
     ClipboardInserter::new().is_supported()
 }
 
+/// The key of a push-to-talk hold coming up.
+///
+/// **Why a channel rather than a second call to `toggle`.** The obvious
+/// implementation of push-to-talk is "the release calls `toggle` too, and
+/// `toggle` already finishes a recording". It has a race that only a short hold
+/// reaches, and push-to-talk is made of short holds: `toggle` decides by reading
+/// `state()`, and the press only sets `Recording` **after** the microphone is
+/// actually open. Two independently spawned tasks have no order between them, so
+/// a release arriving during that window finds `Idle` and either does nothing —
+/// leaving the microphone open with nobody to close it — or starts a second
+/// recording, depending on which of the two wrong things it does.
+///
+/// So the hold is **one task**, which starts, waits here for the key to come up,
+/// and finishes. There is no ordering left to get wrong, because there is only
+/// one order. A fresh channel per press rather than a long-lived flag, so a
+/// release belonging to an earlier hold cannot end a later one.
+///
+/// **Reasoned, not measured.** Nothing here has driven two spawned tasks into
+/// that window on purpose; the argument is that the window exists and the design
+/// removes it, which is cheaper than proving how often it is hit.
+static HOLD_RELEASE: std::sync::Mutex<Option<tokio::sync::watch::Sender<bool>>> =
+    std::sync::Mutex::new(None);
+
 /// Drive a dictation from the global hotkey.
 ///
 /// Spawned rather than awaited: this is called from the shortcut plugin's
-/// synchronous callback, which must return promptly or the whole hotkey system
-/// stalls. The outcome is emitted, not returned, because there is nobody here to
-/// return it to.
-pub fn on_hotkey(app: &AppHandle) {
+/// synchronous callback and from the hook thread, both of which must return
+/// promptly or every keystroke on the machine waits. The outcome is emitted, not
+/// returned, because there is nobody here to return it to.
+///
+/// `what` comes from `shortcuts::act`, which is where the toggle-versus-hold
+/// decision is made and tested. This function does not re-derive it.
+pub fn on_hotkey(app: &AppHandle, what: crate::shortcuts::Act) {
+    use crate::shortcuts::Act;
+
+    // The release half touches no state but the gate, so it is handled before
+    // the runtime is looked up: a release that arrives after the session has
+    // gone away still has to wake the task waiting on it.
+    if matches!(what, Act::EndHold) {
+        release_the_hold();
+        return;
+    }
+
     let Some(runtime) = app
         .try_state::<Arc<DictationRuntime>>()
         .map(|s| Arc::clone(&s))
@@ -1042,28 +1086,87 @@ pub fn on_hotkey(app: &AppHandle) {
         return;
     };
 
+    let held = match what {
+        Act::BeginHold => Some(arm_the_hold()),
+        Act::Toggle => None,
+        // Decided by `shortcuts::act`, which never routes these here. Matched
+        // rather than caught by a wildcard so a fifth `Act` has to be thought
+        // about at this call site too.
+        Act::EndHold | Act::Nothing => return,
+    };
+
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        match runtime.toggle().await {
-            Ok(outcome) => {
-                if let Err(err) = app.emit(OUTCOME_EVENT, outcome) {
-                    tracing::warn!(error = %err, "could not report the dictation outcome");
-                }
-            }
-            Err(message) => {
-                tracing::warn!(%message, "the dictation could not proceed");
-                if let Err(err) = app.emit(
-                    OUTCOME_EVENT,
-                    kw_app_core::dictation::Outcome::Failed {
-                        message,
-                        history_id: None,
-                    },
-                ) {
-                    tracing::warn!(error = %err, "could not report the dictation failure");
-                }
-            }
+        report(&app, runtime.toggle().await);
+
+        // Push-to-talk's second half, in the same task as its first. By the time
+        // this is reached the microphone is either open or it failed, so the
+        // state `toggle` reads below is settled -- which is the whole point of
+        // not spawning the release separately.
+        if let Some(mut held) = held {
+            // `Err` means the sender was dropped, which happens when a later
+            // press replaced it. Treated as a release: a hold whose gate has
+            // gone is a hold nothing will ever end, and leaving the microphone
+            // open is the worse of the two mistakes.
+            let _ = held.wait_for(|released| *released).await;
+            report(&app, runtime.toggle().await);
         }
     });
+}
+
+/// Emit whatever a toggle came back with, success or failure.
+fn report(app: &AppHandle, outcome: Result<kw_app_core::dictation::Outcome, String>) {
+    match outcome {
+        Ok(outcome) => {
+            if let Err(err) = app.emit(OUTCOME_EVENT, outcome) {
+                tracing::warn!(error = %err, "could not report the dictation outcome");
+            }
+        }
+        Err(message) => {
+            tracing::warn!(%message, "the dictation could not proceed");
+            if let Err(err) = app.emit(
+                OUTCOME_EVENT,
+                kw_app_core::dictation::Outcome::Failed {
+                    message,
+                    history_id: None,
+                },
+            ) {
+                tracing::warn!(error = %err, "could not report the dictation failure");
+            }
+        }
+    }
+}
+
+/// Open a fresh gate for one hold and return the end the task waits on.
+fn arm_the_hold() -> tokio::sync::watch::Receiver<bool> {
+    let (tx, rx) = tokio::sync::watch::channel(false);
+    let mut held = HOLD_RELEASE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    *held = Some(tx);
+    rx
+}
+
+/// Tell whichever hold is in progress that its key came up.
+///
+/// Runs on the hook thread, so it does no work beyond a lock and a send. If
+/// nothing is holding, this is a release with no press — which the watcher
+/// should never produce, and doing nothing about it is the right answer if it
+/// somehow does.
+///
+/// Also called by `shortcuts::Hooks::install` when the hook is being torn down
+/// and replaced. That is not a courtesy: the key that would have ended the hold
+/// is watched by the hook that is about to stop existing, so the release will
+/// never arrive. Somebody changing a setting while holding the dictation key
+/// would otherwise be left recording with nothing to stop it until they pressed
+/// the new binding.
+pub(crate) fn release_the_hold() {
+    let held = HOLD_RELEASE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(sender) = held.as_ref() {
+        let _ = sender.send(true);
+    }
 }
 
 #[cfg(test)]
@@ -1075,6 +1178,45 @@ pub fn on_hotkey(app: &AppHandle) {
 )]
 mod tests {
     use super::*;
+
+    /* --------------------------------------------- which local engine */
+
+    #[test]
+    fn a_selected_sherpa_model_never_falls_through_to_whisper() {
+        // The rule two callers now share, and the reason sharing it was worth
+        // doing: `meeting.rs`'s whole-recording pass had its own version that
+        // knew only about `WhisperServer`, so on a machine with a Parakeet
+        // model selected -- the documented one-local-engine state -- the pass
+        // failed and every meeting note silently became the live partials.
+        // Found by a person reading a saved note, not by anything here.
+        use std::sync::{Arc, RwLock};
+
+        let policy = || kw_network_policy::NetworkPolicy::new().expect("a policy");
+        let server = || WhisperServer::new(policy(), 1, None);
+
+        let nothing: crate::local_asr::Selection = Arc::new(RwLock::new(None));
+        assert!(local_engine(&nothing, None)
+            .expect("no engine at all is a state, not an error")
+            .is_none());
+        assert!(
+            local_engine(&nothing, Some(server()))
+                .expect("whisper alone is fine")
+                .is_some(),
+            "with no sherpa selection the whisper server is the engine"
+        );
+
+        // The assertion that matters. A selected model that cannot be built is
+        // an error **even when whisper is available**, because audio going
+        // somewhere the screen did not name is worse than a refusal.
+        let broken: crate::local_asr::Selection =
+            Arc::new(RwLock::new(Some("not-a-model".to_owned())));
+        let err = local_engine(&broken, None).expect_err("a broken selection is an error");
+        assert!(err.contains("not-a-model"), "{err}");
+        assert!(
+            local_engine(&broken, Some(server())).is_err(),
+            "a broken sherpa selection must not quietly become a whisper dictation"
+        );
+    }
 
     /* ------------------------------------------- the recorded local port */
 

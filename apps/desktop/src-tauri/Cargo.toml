@@ -42,6 +42,11 @@ tauri-plugin-autostart.workspace = true
 tauri-plugin-dialog.workspace = true
 tokio.workspace = true
 async-trait.workspace = true
+# Both for `sherpa_stream`'s readiness probe: the streaming server has no health
+# endpoint, so readiness is a real WebSocket handshake rather than an HTTP GET
+# that would be a 400 forever. Same versions the meeting clients already use.
+tokio-tungstenite.workspace = true
+futures.workspace = true
 url.workspace = true
 chrono.workspace = true
 semver.workspace = true

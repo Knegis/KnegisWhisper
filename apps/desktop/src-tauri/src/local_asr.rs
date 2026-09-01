@@ -20,16 +20,29 @@
 //! person distrust the whole setting: dictation would go somewhere neither
 //! control claimed.
 //!
-//! # Why only two of the four models are offered
+//! # All four models are offered now, for two different things
 //!
-//! The registry's `streaming` flag separates them. The two Parakeet models are
-//! offline transducers and are what the probe and the test proved. The two
-//! Nemotron models are streaming, served over
-//! `sherpa-onnx-online-websocket-server`'s own protocol, and nobody has written
-//! a client for it — so they are listed with that reason rather than hidden,
-//! the same rule `Settings > Meetings` follows for a provider with no client. A
-//! model that cannot be used should say why on the screen where someone would
-//! look for it.
+//! The registry's `streaming` flag separates them, and since 2026-09-01 it
+//! separates *what they are for* rather than whether they work:
+//!
+//! - **Offline** (the two Parakeet models) — dictation, through the
+//!   `sherpa-onnx-offline` CLI. What the probe and `tests/sherpa_dictation.rs`
+//!   proved.
+//! - **Streaming** (the two Nemotron models) — meetings, through
+//!   `sherpa-onnx-online-websocket-server` and the `local-streaming` meeting
+//!   provider. Its protocol is undocumented and was measured on 2026-09-01;
+//!   see `kw_meeting_core::nemotron`.
+//!
+//! Until that measurement the streaming pair were listed with a reason and no
+//! button, because no client for the protocol existed. The reason is gone
+//! because the thing it described is gone, which is the only honest way for it
+//! to go.
+//!
+//! **[`use_for`] is the rule, and it is one line and pure.** A model is never
+//! offered for the engine that cannot run it: handing a Parakeet model to the
+//! streaming server produces a server that starts, accepts a socket and
+//! transcribes nothing, and `sherpa_stream::start` refuses it for exactly that
+//! reason.
 //!
 //! # What is never logged
 //!
@@ -76,8 +89,8 @@ pub struct SherpaModelStatus {
     /// Checked by running the same discovery `transcribe` will use, so a
     /// half-extracted directory does not count as installed.
     pub installed: bool,
-    /// `None` when the model can be installed and used.
-    pub not_offered: Option<String>,
+    /// Which engine it runs on, and therefore which button it gets.
+    pub used_for: UsedFor,
 }
 
 /// Everything the sherpa half of the screen needs, with no network access.
@@ -94,6 +107,12 @@ pub struct SherpaStatus {
     pub models: Vec<SherpaModelStatus>,
     /// Which model dictation is set to use, if any.
     pub selected: Option<String>,
+    /// Which streaming model meetings are set to use, if any.
+    ///
+    /// A separate setting from `selected`, not a second reading of it: the two
+    /// engines run different models and choosing one for dictation must not
+    /// silently change what a meeting records with.
+    pub selected_stream: Option<String>,
     /// Where models are kept. Shown because the native binaries cannot open a
     /// file whose path holds a non-ASCII character, so this is sometimes not
     /// where a person would expect.
@@ -114,8 +133,13 @@ pub type Selection = Arc<RwLock<Option<String>>>;
 /// Everything needed to answer "what should dictate locally", per request.
 #[derive(Debug)]
 pub struct LocalAsr {
-    policy: NetworkPolicy,
-    catalog: kw_sidecar::catalog::Catalog,
+    /// `pub(crate)` since 2026-09-01, for `diarization`, which installs the
+    /// **same** sherpa sidecar this does. A second `NetworkPolicy` and a
+    /// second `Catalog` for the same archive would be two things to keep in
+    /// step, and the one that drifted would install a different binary than
+    /// the one the other reported.
+    pub(crate) policy: NetworkPolicy,
+    pub(crate) catalog: kw_sidecar::catalog::Catalog,
     selected: Selection,
 }
 
@@ -210,17 +234,33 @@ fn model_named(id: &str) -> Result<SherpaModel, String> {
         .ok_or_else(|| format!("no local model called {id:?} is in the registry"))
 }
 
-/// Why this model cannot be picked, or `None` if it can.
+/// What a model can be used for.
+///
+/// Two engines, and a model runs on exactly one of them. Not a boolean, for the
+/// reason every other three-state answer in this codebase is not a boolean: the
+/// screen needs to name the use, not just permit it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "kebab-case")]
+pub enum UsedFor {
+    /// The `sherpa-onnx-offline` CLI, one WAV at a time.
+    Dictation,
+    /// `sherpa-onnx-online-websocket-server`, words as they are recognised.
+    Meetings,
+}
+
+/// Which engine this model runs on.
 ///
 /// Pure and taking the flag rather than the whole model, so the rule is one
-/// line and testable.
+/// line and testable. It replaced `not_offered`, which returned a sentence
+/// explaining that streaming models could not be used at all; that sentence
+/// stopped being true when `kw_meeting_core::nemotron` landed.
 #[must_use]
-pub fn not_offered(streaming: bool) -> Option<String> {
-    streaming.then(|| {
-        "streaming model — it is served over sherpa-onnx's own WebSocket protocol, \
-         and no client for that protocol has been written"
-            .to_owned()
-    })
+pub const fn use_for(streaming: bool) -> UsedFor {
+    if streaming {
+        UsedFor::Meetings
+    } else {
+        UsedFor::Dictation
+    }
 }
 
 /// Build the transcriber for the selected model, if there is one.
@@ -258,7 +298,10 @@ fn resolve_id(id: &str) -> Result<SherpaOffline, String> {
 
 /// The sherpa models, what is installed, and which one is selected.
 #[tauri::command]
-pub async fn sherpa_status(asr: State<'_, Arc<LocalAsr>>) -> Result<SherpaStatus, String> {
+pub async fn sherpa_status(
+    state: State<'_, crate::state::AppState>,
+    asr: State<'_, Arc<LocalAsr>>,
+) -> Result<SherpaStatus, String> {
     let registry = kw_provider_registry::registry().map_err(|err| err.to_string())?;
     let root = models_root();
 
@@ -272,7 +315,7 @@ pub async fn sherpa_status(asr: State<'_, Arc<LocalAsr>>) -> Result<SherpaStatus
             size_mb: m.size_mb,
             language: m.language.clone(),
             installed: sherpa_models::is_installed(&root, m),
-            not_offered: not_offered(m.streaming),
+            used_for: use_for(m.streaming),
         })
         .collect();
 
@@ -281,6 +324,18 @@ pub async fn sherpa_status(asr: State<'_, Arc<LocalAsr>>) -> Result<SherpaStatus
         cli_installed: installed_cli().is_some(),
         models,
         selected: asr.selected.read().ok().and_then(|held| held.clone()),
+        // Read from the database rather than held in memory. Unlike the
+        // dictation selection there is nothing to resolve per request: the
+        // meeting runtime reads the same key when a meeting starts, so a second
+        // copy here would be a second thing to keep in step.
+        selected_stream: kw_storage::settings::get_or(
+            state.db().pool(),
+            crate::sherpa_stream::STREAM_MODEL_KEY,
+            String::new(),
+        )
+        .await
+        .ok()
+        .filter(|id| !id.is_empty()),
         models_dir: root.display().to_string(),
     })
 }
@@ -296,10 +351,13 @@ pub async fn sherpa_install_model(
     asr: State<'_, Arc<LocalAsr>>,
     model_id: String,
 ) -> Result<(), String> {
+    // Every model in the registry is installable now. The refusal that used to
+    // be here covered the streaming pair, on the grounds that no client existed
+    // for their protocol -- which stopped being true when
+    // `kw_meeting_core::nemotron` landed on 2026-09-01. Removed rather than
+    // reworded: a check that can no longer fire is a check that stops being
+    // read.
     let model = model_named(&model_id)?;
-    if let Some(reason) = not_offered(model.streaming) {
-        return Err(format!("{} cannot be installed: {reason}", model.name));
-    }
 
     let emit = |progress: InstallProgress| {
         if let Err(err) = app.emit(PROGRESS_EVENT, progress) {
@@ -367,49 +425,99 @@ pub async fn sherpa_use_model(
     Ok(())
 }
 
+/// Choose the streaming model meetings record with.
+///
+/// The other half of [`sherpa_use_model`], and deliberately a separate command
+/// writing a separate key. The two engines run different models: choosing one
+/// for dictation must not silently change what a meeting records with, which is
+/// what a single shared selection would do the first time somebody picked a
+/// Parakeet model.
+///
+/// The server is **not** started here. Nothing about choosing a model says a
+/// meeting is about to happen, and a 630 MB model loaded by a settings click
+/// would be a cost the click did not advertise. `MeetingRuntime::provider`
+/// starts it when a meeting actually begins.
+#[tauri::command]
+pub async fn sherpa_use_stream_model(
+    state: State<'_, crate::state::AppState>,
+    model_id: String,
+) -> Result<(), String> {
+    let model = model_named(&model_id)?;
+    if use_for(model.streaming) != UsedFor::Meetings {
+        // The same refusal `sherpa_stream::start` makes, made earlier and in
+        // the settings screen's words. An offline model handed to the streaming
+        // server produces a server that starts, accepts a socket and
+        // transcribes nothing.
+        return Err(format!(
+            "{} is an offline model, so it is for dictation rather than meetings.",
+            model.name
+        ));
+    }
+    if !sherpa_models::is_installed(&models_root(), &model) {
+        return Err(format!(
+            "{} is not installed. Install it before choosing it for meetings.",
+            model.name
+        ));
+    }
+
+    kw_storage::settings::set(
+        state.db().pool(),
+        crate::sherpa_stream::STREAM_MODEL_KEY,
+        &model_id,
+    )
+    .await
+    .map_err(|err| err.to_string())
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
 
     #[test]
-    fn the_streaming_models_are_the_ones_not_offered() {
+    fn every_model_is_offered_for_exactly_one_engine() {
         // The rule, stated once, against the registry rather than a literal
         // list of ids -- a fifth model landing should be classified by its own
         // flag, not by whether someone remembered to edit this test.
+        //
+        // Until 2026-09-01 this test asserted the opposite half: that the
+        // streaming models were *not* offered, because no client for their
+        // protocol existed. It does not read `>= 1 offered` now for the same
+        // reason it did not then -- both engines having a model is the property
+        // worth holding, and a count would pass with all four on one side.
         let registry = kw_provider_registry::registry().unwrap();
 
-        let offered: Vec<&str> = registry
-            .local_asr
-            .sherpa
-            .iter()
-            .filter(|m| not_offered(m.streaming).is_none())
-            .map(|m| m.id.as_str())
-            .collect();
-
-        assert!(
-            !offered.is_empty(),
-            "no local model is offerable, which would make this screen pointless"
-        );
-        for id in &offered {
-            let model = registry
-                .local_asr
-                .sherpa
-                .iter()
-                .find(|m| &m.id == id)
-                .unwrap();
-            assert!(
-                !model.streaming,
-                "{id} is streaming and should not be offered"
-            );
+        let mut dictation = 0_usize;
+        let mut meetings = 0_usize;
+        for model in &registry.local_asr.sherpa {
+            match use_for(model.streaming) {
+                UsedFor::Dictation => {
+                    assert!(!model.streaming, "{} is streaming", model.id);
+                    dictation += 1;
+                }
+                UsedFor::Meetings => {
+                    assert!(model.streaming, "{} is offline", model.id);
+                    meetings += 1;
+                }
+            }
         }
+        assert!(
+            dictation > 0,
+            "nothing can dictate, so the screen is pointless"
+        );
+        assert!(
+            meetings > 0,
+            "nothing can stream, so `local-streaming` has no model"
+        );
     }
 
     #[test]
-    fn a_streaming_model_says_why_rather_than_going_missing() {
-        let reason = not_offered(true).expect("a streaming model must carry a reason");
-        assert!(reason.contains("WebSocket"), "{reason}");
-        assert!(reason.contains("no client"), "{reason}");
+    fn the_two_engines_are_distinguishable() {
+        // The wording lives in `labels.ts`, where an exhaustive switch with no
+        // `default` makes a third variant a build failure. What this side owes
+        // the screen is that the two are not the same value.
+        assert_ne!(use_for(false), use_for(true));
+        assert_eq!(use_for(true), UsedFor::Meetings);
     }
 
     #[test]

@@ -21,15 +21,25 @@ maintained in place rather than appended to, because its purpose is to be curren
 > detail and the by-hand check that found five real defects; [COMPLETION_PLAN.md](COMPLETION_PLAN.md)
 > keeps the phase 7–10 definitions.
 >
-> **Measured, not asserted, as of 2026-09-01:** `cargo test --workspace` — **1506 passing, 0
+> **Measured, not asserted, as of 2026-09-01:** `cargo test --workspace` — **1664 passing, 0
 > failed** (941 at the start of the original run, 1296 at its close on 2026-08-27); parity —
-> **102 entries, 6 declared unreachable** (17 at the start, 8 on 2026-08-27), and **all 13 UI
-> surfaces built**, with no "surface not built" entry remaining anywhere. The six: two local-ASR
-> models (sherpa/Parakeet — runtime measured, and the Settings selector that was missing landed
-> in `121dc4c`, which is what took this from eight to six), two Tinfoil entries (batch transcription
+> **103 entries, 5 declared unreachable** (17 at the start, 8 on 2026-08-27), and **all 13 UI
+> surfaces built**, with no "surface not built" entry remaining anywhere. The four: **no local-ASR
+> model any longer** — all four sherpa models are pinned and installable as of 2026-09-01 — two
+> Tinfoil entries (batch transcription
 > and meeting-stream, both declined on principle, not unfinished), Apple Calendar (EventKit —
 > described in `kw_calendar_core::apple`, implemented nowhere, on any platform), and URL import
 > (withdrawn as a command — see the 2026-08-27 entry on the merged security fixes).
+>
+> Eight became six when `121dc4c` gave the two **Parakeet** models the Settings selector their
+> measured runtime had been waiting for; six became five on 2026-09-01 when the streaming protocol
+> was measured and `nemotron-speech-streaming-en-0.6b` got a client; and five became four hours
+> later when the multilingual Nemotron was pinned. Worth spelling out because an earlier version of
+> this paragraph named Parakeet as one of the unreachable pair, which is the opposite of what
+> happened to it.
+>
+> Also worth spelling out: the last of those four moved because a **person pressed the button and
+> reported what he saw**, three times. Nothing in the repository was going to.
 >
 > **The reachability rule, settled and applied repeatedly:** `reachable: true` means a user can
 > *configure* the integration through a named, **built** surface — not that the backend code works.
@@ -278,6 +288,614 @@ Unchanged from the Phases 1–4 entry, restated here so they are not buried:
   porting matrix. Upstream pins both by commit and verifies neither.
 - ~~**`nircmd`**~~ — **dropped**, as leaned towards: third-tier Windows paste fallback only, and
   `SendInput` works.
+
+---
+
+## 2026-09-01 (KNEG-123, KNEG-124) — a deferral block that was wrong three times over
+
+Diarization had sat `temporarily-deferred` since before the build plan began, under a `deferral`
+block naming three dependencies. **All three were wrong**, and the cost of not checking was a
+feature deferred for months that took a day.
+
+- `ort` (ONNX Runtime): the sherpa CLI links it itself.
+- a `sherpa-onnx-diarize` sidecar: the pinned sherpa archive — the one already installed on this
+  machine for Parakeet — ships `sherpa-onnx-offline-speaker-diarization.exe` beside the offline
+  transcription CLI.
+- `silero_vad.onnx`: the pyannote segmentation model does its own voice-activity detection.
+
+The lesson is not "check dependencies". It is that **a deferral block ages exactly like a status
+claim and nothing gates it.** `verify-parity.mjs` checks that a deferred entry *has* a reason; it
+has no way to check the reason is still true, and this one had been false since whenever the sherpa
+archive gained that binary. The entry was corrected in place, not annotated.
+
+### Five measurements, each of which changed the code
+
+Nothing here is in the CLI's `--help`.
+
+| measured | what it changed |
+| --- | --- |
+| A failure and a recording nobody spoke in produce **byte-identical stdout** | `interpret` takes the exit status. This is the KNEG-38 shape — "capture broken" and "the far end was quiet" looking the same — and there is a test that fails if the status is dropped. |
+| Labels are cluster indices and **not dense from zero**: the one-speaker fixture returned `speaker_01` | Read straight through, the only person in the room is called "Speaker 2". `interpret` renumbers by first appearance. |
+| Turns overlap, and **one can nest wholly inside another** | Overlapped seconds alone make a nested voice unreachable for every span there is. `assign` needed a second rule. |
+| `--clustering.num-clusters=4` asked for four and **produced three** | Never passed. It is a hint to the clusterer, and a meeting does not know its own attendance. |
+| 16 kHz is a **refusal, not a resample** | Meeting recordings are already written at 16 kHz, so nothing converts — but an imported file need not be. |
+
+### The control cost one extra download and changed what the feature claims
+
+The first run paired the pinned **English** CAM++ embedding model with the release's **Chinese**
+four-speaker reference and returned three voices, one of them swallowing ten seconds belonging to
+two other people. That looked like a mediocre result. Re-run with the language-matched Chinese
+embedding model, the same audio through the same segmentation model returned four, with different
+boundaries.
+
+So the pipeline is fine and **the embedding model is language-sensitive where the segmentation
+model is not.** Without the control this would have shipped as "diarization works, a bit roughly".
+With it, the limit is named: English is the measured case, and the screen says so rather than
+leaving a Swedish meeting's bad speaker turns to be blamed on the feature in general.
+
+### A test that was wrong, and the rule that was wronger
+
+`assign` scored turns by overlapped seconds and took the highest. A test asserted the interrupter
+won a span that was mostly theirs, and it failed — 0.45 s each, a tie, and the tie-break gave it
+to the earlier turn.
+
+The tempting fix is to change the expectation. The real finding is worse than the test: in the
+recorded run `13.025 -- 13.514 speaker_01` lies **wholly inside** `11.455 -- 14.037 speaker_00`, so
+the outer turn ties or wins for *every span there is* and the inner voice can never be named. Not a
+tie — **a voice unreachable by construction.** The rule gained a second criterion: on equal
+overlap, the turn with more of *itself* inside the span wins. 92% of one against 17% of the other
+is not a coin toss.
+
+### `assign` is invented, and says so
+
+`docs/PORTING_MATRIX.md` names upstream's `diarizationPolicy.js` (63 lines) as the thing to port.
+**That file is not in this repository** — only its line count is. Writing "ported" over a rule
+reasoned out from scratch would be exactly the claim these documents exist to prevent, so the
+module says **invented** and the rule stands on its tests rather than on upstream's authority.
+
+### The consumer, and a comment that was true when written
+
+`transcribe_whole` accepted `Inference::Timed { text, .. }` and threw the segments away, under a
+comment saying this pass "is not asked for timings". True when written, and the reason there was
+nothing for a speaker label to attach to. It keeps them now, and `Text` — which a whisper server
+started with `--no-timestamps` still returns — remains an ordinary state that the note describes
+rather than a failure.
+
+**The note only ever speaks up when the result differs from what the setting asked for.** Labels
+that worked add no sentence: they are visible in the note. Labels that were asked for and did not
+happen add one, because an unlabelled note reads as a meeting with one speaker in it. Six tests
+cover that asymmetry, including the one that distinguishes *the step did not run* from *the step
+ran and attributed nothing* — same segments, two different sentences.
+
+### What it costs, said on the screen
+
+Real-time factor 0.081, measured. A one-hour meeting adds roughly five minutes to *Stop and
+transcribe*, on top of the transcription pass already there. Off by default, and the screen gives
+the figure rather than calling it "a short delay".
+
+### Still not done
+
+**Nobody has recorded two people and checked the turns.** The integration test's control is a
+one-speaker fixture, which proves the flags, the exit-status reading and the renumbering end to end
+and says nothing about attribution — one voice cannot be confused with another. That is the same
+distinction KNEG-84 and KNEG-94 both ended on, and it is not a coincidence: finishing the
+measurement is not finishing the feature.
+## 2026-09-01 (KNEG-107) — a boolean that described a path, and the third state it could not hold
+
+`local_llm_status` reported `installed: gguf_path(&m.file_name).exists()`. That is a claim about a
+**path**, not about a file. The install had hashed the bytes against a pinned SHA-256 and then
+nothing looked at them again, so a GGUF corrupted, truncated or replaced months later rendered
+identically to one checked five minutes ago — and was loaded without complaint.
+
+The window is specific to these files. They are the largest thing this application writes to disk
+(19.8 GB for `qwen3-32b-q4_k_m`), they sit in a user-writable cache directory for months, and a bad
+block in one is a far more ordinary event than in a 148 MB whisper model.
+
+### Why the whisper answer was not copied
+
+`kw_transcription_core::models::is_installed` calls `check`, which calls
+`kw_sidecar::integrity::verify` — it re-hashes on **every status call**. That is the right answer at
+3.1 GB and the wrong one at 19.8: `Settings > Intelligence > Local` would stall for about a minute
+per visit. Hashing inside `local_llm_start` instead was considered and rejected on the same
+arithmetic, and it is worse there — it makes starting the server feel broken.
+
+So the trade this project already made stands, and it is the *reporting* that changed.
+
+### A record beside the file, and a sentence saying what it is not worth
+
+`gguf_check::write_record` writes `<name>.gguf.checked.json` after the rename, holding the digest
+the bytes were hashed against, the exact length, and the modification time. A file whose length and
+mtime still agree with that record counts as unchanged since it was installed. Two stat calls and a
+small read, against a minute of hashing.
+
+**The sentence that matters is the one about what it does not catch**, and it is in the module doc,
+in the type, and on the screen: different bytes written into the same length with the timestamp set
+back would still read as unchanged. That is a different threat from the one this closes, and it has
+to be said rather than left for a reader to assume the file is authenticated on every load.
+
+The state is therefore called `UnchangedSinceInstall`, not `Verified`. A test asserts that no state
+spells itself "verified": two integers agreeing is not a hash, and the weaker word is the point.
+
+### Three states, because two of them used to render alike
+
+`installed: bool` became `integrity: GgufIntegrity`, with four answers:
+
+| state | what it means |
+| --- | --- |
+| `not-installed` | nothing at the path |
+| `unchanged-since-install` | a record, and the length and mtime still agree with it |
+| `unrecorded` | the file is there and nothing beside it says what was checked |
+| `changed` | a record, and it disagrees |
+
+`unrecorded` is the one the design turns on. **Every GGUF installed before this landed is in it** —
+including the 1.28 GB `qwen2.5-1.5b-instruct-q5_k_m.gguf` on the developer's machine right now — and
+rendering it as either "verified" or "corrupt" would be the same overclaim in opposite directions.
+It gets the neutral treatment `labels.ts` already gives `unknown` everywhere else.
+
+`changed` reports both lengths, so `recordedBytes === bytes` is how the screen tells "something wrote
+to this" from "this is the wrong size". A restore from backup moves a timestamp without touching a
+byte, and the two deserve different sentences.
+
+### The re-hash is a button, and the button says what it costs
+
+`local_llm_recheck_model` reads the whole file and compares it to the pinned digest — the only thing
+that proves the bytes. It returns a `RecheckOutcome` rather than a `Result<(), String>`, because a
+file that does not match its digest is a **finding**, not a transport failure, and the two must not
+arrive through the same red line.
+
+Two decisions inside it:
+
+- **A mismatch removes the record and keeps the file.** A record that survived a mismatch is a
+  record that is wrong — length and mtime unchanged while the bytes are not — which is exactly the
+  replacement the cheap check documents itself as unable to see. Left in place it would have the
+  screen make the strongest available claim about the worst available file. The weights stay: they
+  may be twenty gigabytes somebody chose to keep, and a stale pin here is as likely as rot there.
+- **`nothing-pinned` is its own answer.** Nothing shipped today can reach it, and "there was nothing
+  to check" still must not render as "checked, and fine".
+
+### `start_model` warns and does not refuse
+
+One stat, no hashing. A disagreement is logged with both lengths and the load proceeds: a moved
+timestamp is a restore as often as it is anything else, and refusing to load a working model on
+evidence this deliberately calls weak is a worse failure than the one being guarded against. The
+screen is where a person sees it.
+
+### What the mutation pass found
+
+Twenty mutations, and the eighteenth was the useful one. Every three-state mutation was caught —
+including the defect itself, an absent record rendering as `UnchangedSinceInstall` — except one:
+making every status row report `NotInstalled` survived, because the mapping was inlined in a
+`#[tauri::command]` that takes a `State` nothing outside a running application can construct. That
+is the `media.rs:1334-1340` line again. Extracting `model_status(provider, dir, model)` moved the
+whole mapping to the testable side and left the command holding one call to
+`paths::model_cache_dir()`; three further mutations aimed at it were all caught.
+
+A second finding came out of a test rather than the code. Written with `Duration::new(0, 1)`, the
+`Mtime` round-trip failed on Windows with "`Mtime { seconds: 0, nanos: 0 }` was produced twice":
+`SystemTime` there is a `FILETIME`, which counts in 100 ns ticks, so one nanosecond either side of
+the epoch *is* the epoch. A limit of the input rather than of the function — and the same 100 ns
+NTFS stores an mtime at, so nothing finer could reach it from a real file.
+
+### What is believed rather than measured
+
+The four states were exercised against real files in a temporary directory: written, recorded,
+rewritten at the same length, truncated, and had the record removed, with the answer asserted at
+each step. **They have not been exercised against a real model in the real cache directory**, which
+needs a person at a machine with a GGUF on it. In particular the *unrecorded* state in the wild —
+the installed Qwen2.5 with nothing beside it — is believed to render as `unrecorded` on the strength
+of the same code path answering that way for a 4 KB file in a tempdir. Nobody has opened the screen.
+
+`local_llm_recheck_model` itself has never been run: its verdict and its record-settling are tested
+as pure functions against real files, and the command that wires them to `spawn_blocking` and the
+registry is the untestable edge. The first real 1.28 GB hash is a by-hand check.
+## 2026-09-01 (KNEG-64) — two capabilities the table promised, and the default nobody was allowed to change
+
+`docs/PLATFORM_SUPPORT.md`'s global-shortcut table has listed **mouse buttons 4/5** and
+**push-to-talk** as things the native hook makes possible since the table was written. Neither was
+built. Both are now, and the interesting parts are the three places where the obvious
+implementation was wrong.
+
+### The encoding was measured, and the obvious decoder reads zero for every click
+
+`MSLLHOOKSTRUCT::mouseData` carries the X-button number in its **high** word. `SendInput`'s
+`MOUSEINPUT::mouseData` carries the same number in its **low** word. Two fields, one name, opposite
+halves — and a decoder written from the wrong half finds zero on every press and reports a mouse
+with no side buttons, which looks exactly like a mouse with no side buttons.
+
+So `mousehook_probe` measures it rather than reasoning from a header:
+
+```
+WM_XBUTTONDOWN mouseData=0x00010000 high word 1     (XBUTTON1, mouse 4)
+WM_XBUTTONDOWN mouseData=0x00020000 high word 2     (XBUTTON2, mouse 5)
+```
+
+**The control took two attempts, and the first one was worthless.** The first version injected a
+zero-pixel mouse move as its "this is not a button" case. Windows filters a zero-pixel move: it
+produced no message at all, which is indistinguishable from a hook that is not listening. The
+shipped probe moves three pixels right, three back, and turns the wheel one notch — the wheel
+because its delta lands in the *same high word* the button number lives in, so it is a case where
+the field is non-zero and the answer is still "not a button". If the run reports zero movement
+messages it says the control failed and that nothing below that line is evidence.
+
+Phase two then drives the real `KeyHook` and reports `[(0, Press), (0, Release), (1, Press), (1,
+Release)]` with zero fires during the control. Two phases because one process can hold one
+`WH_MOUSE_LL` hook usefully at a time, and the raw bytes and the shipped decision are different
+claims.
+
+### Three of the five buttons are refused, and the refusal is the feature
+
+Left, right and middle cannot be bound. The hook does not swallow the event — the same rule the
+keyboard hook has always followed — so binding the left button would start dictation on **every
+click in every application** while the click still went through. That is not a limitation to
+apologise for on a screen; it is the only correct answer, and `keys::REFUSED_MOUSE_BUTTONS` names
+each one so the message can say *which* button rather than "that one".
+
+The two side buttons are not free either, and the difference is why `Accelerator::MouseButton` is a
+third variant rather than a `ModifierOnly` with an odd spelling in it. A hooked chord takes nothing
+away from anything else. A hooked mouse button leaves `Mouse4` going Back in every browser on the
+machine — so the two need different sentences, and an enum variant is how you stop one borrowing
+the other's.
+
+### `armed` and `pressed` are one key apart, and sharing them breaks the microphone
+
+Push-to-talk needs `ChordWatcher::key_up` to report a release. The obvious implementation reuses
+`armed`, the field that already tracks which chord has fired. It is wrong, and the way it is wrong
+is specific:
+
+`armed` is cleared by **any** key going up, including an ordinary one. It has to be — otherwise
+holding `Control+Super` and tapping an arrow would never re-arm, which is rule 1. So under a shared
+field, `Ctrl+Win` held while an arrow is tapped would report the *arrow's* release as the chord's,
+and the real release — the user actually letting go — would find nothing to pair with and report
+nothing. Under push-to-talk that is a microphone nobody can close: you let go and the recording
+continues.
+
+`pressed` is therefore its own field, cleared only when a key **of the chord** goes up.
+`Chord::contains` is the predicate, and
+`an_unrelated_key_coming_up_during_a_hold_is_not_the_release` is the test that would have caught the
+shared-field version.
+
+`reset` deliberately reports nothing. It is called when the watcher has lost track of the keyboard,
+and a caller in that position cannot also claim the key came up; synthesising a release would stop a
+dictation on a key the user is still holding, which is worse than the state being recovered from.
+
+### The race that only a short hold reaches — and push-to-talk is made of short holds
+
+The issue's own framing was that press-then-release needs no new runtime method, because
+`DictationRuntime::toggle` already branches on state: a press finds `Idle` and starts, a release
+finds `Recording` and finishes. That is right about the state machine and wrong about the
+concurrency.
+
+`on_hotkey` spawns. `Dictation::start` sets `Recording` **only after the microphone is actually
+open**, which on Windows is tens to hundreds of milliseconds of `cpal` work. Two independently
+spawned tasks have no order between them, so a release arriving inside that window finds `Idle` and
+does one of two wrong things depending on which wrong thing you picked: nothing, leaving the
+microphone open with no second half to close it, or `start` again, which is worse.
+
+The fix is not a lock — `tokio`'s mutex is fair among *waiters*, and the two tasks do not reach it
+in a defined order. It is that **the hold is one task**: the press starts, waits on a channel
+created for that press, and finishes when the key comes up. There is no ordering left to get wrong
+because there is only one order. A fresh channel per press rather than a long-lived flag, so a
+release belonging to an earlier hold cannot end a later one.
+
+Labelled honestly in the code as **reasoned, not measured**: nothing here has driven two spawned
+tasks into that window on purpose. The argument is that the window exists and the design removes it,
+which is cheaper than proving how often it is hit.
+
+### What was deliberately not decided
+
+**The shipped default is unchanged.** `hotkey.<action>.mode` ships as `toggle` for all five actions.
+
+Push-to-talk is one of the candidate answers to KNEG-115 — an accidental `Control+Super` on the way
+into `Ctrl+Win+Left` brackets a few hundred milliseconds under a hold instead of bracketing
+everything the user does before the next accidental press. That makes `Hold` a genuine candidate for
+the *default*, and choosing it here would settle an open question as a side effect of adding a
+feature, which is with some irony the exact class of failure KNEG-115 describes. So:
+`nothing_ships_holding_by_default` is a tripwire test that asserts it, and says in its own comment
+that a commit changing it is deciding something that belongs to the repo owner.
+
+### The consequence that is written down rather than discovered
+
+**Push-to-talk makes `InsufficientSpeech` routine rather than rare.** A hold shorter than a syllable
+records less than a syllable, the gate refuses to send it — correctly — and the outcome reads
+*"Nothing was sent: insufficient speech."* Every mistimed tap ends that way. Somebody who reads that
+line as a fault will go looking for a fault that is not there, so it is in `HotkeyMode`'s doc
+comment, in `hotkeyModeLabel`'s detail line under the control itself, and in `PLATFORM_SUPPORT.md`.
+
+### What is measured, and what is not
+
+Measured on this machine: the `mouseData` encoding, the mouse hook firing once per press and once
+per release for the right index with a live control, and `keyhook_probe` now reporting **two
+releases** as well as two presses for two injected chords.
+
+Not measured: the plugin path. Push-to-talk on an ordinary accelerator such as `Control+Shift+D`
+routes `ShortcutState::Released` through the same `shortcuts::act`, and nothing in this repository
+has run it — reaching it needs a built application with a WebView2 beside it and a person holding a
+key. `register_one`'s doc comment says so in those words rather than calling it supported. Also not
+measured: any physical side button. Every press in the probe is injected, which is `keyhook_probe`'s
+limitation too and is KNEG-47's shape.
+## 2026-09-01 (KNEG-113) — the sidecar could be proved to exist and never to be the right one
+
+`kw_sidecar::locate` answers "is there an executable at this path". That is the only question
+anything ever asked about an installed sidecar, and it is not the question that matters. The
+manifest pins a SHA-256, `install` checks the download against it, and then **the answer is thrown
+away**: nothing on disk records which archive the files came from, so from the moment an install
+finishes the application can no longer tell its own sidecar from any other.
+
+The consequence was visible on this machine and had been for a week. `sidecars/whisper` dated from
+2026-08-25; the pinned archive extracted on 2026-08-31 into `sidecars/whisper.incoming` carried
+`bench.exe` and `command.exe` that the installed copy did not. Two directories, one demonstrably
+behind the other, and no code path anywhere that would have noticed.
+
+That `.incoming` directory was not incidental either — see the last section.
+
+### Detection first, because replacement without it is a button nobody can aim
+
+Three directions were on the table and the one chosen was the smallest: **make an installed
+sidecar's identity knowable.** `install` now writes a `.kw-install.json` into the directory it
+promotes, naming the pinned archive's digest, the URL, the upstream repo and release, and when. A
+new pure function, `kw_sidecar::record::freshness`, compares that digest against the one this build
+pins.
+
+**It is written into the staging directory, not into the install directory.** So it is carried
+across by the same `rename` as the files it describes, and there is no window in which a directory
+exists without its record or holds a record left over from the extraction before. Written after the
+rename instead, a crash between the two steps would leave an install whose record described the one
+it replaced — worse than no record, because it reads as a measurement. A test makes the promote fail
+at the replace step and asserts the record is already in staging by then.
+
+**What it proves and what it does not**, because the difference is the whole value of writing it
+down. It proves this directory came out of the archive with that digest. It does **not** prove the
+files are still those bytes: nothing re-hashes an installed executable, and the record is an
+ordinary JSON file that anything with write access could rewrite. A staleness check, not a tamper
+check.
+
+### Absence is *unknown*, and that is the one judgement in the type
+
+`Freshness` has four states and the fourth is the one that took thought. An install made before this
+existed has no record. It is neither current nor stale — nobody measured it — and this machine has
+exactly such an install right now, which is what made the temptation concrete:
+
+- Calling it **current** would excuse a binary the pinned archive has demonstrably moved past.
+- Calling it **stale** would claim a comparison that never happened, and would have to offer two
+  digests when only one exists.
+
+So `Unknown(Unrecorded)` is a first-class answer with a reason attached: no record, an unreadable
+record, a record from a schema this build does not understand, or a record naming a different
+sidecar. The last two are not defensive padding. A schema number nothing checks is a schema number
+that does nothing; and two unrelated digests compare unequal, so without the sidecar-name check a
+record copied between directories would report a confident `Stale` built on a comparison of two
+things that were never comparable.
+
+The screen says it in those words too. `Settings > Transcription > Local` had one claim about the
+server binary — *Installed* — which stayed true while the binary fell behind. It now carries the
+freshness sentence under it, and an **Update the server binary** button whenever the answer is not
+`current`.
+
+### Refresh is stop, replace, restart — and the alternative was measured before it was rejected
+
+The application owns the process, so it can put the server down for the length of the install and
+bring it back. `local_server_refresh` reads the running model *before* stopping (the stop clears
+it), installs, and starts it again either way — a refused download must not leave someone whose
+dictation was working a moment ago with nothing and no explanation. `refresh_failure` is a pure
+function precisely so that second half is testable: "your download failed" and "your download failed
+and dictation is now down" are different sentences and the user needs the right one.
+
+The alternative was rename-aside: move the running install out of the way, unpack over the vacated
+name, clean up later. It was rejected on a measurement, not a preference.
+`crates/sidecar/examples/running_exe_lock_probe.rs`, run on this machine on **2026-09-01**:
+
+```text
+control  remove a directory whose exe is not running   Ok
+control  rename a directory whose exe is not running   Ok
+live     remove a directory whose exe is running       Err os error 5 (Access is denied)
+live     rename a directory whose exe is running       Ok
+live     remove it after renaming it aside             Err os error 5 (Access is denied)
+live     create a new directory at the vacated name    Ok
+```
+
+The first four confirm what was recorded on 2026-08-31 by a different session. **The fifth is new
+and it is the one that decided this.** The lock is on the mapped image file, not on the path: moving
+the directory does not make it deletable. Rename-aside buys a shorter outage and inherits a
+directory that cannot be removed until the process ends — which needs a cleanup pass at some later
+launch, a `.replaced` name `install` must tolerate finding, and a story for what happens when the
+cleanup itself fails. More machinery, for the case where the user has explicitly asked to replace
+the thing they are using.
+
+The probe has controls for the reason `kw_storage`'s `native_path_probe` does: that probe's own
+first version reported failure for every case including the control. And it refuses to report a case
+whose process is not in the process table with its image inside the directory under test — the
+discarded 2026-08-31 attempt used `timeout.exe`, which exits at once without a console, and produced
+six meaningless passes.
+
+### The permanently stuck install, which existed regardless of any of the above
+
+`install` began with `remove_dir(&staging)?` on a single `{name}.incoming` path. One leftover
+directory that would not go away — a file a scanner still had open, a hand-made directory with the
+wrong owner — and **every future install of that sidecar failed at the first line, for ever**, with
+nothing the user could do from inside the application. It ended with the same call and the same `?`,
+so a scanner holding the downloaded `asset` file open turned an install that had already succeeded
+into a reported failure.
+
+Both are gone:
+
+- `take_staging` tries up to ten names, `{name}.incoming` then `{name}.incoming.N`, and takes the
+  first that was **absent or emptied by this call** — never one it merely managed to write into,
+  because whatever a previous attempt left there did not finish verifying and promoting it would put
+  unverified bytes where the sidecar goes. Only ten exhausted names are an error, and that error
+  carries the operating system's own last words.
+- `sweep_staging` runs after a successful promote and is best effort. The user has what they asked
+  for; a directory that will not delete is tens of megabytes, not a failure. It also clears whatever
+  a previous run stranded, which is how this machine's week-old `whisper.incoming` goes away.
+
+Replacing the *install* directory stays fatal — `rename` cannot land on a directory that is still
+there — but it is now `InstallError::InUse` when the refusal looks like a permission problem, which
+is the caller's cue and the user's one actionable sentence. A full disk and a running server are not
+the same advice, so every non-permission failure stays a plain `Io`.
+
+### What did not land
+
+Nothing re-hashes the installed executable, so a file corrupted or replaced on disk after an install
+still reads as whatever the record says. Nothing checks freshness at startup or on a schedule: like
+every other download here, a refresh happens because somebody pressed a button. `local_llm.rs` and
+`local_asr.rs` install sidecars through the same `kw_sidecar::install` and so get the record for
+free, but neither reports freshness or offers a refresh — only whisper does.
+
+**The install half is measured; the stop and the restart around it are not.**
+`tests/real_install.rs` was run against the real network on 2026-09-01 — not a fixture — and it now
+asserts three more things: the record beside a fresh install names the digest the manifest pins,
+`freshness` reads `Current` off it, and a reinstall with a junk `whisper.incoming` in the way both
+succeeds and takes the leftover with it. Both halves of the staging fix therefore have real bytes
+behind them. Everything else is 37 tests and 37 mutations, every mutation killed by the test that
+names it.
+
+What has not happened is a **press**. The stop-install-restart sequence is reachable only through an
+`AppHandle`, so nothing has exercised it. The by-hand check is: on this machine, whose sidecar
+reports `unknown`, with `tiny` resumed, press **Update the server binary** and confirm the directory
+gains `bench.exe`, the row turns `current`, `whisper.incoming` is gone, and dictation still works.
+
+---
+
+## 2026-09-01 (KNEG-84) — the documentation was wrong, and only a probe could say so
+
+The sixth meeting client, and the only one whose wire format was **measured**
+rather than read. Worth recording is not the client — it is four hundred lines in
+the shape of the five beside it — but what measuring bought that reading could not.
+
+### One documented fact was false, and it was the load-bearing one
+
+`sherpa-onnx-online-websocket-client --help` says *"16-bit samples"*. The wire
+carries **`f32` little-endian**. As `f32` the values are speech inside ±1; as
+`i16` they are noise.
+
+A client written from that sentence would connect, complete a handshake, send
+every frame successfully and transcribe nothing — with no error anywhere, because
+this server does not report one. It would have looked like a model problem, or a
+microphone problem, or a "streaming does not work on this machine" problem. The
+cost of *not* probing was not a day of work; it was a defect with no symptom
+pointing at its cause.
+
+The probe was cheap for the same reason it was decisive: the reference client
+and the real server were both already on disk, so the measurement was two
+processes talking to each other with our code listening in between.
+
+### The control came first, and it is why the rest is evidence
+
+Reference client against real server, reproducing the model's own
+`test_wavs/trans.txt`. Then our client against the real server, producing the
+same transcript. Only then was the fault run meaningful. Without the first step,
+"our client got nothing back" and "this model gets nothing back" are the same
+observation.
+
+### The finding that shaped the design was a negative one
+
+`--fault` sent an unparseable TEXT frame and a three-byte BINARY frame before
+the audio. **The server answered neither, and the transcript came back
+byte-identical to the clean run** — the odd-length frame did not even knock the
+sample stream out of alignment.
+
+So this provider has no error channel. That is the exact inverse of the four
+cloud clients: `fault.rs` exists because those four read a provider-reported
+error and carried on, and here there is nothing to read. The consequences are
+concrete rather than philosophical:
+
+- `Incoming` has **no `Failed` variant**. Adding one nothing can produce would
+  suggest a channel exists.
+- `SessionFault` for this client can only ever be `Transport` or `Unreadable`.
+- There is a test named `no_error_frame_is_reachable_from_this_client` whose job
+  is to be **deleted deliberately** if sherpa ever grows an error frame — rather
+  than a `Failed` arm quietly never firing, which is how a dead branch outlives
+  the fact that created it.
+
+A negative measurement is easy to leave unrecorded because it produces no
+output. This one decided more of the design than any positive one.
+
+### `text` is cumulative, and appending would have been silently plausible
+
+Every update repeats the whole segment so far. A client that appended would
+produce *"After After early After early nightfall"* — wrong in a way that reads as
+a model artefact rather than a client bug, especially to somebody who has heard
+a streaming recogniser revise itself. `Segments` is that rule and nothing else,
+and it is tested against the recorded thirteen-update sequence rather than
+against a live model.
+
+The socket half therefore **mutates** its event vector rather than only appending
+to it, which no other client here does. Each reader holds the index of its own
+current segment; indices stay valid because nothing is ever removed.
+
+### Two mutations in my own harness were no-ops, and the harness said so
+
+Recorded because the lesson keeps recurring. I wrote ten mutations against the
+rules; eight were caught and two "passed", which looked like two weak tests. Both
+were actually **non-mutations**:
+
+- `split_off(taken)` — `split_off(taken.min(len))`. `taken` can never exceed
+  `len`, so `.min` changed nothing.
+- `chunks_exact(2)` — `chunks(2)`. The `try_from` inside the `filter_map`
+  already rejects a one-byte chunk, so the odd trailing byte is dropped either
+  way. Two independent guards, and no single-line edit defeats both.
+
+The second is the more interesting: the test was fine and the *code* was
+belt-and-braces. Replacing the whole expression with one that pads did fail it.
+Both are now noted in `samples`' own doc comment, because "this test survived a
+mutation" is worth nothing until you know whether the mutation was real.
+
+### Deliberately not done
+
+**No reconnect.** No session limit, no token rotation, no billing clock — the
+server is a child process. `capabilities.reconnect` is `false` rather than a
+recovery path that does not exist.
+
+**`language_detection: false`.** The one capability that differs from `local` in
+a way a user feels. A sherpa online model is built for one language and there is
+no per-request detection the way `whisper-server` has; declaring it true would
+make `validate` accept a session with no language and quietly transcribe English
+whatever was spoken.
+
+**The server is not started at launch, and not by the settings click either.**
+630 MB of model for a user who never records a meeting, or for one who is only
+choosing a model, is a cost neither action advertises. `MeetingRuntime::provider`
+starts it when a meeting begins and returns the same port if it is already up.
+
+**`sherpa-stream`'s targets are `not-published`.** The binary ships inside the
+offline CLI's archive and is already extracted beside it, so there is nothing to
+download. Marking the targets published would have described an install path
+this code does not use and cost 24 MB a second time. What the entry supplies is
+the two things a path cannot: a port range, and the command fragment that lets
+the reaper prove a leftover server is ours — `sherpa`'s own fragment
+(`sherpa-onnx-offline`) does not match `sherpa-onnx-online-websocket-server`, so
+without an entry an orphaned server would hold its port until the machine
+restarted.
+
+**`not_offered` was deleted rather than reworded.** It returned a sentence
+saying streaming models could not be used because no client existed. That
+stopped being true, and a check that can no longer fire is a check that stops
+being read.
+
+### Driven the same day, and the distinction held all the way to the end
+
+A real meeting was recorded through it and the words arrived as spoken. So the
+feature works — and the thing worth recording is that **every claim between
+"the wire is measured" and "a person used it" turned out to be a separate claim,
+and one of them was false.**
+
+The wire was measured. The rules were tested and mutated. The integration test
+drove the shipped client against the real server. All green, and the first
+person to try it still could not start a meeting: the language caveat pointed at
+the field *below* it while rendering underneath that field, `corti-realtime` had
+carried the same flag for days without anyone reaching a screen where the
+sentence rendered, and the wrong one of the two Nemotron models sorts first and
+refuses to install. **None of those is reachable from any test in this
+repository.**
+
+The same shape as KNEG-94 earlier the same day, and not a coincidence: both were
+finished the moment the measurement existed, and finishing the measurement is
+not finishing the feature.
+
+**Still not covered by that run:** *Stop and transcribe*, and the saved note.
+The live transcript and the saved one come from different passes, so words on
+screen say nothing about the note. And the fault path — the client raises the
+error, but nobody has watched it reach `MeetingOutcome::Failed` rather than
+being flattened into an empty transcript somewhere above.
 
 ---
 
@@ -1939,11 +2557,12 @@ The unconditional call looks like a way to keep the sidecar current. It never wa
 succeed when no server is running, which is only the first install, when there is nothing to
 refresh. Every later call failed outright rather than updating anything.
 
-But the gap it appeared to cover is real and now has nothing covering it: the installed whisper
-sidecar dates from 2026-08-25 and the pinned archive has since gained `bench.exe` and `command.exe`,
-so it is measurably behind. Filed as **KNEG-113** with the rename measurement, rather than solved
-here by a scheme whose cleanup story is unresolved — a displaced directory still cannot be deleted
-while the old executable runs, so it has to survive until a launch where nothing holds it.
+But the gap it appeared to cover was real and, for a day, had nothing covering it: the installed
+whisper sidecar dated from 2026-08-25 and the pinned archive had since gained `bench.exe` and
+`command.exe`, so it was measurably behind. Filed as **KNEG-113** with the rename measurement, and
+**closed on 2026-09-01** — see that entry. The displaced-directory scheme guessed at here was the
+one rejected: a later probe found that renaming a running install aside does not make it deletable
+either, so the cleanup story it needed was worse than it looked.
 
 ### The other finding: two documents told a person to hold a chat
 
@@ -2556,11 +3175,13 @@ Two deliberate limits, recorded rather than implied:
 - **Length first, then hash.** The length is free — it is already on the filesystem — and a
   truncated transfer is the common failure, so checking it first turns the common case into a
   specific message rather than a digest mismatch that could mean anything.
-- **The check happens at install and is not repeated.** `installed: true` afterwards means the path
-  exists. The whisper path *does* re-hash on every status call, and gets away with it because its
-  largest model is 3 GB; re-reading 20 GB every time a settings screen opens is not a trade worth
-  making. A model corrupted after a successful install is therefore not caught. Filed as KNEG-107,
-  not hidden.
+- **The hash happens at install and is still not repeated.** The whisper path *does* re-hash on
+  every status call, and gets away with it because its largest model is 3 GB; re-reading 20 GB every
+  time a settings screen opens is not a trade worth making. What changed on 2026-09-01 is what the
+  screen says afterwards: `installed: true` used to mean only that the path existed, so a model
+  corrupted after a successful install was not caught and did not look any different. KNEG-107
+  replaced that boolean with a four-state `GgufIntegrity` read from a record written beside the
+  file, and added a re-hash a user can ask for. See the dated entry.
 
 ### An install is as verified as its weakest half
 

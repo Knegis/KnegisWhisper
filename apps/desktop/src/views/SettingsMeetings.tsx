@@ -33,6 +33,9 @@ import {
   setMeetingKeyterms,
   setMeetingLanguage,
   setMeetingPrompt,
+  getDiarizationStatus,
+  installDiarizationModel,
+  setDiarizationEnabled,
   onMeetingOutcome,
   onMeetingState,
   onMeetingTranscript,
@@ -47,6 +50,8 @@ import {
 import {
   availabilityLabel,
   captureExclusionLabel,
+  diarizationBlocker,
+  diarizationRoleDetail,
   meetingIsLive,
   meetingStateLabel,
   detectedLabel,
@@ -83,14 +88,16 @@ type Live = Partial<Record<TranscriptEvent["source"], string>>;
 
 export function SettingsMeetings() {
   const load = useCallback(async () => {
-    const [providers, status, language, keyterms, detect] = await Promise.all([
-      getMeetingProviders(),
-      getMeetingStatus(),
-      getMeetingLanguage(),
-      getMeetingKeyterms(),
-      getMeetingDetectLists(),
-    ]);
-    return { providers, status, language, keyterms, detect };
+    const [providers, status, language, keyterms, detect, diarization] =
+      await Promise.all([
+        getMeetingProviders(),
+        getMeetingStatus(),
+        getMeetingLanguage(),
+        getMeetingKeyterms(),
+        getMeetingDetectLists(),
+        getDiarizationStatus(),
+      ]);
+    return { providers, status, language, keyterms, detect, diarization };
   }, []);
 
   const { data, error, reload, guard } = useRefresh(load);
@@ -109,6 +116,8 @@ export function SettingsMeetings() {
   const [allowDraft, setAllowDraft] = useState<string | null>(null);
   const [blockDraft, setBlockDraft] = useState<string | null>(null);
   const [review, setReview] = useState<ConfigReview | null>(null);
+  /** Which diarization model is downloading, or null. */
+  const [installing, setInstalling] = useState<string | null>(null);
 
   useEffect(() => {
     const unlisteners: Array<() => void> = [];
@@ -177,7 +186,7 @@ export function SettingsMeetings() {
     );
   }
 
-  const { providers, status, detect } = data;
+  const { providers, status, detect, diarization } = data;
   const effectiveAllowText = allowDraft ?? detect.allow.join("\n");
   const effectiveBlockText = blockDraft ?? detect.block.join("\n");
   const current = state ?? status.state;
@@ -551,6 +560,96 @@ export function SettingsMeetings() {
             detail={captureExclusionLabel(status.notificationExcluded).detail}
           />
         ) : null}
+      </section>
+
+      <section>
+        <h2>Speaker labels</h2>
+        <p className="caveat">
+          A second pass over the finished recording, grouping the voices in it so
+          each passage of the saved note says who was speaking. It answers how
+          many voices and when, never <em>who</em> — a label is{" "}
+          <code>Speaker 1</code>, it means nothing outside this one recording, and
+          the same person is <code>Speaker 1</code> in one meeting and{" "}
+          <code>Speaker 3</code> in the next.
+        </p>
+        <p className="caveat warn">
+          Measured on this machine: the pass costs about 8% of the meeting’s
+          length, so an hour-long recording adds roughly five minutes to Stop and
+          transcribe — on top of the transcription pass that already runs there.
+          That is why it is off unless you turn it on.
+        </p>
+        <p className="caveat warn">
+          The speaker model shipped here is English. Measured: the same recording
+          put through an English and a language-matched model gave three speakers
+          and four. Meetings in another language still get labels, and they will
+          be worse — nothing in the note will say which.
+        </p>
+        <Row
+          label="Status"
+          value={diarization.ready ? "ready" : "not ready"}
+          detail={diarizationBlocker(diarization) ?? undefined}
+        />
+        <div className="row">
+          <span className="row-label">Label speakers</span>
+          <span className="row-value controls">
+            <label>
+              <input
+                type="checkbox"
+                checked={diarization.enabled}
+                disabled={!diarization.ready && !diarization.enabled}
+                onChange={(e) => {
+                  const enabled = e.target.checked;
+                  void guard(async () => {
+                    await setDiarizationEnabled(enabled);
+                    await reload();
+                  });
+                }}
+              />
+              Add speaker labels to saved meeting notes
+            </label>
+          </span>
+        </div>
+        <ul className="list">
+          {diarization.models.map((m) => (
+            <li key={m.id}>
+              <code>{m.id}</code> {m.name}
+              {m.sizeMb ? ` · ${m.sizeMb} MB` : ""}
+              <em className="row-detail">
+                {diarizationRoleDetail(m.role)} ·{" "}
+                {m.installed ? "installed" : "not installed"}
+              </em>
+              {m.installed ? null : (
+                <button
+                  type="button"
+                  disabled={installing !== null}
+                  onClick={() => {
+                    setInstalling(m.id);
+                    void guard(async () => {
+                      try {
+                        await installDiarizationModel(m.id);
+                        await reload();
+                      } finally {
+                        // Cleared in a `finally` rather than on a completion
+                        // event: a refused install emits none, which is the
+                        // defect that left the transcription screen saying
+                        // "Starting..." for ever (9e1a3f6).
+                        setInstalling(null);
+                      }
+                    });
+                  }}
+                >
+                  {installing === m.id ? "Installing…" : "Install"}
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+        <p className="caveat">
+          Both are needed and neither works alone. The first one installed brings
+          the sherpa runtime with it — the same runtime{" "}
+          <code>Settings &gt; Transcription &gt; Local</code> uses, so if you already have a local model
+          it is already there.
+        </p>
       </section>
 
       <section>

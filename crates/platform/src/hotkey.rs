@@ -25,6 +25,19 @@
 //! right classification — it says *which mechanism handles this* — and
 //! [`Accelerator::explain`] now asks the hook whether it exists here rather than
 //! asserting it does not.
+//!
+//! **And since that:** the same hook thread carries a `WH_MOUSE_LL` hook, so
+//! there is a third mechanism and therefore a third classification —
+//! [`Accelerator::MouseButton`] (KNEG-64). It is a variant rather than a
+//! `ModifierOnly` with an odd spelling in it because the *sentence* differs:
+//! a hooked chord takes nothing away from anything else, and a hooked mouse
+//! button leaves the click going Back in every browser on the machine.
+//!
+//! [`HotkeyMode`] arrives with it and is orthogonal to all three: it says
+//! whether an accelerator toggles or is held, and the routing that reads it is
+//! `shortcuts::act` rather than anything here. Its default is deliberately the
+//! shipped one — see the type's own documentation, which is where the reason
+//! belongs.
 
 use std::collections::BTreeSet;
 use std::fmt;
@@ -91,11 +104,96 @@ impl HotkeyAction {
         }
     }
 
+    /// The settings key holding whether this action is held or toggled.
+    ///
+    /// A second key rather than a second field in the accelerator string,
+    /// because the two are edited by different controls and change for
+    /// different reasons: a user rebinding a key is not thereby choosing
+    /// push-to-talk, and a stored accelerator that has to be parsed for a mode
+    /// as well is a format nobody can type.
+    #[must_use]
+    pub fn mode_settings_key(self) -> String {
+        format!("hotkey.{}.mode", self.id())
+    }
+
     /// Resolve an id back to an action. Returns `None` for anything unknown —
     /// an unrecognised action id must not fall through to dictation.
     #[must_use]
     pub fn from_id(id: &str) -> Option<Self> {
         ALL_ACTIONS.into_iter().find(|a| a.id() == id)
+    }
+}
+
+/// Whether a hotkey toggles on each press or acts for as long as it is held.
+///
+/// # The default is `Toggle`, and that is deliberate, not inertia
+///
+/// Push-to-talk is one of the answers to **KNEG-115** — a two-modifier chord
+/// fires on the way into any longer shortcut, and a chord that acts on release
+/// cannot fire as a prefix in the damaging way, because the accidental press
+/// and the accidental release bracket almost no audio instead of bracketing
+/// everything the user did in between. That makes `Hold` a candidate for the
+/// shipped default, and **shipping it as the default here would settle KNEG-115
+/// in passing**, which is exactly the failure that issue is about. The mode
+/// exists; the default is unchanged; the choice stays with the repo owner.
+///
+/// # What holding costs, said here rather than found out
+///
+/// A hold shorter than a syllable produces a recording shorter than a syllable.
+/// The audio gate then reports `InsufficientSpeech` and nothing is transcribed
+/// — which is correct behaviour and is also, under push-to-talk, a **routine**
+/// outcome rather than the rare one it is under a toggle. Every mistimed tap,
+/// every accidental prefix, every "I let go too early" ends that way. A user
+/// who reads `InsufficientSpeech` as a fault will go looking for one.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize, TS,
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum HotkeyMode {
+    /// Press to start, press again to stop. The shipped behaviour.
+    #[default]
+    Toggle,
+    /// Recording lasts as long as the key is held. Push-to-talk.
+    Hold,
+}
+
+/// Every mode, so a caller — and a settings screen — cannot forget one.
+pub const ALL_MODES: [HotkeyMode; 2] = [HotkeyMode::Toggle, HotkeyMode::Hold];
+
+impl HotkeyMode {
+    /// The stable identifier stored in settings.
+    #[must_use]
+    pub const fn id(self) -> &'static str {
+        match self {
+            Self::Toggle => "toggle",
+            Self::Hold => "hold",
+        }
+    }
+
+    /// Resolve a stored value back to a mode.
+    ///
+    /// `None` for anything unrecognised rather than a silent fallback: a stored
+    /// value nobody wrote is a fact worth noticing, and the caller decides what
+    /// to do with an unreadable setting.
+    #[must_use]
+    pub fn from_id(id: &str) -> Option<Self> {
+        ALL_MODES.into_iter().find(|m| m.id() == id)
+    }
+
+    /// Read a stored value, falling back to the shipped default.
+    ///
+    /// The fallback is where an empty or corrupt setting lands, and it lands on
+    /// [`HotkeyMode::Toggle`] — the behaviour that shipped — rather than on
+    /// whatever was most recently added.
+    #[must_use]
+    pub fn from_stored(stored: &str) -> Self {
+        Self::from_id(stored.trim()).unwrap_or_default()
+    }
+}
+
+impl fmt::Display for HotkeyMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.id())
     }
 }
 
@@ -167,6 +265,21 @@ pub enum Accelerator {
         modifiers: Vec<String>,
     },
 
+    /// One mouse side button, live only through the low-level mouse hook.
+    ///
+    /// Its own variant rather than a `ModifierOnly` with a strange spelling in
+    /// it. A mouse button is not a modifier and [`crate::keys::Chord::parse`]
+    /// refuses fewer than two keys, so folding it in would mean loosening the
+    /// chord rules for something that is not a chord — and the two need
+    /// different sentences anyway, because what a hooked chord *also* does is
+    /// nothing and what a hooked mouse button also does is go Back.
+    MouseButton {
+        accelerator: String,
+        /// What the click still does elsewhere, because the hook does not
+        /// consume it. `Back` or `Forward`.
+        also_does: String,
+    },
+
     /// Not a usable accelerator at all.
     Invalid { input: String, reason: String },
 }
@@ -185,7 +298,9 @@ impl Accelerator {
     #[must_use]
     pub fn text(&self) -> &str {
         match self {
-            Self::Standard { accelerator } | Self::ModifierOnly { accelerator, .. } => accelerator,
+            Self::Standard { accelerator }
+            | Self::ModifierOnly { accelerator, .. }
+            | Self::MouseButton { accelerator, .. } => accelerator,
             Self::Invalid { input, .. } => input,
         }
     }
@@ -231,6 +346,31 @@ impl Accelerator {
                     )
                 }
             }
+            // The sentence differs from the modifier-only one in the part that
+            // matters. A hooked chord costs nothing elsewhere; a hooked mouse
+            // button costs whatever that button already did, and on the two
+            // side buttons that is Back and Forward in every browser on the
+            // machine. Saying so here is the only place a user will read it
+            // before pressing it.
+            Self::MouseButton {
+                accelerator,
+                also_does,
+            } => {
+                if crate::keyhook::support().is_available() {
+                    format!(
+                        "{accelerator} is a mouse button, so it is watched by a low-level mouse \
+                         hook — the system shortcut register cannot take a mouse button at all. \
+                         It works, and the click is not swallowed: wherever the pointer is, that \
+                         button still does {also_does}."
+                    )
+                } else {
+                    format!(
+                        "{accelerator} is a mouse button, which needs a low-level mouse hook. \
+                         This platform does not have one in this build, so the binding does \
+                         nothing. Use a keyboard shortcut here."
+                    )
+                }
+            }
             Self::Invalid { input, reason } => {
                 format!("{input:?} is not a valid shortcut: {reason}")
             }
@@ -266,6 +406,15 @@ pub fn classify(input: &str) -> Accelerator {
             input: input.to_owned(),
             reason: "it has an empty segment, so a key or modifier is missing".to_owned(),
         };
+    }
+
+    // A mouse button is decided before anything else, because otherwise
+    // `Mouse4` is a perfectly ordinary one-key accelerator: no modifier, one
+    // key, no side named -- `Standard`. It would be handed to the shortcut
+    // plugin, refused by a parser that has never heard of a mouse, and reported
+    // as a spelling mistake.
+    if let Some(mouse) = classify_mouse(input, &parts) {
+        return mouse;
     }
 
     let mut modifiers = Vec::new();
@@ -320,6 +469,58 @@ pub fn classify(input: &str) -> Accelerator {
     Accelerator::Standard {
         accelerator: trimmed.to_owned(),
     }
+}
+
+/// The mouse verdict on an accelerator, or `None` if no part names a button.
+///
+/// Split out of [`classify`] because it has three answers and folding them into
+/// that function's flow would have meant three more early returns in a function
+/// that already had four. Reads [`crate::keys`]'s tables rather than its own, so
+/// a spelling this accepts is a spelling `Watched::parse` resolves — the
+/// property `SIDED_MODIFIERS` exists to hold for modifiers, applied to the mouse
+/// for the same reason.
+fn classify_mouse(input: &str, parts: &[&str]) -> Option<Accelerator> {
+    use crate::keys::{mouse_button, names_a_mouse_button, refused_mouse_button};
+
+    if !parts.iter().any(|p| names_a_mouse_button(p.trim())) {
+        return None;
+    }
+
+    // More than one part means somebody wrote `Control+Mouse4`. Refused with
+    // both facts, because the interesting one is not "we do not support it" but
+    // that *no* mechanism could: the register cannot see a mouse button and the
+    // hook's chord matcher only ever matches modifier keys.
+    if parts.len() > 1 {
+        return Some(Accelerator::Invalid {
+            input: input.to_owned(),
+            reason: "a mouse button is bound on its own. The system shortcut register cannot \
+                     take a mouse button at all, and the keyboard hook only ever matches \
+                     modifier keys, so nothing could hold the combination. Write just the \
+                     button, for example Mouse4."
+                .to_owned(),
+        });
+    }
+
+    let only = parts.first()?.trim();
+
+    if let Some(button) = mouse_button(only) {
+        return Some(Accelerator::MouseButton {
+            accelerator: only.to_owned(),
+            also_does: button.also_does().to_owned(),
+        });
+    }
+
+    // Left, right and middle. The refusal is the feature -- see
+    // `keys::refused_mouse_button` -- so it says why rather than just no.
+    refused_mouse_button(only).map(|what| Accelerator::Invalid {
+        input: input.to_owned(),
+        reason: format!(
+            "{only} names {what}, which this build will not watch. The hook does not swallow \
+             the click, so binding it would start this action on every click in every \
+             application while the click still went through. Mouse4 and Mouse5, the two side \
+             buttons, are the ones with no meaning to destroy."
+        ),
+    })
 }
 
 /// Whether this modifier spelling names one particular side.
@@ -389,15 +590,22 @@ pub fn serialize_list(hotkeys: &[String]) -> String {
 pub struct Binding {
     pub action: HotkeyAction,
     pub accelerators: Vec<Accelerator>,
+    /// Whether these accelerators toggle or are held. See [`HotkeyMode`].
+    pub mode: HotkeyMode,
 }
 
 impl Binding {
     /// Build from a stored settings value.
+    ///
+    /// The mode is a separate argument rather than being read from the same
+    /// string: it lives in its own settings key, for the reasons
+    /// [`HotkeyAction::mode_settings_key`] gives.
     #[must_use]
-    pub fn from_stored(action: HotkeyAction, stored: &str) -> Self {
+    pub fn from_stored(action: HotkeyAction, stored: &str, mode: HotkeyMode) -> Self {
         Self {
             action,
             accelerators: parse_list(stored).iter().map(|s| classify(s)).collect(),
+            mode,
         }
     }
 
@@ -1041,7 +1249,11 @@ mod tests {
 
     #[test]
     fn a_binding_reports_only_its_working_accelerators() {
-        let b = Binding::from_stored(HotkeyAction::Dictation, "Control+Super, Alt+D, Control+");
+        let b = Binding::from_stored(
+            HotkeyAction::Dictation,
+            "Control+Super, Alt+D, Control+",
+            HotkeyMode::Toggle,
+        );
         assert_eq!(b.registrable(), vec!["Alt+D"]);
         assert!(b.is_usable());
         assert_eq!(
@@ -1053,7 +1265,7 @@ mod tests {
 
     #[test]
     fn a_binding_with_nothing_registrable_is_not_usable() {
-        let b = Binding::from_stored(HotkeyAction::Dictation, "Control+Super");
+        let b = Binding::from_stored(HotkeyAction::Dictation, "Control+Super", HotkeyMode::Toggle);
         assert!(!b.is_usable());
         assert!(b.registrable().is_empty());
         assert_eq!(b.problems().len(), 1);
@@ -1073,7 +1285,7 @@ mod tests {
     /* ----------------------------------------------------------- cautions */
 
     fn bound(action: HotkeyAction, accelerator: &str) -> Binding {
-        Binding::from_stored(action, accelerator)
+        Binding::from_stored(action, accelerator, HotkeyMode::Toggle)
     }
 
     #[test]
@@ -1183,13 +1395,214 @@ mod tests {
         assert!(keys.iter().all(|k| k.starts_with("hotkey.")));
     }
 
+    /// The mode keys are one per action, distinct, and distinct from the
+    /// accelerator keys.
+    ///
+    /// **Named in `config/settings-keys.json` and read by the settings gate**,
+    /// which resolves `.mode_settings_key()` to a family of five and checks that
+    /// this test exists. The last clause is the one that matters: `hotkey.x` and
+    /// `hotkey.x.mode` are one keystroke apart, and a mode key colliding with an
+    /// accelerator key would overwrite a binding rather than fail.
+    #[test]
+    fn mode_settings_keys_are_namespaced_and_distinct() {
+        let modes: BTreeSet<String> = ALL_ACTIONS.iter().map(|a| a.mode_settings_key()).collect();
+        assert_eq!(modes.len(), ALL_ACTIONS.len());
+        assert!(modes.iter().all(|k| k.starts_with("hotkey.")));
+        assert!(modes.iter().all(|k| k.ends_with(".mode")));
+
+        let accelerators: BTreeSet<String> = ALL_ACTIONS.iter().map(|a| a.settings_key()).collect();
+        assert!(modes.is_disjoint(&accelerators));
+    }
+
+    /// Every mode round-trips through its stored id, and nothing else resolves.
+    #[test]
+    fn a_mode_survives_the_trip_through_settings() {
+        for mode in ALL_MODES {
+            assert_eq!(HotkeyMode::from_id(mode.id()), Some(mode), "{mode}");
+            assert_eq!(HotkeyMode::from_stored(mode.id()), mode, "{mode}");
+            assert_eq!(HotkeyMode::from_stored(&format!("  {}  ", mode.id())), mode);
+        }
+        assert_eq!(HotkeyMode::from_id("push-to-talk"), None);
+        assert_eq!(HotkeyMode::from_id(""), None);
+    }
+
+    /// An unreadable stored value lands on the shipped behaviour.
+    ///
+    /// Both halves matter. `from_id` refusing is what stops a *renderer* asking
+    /// for a mode nobody wrote and being told it worked; `from_stored` falling
+    /// back is what stops an empty or corrupt row turning every hotkey into
+    /// something the user did not choose. They are different questions and they
+    /// deliberately have different answers.
+    #[test]
+    fn an_unreadable_stored_mode_falls_back_to_the_shipped_one() {
+        assert_eq!(HotkeyMode::from_stored(""), HotkeyMode::Toggle);
+        assert_eq!(HotkeyMode::from_stored("Hold"), HotkeyMode::Toggle);
+        assert_eq!(HotkeyMode::from_stored("nonsense"), HotkeyMode::Toggle);
+        assert_eq!(HotkeyMode::default(), HotkeyMode::Toggle);
+    }
+
+    /// The shipped default is toggle for every action, and this test is the
+    /// tripwire that says so out loud.
+    ///
+    /// **KNEG-115 is not settled here.** Push-to-talk is one of its candidate
+    /// answers, and shipping `Hold` as the dictation default would decide that
+    /// open question as a side effect of adding a mode — which is, precisely,
+    /// the class of failure KNEG-115 describes. If this test ever fails, the
+    /// commit that changed it is deciding something that belongs to the repo
+    /// owner, and should say so.
+    #[test]
+    fn nothing_ships_holding_by_default() {
+        for action in ALL_ACTIONS {
+            let binding = Binding::from_stored(
+                action,
+                action.default_accelerator(),
+                HotkeyMode::from_stored(""),
+            );
+            assert_eq!(binding.mode, HotkeyMode::Toggle, "{action}");
+        }
+        assert_eq!(
+            HotkeyAction::Dictation.default_accelerator(),
+            "Control+Super",
+            "the shipped dictation accelerator changed, which KNEG-115 is also about"
+        );
+    }
+
+    /* ---------------------------------------------------------- mouse buttons */
+
+    /// A side button classifies as a mouse button, not as an ordinary key.
+    ///
+    /// Without the interception in `classify`, `Mouse4` is one non-modifier
+    /// part with no side named — a textbook `Standard` accelerator. It would go
+    /// to the shortcut plugin, be refused by a parser that has never heard of a
+    /// mouse, and be reported to the user as a spelling mistake.
+    #[test]
+    fn a_side_button_is_its_own_classification() {
+        for (spelling, also) in [
+            ("Mouse4", "Back"),
+            ("mouse5", "Forward"),
+            ("XButton1", "Back"),
+            ("xbutton2", "Forward"),
+        ] {
+            match classify(spelling) {
+                Accelerator::MouseButton {
+                    accelerator,
+                    also_does,
+                } => {
+                    assert_eq!(accelerator, spelling);
+                    assert_eq!(also_does, also, "{spelling}");
+                }
+                other => panic!("{spelling} classified as {other:?}"),
+            }
+        }
+    }
+
+    /// A mouse button is never registrable, and the explanation says why not
+    /// and what it costs.
+    #[test]
+    fn a_mouse_button_is_hooked_rather_than_registered_and_says_what_it_also_does() {
+        let mouse = classify("Mouse4");
+        assert!(!mouse.is_registrable());
+        assert_eq!(mouse.text(), "Mouse4");
+
+        let explanation = mouse.explain();
+        // The half that is true on every platform: the register cannot take it.
+        assert!(explanation.contains("mouse button"), "{explanation}");
+        // And where a hook exists, the cost of not swallowing the click. That
+        // sentence is the whole reason this is a separate variant from
+        // `ModifierOnly`, whose equivalent cost is nothing.
+        if crate::keyhook::support().is_available() {
+            assert!(explanation.contains("Back"), "{explanation}");
+        } else {
+            assert!(explanation.contains("does nothing"), "{explanation}");
+        }
+    }
+
+    /// The ordinary buttons are refused, and the refusal explains itself.
+    #[test]
+    fn the_left_button_cannot_be_bound_and_the_reason_is_given() {
+        for spelling in ["Mouse1", "MouseLeft", "Mouse2", "Mouse3"] {
+            match classify(spelling) {
+                Accelerator::Invalid { reason, .. } => {
+                    assert!(reason.contains("button"), "{spelling}: {reason}");
+                    // Not a bare refusal: it names the two that do work.
+                    assert!(reason.contains("Mouse4"), "{spelling}: {reason}");
+                }
+                other => panic!("{spelling} classified as {other:?}"),
+            }
+        }
+    }
+
+    /// A mouse button combined with anything is refused, and says no mechanism
+    /// could hold it — rather than implying a different spelling would work.
+    #[test]
+    fn a_mouse_button_cannot_be_combined_with_a_key_or_a_modifier() {
+        for spelling in ["Control+Mouse4", "Mouse4+D", "Shift+Alt+Mouse5"] {
+            match classify(spelling) {
+                Accelerator::Invalid { reason, .. } => {
+                    assert!(reason.contains("on its own"), "{spelling}: {reason}");
+                }
+                other => panic!("{spelling} classified as {other:?}"),
+            }
+        }
+    }
+
+    /// The classifier and the hook parser accept the same set.
+    ///
+    /// The mouse half of the property `SIDED_MODIFIERS` exists to hold, and the
+    /// one that KNEG-35 was: a spelling one side takes and the other refuses is
+    /// a shortcut the screen calls hookable and the hook then declines.
+    #[test]
+    fn every_spelling_the_classifier_takes_is_one_the_hook_parser_takes() {
+        for (spelling, _) in crate::keys::MOUSE_BUTTONS {
+            assert!(
+                matches!(classify(spelling), Accelerator::MouseButton { .. }),
+                "classify refuses {spelling}"
+            );
+            assert!(
+                crate::keys::Watched::parse(spelling).is_ok(),
+                "the hook parser refuses {spelling}"
+            );
+        }
+        // And the refused ones are refused on both sides, not just one.
+        for spelling in ["Mouse1", "Mouse2", "Mouse3"] {
+            assert!(matches!(classify(spelling), Accelerator::Invalid { .. }));
+            assert!(crate::keys::Watched::parse(spelling).is_err());
+        }
+    }
+
+    /// A mouse button is not a modifier-only chord, and the two must not be
+    /// confused by the caution machinery.
+    ///
+    /// `prefix_cautions` and `cautions` both filter on `ModifierOnly`, and a
+    /// mouse button reaching either would collect a sentence about AltGr or
+    /// about longer shortcuts that starts with the same keys — neither of which
+    /// means anything about a mouse.
+    #[test]
+    fn a_mouse_binding_collects_no_chord_caution() {
+        let bindings = vec![Binding::from_stored(
+            HotkeyAction::Dictation,
+            "Mouse4",
+            HotkeyMode::Hold,
+        )];
+        assert!(prefix_cautions(&bindings).is_empty());
+        assert!(cautions(
+            &bindings,
+            &crate::keyboard_layout::AltGr::Present { example: '@' }
+        )
+        .is_empty());
+    }
+
     /* --------------------------------------------------------------------- conflicts */
 
     #[test]
     fn two_actions_on_the_same_accelerator_is_reported() {
         let bindings = vec![
-            Binding::from_stored(HotkeyAction::Dictation, "Alt+D"),
-            Binding::from_stored(HotkeyAction::Translation, "Alt+D, Control+T"),
+            Binding::from_stored(HotkeyAction::Dictation, "Alt+D", HotkeyMode::Toggle),
+            Binding::from_stored(
+                HotkeyAction::Translation,
+                "Alt+D, Control+T",
+                HotkeyMode::Toggle,
+            ),
         ];
         let found = conflicts(&bindings);
         assert_eq!(found.len(), 1);
@@ -1205,7 +1618,7 @@ mod tests {
         let bindings: Vec<Binding> = ALL_ACTIONS
             .iter()
             .enumerate()
-            .map(|(i, a)| Binding::from_stored(*a, &format!("Alt+F{}", i + 1)))
+            .map(|(i, a)| Binding::from_stored(*a, &format!("Alt+F{}", i + 1), HotkeyMode::Toggle))
             .collect();
         assert!(conflicts(&bindings).is_empty());
     }
@@ -1215,8 +1628,8 @@ mod tests {
         // Two actions both defaulting to Control+Super is not a conflict worth
         // reporting, because neither is registered.
         let bindings = vec![
-            Binding::from_stored(HotkeyAction::Dictation, "Control+Super"),
-            Binding::from_stored(HotkeyAction::Meeting, "Control+Super"),
+            Binding::from_stored(HotkeyAction::Dictation, "Control+Super", HotkeyMode::Toggle),
+            Binding::from_stored(HotkeyAction::Meeting, "Control+Super", HotkeyMode::Toggle),
         ];
         assert!(conflicts(&bindings).is_empty());
     }
