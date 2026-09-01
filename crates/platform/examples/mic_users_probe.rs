@@ -48,7 +48,20 @@
 //! It also prints [`MicrophoneSupport`], because an empty list under `Failed` or
 //! under zero endpoints is not an answer either, and those two are different
 //! failures.
+//!
+//! # And it prints which meeting applications are open
+//!
+//! Added after the first real run, which reported "nothing is capturing" and a
+//! passing control — and was still unreadable, because nothing in it said
+//! whether Teams had been open at the time. Run 3 and "Teams was not running"
+//! print the same words and mean opposite things: one is the measurement, the
+//! other is no measurement at all.
+//!
+//! The same shape as the control, one level up. A negative is only worth what
+//! the positive beside it is worth, and "Teams is open" is the positive that
+//! makes "Teams is not capturing" mean something.
 
+use kw_platform::meeting_detect;
 use kw_platform::microphone::{self, MicrophoneSupport};
 
 fn main() {
@@ -109,6 +122,38 @@ fn main() {
             println!(
                 "  {name}{}",
                 if mine { "   <- this application" } else { "" }
+            );
+        }
+    }
+
+    // Which meeting applications are open, read off the same process table.
+    // `detect` is reused rather than a name matched by hand here, so this line
+    // reports what the real detector would report and not a second opinion that
+    // could drift from it.
+    let running: Vec<String> = names.values().cloned().collect();
+    let open = meeting_detect::detect(&running, &meeting_detect::Lists::default());
+    println!();
+    if open.is_empty() {
+        println!("no meeting application is running.");
+        println!();
+        println!("So an empty capture list above is the idle baseline and NOT the Teams");
+        println!("comparison. Open Teams before reading it as \"Teams is not capturing\".");
+    } else {
+        println!("meeting applications open:");
+        for app in &open {
+            let capturing = found
+                .processes
+                .iter()
+                .any(|name| name.eq_ignore_ascii_case(&app.evidence));
+            println!(
+                "  {} (matched {}) {}",
+                app.name,
+                app.evidence,
+                if capturing {
+                    "-- AND HOLDING THE MICROPHONE"
+                } else {
+                    "-- not capturing"
+                }
             );
         }
     }
