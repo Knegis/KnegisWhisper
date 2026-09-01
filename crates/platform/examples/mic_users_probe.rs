@@ -11,19 +11,22 @@
 //! cargo run -p kw-platform --example mic_users_probe
 //! ```
 //!
-//! # The run that matters
+//! # The run that mattered, and what it said
 //!
-//! Four times, and the fourth is the whole question:
+//! All four were run on **2026-09-01** on this machine, and the answer is yes:
 //!
-//! 1. **Idle.** Nothing should be capturing. If something is, find out what
-//!    before reading anything else here — a headset utility that holds the
-//!    device permanently would make every later answer meaningless.
-//! 2. **With this application dictating.** `knegiswhisper-desktop.exe` must
-//!    appear. This is the control.
-//! 3. **Teams open, not in a call.** Teams should *not* appear. If it does, the
-//!    signal cannot separate the two states either and KNEG-94 is dead.
-//! 4. **Teams in a real call.** `ms-teams.exe` must appear. Only the repo owner
-//!    can produce this one.
+//! 1. **Idle.** One active capture endpoint, nothing capturing.
+//! 2. **A second process holding the device.** It appeared. This is the control,
+//!    and it ran automatically on every one of the four.
+//! 3. **Teams open, not in a call.** One endpoint, `ms-teams.exe` **absent** from
+//!    the capture list. Had it appeared here the signal could not separate the
+//!    two states and KNEG-94 would have been dead.
+//! 4. **Teams in a real call.** Two endpoints, `ms-teams.exe` **present**.
+//!
+//! Rows 3 and 4 differ, so `ms-teams.exe` holding a capture session is a usable
+//! in-call signal. That is what [`kw_platform::meeting_detect::CallSignal`] was
+//! built on, and this probe is kept so the claim can be re-taken rather than
+//! trusted.
 //!
 //! # The control runs itself
 //!
@@ -131,7 +134,11 @@ fn main() {
     // reports what the real detector would report and not a second opinion that
     // could drift from it.
     let running: Vec<String> = names.values().cloned().collect();
-    let open = meeting_detect::detect(&running, &meeting_detect::Lists::default());
+    let open = meeting_detect::detect(
+        &running,
+        &found.processes,
+        &meeting_detect::Lists::default(),
+    );
     println!();
     if open.is_empty() {
         println!("no meeting application is running.");
@@ -141,18 +148,19 @@ fn main() {
     } else {
         println!("meeting applications open:");
         for app in &open {
-            let capturing = found
-                .processes
-                .iter()
-                .any(|name| name.eq_ignore_ascii_case(&app.evidence));
+            // Read off `detect` rather than recomputed here: the probe exists to
+            // report what the detector decides, and a second opinion computed
+            // beside it is a second implementation that can be right when the
+            // first is wrong.
             println!(
                 "  {} (matched {}) {}",
                 app.name,
                 app.evidence,
-                if capturing {
-                    "-- AND HOLDING THE MICROPHONE"
-                } else {
-                    "-- not capturing"
+                match app.signal {
+                    meeting_detect::CallSignal::Microphone => "-- IN A CALL, holding a microphone",
+                    meeting_detect::CallSignal::CallProcess =>
+                        "-- IN A CALL, a call-only process is running",
+                    meeting_detect::CallSignal::None => "-- open, not in a call",
                 }
             );
         }
@@ -161,9 +169,10 @@ fn main() {
     control();
 
     println!();
-    println!("Now run it again with Teams open and idle (it must NOT be listed above),");
-    println!("and once more during a real Teams call (it must). Those two together are");
-    println!("KNEG-94, and nothing else settles it.");
+    println!("Measured 2026-09-01 on this machine: Teams open and idle does NOT hold a");
+    println!("capture session, and Teams in a real call does. `meeting_detect` is built");
+    println!("on that difference, and this probe is how it gets re-taken rather than");
+    println!("trusted -- run it in a call and the line above must say IN A CALL.");
 }
 
 /// Open the microphone here, and check the enumeration notices.
