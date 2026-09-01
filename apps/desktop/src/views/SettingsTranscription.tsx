@@ -158,6 +158,29 @@ export function SettingsTranscription({
     });
   };
 
+  /**
+   * Run an install and always stop saying it is running.
+   *
+   * `installing` used to be cleared only by the `done` progress event, so an
+   * install that was **refused** left "Starting…" under the row for ever — the
+   * refusal went to the error banner and the row went on claiming work was
+   * happening. Found on the unpinned Nemotron model, whose install is refused
+   * outright (`MissingPin`), but it applied to every failure: a dead network, a
+   * digest mismatch, a full disk.
+   *
+   * `guard` swallows the error after showing it, so this cannot tell success
+   * from failure and does not need to: either way the install is over by the
+   * time it resolves.
+   */
+  const runInstall = (id: string, work: () => Promise<unknown>) => {
+    setInstalling("Starting…");
+    setInstallingId(id);
+    void guard(work).then(() => {
+      setInstalling(null);
+      setInstallingId(null);
+    });
+  };
+
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     void onInstallProgress((progress) => {
@@ -374,9 +397,7 @@ export function SettingsTranscription({
                     <button
                       type="button"
                       onClick={() => {
-                        setInstalling("Starting…");
-                        setInstallingId(m.id);
-                        void guard(() => installLocalModel(m.id));
+                        runInstall(m.id, () => installLocalModel(m.id));
                       }}
                     >
                       Install
@@ -464,9 +485,7 @@ export function SettingsTranscription({
                           <button
                             type="button"
                             onClick={() => {
-                              setInstalling("Starting…");
-                              setInstallingId(m.id);
-                              void guard(() => installSherpaModel(m.id));
+                              runInstall(m.id, () => installSherpaModel(m.id));
                             }}
                           >
                             Install
