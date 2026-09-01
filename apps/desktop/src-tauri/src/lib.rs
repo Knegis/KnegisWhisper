@@ -452,6 +452,7 @@ pub fn run() -> anyhow::Result<()> {
             local_llm::local_llm_start,
             local_llm::local_llm_stop,
             local_llm::local_llm_recheck_model,
+            local_llm::local_llm_refresh_server,
             media::media_import_status,
             media::media_import_install_sidecar,
             media::media_import_audio,

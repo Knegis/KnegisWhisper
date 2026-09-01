@@ -238,23 +238,42 @@ export type HotkeyReport = { bindings: Array<Binding>,
  */
 conflicts: Array<Conflict>,
 /**
- * Actions with no working hotkey at all, for any reason — a bad accelerator
- * or a missing handler. The union, so a caller asking "is this action
- * dead?" gets one answer.
+ * Actions with no registrable accelerator, **or** with no handler.
+ *
+ * Two unrelated properties under one field, which is the whole of what is
+ * wrong with it. The first half stopped meaning "does not work" the moment
+ * a hooked platform existed: on Windows the shipped dictation default
+ * `Control+Super` is in this set and fires perfectly well through the
+ * low-level hook, and so does `Mouse4`. The second half is the opposite
+ * shape — chat agent's `Control+Shift+Space` is a faultless registrable
+ * accelerator and it is the *action* that has nowhere to go, so
+ * [`crate::shortcuts::register_all`] deliberately never offers it. Neither
+ * half implies the other, and their union implies neither.
+ *
+ * It was called `unusable` until 2026-09-01, which asserted the one thing
+ * no member of the set is guaranteed to have in common.
+ *
+ * **Nothing reads this.** There is no caller in Rust outside this module's
+ * tests and none in `apps/desktop/src`, where `Dictation.tsx` renders
+ * `bindings`, `unhandled`, `conflicts` and `cautions`. Whether an action
+ * ended up live is [`crate::shortcuts::RegistrationReport::is_live`], which
+ * counts `Hooked`; *why* it is dead is `unhandled`, which carries the
+ * sentence a screen can show.
  */
-unusable: Array<HotkeyAction>,
+unregistrableOrUnhandled: Array<HotkeyAction>,
 /**
- * The subset of `unusable` that is dead because nothing handles it, with
- * the reason. Separate because the two need different words: one is the
- * user's to fix and the other is not.
+ * The subset of `unregistrable_or_unhandled` that is dead because nothing
+ * handles it, with the reason. Separate because the two need different
+ * words: one is the user's to fix and the other is not.
  */
 unhandled: Array<UnhandledAction>,
 /**
  * Hotkeys that work and also fire when the user meant something else.
  *
- * A third category, not a third spelling of the first two. `unusable` and
- * `conflicts` both mean the hotkey will not do its job; a caution means it
- * will, and will do it at times nobody asked for. Today the only source is
+ * A third category, not a third spelling of the first two.
+ * `unregistrable_or_unhandled` and `conflicts` both mean the hotkey will
+ * not do its job through the shortcut register; a caution means it will,
+ * and will do it at times nobody asked for. Today the only source is
  * AltGr (KNEG-37).
  */
 cautions: Array<Caution>, };
@@ -1182,7 +1201,15 @@ runningModel: string | null,
 installDir: string, installDirFellBack: boolean, };
 
 /**
- * What a refresh of the server binary did.
+ * What a refresh of a local server binary did.
+ *
+ * **One type for both runtimes**, `whisper-server` and `llama-server`. Not
+ * politeness: `ipc_types` asserts that no two Rust types render to the same
+ * TypeScript name, so a second `RefreshOutcome` for the llama.cpp refresh
+ * added in KNEG-128 would have been a failing test rather than a duplicate
+ * nobody noticed. The two refreshes answer the same three questions -- what
+ * was unpacked, what came back, and what did not -- so sharing the answer was
+ * the right resolution rather than renaming one of them.
  */
 export type RefreshOutcome = {
 /**
@@ -1192,7 +1219,8 @@ export type RefreshOutcome = {
  */
 files: number,
 /**
- * The model the server was running before, now running again.
+ * The model the server was running before, now running again. A whisper
+ * model id or a GGUF id, depending on which screen asked.
  */
 restarted: string | null,
 /**
@@ -1254,7 +1282,23 @@ availability: Availability,
 /**
  * Whether the offline CLI itself is installed.
  */
-cliInstalled: boolean, models: Array<SherpaModelStatus>,
+cliInstalled: boolean,
+/**
+ * Whether what is installed is the build this version pins.
+ *
+ * `install` has written a record beside the extracted files since
+ * KNEG-113 and nothing here read it, so `cli_installed` stayed true while
+ * the runtime fell behind the manifest. KNEG-128.
+ *
+ * Derived from the same call as `cli_installed`, which is the point --
+ * see [`sherpa_status`].
+ *
+ * **One archive, three consumers.** The same install directory serves
+ * dictation here, `sherpa_stream`'s meeting server and `diarization`'s
+ * speaker CLI, under one record, so this answer is about all three at once
+ * and the screen says so.
+ */
+cliFreshness: SidecarFreshness, models: Array<SherpaModelStatus>,
 /**
  * Which model dictation is set to use, if any.
  */
@@ -1309,10 +1353,14 @@ ready: boolean, modelsDir: string, };
 /**
  * What the Intelligence > Local screen may say about one GGUF.
  *
- * Four answers, and the third is the reason this is not a boolean. See the
+ * Five answers, and the third is the reason this is not a boolean. See the
  * module documentation for what each one is worth.
+ *
+ * **Not `Copy` since KNEG-130.** [`Self::FailedRecheck`] carries two 64-character
+ * digests, and a state that can be duplicated by accident is one a caller can
+ * report twice about a file it read once.
  */
-export type GgufIntegrity = { "state": "not-installed" } | { "state": "unchanged-since-install", verifiedBy: VerifiedBy, } | { "state": "unrecorded" } | { "state": "changed", recordedBytes: number, bytes: number, };
+export type GgufIntegrity = { "state": "not-installed" } | { "state": "unchanged-since-install", verifiedBy: VerifiedBy, } | { "state": "unrecorded" } | { "state": "changed", recordedBytes: number, bytes: number, } | { "state": "failed-recheck", expected: string, actual: string, };
 
 /**
  * What a re-hash of an installed model found.
@@ -1388,7 +1436,21 @@ export type LocalLlmStatus = {
 /**
  * Whether a server binary is published for this platform.
  */
-availability: Availability, serverInstalled: boolean, models: Array<LocalLlmModelStatus>,
+availability: Availability, serverInstalled: boolean,
+/**
+ * Whether the binary on disk is the build this version pins.
+ *
+ * `server_installed` was the only claim this screen made about the server
+ * binary, and it stays true while the binary falls releases behind the
+ * manifest -- the state `local_model` reported for `whisper-server` in
+ * KNEG-113 and the state this one has been in, unreported, ever since.
+ * `install` has written the record since KNEG-113; nothing here read it.
+ * KNEG-128.
+ *
+ * Derived from the same call as `server_installed`, so the two cannot
+ * disagree. See [`server_state`].
+ */
+serverFreshness: SidecarFreshness, models: Array<LocalLlmModelStatus>,
 /**
  * The port the server is on, if it is running.
  */

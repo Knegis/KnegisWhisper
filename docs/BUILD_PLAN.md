@@ -688,10 +688,16 @@ manifest entries are `ported-with-new-rust-implementation` and `reachable: true`
 repository — only its line count is, in `docs/PORTING_MATRIX.md`. The assignment rule was written
 from scratch and is labelled **invented** rather than ported.
 
-**Semantic search: still deferred.** Qdrant sidecar, ports **6333–6350**, and an embedding path.
-`search:semantic` stays `temporarily-deferred`; `search:sqlite-fts` already works through the FTS5
-external-content table and its three triggers. Its dependency claim shares an origin with
-diarization's, which turned out to be stale, and **nobody has re-checked it**.
+**Semantic search: still deferred, on narrower ground.** The dependency claim shared an origin with
+diarization's, and it was **re-checked on 2026-09-01 (KNEG-73)** rather than left standing. Two of
+its four claims were false: ONNX Runtime is already in the tree, inside the pinned sherpa archive,
+and the `ort` crate belongs to one design rather than to the feature — diarization drives an ONNX
+model without it. Two are real: there is no vector store and no pinned text-embedding model. So
+`search:semantic` stays `temporarily-deferred` on those two, and the entry's `interface` and
+`degradation` fields — which named a module that has never existed and a UI fallback that was never
+built — were corrected in place. `search:sqlite-fts` already works through the FTS5
+external-content table and its three triggers, and it is not a fallback: it is the whole of search
+and always has been. Upstream's Qdrant port range is recorded in `docs/PORTING_MATRIX.md`.
 
 ---
 
@@ -779,7 +785,7 @@ diarization's, which turned out to be stale, and **nobody has re-checked it**.
 | Calendars, real round trip | Google + Microsoft OAuth client IDs as PKCE public clients | Flow, storage, UI, stub server — all built |
 | Apple Calendar | A macOS machine to write and verify an EventKit binding against, which does not exist in this development environment, and the binding itself, which does not exist anywhere in this repository | Google and Microsoft calendar sync, which are unrelated |
 | AEC helper | cmake + MSVC/clang and a `contents: write` run | Meetings themselves — echo cancellation only matters on speakers, and system audio capture (what actually gates recording) is done |
-| Semantic search (chunk I) | The Qdrant sidecar and an embedding path — not attempted, and its dependency claim not re-checked since diarization's proved wrong | FTS5 keyword search, which is fully functional and is what the UI falls back to. Diarization, which was built on 2026-09-01 and shared this row until then |
+| Semantic search (chunk I) | A vector store and a pinned text-embedding model — neither in the tree. **Re-checked 2026-09-01 (KNEG-73):** ONNX Runtime is already here inside the sherpa archive and the `ort` crate is not required, so the claim is two dependencies rather than four | FTS5 keyword search, which is fully functional and is the whole of search rather than a fallback — nothing semantic was ever built to fall back from. Diarization, which was built on 2026-09-01 and shared this row until then |
 | Whether diarization's speaker turns are right | A recording with two people in it, and somebody who was there to say whether the turns match | Everything else about diarization: the flags, the parsing, the renumbering and the install are all covered, and one voice cannot be confused with another |
 | The rewritten agent-skills docs | Someone to write `docs/agent-skills/`, referencing `knegiswhisper`/`knegiswhisper-mcp` instead of the vendor endpoints — the manifest claimed this was done; it was not, and Task 19 corrected the claim rather than writing the docs under time pressure | Nothing else — documentation only |
 | Signed installers | A code-signing identity | Unsigned builds |

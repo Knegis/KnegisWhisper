@@ -67,8 +67,18 @@ pub const SHERPA_MODEL_KEY: &str = "transcription.sherpaModel";
 /// The sidecar id in `config/sidecars.json` for the offline CLI.
 const SIDECAR: &str = "sherpa";
 
-/// The executable that CLI installs as, used to find it again on a later run
-/// without reinstalling.
+/// The executable that CLI installs as.
+///
+/// Kept only as the anchor for
+/// `the_catalogue_still_publishes_the_executable_this_module_expects`. Nothing
+/// builds a path out of it any more -- see [`installed_cli`] -- because doing so
+/// made the screen ask the same question twice and get two independently
+/// derived answers.
+///
+/// `#[cfg(test)]` because that is now the whole truth about it: it is an
+/// expectation, not an input. Leaving it in the shipped build would be a second
+/// spelling of the executable name for somebody to reach for.
+#[cfg(test)]
 const EXECUTABLE: &str = "sherpa-onnx-offline";
 
 /// Why a model this build knows about is not on offer.
@@ -104,6 +114,20 @@ pub struct SherpaStatus {
     pub availability: crate::local_model::Availability,
     /// Whether the offline CLI itself is installed.
     pub cli_installed: bool,
+    /// Whether what is installed is the build this version pins.
+    ///
+    /// `install` has written a record beside the extracted files since
+    /// KNEG-113 and nothing here read it, so `cli_installed` stayed true while
+    /// the runtime fell behind the manifest. KNEG-128.
+    ///
+    /// Derived from the same call as `cli_installed`, which is the point --
+    /// see [`sherpa_status`].
+    ///
+    /// **One archive, three consumers.** The same install directory serves
+    /// dictation here, `sherpa_stream`'s meeting server and `diarization`'s
+    /// speaker CLI, under one record, so this answer is about all three at once
+    /// and the screen says so.
+    pub cli_freshness: crate::local_model::SidecarFreshness,
     pub models: Vec<SherpaModelStatus>,
     /// Which model dictation is set to use, if any.
     pub selected: Option<String>,
@@ -208,18 +232,59 @@ fn cli_root() -> PathBuf {
     kw_storage::paths::sidecar_dir().path
 }
 
-/// Find the installed CLI, if it is there.
-fn installed_cli() -> Option<PathBuf> {
-    let direct = cli_root().join(SIDECAR).join(exe_name());
-    direct.is_file().then_some(direct)
+/// Where the CLI is, if it is installed, according to the catalogue.
+///
+/// **Goes through `kw_sidecar::locate` against the published asset**, rather
+/// than joining `cli_root()/sherpa/` to a hand-built executable name as it did
+/// until KNEG-128. Both spellings resolve to the same path on all five
+/// published targets -- every one of them ships `.../bin/sherpa-onnx-offline`
+/// -- so this is not a fix for a live bug. It is a fix for `cli_installed` and
+/// the freshness sentence beside it being two independent answers to one
+/// question, which is the disagreement `local_model::local_model_status` is
+/// arranged to prevent and the reason its two fields come from a single call.
+///
+/// Takes the catalogue rather than reaching for one, so [`sherpa_status`] can
+/// pass the one [`LocalAsr`] already holds.
+/// Takes the root as an argument for the reason `media.rs:1334-1340` records:
+/// `cli_root()` reads a real per-machine path, so a version of this that reached
+/// for it directly could not be pointed at a test directory and the search would
+/// be untested. A mutation replacing the `locate` call below survived the suite
+/// until this was split out.
+fn located_cli_in(
+    catalog: &kw_sidecar::catalog::Catalog,
+    root: &std::path::Path,
+) -> Option<PathBuf> {
+    let (_, asset) = catalog.resolve(SIDECAR).ok()?;
+    kw_sidecar::locate(
+        SIDECAR,
+        asset,
+        &kw_sidecar::SearchPath {
+            bundled: None,
+            downloaded: root.to_path_buf(),
+        },
+        &kw_sidecar::RealFs,
+    )
+    .executable()
+    .map(std::path::Path::to_path_buf)
 }
 
-fn exe_name() -> String {
-    if cfg!(windows) {
-        format!("{EXECUTABLE}.exe")
-    } else {
-        EXECUTABLE.to_owned()
-    }
+fn located_cli(catalog: &kw_sidecar::catalog::Catalog) -> Option<PathBuf> {
+    located_cli_in(catalog, &cli_root())
+}
+
+/// Find the installed CLI, for the callers that have no catalogue in hand.
+///
+/// [`resolve_id`] is reached from `dictation.rs` and `media.rs` through a bare
+/// [`Selection`], so threading a `Catalog` to it would mean threading one
+/// through `DictationRuntime` and `MediaImportRuntime` as well -- a ripple far
+/// wider than the duplication it would remove. Parsing the shipped catalogue
+/// here instead is an embedded-string `serde_json::from_str` on a path that is
+/// about to spawn a process and transcribe a WAV, and [`LocalAsr::new`] has
+/// already proved at startup that it parses. A catalogue that somehow did not
+/// would report the runtime as absent, which is the safe direction: the refusal
+/// names what is missing rather than transcribing somewhere unexpected.
+fn installed_cli() -> Option<PathBuf> {
+    located_cli(&kw_sidecar::Catalog::shipped().ok()?)
 }
 
 /// Look one model up in the registry.
@@ -319,9 +384,15 @@ pub async fn sherpa_status(
         })
         .collect();
 
+    // One call for both, so they cannot disagree: `Freshness::NotInstalled` is
+    // exactly the case `locate` reports as absent or incomplete, which is the
+    // same question `located_cli` asks.
+    let freshness = crate::local_model::sidecar_freshness(&asr.catalog, SIDECAR, &cli_root());
+
     Ok(SherpaStatus {
         availability: crate::local_model::Availability::of(&asr.catalog, SIDECAR),
-        cli_installed: installed_cli().is_some(),
+        cli_installed: !matches!(freshness, kw_sidecar::Freshness::NotInstalled),
+        cli_freshness: crate::local_model::SidecarFreshness::of(&freshness),
         models,
         selected: asr.selected.read().ok().and_then(|held| held.clone()),
         // Read from the database rather than held in memory. Unlike the
@@ -524,5 +595,112 @@ mod tests {
     fn an_unknown_model_is_refused_by_name() {
         let err = model_named("not-a-model").unwrap_err();
         assert!(err.contains("not-a-model"), "{err}");
+    }
+
+    /* ------------------------------------------------------- the runtime */
+
+    /// The catalogue still publishes the executable this module is built around.
+    ///
+    /// `located_cli` asks the catalogue for the executable name now rather than
+    /// composing one, so a rename upstream would no longer break dictation with
+    /// a "not installed" that is not true -- it would follow the rename. That is
+    /// the improvement and it is also why this assertion is worth keeping: three
+    /// other things depend on *which* binary lands in that directory.
+    /// `sherpa_stream` finds its websocket server beside this one by name, and
+    /// `diarization` finds its speaker CLI the same way, so an upstream rename
+    /// is news even when this module absorbs it silently.
+    #[test]
+    fn the_catalogue_still_publishes_the_executable_this_module_expects() {
+        let catalog = kw_sidecar::Catalog::shipped().unwrap();
+        let Ok((_, asset)) = catalog.resolve(SIDECAR) else {
+            // No published asset for this target. Asserted rather than skipped
+            // silently: `availability` is what reports that, and a test that
+            // returns here having checked nothing is the shape this wave is
+            // about.
+            assert!(
+                located_cli(&catalog).is_none(),
+                "nothing is published for this platform, so nothing can be located"
+            );
+            let _ = EXECUTABLE;
+            return;
+        };
+
+        let published = asset.executable_name();
+        assert!(
+            published.starts_with(EXECUTABLE),
+            "{published} is not {EXECUTABLE}; sherpa_stream and diarization both \
+             expect their binaries beside this one"
+        );
+    }
+
+    /// An installed runtime is reported installed **and** of known provenance,
+    /// from one call.
+    ///
+    /// The disagreement this exists to prevent: `cli_installed` said *yes* while
+    /// nothing anywhere said *which build*, so a runtime two releases behind the
+    /// manifest read exactly like the pinned one. The two answers are derived
+    /// from a single `sidecar_freshness` in `sherpa_status`, and this walks the
+    /// three states that call reports.
+    ///
+    /// **Mutation that turns it red:** have `located_cli` join a hand-built
+    /// executable name again, or point the search path at `cli_root()` without
+    /// the sidecar subdirectory.
+    #[test]
+    fn an_installed_runtime_is_reported_installed_and_its_build_named() {
+        let dir = tempfile::tempdir().unwrap();
+        let catalog = kw_sidecar::Catalog::shipped().unwrap();
+        let Ok((spec, asset)) = catalog.resolve(SIDECAR) else {
+            assert_eq!(
+                crate::local_model::sidecar_freshness(&catalog, SIDECAR, dir.path()),
+                kw_sidecar::Freshness::NotInstalled
+            );
+            return;
+        };
+
+        // 1. Nothing there. Both halves agree, from an empty directory.
+        assert_eq!(located_cli_in(&catalog, dir.path()), None);
+        assert_eq!(
+            crate::local_model::sidecar_freshness(&catalog, SIDECAR, dir.path()),
+            kw_sidecar::Freshness::NotInstalled
+        );
+
+        // 2. The executable, with nothing saying where it came from. What every
+        //    install made before KNEG-113 reports.
+        let install = dir.path().join(SIDECAR);
+        std::fs::create_dir_all(&install).unwrap();
+        let exe = install.join(asset.executable_name());
+        std::fs::write(&exe, b"MZ").unwrap();
+        // The positive control: the negative below is measured against an
+        // artefact that exists, not against an empty directory that would
+        // answer `NotInstalled` for the wrong reason.
+        assert!(exe.is_file(), "the subject of the assertion must be there");
+
+        // The path half. `resolve_id` builds a transcriber out of this, and
+        // `sherpa_status` reports the freshness below -- one question, and the
+        // point of the change is that both go through `locate` against the
+        // catalogue's own asset rather than a name composed here.
+        assert_eq!(
+            located_cli_in(&catalog, dir.path()).as_deref(),
+            Some(exe.as_path()),
+            "the runtime must be found where the catalogue says the archive puts it"
+        );
+
+        let freshness = crate::local_model::sidecar_freshness(&catalog, SIDECAR, dir.path());
+        assert_eq!(
+            freshness,
+            kw_sidecar::Freshness::Unknown(kw_sidecar::Unrecorded::NoRecord)
+        );
+        assert!(
+            !matches!(freshness, kw_sidecar::Freshness::NotInstalled),
+            "an executable that is plainly there must not report as absent; \
+             `cli_installed` is read straight off this"
+        );
+
+        // 3. Recorded, so the pair reads current.
+        kw_sidecar::record::write(&install, &kw_sidecar::InstallRecord::of(spec, asset)).unwrap();
+        assert_eq!(
+            crate::local_model::sidecar_freshness(&catalog, SIDECAR, dir.path()),
+            kw_sidecar::Freshness::Current
+        );
     }
 }

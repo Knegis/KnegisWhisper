@@ -621,9 +621,22 @@ impl Binding {
             .collect()
     }
 
-    /// Whether this action has at least one working hotkey.
+    /// Whether any of this action's accelerators is one
+    /// `tauri-plugin-global-shortcut` can register today.
+    ///
+    /// **Not "whether this action has a working hotkey".** That is what this
+    /// said until 2026-09-01, and on Windows it was false for both hooked
+    /// kinds: a [`Accelerator::ModifierOnly`] chord and an
+    /// [`Accelerator::MouseButton`] are unregistrable by construction and both
+    /// fire through the low-level hook. [`Accelerator::explain`] says so in as
+    /// many words — *"It still works"*, and *"It works, and the click is not
+    /// swallowed"*. [`Accelerator::is_registrable`] had the honest wording all
+    /// along; this converges on it.
+    ///
+    /// Whether an action ended up live is `shortcuts::RegistrationReport::is_live`,
+    /// which counts `Hooked` as a success. This cannot answer that and never could.
     #[must_use]
-    pub fn is_usable(&self) -> bool {
+    pub fn has_registrable(&self) -> bool {
         !self.registrable().is_empty()
     }
 
@@ -1248,14 +1261,14 @@ mod tests {
     /* ---------------------------------------------------------------------- bindings */
 
     #[test]
-    fn a_binding_reports_only_its_working_accelerators() {
+    fn a_binding_reports_only_its_registrable_accelerators() {
         let b = Binding::from_stored(
             HotkeyAction::Dictation,
             "Control+Super, Alt+D, Control+",
             HotkeyMode::Toggle,
         );
         assert_eq!(b.registrable(), vec!["Alt+D"]);
-        assert!(b.is_usable());
+        assert!(b.has_registrable());
         assert_eq!(
             b.problems().len(),
             2,
@@ -1264,11 +1277,52 @@ mod tests {
     }
 
     #[test]
-    fn a_binding_with_nothing_registrable_is_not_usable() {
+    fn a_binding_with_nothing_registrable_says_so() {
         let b = Binding::from_stored(HotkeyAction::Dictation, "Control+Super", HotkeyMode::Toggle);
-        assert!(!b.is_usable());
+        assert!(!b.has_registrable());
         assert!(b.registrable().is_empty());
         assert_eq!(b.problems().len(), 1);
+    }
+
+    /// `has_registrable` is about the register, and never about whether the
+    /// hotkey works.
+    ///
+    /// The name it replaced — `is_usable` — claimed the second, and on Windows
+    /// that was false for both hooked kinds: `Control+Super` is the shipped
+    /// dictation default and it fires. This is the tripwire against the name
+    /// drifting back to the claim it cannot support.
+    ///
+    /// Mutation that turns it red: widen [`Binding::registrable`]'s filter to
+    /// accept `ModifierOnly`, and the `has_registrable` negatives fail. Delete
+    /// the `Alt+D` control and a `from_stored` that parsed nothing at all would
+    /// satisfy every remaining assertion — which is exactly what the control is
+    /// here to stop.
+    #[test]
+    fn nothing_registrable_does_not_mean_nothing_works() {
+        // The control. An accelerator the register does take, so the negatives
+        // below are measured against a parser that is demonstrably working.
+        let ordinary = Binding::from_stored(HotkeyAction::Dictation, "Alt+D", HotkeyMode::Toggle);
+        assert!(ordinary.has_registrable());
+        assert_eq!(ordinary.registrable(), vec!["Alt+D"]);
+
+        for stored in ["Control+Super", "Mouse4"] {
+            let b = Binding::from_stored(HotkeyAction::Dictation, stored, HotkeyMode::Toggle);
+            // The premise: it parsed to one accelerator. Without this the two
+            // assertions below hold for a binding with no accelerators at all.
+            assert_eq!(b.accelerators.len(), 1, "{stored} did not parse to one");
+            assert!(!b.has_registrable(), "{stored} is not registrable");
+
+            // And where the hook exists it is live all the same. This is the
+            // claim the old name got wrong, asserted rather than described.
+            if crate::keyhook::support().is_available() {
+                let problems = b.problems();
+                assert_eq!(problems.len(), 1, "{stored}: {problems:?}");
+                assert!(
+                    !problems[0].contains("does nothing"),
+                    "a platform with the hook must not call {stored} dead: {problems:?}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -1577,19 +1631,51 @@ mod tests {
     /// mouse button reaching either would collect a sentence about AltGr or
     /// about longer shortcuts that starts with the same keys — neither of which
     /// means anything about a mouse.
+    ///
+    /// **Both negatives needed a control and had none.** "No caution" is also
+    /// true of a `prefix_cautions` that returned nothing at all, and — the
+    /// reason this one is worth writing down — true of a `from_stored` that
+    /// read `Mouse4` as an accelerator neither function ever looks at, leaving
+    /// `accelerators` empty. Nothing else in the tree pins `from_stored` on a
+    /// mouse spelling: `a_mouse_button_is_hooked_rather_than_registered_and_says_what_it_also_does`
+    /// and `every_spelling_the_classifier_takes_is_one_the_hook_parser_takes`
+    /// both go through `classify` instead, so that mutation had no sentinel
+    /// anywhere.
+    ///
+    /// The control is a modifier-only chord in the same vector. One caution from
+    /// each function, naming `Control+Alt`, proves both ran over this input and
+    /// produced output — and that what they left out was the mouse.
+    ///
+    /// **Mutation:** make `prefix_cautions` return `Vec::new()`. The control
+    /// fails on `len() == 1`. That is the mutation worth naming, because the old
+    /// test asserted only `is_empty()` and **passed** under it.
+    ///
+    /// **And one mutation that mutates nothing, recorded because the lesson
+    /// keeps recurring.** Deleting the `let Accelerator::ModifierOnly { .. } =
+    /// ... else { continue };` guard looks like it should let the mouse binding
+    /// through, and it does not: `Chord::parse("Mouse4")` fails on its own
+    /// account — `key_of` does not know the spelling, and a chord of one is
+    /// `TooShort` either way — so the very next `let Ok(chord) = ... else {
+    /// continue };` skips it regardless. Two independent guards, and no
+    /// single-line edit defeats both. Same shape as the `chunks_exact(2)`
+    /// non-mutation recorded for `nemotron_socket`'s `samples`.
     #[test]
     fn a_mouse_binding_collects_no_chord_caution() {
-        let bindings = vec![Binding::from_stored(
-            HotkeyAction::Dictation,
-            "Mouse4",
-            HotkeyMode::Hold,
-        )];
-        assert!(prefix_cautions(&bindings).is_empty());
-        assert!(cautions(
-            &bindings,
-            &crate::keyboard_layout::AltGr::Present { example: '@' }
-        )
-        .is_empty());
+        let layout = crate::keyboard_layout::AltGr::Present { example: '@' };
+        let mouse = Binding::from_stored(HotkeyAction::Dictation, "Mouse4", HotkeyMode::Hold);
+        let chord =
+            Binding::from_stored(HotkeyAction::Translation, "Control+Alt", HotkeyMode::Toggle);
+        let both = vec![mouse.clone(), chord];
+
+        for found in [prefix_cautions(&both), cautions(&both, &layout)] {
+            assert_eq!(found.len(), 1, "{found:?}");
+            assert_eq!(found[0].accelerator, "Control+Alt");
+            assert_eq!(found[0].action, HotkeyAction::Translation);
+        }
+
+        let only_mouse = vec![mouse];
+        assert!(prefix_cautions(&only_mouse).is_empty());
+        assert!(cautions(&only_mouse, &layout).is_empty());
     }
 
     /* --------------------------------------------------------------------- conflicts */

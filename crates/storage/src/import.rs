@@ -225,6 +225,22 @@ const COPY_PLAN: &[(&str, &[&str])] = &[
 ///
 /// Row ids are preserved so foreign keys survive the copy, which is only safe
 /// into a fresh database. Refusing is better than silently remapping.
+///
+/// **The rule, which is exact in both directions.** This is every [`COPY_PLAN`]
+/// table whose ids SQLite hands out — every one declared
+/// `INTEGER PRIMARY KEY AUTOINCREMENT` — and no others. A table with a natural
+/// or composite key has no surrogate id to collide and is deliberately absent:
+/// `contacts` is keyed by `email`, `speaker_mappings` and
+/// `note_speaker_embeddings` by `(note_id, speaker_id)`, and the four calendar
+/// tables by a provider-supplied `TEXT` id. The two token tables are here and
+/// not in `COPY_PLAN` because [`relocate_calendar_tokens`] handles them
+/// separately; they are autoincrement all the same.
+///
+/// The correspondence held exactly and was written down nowhere until
+/// 2026-09-01, which made it a coincidence waiting to be broken by whoever
+/// added the next table to either list.
+/// `must_be_empty_is_exactly_the_autoincrement_tables` now fails if one list
+/// gains a table and the other does not.
 const MUST_BE_EMPTY: &[&str] = &[
     "folders",
     "notes",
@@ -1284,5 +1300,84 @@ mod tests {
         .await
         .unwrap_err();
         assert!(err.to_string().contains("no database at"));
+    }
+
+    /// `MUST_BE_EMPTY` is exactly the autoincrement half of `COPY_PLAN`, in
+    /// both directions.
+    ///
+    /// The rule is stated on `MUST_BE_EMPTY` and held exactly when this was
+    /// written, having been written down nowhere for the whole life of the
+    /// importer. It is checked against the *live schema* rather than a second
+    /// hand-written list, because a test that restates the nine names proves
+    /// only that somebody typed them twice.
+    ///
+    /// Mutation that turns it red: add an `INTEGER PRIMARY KEY AUTOINCREMENT`
+    /// table to `COPY_PLAN` and leave it out of `MUST_BE_EMPTY`, or add
+    /// `contacts` -- keyed by `email` -- to `MUST_BE_EMPTY`.
+    #[tokio::test]
+    async fn must_be_empty_is_exactly_the_autoincrement_tables() {
+        let db = Db::open_in_memory().await.unwrap();
+
+        let mut autoincrement = 0_usize;
+        let mut natural_key = 0_usize;
+
+        for (table, _) in COPY_PLAN {
+            let sql: Option<String> = sqlx::query_scalar(
+                "SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = ?",
+            )
+            .bind(table)
+            .fetch_optional(db.pool())
+            .await
+            .unwrap();
+
+            // The control. Without it a table renamed in the migration and not
+            // here yields `None`, every comparison below reads it as "not
+            // autoincrement", and the test passes having measured nothing.
+            let sql =
+                sql.unwrap_or_else(|| panic!("{table} is in COPY_PLAN but not in the schema"));
+            assert!(
+                sql.contains("CREATE TABLE"),
+                "{table}: schema row is not a table definition: {sql}"
+            );
+
+            let ids_are_ours = sql.contains("AUTOINCREMENT");
+            if ids_are_ours {
+                autoincrement = autoincrement.saturating_add(1);
+            } else {
+                natural_key = natural_key.saturating_add(1);
+            }
+
+            assert_eq!(
+                ids_are_ours,
+                MUST_BE_EMPTY.contains(table),
+                "{table}: autoincrement is {ids_are_ours} but MUST_BE_EMPTY membership is {}. \
+                 Every COPY_PLAN table whose ids SQLite hands out has to be refused when the \
+                 target already holds rows, and no other table has an id to collide.",
+                MUST_BE_EMPTY.contains(table)
+            );
+        }
+
+        // The other direction, which also covers the two token tables that are
+        // in MUST_BE_EMPTY and deliberately not in COPY_PLAN.
+        for table in MUST_BE_EMPTY {
+            let sql: Option<String> = sqlx::query_scalar(
+                "SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = ?",
+            )
+            .bind(table)
+            .fetch_optional(db.pool())
+            .await
+            .unwrap();
+            let sql =
+                sql.unwrap_or_else(|| panic!("{table} is in MUST_BE_EMPTY but not in the schema"));
+            assert!(
+                sql.contains("AUTOINCREMENT"),
+                "{table} is refused when non-empty, but its ids are not SQLite's to collide: {sql}"
+            );
+        }
+
+        // Vacuity control: both buckets are populated, so the equivalence above
+        // cannot have been satisfied by every table falling on one side of it.
+        assert!(autoincrement > 0, "no autoincrement table was examined");
+        assert!(natural_key > 0, "no natural-key table was examined");
     }
 }

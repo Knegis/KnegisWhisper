@@ -21,9 +21,9 @@ maintained in place rather than appended to, because its purpose is to be curren
 > detail and the by-hand check that found five real defects; [COMPLETION_PLAN.md](COMPLETION_PLAN.md)
 > keeps the phase 7–10 definitions.
 >
-> **Measured, not asserted, as of 2026-09-01:** `cargo test --workspace` — **1664 passing, 0
+> **Measured, not asserted, as of 2026-09-01:** `cargo test --workspace` — **1678 passing, 0
 > failed** (941 at the start of the original run, 1296 at its close on 2026-08-27); parity —
-> **103 entries, 5 declared unreachable** (17 at the start, 8 on 2026-08-27), and **all 13 UI
+> **103 entries, 4 declared unreachable** (17 at the start, 8 on 2026-08-27), and **all 13 UI
 > surfaces built**, with no "surface not built" entry remaining anywhere. The four: **no local-ASR
 > model any longer** — all four sherpa models are pinned and installable as of 2026-09-01 — two
 > Tinfoil entries (batch transcription
@@ -291,6 +291,644 @@ Unchanged from the Phases 1–4 entry, restated here so they are not buried:
 
 ---
 
+## 2026-09-01 (KNEG-131) — three tests had been green on macOS for weeks by checking nothing
+
+KNEG-117 found the shape and hardened two instances of it: **an assertion that something is absent,
+checked against a resource that may not have been fully written.** This is the same search run over
+the tests the last wave added. The interesting half is not the seven sites that were hardened; it is
+that the worst instance was not that shape at all.
+
+### The arithmetic first, because the issue's was wrong
+
+The issue says ~190 new tests. Measured three ways — diff hunks, and `git grep -c '#\[test\]'` at
+each end of `aa3748a..bcc57f8`:
+
+**182 gross, 54 of them relocations, 128 genuinely new, +128 net** (1531 → 1659). The 54 are the
+`meeting.rs` split: 26 to `config.rs`, 19 to `recorder.rs`, 7 to `watcher.rs`, 2 to `notes.rs`, every
+one name-for-name. `notes.rs` is the only one of the four that also gained tests — 8 of its 10 were
+written. Planning's own correction (185 / ~131 / +129) was closer and still wrong.
+
+The issue also says to search TypeScript with `expect().not`. **There is no TypeScript test suite.**
+The four `tools/**/*.test.mjs` files use `node:assert`, and the wave touched one of them.
+
+### Four buckets, 58 sites
+
+The sweep matched eleven negative-assertion spellings against the 128 new test bodies: 54 hits, plus
+`diarization.rs:662` which the pattern cannot see, plus two from a separate early-return scan, plus
+`local_model.rs:1179`, which carries no negative token at all and is the worst of them.
+
+| | |
+| --- | --- |
+| **fine** — a positive control in the same test | **37** |
+| **false positive of the pattern** | **13** |
+| **real** — no control, and no sibling the same mutation kills | **4** |
+| **weak** — no control, but a sibling kills the same mutation | **4** |
+
+Reporting all four matters more than reporting the seven fixes. Last time seventeen candidates gave
+ten fine, five false positives and two real; a report that lists only what it found cannot be
+audited for whether the search was any good.
+
+The thirteen false positives are three sub-shapes, worth naming because a rerun produces them again:
+**`assert_ne!` used as a positive distinctness claim** (5), **`Vec::new()` in input construction or as
+an accumulator, never in an assertion** (5), and **a literal `0` that is a measured value rather than
+an absence** (3 — `nanos: 0`, `speaker == 0`).
+
+### The one that was live rather than latent
+
+`config/sidecars.json` marks whisper `"availability": "not-published"` on **both** macOS targets.
+`.github/workflows/ci.yml` runs `macos-latest`. And three tests in `local_model.rs` are about
+`sidecar_freshness`, whose first act is to resolve that asset:
+
+- `:1191` and `:1211` opened `let Ok((_, asset)) = catalog.resolve(SIDECAR) else { return; };`.
+  On macOS they **executed zero assertions and reported green.**
+- `:1179` asserts `NotInstalled` against an empty directory. `sidecar_freshness` reaches
+  `NotInstalled` by two roads — no published asset, or the search path finding nothing — and nothing
+  told them apart. Its comment claimed *"the search path this function builds is exercised rather
+  than described"*, which on macOS was false.
+
+So `sidecar_freshness` has had **no coverage at all on a third of every CI run** — and it is worse
+than three tests going quiet independently, because `:1191` and `:1211` are the only *positive*
+controls the function has. Where they vacate the sole survivor is the vacuous one. The cluster
+empties together and the suite reads 1664 passing either way.
+
+This is KNEG-88's shape with an extra property that makes it worse. There, the resource that might
+not have been written was a file. Here it is *the platform's published asset*, and CI has been
+reporting green about its absence for weeks on a machine nobody watches.
+
+### The convention that comes out of it: a skipped test says it skipped
+
+The precedent was already in the tree, and the asymmetry is the argument. `real_install.rs`, written
+the same week by the same hand, also returns early where whisper is unpublished — and it
+`println!`s `"skipped: {err}"` first. Three tests, one road, one of them admitting to it.
+
+`published_asset_or_skip` now does both things for all three: it asserts the one claim that *is* true
+with no published asset — `NotInstalled`, the honest answer when nothing is pinned — and it prints
+that it took that road. Zero assertions becomes one, and the one is checkable.
+
+**It does not give `sidecar_freshness` real macOS coverage.** That needs a published macOS asset or a
+fake catalog, and inventing either at the tail of this task would be building a second thing to keep
+in step. The hole is now audible, and filed rather than fixed.
+
+### The blind spots, which are the durable part
+
+Two are known now, and they are a fact about the **method** rather than about these tests. The next
+person runs this search from here rather than from the issue.
+
+- **`vec![None]`.** `diarization.rs:662` reads
+  `assert_eq!(assign(&turns, &[(18.0, 21.0)]), vec![None])`. A `None` *inside* a `vec![]` matches
+  neither `assert_eq!(…, None)` nor `.is_none()`. It is a real site — an empty `turns` answers `None`
+  for every span there is — and the grep cannot see it. It was found by hand.
+- **The multi-line `assert_eq!`**, already recorded by KNEG-117, and still true.
+
+Both are the same failure: the pattern matches *spellings* of absence, and absence has more spellings
+than the list has entries. `Some(_) => …` is the third one waiting to be found. So the honest
+statement about this search is the one the four-hundred-round flake hunt had to make about itself two
+entries up — **it generates candidates, it does not prove there are none.** The difference is that
+this one costs minutes.
+
+### The two candidates that were dropped, and why
+
+A search that reports only its hits cannot be audited, so both rejections are recorded.
+
+**`diarization.rs:563`, `a_silent_recording_is_no_turns_rather_than_a_failure`.** Planning called it
+Tier 1. It is not the shape. `recorded_silence()` is a `&str` built from two literals in the same
+file, and a source literal cannot fail to be written; more to the point, the emptiness **is** the
+subject, so there is no artefact for a control to assert. This is KNEG-117's own "a test whose whole
+subject is that nothing happened" class. The discriminator is worth more than the fix would have
+been: **the shape needs a resource that may not have been fully written, not merely an absence.**
+
+**`meeting/watcher.rs:170`.** Out of scope — it is one of the 54 relocations, so it is not new code.
+And `:220` one screen away already asserts the same `is_none()` for a client that is merely open, and
+then the `is_some()` when the call starts. The control exists, in a different test.
+
+### The seven, and the mutation that kills each
+
+Every one was mutated by hand and each mutation checked for having changed behaviour — the record of
+two mutations out of ten that mutated nothing is why that second step exists.
+
+| site | control added | mutation that turns it red |
+| --- | --- | --- |
+| `local_model.rs` ×3 | `published_asset_or_skip` asserts, and prints | macOS `Target::current`, then the no-asset arm → `Current` |
+| `local_model.rs:1179` | the answer must change once the executable is placed | `SearchPath.downloaded` → `root.join("nope")` |
+| `hotkey.rs:1581` | a `Control+Alt` binding in the same vector | `prefix_cautions` → `Vec::new()` |
+| `diarization.rs:715` | the list must carry `--clustering.cluster-threshold=` | `build_args` → `Vec::new()` |
+| `diarization.rs:662` | the turn on the far side of the hole | `interpret` → `Ok(Vec::new())` |
+| `notes.rs:312` | the segments it was discarding | `labelled` → `(Vec::new(), None)` |
+
+`hotkey.rs:1581` is the one with no sentinel anywhere else. Its two `.is_empty()` negatives are true
+of a `Binding::from_stored` that read `Mouse4` as an accelerator neither function looks at — and
+nothing in the tree pins `from_stored` on a mouse spelling, because the neighbouring tests all go
+through `classify` instead.
+
+### Two mutations proved nothing, and one of them was the harness
+
+The rule that a mutation must be checked for having changed behaviour earned its keep twice.
+
+**`prefix_cautions`' `ModifierOnly` guard is belt-and-braces.** Deleting it looks like it should let
+a mouse binding collect a chord caution. It does not: `Chord::parse("Mouse4")` fails on its own
+account — `key_of` does not know the spelling, and a chord of one is `TooShort` either way — so the
+very next `let Ok(chord) = ... else { continue };` skips it regardless. Two independent guards, and
+no single-line edit defeats both. That is the same shape as the `chunks_exact(2)` non-mutation
+recorded for `nemotron_socket`'s `samples`, and it is now named in the test's own doc comment so the
+next person does not spend the same twenty minutes. The mutation that *is* real for that test is
+`prefix_cautions → Vec::new()`, and it is worth more anyway: **the old test passed under it.**
+
+**And the mutation harness lied once.** Restoring a mutated file with `shutil.copy2` preserves its
+mtime, so the restore was invisible to cargo and a stale binary went on running. The visible symptom
+was a mutation that "survived" — `SearchPath.downloaded` pointed at a directory that does not exist
+and every test stayed green. The actual state was a macOS-simulating build from two mutations earlier
+still sitting in `target/`, so the tests were taking the skip road and reporting it. Re-run against a
+real rebuild, that mutation kills all three.
+
+It is the flake hunt's lesson in miniature — *a run whose binaries changed underneath it is void* —
+and it is worth writing down because it is the failure mode a hand mutation is most exposed to: there
+is no harness to notice, and a green result reads as a weak test rather than as no test at all. The
+restore now touches the file.
+
+### Found and not fixed
+
+**`diarization_models.rs:278`** is weak — `model_path → None` is caught by three siblings in the same
+module. **`real_install.rs`'s early return** stays: it is `#[ignore]`d, and it is the precedent the
+convention above is built from rather than a defect.
+
+And the wave had already fixed one instance of this class by hand without naming it.
+`pin.test.mjs`'s `assert.equal(targets.length, 4)` became a sorted list of ids, on the grounds that
+*"a count cannot tell a model that was replaced from one that is still there."* That is this issue's
+finding, arrived at independently a week earlier — some evidence the shape is real, and some that
+nobody was looking for it systematically.
+
+No production behaviour changed. Nothing here was vacuous because the code was wrong; every one was
+vacuous because of what the test did or did not say.
+---
+
+## 2026-09-01 (KNEG-129) — a table that overstated a capability, and two sentences that invented one
+
+Three sentences that were true when they were written, and one rename. Nothing here changes
+behaviour, and deliberately not: **when a modifier-only chord should fire is KNEG-115 and it is
+still open.**
+
+### `is_usable` had drifted, and the codebase already knew
+
+`Binding::is_usable` said *"Whether this action has at least one working hotkey"* and computed
+`!self.registrable().is_empty()`. On Windows that is false twice over: a `ModifierOnly` chord and a
+`MouseButton` are both unregistrable by construction and both fire through the low-level hook.
+`Accelerator::explain` says so on the screen in as many words — *"It still works"*, and *"It works,
+and the click is not swallowed"* — and `Accelerator::is_registrable` had the honest wording next
+door the whole time: *"Whether `tauri-plugin-global-shortcut` can register this today."* The drift
+was confined to one method and one field. It is `has_registrable` now, which pairs with the
+`registrable()` immediately above it.
+
+**No user-visible string changed.** `Dictation.tsx` renders `bindings`, `unhandled`, `conflicts` and
+`cautions`, and has never read the field this issue is about.
+
+### The field is worse than its name, and the rename says so rather than hiding it
+
+`HotkeyReport::unusable` is the union of *no registrable accelerator* and *no handler*, which are
+two unrelated properties. The first stopped meaning "does not work" the moment a hooked platform
+existed — on the shipped default, dictation is in that set and it **fires**. The second is the
+opposite shape: chat agent's `Control+Shift+Space` is a faultless registrable accelerator and it is
+the *action* that has nowhere to go. Neither half implies the other and the union implies neither,
+so no short name for it can be true.
+
+It is `unregistrable_or_unhandled` now. The clumsiness is the finding rather than a cost to be
+minimised: **a field whose only truthful name is a conjunction is a field that should not exist**,
+and this one has no consumer at all — nothing in Rust outside its own tests, nothing in
+`apps/desktop/src`. Renaming it stops it lying; deleting it is a separate decision and is filed
+rather than taken here. `unhandled` already carries the reason and
+`RegistrationReport::is_live` already carries the outcome.
+
+The 2026-08-26 and 2026-08-31 entries below still call it `unusable`. They are dated records of what
+was true then and are left alone; rewriting them to use a name that did not exist yet would be its
+own small dishonesty.
+
+### `PLATFORM_SUPPORT.md` was wrong eight times more than the issue thought
+
+The issue named two false cells. Against `keyhook::support()`, which returns `Unsupported` for every
+target that is not Windows, there were **sixteen** — five macOS, four X11, three Wayland
+modifier-only, and the whole push-to-talk row on five platforms — plus three registration mechanisms
+(`gsettings + D-Bus`, `KGlobalAccel`, `hyprctl`) that appear nowhere in the repository, and one
+Windows cell, `native hook per key`, that contradicted line 426 of its own section eight lines
+further down. Line 426 names one-hook-per-key as the upstream design this project deliberately did
+not copy.
+
+**But the ranking is the transferable part, and it is not the count.** A cell overstating a
+capability is a table being generous. A sentence describing behaviour is a different failure, and
+this section had two:
+
+- *"On X11 and GNOME the effective default is adjusted because modifier-only combinations do not
+  work there."* No such adjustment has ever existed. `default_accelerator` is a bare `match` with no
+  conditional compilation anywhere near it — `grep -n "cfg(target_os"` over `hotkey.rs` and
+  `shortcuts.rs` returns nothing — and `nothing_ships_holding_by_default` pins the value. Every
+  platform ships `Control+Super`. This one invents a behaviour.
+- *"Push-to-talk on Linux needs read access to `/dev/input`; without it the app reports the
+  limitation and falls back to toggle mode rather than silently failing."* **This is the worst thing
+  in the section and nobody had noticed it.** There is no `/dev/input` reader in this repository —
+  zero matches — and nothing falls back to toggle mode; `hotkey.<action>.mode` is a stored per-action
+  setting and no code consults the platform when reading it. It invents *two* behaviours, and both
+  of them are the careful, self-aware engineering the rest of the document is genuinely full of,
+  which is exactly why it reads as true.
+
+A capability cell that is too generous costs a reader an expectation. A sentence like the second one
+costs them a belief that the problem was already thought about.
+
+### And one stale reason, folded in
+
+`commands.rs` built an empty speaker map under *"which nothing writes yet because there is no
+diarisation."* There is diarisation now, and the **behaviour is right and unchanged** — the map is
+empty because nothing renames a speaker, not because nothing diarises. `meeting::notes` writes
+`speaker_0` with the placeholder `Speaker 1`, `transcript::speaker_name` renders it from the segment
+alone, and what the table would add is a name a person typed, which no screen offers. Only the
+reason was false.
+
+---
+
+## 2026-09-01 (KNEG-73) — the deferral was narrowed, not dissolved, and the gate still cannot tell
+
+`search:semantic` made four checkable claims and **two were false on their face**:
+
+| claim | verdict |
+| --- | --- |
+| `"interface": "notes_core::search::SemanticIndex"` | **Never existed.** `crates/notes-core/src` is `lib.rs`, `notes.rs`, `transcript.rs`; the name appears nowhere in the tree but in this manifest |
+| `"degradation": "the UI hides semantic ranking rather than failing"` | **False.** Zero occurrences of `semantic` in `apps/desktop/src`. Nothing is hidden, nothing was built, and `SearchHit` has no score field to rank by |
+| ONNX Runtime | **Already in the tree**, as `onnxruntime.dll` inside the pinned sherpa archive — the same discovery that collapsed diarization's identical claim the day before |
+| the `ort` crate | **Not required.** `kw_meeting_core::diarization` drives an ONNX model with no `ort` in `Cargo.lock`, by shelling out to a binary that links the runtime itself |
+| Qdrant, MiniLM | **Genuinely absent**, and the deferral survives on these two alone |
+
+So it **stays deferred** and nothing was built — no sidecar, no embedding path, no `search` module.
+What changed is that the entry now rests on the one argument that holds rather than on three, and
+says which parts are measured and which are not.
+
+### The instruction was to delete the deferral block, and that turned out to be impossible
+
+The plan said to correct this the way the diarization entries were corrected: delete the `deferral`
+block, move the truth into `note`. That could not be done. `verify-parity.mjs` fails
+`incomplete-deferral` when a `temporarily-deferred` entry has no block, and there is no vocabulary
+term for "deferred without one". Diarization could delete its block **because its status changed to
+built** — that is what made it the model, and it is precisely the part that does not transfer to an
+entry that is still deferred. So every field of the block was corrected in place instead.
+
+Worth writing down because the mistake is a natural one: *"correct it the way that one was
+corrected"* silently assumes the two entries are in the same state, and these two were in opposite
+states.
+
+### The general defect, now with a second instance
+
+`verify-parity.mjs` checks that a deferred entry **has** `why`, `dependencies`, `interface` and
+`expectedPhase`. Five existence checks, no type check, no resolution of `interface` against the
+source tree, and no way at all to ask whether any of it is still true. That is how this entry named
+a nonexistent module for months, and it is the same lesson the KNEG-123 entry drew one day earlier —
+*"a deferral block ages exactly like a status claim and nothing gates it."* One instance is an
+anecdote; two in two days is the gate's shape.
+
+`search:sqlite-fts` was stale in the same pass, in a smaller way: `"backend": "crates/storage"` named
+where the FTS5 table is declared rather than where the query runs, which is
+`kw_notes_core::notes::search`.
+
+---
+
+## 2026-09-01 (KNEG-76) — write-only ownership, and a rule that was exact and unwritten
+
+Five orphan tables were really **eight** — `speaker_profiles`, `speaker_mappings` and
+`note_speaker_embeddings` are in the same state — and *"touched only by the importer"* was false for
+four of them. All eight are asserted to exist by a schema test; `agent_messages` is the subject of
+the foreign-key test and `speaker_mappings` of the cascade test; four are named to the user in a
+shipped sentence on `Notes > Upload`; and `contacts` is cited **normatively** by two diarization
+modules as a thing they deliberately do not reach for. The honest phrase is **write-only
+ownership**: the importer writes them, tests and comments depend on them, nothing reads them back.
+
+Two decisions recorded rather than deferred a fourth time. **`snippets` stays** — it is not inert,
+the importer copies it and a shipped sentence promises the user it will, so dropping it discards
+real data to save a five-column table. And **`speaker_mappings` has a candidate owner it did not
+have a week ago**: diarization produces `Speaker 1`, `speaker_name` already prefers a mapping over
+the placeholder, and that table is where a rename to a person would live. The owner is named and
+nothing was built.
+
+### The best thing in this issue was not in the issue
+
+`contacts` is in `COPY_PLAN` and not in `MUST_BE_EMPTY`, which looked like an oversight worth a
+sentence. Checking all sixteen tables against the schema turned it into a rule: **`MUST_BE_EMPTY` is
+exactly the `COPY_PLAN` tables declared `INTEGER PRIMARY KEY AUTOINCREMENT`, with no exception in
+either direction.** The list guards one risk — the importer preserves row ids, so a non-empty target
+could collide — and every table it omits is keyed by something SQLite did not hand out: `contacts`
+by `email`, the two speaker child tables by `(note_id, speaker_id)`, the four calendar tables by a
+provider-supplied `TEXT` id.
+
+Exact, load-bearing, and **written down nowhere**, which made it a coincidence waiting for whoever
+added the next table to either list. It is now on `MUST_BE_EMPTY` as prose and pinned by
+`must_be_empty_is_exactly_the_autoincrement_tables`, which reads the live schema rather than a
+second hand-written list — a test that restates the nine names proves only that someone typed them
+twice. Mutated both ways before being believed: adding `contacts` to the list and removing
+`snippets` from it each turn it red.
+
+**No migration**, and that is the shape of the closing rather than a limitation of it. There is one
+migration file and `migrations_are_idempotent_across_reopens` asserts `applied == 1`.
+---
+
+## 2026-09-01 (KNEG-128) — four installers wrote the record and one screen read it
+
+`kw_sidecar::install` writes `.kw-install.json` into every sidecar directory it promotes, naming the
+digest of the archive the files came out of. That landed with KNEG-113 earlier the same day, and it
+landed for all of them: four modules install through that function. **One read it back.**
+
+`local_llm.rs`, `local_asr.rs`, `diarization.rs` and `media.rs` all had the evidence sitting beside
+their binaries and none of them looked, so each went on claiming *Installed* — a fact about a path —
+while the binary fell behind the manifest. That is the exact state KNEG-113 was written to end, left
+standing in four places by the change that ended it in the fifth.
+
+Two are fixed here, llama.cpp and sherpa. ffmpeg and yt-dlp stay out: a different status shape,
+neither observed stale, and widening would be the speculative reach that issue's own argument for
+being Low warns against.
+
+### The exhaustiveness guard went in first, and that ordering was the point
+
+`freshnessLabel` returns `string | undefined`, so falling off the end of its switch was legal. A
+fifth `SidecarFreshness` variant would have compiled without a murmur and rendered **no sentence at
+all**, and both call sites compare the tag with a bare `===`, which `tsc` cannot check either.
+
+Measured rather than argued, in both directions: a sixth variant added to `ipc-types.ts` by hand
+passed `tsc --noEmit` cleanly before the guard and fails with `Type '{ state: "withdrawn"; ... }' is
+not assignable to type 'never'` after it. Same defect `meetingIsLive` records being bitten by when
+`stalled` arrived for KNEG-116 — *"both screens compiled without a murmur, and answered no"* — and
+the same `never` guard closes it.
+
+It went in **before** the call sites, because this issue takes that function from one screen to
+three. Fixing it afterwards would have tripled the silent-failure surface first and then asked
+somebody to notice.
+
+### llama.cpp: one call for two answers, and a trap that had nothing to do with freshness
+
+`local_llm_status` resolved the asset, located the installation and **threw the `Installation` away**
+to keep a bare `bool`. `server_state` replaces the chain and returns both answers from one
+`sidecar_freshness`, so `server_installed` is a reading of the freshness rather than a second
+question — the disagreement `local_model_status` is arranged to prevent.
+
+`RefreshOutcome` is **shared**, not copied. `ipc_types` asserts that no two Rust types render to the
+same TypeScript name, so a second one would have been a failing test rather than a duplicate nobody
+noticed; the two refreshes answer the same three questions, so sharing was the right resolution.
+`Restart` and `refresh_failure` widened to `pub(crate)` with it.
+
+The refresh reads the running model through `running_model()` and never `LocalEndpoint::port`, which
+records a use and holds the idle clock open — the same choice `local_llm_status` makes and for the
+same reason.
+
+**And then the thing that was not in the issue.** `local_llm_start` armed the idle watcher;
+`LocalLlm::start_model` did not. A refresh that restarts through `start_model` and stops there brings
+the server back with **nothing left to ever stop it** — six gigabytes resident until the application
+exits, which is worse than any staleness this issue was filed about, and nothing in the tree would
+have caught it. Found by reading the start path before copying it, not by a failure.
+
+Fixed two ways, and the split matters. `start_and_watch` is now the only way the ordinary path
+reaches a running server, so the pairing is structural. The refresh consults
+`must_arm_idle_watcher`, which is pure and tested in both directions — `Restarted` must arm, and
+`NothingWasRunning` and `Failed` must not, because a watcher over a server that is not running is a
+task spawned to discover that on its first tick. What no test can do is observe a
+`tauri::async_runtime::spawn`; that half is held by construction.
+
+### sherpa: the fix is worth more than the feature, and the button is declined
+
+`installed_cli()` hand-built `cli_root()/sherpa/<exe>` and never consulted the catalogue, so
+`cli_installed` and any freshness reading were two independent answers to one question. Both now go
+through `locate` against the published asset. It is **not** a live bug — all five published targets
+ship `.../bin/sherpa-onnx-offline`, so the two spellings agree today — and that is precisely the
+condition under which this kind of duplication survives until it does not.
+
+`resolve_id` is reached from `dictation.rs` and `media.rs` through a bare `Selection`, so threading a
+`Catalog` to it would mean threading one through `DictationRuntime` and `MediaImportRuntime` as well.
+`installed_cli()` parses the shipped catalogue itself instead: an embedded-string `from_str` on a
+path that is about to spawn a process and transcribe a WAV, with `LocalAsr::new` having already
+proved at startup that it parses.
+
+**No refresh button, and the reason is the streaming server's lifecycle rather than the archive.**
+`meeting.rs:656` is the only caller of `SherpaStream::start` and **nothing anywhere calls
+`SherpaStream::stop`** — the only stop is the one `start` performs on itself when switching models.
+So a running streaming server means *a meeting has happened this session*, not *a meeting is
+happening now*. A refresh would either stop it unconditionally, ending the live transcript of a
+meeting in progress from a dictation settings screen that never mentions meetings, or need a
+live-meeting guard reaching into a second runtime's state. Neither version is testable — the whole
+sequence is reachable only through an `AppHandle`, exactly as whisper's button is, and that button
+has still never been pressed.
+
+So the screen reports the staleness and says plainly that it cannot fix it, including that one
+archive serves dictation, meetings and speaker separation, and that reinstalling means closing the
+application. A screen that reports honestly and cannot act beats a button that is wrong at the worst
+possible moment.
+
+Worth recording separately, observed and not chased: if nothing ever calls `SherpaStream::stop`, the
+streaming server **outlives every meeting**, holding a 630 MB model from the first meeting until the
+process exits. That may be deliberate reuse — `running_on` already argues for keeping a loaded server
+between meetings — or it may be the defect llama's five-minute idle timer exists to prevent, one
+runtime over. It is outside both issues and it is not guessed at here.
+
+### The mutation that survived
+
+Six mutations for this half; five killed, **one did not**. Replacing `located_cli`'s `locate` call
+with a hand-built path to a nonexistent executable left the suite green, because the function reached
+for `cli_root()` internally and no test could point it anywhere. That is the `media.rs:1334-1340` line
+again, in a function written an hour earlier by someone who had just finished writing about it.
+
+Split into `located_cli_in(catalog, root)` and a one-line wrapper, the same mutation now fails with
+`left: None, right: Some(...sherpa-onnx-offline.exe)`. The gap was real and the mutation pass is the
+only reason it is not still there.
+
+### What is believed rather than measured
+
+Everything on both screens. The freshness reads are exercised against real directories with the
+catalogue's own executable name in them, and `server_state`, `server_progress`,
+`must_arm_idle_watcher` and `located_cli_in` are all tested. **Nothing has been pressed.** The
+llama refresh's stop-install-restart, whether the restarted server actually idle-stops five minutes
+later, and how the sherpa sentence reads on a machine whose runtime really is unrecorded are all
+by-hand checks, and they go to Linear rather than being claimed here.
+
+---
+
+## 2026-09-01 (KNEG-130) — the response to the finding destroyed the finding
+
+`local_llm_recheck_model` hashes an installed GGUF against its pinned digest. It is the only thing in
+this application that actually proves the bytes of a model, and when it found a file that did not
+match, `settle_record` **deleted the record beside it**.
+
+That looks like the safe direction and is not. The reasoning behind the deletion was sound as far as
+it went — a record that survived a mismatch is a record that is *wrong*, because it says the length
+and the timestamp are what they were at install while the bytes say they are not, and leaving it
+would have the screen answer *unchanged since it was installed* about a file just proved otherwise.
+The mistake was in what deleting leaves behind.
+
+It leaves `GgufIntegrity::Unrecorded`, which `gguf_check` documents at length as **not an
+accusation**: it is the state every GGUF installed before records existed is in, including the
+1.28 GB Qwen2.5 on the developer's machine. So a file that had been read in full and refused became
+indistinguishable from one nobody had ever looked at.
+
+**And it was worse than a display problem.** `start_model`'s warning matched `GgufIntegrity::Changed`
+and nothing else. A failed re-check deleted the record, the row fell to `Unrecorded`, the warning
+stopped firing — so the log went quiet on exactly the file the application had just proved was not
+the one that was installed. Responding to the finding was what destroyed it. The verdict survived
+only as long as the command that produced it, and a restart erased it entirely.
+
+### The verdict goes in the one record
+
+Not a second file beside it. Two files describing one model are two things that can disagree, and
+the disagreement would be about whether a model can be trusted.
+
+`SCHEMA` moves 1 → 2 and `InstallRecord` gains a `verdict`: `Passed`, or `Failed` carrying the pair
+of digests that disagreed. The digests live in the verdict rather than being read back off the
+record's own `sha256`, and that is not duplication — `sha256` records what the *install* pinned and
+these record what the *re-check* actually compared. They are the same string today. A pin updated in
+the registry after a model was installed is exactly when a person reading the file needs both.
+
+**The precedent is `calendar.rs`, not something invented here.** It already persists negative
+verdicts — `SyncOutcome::{Failed, TokenUnavailable}` — and folds them into live status through the
+pure `combine_token_status`, whose doc makes the argument this needed: one shape for both, so a
+screen can never see a different answer from a check it just ran than from the record read back
+later. What is new is only the medium. This is the first negative verdict this application writes to
+**a file beside an artefact** rather than into SQLite, and the module doc says so plainly, because
+the record is ordinary JSON in a user-writable directory — a place to keep a finding, never a place
+to enforce one.
+
+### Where the verdict is read is the whole design
+
+Inside the branch where the two integers already agree, never before it. Both halves are load-bearing
+and each has its own test:
+
+- **Only there** is what stops a recorded failure rendering as `UnchangedSinceInstall`. A failed
+  re-check writes the file's *current* length and mtime, so the cheap comparison agrees — and reading
+  only those two integers would have this application make its strongest positive claim about the one
+  file it has proved is wrong.
+- **Not before it**, which is the obvious way to write it and the wrong one. A verdict describes the
+  bytes it was measured against. Once the length or the timestamp moves, those bytes are gone —
+  somebody has reinstalled the model — and the state falls back to `Changed` whatever the verdict
+  said. An accusation carried forward over a file that has since been repaired is a screen nobody can
+  clear.
+
+`integrity_of` stays pure over two integers and a small enum. Nothing here hashes anything; the
+branch is chosen by the *recorded* verdict.
+
+`FailedRecheck` is therefore worth exactly the sentence it carries: the file was read in full and
+refused, **and nothing has written to it since**.
+
+### Backward compatibility was the part that could have gone wrong quietly
+
+`read_record` compared `record.schema == SCHEMA`. Bumping the constant with that line in place would
+have discarded every record already on disk — every installed model dropping from *unchanged since
+it was installed* to *installed, never recorded*, for no reason a user could see. That is the same
+overclaim this module exists to prevent, running in reverse.
+
+There are two constants now, `SCHEMA` for what is written and `READABLE_SCHEMAS` for what is
+understood, because those are different facts. A schema 1 record has no `verdict` key and
+`#[serde(default)]` reads it as `Passed`, which is the correct reading: a record written by an
+install is a record of a check that passed.
+
+**Proved against a fixture, not a fresh install.** The test writes the JSON by hand, with no
+`verdict` key, against a real file whose length and mtime it names — a record built through
+`InstallRecord { .. }` would acquire the field from the struct and prove nothing about what is on
+somebody's disk today. Its control is a schema 3 fixture in the same test, so the acceptance is a
+decision rather than serde taking whatever it is handed.
+
+### `forget_record` is gone, and its argument is not
+
+Deleted rather than left uncalled. Its reasoning moved into `write_failed_record`'s doc, because the
+reasoning was never "forget it" — it was *never let the screen say unchanged about this file* — and
+writing the verdict satisfies that better than deleting did.
+
+The failed record writes `verified_by: nothing`. Nothing about those bytes was verified; the last
+thing that looked at them refused them. Carrying the install's old strength forward would put this
+file's strongest word beside its worst verdict.
+
+### The one assertion that carries the argument, and the gate that actually guards it
+
+`start_model`'s warning was the reason this mattered, so the branch had to become reachable.
+`load_warning(&GgufIntegrity) -> Option<String>` is pure and tested over all five states: `Changed`
+and `FailedRecheck` speak, and `UnchangedSinceInstall`, `Unrecorded` and `NotInstalled` are silent.
+Both directions are asserted, because only one of them is the defect and the other is the noise
+fixing it would create — a warning that fires for every `Unrecorded` model on disk is a warning
+nobody reads.
+
+The cost is honest and small: the structured `recorded_bytes`/`bytes` tracing fields become part of
+the message text. A branch nothing can reach is worth less than two log fields.
+
+**What that test does not prove is that `start_model` still calls it**, and this is worth recording
+because it is the interesting half. Mutating `load_warning`'s body proves the function; it says
+nothing about the call. What catches a deleted call site is not a test at all — `load_warning` is
+private, so removing its only caller makes it dead code and `clippy --workspace --all-targets -D
+warnings` fails the build. Verified by doing it. The gate is the guard here, not the suite, and those
+are different claims.
+
+### What is believed rather than measured
+
+The five states were exercised against real files in a temporary directory, and the failed verdict
+was written, read back, cleared by a passing re-check, and invalidated by a subsequent write. **No
+real GGUF has been through this.** `local_llm_recheck_model` had never been run before this change
+and still has not been: its verdict and its record-settling are tested as pure functions and against
+small real files, and the command that wires them to `spawn_blocking` and the registry is the
+untestable edge. The first genuine 1.28 GB hash, and the first `failed-recheck` row on a real screen,
+are still by-hand checks.
+
+---
+
+## 2026-09-01 (KNEG-117) — the depth that was deferred twice cost two and a half hours
+
+**Run: 400 rounds, 35 binaries, 14,000 runs, thread counts 1/2/4/8/16, control passed, not void,
+nothing found.**
+
+That is the run KNEG-117 asked for, and it is the first time the workspace claim rests on anything.
+
+### The estimate was the whole obstacle, and it was wrong
+
+The 2026-08-31 entry deferred this as *"several hours of a machine doing nothing else"*. Nobody had
+timed it. `--workspace --rounds 3` takes 66 seconds, so a round is **22 seconds** and four hundred
+of them are **two and a half hours**.
+
+Worth recording as a mistake rather than as a measurement: an unmeasured cost estimate deferred a
+piece of work twice, and the measurement that dissolved it took one minute. The instinct that says
+"this is expensive, do it later" is exactly the one that should be checked with a stopwatch first.
+
+### What the result means, and what it does not
+
+Four hundred rounds is four hundred runs of **each** binary, which is the same exposure KNEG-88's
+flake was found at — twice in four hundred runs of `kw-storage`, about 0.5% per run. So this run
+matches that confidence for every binary in the workspace, which is precisely what KNEG-117 asked
+for and nothing more.
+
+Two ways to state the bound, both honest and neither a verdict:
+
+- **Against a flake as common as the one already found:** 1 — 0.995^400 = **86%**. A flake at that
+  rate probably would have shown. It also might not have; fourteen times in a hundred it hides.
+- **Rule of three**, for a binary with zero failures in four hundred runs: the 95% upper bound on
+  its per-run failure rate is 3/400 = **0.75%**.
+
+Note what the second one says. KNEG-88's flake was 0.5% per run, which sits **below** that bound —
+so a flake exactly as common as the one this project has already met could still be sitting in any
+of these thirty-five binaries. The run raises the floor; it does not clear the room.
+
+### Two things that make the number mean anything
+
+**It is not void.** The tool refuses to report a run whose test binaries changed underneath it
+(`2ad9ea2`), because its first workspace run reported a real test failing nine times out of thirty
+and that was a Rust type being edited in another window. The tree sat at `7b7ebfd` untouched for
+the whole run, and the completion line says so.
+
+**The control passed**, which is the only reason a clean report is allowed at all — the first
+version of this tool reported 100% failures for every thread count including the control, because
+a trailing carriage return meant nothing was ever executed. A harness that fails everything is
+measuring itself, and one that passes everything for the same class of reason would have been read
+as a clean result.
+
+### And one banked earlier the same day
+
+`kw-meeting-core` alone, 400 rounds, 1,200 runs, three binaries, clean and not void — run while
+three other branches were still moving, because it was the one crate none of them touched and the
+one that had just gained `diarization`, `diarization_models`, `nemotron` and `nemotron_socket`.
+Subsumed by the workspace run above, and worth recording as a thing that could be done while the
+rest of the tree was unavailable rather than waited on.
+
+### Still not done
+
+The **search** half of KNEG-117 does not need repeating — seventeen candidate sites were read on
+2026-08-31 and the two real ones hardened. But it was a search over the tests that existed then.
+Roughly 190 tests have been written since, across six issues, and **none of them has been read for
+the absent-assertion shape**. The loop cannot find that defect; only the search can.
+
+---
+
 ## 2026-09-01 (KNEG-123, KNEG-124) — a deferral block that was wrong three times over
 
 Diarization had sat `temporarily-deferred` since before the build plan began, under a `deferral`
@@ -426,6 +1064,10 @@ spells itself "verified": two integers agreeing is not a hash, and the weaker wo
 | `unchanged-since-install` | a record, and the length and mtime still agree with it |
 | `unrecorded` | the file is there and nothing beside it says what was checked |
 | `changed` | a record, and it disagrees |
+| `failed-recheck` | a re-hash read the file and refused it, and nothing has written to it since |
+
+The fifth arrived hours later, with KNEG-130 — see that entry. It is listed here rather than left to
+be discovered, because the four-state framing above is the thing that made the defect possible.
 
 `unrecorded` is the one the design turns on. **Every GGUF installed before this landed is in it** —
 including the 1.28 GB `qwen2.5-1.5b-instruct-q5_k_m.gguf` on the developer's machine right now — and
@@ -450,6 +1092,12 @@ Two decisions inside it:
   replacement the cheap check documents itself as unable to see. Left in place it would have the
   screen make the strongest available claim about the worst available file. The weights stay: they
   may be twenty gigabytes somebody chose to keep, and a stale pin here is as likely as rot there.
+
+  **The removal lasted a few hours.** The requirement was right and the remedy was not: deleting the
+  record dropped the row to `unrecorded` — the *nothing is known* state, which is not an accusation
+  and which every pre-record model reports — and silenced `start_model`'s warning with it, so
+  responding to the finding was what destroyed it. A mismatch now **writes** the verdict instead.
+  KNEG-130, same day.
 - **`nothing-pinned` is its own answer.** Nothing shipped today can reach it, and "there was nothing
   to check" still must not render as "checked, and fine".
 
@@ -736,9 +1384,13 @@ the same advice, so every non-permission failure stays a plain `Io`.
 
 Nothing re-hashes the installed executable, so a file corrupted or replaced on disk after an install
 still reads as whatever the record says. Nothing checks freshness at startup or on a schedule: like
-every other download here, a refresh happens because somebody pressed a button. `local_llm.rs` and
-`local_asr.rs` install sidecars through the same `kw_sidecar::install` and so get the record for
-free, but neither reports freshness or offers a refresh — only whisper does.
+every other download here, a refresh happens because somebody pressed a button.
+
+`local_llm.rs` and `local_asr.rs` install sidecars through the same `kw_sidecar::install` and so get
+the record for free, and at the time this was written neither read it. **Both report freshness now**
+— KNEG-128, same day, which also found that `diarization.rs` and `media.rs` make four non-readers
+rather than two. llama.cpp gained a refresh button with it; sherpa deliberately did not, because the
+streaming meeting server runs out of that directory and nothing ever stops it. See that entry.
 
 **The install half is measured; the stop and the restart around it are not.**
 `tests/real_install.rs` was run against the real network on 2026-09-01 — not a fixture — and it now
@@ -1104,10 +1756,15 @@ Not much, and the arithmetic is why. The `kw-storage` flake fired **twice in fou
 that binary** — about 0.5% per run. Forty rounds is forty runs of each binary, so the chance of
 catching something at that rate is about **18%**. A clean result at this depth is closer to "not
 looked at properly" than to "clean", and matching KNEG-88's confidence across the workspace would
-be roughly four hundred rounds — several hours of a machine doing nothing else.
+be roughly four hundred rounds.
 
 Worth writing down because the temptation is to read 1,320 runs as a big number. It is a big number
 of runs and a small number of *rounds*, and rounds are the unit that matters here.
+
+> **Superseded 2026-09-01.** The four hundred rounds were run. This paragraph said they would cost
+> "several hours of a machine doing nothing else"; timed, a round is 22 seconds and the whole run
+> is about two and a half. That estimate is the only reason the depth was deferred twice, and it
+> was wrong by a factor of four. See the 2026-09-01 (KNEG-117) entry.
 
 ### So the second half was a search rather than a loop
 

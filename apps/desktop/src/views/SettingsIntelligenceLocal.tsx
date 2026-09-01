@@ -31,8 +31,10 @@ import { useCallback, useEffect, useState } from "react";
 
 import { Row } from "../components/Row";
 import {
+  freshnessLabel,
   ggufIntegrityLabel,
   recheckOutcomeLabel,
+  refreshOutcomeLabel,
   verificationLabel,
 } from "../lib/labels";
 import {
@@ -40,6 +42,7 @@ import {
   installLocalLlm,
   onLocalLlmProgress,
   recheckLocalLlmModel,
+  refreshLocalLlmServer,
   startLocalLlm,
   stopLocalLlm,
   type LocalLlmModelStatus,
@@ -105,6 +108,8 @@ export function SettingsIntelligenceLocal() {
   } | null>(null);
   /** Which model is being hashed, so its button can say so and not restart. */
   const [checking, setChecking] = useState<string | null>(null);
+  /** What the last press of the server-binary button did. */
+  const [refreshed, setRefreshed] = useState<string | null>(null);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -285,6 +290,61 @@ export function SettingsIntelligenceLocal() {
                     : "installing a model installs the server with it"
               }
             />
+            {/*
+              Which build is installed, said out loud. "Installed" was the only
+              thing this screen ever claimed about the server binary, and it
+              stays true while the binary falls releases behind the manifest
+              this application ships. `install` has written the record since
+              KNEG-113 and nothing here read it. The three answers are kept
+              apart — `unknown` is not a polite `stale` — and the button is
+              offered for both, because pressing it is how either is settled.
+            */}
+            {freshnessLabel(data.serverFreshness) ? (
+              <p
+                className={
+                  data.serverFreshness.state === "current"
+                    ? "muted"
+                    : "muted warn"
+                }
+              >
+                {freshnessLabel(data.serverFreshness)}
+              </p>
+            ) : null}
+            {data.serverFreshness.state !== "not-installed" ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => {
+                    void guard(async () => {
+                      // Said before it starts: this stops the server, and a
+                      // loaded model is several gigabytes to reload.
+                      setProgress("Replacing the server binary…");
+                      const outcome = await refreshLocalLlmServer();
+                      setRefreshed(refreshOutcomeLabel(outcome));
+                      setProgress(null);
+                    });
+                  }}
+                >
+                  {data.serverFreshness.state === "current"
+                    ? "Reinstall the server binary"
+                    : "Update the server binary"}
+                </button>
+                {running ? (
+                  <p className="caveat">
+                    The server is running. It will be stopped for the
+                    replacement and started again with the same model, which
+                    means reloading it.
+                  </p>
+                ) : null}
+              </>
+            ) : null}
+            {/*
+              Always rendered, so a press fills a slot rather than growing the
+              section under the pointer.
+            */}
+            <p className="status-slot row-detail" role="status">
+              {refreshed}
+            </p>
             <Row label="Models are kept in" value={data.installDir} />
             <Row
               label="Idle shutdown"
