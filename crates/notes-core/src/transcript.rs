@@ -16,9 +16,11 @@
 //! subtitle formats need seconds from the start of the recording. The tell is a
 //! value above 10^9, which no plausible recording duration reaches.
 //!
-//! **SRT and VTT omit speaker labels when there is no speaker identity at all.**
-//! An uploaded audio file has no diarisation, so prefixing every cue with
-//! "Unknown speaker:" defeats the point of exporting subtitles.
+//! **Anonymous segments omit speaker labels in every format.** An uploaded
+//! audio file has no diarisation, so prefixing every cue with "Unknown
+//! speaker:" adds no information. Identity is structural rather than a
+//! comparison with the localised placeholder: a typed name, diarisation label,
+//! or known capture source is retained; a segment carrying none gets no label.
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -347,18 +349,30 @@ pub fn format_date(note: &NoteMeta) -> String {
         })
 }
 
-/// Whether any segment carries speaker identity.
+/// The speaker to render, only when the segment carries a real identity.
 ///
-/// When none does — an uploaded file with no diarisation — subtitle formats omit
-/// the speaker prefix rather than repeating "Unknown speaker" on every cue.
-fn has_speaker_identity(segments: &[Segment]) -> bool {
-    segments.iter().any(|s| {
-        s.speaker.is_some()
-            || s.speaker_name
-                .as_deref()
-                .is_some_and(|n| !n.trim().is_empty())
-            || s.source.is_some()
-    })
+/// Do not decide this by comparing [`speaker_name`] with `labels.unknown`: that
+/// word is localised, and a user is allowed to type the same words as a name.
+/// The stored fields already say whether identity exists. A generated
+/// placeholder is not one, and only the two documented capture sources are.
+fn identified_speaker(
+    segment: &Segment,
+    mappings: &BTreeMap<String, String>,
+    labels: &SpeakerLabels,
+) -> Option<String> {
+    let typed = segment
+        .speaker_name
+        .as_deref()
+        .is_some_and(|name| !segment.speaker_is_placeholder && !name.trim().is_empty());
+    let diarized = segment
+        .speaker
+        .as_deref()
+        .is_some_and(|speaker| !speaker.trim().is_empty());
+    let sourced = matches!(segment.source.as_deref(), Some("mic" | "system"));
+
+    (typed || diarized || sourced)
+        .then(|| speaker_name(segment, mappings, labels))
+        .filter(|name| !name.trim().is_empty())
 }
 
 /// How long an unterminated final cue lasts, in seconds.
@@ -403,10 +417,10 @@ fn export_txt(
     lines.push(String::new());
 
     for segment in merged {
-        lines.push(format!(
-            "[{}] {}:",
-            format_clock(segment.timestamp.unwrap_or(0.0)),
-            speaker_name(segment, mappings, labels)
+        let clock = format_clock(segment.timestamp.unwrap_or(0.0));
+        lines.push(identified_speaker(segment, mappings, labels).map_or_else(
+            || format!("[{clock}]"),
+            |speaker| format!("[{clock}] {speaker}:"),
         ));
         lines.push(segment.text.clone());
         lines.push(String::new());
@@ -437,10 +451,10 @@ fn export_md(
     lines.push(String::new());
 
     for segment in merged {
-        lines.push(format!(
-            "**{}** `{}`",
-            speaker_name(segment, mappings, labels),
-            format_clock(segment.timestamp.unwrap_or(0.0))
+        let clock = format_clock(segment.timestamp.unwrap_or(0.0));
+        lines.push(identified_speaker(segment, mappings, labels).map_or_else(
+            || format!("`{clock}`"),
+            |speaker| format!("**{speaker}** `{clock}`"),
         ));
         lines.push(segment.text.clone());
         lines.push(String::new());
@@ -457,9 +471,10 @@ fn export_json(
 ) -> String {
     let mut speakers: Vec<String> = Vec::new();
     for segment in merged {
-        let name = speaker_name(segment, mappings, labels);
-        if !speakers.contains(&name) {
-            speakers.push(name);
+        if let Some(name) = identified_speaker(segment, mappings, labels) {
+            if !speakers.contains(&name) {
+                speakers.push(name);
+            }
         }
     }
 
@@ -478,11 +493,14 @@ fn export_json(
             "segmentCount": merged.len(),
         },
         "speakers": speakers,
-        "segments": merged.iter().map(|segment| serde_json::json!({
-            "speaker": speaker_name(segment, mappings, labels),
-            "timestamp": segment.timestamp.unwrap_or(0.0),
-            "text": segment.text,
-        })).collect::<Vec<_>>(),
+        "segments": merged.iter().map(|segment| {
+            let speaker = identified_speaker(segment, mappings, labels);
+            serde_json::json!({
+                "speaker": speaker,
+                "timestamp": segment.timestamp.unwrap_or(0.0),
+                "text": segment.text,
+            })
+        }).collect::<Vec<_>>(),
     });
 
     // Pretty-printed: an exported transcript is read by people.
@@ -502,8 +520,6 @@ fn export_cues(
     style: CueStyle,
 ) -> String {
     let decimal = if style == CueStyle::Srt { ',' } else { '.' };
-    let labelled = has_speaker_identity(merged);
-
     let mut out = Vec::new();
     if style == CueStyle::Vtt {
         out.push("WEBVTT".to_owned());
@@ -524,15 +540,10 @@ fn export_cues(
             format_cue(start, decimal),
             format_cue(end, decimal)
         ));
-        out.push(if labelled {
-            format!(
-                "{}: {}",
-                speaker_name(segment, mappings, labels),
-                segment.text
-            )
-        } else {
-            segment.text.clone()
-        });
+        out.push(identified_speaker(segment, mappings, labels).map_or_else(
+            || segment.text.clone(),
+            |speaker| format!("{speaker}: {}", segment.text),
+        ));
         out.push(String::new());
     }
 
@@ -804,6 +815,65 @@ mod tests {
         let identified = vec![segment("Attributed", 0.0, Some("speaker_0"))];
         let srt = export(Format::Srt, &note(), &identified, &no_mappings(), &labels());
         assert!(srt.contains("Speaker 1: Attributed"), "{srt}");
+    }
+
+    #[test]
+    fn anonymous_segments_never_repeat_the_unknown_placeholder() {
+        let anonymous = vec![
+            segment("First anonymous turn", 0.0, None),
+            segment("Second anonymous turn", 10.0, None),
+        ];
+
+        for format in [Format::Txt, Format::Md, Format::Srt, Format::Vtt] {
+            let out = export(format, &note(), &anonymous, &no_mappings(), &labels());
+            assert!(!out.contains("Unknown speaker"), "{format:?}: {out}");
+            assert!(out.contains("First anonymous turn"), "{format:?}: {out}");
+            assert!(out.contains("Second anonymous turn"), "{format:?}: {out}");
+        }
+
+        let json = export(Format::Json, &note(), &anonymous, &no_mappings(), &labels());
+        assert!(!json.contains("Unknown speaker"), "{json}");
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["metadata"]["speakerCount"], 0);
+        assert_eq!(parsed["metadata"]["segmentCount"], 2);
+        assert!(parsed["speakers"].as_array().unwrap().is_empty());
+        assert!(parsed["segments"][0]["speaker"].is_null());
+        assert!(parsed["segments"][1]["speaker"].is_null());
+    }
+
+    #[test]
+    fn mixed_transcripts_keep_real_identities_and_leave_only_anonymous_turns_unlabelled() {
+        let segments = vec![
+            segment("Diarized", 0.0, Some("speaker_0")),
+            segment("Anonymous", 10.0, None),
+            Segment {
+                source: Some("mic".to_owned()),
+                ..segment("From the microphone", 20.0, None)
+            },
+            Segment {
+                speaker_name: Some("Grace".to_owned()),
+                ..segment("Named by a person", 30.0, None)
+            },
+        ];
+
+        for format in [Format::Txt, Format::Md, Format::Srt, Format::Vtt] {
+            let out = export(format, &note(), &segments, &no_mappings(), &labels());
+            assert!(out.contains("Speaker 1"), "{format:?}: {out}");
+            assert!(out.contains("You"), "{format:?}: {out}");
+            assert!(out.contains("Grace"), "{format:?}: {out}");
+            assert!(!out.contains("Unknown speaker"), "{format:?}: {out}");
+            assert!(out.contains("Anonymous"), "{format:?}: {out}");
+        }
+
+        let json = export(Format::Json, &note(), &segments, &no_mappings(), &labels());
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["metadata"]["speakerCount"], 3);
+        assert_eq!(parsed["metadata"]["segmentCount"], 4);
+        assert_eq!(parsed["speakers"].as_array().unwrap().len(), 3);
+        assert_eq!(parsed["segments"][0]["speaker"], "Speaker 1");
+        assert!(parsed["segments"][1]["speaker"].is_null());
+        assert_eq!(parsed["segments"][2]["speaker"], "You");
+        assert_eq!(parsed["segments"][3]["speaker"], "Grace");
     }
 
     #[test]
