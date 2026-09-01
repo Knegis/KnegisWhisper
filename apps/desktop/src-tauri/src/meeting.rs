@@ -1113,6 +1113,11 @@ impl MeetingRuntime {
                 transcript.gaps
             ));
         }
+        append_delivery_facts(
+            &mut content,
+            finished.mic_delivered,
+            finished.system_delivered,
+        );
 
         let note = kw_notes_core::notes::NewNote {
             title: format!(
@@ -1244,6 +1249,20 @@ impl MeetingRuntime {
             }
         }
     }
+}
+
+/// Preserve what each capture delivered in the note that outlives the session.
+///
+/// The whole-recording pass reads a mixed WAV, so its segments cannot recover
+/// which source contributed. The recorder has already measured the two facts;
+/// dropping them only on the successful path made a complete-looking note out
+/// of a meeting where one source may have contributed nothing.
+fn append_delivery_facts(content: &mut String, mic: Delivered, system: Delivered) {
+    content.push_str("\n\nRecording sources:\n- Microphone: ");
+    content.push_str(mic.note_fact());
+    content.push_str(".\n- System audio: ");
+    content.push_str(system.note_fact());
+    content.push('.');
 }
 
 /// Ask the recorder to stop, and wait for what it wrote.
@@ -1689,5 +1708,28 @@ mod tests {
         let reason = kw_meeting_core::declined("tinfoil-realtime").unwrap();
         assert!(reason.contains("attestation"), "{reason}");
         assert!(kw_meeting_core::client("tinfoil-realtime").is_none());
+    }
+
+    #[test]
+    fn a_saved_note_keeps_each_sources_delivery_facts_without_guessing_why() {
+        let mut content = "The transcript.".to_owned();
+        append_delivery_facts(&mut content, Delivered::Audio, Delivered::Nothing);
+
+        assert_eq!(
+            content,
+            "The transcript.\n\nRecording sources:\n\
+             - Microphone: delivered non-silent audio.\n\
+             - System audio: opened but delivered no audio blocks."
+        );
+
+        let expected = [
+            (Delivered::NotCaptured, "was not captured"),
+            (Delivered::Nothing, "opened but delivered no audio blocks"),
+            (Delivered::Silence, "delivered only digital silence"),
+            (Delivered::Audio, "delivered non-silent audio"),
+        ];
+        for (state, fact) in expected {
+            assert_eq!(state.note_fact(), fact);
+        }
     }
 }
