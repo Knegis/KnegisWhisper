@@ -28,10 +28,20 @@
 //! end of a stream. None of that depends on a model, so none of it needs the
 //! 650 MB download the real feature does.
 //!
-//! **Cannot:** anything the server sends back. A real transcript needs a real
-//! streaming model. That half is a separate run against the real server, and
-//! this probe deliberately does not pretend to cover it — it replies with
-//! nothing and says so.
+//! **Cannot, in listen mode:** anything the server sends back. A real transcript
+//! needs a real streaming model, so that half is `--talk`, which drives the real
+//! server instead of impersonating it.
+//!
+//! ```text
+//! cargo run -p kw-meeting-core --example sherpa_ws_probe -- --talk <port> <wav> [--fault]
+//! ```
+//!
+//! `--fault` is the run that matters most. KNEG-79 exists because four clients
+//! read a provider-reported error and carried on, so **what this server does
+//! with a frame it cannot parse decides whether a fifth client can be written
+//! honestly.** If a malformed frame is ignored silently, a client cannot tell a
+//! rejected session from a quiet room, and that is the defect this project has
+//! already paid for once.
 //!
 //! # What it found on 2026-09-01, against the installed reference client
 //!
@@ -66,6 +76,56 @@
 //! whatever is left over. So a real client chooses its own block size and does
 //! not have to match the reference.
 //!
+//! # And what the server sends back, same day, against the real thing
+//!
+//! `sherpa-onnx-online-websocket-server` running the pinned
+//! `nemotron-speech-streaming-en-0.6b`, driven by `--talk`:
+//!
+//! ```text
+//! reply 1..13   TEXT   one JSON object per update
+//! reply 14      TEXT   "Done!"
+//!               then the socket stays open until the client closes it
+//! ```
+//!
+//! The JSON carries `text`, `tokens[]`, `timestamps[]`, `ys_probs[]`,
+//! `lm_probs[]`, `context_scores[]`, `segment`, `words[]`, `start_time`,
+//! `is_final` and `is_eof`.
+//!
+//! Four things a client has to get right, and none is in the flags:
+//!
+//! 1. **`text` is cumulative within a segment.** Every update repeats the whole
+//!    segment so far, growing. A client that appended would produce
+//!    *"After After early After early nightfall"*. Replace — the same rule
+//!    `local.rs` already applies to its windows, arrived at from the other
+//!    direction.
+//! 2. **`is_final` and `is_eof` are both false throughout** and both true on the
+//!    last JSON. There is no per-utterance final within a stream; `segment`
+//!    numbers the utterances, and endpointing is the server's
+//!    `--rule2-min-trailing-silence` and `--rule3-min-trailing-silence`.
+//! 3. **The server's end marker is `Done!` and the client's is `Done`.**
+//!    Different strings, and the reference client also prints `Done!` as its own
+//!    last log line — so it is easy to read the frame as an echo of the log.
+//!    It is not; it comes off the wire.
+//! 4. **The server does not close.** The reference client closes and then
+//!    reports "Disconnected". A client that waits for the server to hang up
+//!    waits forever, which is how this probe learnt it.
+//!
+//! ## The finding that decides how the client reports faults
+//!
+//! **A malformed frame produces nothing at all.** `--fault` sends an unparseable
+//! TEXT frame (`{ not json`) and a three-byte BINARY frame — not a whole `f32`
+//! — before the audio. The server answered neither, and the transcript came back
+//! **byte-identical to the clean run**, so the odd-length frame did not even
+//! knock the sample stream out of alignment.
+//!
+//! That is the opposite of the four cloud clients, and it decides the design.
+//! KNEG-79 exists because those four read a provider-reported error frame and
+//! carried on; here **there is no error frame to read**. So a
+//! [`crate::fault::SessionFault`] for this provider can only ever be filled from
+//! transport-level failure — a refused connect, a closed socket, a read error —
+//! and a client that claimed to surface "what the provider said was wrong" would
+//! be describing a channel that does not exist.
+//!
 //! # The control
 //!
 //! The client is a real program and can fail to connect for ordinary reasons. So
@@ -80,6 +140,12 @@ use futures::StreamExt as _;
 
 #[tokio::main]
 async fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|a| a == "--talk") {
+        talk(&args).await;
+        return;
+    }
+
     let port: u16 = std::env::args()
         .nth(1)
         .and_then(|arg| arg.parse().ok())
@@ -204,4 +270,186 @@ fn describe_binary(frame: usize, bytes: &[u8]) {
     if bytes.len() <= 8 {
         println!("           short frame -- likely a header, not audio");
     }
+}
+
+/// Drive the **real** server and print everything it says back.
+///
+/// The other half of the protocol, and the half that needs a model. Written as
+/// the smallest client that can be believed: it sends what the reference client
+/// was measured to send -- `f32` little-endian blocks then a TEXT `Done` -- and
+/// prints every reply verbatim rather than parsing it into something that could
+/// hide a field.
+///
+/// With `--fault` it sends one unparseable frame first. That is the KNEG-79
+/// question asked of this server: a client cannot report a fault it is never
+/// told about.
+async fn talk(args: &[String]) {
+    use futures::SinkExt as _;
+    use tokio_tungstenite::tungstenite::Message;
+
+    let port: u16 = args
+        .iter()
+        .position(|a| a == "--talk")
+        .and_then(|i| args.get(i + 1))
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(6006);
+    let wav = args
+        .iter()
+        .position(|a| a == "--talk")
+        .and_then(|i| args.get(i + 2))
+        .cloned()
+        .unwrap_or_default();
+    let fault = args.iter().any(|a| a == "--fault");
+
+    println!("driving the real server on 127.0.0.1:{port}");
+
+    let url = format!("ws://127.0.0.1:{port}/");
+    let (mut socket, _) = match tokio_tungstenite::connect_async(&url).await {
+        Ok(pair) => pair,
+        Err(err) => {
+            println!("could not connect: {err}");
+            println!("Nothing below is a measurement.");
+            return;
+        }
+    };
+    println!("--- connected ---");
+
+    if fault {
+        // Not JSON, not audio, not "Done". Whatever the server makes of this is
+        // what a real client would have to survive.
+        println!("\nsending one unparseable TEXT frame: \"{{ not json\"");
+        if let Err(err) = socket.send(Message::Text("{ not json".to_owned())).await {
+            println!("the send itself failed: {err}");
+        }
+
+        // A four-byte binary frame is not a whole f32 block either.
+        println!("sending one odd-length BINARY frame: 3 bytes");
+        if let Err(err) = socket.send(Message::Binary(vec![1, 2, 3])).await {
+            println!("the send itself failed: {err}");
+        }
+    }
+
+    let samples = match read_wav_f32(&wav) {
+        Ok(samples) => samples,
+        Err(err) => {
+            println!("could not read {wav}: {err}");
+            return;
+        }
+    };
+    println!(
+        "\nsending {} samples as f32 le, 8000 per frame",
+        samples.len()
+    );
+
+    for block in samples.chunks(8000) {
+        let mut bytes = Vec::with_capacity(block.len() * 4);
+        for sample in block {
+            bytes.extend_from_slice(&sample.to_le_bytes());
+        }
+        if let Err(err) = socket.send(Message::Binary(bytes)).await {
+            println!("send failed part way: {err}");
+            break;
+        }
+    }
+
+    println!("sending TEXT \"Done\"\n");
+    let _ = socket.send(Message::Text("Done".to_owned())).await;
+
+    let mut replies = 0_usize;
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(120);
+    loop {
+        let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if left.is_zero() {
+            println!("(stopped waiting after two minutes)");
+            break;
+        }
+        match tokio::time::timeout(left, socket.next()).await {
+            Err(_) => {
+                println!("(stopped waiting after two minutes)");
+                break;
+            }
+            Ok(None) => {
+                println!("--- the server closed the socket ---");
+                break;
+            }
+            Ok(Some(Err(err))) => {
+                println!("--- read failed: {err} ---");
+                break;
+            }
+            Ok(Some(Ok(message))) => {
+                replies += 1;
+                match message {
+                    Message::Text(text) => {
+                        println!("reply {replies}: TEXT {text}");
+                        // The server's own end marker, which is not the same
+                        // string the client sends. Measured, not assumed: the
+                        // reference client also prints "Done!" as its last log
+                        // line, so it would be easy to read this as an echo of
+                        // that rather than as a frame off the wire.
+                        if text.trim() == "Done!" {
+                            println!("(the server said Done! -- end of stream)");
+                            break;
+                        }
+                    }
+                    Message::Binary(bytes) => {
+                        println!("reply {replies}: BINARY {} bytes", bytes.len());
+                    }
+                    Message::Close(reason) => {
+                        println!("reply {replies}: CLOSE {reason:?}");
+                        break;
+                    }
+                    other => println!("reply {replies}: {other:?}"),
+                }
+            }
+        }
+    }
+
+    println!("\n--- {replies} repl(ies) ---");
+    if replies == 0 {
+        println!("The server said nothing at all. For a --fault run that IS the finding:");
+        println!("a client cannot report a fault it is never told about.");
+    }
+}
+
+/// A 16-bit mono WAV as `f32` in [-1, 1].
+///
+/// Deliberately minimal and deliberately strict: this reads the format the
+/// server was told to expect and refuses anything else, rather than resampling
+/// and hiding a mismatch the real client would also have hidden.
+fn read_wav_f32(path: &str) -> Result<Vec<f32>, String> {
+    let bytes = std::fs::read(path).map_err(|err| err.to_string())?;
+    if bytes.len() < 44 {
+        return Err("shorter than a WAV header".to_owned());
+    }
+
+    // The data chunk is not always at offset 44, so it is searched for rather
+    // than assumed. A fixed offset works on the files this was written against
+    // and silently truncates on any file with an extra chunk.
+    let mut at = 12;
+    while let Some(header) = bytes.get(at..at + 8) {
+        let Some(size) = header
+            .get(4..8)
+            .and_then(|raw| <[u8; 4]>::try_from(raw).ok())
+            .map(|raw| u32::from_le_bytes(raw) as usize)
+        else {
+            break;
+        };
+
+        if header.get(..4) == Some(b"data".as_slice()) {
+            let end = at.saturating_add(8).saturating_add(size).min(bytes.len());
+            let Some(data) = bytes.get(at.saturating_add(8)..end) else {
+                break;
+            };
+            return Ok(data
+                .chunks_exact(2)
+                .filter_map(|c| <[u8; 2]>::try_from(c).ok())
+                .map(|raw| f32::from(i16::from_le_bytes(raw)) / 32768.0)
+                .collect());
+        }
+        at = at
+            .saturating_add(8)
+            .saturating_add(size)
+            .saturating_add(size % 2);
+    }
+    Err("no data chunk".to_owned())
 }
