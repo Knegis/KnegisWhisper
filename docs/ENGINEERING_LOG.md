@@ -372,6 +372,50 @@ reason was false.
 
 ---
 
+## 2026-09-01 (KNEG-73) — the deferral was narrowed, not dissolved, and the gate still cannot tell
+
+`search:semantic` made four checkable claims and **two were false on their face**:
+
+| claim | verdict |
+| --- | --- |
+| `"interface": "notes_core::search::SemanticIndex"` | **Never existed.** `crates/notes-core/src` is `lib.rs`, `notes.rs`, `transcript.rs`; the name appears nowhere in the tree but in this manifest |
+| `"degradation": "the UI hides semantic ranking rather than failing"` | **False.** Zero occurrences of `semantic` in `apps/desktop/src`. Nothing is hidden, nothing was built, and `SearchHit` has no score field to rank by |
+| ONNX Runtime | **Already in the tree**, as `onnxruntime.dll` inside the pinned sherpa archive — the same discovery that collapsed diarization's identical claim the day before |
+| the `ort` crate | **Not required.** `kw_meeting_core::diarization` drives an ONNX model with no `ort` in `Cargo.lock`, by shelling out to a binary that links the runtime itself |
+| Qdrant, MiniLM | **Genuinely absent**, and the deferral survives on these two alone |
+
+So it **stays deferred** and nothing was built — no sidecar, no embedding path, no `search` module.
+What changed is that the entry now rests on the one argument that holds rather than on three, and
+says which parts are measured and which are not.
+
+### The instruction was to delete the deferral block, and that turned out to be impossible
+
+The plan said to correct this the way the diarization entries were corrected: delete the `deferral`
+block, move the truth into `note`. That could not be done. `verify-parity.mjs` fails
+`incomplete-deferral` when a `temporarily-deferred` entry has no block, and there is no vocabulary
+term for "deferred without one". Diarization could delete its block **because its status changed to
+built** — that is what made it the model, and it is precisely the part that does not transfer to an
+entry that is still deferred. So every field of the block was corrected in place instead.
+
+Worth writing down because the mistake is a natural one: *"correct it the way that one was
+corrected"* silently assumes the two entries are in the same state, and these two were in opposite
+states.
+
+### The general defect, now with a second instance
+
+`verify-parity.mjs` checks that a deferred entry **has** `why`, `dependencies`, `interface` and
+`expectedPhase`. Five existence checks, no type check, no resolution of `interface` against the
+source tree, and no way at all to ask whether any of it is still true. That is how this entry named
+a nonexistent module for months, and it is the same lesson the KNEG-123 entry drew one day earlier —
+*"a deferral block ages exactly like a status claim and nothing gates it."* One instance is an
+anecdote; two in two days is the gate's shape.
+
+`search:sqlite-fts` was stale in the same pass, in a smaller way: `"backend": "crates/storage"` named
+where the FTS5 table is declared rather than where the query runs, which is
+`kw_notes_core::notes::search`.
+
+---
+
 ## 2026-09-01 (KNEG-117) — the depth that was deferred twice cost two and a half hours
 
 **Run: 400 rounds, 35 binaries, 14,000 runs, thread counts 1/2/4/8/16, control passed, not void,

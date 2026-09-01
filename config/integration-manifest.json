@@ -1172,8 +1172,8 @@
         "src/helpers/database.js#notes_fts",
         "src/helpers/noteSearch.js"
       ],
-      "backend": "crates/storage",
-      "note": "FTS5 external-content table mirroring notes via three triggers. Port verbatim."
+      "backend": "crates/notes-core",
+      "note": "FTS5 external-content table mirroring notes via three triggers. Port verbatim. The search itself is kw_notes_core::notes::search (crates/notes-core/src/notes.rs:255), which is what `backend` now names; the virtual table and its three triggers are declared in crates/storage/migrations/0001_initial.sql:110-133. `backend` read crates/storage until 2026-09-01, which named where the table is created rather than where the query runs -- the same class of drift as search:semantic's `interface` field below, and found in the same pass (KNEG-73)."
     },
     "search:semantic": {
       "status": "temporarily-deferred",
@@ -1184,17 +1184,16 @@
         "src/workers/onnxWorker.js"
       ],
       "deferral": {
-        "why": "Qdrant sidecar plus MiniLM embeddings plus ONNX Runtime is a large dependency for a feature the app must work without anyway.",
+        "why": "Re-checked 2026-09-01 (KNEG-73) and narrowed rather than dissolved. Of the four checkable claims this block made, two were false on their face. ONNX Runtime is not a barrier: onnxruntime.dll is already in the tree and installed on this machine, inside the pinned sherpa archive -- the same discovery that collapsed diarization's identical claim on the same day. The `ort` crate is a dependency of one design and not of the feature: kw_meeting_core::diarization drives an ONNX model with no `ort` anywhere in Cargo.lock, by shelling out to a sherpa binary that links the runtime itself. What is genuinely absent is a vector store and a pinned text-embedding model. The judgement is unchanged -- a vector store is a large dependency for a feature the application must work without anyway -- but it is now the only argument left rather than one of three, and the installer, digest-pin and verify machinery such a model would need already ships for diarization-model:3dspeaker-campplus-en.",
         "dependencies": [
-          "qdrant sidecar",
-          "all-MiniLM-L6-v2",
-          "ort crate"
+          "a vector store: no qdrant sidecar in config/sidecars.json, and no in-process alternative in Cargo.lock",
+          "a pinned text-embedding model -- all-MiniLM-L6-v2 or an equivalent: none is pinned by tools/model-pin, and none appears in config/provider-registry.json or anywhere else"
         ],
-        "interface": "notes_core::search::SemanticIndex",
+        "interface": "None is declared anywhere in this repository. The previous value, notes_core::search::SemanticIndex, named a module that has never existed -- crates/notes-core/src is lib.rs, notes.rs and transcript.rs, and SemanticIndex appears nowhere in the tree but in this manifest. The function semantic ranking would have to join is kw_notes_core::notes::search (crates/notes-core/src/notes.rs:255), whose SearchHit is id, title and snippet, with no score field to rank by.",
         "expectedPhase": 8,
-        "degradation": "FTS5 keyword search remains fully functional; the UI hides semantic ranking rather than failing."
+        "degradation": "Nothing degrades, because nothing was built to degrade from. FTS5 keyword search is the whole of search today rather than a fallback from something richer. The previous value claimed the UI hides semantic ranking rather than failing; apps/desktop/src contains zero occurrences of `semantic`, so there has never been anything to hide."
       },
-      "note": "Note added 2026-08-27, in the whole-branch review's fix wave: this entry has carried `temporarily-deferred` with a `deferral` block since before this plan began, but no top-level `note` explaining why -- unlike every other deferred entry in this file. The reason is docs/BUILD_PLAN.md's chunk I: the Qdrant sidecar, MiniLM embeddings and `ort` crate this needs were not attempted across the 19 tasks in this plan or the one added mid-run; `search:sqlite-fts` is fully functional and is what the UI falls back to in the meantime. This entry sits outside both the ACTIVE-status audit's scope (it never claimed a working implementation, so there was nothing to overclaim) and the parity gate's `USER_CONFIGURABLE` set, so no gate would ever have caught the missing note on its own."
+      "note": "Note added 2026-08-27, in the whole-branch review's fix wave: this entry has carried `temporarily-deferred` with a `deferral` block since before this plan began, but no top-level `note` explaining why -- unlike every other deferred entry in this file. The reason is docs/BUILD_PLAN.md's chunk I: the Qdrant sidecar, MiniLM embeddings and `ort` crate this needs were not attempted across the 19 tasks in this plan or the one added mid-run; `search:sqlite-fts` is fully functional and is what the UI falls back to in the meantime. This entry sits outside both the ACTIVE-status audit's scope (it never claimed a working implementation, so there was nothing to overclaim) and the parity gate's `USER_CONFIGURABLE` set, so no gate would ever have caught the missing note on its own. RE-CHECKED 2026-09-01 (KNEG-73): the deferral block above was corrected in place rather than annotated, the way the two diarization entries were on the same day, and the sentence just above about the UI falling back overstates it in the same way the old `degradation` field did -- FTS5 is not a fallback, it is all there has ever been. WHAT IS MEASURED: onnxruntime.dll ships inside the pinned sherpa archive and is extracted by the installer (docs/BENCH_CHECK.md:1290 counts the 23 extracted files by name on Windows); there is no `ort` in Cargo.lock; `qdrant` appears nowhere in this repository but in this entry's own prose; no text-embedding model is pinned anywhere; notes_core::search does not exist and never has; and apps/desktop/src contains no occurrence of `semantic`. WHAT IS NOT: whether semantic ranking would actually beat FTS5 on a corpus of this application's notes -- nobody has tried it, and no version of this entry has ever claimed a measurement; and whether an in-process vector store would remove the sidecar dependency altogether, which is a design question nobody has costed. It stays deferred on the narrowed ground and nothing was built for it -- no sidecar, no embedding path, no search module. The general defect this entry is the worked example of: verify-parity.mjs checks that a deferred entry HAS `why`, `dependencies`, `interface` and `expectedPhase`, and has no way to check that any of them is still true, which is how this one named a nonexistent module for months."
     },
     "platform:text-insertion": {
       "status": "ported-with-new-rust-implementation",
