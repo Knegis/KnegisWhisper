@@ -291,6 +291,177 @@ Unchanged from the Phases 1–4 entry, restated here so they are not buried:
 
 ---
 
+## 2026-09-01 (KNEG-131) — three tests had been green on macOS for weeks by checking nothing
+
+KNEG-117 found the shape and hardened two instances of it: **an assertion that something is absent,
+checked against a resource that may not have been fully written.** This is the same search run over
+the tests the last wave added. The interesting half is not the seven sites that were hardened; it is
+that the worst instance was not that shape at all.
+
+### The arithmetic first, because the issue's was wrong
+
+The issue says ~190 new tests. Measured three ways — diff hunks, and `git grep -c '#\[test\]'` at
+each end of `aa3748a..bcc57f8`:
+
+**182 gross, 54 of them relocations, 128 genuinely new, +128 net** (1531 → 1659). The 54 are the
+`meeting.rs` split: 26 to `config.rs`, 19 to `recorder.rs`, 7 to `watcher.rs`, 2 to `notes.rs`, every
+one name-for-name. `notes.rs` is the only one of the four that also gained tests — 8 of its 10 were
+written. Planning's own correction (185 / ~131 / +129) was closer and still wrong.
+
+The issue also says to search TypeScript with `expect().not`. **There is no TypeScript test suite.**
+The four `tools/**/*.test.mjs` files use `node:assert`, and the wave touched one of them.
+
+### Four buckets, 58 sites
+
+The sweep matched eleven negative-assertion spellings against the 128 new test bodies: 54 hits, plus
+`diarization.rs:662` which the pattern cannot see, plus two from a separate early-return scan, plus
+`local_model.rs:1179`, which carries no negative token at all and is the worst of them.
+
+| | |
+| --- | --- |
+| **fine** — a positive control in the same test | **37** |
+| **false positive of the pattern** | **13** |
+| **real** — no control, and no sibling the same mutation kills | **4** |
+| **weak** — no control, but a sibling kills the same mutation | **4** |
+
+Reporting all four matters more than reporting the seven fixes. Last time seventeen candidates gave
+ten fine, five false positives and two real; a report that lists only what it found cannot be
+audited for whether the search was any good.
+
+The thirteen false positives are three sub-shapes, worth naming because a rerun produces them again:
+**`assert_ne!` used as a positive distinctness claim** (5), **`Vec::new()` in input construction or as
+an accumulator, never in an assertion** (5), and **a literal `0` that is a measured value rather than
+an absence** (3 — `nanos: 0`, `speaker == 0`).
+
+### The one that was live rather than latent
+
+`config/sidecars.json` marks whisper `"availability": "not-published"` on **both** macOS targets.
+`.github/workflows/ci.yml` runs `macos-latest`. And three tests in `local_model.rs` are about
+`sidecar_freshness`, whose first act is to resolve that asset:
+
+- `:1191` and `:1211` opened `let Ok((_, asset)) = catalog.resolve(SIDECAR) else { return; };`.
+  On macOS they **executed zero assertions and reported green.**
+- `:1179` asserts `NotInstalled` against an empty directory. `sidecar_freshness` reaches
+  `NotInstalled` by two roads — no published asset, or the search path finding nothing — and nothing
+  told them apart. Its comment claimed *"the search path this function builds is exercised rather
+  than described"*, which on macOS was false.
+
+So `sidecar_freshness` has had **no coverage at all on a third of every CI run** — and it is worse
+than three tests going quiet independently, because `:1191` and `:1211` are the only *positive*
+controls the function has. Where they vacate the sole survivor is the vacuous one. The cluster
+empties together and the suite reads 1664 passing either way.
+
+This is KNEG-88's shape with an extra property that makes it worse. There, the resource that might
+not have been written was a file. Here it is *the platform's published asset*, and CI has been
+reporting green about its absence for weeks on a machine nobody watches.
+
+### The convention that comes out of it: a skipped test says it skipped
+
+The precedent was already in the tree, and the asymmetry is the argument. `real_install.rs`, written
+the same week by the same hand, also returns early where whisper is unpublished — and it
+`println!`s `"skipped: {err}"` first. Three tests, one road, one of them admitting to it.
+
+`published_asset_or_skip` now does both things for all three: it asserts the one claim that *is* true
+with no published asset — `NotInstalled`, the honest answer when nothing is pinned — and it prints
+that it took that road. Zero assertions becomes one, and the one is checkable.
+
+**It does not give `sidecar_freshness` real macOS coverage.** That needs a published macOS asset or a
+fake catalog, and inventing either at the tail of this task would be building a second thing to keep
+in step. The hole is now audible, and filed rather than fixed.
+
+### The blind spots, which are the durable part
+
+Two are known now, and they are a fact about the **method** rather than about these tests. The next
+person runs this search from here rather than from the issue.
+
+- **`vec![None]`.** `diarization.rs:662` reads
+  `assert_eq!(assign(&turns, &[(18.0, 21.0)]), vec![None])`. A `None` *inside* a `vec![]` matches
+  neither `assert_eq!(…, None)` nor `.is_none()`. It is a real site — an empty `turns` answers `None`
+  for every span there is — and the grep cannot see it. It was found by hand.
+- **The multi-line `assert_eq!`**, already recorded by KNEG-117, and still true.
+
+Both are the same failure: the pattern matches *spellings* of absence, and absence has more spellings
+than the list has entries. `Some(_) => …` is the third one waiting to be found. So the honest
+statement about this search is the one the four-hundred-round flake hunt had to make about itself two
+entries up — **it generates candidates, it does not prove there are none.** The difference is that
+this one costs minutes.
+
+### The two candidates that were dropped, and why
+
+A search that reports only its hits cannot be audited, so both rejections are recorded.
+
+**`diarization.rs:563`, `a_silent_recording_is_no_turns_rather_than_a_failure`.** Planning called it
+Tier 1. It is not the shape. `recorded_silence()` is a `&str` built from two literals in the same
+file, and a source literal cannot fail to be written; more to the point, the emptiness **is** the
+subject, so there is no artefact for a control to assert. This is KNEG-117's own "a test whose whole
+subject is that nothing happened" class. The discriminator is worth more than the fix would have
+been: **the shape needs a resource that may not have been fully written, not merely an absence.**
+
+**`meeting/watcher.rs:170`.** Out of scope — it is one of the 54 relocations, so it is not new code.
+And `:220` one screen away already asserts the same `is_none()` for a client that is merely open, and
+then the `is_some()` when the call starts. The control exists, in a different test.
+
+### The seven, and the mutation that kills each
+
+Every one was mutated by hand and each mutation checked for having changed behaviour — the record of
+two mutations out of ten that mutated nothing is why that second step exists.
+
+| site | control added | mutation that turns it red |
+| --- | --- | --- |
+| `local_model.rs` ×3 | `published_asset_or_skip` asserts, and prints | macOS `Target::current`, then the no-asset arm → `Current` |
+| `local_model.rs:1179` | the answer must change once the executable is placed | `SearchPath.downloaded` → `root.join("nope")` |
+| `hotkey.rs:1581` | a `Control+Alt` binding in the same vector | `prefix_cautions` → `Vec::new()` |
+| `diarization.rs:715` | the list must carry `--clustering.cluster-threshold=` | `build_args` → `Vec::new()` |
+| `diarization.rs:662` | the turn on the far side of the hole | `interpret` → `Ok(Vec::new())` |
+| `notes.rs:312` | the segments it was discarding | `labelled` → `(Vec::new(), None)` |
+
+`hotkey.rs:1581` is the one with no sentinel anywhere else. Its two `.is_empty()` negatives are true
+of a `Binding::from_stored` that read `Mouse4` as an accelerator neither function looks at — and
+nothing in the tree pins `from_stored` on a mouse spelling, because the neighbouring tests all go
+through `classify` instead.
+
+### Two mutations proved nothing, and one of them was the harness
+
+The rule that a mutation must be checked for having changed behaviour earned its keep twice.
+
+**`prefix_cautions`' `ModifierOnly` guard is belt-and-braces.** Deleting it looks like it should let
+a mouse binding collect a chord caution. It does not: `Chord::parse("Mouse4")` fails on its own
+account — `key_of` does not know the spelling, and a chord of one is `TooShort` either way — so the
+very next `let Ok(chord) = ... else { continue };` skips it regardless. Two independent guards, and
+no single-line edit defeats both. That is the same shape as the `chunks_exact(2)` non-mutation
+recorded for `nemotron_socket`'s `samples`, and it is now named in the test's own doc comment so the
+next person does not spend the same twenty minutes. The mutation that *is* real for that test is
+`prefix_cautions → Vec::new()`, and it is worth more anyway: **the old test passed under it.**
+
+**And the mutation harness lied once.** Restoring a mutated file with `shutil.copy2` preserves its
+mtime, so the restore was invisible to cargo and a stale binary went on running. The visible symptom
+was a mutation that "survived" — `SearchPath.downloaded` pointed at a directory that does not exist
+and every test stayed green. The actual state was a macOS-simulating build from two mutations earlier
+still sitting in `target/`, so the tests were taking the skip road and reporting it. Re-run against a
+real rebuild, that mutation kills all three.
+
+It is the flake hunt's lesson in miniature — *a run whose binaries changed underneath it is void* —
+and it is worth writing down because it is the failure mode a hand mutation is most exposed to: there
+is no harness to notice, and a green result reads as a weak test rather than as no test at all. The
+restore now touches the file.
+
+### Found and not fixed
+
+**`diarization_models.rs:278`** is weak — `model_path → None` is caught by three siblings in the same
+module. **`real_install.rs`'s early return** stays: it is `#[ignore]`d, and it is the precedent the
+convention above is built from rather than a defect.
+
+And the wave had already fixed one instance of this class by hand without naming it.
+`pin.test.mjs`'s `assert.equal(targets.length, 4)` became a sorted list of ids, on the grounds that
+*"a count cannot tell a model that was replaced from one that is still there."* That is this issue's
+finding, arrived at independently a week earlier — some evidence the shape is real, and some that
+nobody was looking for it systematically.
+
+No production behaviour changed. Nothing here was vacuous because the code was wrong; every one was
+vacuous because of what the test did or did not say.
+
+---
+
 ## 2026-09-01 (KNEG-117) — the depth that was deferred twice cost two and a half hours
 
 **Run: 400 rounds, 35 binaries, 14,000 runs, thread counts 1/2/4/8/16, control passed, not void,

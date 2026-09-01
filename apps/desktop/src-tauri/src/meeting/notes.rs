@@ -308,10 +308,20 @@ mod tests {
         assert_ne!(never_ran, found_nobody);
     }
 
+    /// Nothing asked for means nothing said.
+    ///
+    /// The rule the other way round: a person who has this switched off must not
+    /// find sentences about diarization in their notes.
+    ///
+    /// **This discarded the segments entirely**, and `None` is also what a
+    /// `labelled` that produced nothing at all would return — so the claim
+    /// "no note was written" was being made about a function that may have done
+    /// no work. That is the shape KNEG-88 cost four hundred runs to find once.
+    ///
+    /// **Mutation:** return `(Vec::new(), None)` from the head of `labelled`.
+    /// The control fails; without it the test passes.
     #[test]
     fn a_note_is_never_written_when_nothing_was_asked_for() {
-        // The rule the other way round: a person who has this switched off
-        // must not find sentences about diarization in their notes.
         for pass in [
             two_utterances(),
             WholePass {
@@ -319,7 +329,13 @@ mod tests {
                 timings: Vec::new(),
             },
         ] {
-            assert_eq!(labelled(&pass, None, false).1, None);
+            let (segments, note) = labelled(&pass, None, false);
+            assert!(
+                !segments.is_empty(),
+                "the control: nothing was segmented, so there was no note to \
+                 withhold and the line below says nothing about the rule"
+            );
+            assert_eq!(note, None);
         }
     }
 }
