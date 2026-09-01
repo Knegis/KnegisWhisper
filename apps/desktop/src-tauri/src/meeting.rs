@@ -1014,9 +1014,8 @@ impl MeetingRuntime {
         self.emit_state(MeetingState::Finishing);
 
         let outcome = self
-            .finish_recording(&provider_id, &commands, pump, &recording_path)
+            .finish_recording(&provider_id, &commands, pump, &recording_path, stream_lease)
             .await;
-        self.release_stream(stream_lease).await;
 
         if self.lifecycle.lock().await.finished(generation) {
             self.emit_state(MeetingState::Idle);
@@ -1043,6 +1042,7 @@ impl MeetingRuntime {
         commands: &sync_mpsc::Sender<RecorderCommand>,
         pump: tokio::task::JoinHandle<Result<MeetingTranscript, MeetingError>>,
         recording_path: &std::path::Path,
+        stream_lease: Option<crate::sherpa_stream::StreamLease>,
     ) -> MeetingOutcome {
         let path = recording_path.display().to_string();
         let closed = close_recorder(commands);
@@ -1053,6 +1053,13 @@ impl MeetingRuntime {
         // returns. Aborting instead would leave two sockets open until the
         // process noticed.
         let live_transcript = pump_result(pump.await);
+
+        // The live socket is gone now. The whole-file pass below uses the
+        // separate offline transcriber and may run for minutes, so retaining the
+        // streaming lease through it would turn "five minutes after the meeting"
+        // into "five minutes after all post-processing". Release on both the
+        // successful and failed pump paths before inspecting any later result.
+        self.release_stream(stream_lease).await;
 
         let finished = match closed {
             Ok(finished) => finished,
