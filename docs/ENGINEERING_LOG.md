@@ -488,6 +488,131 @@ of the same code path answering that way for a 4 KB file in a tempdir. Nobody ha
 `local_llm_recheck_model` itself has never been run: its verdict and its record-settling are tested
 as pure functions against real files, and the command that wires them to `spawn_blocking` and the
 registry is the untestable edge. The first real 1.28 GB hash is a by-hand check.
+## 2026-09-01 (KNEG-64) — two capabilities the table promised, and the default nobody was allowed to change
+
+`docs/PLATFORM_SUPPORT.md`'s global-shortcut table has listed **mouse buttons 4/5** and
+**push-to-talk** as things the native hook makes possible since the table was written. Neither was
+built. Both are now, and the interesting parts are the three places where the obvious
+implementation was wrong.
+
+### The encoding was measured, and the obvious decoder reads zero for every click
+
+`MSLLHOOKSTRUCT::mouseData` carries the X-button number in its **high** word. `SendInput`'s
+`MOUSEINPUT::mouseData` carries the same number in its **low** word. Two fields, one name, opposite
+halves — and a decoder written from the wrong half finds zero on every press and reports a mouse
+with no side buttons, which looks exactly like a mouse with no side buttons.
+
+So `mousehook_probe` measures it rather than reasoning from a header:
+
+```
+WM_XBUTTONDOWN mouseData=0x00010000 high word 1     (XBUTTON1, mouse 4)
+WM_XBUTTONDOWN mouseData=0x00020000 high word 2     (XBUTTON2, mouse 5)
+```
+
+**The control took two attempts, and the first one was worthless.** The first version injected a
+zero-pixel mouse move as its "this is not a button" case. Windows filters a zero-pixel move: it
+produced no message at all, which is indistinguishable from a hook that is not listening. The
+shipped probe moves three pixels right, three back, and turns the wheel one notch — the wheel
+because its delta lands in the *same high word* the button number lives in, so it is a case where
+the field is non-zero and the answer is still "not a button". If the run reports zero movement
+messages it says the control failed and that nothing below that line is evidence.
+
+Phase two then drives the real `KeyHook` and reports `[(0, Press), (0, Release), (1, Press), (1,
+Release)]` with zero fires during the control. Two phases because one process can hold one
+`WH_MOUSE_LL` hook usefully at a time, and the raw bytes and the shipped decision are different
+claims.
+
+### Three of the five buttons are refused, and the refusal is the feature
+
+Left, right and middle cannot be bound. The hook does not swallow the event — the same rule the
+keyboard hook has always followed — so binding the left button would start dictation on **every
+click in every application** while the click still went through. That is not a limitation to
+apologise for on a screen; it is the only correct answer, and `keys::REFUSED_MOUSE_BUTTONS` names
+each one so the message can say *which* button rather than "that one".
+
+The two side buttons are not free either, and the difference is why `Accelerator::MouseButton` is a
+third variant rather than a `ModifierOnly` with an odd spelling in it. A hooked chord takes nothing
+away from anything else. A hooked mouse button leaves `Mouse4` going Back in every browser on the
+machine — so the two need different sentences, and an enum variant is how you stop one borrowing
+the other's.
+
+### `armed` and `pressed` are one key apart, and sharing them breaks the microphone
+
+Push-to-talk needs `ChordWatcher::key_up` to report a release. The obvious implementation reuses
+`armed`, the field that already tracks which chord has fired. It is wrong, and the way it is wrong
+is specific:
+
+`armed` is cleared by **any** key going up, including an ordinary one. It has to be — otherwise
+holding `Control+Super` and tapping an arrow would never re-arm, which is rule 1. So under a shared
+field, `Ctrl+Win` held while an arrow is tapped would report the *arrow's* release as the chord's,
+and the real release — the user actually letting go — would find nothing to pair with and report
+nothing. Under push-to-talk that is a microphone nobody can close: you let go and the recording
+continues.
+
+`pressed` is therefore its own field, cleared only when a key **of the chord** goes up.
+`Chord::contains` is the predicate, and
+`an_unrelated_key_coming_up_during_a_hold_is_not_the_release` is the test that would have caught the
+shared-field version.
+
+`reset` deliberately reports nothing. It is called when the watcher has lost track of the keyboard,
+and a caller in that position cannot also claim the key came up; synthesising a release would stop a
+dictation on a key the user is still holding, which is worse than the state being recovered from.
+
+### The race that only a short hold reaches — and push-to-talk is made of short holds
+
+The issue's own framing was that press-then-release needs no new runtime method, because
+`DictationRuntime::toggle` already branches on state: a press finds `Idle` and starts, a release
+finds `Recording` and finishes. That is right about the state machine and wrong about the
+concurrency.
+
+`on_hotkey` spawns. `Dictation::start` sets `Recording` **only after the microphone is actually
+open**, which on Windows is tens to hundreds of milliseconds of `cpal` work. Two independently
+spawned tasks have no order between them, so a release arriving inside that window finds `Idle` and
+does one of two wrong things depending on which wrong thing you picked: nothing, leaving the
+microphone open with no second half to close it, or `start` again, which is worse.
+
+The fix is not a lock — `tokio`'s mutex is fair among *waiters*, and the two tasks do not reach it
+in a defined order. It is that **the hold is one task**: the press starts, waits on a channel
+created for that press, and finishes when the key comes up. There is no ordering left to get wrong
+because there is only one order. A fresh channel per press rather than a long-lived flag, so a
+release belonging to an earlier hold cannot end a later one.
+
+Labelled honestly in the code as **reasoned, not measured**: nothing here has driven two spawned
+tasks into that window on purpose. The argument is that the window exists and the design removes it,
+which is cheaper than proving how often it is hit.
+
+### What was deliberately not decided
+
+**The shipped default is unchanged.** `hotkey.<action>.mode` ships as `toggle` for all five actions.
+
+Push-to-talk is one of the candidate answers to KNEG-115 — an accidental `Control+Super` on the way
+into `Ctrl+Win+Left` brackets a few hundred milliseconds under a hold instead of bracketing
+everything the user does before the next accidental press. That makes `Hold` a genuine candidate for
+the *default*, and choosing it here would settle an open question as a side effect of adding a
+feature, which is with some irony the exact class of failure KNEG-115 describes. So:
+`nothing_ships_holding_by_default` is a tripwire test that asserts it, and says in its own comment
+that a commit changing it is deciding something that belongs to the repo owner.
+
+### The consequence that is written down rather than discovered
+
+**Push-to-talk makes `InsufficientSpeech` routine rather than rare.** A hold shorter than a syllable
+records less than a syllable, the gate refuses to send it — correctly — and the outcome reads
+*"Nothing was sent: insufficient speech."* Every mistimed tap ends that way. Somebody who reads that
+line as a fault will go looking for a fault that is not there, so it is in `HotkeyMode`'s doc
+comment, in `hotkeyModeLabel`'s detail line under the control itself, and in `PLATFORM_SUPPORT.md`.
+
+### What is measured, and what is not
+
+Measured on this machine: the `mouseData` encoding, the mouse hook firing once per press and once
+per release for the right index with a live control, and `keyhook_probe` now reporting **two
+releases** as well as two presses for two injected chords.
+
+Not measured: the plugin path. Push-to-talk on an ordinary accelerator such as `Control+Shift+D`
+routes `ShortcutState::Released` through the same `shortcuts::act`, and nothing in this repository
+has run it — reaching it needs a built application with a WebView2 beside it and a person holding a
+key. `register_one`'s doc comment says so in those words rather than calling it supported. Also not
+measured: any physical side button. Every press in the probe is injected, which is `keyhook_probe`'s
+limitation too and is KNEG-47's shape.
 
 ---
 

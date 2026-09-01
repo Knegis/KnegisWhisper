@@ -29,6 +29,7 @@ import type {
   DiscoveryPermissions,
   GgufIntegrity,
   HotkeyChange,
+  HotkeyMode,
   ImportReport,
   InstallProgress,
   KeytermSupport,
@@ -136,8 +137,47 @@ export function acceleratorLabel(
               ? `Uses only modifier keys, so it runs through ${hook.mechanism} rather than the system shortcut register. It works, and other applications still see the same keys.`
               : `Uses only modifier keys, which does nothing here. ${hook.reason}`,
       };
+    // A third mechanism, so a third case, and it must not borrow the
+    // modifier-only sentence. A hooked chord takes nothing away from anything
+    // else; a hooked mouse button leaves the click going Back in every browser
+    // on the machine, and that is the part a user needs before pressing it
+    // rather than after.
+    case "mouse-button":
+      return {
+        text: a.accelerator,
+        problem:
+          hook === undefined
+            ? "A mouse button. Whether that works here is still being checked."
+            : hook.state === "available"
+              ? `A mouse button, watched by ${hook.mechanism}. The click is not swallowed, so wherever the pointer is that button still does ${a.alsoDoes}.`
+              : `A mouse button, which does nothing here. ${hook.reason}`,
+      };
     case "invalid":
       return { text: a.input, problem: a.reason };
+  }
+}
+
+/**
+ * Whether an action toggles or is held, in the words a control needs.
+ *
+ * The `detail` is the cost, not a restatement of the name. Push-to-talk turns
+ * "nothing was sent: insufficient speech" from a rare outcome into the ordinary
+ * one for every mistimed tap, and somebody who has not been told that will read
+ * it as a fault.
+ */
+export function hotkeyModeLabel(mode: HotkeyMode): Stated {
+  switch (mode) {
+    case "toggle":
+      return {
+        text: "Toggle",
+        detail: "press once to start, again to stop",
+      };
+    case "hold":
+      return {
+        text: "Hold to talk",
+        detail:
+          "recording lasts while the key is down. A short hold records almost nothing, so “insufficient speech” becomes a routine outcome rather than a rare one.",
+      };
   }
 }
 

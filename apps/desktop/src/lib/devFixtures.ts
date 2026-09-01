@@ -53,6 +53,7 @@ import type {
   Format,
   HotkeyAction,
   HotkeyChange,
+  HotkeyMode,
   HotkeyReport,
   ImportReport,
   InputDevice,
@@ -140,7 +141,11 @@ const standard = (accelerator: string): Accelerator => ({
 });
 
 const BINDINGS: Binding[] = [
-  { action: "dictation", accelerators: [standard("Control+Shift+D")] },
+  {
+    action: "dictation",
+    accelerators: [standard("Control+Shift+D")],
+    mode: "toggle",
+  },
   {
     action: "chat-agent",
     accelerators: [
@@ -150,6 +155,7 @@ const BINDINGS: Binding[] = [
         modifiers: ["Control", "Super"],
       },
     ],
+    mode: "toggle",
   },
   {
     // `Control+Alt` rather than another tidy chord, because this is the one
@@ -165,14 +171,30 @@ const BINDINGS: Binding[] = [
         modifiers: ["Control", "Alt"],
       },
     ],
+    // The one fixture that is held rather than toggled, so the mode control and
+    // the sentence under it are visible in dev mode without anyone changing a
+    // setting. A fixture where every row reads the same is a fixture that
+    // cannot show a difference.
+    mode: "hold",
   },
   {
     action: "translation",
     accelerators: [
       { kind: "invalid", input: "Ctrl+Shft+T", reason: "unknown key `Shft`" },
     ],
+    mode: "toggle",
   },
-  { action: "meeting", accelerators: [standard("Control+Shift+V")] },
+  {
+    action: "meeting",
+    accelerators: [
+      standard("Control+Shift+V"),
+      // A mouse binding, for the same reason the `Control+Alt` row above is a
+      // caution: the third classification has to be visible somewhere without
+      // anybody owning a five-button mouse.
+      { kind: "mouse-button", accelerator: "Mouse4", alsoDoes: "Back" },
+    ],
+    mode: "toggle",
+  },
 ];
 
 const HOTKEYS: HotkeyReport = {
@@ -1091,7 +1113,11 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
     const action = arg<HotkeyAction>(a, "action") ?? "dictation";
     const accelerators = arg<string[]>(a, "accelerators") ?? [];
     const change: HotkeyChange = {
-      binding: { action, accelerators: accelerators.map(standard) },
+      binding: {
+        action,
+        accelerators: accelerators.map(standard),
+        mode: "toggle",
+      },
       registrations: accelerators.map((accelerator) => ({
         state: "registered" as const,
         accelerator,
@@ -1108,6 +1134,26 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
           accelerator,
           reason: `${accelerator} also fires when you press AltGr. This layout types '@' with Control and Alt together, and Windows sends left Control and right Alt for AltGr -- which completes this chord, with nothing downstream able to tell that apart from you pressing it deliberately.`,
         })),
+    };
+    return change;
+  },
+  // Echoes the mode back rather than remembering it: this file exists so a
+  // screen can be looked at without a backend, and a fixture that kept state
+  // would start being a second implementation to keep in step.
+  hotkey_set_mode: (a) => {
+    const action = arg<HotkeyAction>(a, "action") ?? "dictation";
+    const mode = arg<HotkeyMode>(a, "mode") ?? "toggle";
+    const change: HotkeyChange = {
+      binding: {
+        action,
+        accelerators: [standard("Control+Shift+D")],
+        mode,
+      },
+      registrations: [
+        { state: "registered" as const, accelerator: "Control+Shift+D" },
+      ],
+      live: true,
+      cautions: [],
     };
     return change;
   },

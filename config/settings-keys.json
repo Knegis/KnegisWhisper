@@ -18,6 +18,22 @@
         "test": "settings_keys_are_namespaced_and_distinct"
       }
     },
+    ".mode_settings_key()": {
+      "kind": "derived",
+      "why": "One key per hotkey action holding toggle-versus-hold, built by format!(\"hotkey.{}.mode\", self.id()) beside the accelerator key and for the same reason -- adding an action must not leave its mode behind. Separate from .settings_key() because the two are written by different commands and change for different reasons: rebinding a key is not choosing push-to-talk. The scanner cannot follow the derivation through two functions in another crate, so the family is listed here and pinned by a test.",
+      "keys": [
+        "hotkey.dictation.mode",
+        "hotkey.chat-agent.mode",
+        "hotkey.voice-agent.mode",
+        "hotkey.translation.mode",
+        "hotkey.meeting.mode"
+      ],
+      "derivedFrom": {
+        "file": "crates/platform/src/hotkey.rs",
+        "fn": "mode_settings_key",
+        "test": "mode_settings_keys_are_namespaced_and_distinct"
+      }
+    },
     "key": {
       "kind": "renderer-supplied",
       "why": "commands::settings_get, settings_set and settings_keys take the key from the renderer, so no fixed key can be attributed to them. They are also why a command that writes an arbitrary key is refused as a writer below: one that writes every key is evidence for none of them."
@@ -76,6 +92,46 @@
       "what": "The accelerator list bound to the meeting action. Settable; nothing handles the action.",
       "writtenBy": [
         "hotkey_set"
+      ],
+      "ui": "Dictation > Shortcuts",
+      "reachable": true
+    },
+    "hotkey.dictation.mode": {
+      "what": "Whether the dictation hotkey toggles on each press or records for as long as it is held (push-to-talk). Defaults to toggle, which is the shipped behaviour: holding is one of the answers to KNEG-115 and making it the default would settle that open question in passing.",
+      "writtenBy": [
+        "hotkey_set_mode"
+      ],
+      "ui": "Dictation > Shortcuts",
+      "reachable": true
+    },
+    "hotkey.chat-agent.mode": {
+      "what": "Whether the chat-agent hotkey toggles on each press or records for as long as it is held (push-to-talk). Settable; nothing handles the action, so the mode has nothing to change yet.",
+      "writtenBy": [
+        "hotkey_set_mode"
+      ],
+      "ui": "Dictation > Shortcuts",
+      "reachable": true
+    },
+    "hotkey.voice-agent.mode": {
+      "what": "Whether the voice-agent hotkey toggles on each press or records for as long as it is held (push-to-talk). Settable; nothing handles the action, so the mode has nothing to change yet.",
+      "writtenBy": [
+        "hotkey_set_mode"
+      ],
+      "ui": "Dictation > Shortcuts",
+      "reachable": true
+    },
+    "hotkey.translation.mode": {
+      "what": "Whether the translation hotkey toggles on each press or records for as long as it is held (push-to-talk). Settable; nothing handles the action, so the mode has nothing to change yet.",
+      "writtenBy": [
+        "hotkey_set_mode"
+      ],
+      "ui": "Dictation > Shortcuts",
+      "reachable": true
+    },
+    "hotkey.meeting.mode": {
+      "what": "Whether the meeting hotkey toggles on each press or records for as long as it is held (push-to-talk). Settable; nothing handles the action, so the mode has nothing to change yet.",
+      "writtenBy": [
+        "hotkey_set_mode"
       ],
       "ui": "Dictation > Shortcuts",
       "reachable": true

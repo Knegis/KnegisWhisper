@@ -48,7 +48,7 @@
       "surfaceId": "dictation.shortcuts",
       "component": "apps/desktop/src/views/Dictation.tsx",
       "built": true,
-      "note": "Binds an accelerator to each of the five hotkey actions and writes hotkey.<action>. Binding a key and seeing whether anything handled it are on one screen deliberately -- the first bench check could not tell \"the hotkey did nothing\" from \"the hotkey saved nothing\". Four of the five actions have no handler; commands::hotkeys reports that as an UnhandledAction rather than letting a bound key look wired."
+      "note": "Binds an accelerator to each of the five hotkey actions and writes hotkey.<action>, and since 2026-09-01 (KNEG-64) picks toggle or hold-to-talk per action and writes hotkey.<action>.mode. Binding a key and seeing whether anything handled it are on one screen deliberately -- the first bench check could not tell \"the hotkey did nothing\" from \"the hotkey saved nothing\". The accelerator field also takes Mouse4 and Mouse5, which go to the WH_MOUSE_LL hook; the mode selector ships as toggle for every action and the screen says why holding is offered rather than defaulted. Four of the five actions have no handler; commands::hotkeys reports that as an UnhandledAction rather than letting a bound key look wired."
     },
     "Dictation > History": {
       "surfaceId": "dictation.history",

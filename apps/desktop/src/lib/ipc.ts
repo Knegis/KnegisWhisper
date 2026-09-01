@@ -64,6 +64,7 @@ import type {
   GgufIntegrity,
   HotkeyAction,
   HotkeyChange,
+  HotkeyMode,
   HotkeyReport,
   ImportPickKind,
   ImportReport,
@@ -174,6 +175,7 @@ export type {
   GgufIntegrity,
   HotkeyAction,
   HotkeyChange,
+  HotkeyMode,
   HotkeyReport,
   ImportPickKind,
   ImportReport,
@@ -271,6 +273,21 @@ export async function setHotkey(
   accelerators: string,
 ): Promise<HotkeyChange> {
   return invoke<HotkeyChange>("hotkey_set", { action, accelerators });
+}
+
+/**
+ * Choose whether an action toggles on each press or runs while the key is held.
+ *
+ * Its own command rather than a second argument to `setHotkey`, because the two
+ * are separate settings keys and separate controls: rebinding a key is not
+ * choosing push-to-talk. Returns the same `HotkeyChange` so the row can say what
+ * became of the binding either way.
+ */
+export async function setHotkeyMode(
+  action: HotkeyAction,
+  mode: HotkeyMode,
+): Promise<HotkeyChange> {
+  return invoke<HotkeyChange>("hotkey_set_mode", { action, mode });
 }
 
 /** Fired when a registered hotkey is pressed. Mirrors `shortcuts::HotkeyFired`. */

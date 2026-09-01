@@ -391,6 +391,7 @@ pub fn run() -> anyhow::Result<()> {
             commands::settings_keys,
             commands::hotkeys,
             commands::hotkey_set,
+            commands::hotkey_set_mode,
             commands::history,
             commands::history_delete,
             commands::history_clear,

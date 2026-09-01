@@ -130,6 +130,7 @@ fn render() -> String {
         ],
         "hotkeys" => [
             kw_platform::hotkey::HotkeyAction,
+            kw_platform::hotkey::HotkeyMode,
             kw_platform::hotkey::Accelerator,
             kw_platform::hotkey::Binding,
             crate::commands::UnhandledAction,
