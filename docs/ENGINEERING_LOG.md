@@ -21,15 +21,21 @@ maintained in place rather than appended to, because its purpose is to be curren
 > detail and the by-hand check that found five real defects; [COMPLETION_PLAN.md](COMPLETION_PLAN.md)
 > keeps the phase 7–10 definitions.
 >
-> **Measured, not asserted, as of 2026-09-01:** `cargo test --workspace` — **1506 passing, 0
+> **Measured, not asserted, as of 2026-09-01:** `cargo test --workspace` — **1537 passing, 0
 > failed** (941 at the start of the original run, 1296 at its close on 2026-08-27); parity —
-> **102 entries, 6 declared unreachable** (17 at the start, 8 on 2026-08-27), and **all 13 UI
-> surfaces built**, with no "surface not built" entry remaining anywhere. The six: two local-ASR
-> models (sherpa/Parakeet — runtime measured, and the Settings selector that was missing landed
-> in `121dc4c`, which is what took this from eight to six), two Tinfoil entries (batch transcription
+> **103 entries, 5 declared unreachable** (17 at the start, 8 on 2026-08-27), and **all 13 UI
+> surfaces built**, with no "surface not built" entry remaining anywhere. The five: **one** local-ASR
+> model (`nemotron-3.5-asr-streaming-0.6b`, the multilingual one — its `sha256` is `null`, so
+> `sherpa_models::install` refuses with `MissingPin`), two Tinfoil entries (batch transcription
 > and meeting-stream, both declined on principle, not unfinished), Apple Calendar (EventKit —
 > described in `kw_calendar_core::apple`, implemented nowhere, on any platform), and URL import
 > (withdrawn as a command — see the 2026-08-27 entry on the merged security fixes).
+>
+> Eight became six when `121dc4c` gave the two **Parakeet** models the Settings selector their
+> measured runtime had been waiting for, and six became five on 2026-09-01 when the streaming
+> protocol was measured and `nemotron-speech-streaming-en-0.6b` got a client. Worth spelling out
+> because an earlier version of this paragraph named Parakeet as one of the unreachable pair, which
+> is the opposite of what happened to it.
 >
 > **The reachability rule, settled and applied repeatedly:** `reachable: true` means a user can
 > *configure* the integration through a named, **built** surface — not that the backend code works.
@@ -278,6 +284,134 @@ Unchanged from the Phases 1–4 entry, restated here so they are not buried:
   porting matrix. Upstream pins both by commit and verifies neither.
 - ~~**`nircmd`**~~ — **dropped**, as leaned towards: third-tier Windows paste fallback only, and
   `SendInput` works.
+
+---
+
+## 2026-09-01 (KNEG-84) — the documentation was wrong, and only a probe could say so
+
+The sixth meeting client, and the only one whose wire format was **measured**
+rather than read. Worth recording is not the client — it is four hundred lines in
+the shape of the five beside it — but what measuring bought that reading could not.
+
+### One documented fact was false, and it was the load-bearing one
+
+`sherpa-onnx-online-websocket-client --help` says *"16-bit samples"*. The wire
+carries **`f32` little-endian**. As `f32` the values are speech inside ±1; as
+`i16` they are noise.
+
+A client written from that sentence would connect, complete a handshake, send
+every frame successfully and transcribe nothing — with no error anywhere, because
+this server does not report one. It would have looked like a model problem, or a
+microphone problem, or a "streaming does not work on this machine" problem. The
+cost of *not* probing was not a day of work; it was a defect with no symptom
+pointing at its cause.
+
+The probe was cheap for the same reason it was decisive: the reference client
+and the real server were both already on disk, so the measurement was two
+processes talking to each other with our code listening in between.
+
+### The control came first, and it is why the rest is evidence
+
+Reference client against real server, reproducing the model's own
+`test_wavs/trans.txt`. Then our client against the real server, producing the
+same transcript. Only then was the fault run meaningful. Without the first step,
+"our client got nothing back" and "this model gets nothing back" are the same
+observation.
+
+### The finding that shaped the design was a negative one
+
+`--fault` sent an unparseable TEXT frame and a three-byte BINARY frame before
+the audio. **The server answered neither, and the transcript came back
+byte-identical to the clean run** — the odd-length frame did not even knock the
+sample stream out of alignment.
+
+So this provider has no error channel. That is the exact inverse of the four
+cloud clients: `fault.rs` exists because those four read a provider-reported
+error and carried on, and here there is nothing to read. The consequences are
+concrete rather than philosophical:
+
+- `Incoming` has **no `Failed` variant**. Adding one nothing can produce would
+  suggest a channel exists.
+- `SessionFault` for this client can only ever be `Transport` or `Unreadable`.
+- There is a test named `no_error_frame_is_reachable_from_this_client` whose job
+  is to be **deleted deliberately** if sherpa ever grows an error frame — rather
+  than a `Failed` arm quietly never firing, which is how a dead branch outlives
+  the fact that created it.
+
+A negative measurement is easy to leave unrecorded because it produces no
+output. This one decided more of the design than any positive one.
+
+### `text` is cumulative, and appending would have been silently plausible
+
+Every update repeats the whole segment so far. A client that appended would
+produce *"After After early After early nightfall"* — wrong in a way that reads as
+a model artefact rather than a client bug, especially to somebody who has heard
+a streaming recogniser revise itself. `Segments` is that rule and nothing else,
+and it is tested against the recorded thirteen-update sequence rather than
+against a live model.
+
+The socket half therefore **mutates** its event vector rather than only appending
+to it, which no other client here does. Each reader holds the index of its own
+current segment; indices stay valid because nothing is ever removed.
+
+### Two mutations in my own harness were no-ops, and the harness said so
+
+Recorded because the lesson keeps recurring. I wrote ten mutations against the
+rules; eight were caught and two "passed", which looked like two weak tests. Both
+were actually **non-mutations**:
+
+- `split_off(taken)` — `split_off(taken.min(len))`. `taken` can never exceed
+  `len`, so `.min` changed nothing.
+- `chunks_exact(2)` — `chunks(2)`. The `try_from` inside the `filter_map`
+  already rejects a one-byte chunk, so the odd trailing byte is dropped either
+  way. Two independent guards, and no single-line edit defeats both.
+
+The second is the more interesting: the test was fine and the *code* was
+belt-and-braces. Replacing the whole expression with one that pads did fail it.
+Both are now noted in `samples`' own doc comment, because "this test survived a
+mutation" is worth nothing until you know whether the mutation was real.
+
+### Deliberately not done
+
+**No reconnect.** No session limit, no token rotation, no billing clock — the
+server is a child process. `capabilities.reconnect` is `false` rather than a
+recovery path that does not exist.
+
+**`language_detection: false`.** The one capability that differs from `local` in
+a way a user feels. A sherpa online model is built for one language and there is
+no per-request detection the way `whisper-server` has; declaring it true would
+make `validate` accept a session with no language and quietly transcribe English
+whatever was spoken.
+
+**The server is not started at launch, and not by the settings click either.**
+630 MB of model for a user who never records a meeting, or for one who is only
+choosing a model, is a cost neither action advertises. `MeetingRuntime::provider`
+starts it when a meeting begins and returns the same port if it is already up.
+
+**`sherpa-stream`'s targets are `not-published`.** The binary ships inside the
+offline CLI's archive and is already extracted beside it, so there is nothing to
+download. Marking the targets published would have described an install path
+this code does not use and cost 24 MB a second time. What the entry supplies is
+the two things a path cannot: a port range, and the command fragment that lets
+the reaper prove a leftover server is ours — `sherpa`'s own fragment
+(`sherpa-onnx-offline`) does not match `sherpa-onnx-online-websocket-server`, so
+without an entry an orphaned server would hold its port until the machine
+restarted.
+
+**`not_offered` was deleted rather than reworded.** It returned a sentence
+saying streaming models could not be used because no client existed. That
+stopped being true, and a check that can no longer fire is a check that stops
+being read.
+
+### Still not done, and it is not the same claim
+
+**Nobody has recorded a real meeting through it.** The wire is measured, the
+rules are tested and mutated, the server starts and answers a handshake. None of
+that is a meeting. Recorded in `BENCH_CHECK.md` and in the manifest entry rather
+than left implied by a closed issue — the same distinction KNEG-94 ended on
+earlier the same day, which is not a coincidence: both were finished the moment
+the measurement existed, and finishing the measurement is not finishing the
+feature.
 
 ---
 
