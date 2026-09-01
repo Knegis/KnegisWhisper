@@ -409,6 +409,13 @@ impl Hooks {
             }
         }
 
+        // A push-to-talk hold in progress is ended before the hook that would
+        // have ended it goes away. Its release is watched by the hook being
+        // dropped on the next line, so it will never arrive -- somebody
+        // changing a setting while holding the dictation key would otherwise be
+        // left recording with nothing to stop it.
+        crate::dictation::release_the_hold();
+
         // Dropped first, and deliberately before installing: Windows allows one
         // hook per process, so the old one has to be gone before the new one can
         // exist.

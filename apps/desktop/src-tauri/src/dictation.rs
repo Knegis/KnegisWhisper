@@ -1153,7 +1153,14 @@ fn arm_the_hold() -> tokio::sync::watch::Receiver<bool> {
 /// nothing is holding, this is a release with no press — which the watcher
 /// should never produce, and doing nothing about it is the right answer if it
 /// somehow does.
-fn release_the_hold() {
+///
+/// Also called by `shortcuts::Hooks::install` when the hook is being torn down
+/// and replaced. That is not a courtesy: the key that would have ended the hold
+/// is watched by the hook that is about to stop existing, so the release will
+/// never arrive. Somebody changing a setting while holding the dictation key
+/// would otherwise be left recording with nothing to stop it until they pressed
+/// the new binding.
+pub(crate) fn release_the_hold() {
     let held = HOLD_RELEASE
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);

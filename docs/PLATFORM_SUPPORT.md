@@ -544,10 +544,14 @@ or start a second recording. The press therefore starts, waits on a per-press ch
 come up, and finishes. That is reasoned rather than measured — the window exists and the design
 removes it.
 
-If the release is never delivered at all (a locked session, a reinstalled hook), the recording runs
-to the maximum-length cap rather than for ever. `ChordWatcher::reset` deliberately does **not**
-synthesise a release: a watcher that has lost track of the keyboard cannot also claim the key came
-up, and inventing one would stop a dictation on a key the user is still holding.
+Two ways the release can fail to arrive, and they are handled differently. **Re-registering the
+hotkeys** — which happens on every settings change — tears down the hook that was watching the key,
+so `Hooks::install` ends any hold in progress before dropping it; the alternative is somebody who
+changed a setting mid-hold being left recording with nothing to stop them. A **lost key-up** (a
+locked session) is not detectable, so the recording runs to the maximum-length cap rather than for
+ever, and `ChordWatcher::reset` deliberately does **not** synthesise a release: a watcher that has
+lost track of the keyboard cannot also claim the key came up, and inventing one would stop a
+dictation on a key the user is still holding.
 
 Push-to-talk on Linux needs read access to `/dev/input`; without it the app reports the
 limitation and falls back to toggle mode rather than silently failing.
