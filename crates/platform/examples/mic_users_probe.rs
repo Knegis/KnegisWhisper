@@ -34,10 +34,16 @@
 //! it could not start the binary at all. **A probe that finds nothing and has
 //! never found anything is not evidence of absence.**
 //!
-//! So this probe does not wait for run 2. It opens the microphone itself, with
-//! the same `kw_audio_core::Capture` a dictation uses, and enumerates again. If
-//! its own capture does not appear it says so, and every run afterwards carries
-//! a control rather than depending on somebody remembering to do run 2 first.
+//! So this probe does not wait for run 2. It runs its own control, and the
+//! control is deliberately **cross-process**: it launches a second copy of
+//! itself with `--hold`, which opens the microphone and waits, and then checks
+//! the enumeration lists that other process.
+//!
+//! Seeing *itself* capture would have been the easy version and it proves less
+//! than it looks. An audio session belongs to a process, and the question Task 2
+//! actually asks is whether this code can see a session belonging to **somebody
+//! else** — Teams. That those are the same mechanism is true and is an argument,
+//! and an argument is what a measurement replaces.
 //!
 //! It also prints [`MicrophoneSupport`], because an empty list under `Failed` or
 //! under zero endpoints is not an answer either, and those two are different
@@ -46,6 +52,19 @@
 use kw_platform::microphone::{self, MicrophoneSupport};
 
 fn main() {
+    // `--hold <seconds>`: open the microphone and wait. This is the other half
+    // of the control -- the parent launches a copy of itself in this mode so it
+    // has a *different* process to look for.
+    let args: Vec<String> = std::env::args().collect();
+    if let Some(seconds) = args
+        .iter()
+        .position(|a| a == "--hold")
+        .and_then(|i| args.get(i + 1).and_then(|value| value.parse::<u64>().ok()))
+    {
+        hold(seconds);
+        return;
+    }
+
     println!("microphone-activity probe\n");
 
     let names = microphone::process_names();
@@ -94,7 +113,7 @@ fn main() {
         }
     }
 
-    control(&names);
+    control();
 
     println!();
     println!("Now run it again with Teams open and idle (it must NOT be listed above),");
@@ -107,48 +126,76 @@ fn main() {
 /// The whole reason this probe can be believed. Without it a clean "nothing is
 /// capturing" is indistinguishable from an enumeration that never worked, and
 /// the second is the one somebody would act on by mistake.
-fn control(names: &std::collections::HashMap<u32, String>) {
+fn control() {
     println!();
-    println!("--- control: opening the microphone from this process ---");
+    println!("--- control: a SECOND process opens the microphone ---");
 
-    let capture = match kw_audio_core::capture::Capture::start(None) {
-        Ok(capture) => capture,
-        Err(err) => {
-            println!("could not open the microphone: {err}");
-            println!("The control did not run, so the reading above is unverified.");
-            return;
-        }
+    let Ok(exe) = std::env::current_exe() else {
+        println!("could not find this executable, so the control did not run.");
+        return;
     };
 
-    // A capture session appears when the stream actually starts, which is not
-    // the instant `start` returns. Polled rather than slept once: a fixed sleep
-    // long enough to be reliable is longer than this needs on most machines.
+    let child = std::process::Command::new(&exe)
+        .arg("--hold")
+        .arg("12")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+
+    let Ok(mut child) = child else {
+        println!("could not start a second copy, so the control did not run.");
+        return;
+    };
+    println!("started pid {} holding the microphone", child.id());
+
+    // Polled rather than slept once: the session appears when the stream
+    // actually starts, which is some way after the process does, and a fixed
+    // sleep long enough to be reliable is longer than this needs.
+    //
+    // The process table is rebuilt each time. The child did not exist when the
+    // reading above was taken, so reusing that snapshot would fail to resolve
+    // its pid and report a false negative -- the control failing for a reason
+    // that has nothing to do with what it is testing.
     let mut seen = None;
-    for _ in 0..25 {
-        std::thread::sleep(std::time::Duration::from_millis(80));
+    for _ in 0..40 {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        let names = microphone::process_names();
         let found = microphone::capturing(&|pid| names.get(&pid).cloned());
-        if let Some(mine) = found
+        if let Some(other) = found
             .processes
             .iter()
-            .find(|name| name.contains("mic_users_probe") || name.contains("knegiswhisper"))
+            .find(|name| name.contains("mic_users_probe"))
         {
-            seen = Some(mine.clone());
+            seen = Some(other.clone());
             break;
         }
     }
 
-    drop(capture);
+    let _ = child.kill();
+    let _ = child.wait();
 
     match seen {
         Some(name) => {
-            println!("PASS: this process appeared as {name} while its stream was open.");
-            println!("The enumeration sees a real capture, so an empty list above is a real");
-            println!("absence rather than a broken probe.");
+            println!("PASS: a different process appeared as {name} while its stream was open.");
+            println!("The enumeration sees another process capturing, which is the property");
+            println!("Teams detection needs. An empty list above is a real absence.");
         }
         None => {
-            println!("FAIL: this process opened the microphone and never appeared.");
-            println!("The enumeration is not working and nothing printed above means");
-            println!("anything. Do not read an empty list as an absence.");
+            println!("FAIL: a second process held the microphone and never appeared.");
+            println!("The enumeration cannot see other processes, so nothing printed above");
+            println!("means anything and KNEG-94 cannot be built on it.");
         }
     }
+}
+
+/// Open the microphone and wait, so the parent has something to look for.
+///
+/// Deliberately silent: the parent reads nothing from it, and a child writing to
+/// a shared console would interleave with the measurement.
+fn hold(seconds: u64) {
+    let Ok(capture) = kw_audio_core::capture::Capture::start(None) else {
+        return;
+    };
+    std::thread::sleep(std::time::Duration::from_secs(seconds));
+    drop(capture);
 }
