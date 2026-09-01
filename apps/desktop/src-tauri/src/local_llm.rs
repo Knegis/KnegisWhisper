@@ -39,6 +39,7 @@ use tokio::sync::Mutex;
 use ts_rs::TS;
 
 use crate::gguf_check::{self, GgufIntegrity};
+use crate::local_model::Restart;
 
 /// The sidecar this module runs.
 const SIDECAR: &str = "llama";
@@ -245,17 +246,8 @@ impl LocalLlm {
         // is a worse failure than the one being guarded against. The screen
         // reports the state and offers a re-hash; this only makes sure the fact
         // reaches the log of a session that is about to load the file anyway.
-        if let GgufIntegrity::Changed {
-            recorded_bytes,
-            bytes,
-        } = gguf_check::integrity(&path)
-        {
-            tracing::warn!(
-                model = %model_id,
-                recorded_bytes,
-                bytes,
-                "this model has changed since it was checked at install; loading it anyway"
-            );
+        if let Some(reason) = load_warning(&gguf_check::integrity(&path)) {
+            tracing::warn!(model = %model_id, "{reason}");
         }
 
         let chosen = port::allocate(
@@ -317,6 +309,46 @@ impl LocalLlm {
         *self.running.lock().await = Some(running);
 
         Ok(chosen)
+    }
+}
+
+/// What the log should say about a file the server is about to load, if
+/// anything.
+///
+/// **Pure, and extracted for the reason `media.rs:1334-1340` records.** The
+/// judgement used to sit inside [`LocalLlm::start_model`], which allocates a
+/// port and spawns a child process, so nothing outside a running application
+/// could reach it -- and it was wrong in a way that mattered. It matched
+/// [`GgufIntegrity::Changed`] alone, so when a failed re-hash *deleted* the
+/// record the row fell to [`GgufIntegrity::Unrecorded`], this warning stopped
+/// firing, and **the log went quiet on exactly the file the application had just
+/// proved was not the one that was installed.** That is the argument KNEG-130
+/// rests on, and it is asserted here rather than described in a comment.
+///
+/// The two silent states are as deliberate as the two loud ones.
+/// `UnchangedSinceInstall` has nothing to report. `Unrecorded` is every GGUF
+/// installed before records existed, and warning about those would train a user
+/// to ignore the line that matters.
+///
+/// The cost of the extraction, stated because it is a real one: the structured
+/// `recorded_bytes` and `bytes` tracing fields become part of the message text.
+/// A branch nothing can reach is worth less than two log fields.
+fn load_warning(integrity: &GgufIntegrity) -> Option<String> {
+    match integrity {
+        GgufIntegrity::Changed {
+            recorded_bytes,
+            bytes,
+        } => Some(format!(
+            "this model has changed since it was checked at install \
+             (recorded {recorded_bytes} bytes, found {bytes}); loading it anyway"
+        )),
+        GgufIntegrity::FailedRecheck { expected, actual } => Some(format!(
+            "this model failed a checksum re-check and has not been written to since \
+             (pinned {expected}, hashed {actual}); loading it anyway"
+        )),
+        GgufIntegrity::NotInstalled
+        | GgufIntegrity::UnchangedSinceInstall { .. }
+        | GgufIntegrity::Unrecorded => None,
     }
 }
 
@@ -392,6 +424,44 @@ fn watch_for_idle(llm: Arc<LocalLlm>, app: AppHandle) {
     });
 }
 
+/// Start a model **and** arm the watcher that will stop it, in one call.
+///
+/// The two were separate for exactly as long as it took to write a second
+/// caller. `local_llm_start` did both; [`LocalLlm::start_model`] did only the
+/// first -- so the refresh added in KNEG-128, which restarts through
+/// `start_model`, would have brought a server back with **nothing left to ever
+/// stop it**. Six gigabytes resident until the application exits, which is worse
+/// than anything that issue was filed about, and no test would have seen it.
+///
+/// So there is one way to reach a running server from a command, and it arms the
+/// timer. Found while reading, not by a failure.
+async fn start_and_watch(
+    llm: &Arc<LocalLlm>,
+    app: AppHandle,
+    model_id: &str,
+) -> Result<u16, String> {
+    let port = llm.start_model(model_id).await?;
+    watch_for_idle(Arc::clone(llm), app);
+    Ok(port)
+}
+
+/// Whether a finished refresh has left a server that needs an idle watcher.
+///
+/// Pure, and its own function for the reason
+/// [`crate::local_model::refresh_failure`] is one: the judgement sits inside a
+/// command that cannot be constructed outside a running application, so without
+/// this nothing could reach it.
+///
+/// The rule is that **anything which brought a server back owes it a watcher**,
+/// and equally that nothing else may arm one. Arming after
+/// [`Restart::NothingWasRunning`] or [`Restart::Failed`] would spawn a task to
+/// watch a server that is not running -- harmless today, because the loop
+/// returns on the first tick that finds no port, and precisely the kind of
+/// "harmless" that stops being true when the loop grows a second reason to act.
+const fn must_arm_idle_watcher(restart: &Restart) -> bool {
+    matches!(restart, Restart::Restarted(_))
+}
+
 /* ------------------------------------------------------------------- status */
 
 /// One local model on offer.
@@ -453,6 +523,18 @@ pub struct LocalLlmStatus {
     /// Whether a server binary is published for this platform.
     pub availability: crate::local_model::Availability,
     pub server_installed: bool,
+    /// Whether the binary on disk is the build this version pins.
+    ///
+    /// `server_installed` was the only claim this screen made about the server
+    /// binary, and it stays true while the binary falls releases behind the
+    /// manifest -- the state `local_model` reported for `whisper-server` in
+    /// KNEG-113 and the state this one has been in, unreported, ever since.
+    /// `install` has written the record since KNEG-113; nothing here read it.
+    /// KNEG-128.
+    ///
+    /// Derived from the same call as `server_installed`, so the two cannot
+    /// disagree. See [`server_state`].
+    pub server_freshness: crate::local_model::SidecarFreshness,
     pub models: Vec<LocalLlmModelStatus>,
     /// The port the server is on, if it is running.
     pub port: Option<f64>,
@@ -561,32 +643,63 @@ fn model_status(
     }
 }
 
+/// Whether the server binary is on disk, and whether it is the one this build
+/// pins -- from **one** call.
+///
+/// This replaced a chain that resolved the asset, located the installation and
+/// then threw the `Installation` away to keep a bare `bool`. Asking twice is how
+/// `server_installed` and a freshness sentence come to answer differently about
+/// the same directory, which is the disagreement `local_model` avoids the same
+/// way (`local_model.rs`, `local_model_status`).
+///
+/// `Freshness::NotInstalled` is exactly the case `locate` reports as absent or
+/// incomplete, so the boolean is a reading of the freshness rather than a second
+/// question. A platform with no published asset answers `NotInstalled` too, and
+/// that is correct rather than an error to report: `availability` already
+/// carries that fact and says why.
+fn server_state(
+    catalog: &Catalog,
+    root: &std::path::Path,
+) -> (bool, crate::local_model::SidecarFreshness) {
+    let freshness = crate::local_model::sidecar_freshness(catalog, SIDECAR, root);
+    (
+        !matches!(freshness, kw_sidecar::Freshness::NotInstalled),
+        crate::local_model::SidecarFreshness::of(&freshness),
+    )
+}
+
+/// One `kw_sidecar` install event as this screen's progress line, if it is one
+/// worth showing.
+///
+/// Extracted so the install path and the refresh path cannot drift into
+/// describing the same download two ways, and so the mapping is reachable by a
+/// test -- both closures it replaced lived inside `#[tauri::command]`s.
+///
+/// `Verifying` maps to nothing, exactly as it did inline before. That is not an
+/// oversight: [`LocalLlmProgress::Verifying`] names a model id, and the server
+/// binary is not a model. The archive is still checked against its pinned digest
+/// by `kw_sidecar::install`; what is missing is a sentence about it, and a
+/// sentence naming the wrong thing would be worse than none.
+fn server_progress(progress: &kw_sidecar::install::Progress) -> Option<LocalLlmProgress> {
+    match progress {
+        kw_sidecar::install::Progress::Downloading { written, total } => {
+            Some(LocalLlmProgress::Server {
+                written: *written as f64,
+                total: total.map(|t| t as f64),
+            })
+        }
+        kw_sidecar::install::Progress::Extracting => Some(LocalLlmProgress::Extracting),
+        kw_sidecar::install::Progress::Verifying => None,
+    }
+}
+
 #[tauri::command]
 pub async fn local_llm_status(llm: State<'_, Arc<LocalLlm>>) -> Result<LocalLlmStatus, String> {
     let registry = kw_provider_registry::registry().map_err(|e| e.to_string())?;
     let availability = crate::local_model::Availability::of(&llm.catalog, SIDECAR);
 
-    // `resolve` fails on a platform with no published binary, which is not an
-    // error to report: it is the answer, and `availability` already carries it.
     let sidecars = paths::sidecar_dir();
-    let server_installed = llm
-        .catalog
-        .resolve(SIDECAR)
-        .ok()
-        .and_then(|(_, asset)| {
-            kw_sidecar::locate(
-                SIDECAR,
-                asset,
-                &kw_sidecar::SearchPath {
-                    bundled: None,
-                    downloaded: sidecars.path.clone(),
-                },
-                &kw_sidecar::RealFs,
-            )
-            .executable()
-            .map(|_| ())
-        })
-        .is_some();
+    let (server_installed, server_freshness) = server_state(&llm.catalog, &sidecars.path);
 
     let dir = paths::model_cache_dir().path;
     let models = registry
@@ -603,6 +716,7 @@ pub async fn local_llm_status(llm: State<'_, Arc<LocalLlm>>) -> Result<LocalLlmS
     Ok(LocalLlmStatus {
         availability,
         server_installed,
+        server_freshness,
         models,
         // Read directly rather than through `LocalEndpoint::port`, which would
         // record a use and keep the idle timer from ever firing while a settings
@@ -645,15 +759,10 @@ pub async fn local_llm_install(
     );
 
     if installation.executable().is_none() {
-        kw_sidecar::install::install(&llm.policy, spec, asset, &sidecars.path, &mut |p| match p {
-            kw_sidecar::install::Progress::Downloading { written, total } => {
-                emit(LocalLlmProgress::Server {
-                    written: written as f64,
-                    total: total.map(|t| t as f64),
-                });
+        kw_sidecar::install::install(&llm.policy, spec, asset, &sidecars.path, &mut |p| {
+            if let Some(progress) = server_progress(&p) {
+                emit(progress);
             }
-            kw_sidecar::install::Progress::Extracting => emit(LocalLlmProgress::Extracting),
-            _ => {}
         })
         .await
         .map_err(|e| e.to_string())?;
@@ -1080,6 +1189,11 @@ pub enum RecheckOutcome {
     /// having gone stale rather than the file having rotted, and deleting
     /// somebody's data on a hunch is not this command's decision to make. It
     /// names both digests and leaves the choice with them.
+    ///
+    /// **The verdict is written down beside the file**, so this survives the
+    /// process that found it -- see [`settle_record`]. Both digests go into the
+    /// record for the same reason they are in this variant: a message with only
+    /// one of them cannot be acted on.
     Mismatched {
         file_name: String,
         expected: String,
@@ -1133,8 +1247,18 @@ fn recheck_verdict(digest: &DigestCheck, file_name: &str, actual: &str) -> Reche
 /// replacement [`crate::gguf_check`] documents itself as unable to catch.
 /// Leaving it in place would have the screen answer "unchanged since it was
 /// installed" about a file this application has just proved is not the one that
-/// was installed, so the record goes and the state falls back to "nothing is
-/// known".
+/// was installed.
+///
+/// **It used to delete the record, and that was the defect KNEG-130 fixed.**
+/// Deleting satisfied the letter of the requirement -- the screen stopped saying
+/// *unchanged* -- and lost the finding. The row fell to
+/// [`GgufIntegrity::Unrecorded`], which `gguf_check` documents as *nothing is
+/// known* and which every model installed before records existed also reports,
+/// so a file that had been read in full and refused became indistinguishable
+/// from one nobody had ever looked at. Worse, [`load_warning`] fires for
+/// [`GgufIntegrity::Changed`] and not for `Unrecorded`, so the deletion also
+/// silenced the log line about that exact file. The verdict is written instead,
+/// and it survives a restart.
 ///
 /// Neither arm fails the command. The answer is the hash; the record is a
 /// convenience for the next screen paint, and a convenience that could not be
@@ -1152,12 +1276,14 @@ fn settle_record(path: &std::path::Path, digest: &DigestCheck, outcome: &Recheck
                 );
             }
         }
-        RecheckOutcome::Mismatched { .. } => {
-            if let Err(err) = gguf_check::forget_record(path) {
+        RecheckOutcome::Mismatched {
+            expected, actual, ..
+        } => {
+            if let Err(err) = gguf_check::write_failed_record(path, expected, actual) {
                 tracing::warn!(
                     error = %err,
-                    "the re-check failed and the record that disagrees with it could not \
-                     be removed; the screen may still call this file unchanged"
+                    "the re-check failed and the verdict could not be written beside the \
+                     file; the screen may still call this file unchanged"
                 );
             }
         }
@@ -1259,7 +1385,10 @@ pub async fn local_llm_start(
     llm: State<'_, Arc<LocalLlm>>,
     model_id: String,
 ) -> Result<u16, String> {
-    let port = llm.start_model(&model_id).await?;
+    // Armed as the server comes up rather than after the settings write below:
+    // the write can fail, and an idle timer is not something to make conditional
+    // on remembering a preference.
+    let port = start_and_watch(&llm, app, &model_id).await?;
 
     // Remembered only after it came up, so a model that fails to start is not
     // the one resumed at the next launch.
@@ -1269,8 +1398,85 @@ pub async fn local_llm_start(
         tracing::warn!(error = %err, "could not remember the local text-generation model");
     }
 
-    watch_for_idle(Arc::clone(&llm), app);
     Ok(port)
+}
+
+/// Replace the installed llama.cpp server with the build this version pins.
+///
+/// **Stop, replace, restart** -- the same sequence, and the same reasoning, as
+/// `local_model::local_server_refresh`, whose doc records why rename-aside was
+/// measured and rejected. That argument is not repeated here; what differs is
+/// this runtime's two extra facts.
+///
+/// **The running model is read through [`LocalLlm::running_model`], never
+/// through [`LocalEndpoint::port`].** Reading the port records a use and resets
+/// the idle clock, which is why `local_llm_status` avoids it, and a refresh that
+/// reset it would leave the restarted server holding several gigabytes for a
+/// further five minutes for no reason anybody asked for.
+///
+/// **The restart re-arms the idle watcher**, via [`must_arm_idle_watcher`].
+/// Without it the replaced server would run until the application exits.
+///
+/// Nothing calls this on its own. Like every other download here, it happens
+/// because somebody pressed a button.
+#[tauri::command]
+pub async fn local_llm_refresh_server(
+    app: AppHandle,
+    llm: State<'_, Arc<LocalLlm>>,
+) -> Result<crate::local_model::RefreshOutcome, String> {
+    let (spec, asset) = llm.catalog.resolve(SIDECAR).map_err(|e| e.to_string())?;
+    let sidecars = paths::sidecar_dir();
+
+    // Read before the stop: `stop` clears it, and this is the only record of
+    // what has to be put back.
+    let was_running = llm.running_model();
+    llm.stop().await;
+
+    // The progress closure owns its own handle so `app` is free to be moved into
+    // the watcher below.
+    let installed = {
+        let app = app.clone();
+        kw_sidecar::install::install(&llm.policy, spec, asset, &sidecars.path, &mut move |p| {
+            if let Some(progress) = server_progress(&p) {
+                if let Err(err) = app.emit(PROGRESS_EVENT, progress) {
+                    tracing::debug!(error = %err, "could not report refresh progress");
+                }
+            }
+        })
+        .await
+    };
+
+    // Whichever way the install went. A refused download must not leave someone
+    // with a server that was loaded a moment ago and is now simply gone.
+    let restart = match &was_running {
+        None => Restart::NothingWasRunning,
+        Some(model) => match llm.start_model(model).await {
+            Ok(port) => {
+                tracing::info!(port, model = %model, "restarted the local text-generation server after a refresh");
+                Restart::Restarted(model.clone())
+            }
+            Err(error) => Restart::Failed {
+                model: model.clone(),
+                error,
+            },
+        },
+    };
+
+    if must_arm_idle_watcher(&restart) {
+        watch_for_idle(Arc::clone(&llm), app);
+    }
+
+    match installed {
+        Ok(installed) => Ok(crate::local_model::RefreshOutcome {
+            files: installed.files,
+            restarted: restart.restarted().cloned(),
+            restart_error: restart.error().cloned(),
+        }),
+        Err(err) => Err(crate::local_model::refresh_failure(
+            &err.to_string(),
+            &restart,
+        )),
+    }
 }
 
 #[tauri::command]
@@ -2075,6 +2281,178 @@ mod tests {
             model_status(&provider.id, dir.path(), model).integrity,
             GgufIntegrity::Changed { .. }
         ));
+
+        // 5. A re-hash has refused it. The wiring claim for KNEG-130: every
+        //    assertion about the fifth state elsewhere is about `gguf_check` in
+        //    isolation, and a `model_status` that ignored the verdict would pass
+        //    all of them while the screen said nothing.
+        gguf_check::write_failed_record(&path, &"1".repeat(64), &"2".repeat(64)).expect("verdict");
+        let row = model_status(&provider.id, dir.path(), model);
+        assert_eq!(
+            row.integrity,
+            GgufIntegrity::FailedRecheck {
+                expected: "1".repeat(64),
+                actual: "2".repeat(64),
+            }
+        );
+        assert_ne!(
+            row.integrity,
+            GgufIntegrity::Unrecorded,
+            "the row must not report a refused file the way it reports one \
+             nobody has looked at"
+        );
+        assert_eq!(
+            row.draft.as_ref().expect("drafter row").integrity,
+            GgufIntegrity::NotInstalled,
+            "one file's verdict must not spread to the other half of the row"
+        );
+    }
+
+    /* ------------------------------------------------ the server binary */
+
+    /// An empty sidecar root answers *not installed* to both halves at once.
+    ///
+    /// `server_installed` is read straight off the freshness, so the pair cannot
+    /// disagree by construction; this is the shape of the pair, and the two
+    /// tests below walk the states where disagreeing would matter.
+    #[test]
+    fn an_empty_sidecar_root_reports_the_llama_server_as_not_installed() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let catalog = Catalog::shipped().expect("the shipped catalogue parses");
+
+        let (installed, freshness) = server_state(&catalog, dir.path());
+        assert!(!installed);
+        assert_eq!(
+            serde_json::to_value(&freshness).expect("wire")["state"],
+            "not-installed"
+        );
+    }
+
+    /// An executable with no record is installed **and** of unknown provenance.
+    ///
+    /// The state this machine is in, and the one KNEG-128 exists for: the binary
+    /// is plainly there, so `server_installed` says yes, and until now that was
+    /// the only thing the screen ever claimed about it -- which stayed true while
+    /// the binary fell releases behind the manifest. `install` has written the
+    /// record since KNEG-113; nothing on this path read it.
+    ///
+    /// The `assert!(exe.is_file())` is the positive control. Without it the
+    /// assertions below would be measured against a directory that might simply
+    /// be empty, and would pass for the wrong reason.
+    ///
+    /// **Mutation that turns it red:** have `server_state` return `false` for
+    /// `installed`, or point `sidecar_freshness` at the root instead of the
+    /// sidecar's own directory.
+    #[test]
+    fn an_executable_with_no_record_is_installed_and_of_unknown_provenance() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let catalog = Catalog::shipped().expect("catalogue");
+        let Ok((spec, asset)) = catalog.resolve(SIDECAR) else {
+            // Nothing published for this target. Asserted rather than returned
+            // silently: a test that exits here having checked nothing is the
+            // shape this wave was called to find.
+            let (installed, _) = server_state(&catalog, dir.path());
+            assert!(!installed, "nothing is published, so nothing is installed");
+            return;
+        };
+
+        let install = dir.path().join(SIDECAR);
+        std::fs::create_dir_all(&install).expect("mkdir");
+        let exe = install.join(asset.executable_name());
+        std::fs::write(&exe, b"MZ").expect("write");
+        assert!(exe.is_file(), "the subject of the assertions must be there");
+
+        let (installed, freshness) = server_state(&catalog, dir.path());
+        assert!(
+            installed,
+            "an executable that is there must report installed"
+        );
+        assert_eq!(
+            serde_json::to_value(&freshness).expect("wire")["state"],
+            "unknown",
+            "an install this application did not record cannot be compared with \
+             anything, and must not be rounded to either neighbour"
+        );
+
+        // Recorded, and the same pair now reads current -- the control that
+        // stops the assertion above passing because everything is `unknown`.
+        kw_sidecar::record::write(&install, &kw_sidecar::InstallRecord::of(spec, asset))
+            .expect("record");
+        let (installed, freshness) = server_state(&catalog, dir.path());
+        assert!(installed);
+        assert_eq!(
+            serde_json::to_value(&freshness).expect("wire")["state"],
+            "current"
+        );
+    }
+
+    /// The install path and the refresh path describe a download the same way.
+    ///
+    /// One mapping, so the two cannot drift into two vocabularies for one
+    /// download. `Verifying` maps to nothing on purpose and the two `Some`s
+    /// beside it are what keep that from being a mapping that reports nothing at
+    /// all.
+    #[test]
+    fn the_server_progress_mapping_is_shared_by_both_paths() {
+        let downloading = server_progress(&kw_sidecar::install::Progress::Downloading {
+            written: 1_024,
+            total: Some(17_287_711),
+        })
+        .expect("a download is worth a progress line");
+        let json = serde_json::to_value(&downloading).expect("wire");
+        assert_eq!(json["stage"], "server");
+        assert_eq!(json["written"], 1_024.0);
+        assert_eq!(json["total"], 17_287_711.0);
+
+        let extracting =
+            server_progress(&kw_sidecar::install::Progress::Extracting).expect("unpacking too");
+        assert_eq!(
+            serde_json::to_value(&extracting).expect("wire")["stage"],
+            "extracting"
+        );
+
+        // `LocalLlmProgress::Verifying` names a model id and the server binary
+        // is not a model. The archive is still checked against its pinned
+        // digest; what is missing is a sentence, and one naming the wrong thing
+        // would be worse than none.
+        assert!(server_progress(&kw_sidecar::install::Progress::Verifying).is_none());
+    }
+
+    /// A restarted server is owed an idle watcher, and nothing else is.
+    ///
+    /// **The rule behind a defect found while reading rather than by a failure.**
+    /// `local_llm_start` armed the idle watcher; `LocalLlm::start_model` did not.
+    /// A refresh that restarts through `start_model` and stops there brings the
+    /// server back with **nothing left to ever stop it** -- six gigabytes
+    /// resident until the application exits, which is worse than the staleness
+    /// KNEG-128 was filed about, and no test would have seen it.
+    ///
+    /// Both directions are asserted. Arming for `Restarted` is the defect;
+    /// *not* arming for the other two is the noise fixing it would create, since
+    /// a watcher over a server that is not running is a task spawned to discover
+    /// that on its first tick.
+    ///
+    /// **Mutations that turn it red:** return `false` unconditionally; return
+    /// `true` unconditionally.
+    ///
+    /// **What it does not prove:** that the refresh actually calls
+    /// `watch_for_idle`. Nothing can observe a `tauri::async_runtime::spawn`
+    /// without an `AppHandle`. That half is held by there being one function --
+    /// `start_and_watch` -- which starts a server on the ordinary path, and by
+    /// this rule being consulted on the other.
+    #[test]
+    fn a_restarted_server_is_owed_an_idle_watcher_and_nothing_else_is() {
+        assert!(
+            must_arm_idle_watcher(&Restart::Restarted("qwen2.5-7b-instruct-q4".to_owned())),
+            "a server brought back by a refresh with no watcher holds several \
+             gigabytes until the application exits"
+        );
+
+        assert!(!must_arm_idle_watcher(&Restart::NothingWasRunning));
+        assert!(!must_arm_idle_watcher(&Restart::Failed {
+            model: "qwen2.5-7b-instruct-q4".to_owned(),
+            error: "the port was taken".to_owned(),
+        }));
     }
 
     /* --------------------------------------------------------- the re-hash */
@@ -2192,19 +2570,31 @@ mod tests {
         );
     }
 
-    /// A re-hash that disagrees takes the record with it.
+    /// A re-hash that disagrees records the verdict instead of forgetting it.
     ///
     /// This is the one case where the cheap check and the real one contradict
     /// each other, and it is exactly the replacement `gguf_check` documents
     /// itself as unable to see: same length, same timestamp, different bytes.
-    /// The record has to go, because leaving it would have the screen answer
-    /// "unchanged since it was installed" about a file just proved otherwise —
-    /// the strongest available claim, made about the worst available file.
+    /// The record cannot be left as it is, because that would have the screen
+    /// answer "unchanged since it was installed" about a file just proved
+    /// otherwise -- the strongest available claim, made about the worst
+    /// available file.
+    ///
+    /// **Until KNEG-130 it was deleted, and this test asserted that.** Deleting
+    /// met the letter of the requirement and threw the finding away: the row
+    /// dropped to `Unrecorded`, which `gguf_check` documents as *nothing is
+    /// known* and which every model installed before records existed also
+    /// reports, so a file read in full and refused became indistinguishable from
+    /// one nobody had looked at -- and `load_warning` went quiet about it too.
+    /// The two negative assertions below are the old behaviour, now forbidden.
     ///
     /// The file itself stays. It may be twenty gigabytes somebody chose to keep,
     /// and the pin going stale is as likely an explanation as the bytes rotting.
+    ///
+    /// **Mutation that turns it red:** make the `Mismatched` arm of
+    /// `settle_record` a no-op, or restore the deletion.
     #[test]
-    fn a_failed_recheck_removes_the_record_that_contradicts_it_and_keeps_the_file() {
+    fn a_failed_recheck_records_the_verdict_instead_of_forgetting_it() {
         use crate::gguf_check::{self, GgufIntegrity};
         use crate::local_model::VerifiedBy;
 
@@ -2222,21 +2612,114 @@ mod tests {
             "the record claims the strongest thing there is, before the re-hash"
         );
 
-        let digest = DigestCheck::Measured(pinned);
-        let outcome = recheck_verdict(&digest, "weights.gguf", &"8".repeat(64));
+        let found = "8".repeat(64);
+        let digest = DigestCheck::Measured(pinned.clone());
+        let outcome = recheck_verdict(&digest, "weights.gguf", &found);
         assert!(matches!(outcome, RecheckOutcome::Mismatched { .. }));
         settle_record(&path, &digest, &outcome);
 
+        let after = gguf_check::integrity(&path);
         assert_eq!(
-            gguf_check::integrity(&path),
+            after,
+            GgufIntegrity::FailedRecheck {
+                expected: pinned,
+                actual: found,
+            },
+            "the verdict has to outlive the command that found it"
+        );
+        assert_ne!(
+            after,
             GgufIntegrity::Unrecorded,
+            "the old behaviour: deleting the record hid the finding behind the \
+             state every un-recorded model on disk already reports"
+        );
+        assert!(
+            !matches!(after, GgufIntegrity::UnchangedSinceInstall { .. }),
             "a record that survived a mismatch would be the strongest claim in \
              this application, standing on bytes it has just been shown are wrong"
         );
         assert!(
             path.exists(),
-            "the weights are the user's, not ours to delete"
+            "the weights are the user\u{27}s, not ours to delete"
         );
+
+        // The control: the matched arm on the same file writes the other
+        // verdict, so this is not passing because `settle_record` writes a
+        // failure whatever it is handed.
+        let real = kw_sidecar::integrity::hash_file(&path).expect("hash");
+        let good = DigestCheck::Stated(real.clone());
+        settle_record(&path, &good, &recheck_verdict(&good, "weights.gguf", &real));
+        assert_eq!(
+            gguf_check::integrity(&path),
+            GgufIntegrity::UnchangedSinceInstall {
+                verified_by: VerifiedBy::StatedDigest
+            },
+            "a passing re-check must be able to clear a recorded failure"
+        );
+    }
+
+    /// The start path warns about a file a re-hash has already refused.
+    ///
+    /// **This assertion carries the whole argument KNEG-130 rests on.** The
+    /// warning `start_model` emits used to match `GgufIntegrity::Changed` alone.
+    /// A failed re-check deleted the record, the row fell to `Unrecorded`, and
+    /// the warning stopped firing -- so the application went silent about
+    /// precisely the file it had just proved was not the one that was installed.
+    /// A recorded verdict fixes nothing on its own unless the start path can see
+    /// it, which is what this asserts.
+    ///
+    /// The three `None` arms are the controls and they are not padding. Without
+    /// them a `load_warning` that returned `Some` for everything would pass, and
+    /// a warning that fires for every model on disk -- most of which are
+    /// `Unrecorded`, which is not a fault -- is a warning nobody reads.
+    ///
+    /// **Mutations that turn it red:** return `None` for `FailedRecheck`; return
+    /// `Some` for `UnchangedSinceInstall`. Both directions are checked because
+    /// only one of them is the defect and the other is the noise it would create.
+    ///
+    /// **What this does not prove**, said here rather than left to be assumed:
+    /// that `start_model` still calls this. Nothing can reach that call without
+    /// spawning a server. What catches its removal is not a test -- it is
+    /// `clippy -D warnings`, for which a private function with no call site is
+    /// dead code.
+    #[test]
+    fn the_start_path_warns_about_a_file_a_recheck_has_already_failed() {
+        use crate::gguf_check::GgufIntegrity;
+        use crate::local_model::VerifiedBy;
+
+        let refused = load_warning(&GgufIntegrity::FailedRecheck {
+            expected: "1".repeat(64),
+            actual: "2".repeat(64),
+        })
+        .expect("a file proved wrong must reach the log of a session loading it");
+        assert!(refused.contains(&"1".repeat(64)), "{refused}");
+        assert!(refused.contains(&"2".repeat(64)), "{refused}");
+
+        let changed = load_warning(&GgufIntegrity::Changed {
+            recorded_bytes: 4_680_000_000,
+            bytes: 2_048,
+        })
+        .expect("the state this warning was originally written for");
+        assert!(changed.contains("4680000000"), "{changed}");
+
+        // The two sentences must not be the same sentence: one is two integers
+        // disagreeing, the other is the whole file having been read and refused.
+        assert_ne!(refused, changed);
+
+        // The controls. Silence is as much a decision as the warning is.
+        assert_eq!(
+            load_warning(&GgufIntegrity::UnchangedSinceInstall {
+                verified_by: VerifiedBy::Digest
+            }),
+            None
+        );
+        assert_eq!(
+            load_warning(&GgufIntegrity::Unrecorded),
+            None,
+            "every GGUF installed before records existed is in this state; \
+             warning about them would train a user to ignore the line that matters"
+        );
+        assert_eq!(load_warning(&GgufIntegrity::NotInstalled), None);
     }
 
     /// Nothing pinned changes nothing on disk.

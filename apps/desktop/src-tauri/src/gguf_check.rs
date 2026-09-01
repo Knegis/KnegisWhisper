@@ -41,14 +41,41 @@
 //! and not `Verified`. The weaker name is the point: it is the strongest claim
 //! two integers can support.
 //!
-//! # Three states, not two
+//! # Five states, not two
 //!
 //! A boolean over a path cannot tell *checked and unchanged* from *nothing was
 //! ever recorded*, and rendering the second as the first is the same defect this
-//! module exists to remove, one layer up. So [`integrity_of`] answers four ways,
+//! module exists to remove, one layer up. So [`integrity_of`] answers five ways,
 //! and **the absence of a record is its own answer** — never "verified", never
 //! "corrupt". Every GGUF installed before this landed is in that state, and that
 //! is not a fault in the file.
+//!
+//! # A failed re-hash is a fact, and it is kept
+//!
+//! The fifth state, [`GgufIntegrity::FailedRecheck`], is KNEG-130. A re-hash that
+//! disagreed with the pinned digest used to **delete** the record, which sounds
+//! like the safe direction and is not. The row fell back to
+//! [`GgufIntegrity::Unrecorded`] -- which this module documents at length as
+//! emphatically *not* an accusation -- and the one warning `local_llm::start_model`
+//! emitted fired only for [`GgufIntegrity::Changed`], so the application went
+//! quiet about exactly the file it had just proved was not the one that was
+//! installed. Deleting the record destroyed the finding. It is written down now,
+//! and it survives a restart.
+//!
+//! **It goes in the one record.** Not a second file beside it: two files
+//! describing one model are two things that can disagree, and the disagreement
+//! would be about whether a model can be trusted. The precedent is
+//! [`crate::calendar`], which already persists negative verdicts --
+//! `SyncOutcome::{Failed, TokenUnavailable}` -- and folds them into live status
+//! through the pure `combine_token_status`, so that a screen can never see a
+//! different answer from a check it just ran than from the record read back
+//! later. That is the property wanted here and it is why the verdict is a field
+//! of [`InstallRecord`] rather than a file of its own.
+//!
+//! This is still the first negative verdict this application writes to **a file
+//! beside an artefact** rather than into SQLite, which is worth saying plainly:
+//! the record is ordinary JSON in a user-writable directory. It is a place to
+//! keep a finding, never a place to enforce one.
 //!
 //! # Where the line between decision and platform runs
 //!
@@ -73,12 +100,26 @@ use crate::local_model::VerifiedBy;
 /// silently.
 const RECORD_SUFFIX: &str = ".checked.json";
 
-/// The only record layout this build understands.
+/// The record layout this build **writes**.
 ///
-/// A record carrying anything else is read as no record at all rather than
-/// interpreted optimistically: a future version that changes what `bytes` means
-/// must not have this one agreeing with it by accident.
-const SCHEMA: u32 = 1;
+/// Bumped to 2 by KNEG-130, which added [`InstallRecord::verdict`].
+const SCHEMA: u32 = 2;
+
+/// The record layouts this build can **read**.
+///
+/// Two constants rather than one, because "what we write" and "what we
+/// understand" are different facts and collapsing them is what made the
+/// original single `SCHEMA` a backward-compatibility hazard the moment it
+/// moved: every record written before the bump would have been discarded, and
+/// every model on disk would have fallen from *unchanged since it was
+/// installed* to *installed, never recorded* for no reason a user could see.
+///
+/// A schema **1** record predates the verdict field and is read as
+/// [`Verdict::Passed`] -- see [`InstallRecord::verdict`]. Anything outside this
+/// set is still read as no record at all rather than interpreted
+/// optimistically: a future version that changes what `bytes` means must not
+/// have this one agreeing with it by accident.
+const READABLE_SCHEMAS: [u32; 2] = [1, SCHEMA];
 
 const NANOS_PER_SECOND: u32 = 1_000_000_000;
 
@@ -144,6 +185,38 @@ pub struct Observed {
     pub mtime: Mtime,
 }
 
+/// What the last check of these bytes concluded.
+///
+/// Two states and not a `bool`, for the reason every other answer in this module
+/// is not a `bool`: the variants carry different evidence. A pass carries
+/// nothing beyond itself -- the record's own `sha256` and `verified_by` already
+/// say what was met -- and a failure has to carry the pair of digests that
+/// disagreed, because "it did not match" without saying what it did not match is
+/// not something anybody can act on.
+///
+/// **The digests live here rather than being read back off
+/// [`InstallRecord::sha256`].** They are the same string today. They are not the
+/// same claim: `sha256` records what the *install* pinned, and these record what
+/// the *re-check* actually compared. A future in which those diverge -- a pin
+/// updated in the registry after a model was installed -- is exactly when a
+/// person reading this file needs to see both.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(tag = "outcome", rename_all = "kebab-case")]
+pub enum Verdict {
+    /// Nothing has contradicted this file. The state of every record written by
+    /// an install, and of every record written before this field existed.
+    #[default]
+    Passed,
+    /// A re-hash read the whole file and it did not match the digest it is
+    /// pinned to.
+    Failed {
+        /// The digest the file was compared against.
+        expected: String,
+        /// What it actually hashed to.
+        actual: String,
+    },
+}
+
 /// What was checked when a GGUF was installed, as written beside it.
 ///
 /// `verified_by` is a plain string rather than a [`VerifiedBy`], and that is not
@@ -171,6 +244,18 @@ pub struct InstallRecord {
     /// because the file is meant to be readable by a person looking at their own
     /// model directory, and "when" is the first thing they will want.
     checked_at_unix_seconds: i64,
+    /// What that check concluded.
+    ///
+    /// `#[serde(default)]` is the whole of the backward compatibility. A schema
+    /// 1 record has no such key and deserialises to [`Verdict::Passed`], which
+    /// is the correct reading of it: nothing had ever contradicted the file, and
+    /// a record written by an install is a record of a check that passed. The
+    /// distinction between *passed* and *no verdict was recorded* exists in the
+    /// history and not in the answer -- both mean the screen may say `unchanged
+    /// since it was installed` when the two integers still agree -- so it is not
+    /// carried as a third variant that nothing would ever branch on.
+    #[serde(default)]
+    verdict: Verdict,
 }
 
 impl InstallRecord {
@@ -194,9 +279,13 @@ impl InstallRecord {
 
 /// What the Intelligence > Local screen may say about one GGUF.
 ///
-/// Four answers, and the third is the reason this is not a boolean. See the
+/// Five answers, and the third is the reason this is not a boolean. See the
 /// module documentation for what each one is worth.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+///
+/// **Not `Copy` since KNEG-130.** [`Self::FailedRecheck`] carries two 64-character
+/// digests, and a state that can be duplicated by accident is one a caller can
+/// report twice about a file it read once.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[serde(
     tag = "state",
     rename_all = "kebab-case",
@@ -225,6 +314,22 @@ pub enum GgufIntegrity {
     /// be the right ones. Only a re-hash can tell those apart, which is why this
     /// state points at one rather than declaring the file bad.
     Changed { recorded_bytes: u64, bytes: u64 },
+    /// A re-hash read this file and it did not match the digest it is pinned to,
+    /// and **nothing has written to it since**.
+    ///
+    /// The strongest negative claim this application makes about a file. Unlike
+    /// [`Self::Changed`], which is two integers disagreeing and may be nothing
+    /// worse than a restore from backup, this is the whole file having been read
+    /// and compared. It is reported rather than inferred: the check that produced
+    /// it may have been made weeks ago, and the point of writing it down was that
+    /// it should still be here after a restart.
+    ///
+    /// The qualifier is load-bearing and is why this is not simply "the last
+    /// re-check failed". A verdict describes the bytes it was measured against;
+    /// once the length or the timestamp moves, those bytes are gone and the
+    /// verdict with them, so the state falls back to [`Self::Changed`]. See
+    /// [`integrity_of`].
+    FailedRecheck { expected: String, actual: String },
 }
 
 /// Decide what may be said, from the record and the file as it is now.
@@ -238,6 +343,27 @@ pub enum GgufIntegrity {
 /// leftover record is [`GgufIntegrity::NotInstalled`], not
 /// [`GgufIntegrity::Changed`]: there is nothing to have changed, and reporting a
 /// change would send someone looking for corruption in a file they removed.
+///
+/// # Where the verdict is read, and why it is there and not earlier
+///
+/// **Inside the branch where the two integers still agree, never before it.**
+/// This is the one placement decision in KNEG-130 and both halves of it matter:
+///
+/// - Reading it *only* there is what stops a recorded failure being rendered as
+///   [`GgufIntegrity::UnchangedSinceInstall`]. A failed re-check writes the
+///   file's **current** length and mtime, so the cheap comparison agrees --
+///   which would otherwise have this function make its strongest positive claim
+///   about the one file the application has proved is wrong.
+/// - Reading it *before* the comparison would be the obvious way to write this
+///   and is the wrong one. The verdict describes the bytes that were hashed. Once
+///   the length or the timestamp moves, those bytes are gone -- somebody has
+///   reinstalled the model, or restored it -- and an accusation carried forward
+///   over a file that has since been repaired is a screen nobody can clear.
+///   So a moved file falls to [`GgufIntegrity::Changed`] whatever the verdict
+///   says, and the next re-hash settles it.
+///
+/// The branch is chosen by the **recorded** verdict. Nothing here hashes
+/// anything; this function stays pure over integers and a small enum.
 #[must_use]
 pub fn integrity_of(record: Option<&InstallRecord>, observed: Option<Observed>) -> GgufIntegrity {
     let Some(observed) = observed else {
@@ -248,8 +374,14 @@ pub fn integrity_of(record: Option<&InstallRecord>, observed: Option<Observed>) 
     };
 
     if record.bytes == observed.bytes && record.mtime == observed.mtime {
-        GgufIntegrity::UnchangedSinceInstall {
-            verified_by: record.strength(),
+        match &record.verdict {
+            Verdict::Passed => GgufIntegrity::UnchangedSinceInstall {
+                verified_by: record.strength(),
+            },
+            Verdict::Failed { expected, actual } => GgufIntegrity::FailedRecheck {
+                expected: expected.clone(),
+                actual: actual.clone(),
+            },
         }
     } else {
         GgufIntegrity::Changed {
@@ -295,16 +427,22 @@ pub fn observe(gguf: &Path) -> Option<Observed> {
 
 /// Read the record beside a GGUF, or `None` when there is nothing to read.
 ///
-/// Missing, unreadable, malformed and written-by-a-future-schema all answer
-/// `None`, and they are folded together on purpose: each one means the same
-/// thing to the decision, which is that nothing is known about this file. A
+/// Missing, unreadable, malformed and written-by-a-schema-we-do-not-know all
+/// answer `None`, and they are folded together on purpose: each one means the
+/// same thing to the decision, which is that nothing is known about this file. A
 /// half-written record is not evidence of tampering, and treating it as such
 /// would put a warning in front of a user whose machine simply lost power.
+///
+/// **Both schemas are accepted**, against [`READABLE_SCHEMAS`] rather than
+/// against [`SCHEMA`]. A record written before the verdict field existed reads
+/// as [`Verdict::Passed`] and keeps saying exactly what it said before the bump;
+/// see [`InstallRecord::verdict`]. Comparing against `SCHEMA` alone would have
+/// made the version bump silently discard every record already on disk.
 #[must_use]
 pub fn read_record(gguf: &Path) -> Option<InstallRecord> {
     let raw = std::fs::read_to_string(record_path(gguf)).ok()?;
     let record: InstallRecord = serde_json::from_str(&raw).ok()?;
-    (record.schema == SCHEMA).then_some(record)
+    READABLE_SCHEMAS.contains(&record.schema).then_some(record)
 }
 
 /// Write the record for a GGUF that has just been checked.
@@ -329,27 +467,59 @@ pub fn write_record(
         bytes: metadata.len(),
         mtime: Mtime::of(metadata.modified()?),
         checked_at_unix_seconds: chrono::Utc::now().timestamp(),
+        verdict: Verdict::Passed,
     };
-    let json = serde_json::to_string_pretty(&record)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-    std::fs::write(record_path(gguf), json)
+    write(gguf, &record)
 }
 
-/// Remove the record beside a GGUF, if there is one.
+/// Record that a re-hash of this file **disagreed** with the digest it is
+/// pinned to.
 ///
-/// Called when a re-hash disagrees with the pinned digest. A record that
-/// survived *that* is a record which was wrong — the file's length and mtime say
-/// nothing has changed while its bytes say otherwise — and leaving it in place
-/// would have the screen answer "unchanged since it was installed" about a file
-/// this application has just proved is not the one that was installed.
+/// Called where `forget_record` used to be. Its removal is KNEG-130.
 ///
-/// Absent afterwards is the only outcome that matters, so a missing file is not
-/// an error and neither is a failure to delete one that reports back as gone.
-pub fn forget_record(gguf: &Path) -> std::io::Result<()> {
-    match std::fs::remove_file(record_path(gguf)) {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        other => other,
-    }
+/// **The reasoning that produced the deletion is preserved and better served by
+/// writing.** The point was never "forget it": it was *never let the screen say
+/// unchanged about this file*. A record that survived a mismatch is a record
+/// which was wrong -- the length and the mtime say nothing has changed while the
+/// bytes say otherwise -- so it could not be left as it was. But deleting it
+/// dropped the row to [`GgufIntegrity::Unrecorded`], which this module insists is
+/// *not an accusation* and which every GGUF installed before records existed also
+/// reports, and it silenced `local_llm::start_model`'s warning, which fires for
+/// [`GgufIntegrity::Changed`]. The finding was destroyed by the act of responding
+/// to it. Overwriting the record with the verdict satisfies the original
+/// requirement and keeps the finding.
+///
+/// **`verified_by` is written as [`VerifiedBy::Nothing`], deliberately.** Nothing
+/// about these bytes was verified; the last thing that looked at them refused
+/// them. Carrying the install's old strength forward would put the record's
+/// strongest word beside its worst verdict.
+///
+/// The length and mtime stored are the file's **as it is now**, which is what
+/// makes [`GgufIntegrity::FailedRecheck`] mean "and nothing has written to it
+/// since" -- see [`integrity_of`].
+pub fn write_failed_record(gguf: &Path, expected: &str, actual: &str) -> std::io::Result<()> {
+    let metadata = std::fs::metadata(gguf)?;
+    let record = InstallRecord {
+        schema: SCHEMA,
+        sha256: Some(expected.to_owned()),
+        verified_by: VerifiedBy::Nothing.as_str().to_owned(),
+        bytes: metadata.len(),
+        mtime: Mtime::of(metadata.modified()?),
+        checked_at_unix_seconds: chrono::Utc::now().timestamp(),
+        verdict: Verdict::Failed {
+            expected: expected.to_owned(),
+            actual: actual.to_owned(),
+        },
+    };
+    write(gguf, &record)
+}
+
+/// Serialise one record into place. Shared by both writers so the two cannot
+/// disagree about where a record goes or how it is spelled.
+fn write(gguf: &Path, record: &InstallRecord) -> std::io::Result<()> {
+    let json = serde_json::to_string_pretty(record)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    std::fs::write(record_path(gguf), json)
 }
 
 /// The whole answer for one GGUF: read the record, stat the file, decide.
@@ -388,6 +558,18 @@ mod tests {
             bytes,
             mtime: Mtime { seconds, nanos },
             checked_at_unix_seconds: 1_700_000_000,
+            verdict: Verdict::Passed,
+        }
+    }
+
+    /// The same record, carrying a re-hash that disagreed.
+    fn failed(bytes: u64, seconds: i64, nanos: u32) -> InstallRecord {
+        InstallRecord {
+            verdict: Verdict::Failed {
+                expected: "1".repeat(64),
+                actual: "2".repeat(64),
+            },
+            ..record(bytes, seconds, nanos, VerifiedBy::Nothing)
         }
     }
 
@@ -520,12 +702,12 @@ mod tests {
         );
     }
 
-    /// The four states are four distinct things on the wire.
+    /// The five states are five distinct things on the wire.
     ///
     /// The frontend switches on `state`; two variants that serialised the same
     /// would make one of them unreachable and the other wrong.
     #[test]
-    fn the_four_states_are_four_distinct_tags() {
+    fn the_five_states_are_five_distinct_tags() {
         let tags: Vec<String> = [
             GgufIntegrity::NotInstalled,
             GgufIntegrity::UnchangedSinceInstall {
@@ -535,6 +717,10 @@ mod tests {
             GgufIntegrity::Changed {
                 recorded_bytes: 1,
                 bytes: 2,
+            },
+            GgufIntegrity::FailedRecheck {
+                expected: "1".repeat(64),
+                actual: "2".repeat(64),
             },
         ]
         .iter()
@@ -552,8 +738,18 @@ mod tests {
                 "not-installed",
                 "unchanged-since-install",
                 "unrecorded",
-                "changed"
+                "changed",
+                "failed-recheck"
             ]
+        );
+
+        // `failed-recheck` must not be mistakable for `changed`: the first is
+        // the whole file having been read, the second is two integers
+        // disagreeing, and the screen says very different things about them.
+        assert_eq!(
+            tags.iter().collect::<std::collections::HashSet<_>>().len(),
+            5,
+            "two states share a tag, so one of them is unreachable"
         );
 
         // The name is the claim. `unchanged-since-install` is weaker than
@@ -571,6 +767,171 @@ mod tests {
         .unwrap();
         assert_eq!(json["recordedBytes"], 4_680_000_000_u64);
         assert_eq!(json["bytes"], 2_u64);
+
+        // Both digests cross, because a message carrying only one of them
+        // cannot be acted on -- the same reason `RecheckOutcome::Mismatched`
+        // carries the pair.
+        let json = serde_json::to_value(GgufIntegrity::FailedRecheck {
+            expected: "1".repeat(64),
+            actual: "2".repeat(64),
+        })
+        .unwrap();
+        assert_eq!(json["expected"], "1".repeat(64));
+        assert_eq!(json["actual"], "2".repeat(64));
+        assert_ne!(json["expected"], json["actual"]);
+    }
+
+    /* ---------------------------------------------------- the failed verdict */
+
+    /// A recorded failure is reported even though the two integers agree.
+    ///
+    /// **Half one of the placement decision in [`integrity_of`], and the reason
+    /// KNEG-130 exists.** A failed re-check writes the file's *current* length
+    /// and mtime, so the cheap comparison agrees -- and a function that read only
+    /// those two integers would answer `UnchangedSinceInstall`, which is this
+    /// application's strongest positive claim, about the one file it has proved
+    /// is wrong.
+    ///
+    /// The control is the same record with the verdict flipped to `Passed`: it
+    /// answers `UnchangedSinceInstall` from identical integers, so this is not
+    /// passing because everything answers `FailedRecheck`.
+    ///
+    /// **Mutation that turns it red:** delete the `match` on `record.verdict` in
+    /// [`integrity_of`] and return `UnchangedSinceInstall` unconditionally.
+    #[test]
+    fn a_recorded_failure_is_reported_even_though_the_file_has_not_moved() {
+        let seen = observed(4_680_000_000, 1_756_000_000, 250);
+
+        let held = failed(4_680_000_000, 1_756_000_000, 250);
+        let state = integrity_of(Some(&held), Some(seen));
+
+        assert_eq!(
+            state,
+            GgufIntegrity::FailedRecheck {
+                expected: "1".repeat(64),
+                actual: "2".repeat(64),
+            }
+        );
+        assert!(
+            !matches!(state, GgufIntegrity::UnchangedSinceInstall { .. }),
+            "a file a re-hash has refused must never make the strongest claim \
+             this application has"
+        );
+
+        // The control. Identical bytes, identical timestamp, opposite verdict.
+        let passed = record(4_680_000_000, 1_756_000_000, 250, VerifiedBy::Digest);
+        assert_eq!(
+            integrity_of(Some(&passed), Some(seen)),
+            GgufIntegrity::UnchangedSinceInstall {
+                verified_by: VerifiedBy::Digest
+            },
+            "the two integers still decide the passing case; only the verdict \
+             separates these two records"
+        );
+    }
+
+    /// A file written to since the failed check reports the change, not the
+    /// stale verdict.
+    ///
+    /// **Half two of the same decision, and the half that says why the verdict is
+    /// read *inside* the branch where the integers agree rather than before it.**
+    /// Reading it first is the obvious way to write this and the wrong one: a
+    /// verdict describes the bytes it was measured against, and once the length
+    /// or the timestamp moves those bytes are gone -- somebody has reinstalled
+    /// the model. An accusation carried forward over a file that has since been
+    /// repaired is a screen nobody can clear.
+    ///
+    /// **Mutation that turns it red:** move the `match` on `record.verdict` above
+    /// the `record.bytes == observed.bytes` comparison.
+    #[test]
+    fn a_file_written_to_since_a_failed_check_reports_the_change_not_the_stale_verdict() {
+        let held = failed(4_680_000_000, 1_756_000_000, 250);
+
+        // Same length, later timestamp: the model has been put back.
+        let state = integrity_of(Some(&held), Some(observed(4_680_000_000, 1_756_000_900, 0)));
+        assert_eq!(
+            state,
+            GgufIntegrity::Changed {
+                recorded_bytes: 4_680_000_000,
+                bytes: 4_680_000_000,
+            },
+            "the verdict described bytes that are no longer there"
+        );
+        assert!(
+            !matches!(state, GgufIntegrity::FailedRecheck { .. }),
+            "a repaired file must not keep reporting the verdict it earned \
+             before it was repaired"
+        );
+
+        // The control: unmoved, the verdict still stands. Without it this would
+        // pass against an `integrity_of` that never returns `FailedRecheck`.
+        assert_eq!(
+            integrity_of(
+                Some(&held),
+                Some(observed(4_680_000_000, 1_756_000_000, 250))
+            ),
+            GgufIntegrity::FailedRecheck {
+                expected: "1".repeat(64),
+                actual: "2".repeat(64),
+            }
+        );
+    }
+
+    /// A record whose verdict failed claims no strength.
+    ///
+    /// The record's `verified_by` is what
+    /// [`GgufIntegrity::UnchangedSinceInstall`] reports, so a failed record that
+    /// kept the install's old `digest` would be this file's strongest word
+    /// sitting beside its worst verdict, one refactor away from being read out.
+    #[test]
+    fn a_failed_record_claims_no_strength() {
+        let dir = tempfile::tempdir().unwrap();
+        let gguf = dir.path().join("weights.gguf");
+        std::fs::write(&gguf, b"the model").unwrap();
+
+        // The control first: an ordinary install records what it earned.
+        write_record(&gguf, Some(&"a".repeat(64)), VerifiedBy::Digest).unwrap();
+        assert_eq!(read_record(&gguf).unwrap().strength(), VerifiedBy::Digest);
+
+        write_failed_record(&gguf, &"1".repeat(64), &"2".repeat(64)).unwrap();
+        assert_eq!(read_record(&gguf).unwrap().strength(), VerifiedBy::Nothing);
+    }
+
+    /// A failed verdict survives the round trip to disk and back.
+    ///
+    /// The pure tests above prove the decision; this proves the verdict is
+    /// actually written, actually parsed back, and reaches the same answer
+    /// through the real filesystem edge. Surviving a restart is the whole point
+    /// of writing it down.
+    #[test]
+    fn a_failed_verdict_survives_the_round_trip_to_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let gguf = dir.path().join("weights.gguf");
+        std::fs::write(&gguf, b"the model").unwrap();
+
+        // The control: the passing writer, on the same file, first.
+        write_record(&gguf, Some(&"a".repeat(64)), VerifiedBy::StatedDigest).unwrap();
+        assert_eq!(
+            integrity(&gguf),
+            GgufIntegrity::UnchangedSinceInstall {
+                verified_by: VerifiedBy::StatedDigest
+            }
+        );
+
+        write_failed_record(&gguf, &"1".repeat(64), &"2".repeat(64)).unwrap();
+        assert_eq!(
+            integrity(&gguf),
+            GgufIntegrity::FailedRecheck {
+                expected: "1".repeat(64),
+                actual: "2".repeat(64),
+            }
+        );
+
+        // Reading it twice must not change the answer: this runs on every paint.
+        assert_eq!(integrity(&gguf), integrity(&gguf));
+
+        // And the file is still the user's.
+        assert!(gguf.exists(), "the weights are not ours to delete");
     }
 
     /* ------------------------------------------------------------ the record */
@@ -608,6 +969,71 @@ mod tests {
         assert!(json.contains("\"checkedAtUnixSeconds\""), "{json}");
 
         assert_eq!(serde_json::from_str::<InstallRecord>(&json).unwrap(), held);
+    }
+
+    /// A record written before the verdict field existed still reads as passed.
+    ///
+    /// **The backward-compatibility claim, proved against a fixture rather than
+    /// against a fresh install.** `SCHEMA` moved 1 -> 2 for KNEG-130, and the
+    /// old `record.schema == SCHEMA` test would have discarded every record
+    /// already on disk -- dropping every installed model from *unchanged since
+    /// it was installed* to *installed, never recorded* for no reason a user
+    /// could see, which is the exact overclaim-in-reverse this module exists to
+    /// avoid.
+    ///
+    /// The JSON is written out by hand, with no `verdict` key, because a record
+    /// built through `InstallRecord { .. }` would acquire the field from the
+    /// struct and prove nothing about what is on somebody's disk today.
+    ///
+    /// **Mutation that turns it red:** `READABLE_SCHEMAS` back to `[SCHEMA]`.
+    #[test]
+    fn a_schema_one_record_still_reads_as_passed_with_no_verdict_recorded() {
+        let dir = tempfile::tempdir().unwrap();
+        let gguf = dir.path().join("weights.gguf");
+        std::fs::write(&gguf, vec![0x47_u8; 4096]).unwrap();
+
+        // The record has to describe this file exactly, or the answer would be
+        // `Changed` for a reason that has nothing to do with the schema.
+        let meta = std::fs::metadata(&gguf).unwrap();
+        let mtime = Mtime::of(meta.modified().unwrap());
+        let schema_one = format!(
+            r#"{{
+  "schema": 1,
+  "sha256": "{digest}",
+  "verifiedBy": "stated-digest",
+  "bytes": {bytes},
+  "mtime": {{ "seconds": {seconds}, "nanos": {nanos} }},
+  "checkedAtUnixSeconds": 1756000000
+}}"#,
+            digest = "a".repeat(64),
+            bytes = meta.len(),
+            seconds = mtime.seconds,
+            nanos = mtime.nanos,
+        );
+        assert!(
+            !schema_one.contains("verdict"),
+            "the fixture must be what a pre-KNEG-130 build wrote"
+        );
+        std::fs::write(record_path(&gguf), &schema_one).unwrap();
+
+        let read = read_record(&gguf).expect("a schema 1 record is still readable");
+        assert_eq!(read.verdict, Verdict::Passed);
+        assert_eq!(
+            integrity(&gguf),
+            GgufIntegrity::UnchangedSinceInstall {
+                verified_by: VerifiedBy::StatedDigest
+            },
+            "a record written before the bump must keep saying what it said"
+        );
+
+        // The control, in the same test: a schema this build does not know is
+        // still no record at all, so the acceptance above is a decision and not
+        // serde accepting anything put in front of it.
+        let schema_three = schema_one.replace("\"schema\": 1", "\"schema\": 3");
+        assert_ne!(schema_three, schema_one, "the fixture edit did nothing");
+        std::fs::write(record_path(&gguf), schema_three).unwrap();
+        assert!(read_record(&gguf).is_none());
+        assert_eq!(integrity(&gguf), GgufIntegrity::Unrecorded);
     }
 
     /// A record from a schema this build does not know is no record at all.
@@ -671,14 +1097,14 @@ mod tests {
 
     /* -------------------------------------------------- against real files */
 
-    /// The whole cycle, on a real file: recorded, changed, forgotten, deleted.
+    /// The whole cycle, on a real file: recorded, changed, refused, deleted.
     ///
     /// The pure tests above prove the decision; this proves the two integers
     /// reaching it are the ones the filesystem actually reports. Those are
     /// different claims, and the second is the one that would break on a
     /// platform whose mtime resolution is coarser than the write it follows.
     #[test]
-    fn a_real_file_walks_all_four_states() {
+    fn a_real_file_walks_all_five_states() {
         let dir = tempfile::tempdir().unwrap();
         let gguf = dir.path().join("weights.gguf");
 
@@ -716,13 +1142,26 @@ mod tests {
             other => panic!("a truncated file read as {other:?}"),
         }
 
-        // 5. The record removed, as a failed re-hash does.
-        forget_record(&gguf).unwrap();
-        assert_eq!(integrity(&gguf), GgufIntegrity::Unrecorded);
-        forget_record(&gguf).unwrap(); // idempotent
+        // 5. A re-hash refuses it. The verdict replaces the record rather than
+        //    deleting it -- deleting dropped the row to `Unrecorded`, which is
+        //    this module's *nothing is known* answer, and silenced the one
+        //    warning the start path emits. KNEG-130.
+        write_failed_record(&gguf, &"1".repeat(64), &"2".repeat(64)).unwrap();
+        assert_eq!(
+            integrity(&gguf),
+            GgufIntegrity::FailedRecheck {
+                expected: "1".repeat(64),
+                actual: "2".repeat(64),
+            }
+        );
+        assert_ne!(
+            integrity(&gguf),
+            GgufIntegrity::Unrecorded,
+            "a refused file must not read like one nobody has looked at"
+        );
 
-        // 6. The model removed. A stale record must not resurrect it.
-        write_record(&gguf, None, VerifiedBy::Size).unwrap();
+        // 6. The model removed. A stale record must not resurrect it, and a
+        //    stale *failed* record must not accuse a file that is not there.
         std::fs::remove_file(&gguf).unwrap();
         assert_eq!(integrity(&gguf), GgufIntegrity::NotInstalled);
     }

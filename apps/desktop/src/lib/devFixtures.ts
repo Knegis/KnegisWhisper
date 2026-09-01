@@ -715,6 +715,15 @@ const LOCAL_MODELS: LocalStatus = {
 const SHERPA: SherpaStatus = {
   availability: { state: "installable" },
   cliInstalled: true,
+  // `unknown` rather than `stale`, and deliberately the opposite choice from
+  // the whisper block above: this is the commoner state in the wild -- what
+  // every install made before records existed reports -- and the sherpa row is
+  // the one with no Update button beside it, so the sentence has to carry the
+  // whole weight on its own.
+  cliFreshness: {
+    state: "unknown",
+    why: "it was installed before this application started recording what it installs",
+  },
   // One installed and selected, one installable, and the two streaming models
   // carrying the reason they cannot be picked -- the three states this list has,
   // so the screen is worked on against all of them rather than the easy one.
@@ -760,6 +769,10 @@ const LOCAL_LLM: LocalLlmStatus = {
     tracking: "https://github.com/ggml-org/llama.cpp/releases",
   },
   serverInstalled: false,
+  // Nothing is installed on this fixture's platform, so there is nothing to be
+  // out of date. The `stale` and `unknown` branches are rendered by the two
+  // blocks above; a third copy here would be a third thing to keep in step.
+  serverFreshness: { state: "not-installed" },
   models: [
     {
       id: "qwen2.5-7b-instruct-q4",
@@ -803,6 +816,29 @@ const LOCAL_LLM: LocalLlmStatus = {
       // file is there and nothing beside it says what was checked. It is
       // rendered as neither good news nor bad, which is the whole point.
       integrity: { state: "unrecorded" },
+      verifiedBy: "digest",
+      draft: null,
+    },
+    {
+      id: "qwen2.5-14b-instruct-q4",
+      name: "Qwen2.5 14B Instruct (Q4_K_M)",
+      provider: "qwen",
+      sizeBytes: 8_990_000_000,
+      quantization: "Q4_K_M",
+      contextLength: 32768,
+      recommended: false,
+      supportsThinking: false,
+      // The one state here that is an accusation, and the one that was
+      // impossible to render before KNEG-130: a re-hash read the whole file and
+      // refused it. Until then the verdict was thrown away with the record and
+      // the row fell back to `unrecorded` -- the *nothing is known* answer --
+      // so the worst finding this application can make looked exactly like the
+      // ordinary state of every model installed before records existed.
+      integrity: {
+        state: "failed-recheck",
+        expected: "9f2c1d4a6b8e0357c1a9d2f4b6e8071932a5c7d9e1f3054627b8d0a2c4e6f819",
+        actual: "0a1b2c3d4e5f60718293a4b5c6d7e8f90112233445566778899aabbccddeeff0",
+      },
       verifiedBy: "digest",
       draft: null,
     },

@@ -1201,7 +1201,15 @@ runningModel: string | null,
 installDir: string, installDirFellBack: boolean, };
 
 /**
- * What a refresh of the server binary did.
+ * What a refresh of a local server binary did.
+ *
+ * **One type for both runtimes**, `whisper-server` and `llama-server`. Not
+ * politeness: `ipc_types` asserts that no two Rust types render to the same
+ * TypeScript name, so a second `RefreshOutcome` for the llama.cpp refresh
+ * added in KNEG-128 would have been a failing test rather than a duplicate
+ * nobody noticed. The two refreshes answer the same three questions -- what
+ * was unpacked, what came back, and what did not -- so sharing the answer was
+ * the right resolution rather than renaming one of them.
  */
 export type RefreshOutcome = {
 /**
@@ -1211,7 +1219,8 @@ export type RefreshOutcome = {
  */
 files: number,
 /**
- * The model the server was running before, now running again.
+ * The model the server was running before, now running again. A whisper
+ * model id or a GGUF id, depending on which screen asked.
  */
 restarted: string | null,
 /**
@@ -1273,7 +1282,23 @@ availability: Availability,
 /**
  * Whether the offline CLI itself is installed.
  */
-cliInstalled: boolean, models: Array<SherpaModelStatus>,
+cliInstalled: boolean,
+/**
+ * Whether what is installed is the build this version pins.
+ *
+ * `install` has written a record beside the extracted files since
+ * KNEG-113 and nothing here read it, so `cli_installed` stayed true while
+ * the runtime fell behind the manifest. KNEG-128.
+ *
+ * Derived from the same call as `cli_installed`, which is the point --
+ * see [`sherpa_status`].
+ *
+ * **One archive, three consumers.** The same install directory serves
+ * dictation here, `sherpa_stream`'s meeting server and `diarization`'s
+ * speaker CLI, under one record, so this answer is about all three at once
+ * and the screen says so.
+ */
+cliFreshness: SidecarFreshness, models: Array<SherpaModelStatus>,
 /**
  * Which model dictation is set to use, if any.
  */
@@ -1328,10 +1353,14 @@ ready: boolean, modelsDir: string, };
 /**
  * What the Intelligence > Local screen may say about one GGUF.
  *
- * Four answers, and the third is the reason this is not a boolean. See the
+ * Five answers, and the third is the reason this is not a boolean. See the
  * module documentation for what each one is worth.
+ *
+ * **Not `Copy` since KNEG-130.** [`Self::FailedRecheck`] carries two 64-character
+ * digests, and a state that can be duplicated by accident is one a caller can
+ * report twice about a file it read once.
  */
-export type GgufIntegrity = { "state": "not-installed" } | { "state": "unchanged-since-install", verifiedBy: VerifiedBy, } | { "state": "unrecorded" } | { "state": "changed", recordedBytes: number, bytes: number, };
+export type GgufIntegrity = { "state": "not-installed" } | { "state": "unchanged-since-install", verifiedBy: VerifiedBy, } | { "state": "unrecorded" } | { "state": "changed", recordedBytes: number, bytes: number, } | { "state": "failed-recheck", expected: string, actual: string, };
 
 /**
  * What a re-hash of an installed model found.
@@ -1407,7 +1436,21 @@ export type LocalLlmStatus = {
 /**
  * Whether a server binary is published for this platform.
  */
-availability: Availability, serverInstalled: boolean, models: Array<LocalLlmModelStatus>,
+availability: Availability, serverInstalled: boolean,
+/**
+ * Whether the binary on disk is the build this version pins.
+ *
+ * `server_installed` was the only claim this screen made about the server
+ * binary, and it stays true while the binary falls releases behind the
+ * manifest -- the state `local_model` reported for `whisper-server` in
+ * KNEG-113 and the state this one has been in, unreported, ever since.
+ * `install` has written the record since KNEG-113; nothing here read it.
+ * KNEG-128.
+ *
+ * Derived from the same call as `server_installed`, so the two cannot
+ * disagree. See [`server_state`].
+ */
+serverFreshness: SidecarFreshness, models: Array<LocalLlmModelStatus>,
 /**
  * The port the server is on, if it is running.
  */

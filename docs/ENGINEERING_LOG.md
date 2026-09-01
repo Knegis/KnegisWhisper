@@ -622,6 +622,245 @@ twice. Mutated both ways before being believed: adding `contacts` to the list an
 
 **No migration**, and that is the shape of the closing rather than a limitation of it. There is one
 migration file and `migrations_are_idempotent_across_reopens` asserts `applied == 1`.
+---
+
+## 2026-09-01 (KNEG-128) — four installers wrote the record and one screen read it
+
+`kw_sidecar::install` writes `.kw-install.json` into every sidecar directory it promotes, naming the
+digest of the archive the files came out of. That landed with KNEG-113 earlier the same day, and it
+landed for all of them: four modules install through that function. **One read it back.**
+
+`local_llm.rs`, `local_asr.rs`, `diarization.rs` and `media.rs` all had the evidence sitting beside
+their binaries and none of them looked, so each went on claiming *Installed* — a fact about a path —
+while the binary fell behind the manifest. That is the exact state KNEG-113 was written to end, left
+standing in four places by the change that ended it in the fifth.
+
+Two are fixed here, llama.cpp and sherpa. ffmpeg and yt-dlp stay out: a different status shape,
+neither observed stale, and widening would be the speculative reach that issue's own argument for
+being Low warns against.
+
+### The exhaustiveness guard went in first, and that ordering was the point
+
+`freshnessLabel` returns `string | undefined`, so falling off the end of its switch was legal. A
+fifth `SidecarFreshness` variant would have compiled without a murmur and rendered **no sentence at
+all**, and both call sites compare the tag with a bare `===`, which `tsc` cannot check either.
+
+Measured rather than argued, in both directions: a sixth variant added to `ipc-types.ts` by hand
+passed `tsc --noEmit` cleanly before the guard and fails with `Type '{ state: "withdrawn"; ... }' is
+not assignable to type 'never'` after it. Same defect `meetingIsLive` records being bitten by when
+`stalled` arrived for KNEG-116 — *"both screens compiled without a murmur, and answered no"* — and
+the same `never` guard closes it.
+
+It went in **before** the call sites, because this issue takes that function from one screen to
+three. Fixing it afterwards would have tripled the silent-failure surface first and then asked
+somebody to notice.
+
+### llama.cpp: one call for two answers, and a trap that had nothing to do with freshness
+
+`local_llm_status` resolved the asset, located the installation and **threw the `Installation` away**
+to keep a bare `bool`. `server_state` replaces the chain and returns both answers from one
+`sidecar_freshness`, so `server_installed` is a reading of the freshness rather than a second
+question — the disagreement `local_model_status` is arranged to prevent.
+
+`RefreshOutcome` is **shared**, not copied. `ipc_types` asserts that no two Rust types render to the
+same TypeScript name, so a second one would have been a failing test rather than a duplicate nobody
+noticed; the two refreshes answer the same three questions, so sharing was the right resolution.
+`Restart` and `refresh_failure` widened to `pub(crate)` with it.
+
+The refresh reads the running model through `running_model()` and never `LocalEndpoint::port`, which
+records a use and holds the idle clock open — the same choice `local_llm_status` makes and for the
+same reason.
+
+**And then the thing that was not in the issue.** `local_llm_start` armed the idle watcher;
+`LocalLlm::start_model` did not. A refresh that restarts through `start_model` and stops there brings
+the server back with **nothing left to ever stop it** — six gigabytes resident until the application
+exits, which is worse than any staleness this issue was filed about, and nothing in the tree would
+have caught it. Found by reading the start path before copying it, not by a failure.
+
+Fixed two ways, and the split matters. `start_and_watch` is now the only way the ordinary path
+reaches a running server, so the pairing is structural. The refresh consults
+`must_arm_idle_watcher`, which is pure and tested in both directions — `Restarted` must arm, and
+`NothingWasRunning` and `Failed` must not, because a watcher over a server that is not running is a
+task spawned to discover that on its first tick. What no test can do is observe a
+`tauri::async_runtime::spawn`; that half is held by construction.
+
+### sherpa: the fix is worth more than the feature, and the button is declined
+
+`installed_cli()` hand-built `cli_root()/sherpa/<exe>` and never consulted the catalogue, so
+`cli_installed` and any freshness reading were two independent answers to one question. Both now go
+through `locate` against the published asset. It is **not** a live bug — all five published targets
+ship `.../bin/sherpa-onnx-offline`, so the two spellings agree today — and that is precisely the
+condition under which this kind of duplication survives until it does not.
+
+`resolve_id` is reached from `dictation.rs` and `media.rs` through a bare `Selection`, so threading a
+`Catalog` to it would mean threading one through `DictationRuntime` and `MediaImportRuntime` as well.
+`installed_cli()` parses the shipped catalogue itself instead: an embedded-string `from_str` on a
+path that is about to spawn a process and transcribe a WAV, with `LocalAsr::new` having already
+proved at startup that it parses.
+
+**No refresh button, and the reason is the streaming server's lifecycle rather than the archive.**
+`meeting.rs:656` is the only caller of `SherpaStream::start` and **nothing anywhere calls
+`SherpaStream::stop`** — the only stop is the one `start` performs on itself when switching models.
+So a running streaming server means *a meeting has happened this session*, not *a meeting is
+happening now*. A refresh would either stop it unconditionally, ending the live transcript of a
+meeting in progress from a dictation settings screen that never mentions meetings, or need a
+live-meeting guard reaching into a second runtime's state. Neither version is testable — the whole
+sequence is reachable only through an `AppHandle`, exactly as whisper's button is, and that button
+has still never been pressed.
+
+So the screen reports the staleness and says plainly that it cannot fix it, including that one
+archive serves dictation, meetings and speaker separation, and that reinstalling means closing the
+application. A screen that reports honestly and cannot act beats a button that is wrong at the worst
+possible moment.
+
+Worth recording separately, observed and not chased: if nothing ever calls `SherpaStream::stop`, the
+streaming server **outlives every meeting**, holding a 630 MB model from the first meeting until the
+process exits. That may be deliberate reuse — `running_on` already argues for keeping a loaded server
+between meetings — or it may be the defect llama's five-minute idle timer exists to prevent, one
+runtime over. It is outside both issues and it is not guessed at here.
+
+### The mutation that survived
+
+Six mutations for this half; five killed, **one did not**. Replacing `located_cli`'s `locate` call
+with a hand-built path to a nonexistent executable left the suite green, because the function reached
+for `cli_root()` internally and no test could point it anywhere. That is the `media.rs:1334-1340` line
+again, in a function written an hour earlier by someone who had just finished writing about it.
+
+Split into `located_cli_in(catalog, root)` and a one-line wrapper, the same mutation now fails with
+`left: None, right: Some(...sherpa-onnx-offline.exe)`. The gap was real and the mutation pass is the
+only reason it is not still there.
+
+### What is believed rather than measured
+
+Everything on both screens. The freshness reads are exercised against real directories with the
+catalogue's own executable name in them, and `server_state`, `server_progress`,
+`must_arm_idle_watcher` and `located_cli_in` are all tested. **Nothing has been pressed.** The
+llama refresh's stop-install-restart, whether the restarted server actually idle-stops five minutes
+later, and how the sherpa sentence reads on a machine whose runtime really is unrecorded are all
+by-hand checks, and they go to Linear rather than being claimed here.
+
+---
+
+## 2026-09-01 (KNEG-130) — the response to the finding destroyed the finding
+
+`local_llm_recheck_model` hashes an installed GGUF against its pinned digest. It is the only thing in
+this application that actually proves the bytes of a model, and when it found a file that did not
+match, `settle_record` **deleted the record beside it**.
+
+That looks like the safe direction and is not. The reasoning behind the deletion was sound as far as
+it went — a record that survived a mismatch is a record that is *wrong*, because it says the length
+and the timestamp are what they were at install while the bytes say they are not, and leaving it
+would have the screen answer *unchanged since it was installed* about a file just proved otherwise.
+The mistake was in what deleting leaves behind.
+
+It leaves `GgufIntegrity::Unrecorded`, which `gguf_check` documents at length as **not an
+accusation**: it is the state every GGUF installed before records existed is in, including the
+1.28 GB Qwen2.5 on the developer's machine. So a file that had been read in full and refused became
+indistinguishable from one nobody had ever looked at.
+
+**And it was worse than a display problem.** `start_model`'s warning matched `GgufIntegrity::Changed`
+and nothing else. A failed re-check deleted the record, the row fell to `Unrecorded`, the warning
+stopped firing — so the log went quiet on exactly the file the application had just proved was not
+the one that was installed. Responding to the finding was what destroyed it. The verdict survived
+only as long as the command that produced it, and a restart erased it entirely.
+
+### The verdict goes in the one record
+
+Not a second file beside it. Two files describing one model are two things that can disagree, and
+the disagreement would be about whether a model can be trusted.
+
+`SCHEMA` moves 1 → 2 and `InstallRecord` gains a `verdict`: `Passed`, or `Failed` carrying the pair
+of digests that disagreed. The digests live in the verdict rather than being read back off the
+record's own `sha256`, and that is not duplication — `sha256` records what the *install* pinned and
+these record what the *re-check* actually compared. They are the same string today. A pin updated in
+the registry after a model was installed is exactly when a person reading the file needs both.
+
+**The precedent is `calendar.rs`, not something invented here.** It already persists negative
+verdicts — `SyncOutcome::{Failed, TokenUnavailable}` — and folds them into live status through the
+pure `combine_token_status`, whose doc makes the argument this needed: one shape for both, so a
+screen can never see a different answer from a check it just ran than from the record read back
+later. What is new is only the medium. This is the first negative verdict this application writes to
+**a file beside an artefact** rather than into SQLite, and the module doc says so plainly, because
+the record is ordinary JSON in a user-writable directory — a place to keep a finding, never a place
+to enforce one.
+
+### Where the verdict is read is the whole design
+
+Inside the branch where the two integers already agree, never before it. Both halves are load-bearing
+and each has its own test:
+
+- **Only there** is what stops a recorded failure rendering as `UnchangedSinceInstall`. A failed
+  re-check writes the file's *current* length and mtime, so the cheap comparison agrees — and reading
+  only those two integers would have this application make its strongest positive claim about the one
+  file it has proved is wrong.
+- **Not before it**, which is the obvious way to write it and the wrong one. A verdict describes the
+  bytes it was measured against. Once the length or the timestamp moves, those bytes are gone —
+  somebody has reinstalled the model — and the state falls back to `Changed` whatever the verdict
+  said. An accusation carried forward over a file that has since been repaired is a screen nobody can
+  clear.
+
+`integrity_of` stays pure over two integers and a small enum. Nothing here hashes anything; the
+branch is chosen by the *recorded* verdict.
+
+`FailedRecheck` is therefore worth exactly the sentence it carries: the file was read in full and
+refused, **and nothing has written to it since**.
+
+### Backward compatibility was the part that could have gone wrong quietly
+
+`read_record` compared `record.schema == SCHEMA`. Bumping the constant with that line in place would
+have discarded every record already on disk — every installed model dropping from *unchanged since
+it was installed* to *installed, never recorded*, for no reason a user could see. That is the same
+overclaim this module exists to prevent, running in reverse.
+
+There are two constants now, `SCHEMA` for what is written and `READABLE_SCHEMAS` for what is
+understood, because those are different facts. A schema 1 record has no `verdict` key and
+`#[serde(default)]` reads it as `Passed`, which is the correct reading: a record written by an
+install is a record of a check that passed.
+
+**Proved against a fixture, not a fresh install.** The test writes the JSON by hand, with no
+`verdict` key, against a real file whose length and mtime it names — a record built through
+`InstallRecord { .. }` would acquire the field from the struct and prove nothing about what is on
+somebody's disk today. Its control is a schema 3 fixture in the same test, so the acceptance is a
+decision rather than serde taking whatever it is handed.
+
+### `forget_record` is gone, and its argument is not
+
+Deleted rather than left uncalled. Its reasoning moved into `write_failed_record`'s doc, because the
+reasoning was never "forget it" — it was *never let the screen say unchanged about this file* — and
+writing the verdict satisfies that better than deleting did.
+
+The failed record writes `verified_by: nothing`. Nothing about those bytes was verified; the last
+thing that looked at them refused them. Carrying the install's old strength forward would put this
+file's strongest word beside its worst verdict.
+
+### The one assertion that carries the argument, and the gate that actually guards it
+
+`start_model`'s warning was the reason this mattered, so the branch had to become reachable.
+`load_warning(&GgufIntegrity) -> Option<String>` is pure and tested over all five states: `Changed`
+and `FailedRecheck` speak, and `UnchangedSinceInstall`, `Unrecorded` and `NotInstalled` are silent.
+Both directions are asserted, because only one of them is the defect and the other is the noise
+fixing it would create — a warning that fires for every `Unrecorded` model on disk is a warning
+nobody reads.
+
+The cost is honest and small: the structured `recorded_bytes`/`bytes` tracing fields become part of
+the message text. A branch nothing can reach is worth less than two log fields.
+
+**What that test does not prove is that `start_model` still calls it**, and this is worth recording
+because it is the interesting half. Mutating `load_warning`'s body proves the function; it says
+nothing about the call. What catches a deleted call site is not a test at all — `load_warning` is
+private, so removing its only caller makes it dead code and `clippy --workspace --all-targets -D
+warnings` fails the build. Verified by doing it. The gate is the guard here, not the suite, and those
+are different claims.
+
+### What is believed rather than measured
+
+The five states were exercised against real files in a temporary directory, and the failed verdict
+was written, read back, cleared by a passing re-check, and invalidated by a subsequent write. **No
+real GGUF has been through this.** `local_llm_recheck_model` had never been run before this change
+and still has not been: its verdict and its record-settling are tested as pure functions and against
+small real files, and the command that wires them to `spawn_blocking` and the registry is the
+untestable edge. The first genuine 1.28 GB hash, and the first `failed-recheck` row on a real screen,
+are still by-hand checks.
 
 ---
 
@@ -825,6 +1064,10 @@ spells itself "verified": two integers agreeing is not a hash, and the weaker wo
 | `unchanged-since-install` | a record, and the length and mtime still agree with it |
 | `unrecorded` | the file is there and nothing beside it says what was checked |
 | `changed` | a record, and it disagrees |
+| `failed-recheck` | a re-hash read the file and refused it, and nothing has written to it since |
+
+The fifth arrived hours later, with KNEG-130 — see that entry. It is listed here rather than left to
+be discovered, because the four-state framing above is the thing that made the defect possible.
 
 `unrecorded` is the one the design turns on. **Every GGUF installed before this landed is in it** —
 including the 1.28 GB `qwen2.5-1.5b-instruct-q5_k_m.gguf` on the developer's machine right now — and
@@ -849,6 +1092,12 @@ Two decisions inside it:
   replacement the cheap check documents itself as unable to see. Left in place it would have the
   screen make the strongest available claim about the worst available file. The weights stay: they
   may be twenty gigabytes somebody chose to keep, and a stale pin here is as likely as rot there.
+
+  **The removal lasted a few hours.** The requirement was right and the remedy was not: deleting the
+  record dropped the row to `unrecorded` — the *nothing is known* state, which is not an accusation
+  and which every pre-record model reports — and silenced `start_model`'s warning with it, so
+  responding to the finding was what destroyed it. A mismatch now **writes** the verdict instead.
+  KNEG-130, same day.
 - **`nothing-pinned` is its own answer.** Nothing shipped today can reach it, and "there was nothing
   to check" still must not render as "checked, and fine".
 
@@ -1135,9 +1384,13 @@ the same advice, so every non-permission failure stays a plain `Io`.
 
 Nothing re-hashes the installed executable, so a file corrupted or replaced on disk after an install
 still reads as whatever the record says. Nothing checks freshness at startup or on a schedule: like
-every other download here, a refresh happens because somebody pressed a button. `local_llm.rs` and
-`local_asr.rs` install sidecars through the same `kw_sidecar::install` and so get the record for
-free, but neither reports freshness or offers a refresh — only whisper does.
+every other download here, a refresh happens because somebody pressed a button.
+
+`local_llm.rs` and `local_asr.rs` install sidecars through the same `kw_sidecar::install` and so get
+the record for free, and at the time this was written neither read it. **Both report freshness now**
+— KNEG-128, same day, which also found that `diarization.rs` and `media.rs` make four non-readers
+rather than two. llama.cpp gained a refresh button with it; sherpa deliberately did not, because the
+streaming meeting server runs out of that directory and nothing ever stops it. See that entry.
 
 **The install half is measured; the stop and the restart around it are not.**
 `tests/real_install.rs` was run against the real network on 2026-09-01 — not a fixture — and it now

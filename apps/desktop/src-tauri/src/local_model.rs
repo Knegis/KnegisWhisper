@@ -279,10 +279,17 @@ impl SidecarFreshness {
 
 /// What this build knows about the sidecar on disk.
 ///
-/// The filesystem half of the question, kept in one place because three callers
-/// want it and each of them getting the search path slightly wrong is exactly
-/// how `server_installed` and the start path would come to disagree.
-fn sidecar_freshness(
+/// The filesystem half of the question, kept in one place because several
+/// callers want it and each of them getting the search path slightly wrong is
+/// exactly how `server_installed` and the start path would come to disagree.
+///
+/// `pub(crate)` since KNEG-128, for [`crate::local_llm`] and
+/// [`crate::local_asr`], which install sidecars through the same
+/// `kw_sidecar::install` and so have had the record on disk since KNEG-113
+/// without ever reading it. A second copy of this function was the alternative
+/// and would have been two things to keep in step -- and the one that drifted
+/// would report a different answer about the same directory.
+pub(crate) fn sidecar_freshness(
     catalog: &Catalog,
     sidecar: &str,
     root: &std::path::Path,
@@ -611,22 +618,26 @@ pub async fn local_model_install(
 /// Three states rather than an `Option<String>`, because "nothing was running"
 /// and "something was running and could not be started again" are opposite
 /// news and the second one is the whole risk of doing this at all.
+///
+/// `pub(crate)` since KNEG-128: the llama.cpp refresh in [`crate::local_llm`]
+/// stops and restarts its own server for the same reason and needs the same
+/// three answers about it.
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum Restart {
+pub(crate) enum Restart {
     NothingWasRunning,
     Restarted(String),
     Failed { model: String, error: String },
 }
 
 impl Restart {
-    const fn restarted(&self) -> Option<&String> {
+    pub(crate) const fn restarted(&self) -> Option<&String> {
         match self {
             Self::Restarted(model) => Some(model),
             _ => None,
         }
     }
 
-    const fn error(&self) -> Option<&String> {
+    pub(crate) const fn error(&self) -> Option<&String> {
         match self {
             Self::Failed { error, .. } => Some(error),
             _ => None,
@@ -645,7 +656,10 @@ impl Restart {
 /// Pure, and separated from the command for the reason `media.rs:1334-1340`
 /// records: a judgement reachable only through an `AppHandle` is a judgement
 /// nothing can test.
-fn refresh_failure(install_error: &str, restart: &Restart) -> String {
+///
+/// `pub(crate)` since KNEG-128; the llama.cpp refresh leaves the user in exactly
+/// the same position and owes them the same sentence.
+pub(crate) fn refresh_failure(install_error: &str, restart: &Restart) -> String {
     match restart {
         Restart::NothingWasRunning => install_error.to_owned(),
         Restart::Restarted(model) => format!(
@@ -659,7 +673,15 @@ fn refresh_failure(install_error: &str, restart: &Restart) -> String {
     }
 }
 
-/// What a refresh of the server binary did.
+/// What a refresh of a local server binary did.
+///
+/// **One type for both runtimes**, `whisper-server` and `llama-server`. Not
+/// politeness: `ipc_types` asserts that no two Rust types render to the same
+/// TypeScript name, so a second `RefreshOutcome` for the llama.cpp refresh
+/// added in KNEG-128 would have been a failing test rather than a duplicate
+/// nobody noticed. The two refreshes answer the same three questions -- what
+/// was unpacked, what came back, and what did not -- so sharing the answer was
+/// the right resolution rather than renaming one of them.
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct RefreshOutcome {
@@ -667,7 +689,8 @@ pub struct RefreshOutcome {
     /// [`kw_sidecar::Installed::files`] is: one would mean the sibling `ggml`
     /// libraries were missed and the server will not start.
     pub files: usize,
-    /// The model the server was running before, now running again.
+    /// The model the server was running before, now running again. A whisper
+    /// model id or a GGUF id, depending on which screen asked.
     pub restarted: Option<String>,
     /// Why it could not be started again, when it could not. Not an error —
     /// the replacement succeeded — but not something to leave unsaid either.

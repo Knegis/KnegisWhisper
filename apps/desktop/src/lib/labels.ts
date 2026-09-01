@@ -42,6 +42,7 @@ import type {
   NonActivating,
   Offer,
   RecheckOutcome,
+  RefreshOutcome,
   RelocatedCredential,
   ShortcutHookStatus,
   SidecarFreshness,
@@ -287,10 +288,11 @@ export function verificationLabel(verifiedBy: VerifiedBy): string {
 /**
  * What is still known about an installed GGUF, without overstating it.
  *
- * Four states, and the reason there are four rather than two is the whole of
- * KNEG-107. The field this replaced was a boolean over `path.exists()`, so a
- * file hashed at install and untouched since rendered identically to one nobody
- * has ever looked at — and a model corrupted months later rendered that way too.
+ * Five states, and the reason there are five rather than two is the whole of
+ * KNEG-107 and then KNEG-130. The field this replaced was a boolean over
+ * `path.exists()`, so a file hashed at install and untouched since rendered
+ * identically to one nobody has ever looked at — and a model corrupted months
+ * later rendered that way too.
  *
  * The rule this file opens with does the rest of the work here. **`unrecorded`
  * is not a warning.** Every GGUF installed before the record existed is in that
@@ -302,6 +304,15 @@ export function verificationLabel(verifiedBy: VerifiedBy): string {
  * the caveat rather than burying it: two integers agreeing is not a hash. The
  * one thing that proves the bytes is `recheckLocalLlmModel`, and the caveat is
  * what points a reader at it.
+ *
+ * **`failed-recheck` is the only state here that is an accusation**, and it is
+ * the one state that was previously impossible to render. A failed re-hash used
+ * to delete the record beside the file, which dropped the row to `unrecorded` —
+ * the *nothing is known* answer — so the worst finding this application can
+ * make looked exactly like the ordinary state of every model installed before
+ * records existed. It is written down now and it survives a restart, which is
+ * why this arm can say "and nothing has written to it since": once the file
+ * moves, the state falls back to `changed` and the verdict is discarded.
  */
 export function ggufIntegrityLabel(integrity: GgufIntegrity): Stated {
   switch (integrity.state) {
@@ -333,6 +344,13 @@ export function ggufIntegrityLabel(integrity: GgufIntegrity): Stated {
             : `it was ${integrity.recordedBytes.toLocaleString()} bytes when it was checked and is ${integrity.bytes.toLocaleString()} now`,
         caveat:
           "The bytes may still be the right ones; a restore moves a timestamp without changing a file. Re-checking hashes it and says which.",
+      };
+    case "failed-recheck":
+      return {
+        text: "This file did not match its checksum",
+        detail: `it was hashed in full and compared against the checksum it is pinned to — pinned ${integrity.expected}, found ${integrity.actual}`,
+        caveat:
+          "This is the one finding here that was not guessed from a file's size and timestamp: the whole file was read. It was left where it is, and nothing has written to it since that check. Either it has been damaged or replaced since it was installed, or the checksum this build carries for it has gone stale — reinstalling the model is what settles that, and deleting gigabytes on a guess is not something this screen will do for you.",
       };
   }
 }
@@ -384,6 +402,21 @@ export function recheckOutcomeLabel(outcome: RecheckOutcome): Stated {
  * The digests are shown short. Both are in `SidecarFreshness` in full, for a
  * bug report; twelve characters is enough to tell two builds apart on screen
  * and a 64-character hex string in a settings row is unreadable.
+ *
+ * **The `never` at the end is not decoration, and it was missing.** This
+ * function returns `string | undefined`, so falling off the end of the switch
+ * was legal: a fifth `SidecarFreshness` variant would have compiled without a
+ * murmur and rendered **no sentence at all** — and both call sites compare the
+ * tag with a bare `===`, which `tsc` cannot check either. Measured before it was
+ * fixed: a sixth variant added to `ipc-types.ts` by hand passed `tsc --noEmit`
+ * cleanly.
+ *
+ * That is the same defect `meetingIsLive` records being bitten by when `stalled`
+ * was added for KNEG-116 — *"both screens compiled without a murmur, and
+ * answered no"* — and the guard is the same one. It went in **before** KNEG-128
+ * took this type from one screen to three, because adding the call sites first
+ * would have multiplied the silent-failure surface by three and then asked
+ * somebody to notice.
  */
 export function freshnessLabel(freshness: SidecarFreshness): string | undefined {
   switch (freshness.state) {
@@ -399,12 +432,42 @@ export function freshnessLabel(freshness: SidecarFreshness): string | undefined 
       )}, pinned ${short(freshness.expected)}`;
     case "unknown":
       return `it is not known whether this is the build this version pins: ${freshness.why}`;
+    default: {
+      const unhandled: never = freshness;
+      return unhandled;
+    }
   }
 }
 
 /** Enough of a digest to tell two builds apart, and no more. */
 function short(digest: string): string {
   return `${digest.slice(0, 12)}…`;
+}
+
+/**
+ * What a completed refresh of a local server binary should say.
+ *
+ * Two facts, and the second is the one that would otherwise go missing: a
+ * refresh stops the server before replacing it, so whether it came back is
+ * separate news from whether the replacement worked. `restartError` is not an
+ * error — the binary *was* replaced — but a user whose dictation or local model
+ * has just gone quiet needs to be told why.
+ *
+ * Lives here rather than in a screen because two screens use it since KNEG-128:
+ * `Settings > Transcription > Local` for `whisper-server` and
+ * `Settings > Intelligence > Local` for `llama-server`. It was a private
+ * function in the first of those, and copying it into the second would have been
+ * two sentences about one mechanism, drifting apart.
+ */
+export function refreshOutcomeLabel(outcome: RefreshOutcome): string {
+  const replaced = `The server binary was replaced (${outcome.files} files).`;
+  if (outcome.restartError) {
+    return `${replaced} The model that was running could not be started again: ${outcome.restartError}`;
+  }
+  if (outcome.restarted) {
+    return `${replaced} ${outcome.restarted} is running again.`;
+  }
+  return replaced;
 }
 
 export function bytes(written: number, total: number | null): string {

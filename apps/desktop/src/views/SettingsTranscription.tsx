@@ -33,11 +33,11 @@ import {
   useSherpaStreamModel,
   type Dispatch,
   type ProviderSummary,
-  type RefreshOutcome,
 } from "../lib/ipc";
 import {
   freshnessLabel,
   progressLabel,
+  refreshOutcomeLabel,
   useForDetail,
   useForLabel,
   verificationLabel,
@@ -77,26 +77,6 @@ function dispatchLabel(d: Dispatch): string {
  * dotted path.
  */
 const SERVER_ROW = "sidecar.whisper";
-
-/**
- * What a completed refresh should say.
- *
- * Two facts, and the second is the one that would otherwise go missing: a
- * refresh stops the server before replacing it, so whether it came back is
- * separate news from whether the replacement worked. `restartError` is not an
- * error -- the binary was replaced -- but a user whose dictation has just gone
- * quiet needs to be told why.
- */
-function refreshOutcomeLabel(outcome: RefreshOutcome): string {
-  const replaced = `The server binary was replaced (${outcome.files} files).`;
-  if (outcome.restartError) {
-    return `${replaced} The model that was running could not be started again: ${outcome.restartError}`;
-  }
-  if (outcome.restarted) {
-    return `${replaced} ${outcome.restarted} is running again.`;
-  }
-  return replaced;
-}
 
 export function SettingsTranscription({
   onGoToProviders,
@@ -513,6 +493,45 @@ export function SettingsTranscription({
                       : "installed automatically with the first model"
                   }
                 />
+                {/*
+                  Which build is installed, said out loud — and, unlike the
+                  whisper block above, with no button beside it. That is a
+                  deliberate limit and the sentence says so rather than leaving
+                  a reader hunting for a control that is not there.
+
+                  The reason is this runtime's lifecycle, not the archive.
+                  `sherpa_stream` starts its meeting server out of this same
+                  directory and nothing ever stops it, so a running server means
+                  "a meeting happened this session", not "a meeting is happening
+                  now". A refresh replaces the directory, which on Windows fails
+                  against a running .exe — and an unconditional stop would end
+                  the live transcript of a meeting in progress, from a dictation
+                  screen that never mentions meetings. Reporting the staleness
+                  honestly beats a button that is wrong at the worst moment.
+                */}
+                {freshnessLabel(sherpa.cliFreshness) ? (
+                  <p
+                    className={
+                      sherpa.cliFreshness.state === "current"
+                        ? "muted"
+                        : "muted warn"
+                    }
+                  >
+                    {freshnessLabel(sherpa.cliFreshness)}
+                  </p>
+                ) : null}
+                {sherpa.cliFreshness.state !== "not-installed" &&
+                sherpa.cliFreshness.state !== "current" ? (
+                  <p className="caveat">
+                    This runtime cannot be replaced from here yet. One archive
+                    serves three things — dictation with a Parakeet model, the
+                    live transcript in meetings, and speaker separation — so
+                    replacing it affects all three, and the meeting server runs
+                    out of this directory for as long as the application is
+                    open. Reinstalling means closing the application and
+                    deleting the directory above by hand.
+                  </p>
+                ) : null}
                 <Row label="Models kept in" value={sherpa.modelsDir} />
                 <ul className="list">
                   {sherpa.models.map((m) => {
