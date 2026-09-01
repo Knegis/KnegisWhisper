@@ -658,12 +658,30 @@ mod tests {
         assert_eq!(assign(&turns, &[(13.05, 13.50)]), vec![Some(1)]);
     }
 
+    /// A span no voice covered comes back `None` rather than a nearest guess.
+    ///
+    /// 17.041 to 22.137 is a real hole in the recorded output. Naming the
+    /// nearest voice would invent an attribution indistinguishable from a
+    /// measured one.
+    ///
+    /// **`vec![None]` is also what an empty `turns` produces**, for every span
+    /// there is — so without the line below this asserted a hole in nothing.
+    /// The control is the turn on the far side of the hole, 22.137--24.837
+    /// speaker_00: it proves the parse reached this region of the recording, so
+    /// the `None` is a gap between turns rather than an absence of turns.
+    ///
+    /// **Mutation:** make `interpret` return `Ok(Vec::new())`. The control fails
+    /// and the negative goes on passing.
     #[test]
     fn a_span_diarization_never_covered_is_none() {
-        // 17.041 to 22.137 is a real hole in the recorded output. Naming the
-        // nearest voice would invent an attribution indistinguishable from a
-        // measured one.
         let turns = interpret(&recorded_english_model(), "", true).unwrap();
+        assert_eq!(
+            assign(&turns, &[(23.0, 24.0)]),
+            vec![Some(0)],
+            "the control: `assign` answers None for every span of an empty \
+             `turns`, so the hole below needs a turn beside it to be a hole in \
+             anything"
+        );
         assert_eq!(assign(&turns, &[(18.0, 21.0)]), vec![None]);
     }
 
@@ -711,17 +729,36 @@ mod tests {
         );
     }
 
+    /// `--num-clusters` is never passed.
+    ///
+    /// Measured: asking for four produced three, so it is a hint rather than a
+    /// promise -- and a meeting does not know its own attendance in the first
+    /// place. If this flag ever appears, something has decided it knows how many
+    /// people are in the room.
+    ///
+    /// **"No argument contains num-clusters" is trivially true of no arguments
+    /// at all**, so a `build_args` that returned `vec![]` — or that was renamed
+    /// out from under this — would leave it green while proving nothing. The
+    /// control is one flag the list must carry. `build_args_names_the_flags_the_cli_accepts`
+    /// pins the whole vector by equality two tests above, but a negative that
+    /// depends on a sibling for its meaning is one deletion away from meaning
+    /// nothing.
+    ///
+    /// **Mutation:** make `build_args` return `Vec::new()`. The control fails
+    /// and the negative goes on passing.
     #[test]
     fn num_clusters_is_never_passed() {
-        // Measured: asking for four produced three, so it is a hint rather
-        // than a promise -- and a meeting does not know its own attendance in
-        // the first place. If this flag ever appears, something has decided it
-        // knows how many people are in the room.
         let models = Models {
             segmentation: PathBuf::from("seg/model.onnx"),
             embedding: PathBuf::from("emb.onnx"),
         };
         let args = build_args(&models, Path::new("a.wav"), &Tuning::default());
+        assert!(
+            args.iter()
+                .any(|a| a.starts_with("--clustering.cluster-threshold=")),
+            "the control: an empty or renamed argument list makes the negative \
+             below true for the wrong reason -- {args:?}"
+        );
         assert!(!args.iter().any(|a| a.contains("num-clusters")), "{args:?}");
     }
 

@@ -1577,19 +1577,51 @@ mod tests {
     /// mouse button reaching either would collect a sentence about AltGr or
     /// about longer shortcuts that starts with the same keys — neither of which
     /// means anything about a mouse.
+    ///
+    /// **Both negatives needed a control and had none.** "No caution" is also
+    /// true of a `prefix_cautions` that returned nothing at all, and — the
+    /// reason this one is worth writing down — true of a `from_stored` that
+    /// read `Mouse4` as an accelerator neither function ever looks at, leaving
+    /// `accelerators` empty. Nothing else in the tree pins `from_stored` on a
+    /// mouse spelling: `a_mouse_button_is_hooked_rather_than_registered_and_says_what_it_also_does`
+    /// and `every_spelling_the_classifier_takes_is_one_the_hook_parser_takes`
+    /// both go through `classify` instead, so that mutation had no sentinel
+    /// anywhere.
+    ///
+    /// The control is a modifier-only chord in the same vector. One caution from
+    /// each function, naming `Control+Alt`, proves both ran over this input and
+    /// produced output — and that what they left out was the mouse.
+    ///
+    /// **Mutation:** make `prefix_cautions` return `Vec::new()`. The control
+    /// fails on `len() == 1`. That is the mutation worth naming, because the old
+    /// test asserted only `is_empty()` and **passed** under it.
+    ///
+    /// **And one mutation that mutates nothing, recorded because the lesson
+    /// keeps recurring.** Deleting the `let Accelerator::ModifierOnly { .. } =
+    /// ... else { continue };` guard looks like it should let the mouse binding
+    /// through, and it does not: `Chord::parse("Mouse4")` fails on its own
+    /// account — `key_of` does not know the spelling, and a chord of one is
+    /// `TooShort` either way — so the very next `let Ok(chord) = ... else {
+    /// continue };` skips it regardless. Two independent guards, and no
+    /// single-line edit defeats both. Same shape as the `chunks_exact(2)`
+    /// non-mutation recorded for `nemotron_socket`'s `samples`.
     #[test]
     fn a_mouse_binding_collects_no_chord_caution() {
-        let bindings = vec![Binding::from_stored(
-            HotkeyAction::Dictation,
-            "Mouse4",
-            HotkeyMode::Hold,
-        )];
-        assert!(prefix_cautions(&bindings).is_empty());
-        assert!(cautions(
-            &bindings,
-            &crate::keyboard_layout::AltGr::Present { example: '@' }
-        )
-        .is_empty());
+        let layout = crate::keyboard_layout::AltGr::Present { example: '@' };
+        let mouse = Binding::from_stored(HotkeyAction::Dictation, "Mouse4", HotkeyMode::Hold);
+        let chord =
+            Binding::from_stored(HotkeyAction::Translation, "Control+Alt", HotkeyMode::Toggle);
+        let both = vec![mouse.clone(), chord];
+
+        for found in [prefix_cautions(&both), cautions(&both, &layout)] {
+            assert_eq!(found.len(), 1, "{found:?}");
+            assert_eq!(found[0].accelerator, "Control+Alt");
+            assert_eq!(found[0].action, HotkeyAction::Translation);
+        }
+
+        let only_mouse = vec![mouse];
+        assert!(prefix_cautions(&only_mouse).is_empty());
+        assert!(cautions(&only_mouse, &layout).is_empty());
     }
 
     /* --------------------------------------------------------------------- conflicts */
