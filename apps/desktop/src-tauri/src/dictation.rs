@@ -312,7 +312,15 @@ const fn classify(recorded: Option<u16>, answering: bool) -> Recorded {
 /// selected but cannot be built is an error rather than a quiet fall through to
 /// whisper -- audio going somewhere the screen did not name is the failure this
 /// ordering exists to prevent.
-fn local_engine(
+///
+/// **`pub(crate)` since 2026-09-01, because a second caller needed the same
+/// rule and had been getting a different one.** `meeting.rs`'s whole-recording
+/// pass asked `WhisperServer` directly, so on a machine where a sherpa model was
+/// selected -- the documented "one local engine" state, and the one this
+/// project ships people into -- the pass failed with "the local model server is
+/// not running" and every meeting fell back to its live partials. Reusing this
+/// is the fix; a second copy of the rule would have been the bug again.
+pub(crate) fn local_engine(
     sherpa: &crate::local_asr::Selection,
     whisper: Option<WhisperServer>,
 ) -> Result<Option<Box<dyn LocalTranscriber>>, String> {
@@ -1075,6 +1083,45 @@ pub fn on_hotkey(app: &AppHandle) {
 )]
 mod tests {
     use super::*;
+
+    /* --------------------------------------------- which local engine */
+
+    #[test]
+    fn a_selected_sherpa_model_never_falls_through_to_whisper() {
+        // The rule two callers now share, and the reason sharing it was worth
+        // doing: `meeting.rs`'s whole-recording pass had its own version that
+        // knew only about `WhisperServer`, so on a machine with a Parakeet
+        // model selected -- the documented one-local-engine state -- the pass
+        // failed and every meeting note silently became the live partials.
+        // Found by a person reading a saved note, not by anything here.
+        use std::sync::{Arc, RwLock};
+
+        let policy = || kw_network_policy::NetworkPolicy::new().expect("a policy");
+        let server = || WhisperServer::new(policy(), 1, None);
+
+        let nothing: crate::local_asr::Selection = Arc::new(RwLock::new(None));
+        assert!(local_engine(&nothing, None)
+            .expect("no engine at all is a state, not an error")
+            .is_none());
+        assert!(
+            local_engine(&nothing, Some(server()))
+                .expect("whisper alone is fine")
+                .is_some(),
+            "with no sherpa selection the whisper server is the engine"
+        );
+
+        // The assertion that matters. A selected model that cannot be built is
+        // an error **even when whisper is available**, because audio going
+        // somewhere the screen did not name is worse than a refusal.
+        let broken: crate::local_asr::Selection =
+            Arc::new(RwLock::new(Some("not-a-model".to_owned())));
+        let err = local_engine(&broken, None).expect_err("a broken selection is an error");
+        assert!(err.contains("not-a-model"), "{err}");
+        assert!(
+            local_engine(&broken, Some(server())).is_err(),
+            "a broken sherpa selection must not quietly become a whisper dictation"
+        );
+    }
 
     /* ------------------------------------------- the recorded local port */
 

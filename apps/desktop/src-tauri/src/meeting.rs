@@ -23,10 +23,19 @@
 //!
 //! # Why the note is not made of the live events
 //!
-//! The live events are partials: windows overlap, so they repeat words, and
+//! The live events are partials, and what that costs depends on the provider:
+//! `local`'s five-second windows overlap by two and repeat words, and
 //! [`kw_meeting_core::local`] explains why deduplicating them properly is not
-//! possible with what `/inference` returns. So the note gets one pass over the
-//! finished file, which is exactly the path a dictation takes.
+//! possible with what `/inference` returns; `local-streaming` revises one event
+//! per utterance in place and does not repeat at all. Either way they are the
+//! running transcription rather than a considered pass, so the note gets one
+//! pass over the finished file, which is exactly the path a dictation takes.
+//!
+//! **Which engine that pass uses is [`crate::dictation::local_engine`]'s
+//! answer, not this module's.** It used to build a `WhisperServer` directly and
+//! so failed outright whenever a sherpa model was selected -- the documented
+//! one-local-engine state -- and every note silently fell back to the partials
+//! it exists to avoid. Found by a person reading a saved note on 2026-09-01.
 //!
 //! If that pass fails — an hour of audio is a large request — the partials are
 //! saved instead, with the note saying so. A meeting nobody can read because the
@@ -804,6 +813,12 @@ pub struct MeetingRuntime {
     credentials: Arc<dyn kw_security::CredentialStore>,
     /// Where the local model server is listening, and what it loaded.
     local: crate::local_model::SharedLocal,
+    /// Which sherpa model is selected for dictation, if any.
+    ///
+    /// Read by the whole-recording pass so it uses the same engine dictation
+    /// would. Not for meetings -- a meeting's *live* provider is chosen on
+    /// `Settings > Meetings` and has nothing to do with this.
+    sherpa: crate::local_asr::Selection,
     /// The streaming model server, started on demand for `local-streaming`.
     ///
     /// The whole supervisor rather than a `SharedStream`, unlike `local` above:
@@ -1051,6 +1066,7 @@ impl MeetingRuntime {
         policy: NetworkPolicy,
         credentials: Arc<dyn kw_security::CredentialStore>,
         local: crate::local_model::SharedLocal,
+        sherpa: crate::local_asr::Selection,
         stream: Arc<crate::sherpa_stream::SherpaStream>,
     ) -> Self {
         Self {
@@ -1060,6 +1076,7 @@ impl MeetingRuntime {
             credentials,
             live: Arc::new(Mutex::new(None)),
             local,
+            sherpa,
             stream,
             watch: Mutex::new(WatchState::default()),
         }
@@ -1623,8 +1640,9 @@ impl MeetingRuntime {
         let mut content = text.clone();
         if from_partials {
             content.push_str(
-                "\n\n(The whole-recording pass did not complete, so this is the live transcript. \
-                 Its windows overlap, so some phrases repeat.)",
+                "\n\n(The whole-recording pass did not complete, so this is the running \
+                 transcript from during the meeting rather than a single pass over the \
+                 finished audio.)",
             );
         }
         if let Some(reason) = live_failure {
@@ -1686,26 +1704,41 @@ impl MeetingRuntime {
 
     /// Transcribe the finished recording in one request.
     async fn transcribe_whole(&self, path: &std::path::Path) -> Result<Option<String>, String> {
-        use kw_transcription_core::local::{Inference, LocalTranscriber as _};
+        use kw_transcription_core::local::Inference;
 
-        let port = *self
-            .local
-            .port
-            .read()
-            .map_err(|_| "the local model server's state could not be read".to_owned())?;
-        let port = port.ok_or_else(|| "the local model server is not running".to_owned())?;
-        let model = self
-            .local
-            .model
-            .read()
-            .map_err(|_| "the local model could not be read".to_owned())?
-            .clone();
+        // The same engine dictation would use, through the same function, and
+        // that is the whole of the 2026-09-01 fix. This used to build a
+        // `WhisperServer` directly and fail with "the local model server is not
+        // running" whenever a sherpa model was selected -- which is the
+        // documented one-local-engine state, so the whole-recording pass was
+        // failing for anybody who had chosen Parakeet, and every meeting note
+        // silently became the live partials. Found by a person reading a saved
+        // note, not by a test.
+        let whisper = {
+            let port = *self
+                .local
+                .port
+                .read()
+                .map_err(|_| "the local model server's state could not be read".to_owned())?;
+            let model = self
+                .local
+                .model
+                .read()
+                .map_err(|_| "the local model could not be read".to_owned())?
+                .clone();
+            port.map(|port| {
+                kw_transcription_core::local::WhisperServer::new(self.policy.clone(), port, model)
+            })
+        };
+
+        let engine = crate::dictation::local_engine(&self.sherpa, whisper)?.ok_or_else(|| {
+            "no local engine is available: start a model under Settings > Transcription > Local"
+                .to_owned()
+        })?;
 
         let wav = std::fs::read(path).map_err(|e| format!("could not read the recording: {e}"))?;
-        let server =
-            kw_transcription_core::local::WhisperServer::new(self.policy.clone(), port, model);
 
-        match server.transcribe(wav, None, None).await? {
+        match engine.transcribe(wav, None, None).await? {
             // This is the whole-file fallback: one string is what it wants,
             // and it is not asked for timings. `Timed` is accepted anyway
             // because the text is the same text -- refusing it would turn a

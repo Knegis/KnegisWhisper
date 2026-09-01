@@ -314,6 +314,8 @@ pub fn run() -> anyhow::Result<()> {
                 meeting_policy,
                 meeting_credentials,
                 local.shared(),
+                // So the whole-recording pass uses the engine dictation uses.
+                asr.selection(),
                 std::sync::Arc::clone(&stream),
             ));
             // Polls the process table while idle and offers to record a meeting

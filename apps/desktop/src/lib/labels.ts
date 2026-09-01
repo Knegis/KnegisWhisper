@@ -494,10 +494,18 @@ export function meetingOutcomeLabel(outcome: MeetingOutcome): string {
       const minutes = Math.round(outcome.durationSeconds / 60);
       const parts = [`Saved as note ${outcome.noteId} (${minutes} min).`];
       if (outcome.transcriptIsPartials) {
-        // Said plainly rather than left for the reader to notice repeated
-        // phrases and wonder.
+        // Said plainly rather than left for the reader to notice and wonder.
+        //
+        // It asserted "and some phrases repeat" until 2026-09-01. That is true
+        // of `Local windowed model`, whose five-second windows overlap by two,
+        // and **not** true of `Local streaming model`, which revises one event
+        // per utterance in place. Naming a symptom the reader then does not
+        // find is its own way of being untrustworthy, so this now says what is
+        // certain -- which pass produced the text -- and leaves the reader to
+        // judge the text.
         parts.push(
-          "The whole-recording pass did not complete, so the saved transcript is the live one and some phrases repeat.",
+          "The whole-recording pass did not complete, so the saved transcript is the running one " +
+            "from during the meeting rather than a single pass over the finished audio.",
         );
       }
       if (outcome.gaps > 0) {
