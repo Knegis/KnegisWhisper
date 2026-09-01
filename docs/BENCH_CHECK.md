@@ -155,9 +155,15 @@ whisper path never did. Fixed by giving it the same guard.
 
 **Skipping loses nothing.** The unconditional call looked like a way to keep the sidecar current,
 and never was — it can only succeed when no server is running, which is only the first install, when
-there is nothing to refresh. Keeping a sidecar current after that is **KNEG-113**, which is a real
-gap and a different one: the installed whisper sidecar dates from 2026-08-25 and the pinned archive
-has since gained `bench.exe` and `command.exe`, so it is measurably behind.
+there is nothing to refresh. Keeping a sidecar current after that was **KNEG-113**, a real gap and a
+different one: the installed whisper sidecar dated from 2026-08-25 and the pinned archive had since
+gained `bench.exe` and `command.exe`, so it was measurably behind and nothing would ever have said
+so. **Closed 2026-09-01.** `install` now writes a `.kw-install.json` naming the pinned digest into
+the directory it promotes, `Settings > Transcription > Local` reports whether the installed binary
+is that build — `unknown` where no record exists, which is what this machine still reports — and an
+**Update the server binary** button stops the server, replaces it and starts it again. See
+`docs/ENGINEERING_LOG.md` § 2026-09-01 (KNEG-113). **The button itself has not been pressed on real
+hardware**; see *Still unchecked* below.
 
 **2. There is no chat, and two documents told a person to hold one.** The instruction "install a
 local LLM and hold a chat" names a screen that does not exist. The application has thirteen views
@@ -169,6 +175,23 @@ GGUF is `Settings > Local models` → *Use this model*, then `Settings > Intelli
 model** route, then dictate. `reasoning.rs` already wires the two screens together and says so on
 screen — *"no local model is running. Start one under Local models."* — so the path is built and
 only its name was wrong. Both instructions are corrected.
+
+### Still unchecked, and needs a person at the machine
+
+1. **The server binary refreshed from the screen (KNEG-113, added 2026-09-01).** The button exists,
+   the freshness decision is tested and mutation-checked, and the Windows file-locking facts it is
+   built on were re-measured on 2026-09-01 by
+   `cargo run -p kw-sidecar --example running_exe_lock_probe`. None of that is a press.
+
+   This machine is the right one to press it on: `sidecars/whisper` still holds the 2026-08-25
+   files and no record, so the row should read *not known whether this is the build this version
+   pins*. With `tiny` resumed, press **Update the server binary** under
+   `Settings > Transcription > Local` and confirm four things — the directory gains `bench.exe` and
+   `command.exe`, the row turns to *the build this version of the application pins*, the week-old
+   `sidecars/whisper.incoming` is gone, and a dictation still works afterwards.
+
+   The fourth is the one that cannot be inferred: stopping and restarting the server around an
+   install is exercised by nobody, because it is reachable only through an `AppHandle`.
 
 ---
 

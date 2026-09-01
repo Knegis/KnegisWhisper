@@ -35,6 +35,7 @@
 //! | [`integrity`] | Proving a downloaded file is the pinned one |
 //! | [`install`] | Download, verify, unpack -- strictly in that order |
 //! | [`resolve`] | Finding an installed sidecar, or saying why not |
+//! | [`record`] | What was installed, and whether it is what this build pins |
 //! | [`port`] | Choosing a free loopback port from a declared range |
 //! | [`pid`] | Remembering what we started, so a crash can be cleaned up |
 //! | [`reap`] | Stopping what a previous run left behind, safely |
@@ -49,6 +50,7 @@ pub mod pid;
 pub mod port;
 pub mod process;
 pub mod reap;
+pub mod record;
 pub mod resolve;
 
 pub use catalog::{Catalog, SCHEMA_VERSION};
@@ -62,6 +64,7 @@ pub use pid::{Inventory, PidError, PidRecord, PidStore};
 pub use port::{allocate, BindProbe, PortError, PortProbe, LOOPBACK};
 pub use process::{start, Health, HttpHealth, Launch, ProcessError, Running, StartTimings};
 pub use reap::{reap_one, Liveness, Outcome, ProcessTable, SystemProcessTable, Verdict};
+pub use record::{freshness, Freshness, InstallRecord, Record, Unrecorded};
 pub use resolve::{locate, Installation, RealFs, SearchPath};
 
 /// Anything that can go wrong installing or running a sidecar.

@@ -41,6 +41,7 @@ import type {
   Offer,
   RelocatedCredential,
   ShortcutHookStatus,
+  SidecarFreshness,
   Sources,
   SyncOutcome,
   SystemAudioSupport,
@@ -237,6 +238,41 @@ export function verificationLabel(verifiedBy: VerifiedBy): string {
     case "nothing":
       return "not verified";
   }
+}
+
+/**
+ * Whether the installed server binary is the one this build pins.
+ *
+ * `unknown` is the case this function exists for, and it must not read as
+ * either of its neighbours. An install this application did not record cannot
+ * be compared with anything: calling it out of date would claim a comparison
+ * nobody made, and calling it current would excuse a binary the manifest may
+ * well have moved past. So the sentence says *not known* and then says why.
+ *
+ * The digests are shown short. Both are in `SidecarFreshness` in full, for a
+ * bug report; twelve characters is enough to tell two builds apart on screen
+ * and a 64-character hex string in a settings row is unreadable.
+ */
+export function freshnessLabel(freshness: SidecarFreshness): string | undefined {
+  switch (freshness.state) {
+    case "not-installed":
+      // The row already says "Not installed". A second sentence saying the same
+      // thing is noise.
+      return undefined;
+    case "current":
+      return "the build this version of the application pins";
+    case "stale":
+      return `a different build from the one this version pins — installed ${short(
+        freshness.installed,
+      )}, pinned ${short(freshness.expected)}`;
+    case "unknown":
+      return `it is not known whether this is the build this version pins: ${freshness.why}`;
+  }
+}
+
+/** Enough of a digest to tell two builds apart, and no more. */
+function short(digest: string): string {
+  return `${digest.slice(0, 12)}…`;
 }
 
 export function bytes(written: number, total: number | null): string {

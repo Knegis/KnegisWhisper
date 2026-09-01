@@ -431,6 +431,7 @@ pub fn run() -> anyhow::Result<()> {
             local_model::local_model_install,
             local_model::local_server_start,
             local_model::local_server_stop,
+            local_model::local_server_refresh,
             local_asr::sherpa_status,
             local_asr::sherpa_install_model,
             local_asr::sherpa_use_model,

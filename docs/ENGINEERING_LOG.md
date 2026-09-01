@@ -21,7 +21,7 @@ maintained in place rather than appended to, because its purpose is to be curren
 > detail and the by-hand check that found five real defects; [COMPLETION_PLAN.md](COMPLETION_PLAN.md)
 > keeps the phase 7–10 definitions.
 >
-> **Measured, not asserted, as of 2026-09-01:** `cargo test --workspace` — **1537 passing, 0
+> **Measured, not asserted, as of 2026-09-01:** `cargo test --workspace` — **1594 passing, 0
 > failed** (941 at the start of the original run, 1296 at its close on 2026-08-27); parity —
 > **103 entries, 5 declared unreachable** (17 at the start, 8 on 2026-08-27), and **all 13 UI
 > surfaces built**, with no "surface not built" entry remaining anywhere. The four: **no local-ASR
@@ -288,6 +288,143 @@ Unchanged from the Phases 1–4 entry, restated here so they are not buried:
   porting matrix. Upstream pins both by commit and verifies neither.
 - ~~**`nircmd`**~~ — **dropped**, as leaned towards: third-tier Windows paste fallback only, and
   `SendInput` works.
+
+---
+
+## 2026-09-01 (KNEG-113) — the sidecar could be proved to exist and never to be the right one
+
+`kw_sidecar::locate` answers "is there an executable at this path". That is the only question
+anything ever asked about an installed sidecar, and it is not the question that matters. The
+manifest pins a SHA-256, `install` checks the download against it, and then **the answer is thrown
+away**: nothing on disk records which archive the files came from, so from the moment an install
+finishes the application can no longer tell its own sidecar from any other.
+
+The consequence was visible on this machine and had been for a week. `sidecars/whisper` dated from
+2026-08-25; the pinned archive extracted on 2026-08-31 into `sidecars/whisper.incoming` carried
+`bench.exe` and `command.exe` that the installed copy did not. Two directories, one demonstrably
+behind the other, and no code path anywhere that would have noticed.
+
+That `.incoming` directory was not incidental either — see the last section.
+
+### Detection first, because replacement without it is a button nobody can aim
+
+Three directions were on the table and the one chosen was the smallest: **make an installed
+sidecar's identity knowable.** `install` now writes a `.kw-install.json` into the directory it
+promotes, naming the pinned archive's digest, the URL, the upstream repo and release, and when. A
+new pure function, `kw_sidecar::record::freshness`, compares that digest against the one this build
+pins.
+
+**It is written into the staging directory, not into the install directory.** So it is carried
+across by the same `rename` as the files it describes, and there is no window in which a directory
+exists without its record or holds a record left over from the extraction before. Written after the
+rename instead, a crash between the two steps would leave an install whose record described the one
+it replaced — worse than no record, because it reads as a measurement. A test makes the promote fail
+at the replace step and asserts the record is already in staging by then.
+
+**What it proves and what it does not**, because the difference is the whole value of writing it
+down. It proves this directory came out of the archive with that digest. It does **not** prove the
+files are still those bytes: nothing re-hashes an installed executable, and the record is an
+ordinary JSON file that anything with write access could rewrite. A staleness check, not a tamper
+check.
+
+### Absence is *unknown*, and that is the one judgement in the type
+
+`Freshness` has four states and the fourth is the one that took thought. An install made before this
+existed has no record. It is neither current nor stale — nobody measured it — and this machine has
+exactly such an install right now, which is what made the temptation concrete:
+
+- Calling it **current** would excuse a binary the pinned archive has demonstrably moved past.
+- Calling it **stale** would claim a comparison that never happened, and would have to offer two
+  digests when only one exists.
+
+So `Unknown(Unrecorded)` is a first-class answer with a reason attached: no record, an unreadable
+record, a record from a schema this build does not understand, or a record naming a different
+sidecar. The last two are not defensive padding. A schema number nothing checks is a schema number
+that does nothing; and two unrelated digests compare unequal, so without the sidecar-name check a
+record copied between directories would report a confident `Stale` built on a comparison of two
+things that were never comparable.
+
+The screen says it in those words too. `Settings > Transcription > Local` had one claim about the
+server binary — *Installed* — which stayed true while the binary fell behind. It now carries the
+freshness sentence under it, and an **Update the server binary** button whenever the answer is not
+`current`.
+
+### Refresh is stop, replace, restart — and the alternative was measured before it was rejected
+
+The application owns the process, so it can put the server down for the length of the install and
+bring it back. `local_server_refresh` reads the running model *before* stopping (the stop clears
+it), installs, and starts it again either way — a refused download must not leave someone whose
+dictation was working a moment ago with nothing and no explanation. `refresh_failure` is a pure
+function precisely so that second half is testable: "your download failed" and "your download failed
+and dictation is now down" are different sentences and the user needs the right one.
+
+The alternative was rename-aside: move the running install out of the way, unpack over the vacated
+name, clean up later. It was rejected on a measurement, not a preference.
+`crates/sidecar/examples/running_exe_lock_probe.rs`, run on this machine on **2026-09-01**:
+
+```text
+control  remove a directory whose exe is not running   Ok
+control  rename a directory whose exe is not running   Ok
+live     remove a directory whose exe is running       Err os error 5 (Access is denied)
+live     rename a directory whose exe is running       Ok
+live     remove it after renaming it aside             Err os error 5 (Access is denied)
+live     create a new directory at the vacated name    Ok
+```
+
+The first four confirm what was recorded on 2026-08-31 by a different session. **The fifth is new
+and it is the one that decided this.** The lock is on the mapped image file, not on the path: moving
+the directory does not make it deletable. Rename-aside buys a shorter outage and inherits a
+directory that cannot be removed until the process ends — which needs a cleanup pass at some later
+launch, a `.replaced` name `install` must tolerate finding, and a story for what happens when the
+cleanup itself fails. More machinery, for the case where the user has explicitly asked to replace
+the thing they are using.
+
+The probe has controls for the reason `kw_storage`'s `native_path_probe` does: that probe's own
+first version reported failure for every case including the control. And it refuses to report a case
+whose process is not in the process table with its image inside the directory under test — the
+discarded 2026-08-31 attempt used `timeout.exe`, which exits at once without a console, and produced
+six meaningless passes.
+
+### The permanently stuck install, which existed regardless of any of the above
+
+`install` began with `remove_dir(&staging)?` on a single `{name}.incoming` path. One leftover
+directory that would not go away — a file a scanner still had open, a hand-made directory with the
+wrong owner — and **every future install of that sidecar failed at the first line, for ever**, with
+nothing the user could do from inside the application. It ended with the same call and the same `?`,
+so a scanner holding the downloaded `asset` file open turned an install that had already succeeded
+into a reported failure.
+
+Both are gone:
+
+- `take_staging` tries up to ten names, `{name}.incoming` then `{name}.incoming.N`, and takes the
+  first that was **absent or emptied by this call** — never one it merely managed to write into,
+  because whatever a previous attempt left there did not finish verifying and promoting it would put
+  unverified bytes where the sidecar goes. Only ten exhausted names are an error, and that error
+  carries the operating system's own last words.
+- `sweep_staging` runs after a successful promote and is best effort. The user has what they asked
+  for; a directory that will not delete is tens of megabytes, not a failure. It also clears whatever
+  a previous run stranded, which is how this machine's week-old `whisper.incoming` goes away.
+
+Replacing the *install* directory stays fatal — `rename` cannot land on a directory that is still
+there — but it is now `InstallError::InUse` when the refusal looks like a permission problem, which
+is the caller's cue and the user's one actionable sentence. A full disk and a running server are not
+the same advice, so every non-permission failure stays a plain `Io`.
+
+### What did not land
+
+Nothing re-hashes the installed executable, so a file corrupted or replaced on disk after an install
+still reads as whatever the record says. Nothing checks freshness at startup or on a schedule: like
+every other download here, a refresh happens because somebody pressed a button. `local_llm.rs` and
+`local_asr.rs` install sidecars through the same `kw_sidecar::install` and so get the record for
+free, but neither reports freshness or offers a refresh — only whisper does.
+
+And **no refresh has been run on real hardware.** The record, the freshness decision, the staging
+recovery and the failure wording are covered by 37 tests and 35 mutations, every mutation killed by
+the test that names it; the stop-install-restart sequence itself is reachable only through an
+`AppHandle` and has been exercised by nobody. The by-hand check is: press **Update the server
+binary** on this machine, whose sidecar reports `unknown`, with `tiny` resumed — and confirm the
+directory gains `bench.exe`, the row turns `current`, `whisper.incoming` is gone, and dictation
+still works.
 
 ---
 
@@ -2093,11 +2230,12 @@ The unconditional call looks like a way to keep the sidecar current. It never wa
 succeed when no server is running, which is only the first install, when there is nothing to
 refresh. Every later call failed outright rather than updating anything.
 
-But the gap it appeared to cover is real and now has nothing covering it: the installed whisper
-sidecar dates from 2026-08-25 and the pinned archive has since gained `bench.exe` and `command.exe`,
-so it is measurably behind. Filed as **KNEG-113** with the rename measurement, rather than solved
-here by a scheme whose cleanup story is unresolved — a displaced directory still cannot be deleted
-while the old executable runs, so it has to survive until a launch where nothing holds it.
+But the gap it appeared to cover was real and, for a day, had nothing covering it: the installed
+whisper sidecar dated from 2026-08-25 and the pinned archive had since gained `bench.exe` and
+`command.exe`, so it was measurably behind. Filed as **KNEG-113** with the rename measurement, and
+**closed on 2026-09-01** — see that entry. The displaced-directory scheme guessed at here was the
+one rejected: a later probe found that renaming a running install aside does not make it deletable
+either, so the cleanup story it needed was worse than it looked.
 
 ### The other finding: two documents told a person to hold a chat
 

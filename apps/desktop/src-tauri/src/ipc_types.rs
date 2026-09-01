@@ -209,8 +209,10 @@ fn render() -> String {
         "local transcription" => [
             crate::local_model::Availability,
             crate::local_model::VerifiedBy,
+            crate::local_model::SidecarFreshness,
             crate::local_model::ModelStatus,
             crate::local_model::LocalStatus,
+            crate::local_model::RefreshOutcome,
             crate::local_model::InstallProgress,
             crate::local_asr::UsedFor,
             crate::local_asr::SherpaModelStatus,

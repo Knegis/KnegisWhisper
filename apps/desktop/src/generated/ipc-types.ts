@@ -1078,6 +1078,21 @@ export type Availability = { "state": "installable" } | { "state": "not-publishe
 export type VerifiedBy = "digest" | "stated-digest" | "size" | "nothing";
 
 /**
+ * Whether the installed server binary is the build this version pins.
+ *
+ * The wire form of [`kw_sidecar::Freshness`]. A separate type for the reason
+ * [`Availability`] is one: the crate's enum carries `Sha256Digest` and a
+ * structured reason, neither of which should become a TypeScript shape that
+ * then has to be kept in step across the boundary.
+ *
+ * **`Unknown` is not a rounded-down `Stale`.** An install this application did
+ * not record cannot be compared with anything, and the screen says exactly
+ * that rather than picking whichever of the other two answers reads better.
+ * The machine this was written on is in that state right now.
+ */
+export type SidecarFreshness = { "state": "not-installed" } | { "state": "current" } | { "state": "stale", installed: string, expected: string, } | { "state": "unknown", why: string, };
+
+/**
  * One model on offer.
  */
 export type ModelStatus = { id: string, name: string, sizeMb: number | null, recommended: boolean, installed: boolean,
@@ -1100,6 +1115,16 @@ availability: Availability,
  */
 serverInstalled: boolean,
 /**
+ * Whether the installed one is the build this version pins.
+ *
+ * Separate from `server_installed`, and it has to be: "a `whisper-server.exe`
+ * is there" and "it is *our* `whisper-server.exe`" are different claims,
+ * and until KNEG-113 only the first was ever made. The screen showed
+ * *Installed* for a binary two releases behind the manifest and nothing
+ * anywhere would have said so.
+ */
+serverFreshness: SidecarFreshness,
+/**
  * The models on offer, and what is known about each.
  */
 models: Array<ModelStatus>,
@@ -1121,6 +1146,26 @@ runningModel: string | null,
  * abandoned because the native binaries cannot cope with the path.
  */
 installDir: string, installDirFellBack: boolean, };
+
+/**
+ * What a refresh of the server binary did.
+ */
+export type RefreshOutcome = {
+/**
+ * How many files the replacement unpacked. Reported for the reason
+ * [`kw_sidecar::Installed::files`] is: one would mean the sibling `ggml`
+ * libraries were missed and the server will not start.
+ */
+files: number,
+/**
+ * The model the server was running before, now running again.
+ */
+restarted: string | null,
+/**
+ * Why it could not be started again, when it could not. Not an error —
+ * the replacement succeeded — but not something to leave unsaid either.
+ */
+restartError: string | null, };
 
 /**
  * Progress of an install, as reported to the frontend.
