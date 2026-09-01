@@ -269,7 +269,7 @@ pub enum DiarizationRole {
 /// the two is an archive, neither declares a language the way an ASR model
 /// does, and neither is `streaming`. Sharing the struct would mean three fields
 /// that are always meaningless for one of them.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DiarizationModel {
     pub id: String,
@@ -278,6 +278,10 @@ pub struct DiarizationModel {
     /// `None` for the embedding model, which is a single `.onnx` file with
     /// nothing to extract.
     pub extract_dir: Option<String>,
+    /// `None` for the segmentation model, which is an archive. Exactly one of
+    /// this and `extract_dir` is set, which is what decides the install path;
+    /// the generator refuses to emit a model declaring both or neither.
+    pub file_name: Option<String>,
     pub size_mb: Option<f64>,
     pub role: Option<DiarizationRole>,
     /// SHA-256 of the download, required before installation.

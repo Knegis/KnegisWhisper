@@ -48,6 +48,8 @@ import type {
   Delivered,
   Detected,
   Diagnostics,
+  DiarizationModelStatus,
+  DiarizationStatus,
   Dispatch,
   DiscoveryPermissions,
   DraftStatus,
@@ -155,6 +157,8 @@ export type {
   Delivered,
   Detected,
   Diagnostics,
+  DiarizationModelStatus,
+  DiarizationStatus,
   Dispatch,
   DiscoveryPermissions,
   DraftStatus,
@@ -354,6 +358,34 @@ export async function dismissMeetingOffer(): Promise<void> {
 
 export async function setMeetingPrompt(enabled: boolean): Promise<void> {
   return invoke("meeting_set_prompt", { enabled });
+}
+
+/** The two diarization models, and whether speaker labels can run. */
+export async function getDiarizationStatus(): Promise<DiarizationStatus> {
+  return invoke<DiarizationStatus>("diarization_status");
+}
+
+/**
+ * Install one of the two models, and the sherpa runtime with the first of
+ * them.
+ *
+ * Resolves when the install finishes. Progress arrives on the
+ * `diarization://install` event, which this wrapper does not subscribe to —
+ * the screen decides whether it wants the detail.
+ */
+export async function installDiarizationModel(modelId: string): Promise<void> {
+  return invoke("diarization_install_model", { modelId });
+}
+
+/**
+ * Turn speaker labels on or off.
+ *
+ * Rejects when turning on something that cannot run, with a message naming
+ * which half is missing. Accepting it and skipping silently at save time is
+ * how somebody comes to believe the feature is on for three meetings.
+ */
+export async function setDiarizationEnabled(enabled: boolean): Promise<void> {
+  return invoke("diarization_set_enabled", { enabled });
 }
 
 export async function getMeetingDetectLists(): Promise<DetectLists> {

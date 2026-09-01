@@ -291,6 +291,98 @@ Unchanged from the Phases 1–4 entry, restated here so they are not buried:
 
 ---
 
+## 2026-09-01 (KNEG-123, KNEG-124) — a deferral block that was wrong three times over
+
+Diarization had sat `temporarily-deferred` since before the build plan began, under a `deferral`
+block naming three dependencies. **All three were wrong**, and the cost of not checking was a
+feature deferred for months that took a day.
+
+- `ort` (ONNX Runtime): the sherpa CLI links it itself.
+- a `sherpa-onnx-diarize` sidecar: the pinned sherpa archive — the one already installed on this
+  machine for Parakeet — ships `sherpa-onnx-offline-speaker-diarization.exe` beside the offline
+  transcription CLI.
+- `silero_vad.onnx`: the pyannote segmentation model does its own voice-activity detection.
+
+The lesson is not "check dependencies". It is that **a deferral block ages exactly like a status
+claim and nothing gates it.** `verify-parity.mjs` checks that a deferred entry *has* a reason; it
+has no way to check the reason is still true, and this one had been false since whenever the sherpa
+archive gained that binary. The entry was corrected in place, not annotated.
+
+### Five measurements, each of which changed the code
+
+Nothing here is in the CLI's `--help`.
+
+| measured | what it changed |
+| --- | --- |
+| A failure and a recording nobody spoke in produce **byte-identical stdout** | `interpret` takes the exit status. This is the KNEG-38 shape — "capture broken" and "the far end was quiet" looking the same — and there is a test that fails if the status is dropped. |
+| Labels are cluster indices and **not dense from zero**: the one-speaker fixture returned `speaker_01` | Read straight through, the only person in the room is called "Speaker 2". `interpret` renumbers by first appearance. |
+| Turns overlap, and **one can nest wholly inside another** | Overlapped seconds alone make a nested voice unreachable for every span there is. `assign` needed a second rule. |
+| `--clustering.num-clusters=4` asked for four and **produced three** | Never passed. It is a hint to the clusterer, and a meeting does not know its own attendance. |
+| 16 kHz is a **refusal, not a resample** | Meeting recordings are already written at 16 kHz, so nothing converts — but an imported file need not be. |
+
+### The control cost one extra download and changed what the feature claims
+
+The first run paired the pinned **English** CAM++ embedding model with the release's **Chinese**
+four-speaker reference and returned three voices, one of them swallowing ten seconds belonging to
+two other people. That looked like a mediocre result. Re-run with the language-matched Chinese
+embedding model, the same audio through the same segmentation model returned four, with different
+boundaries.
+
+So the pipeline is fine and **the embedding model is language-sensitive where the segmentation
+model is not.** Without the control this would have shipped as "diarization works, a bit roughly".
+With it, the limit is named: English is the measured case, and the screen says so rather than
+leaving a Swedish meeting's bad speaker turns to be blamed on the feature in general.
+
+### A test that was wrong, and the rule that was wronger
+
+`assign` scored turns by overlapped seconds and took the highest. A test asserted the interrupter
+won a span that was mostly theirs, and it failed — 0.45 s each, a tie, and the tie-break gave it
+to the earlier turn.
+
+The tempting fix is to change the expectation. The real finding is worse than the test: in the
+recorded run `13.025 -- 13.514 speaker_01` lies **wholly inside** `11.455 -- 14.037 speaker_00`, so
+the outer turn ties or wins for *every span there is* and the inner voice can never be named. Not a
+tie — **a voice unreachable by construction.** The rule gained a second criterion: on equal
+overlap, the turn with more of *itself* inside the span wins. 92% of one against 17% of the other
+is not a coin toss.
+
+### `assign` is invented, and says so
+
+`docs/PORTING_MATRIX.md` names upstream's `diarizationPolicy.js` (63 lines) as the thing to port.
+**That file is not in this repository** — only its line count is. Writing "ported" over a rule
+reasoned out from scratch would be exactly the claim these documents exist to prevent, so the
+module says **invented** and the rule stands on its tests rather than on upstream's authority.
+
+### The consumer, and a comment that was true when written
+
+`transcribe_whole` accepted `Inference::Timed { text, .. }` and threw the segments away, under a
+comment saying this pass "is not asked for timings". True when written, and the reason there was
+nothing for a speaker label to attach to. It keeps them now, and `Text` — which a whisper server
+started with `--no-timestamps` still returns — remains an ordinary state that the note describes
+rather than a failure.
+
+**The note only ever speaks up when the result differs from what the setting asked for.** Labels
+that worked add no sentence: they are visible in the note. Labels that were asked for and did not
+happen add one, because an unlabelled note reads as a meeting with one speaker in it. Six tests
+cover that asymmetry, including the one that distinguishes *the step did not run* from *the step
+ran and attributed nothing* — same segments, two different sentences.
+
+### What it costs, said on the screen
+
+Real-time factor 0.081, measured. A one-hour meeting adds roughly five minutes to *Stop and
+transcribe*, on top of the transcription pass already there. Off by default, and the screen gives
+the figure rather than calling it "a short delay".
+
+### Still not done
+
+**Nobody has recorded two people and checked the turns.** The integration test's control is a
+one-speaker fixture, which proves the flags, the exit-status reading and the renumbering end to end
+and says nothing about attribution — one voice cannot be confused with another. That is the same
+distinction KNEG-84 and KNEG-94 both ended on, and it is not a coincidence: finishing the
+measurement is not finishing the feature.
+
+---
+
 ## 2026-09-01 (KNEG-84) — the documentation was wrong, and only a probe could say so
 
 The sixth meeting client, and the only one whose wire format was **measured**

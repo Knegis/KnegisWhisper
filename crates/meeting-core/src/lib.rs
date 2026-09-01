@@ -36,6 +36,7 @@ pub mod corti_socket;
 pub mod deepgram;
 pub mod deepgram_socket;
 pub mod diarization;
+pub mod diarization_models;
 pub mod fault;
 pub mod local;
 pub mod nemotron;

@@ -1197,6 +1197,11 @@ const diarization = Object.entries(R.diarizationModels).map(([id, m]) => ({
   // and has nothing to extract -- the same shape-does-not-change rule the
   // sherpa pins follow.
   extractDir: m.extractDir ?? null,
+  // The other half of the same either/or: the embedding model is one file and
+  // the baseline names it, the segmentation model is an archive and does not.
+  // Derived from neither -- reading the last path segment of a URL would be a
+  // rule that works until a publisher adds a query string.
+  fileName: m.fileName ?? null,
   sizeMb: m.sizeMb ?? null,
   role: DIARIZATION_PINS[id]?.role ?? null,
   sha256: DIARIZATION_PINS[id]?.sha256 ?? null,
@@ -1209,6 +1214,19 @@ for (const id of Object.keys(DIARIZATION_PINS)) {
     die(
       `DIARIZATION_PINS has an entry for "${id}", which is not a model in the ` +
         `baseline's diarizationModels. Fix the id, or remove the pin.`
+    );
+  }
+}
+
+// An archive or a single file, never both and never neither. `extractDir`
+// decides which install path runs, so a model declaring both would be a
+// coin toss and one declaring neither could not be installed at all.
+for (const model of diarization) {
+  if (Boolean(model.extractDir) === Boolean(model.fileName)) {
+    die(
+      `diarization/${model.id} must declare exactly one of extractDir (an archive) ` +
+        `or fileName (a single file); it declares ` +
+        `${model.extractDir ? "both" : "neither"}.`
     );
   }
 }

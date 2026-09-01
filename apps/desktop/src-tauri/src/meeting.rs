@@ -1594,8 +1594,13 @@ impl MeetingRuntime {
 
         // One pass over the whole file, which is the same path a dictation takes
         // and produces a transcript with no overlap to deduplicate.
+        let mut speaker_note: Option<String> = None;
         let (segments, from_partials) = match self.transcribe_whole(&finished.path).await {
-            Ok(Some(text)) => (vec![segment(&text, 0.0, None)], false),
+            Ok(Some(pass)) => {
+                let (segments, note) = self.with_speakers(pass, &finished.path).await;
+                speaker_note = note;
+                (segments, false)
+            }
             Ok(None) => (Vec::new(), false),
             Err(err) => {
                 // Not fatal, and not silent. The partials overlap and are worse,
@@ -1656,6 +1661,13 @@ impl MeetingRuntime {
                  whole-recording pass, which ran afterwards over the complete audio.)"
             ));
         }
+        if let Some(note) = &speaker_note {
+            // Only ever says something went differently from what the setting
+            // asked for. A run that produced labels adds nothing here -- the
+            // labels are visible in the note itself, and a sentence announcing
+            // that a feature worked is noise.
+            content.push_str(&format!("\n\n({note})"));
+        }
         if transcript.gaps > 0 {
             // Two causes, and `MeetingTranscript::gaps` is one number that does
             // not distinguish them: the local model falling behind the meeting,
@@ -1702,8 +1714,48 @@ impl MeetingRuntime {
         }
     }
 
+    /// Run the diarizer if it was asked for, and label the pass.
+    ///
+    /// Failure here is never fatal: a note with no speaker labels is worth far
+    /// more than no note, so a diarization that could not run degrades to the
+    /// unlabelled transcript **and a sentence saying so**. Silence would be the
+    /// defect -- a user who turned the setting on would read an unlabelled note
+    /// and conclude the meeting had one speaker.
+    async fn with_speakers(
+        &self,
+        pass: WholePass,
+        recording: &std::path::Path,
+    ) -> (Vec<kw_notes_core::transcript::Segment>, Option<String>) {
+        let wanted = crate::diarization::is_enabled(&self.db).await;
+        if !wanted {
+            return labelled(&pass, None, false);
+        }
+        match crate::diarization::turns(recording).await {
+            Ok(Some(turns)) => labelled(&pass, Some(&turns), true),
+            Ok(None) => {
+                let (segments, _) = labelled(&pass, None, false);
+                (
+                    segments,
+                    Some(
+                        "Speaker labels are switched on but could not run: the diarization \
+                         models or runtime are not installed."
+                            .to_owned(),
+                    ),
+                )
+            }
+            Err(err) => {
+                tracing::warn!(error = %err, "the diarization pass failed; keeping the transcript");
+                let (segments, _) = labelled(&pass, None, false);
+                (
+                    segments,
+                    Some(format!("Speaker labels could not be produced: {err}")),
+                )
+            }
+        }
+    }
+
     /// Transcribe the finished recording in one request.
-    async fn transcribe_whole(&self, path: &std::path::Path) -> Result<Option<String>, String> {
+    async fn transcribe_whole(&self, path: &std::path::Path) -> Result<Option<WholePass>, String> {
         use kw_transcription_core::local::Inference;
 
         // The same engine dictation would use, through the same function, and
@@ -1739,14 +1791,21 @@ impl MeetingRuntime {
         let wav = std::fs::read(path).map_err(|e| format!("could not read the recording: {e}"))?;
 
         match engine.transcribe(wav, None, None).await? {
-            // This is the whole-file fallback: one string is what it wants,
-            // and it is not asked for timings. `Timed` is accepted anyway
-            // because the text is the same text -- refusing it would turn a
-            // server configuration change into a lost recording, which is the
-            // opposite of what a fallback is for.
-            Inference::Text(text) | Inference::Timed { text, .. } if !text.trim().is_empty() => {
-                Ok(Some(text))
-            }
+            // Timings are kept when the engine produced them and the note is
+            // no worse without them. Until 2026-09-01 both arms collapsed to
+            // one string, with a comment saying this pass "is not asked for
+            // timings" -- true then, and the reason speaker labels had nothing
+            // to attach to. `Text` still arrives from a server started with
+            // `--no-timestamps`, so an empty `timings` is an ordinary state
+            // rather than a fault, and `labelled` says so on the note.
+            Inference::Timed { text, segments } if !text.trim().is_empty() => Ok(Some(WholePass {
+                text,
+                timings: segments,
+            })),
+            Inference::Text(text) if !text.trim().is_empty() => Ok(Some(WholePass {
+                text,
+                timings: Vec::new(),
+            })),
             Inference::Text(_) | Inference::Timed { .. } | Inference::Empty => Ok(None),
             Inference::Rejected { status, body } => {
                 Err(format!("the local server answered {status}: {body}"))
@@ -2045,6 +2104,101 @@ fn segment(
             AudioSource::System => "system".to_owned(),
         }),
     }
+}
+
+/// What one pass over the finished recording produced.
+///
+/// `timings` is empty when the engine returned none -- a whisper server started
+/// with `--no-timestamps` does exactly that -- which is a state the note has to
+/// be able to describe rather than a failure.
+#[derive(Debug, Clone, PartialEq)]
+struct WholePass {
+    text: String,
+    timings: Vec<kw_transcription_core::local::TimedSegment>,
+}
+
+/// Turn one pass into note segments, with speaker labels where they were asked
+/// for and could be produced.
+///
+/// Pure: the diarizer has already run, or has already been decided against, by
+/// the time this is called. Everything it decides is testable with no process,
+/// no database and no `AppHandle`, which is the split `media.rs:1334-1340`
+/// argues for.
+///
+/// The second half of the answer is a sentence for the note, and it is only
+/// ever present when the result differs from what the setting asked for.
+/// Announcing that a feature worked is noise; not saying that it silently did
+/// not is the defect.
+fn labelled(
+    pass: &WholePass,
+    turns: Option<&[kw_meeting_core::diarization::Turn]>,
+    wanted: bool,
+) -> (Vec<kw_notes_core::transcript::Segment>, Option<String>) {
+    // No timings means nothing to attach a speaker to. One segment holding the
+    // whole transcript, which is what this pass produced before timings were
+    // kept at all.
+    if pass.timings.is_empty() {
+        let note = wanted.then(|| {
+            "Speaker labels were asked for and not applied: the transcription pass returned no \
+             timings, so there was nothing to attach a speaker to."
+                .to_owned()
+        });
+        return (vec![segment(&pass.text, 0.0, None)], note);
+    }
+
+    let spans: Vec<(f64, f64)> = pass.timings.iter().map(|s| (s.start, s.end)).collect();
+    let assigned = turns.map(|turns| kw_meeting_core::diarization::assign(turns, &spans));
+
+    let mut segments = Vec::with_capacity(pass.timings.len());
+    let mut unattributed = 0_usize;
+    for (at, timed) in pass.timings.iter().enumerate() {
+        let speaker = assigned
+            .as_ref()
+            .and_then(|all| all.get(at).copied().flatten());
+        if assigned.is_some() && speaker.is_none() {
+            unattributed = unattributed.saturating_add(1);
+        }
+        segments.push(kw_notes_core::transcript::Segment {
+            text: timed.text.trim().to_owned(),
+            timestamp: Some(timed.start),
+            end_timestamp: Some(timed.end),
+            speaker: speaker.map(|n| format!("speaker_{n}")),
+            // A generated placeholder, and flagged as one so a name somebody
+            // types later wins over it. `Speaker 1` is not a name and this is
+            // the field that says so.
+            speaker_name: speaker.map(|n| {
+                kw_meeting_core::diarization::Turn {
+                    start_seconds: timed.start,
+                    end_seconds: timed.end,
+                    speaker: n,
+                }
+                .label()
+            }),
+            speaker_is_placeholder: speaker.is_some(),
+            source: None,
+        });
+    }
+
+    let note = match (turns, wanted) {
+        // Asked for, ran, and left some of the transcript unattributed. Said
+        // out loud because a reader seeing most segments labelled and some not
+        // would otherwise read the blanks as a person who said nothing.
+        (Some(_), _) if unattributed > 0 => Some(format!(
+            "{unattributed} of {} passages carry no speaker: the diarization pass found no \
+             voice covering them.",
+            segments.len()
+        )),
+        (Some(_), _) => None,
+        // Asked for and nothing ran. The caller has already decided why; this
+        // only reports that it did not happen.
+        (None, true) => Some(
+            "Speaker labels were asked for and not applied: the diarization step did not run. \
+             Check Settings > Meetings."
+                .to_owned(),
+        ),
+        (None, false) => None,
+    };
+    (segments, note)
 }
 
 /* ------------------------------------------------------------------ commands */
@@ -3008,5 +3162,142 @@ mod tests {
         let reason = kw_meeting_core::declined("tinfoil-realtime").unwrap();
         assert!(reason.contains("attestation"), "{reason}");
         assert!(kw_meeting_core::client("tinfoil-realtime").is_none());
+    }
+
+    /* ------------------------------------------------- speaker labels */
+
+    fn timed(text: &str, start: f64, end: f64) -> kw_transcription_core::local::TimedSegment {
+        kw_transcription_core::local::TimedSegment {
+            text: text.to_owned(),
+            start,
+            end,
+        }
+    }
+
+    fn turn(speaker: u32, start: f64, end: f64) -> kw_meeting_core::diarization::Turn {
+        kw_meeting_core::diarization::Turn {
+            start_seconds: start,
+            end_seconds: end,
+            speaker,
+        }
+    }
+
+    fn two_utterances() -> WholePass {
+        WholePass {
+            text: "Morning all. Right, shall we start?".to_owned(),
+            timings: vec![
+                timed("Morning all.", 0.0, 2.0),
+                timed("Right, shall we start?", 2.5, 5.0),
+            ],
+        }
+    }
+
+    #[test]
+    fn a_pass_with_no_timings_is_still_one_readable_segment() {
+        // A whisper server started with `--no-timestamps` produces this, and it
+        // is the shape every meeting note had before timings were kept. It must
+        // keep working, unlabelled, rather than becoming an error.
+        let pass = WholePass {
+            text: "  the whole thing  ".to_owned(),
+            timings: Vec::new(),
+        };
+        let (segments, note) = labelled(&pass, None, false);
+        assert_eq!(segments.len(), 1);
+        assert_eq!(segments[0].text, "the whole thing");
+        assert_eq!(segments[0].speaker, None);
+        assert_eq!(note, None);
+    }
+
+    #[test]
+    fn asking_for_labels_with_no_timings_says_so_rather_than_going_quiet() {
+        // The failure this whole `Option<String>` exists for: a user turns the
+        // setting on, the pass returns no timings, and an unlabelled note reads
+        // as a meeting with one speaker in it.
+        let pass = WholePass {
+            text: "the whole thing".to_owned(),
+            timings: Vec::new(),
+        };
+        let (_, note) = labelled(&pass, None, true);
+        let note = note.expect("a note is written when the request could not be honoured");
+        assert!(note.contains("no timings"), "{note}");
+    }
+
+    #[test]
+    fn timings_without_diarization_become_timed_segments_with_no_speaker() {
+        let (segments, note) = labelled(&two_utterances(), None, false);
+        assert_eq!(segments.len(), 2);
+        assert_eq!(segments[0].timestamp, Some(0.0));
+        assert_eq!(segments[0].end_timestamp, Some(2.0));
+        assert!(segments.iter().all(|s| s.speaker.is_none()));
+        assert!(segments.iter().all(|s| !s.speaker_is_placeholder));
+        assert_eq!(note, None);
+    }
+
+    #[test]
+    fn two_voices_land_on_the_passages_they_spoke() {
+        let turns = [turn(0, 0.0, 2.2), turn(1, 2.4, 5.1)];
+        let (segments, note) = labelled(&two_utterances(), Some(&turns), true);
+
+        assert_eq!(segments[0].speaker.as_deref(), Some("speaker_0"));
+        assert_eq!(segments[0].speaker_name.as_deref(), Some("Speaker 1"));
+        assert_eq!(segments[1].speaker.as_deref(), Some("speaker_1"));
+        assert_eq!(segments[1].speaker_name.as_deref(), Some("Speaker 2"));
+        // Nothing to report: it was asked for and it worked.
+        assert_eq!(note, None);
+    }
+
+    #[test]
+    fn a_generated_label_is_flagged_so_a_typed_name_wins_over_it() {
+        // `Speaker 1` is not a name. `speaker_is_placeholder` is the field that
+        // says so, and without it a name somebody types into the note would
+        // lose to a number the clusterer chose.
+        let turns = [turn(0, 0.0, 2.2)];
+        let (segments, _) = labelled(&two_utterances(), Some(&turns), true);
+        assert!(segments[0].speaker_is_placeholder);
+        // And an unattributed passage carries no placeholder at all, rather
+        // than a placeholder saying "unknown".
+        assert!(!segments[1].speaker_is_placeholder);
+        assert_eq!(segments[1].speaker_name, None);
+    }
+
+    #[test]
+    fn passages_no_voice_covers_are_counted_in_the_note() {
+        // Half the transcript labelled and half not would otherwise read as a
+        // participant who said nothing.
+        let turns = [turn(0, 0.0, 2.2)];
+        let (segments, note) = labelled(&two_utterances(), Some(&turns), true);
+        assert_eq!(segments[1].speaker, None);
+        let note = note.expect("an unattributed passage is reported");
+        assert!(note.starts_with("1 of 2"), "{note}");
+    }
+
+    #[test]
+    fn a_diarization_that_never_ran_is_not_the_same_as_one_that_found_nobody() {
+        // `turns: None` with `wanted: true` means the step did not happen;
+        // `turns: Some(&[])` means it ran and attributed nothing. They produce
+        // the same segments and must not produce the same sentence.
+        let (_, never_ran) = labelled(&two_utterances(), None, true);
+        let (_, found_nobody) = labelled(&two_utterances(), Some(&[]), true);
+
+        let never_ran = never_ran.expect("a step that did not run is reported");
+        let found_nobody = found_nobody.expect("a step that attributed nothing is reported");
+        assert!(never_ran.contains("did not run"), "{never_ran}");
+        assert!(found_nobody.starts_with("2 of 2"), "{found_nobody}");
+        assert_ne!(never_ran, found_nobody);
+    }
+
+    #[test]
+    fn a_note_is_never_written_when_nothing_was_asked_for() {
+        // The rule the other way round: a person who has this switched off
+        // must not find sentences about diarization in their notes.
+        for pass in [
+            two_utterances(),
+            WholePass {
+                text: "x".to_owned(),
+                timings: Vec::new(),
+            },
+        ] {
+            assert_eq!(labelled(&pass, None, false).1, None);
+        }
     }
 }

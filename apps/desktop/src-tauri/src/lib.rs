@@ -19,6 +19,7 @@ mod dictation;
 mod integrations;
 // Test-only: it renders `apps/desktop/src/generated/ipc-types.ts` and asserts
 // the committed copy still matches the Rust types. Nothing at runtime calls it.
+mod diarization;
 #[cfg(test)]
 mod ipc_types;
 mod local_api;
@@ -435,6 +436,9 @@ pub fn run() -> anyhow::Result<()> {
             local_asr::sherpa_install_model,
             local_asr::sherpa_use_model,
             local_asr::sherpa_use_stream_model,
+            diarization::diarization_status,
+            diarization::diarization_install_model,
+            diarization::diarization_set_enabled,
             local_api::local_api_status,
             local_api::local_api_start,
             local_api::local_api_stop,

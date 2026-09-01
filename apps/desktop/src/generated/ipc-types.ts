@@ -1198,6 +1198,34 @@ selectedStream: string | null,
  */
 modelsDir: string, };
 
+/**
+ * Which half of a diarization run a model does.
+ *
+ * Two files, two jobs, and neither works alone: the segmentation model finds
+ * where speech is and where it changes, the embedding model turns each stretch
+ * into a voice fingerprint to cluster. The CLI takes one of each and refuses
+ * without both.
+ */
+export type DiarizationRole = "segmentation" | "embedding";
+
+export type DiarizationModelStatus = { id: string, name: string, role: DiarizationRole | null, sizeMb: number | null, installed: boolean, };
+
+export type DiarizationStatus = {
+/**
+ * Whether the sherpa sidecar can be installed on this platform at all.
+ */
+availability: Availability, cliInstalled: boolean, models: Array<DiarizationModelStatus>,
+/**
+ * The setting, which is a different fact from whether it can run.
+ */
+enabled: boolean,
+/**
+ * Both models present **and** the CLI installed. `enabled` without this is
+ * a setting that will be skipped, and the screen has to be able to say
+ * which of the two is missing rather than showing one green tick.
+ */
+ready: boolean, modelsDir: string, };
+
 /* -------------------------------------------------- local text generation */
 /**
  * A drafter alongside the main model.

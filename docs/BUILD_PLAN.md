@@ -69,7 +69,7 @@ integration parity OK — 102 entries against baseline c4000db9802d
 
 So this plan front-loaded the screens, then closed genuine backend gaps behind them, then did the
 platform work that no amount of UI could substitute for — meetings, calendars, media import, MCP,
-packaging — leaving only the AEC helper and two diarization/search entries in the deliberately-deferred
+packaging — leaving only the AEC helper and `search:semantic` in the deliberately-deferred
 state chunk I and chunk E4 describe below.
 
 ## Decisions taken (2026-08-25)
@@ -97,7 +97,7 @@ state chunk I and chunk E4 describe below.
 | 5 — Calendars | **Complete** | Google and Microsoft: loopback PKCE, calendar list and incremental sync, all reachable — no client ID on this machine, so no live call has been made. Apple Calendar: `temporarily-deferred`, described in `kw_calendar_core::apple` and implemented nowhere, for lack of a macOS machine |
 | 6 — Local API and CLI | **Verified on Windows** | `Integrations > CLI` is now built. (Chunk H built its screen and phase 7's `Integrations > MCP` screen together, in one task, since both render the same discovery-permissions state) |
 | 7 — MCP | **Complete** | `tools/knegiswhisper-mcp`, a stdio server (~1573 lines incl. tests), reusing the local API's tool surface and token comparison. 28 crate tests plus protocol tests. Unverified by a person driving a real MCP client — see `BENCH_CHECK.md` |
-| 8 — Media import, diarization, semantic search | Local media import complete; URL import withdrawn; diarization and search deferred | `media:{audio,video}-import` and `media:openwhispr-import` are reachable through `Notes > Upload`. `media:url-import` was reachable at the close of this plan and is not now: the command was unregistered because the fetch belongs to `yt-dlp` and cannot be policed — see chunk G. The two diarization models and `search:semantic` stay `temporarily-deferred` — Qdrant sidecar, ONNX Runtime, embeddings, none attempted this run |
+| 8 — Media import, diarization, semantic search | Local media import complete; URL import withdrawn; **diarization built 2026-09-01**; semantic search deferred | `media:{audio,video}-import` and `media:openwhispr-import` are reachable through `Notes > Upload`. `media:url-import` was reachable at the close of this plan and is not now: the command was unregistered because the fetch belongs to `yt-dlp` and cannot be policed — see chunk G. The two diarization models and `search:semantic` stay `temporarily-deferred` — Qdrant sidecar, ONNX Runtime, embeddings, none attempted this run |
 | 9 — Packaging | Written, unrun | `createUpdaterArtifacts: true` now (chunk J), release/CI workflows exist and pass locally, but no signing identity exists, no release has ever been published, and **CI triggers remain commented out by design** — chunk J's own value is deferred until someone uncomments them, so every gate in this document runs only when a person runs it |
 
 ## The unlock arithmetic
@@ -114,7 +114,7 @@ Why the order below is what it is. Each chunk's integrations-made-reachable:
 | F — calendars *(done)* | new crate | **2 of 3** (Google, Microsoft; Apple `temporarily-deferred` for lack of a macOS machine) |
 | G — media import *(done)* | ffmpeg, yt-dlp sidecars | **4 at the time, 3 now**: audio/video/url import on the two new sidecars, plus `media:openwhispr-import` — already written and tested, newly given the screen that made it reachable. URL import was withdrawn after this plan closed; see the chunk G section |
 | H — MCP + CLI screens *(done)* | MCP server | **2** |
-| I — diarization + search *(not attempted this run)* | sherpa + Qdrant | **0**. Neither `ort`, Qdrant, nor the diarization/semantic-search work was started; both entries stay `temporarily-deferred`, unchanged since before this plan. (The 2 Parakeet local-ASR models Task 18 measured and proved are chunk B4's local-ASR work, not this chunk — they stay `reachable: false` for want of a Settings selector, deliberately not built as part of that measurement task) |
+| I — diarization *(built 2026-09-01)* + semantic search *(deferred)* | sherpa + Qdrant | **2 of 3**. Diarization was built after this plan closed and needed none of what this chunk said it needed — see the chunk. `search:semantic` stays `temporarily-deferred`. (The 2 Parakeet local-ASR models Task 18 measured are chunk B4's work, not this chunk, and became reachable with the `Settings > Transcription > Local` selector) |
 
 ---
 
@@ -669,21 +669,29 @@ documentation check only requires a target to be *named*, not to exist) and corr
 
 ---
 
-## Chunk I — diarization and semantic search (phase 8) *(not attempted this run)*
+## Chunk I — diarization *(built 2026-09-01)* and semantic search *(deferred)*
 
-- Diarization: `ort` + the 2 `temporarily-deferred` sherpa models, plus a port of
-  `diarizationPolicy.js` (63 lines, deliberately Electron-free upstream and therefore testable).
-- Semantic search: Qdrant sidecar, ports **6333–6350**, and an embedding path. `search:semantic`
-  is `temporarily-deferred`; `search:sqlite-fts` already works through the FTS5 external-content
-  table and its three triggers.
+This chunk was not attempted during the plan itself, and half of it has since been built — by
+discovering that what the chunk said it needed was wrong.
 
-None of this chunk's work was started across the 19 tasks in this plan or the one added mid-run.
-`diarization-model:3dspeaker-campplus-en`, `diarization-model:sherpa-onnx-pyannote-segmentation-3-0`
-and `search:semantic` remain exactly as `temporarily-deferred` as they were before this plan began,
-each still carrying its own `deferral` block with dependencies and a named interface. Recorded here
-rather than left silent, so a future session does not have to rediscover that this chunk is where
-the plan actually stopped: everything else in chunks A–J is either done or explicitly, permanently
-declined, and this is the one piece that is simply not-yet-begun.
+**Diarization: built, and none of the three named dependencies was real.** This chunk said it
+needed `ort` (ONNX Runtime), a `sherpa-onnx-diarize` sidecar, and `silero_vad.onnx`. The pinned
+sherpa release already ships `sherpa-onnx-offline-speaker-diarization` beside the offline
+transcription CLI this project drives for Parakeet; that binary links ONNX Runtime itself; and the
+pyannote segmentation model does its own voice-activity detection. So the work was the same shape
+as `kw_transcription_core::sherpa`: a pure half (`kw_meeting_core::diarization`) and a thin
+`Command` half, plus an installer for two pinned models and a `Settings > Meetings` surface. Both
+manifest entries are `ported-with-new-rust-implementation` and `reachable: true`. See
+`docs/ENGINEERING_LOG.md` 2026-09-01 (KNEG-123, KNEG-124).
+
+**`diarizationPolicy.js` was not ported, and the code says so.** That file is not in this
+repository — only its line count is, in `docs/PORTING_MATRIX.md`. The assignment rule was written
+from scratch and is labelled **invented** rather than ported.
+
+**Semantic search: still deferred.** Qdrant sidecar, ports **6333–6350**, and an embedding path.
+`search:semantic` stays `temporarily-deferred`; `search:sqlite-fts` already works through the FTS5
+external-content table and its three triggers. Its dependency claim shares an origin with
+diarization's, which turned out to be stale, and **nobody has re-checked it**.
 
 ---
 
@@ -771,7 +779,8 @@ declined, and this is the one piece that is simply not-yet-begun.
 | Calendars, real round trip | Google + Microsoft OAuth client IDs as PKCE public clients | Flow, storage, UI, stub server — all built |
 | Apple Calendar | A macOS machine to write and verify an EventKit binding against, which does not exist in this development environment, and the binding itself, which does not exist anywhere in this repository | Google and Microsoft calendar sync, which are unrelated |
 | AEC helper | cmake + MSVC/clang and a `contents: write` run | Meetings themselves — echo cancellation only matters on speakers, and system audio capture (what actually gates recording) is done |
-| Diarization + semantic search (chunk I) | `ort`, the Qdrant sidecar, embeddings — none of it attempted this run | FTS5 keyword search, which is fully functional and is what the UI falls back to |
+| Semantic search (chunk I) | The Qdrant sidecar and an embedding path — not attempted, and its dependency claim not re-checked since diarization's proved wrong | FTS5 keyword search, which is fully functional and is what the UI falls back to. Diarization, which was built on 2026-09-01 and shared this row until then |
+| Whether diarization's speaker turns are right | A recording with two people in it, and somebody who was there to say whether the turns match | Everything else about diarization: the flags, the parsing, the renumbering and the install are all covered, and one voice cannot be confused with another |
 | The rewritten agent-skills docs | Someone to write `docs/agent-skills/`, referencing `knegiswhisper`/`knegiswhisper-mcp` instead of the vendor endpoints — the manifest claimed this was done; it was not, and Task 19 corrected the claim rather than writing the docs under time pressure | Nothing else — documentation only |
 | Signed installers | A code-signing identity | Unsigned builds |
 | CI actually running | Someone uncommenting `push`/`pull_request` in `.github/workflows/ci.yml` — deliberately not done this run | Every gate still runs by hand; it has, repeatedly, this session |

@@ -30,15 +30,22 @@ futures.workspace = true
 
 kw-audio-core.workspace = true
 kw-network-policy.workspace = true
+# For `extract_with_limit`, `integrity::verify` and `Sha256Digest` in
+# `diarization_models` -- the same download-and-check machinery every other
+# model install in this workspace goes through, rather than a second copy.
+kw-sidecar.workspace = true
 kw-security.workspace = true
 # For the `LocalTranscriber` trait only. The concrete `WhisperServer` is supplied
 # by the caller, which is what makes the whole window-to-transcript path testable
 # with no server running.
 kw-transcription-core.workspace = true
 
+# Was a dev-dependency until 2026-09-01, for one test checking every cloud
+# client's credential slot against config/provider-registry.json. It is a real
+# one now: `diarization_models` installs the two models the registry describes,
+# so the registry types cross into this crate's public API rather than only
+# into its tests.
+kw-provider-registry.workspace = true
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
-# Only for the test that checks every cloud client's credential slot against
-# config/provider-registry.json -- the mapping itself is a plain function over
-# `Client` with no registry dependency at runtime.
-kw-provider-registry.workspace = true

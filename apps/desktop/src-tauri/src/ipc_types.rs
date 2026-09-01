@@ -215,6 +215,9 @@ fn render() -> String {
             crate::local_asr::UsedFor,
             crate::local_asr::SherpaModelStatus,
             crate::local_asr::SherpaStatus,
+            kw_provider_registry::DiarizationRole,
+            crate::diarization::DiarizationModelStatus,
+            crate::diarization::DiarizationStatus,
         ],
         "local text generation" => [
             crate::local_llm::DraftStatus,

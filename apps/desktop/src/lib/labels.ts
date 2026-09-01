@@ -50,6 +50,8 @@ import type {
   VerifiedBy,
 } from "./ipc";
 
+import type { DiarizationRole } from "../generated/providers";
+
 /**
  * A state and, where there is one, what backs it up.
  *
@@ -560,6 +562,50 @@ export function detectedLabel(d: Detected): string {
     case "none":
       return `open, and not using a microphone, so nothing here says a call is in progress — detected as ${d.evidence}`;
   }
+}
+
+/**
+ * What one diarization model is for, in the words of the row that offers it.
+ *
+ * Two models, two jobs, and neither works alone — so the row has to say which
+ * one this is rather than presenting two similar downloads and letting the
+ * reader guess why both are needed.
+ *
+ * Exhaustive with no `default`, so a third role is a build failure here rather
+ * than a row that silently says nothing.
+ */
+export function diarizationRoleDetail(role: DiarizationRole | null): string {
+  switch (role) {
+    case "segmentation":
+      return "finds where speech is and where the voice changes";
+    case "embedding":
+      return "turns each stretch into a voice fingerprint, so they can be grouped";
+    case null:
+      return "";
+  }
+}
+
+/**
+ * Why speaker labels cannot be switched on yet, or nothing when they can.
+ *
+ * Both halves are named separately because the remedies differ: a missing
+ * runtime arrives with the first model, and a missing model has to be chosen.
+ * "Not ready" on its own would leave a person pressing the same button twice.
+ */
+export function diarizationBlocker(status: {
+  cliInstalled: boolean;
+  models: readonly { installed: boolean }[];
+}): string | null {
+  const missing = status.models.filter((m) => !m.installed).length;
+  if (missing > 0) {
+    return missing === status.models.length
+      ? "Install both models below. The first one brings the runtime with it."
+      : "One of the two models is still missing, and a run needs both.";
+  }
+  if (!status.cliInstalled) {
+    return "The sherpa runtime is not installed.";
+  }
+  return null;
 }
 
 /**

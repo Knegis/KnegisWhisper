@@ -262,6 +262,9 @@ export interface DiarizationModel {
   readonly downloadUrl: string;
   /** Null for the embedding model, a single .onnx with nothing to extract. */
   readonly extractDir: string | null;
+  /** Null for the segmentation model, which is an archive. Exactly one of
+   *  this and extractDir is set. */
+  readonly fileName: string | null;
   readonly sizeMb: number | null;
   readonly role: DiarizationRole | null;
   readonly sha256: string | null;
@@ -1852,6 +1855,7 @@ export const PROVIDER_REGISTRY = {
         "name": "CAM++ Speaker Embedding (English)",
         "downloadUrl": "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_campplus_sv_en_voxceleb_16k.onnx",
         "extractDir": null,
+        "fileName": "3dspeaker_speech_campplus_sv_en_voxceleb_16k.onnx",
         "sizeMb": 28.2,
         "role": "embedding",
         "sha256": "357a834f702b80161e5b981182c038e18553c1f2ca752ed6cec2052365d4129b",
@@ -1863,6 +1867,7 @@ export const PROVIDER_REGISTRY = {
         "name": "Pyannote Segmentation 3.0",
         "downloadUrl": "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-segmentation-models/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2",
         "extractDir": "sherpa-onnx-pyannote-segmentation-3-0",
+        "fileName": null,
         "sizeMb": 6.6,
         "role": "segmentation",
         "sha256": "24615ee884c897d9d2ba09bb4d30da6bb1b15e685065962db5b02e76e4996488",

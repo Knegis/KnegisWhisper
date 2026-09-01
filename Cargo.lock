@@ -2839,6 +2839,7 @@ dependencies = [
  "kw-network-policy",
  "kw-provider-registry",
  "kw-security",
+ "kw-sidecar",
  "kw-transcription-core",
  "serde",
  "serde_json",

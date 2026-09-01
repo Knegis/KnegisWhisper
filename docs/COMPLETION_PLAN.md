@@ -158,8 +158,12 @@ an unrelated task.
   `media_import_url` was unregistered as a command rather than shipped with a guard that does not
   cover the fetch. The backend is dormant, not deleted. See `docs/SECURITY.md`'s Network section
   and `docs/NETWORK_BOUNDARY.md`'s "SSRF guards for URL import".
-- Diarization and semantic search, still the three `temporarily-deferred` entries, unattempted this
-  run and already carrying dependencies and named interfaces.
+- Semantic search, still `temporarily-deferred`, carrying a dependency claim nobody has
+  re-checked. **Diarization is no longer beside it**: it was built on 2026-09-01 (KNEG-123,
+  KNEG-124) once the three dependencies its `deferral` block named turned out not to be needed —
+  the pinned sherpa release already ships the CLI. Both models are pinned and reachable through
+  `Settings > Meetings`. What remains unproven is whether the speaker turns are *right*, which
+  needs a two-person recording.
 
 **Phase 9 — shipping.** Done except by-hand verification. `.github/workflows/release.yml`
 (`workflow_dispatch` only) builds and publishes unsigned nsis/dmg/appimage/deb bundles on

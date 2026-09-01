@@ -200,8 +200,6 @@ deferred for a genuine resource or scope reason.
 | Integration | Phase | Why | Degradation |
 | --- | --- | --- | --- |
 | `search:semantic` | 8 | Qdrant + MiniLM + ONNX Runtime is a large dependency for a feature the app must work without anyway. | FTS5 keyword search stays fully functional; the UI hides semantic ranking rather than failing. |
-| `diarization-model:sherpa-onnx-pyannote-segmentation-3-0` | 8 | Needs ONNX Runtime and three models; dictation and meetings must be reliable first. | Transcripts have no speaker labels. |
-| `diarization-model:3dspeaker-campplus-en` | 8 | As above. | As above. |
 | `platform:aec` | 4 | No Rust equivalent to WebRTC's audio processing module exists that is not itself a C++ binding, and there is no C++ toolchain on this development machine. | Meetings still record and transcribe correctly; on speakers the far-end voice is transcribed twice instead of once, and on headphones there is nothing to cancel. |
 | `meeting-stream:tinfoil-realtime` | 4 | Declined on principle, not resource-blocked — see "the `ACTIVE`-status audit" above. | Every other meeting-stream provider is unaffected; this one is refused rather than approximated. |
 | `transcription:tinfoil` | 3 | Same principled refusal as above, for the batch client. | The other six transcription providers are unaffected. |

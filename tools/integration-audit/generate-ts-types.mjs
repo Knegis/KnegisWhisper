@@ -279,6 +279,9 @@ export interface DiarizationModel {
   readonly downloadUrl: string;
   /** Null for the embedding model, a single .onnx with nothing to extract. */
   readonly extractDir: string | null;
+  /** Null for the segmentation model, which is an archive. Exactly one of
+   *  this and extractDir is set. */
+  readonly fileName: string | null;
   readonly sizeMb: number | null;
   readonly role: DiarizationRole | null;
   readonly sha256: string | null;

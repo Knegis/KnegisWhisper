@@ -133,8 +133,13 @@ pub type Selection = Arc<RwLock<Option<String>>>;
 /// Everything needed to answer "what should dictate locally", per request.
 #[derive(Debug)]
 pub struct LocalAsr {
-    policy: NetworkPolicy,
-    catalog: kw_sidecar::catalog::Catalog,
+    /// `pub(crate)` since 2026-09-01, for `diarization`, which installs the
+    /// **same** sherpa sidecar this does. A second `NetworkPolicy` and a
+    /// second `Catalog` for the same archive would be two things to keep in
+    /// step, and the one that drifted would install a different binary than
+    /// the one the other reported.
+    pub(crate) policy: NetworkPolicy,
+    pub(crate) catalog: kw_sidecar::catalog::Catalog,
     selected: Selection,
 }
 
