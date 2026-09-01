@@ -1055,10 +1055,19 @@ for (const repo of Object.keys(HF_REVISIONS)) {
  *
  * A model with no entry here cannot be installed at all:
  * `kw_transcription_core::sherpa_models::install` refuses with `MissingPin`
- * rather than downloading something unauthenticated. That is why the two
- * Nemotron streaming models are absent rather than pinned with placeholders --
- * they are `reachable: false` and nothing can install them yet, and a
+ * rather than downloading something unauthenticated. That is why a Nemotron
+ * streaming model was absent rather than pinned with a placeholder -- a
  * placeholder digest would be a lie that only failed at the worst moment.
+ *
+ * **`nemotron-speech-streaming-en-0.6b` is now measured** (2026-09-01), because
+ * KNEG-84 needed a real streaming model to measure the WebSocket protocol
+ * against and the pin is what makes downloading one legitimate. Same standard as
+ * the two above: the bytes moved through this machine and were hashed here.
+ *
+ * **`nemotron-3.5-asr-streaming-0.6b`, the multilingual one, is still absent.**
+ * Not an oversight: nothing has downloaded it, so there is nothing to pin, and
+ * it stays uninstallable until something does. One model was enough to settle
+ * the protocol, which is what the download was for.
  */
 const SHERPA_PINS = {
   "parakeet-tdt-0.6b-v3": {
@@ -1069,6 +1078,16 @@ const SHERPA_PINS = {
   "parakeet-unified-en-0.6b": {
     sha256: "99f63605b3a85a54c250c0869670a687b7d6598a47bf2421515e1f839a76e150",
     expectedSizeBytes: 501_350_460,
+    maxExtractedSizeBytes: 750 * 1024 * 1024,
+  },
+  // Measured 2026-09-01 by `tools/model-pin/pin.mjs --url ... --keep`, and then
+  // used: this is the model the sherpa streaming protocol was measured against
+  // (`crates/meeting-core/examples/sherpa_ws_probe.rs`). Extracted total 9 files,
+  // 662,744,235 bytes -- within a megabyte of `parakeet-unified` above, so it
+  // takes the same ceiling rather than a separately invented one.
+  "nemotron-speech-streaming-en-0.6b": {
+    sha256: "78e2b79fcf7271553a74402a76b771b09ea40117a39566a79f52235b23db6358",
+    expectedSizeBytes: 463_945_051,
     maxExtractedSizeBytes: 750 * 1024 * 1024,
   },
 };
