@@ -291,6 +291,71 @@ Unchanged from the Phases 1–4 entry, restated here so they are not buried:
 
 ---
 
+## 2026-09-01 (KNEG-117) — the depth that was deferred twice cost two and a half hours
+
+**Run: 400 rounds, 35 binaries, 14,000 runs, thread counts 1/2/4/8/16, control passed, not void,
+nothing found.**
+
+That is the run KNEG-117 asked for, and it is the first time the workspace claim rests on anything.
+
+### The estimate was the whole obstacle, and it was wrong
+
+The 2026-08-31 entry deferred this as *"several hours of a machine doing nothing else"*. Nobody had
+timed it. `--workspace --rounds 3` takes 66 seconds, so a round is **22 seconds** and four hundred
+of them are **two and a half hours**.
+
+Worth recording as a mistake rather than as a measurement: an unmeasured cost estimate deferred a
+piece of work twice, and the measurement that dissolved it took one minute. The instinct that says
+"this is expensive, do it later" is exactly the one that should be checked with a stopwatch first.
+
+### What the result means, and what it does not
+
+Four hundred rounds is four hundred runs of **each** binary, which is the same exposure KNEG-88's
+flake was found at — twice in four hundred runs of `kw-storage`, about 0.5% per run. So this run
+matches that confidence for every binary in the workspace, which is precisely what KNEG-117 asked
+for and nothing more.
+
+Two ways to state the bound, both honest and neither a verdict:
+
+- **Against a flake as common as the one already found:** 1 — 0.995^400 = **86%**. A flake at that
+  rate probably would have shown. It also might not have; fourteen times in a hundred it hides.
+- **Rule of three**, for a binary with zero failures in four hundred runs: the 95% upper bound on
+  its per-run failure rate is 3/400 = **0.75%**.
+
+Note what the second one says. KNEG-88's flake was 0.5% per run, which sits **below** that bound —
+so a flake exactly as common as the one this project has already met could still be sitting in any
+of these thirty-five binaries. The run raises the floor; it does not clear the room.
+
+### Two things that make the number mean anything
+
+**It is not void.** The tool refuses to report a run whose test binaries changed underneath it
+(`2ad9ea2`), because its first workspace run reported a real test failing nine times out of thirty
+and that was a Rust type being edited in another window. The tree sat at `7b7ebfd` untouched for
+the whole run, and the completion line says so.
+
+**The control passed**, which is the only reason a clean report is allowed at all — the first
+version of this tool reported 100% failures for every thread count including the control, because
+a trailing carriage return meant nothing was ever executed. A harness that fails everything is
+measuring itself, and one that passes everything for the same class of reason would have been read
+as a clean result.
+
+### And one banked earlier the same day
+
+`kw-meeting-core` alone, 400 rounds, 1,200 runs, three binaries, clean and not void — run while
+three other branches were still moving, because it was the one crate none of them touched and the
+one that had just gained `diarization`, `diarization_models`, `nemotron` and `nemotron_socket`.
+Subsumed by the workspace run above, and worth recording as a thing that could be done while the
+rest of the tree was unavailable rather than waited on.
+
+### Still not done
+
+The **search** half of KNEG-117 does not need repeating — seventeen candidate sites were read on
+2026-08-31 and the two real ones hardened. But it was a search over the tests that existed then.
+Roughly 190 tests have been written since, across six issues, and **none of them has been read for
+the absent-assertion shape**. The loop cannot find that defect; only the search can.
+
+---
+
 ## 2026-09-01 (KNEG-123, KNEG-124) — a deferral block that was wrong three times over
 
 Diarization had sat `temporarily-deferred` since before the build plan began, under a `deferral`
@@ -1104,10 +1169,15 @@ Not much, and the arithmetic is why. The `kw-storage` flake fired **twice in fou
 that binary** — about 0.5% per run. Forty rounds is forty runs of each binary, so the chance of
 catching something at that rate is about **18%**. A clean result at this depth is closer to "not
 looked at properly" than to "clean", and matching KNEG-88's confidence across the workspace would
-be roughly four hundred rounds — several hours of a machine doing nothing else.
+be roughly four hundred rounds.
 
 Worth writing down because the temptation is to read 1,320 runs as a big number. It is a big number
 of runs and a small number of *rounds*, and rounds are the unit that matters here.
+
+> **Superseded 2026-09-01.** The four hundred rounds were run. This paragraph said they would cost
+> "several hours of a machine doing nothing else"; timed, a round is 22 seconds and the whole run
+> is about two and a half. That estimate is the only reason the depth was deferred twice, and it
+> was wrong by a factor of four. See the 2026-09-01 (KNEG-117) entry.
 
 ### So the second half was a search rather than a loop
 
