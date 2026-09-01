@@ -70,6 +70,12 @@ export const USER_CONFIGURABLE = new Set([
   "enterprise",
   "local-llm",
   "local-asr",
+  // Added 2026-09-01 with KNEG-73a. A model somebody has to choose to download
+  // is as much a setting as an ASR model is, and it is neither of the two
+  // things this set excludes -- not a platform capability, not an automatic
+  // detector. While it was absent, the two diarization entries could move from
+  // deferred to built with no screen anywhere and no gate would have asked.
+  "diarization-model",
   "meeting-stream",
   "credential",
   "calendar",

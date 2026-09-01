@@ -349,7 +349,7 @@ export async function download(url, label, keepAt = null) {
 
 /* ---------------------------------------------------------- pin discovery */
 
-function registry() {
+export function registry() {
   try {
     return JSON.parse(readFileSync(REGISTRY, "utf8"));
   } catch (error) {
@@ -360,12 +360,15 @@ function registry() {
 /**
  * Every committed model pin, as one list of things to re-measure.
  *
- * Both families come out of the generated registry now, read as data. A model
- * with no `sha256` is skipped rather than reported: today that is only
- * `localAsr.sherpa`'s two Nemotron streaming models, which nothing can install
- * and nobody pinned, so there is nothing committed for a measurement to
- * disagree with. The generator writes an explicit `null` there rather than
- * omitting the key, which is what makes this a data check and not a guess.
+ * All three families come out of the generated registry now, read as data. A
+ * model with no `sha256` is skipped rather than reported, and **as of
+ * 2026-09-01 nothing is skipped**: this used to say the exceptions were
+ * `localAsr.sherpa`'s two Nemotron streaming models, which nothing could
+ * install and nobody had pinned. Both were measured that day, and the two
+ * diarization models were measured and added beside them, so every model this
+ * registry describes is now pinned and re-measurable. The generator writes an
+ * explicit `null` for an unpinned model rather than omitting the key, which is
+ * what makes this a data check and not a guess.
  *
  * A pin with a digest and no `expectedSizeBytes` is a `die()`, not a skip. The
  * generator cannot emit that pair — both `WHISPER_PINS` and `SHERPA_PINS`
@@ -379,6 +382,7 @@ export function pinnedTargets(reg = registry()) {
   for (const [kind, models] of [
     ["whisper", reg.localAsr?.whisper ?? []],
     ["sherpa", reg.localAsr?.sherpa ?? []],
+    ["diarization", reg.localAsr?.diarization ?? []],
   ]) {
     for (const model of models) {
       if (!model.sha256) continue;
@@ -551,11 +555,19 @@ export function parseGithubAssetUrl(url) {
 }
 
 /**
- * Every committed sherpa pin, as an asset to look up in a GitHub release.
+ * Every committed pin that lives in a GitHub release, as an asset to look up.
  *
- * `localAsr.sherpa` only. A model with no `sha256` is skipped for the reason
- * [`pinnedTargets`] gives -- today that is the two Nemotron streaming models,
- * which nothing can install and nobody pinned.
+ * `localAsr.sherpa` **and** `localAsr.diarization`. It read only the first
+ * until 2026-09-01, which was correct while sherpa held the only such pins and
+ * became a hole the moment the two diarization models were committed: the
+ * expensive check covered them and the cheap one did not, so a swapped asset
+ * would have gone unnoticed by every run short of a full re-download. All four
+ * sherpa archives sit under one rolling `asr-models` tag; the diarization pair
+ * sits under two others in the same repository, which the tag comes from the
+ * URL rather than being assumed.
+ *
+ * A model with no `sha256` is skipped for the reason [`pinnedTargets`] gives.
+ * As of 2026-09-01 nothing is skipped.
  *
  * **These are bytes this project hashed**, unlike the GGUF pins. Re-reading
  * what GitHub states about them is strictly weaker than the download
@@ -565,29 +577,34 @@ export function parseGithubAssetUrl(url) {
  */
 export function githubAssetTargets(reg = registry()) {
   const targets = [];
-  for (const model of reg.localAsr?.sherpa ?? []) {
-    if (!model.sha256) continue;
-    const parsed = parseGithubAssetUrl(model.downloadUrl);
-    if (!parsed) {
-      die(
-        `sherpa/${model.id} is pinned but its downloadUrl is not a GitHub release asset: ` +
-          `${model.downloadUrl}. This mode does not know how to re-read that host.`
-      );
+  for (const [kind, models] of [
+    ["sherpa", reg.localAsr?.sherpa ?? []],
+    ["diarization", reg.localAsr?.diarization ?? []],
+  ]) {
+    for (const model of models) {
+      if (!model.sha256) continue;
+      const parsed = parseGithubAssetUrl(model.downloadUrl);
+      if (!parsed) {
+        die(
+          `${kind}/${model.id} is pinned but its downloadUrl is not a GitHub release asset: ` +
+            `${model.downloadUrl}. This mode does not know how to re-read that host.`
+        );
+      }
+      if (typeof model.expectedSizeBytes !== "number") {
+        die(
+          `${kind}/${model.id} has a sha256 and no expectedSizeBytes. The generator emits both ` +
+            "or neither, so config/provider-registry.json has been hand-edited."
+        );
+      }
+      targets.push({
+        id: model.id,
+        repo: parsed.repo,
+        tag: parsed.tag,
+        name: parsed.name,
+        sha256: model.sha256.toLowerCase(),
+        sizeBytes: model.expectedSizeBytes,
+      });
     }
-    if (typeof model.expectedSizeBytes !== "number") {
-      die(
-        `sherpa/${model.id} has a sha256 and no expectedSizeBytes. The generator emits both or ` +
-          "neither, so config/provider-registry.json has been hand-edited."
-      );
-    }
-    targets.push({
-      id: model.id,
-      repo: parsed.repo,
-      tag: parsed.tag,
-      name: parsed.name,
-      sha256: model.sha256.toLowerCase(),
-      sizeBytes: model.expectedSizeBytes,
-    });
   }
   return targets;
 }

@@ -1571,6 +1571,30 @@
         ],
         "streaming": false
       }
+    ],
+    "diarization": [
+      {
+        "id": "3dspeaker-campplus-en",
+        "name": "CAM++ Speaker Embedding (English)",
+        "downloadUrl": "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_campplus_sv_en_voxceleb_16k.onnx",
+        "extractDir": null,
+        "sizeMb": 28.2,
+        "role": "embedding",
+        "sha256": "357a834f702b80161e5b981182c038e18553c1f2ca752ed6cec2052365d4129b",
+        "expectedSizeBytes": 29596978,
+        "maxExtractedSizeBytes": null
+      },
+      {
+        "id": "sherpa-onnx-pyannote-segmentation-3-0",
+        "name": "Pyannote Segmentation 3.0",
+        "downloadUrl": "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-segmentation-models/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2",
+        "extractDir": "sherpa-onnx-pyannote-segmentation-3-0",
+        "sizeMb": 6.6,
+        "role": "segmentation",
+        "sha256": "24615ee884c897d9d2ba09bb4d30da6bb1b15e685065962db5b02e76e4996488",
+        "expectedSizeBytes": 6958444,
+        "maxExtractedSizeBytes": 33554432
+      }
     ]
   }
 }

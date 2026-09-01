@@ -1142,6 +1142,90 @@ for (const id of Object.keys(SHERPA_PINS)) {
   }
 }
 
+/**
+ * The two speaker-diarization models, measured 2026-09-01.
+ *
+ * Here rather than in the baseline for the reason `SHERPA_PINS` gives: the
+ * baseline is a frozen record of what upstream had, and upstream pinned
+ * nothing. `role` is here for a second reason -- it is not a fact about the
+ * upstream registry at all, it is which of the two jobs a file does, and
+ * deriving it from "the one with an extractDir" would be a rule that breaks the
+ * first time a model ships differently.
+ *
+ * **Both digests are measurements.** `tools/model-pin/pin.mjs` fetched each
+ * end to end, hashing as the bytes passed through and taking the length from
+ * `stat` afterwards. Read that for what it is: the committed digest matches the
+ * bytes k2-fsa's release serves today. Re-measure with `--verify`.
+ *
+ * **Only the segmentation model is an archive**, so only it carries a
+ * `maxExtractedSizeBytes`. Its real extracted footprint was measured at
+ * 7,566,812 bytes across 11 files; 32 MiB leaves the same kind of headroom the
+ * sherpa ceilings take, and errs high for the same reason -- being wrong low
+ * rejects a legitimate install. The embedding model is a bare `.onnx` that is
+ * never extracted, and a ceiling on it would describe a step that does not
+ * happen.
+ *
+ * **There is one embedding model and it is English.** Measured the same day:
+ * the segmentation model is language-independent, and the embedding model is
+ * not. The release's Chinese four-speaker reference came back as three voices
+ * through this English model and as four through the language-matched Chinese
+ * one, same audio and same segmentation. So this pair is measured for English
+ * meetings and nothing else, which
+ * `crates/meeting-core/src/diarization.rs` says out loud and the screen that
+ * offers it repeats.
+ */
+const DIARIZATION_PINS = {
+  "sherpa-onnx-pyannote-segmentation-3-0": {
+    role: "segmentation",
+    sha256: "24615ee884c897d9d2ba09bb4d30da6bb1b15e685065962db5b02e76e4996488",
+    expectedSizeBytes: 6_958_444,
+    maxExtractedSizeBytes: 32 * 1024 * 1024,
+  },
+  "3dspeaker-campplus-en": {
+    role: "embedding",
+    sha256: "357a834f702b80161e5b981182c038e18553c1f2ca752ed6cec2052365d4129b",
+    expectedSizeBytes: 29_596_978,
+    maxExtractedSizeBytes: null,
+  },
+};
+
+const diarization = Object.entries(R.diarizationModels).map(([id, m]) => ({
+  id,
+  name: m.name,
+  downloadUrl: m.downloadUrl,
+  // Null rather than absent for the embedding model, which is a single file
+  // and has nothing to extract -- the same shape-does-not-change rule the
+  // sherpa pins follow.
+  extractDir: m.extractDir ?? null,
+  sizeMb: m.sizeMb ?? null,
+  role: DIARIZATION_PINS[id]?.role ?? null,
+  sha256: DIARIZATION_PINS[id]?.sha256 ?? null,
+  expectedSizeBytes: DIARIZATION_PINS[id]?.expectedSizeBytes ?? null,
+  maxExtractedSizeBytes: DIARIZATION_PINS[id]?.maxExtractedSizeBytes ?? null,
+}));
+
+for (const id of Object.keys(DIARIZATION_PINS)) {
+  if (!(id in R.diarizationModels)) {
+    die(
+      `DIARIZATION_PINS has an entry for "${id}", which is not a model in the ` +
+        `baseline's diarizationModels. Fix the id, or remove the pin.`
+    );
+  }
+}
+
+// Two roles, exactly one model each. A run needs one of each and the CLI
+// refuses without both, so a registry holding two segmentation models and no
+// embedding one would be a screen offering an install that cannot work.
+for (const role of ["segmentation", "embedding"]) {
+  const found = diarization.filter((m) => m.role === role);
+  if (found.length !== 1) {
+    die(
+      `diarization needs exactly one ${role} model and the registry has ` +
+        `${found.length}. A diarization run passes one of each.`
+    );
+  }
+}
+
 // --- credentials -------------------------------------------------------------
 // Built last, because `usedFor` is derived from the lists above rather than
 // restated: a provider that gains transcription support does not also need its
@@ -1213,7 +1297,7 @@ const registry = {
   reasoning,
   enterprise,
   localLlm,
-  localAsr: { whisper, sherpa },
+  localAsr: { whisper, sherpa, diarization },
 };
 
 const rendered = JSON.stringify(registry, null, 2) + "\n";
@@ -1240,7 +1324,7 @@ const counts = {
   reasoning: `${reasoning.length} providers / ${reasoning.reduce((n, p) => n + p.models.length, 0)} models`,
   enterprise: `${enterprise.length} providers / ${enterprise.reduce((n, p) => n + p.models.length, 0)} models`,
   localLlm: `${localLlm.length} providers / ${localLlm.reduce((n, p) => n + p.models.length, 0)} models`,
-  localAsr: `${whisper.length} whisper / ${sherpa.length} sherpa`,
+  localAsr: `${whisper.length} whisper / ${sherpa.length} sherpa / ${diarization.length} diarization`,
 };
 console.log(`wrote ${OUT}`);
 for (const [k, v] of Object.entries(counts)) {

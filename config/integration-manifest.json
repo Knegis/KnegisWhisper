@@ -930,44 +930,30 @@
       "note": "New relative to upstream: baseline.secretKeys has no entry for Deepgram. meeting-stream:deepgram-realtime minted its realtime token from api.openwhispr.com, a removed vendor service (vendor:openwhispr-realtime-token-broker), rather than asking the user for a key. This slot exists so a direct client can authenticate itself instead. Reachable: Settings > Providers lists every provider-kind slot the registry declares, including this one, with no frontend change needed. No Deepgram meeting client exists yet -- see meeting-stream:deepgram-realtime -- so nothing consumes the stored key today."
     },
     "diarization-model:3dspeaker-campplus-en": {
-      "status": "temporarily-deferred",
+      "status": "ported-with-new-rust-implementation",
       "name": "CAM++ Speaker Embedding (English)",
       "phase": 8,
       "upstream": [
         "src/helpers/diarization.js",
         "src/helpers/diarizationPolicy.js"
       ],
-      "deferral": {
-        "why": "Needs ONNX Runtime plus three models, and the dictation and meeting slices must be reliable before speaker attribution is worth having.",
-        "dependencies": [
-          "ort crate (ONNX Runtime)",
-          "sherpa-onnx-diarize sidecar",
-          "silero_vad.onnx (hardcoded upstream, absent from the registry)"
-        ],
-        "interface": "meeting_core::diarization::Diarizer",
-        "expectedPhase": 8
-      },
-      "note": "Note added 2026-08-27, in the whole-branch review's fix wave: this entry has carried `temporarily-deferred` with a `deferral` block since before this plan began, but no top-level `note` explaining why -- unlike every other deferred entry in this file. The reason is docs/BUILD_PLAN.md's chunk I: none of diarization's work (the `ort` crate, the sherpa-onnx-diarize sidecar, silero_vad.onnx, or a port of diarizationPolicy.js) was attempted across the 19 tasks in this plan or the one added mid-run. This entry sits outside both the ACTIVE-status audit's scope (it never claimed a working implementation, so there was nothing to overclaim) and the parity gate's `USER_CONFIGURABLE` set, so no gate would ever have caught the missing note on its own."
+      "note": "Measured and built 2026-09-01 (KNEG-73a). This entry carried a `deferral` block naming three dependencies -- the `ort` crate, a `sherpa-onnx-diarize` sidecar, and silero_vad.onnx -- and all three were wrong. The pinned sherpa release already ships sherpa-onnx-offline-speaker-diarization beside the offline transcription CLI this project drives for Parakeet, that binary links ONNX Runtime itself, and the pyannote segmentation model does its own voice-activity detection, so no separate VAD model is involved. The implementation is therefore the same shape as kw_transcription_core::sherpa: a pure half (kw_meeting_core::diarization -- build_args, interpret, assign) and a thin Command half. Both models are pinned by measurement, and both digests are re-readable by tools/model-pin/pin.mjs --verify and --verify-stated. WHAT IS MEASURED: the CLI's argument set, its output shape, that a failure and a silent recording produce byte-identical stdout so the exit status is the only discriminator, that speaker labels are cluster indices which are not dense from zero, and that turns overlap and can nest. WHAT IS NOT: whether the speaker turns are right in a real meeting. One voice cannot be confused with another, so the integration test's one-speaker control proves the flags and the renumbering and nothing about attribution -- that is a by-hand check. AND ONE LIMIT WORTH READING: the embedding model is language-sensitive where the segmentation model is not, measured by running the same Chinese reference recording through an English and a Chinese embedding model and getting three speakers against four. Only the English model is pinned, so English is the measured case. NOT REACHABLE YET: the runtime and the pins are in, and no screen offers the install or the option, so nothing a user can press reaches this. Declared false here rather than left for somebody to notice.",
+      "backend": "crates/meeting-core",
+      "ui": "Settings > Meetings",
+      "reachable": false
     },
     "diarization-model:sherpa-onnx-pyannote-segmentation-3-0": {
-      "status": "temporarily-deferred",
+      "status": "ported-with-new-rust-implementation",
       "name": "Pyannote Segmentation 3.0",
       "phase": 8,
       "upstream": [
         "src/helpers/diarization.js",
         "src/helpers/diarizationPolicy.js"
       ],
-      "deferral": {
-        "why": "Needs ONNX Runtime plus three models, and the dictation and meeting slices must be reliable before speaker attribution is worth having.",
-        "dependencies": [
-          "ort crate (ONNX Runtime)",
-          "sherpa-onnx-diarize sidecar",
-          "silero_vad.onnx (hardcoded upstream, absent from the registry)"
-        ],
-        "interface": "meeting_core::diarization::Diarizer",
-        "expectedPhase": 8
-      },
-      "note": "Note added 2026-08-27, in the whole-branch review's fix wave: this entry has carried `temporarily-deferred` with a `deferral` block since before this plan began, but no top-level `note` explaining why -- unlike every other deferred entry in this file. The reason is docs/BUILD_PLAN.md's chunk I: none of diarization's work (the `ort` crate, the sherpa-onnx-diarize sidecar, silero_vad.onnx, or a port of diarizationPolicy.js) was attempted across the 19 tasks in this plan or the one added mid-run. This entry sits outside both the ACTIVE-status audit's scope (it never claimed a working implementation, so there was nothing to overclaim) and the parity gate's `USER_CONFIGURABLE` set, so no gate would ever have caught the missing note on its own."
+      "note": "Measured and built 2026-09-01 (KNEG-73a). This entry carried a `deferral` block naming three dependencies -- the `ort` crate, a `sherpa-onnx-diarize` sidecar, and silero_vad.onnx -- and all three were wrong. The pinned sherpa release already ships sherpa-onnx-offline-speaker-diarization beside the offline transcription CLI this project drives for Parakeet, that binary links ONNX Runtime itself, and the pyannote segmentation model does its own voice-activity detection, so no separate VAD model is involved. The implementation is therefore the same shape as kw_transcription_core::sherpa: a pure half (kw_meeting_core::diarization -- build_args, interpret, assign) and a thin Command half. Both models are pinned by measurement, and both digests are re-readable by tools/model-pin/pin.mjs --verify and --verify-stated. WHAT IS MEASURED: the CLI's argument set, its output shape, that a failure and a silent recording produce byte-identical stdout so the exit status is the only discriminator, that speaker labels are cluster indices which are not dense from zero, and that turns overlap and can nest. WHAT IS NOT: whether the speaker turns are right in a real meeting. One voice cannot be confused with another, so the integration test's one-speaker control proves the flags and the renumbering and nothing about attribution -- that is a by-hand check. AND ONE LIMIT WORTH READING: the embedding model is language-sensitive where the segmentation model is not, measured by running the same Chinese reference recording through an English and a Chinese embedding model and getting three speakers against four. Only the English model is pinned, so English is the measured case. NOT REACHABLE YET: the runtime and the pins are in, and no screen offers the install or the option, so nothing a user can press reaches this. Declared false here rather than left for somebody to notice.",
+      "backend": "crates/meeting-core",
+      "ui": "Settings > Meetings",
+      "reachable": false
     },
     "calendar:google": {
       "status": "ported-with-new-rust-implementation",
