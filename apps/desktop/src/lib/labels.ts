@@ -27,6 +27,7 @@ import type {
   Detected,
   DictationOutcome,
   DiscoveryPermissions,
+  GgufIntegrity,
   HotkeyChange,
   ImportReport,
   InstallProgress,
@@ -39,6 +40,7 @@ import type {
   MicrophoneSupport,
   NonActivating,
   Offer,
+  RecheckOutcome,
   RelocatedCredential,
   ShortcutHookStatus,
   Sources,
@@ -236,6 +238,94 @@ export function verificationLabel(verifiedBy: VerifiedBy): string {
       return "size checked only";
     case "nothing":
       return "not verified";
+  }
+}
+
+/**
+ * What is still known about an installed GGUF, without overstating it.
+ *
+ * Four states, and the reason there are four rather than two is the whole of
+ * KNEG-107. The field this replaced was a boolean over `path.exists()`, so a
+ * file hashed at install and untouched since rendered identically to one nobody
+ * has ever looked at — and a model corrupted months later rendered that way too.
+ *
+ * The rule this file opens with does the rest of the work here. **`unrecorded`
+ * is not a warning.** Every GGUF installed before the record existed is in that
+ * state, including whatever is on this machine right now, and rendering it as
+ * either "verified" or "corrupt" would be the same overclaim in opposite
+ * directions. It gets the neutral treatment `unknown` gets everywhere else.
+ *
+ * `unchanged-since-install` is deliberately not called "verified", and carries
+ * the caveat rather than burying it: two integers agreeing is not a hash. The
+ * one thing that proves the bytes is `recheckLocalLlmModel`, and the caveat is
+ * what points a reader at it.
+ */
+export function ggufIntegrityLabel(integrity: GgufIntegrity): Stated {
+  switch (integrity.state) {
+    case "not-installed":
+      return { text: "Not installed", detail: "there is nothing on disk yet" };
+    case "unchanged-since-install":
+      return {
+        text: "Unchanged since it was installed",
+        detail: `${verificationLabel(
+          integrity.verifiedBy,
+        )} when it was downloaded, and its length and timestamp still match what was recorded then`,
+        caveat:
+          "That is two numbers agreeing, not a checksum. A file rewritten in place, keeping both its length and its timestamp, would still read as unchanged. Re-checking hashes the whole file, which is the only thing that proves the bytes.",
+      };
+    case "unrecorded":
+      return {
+        text: "Installed, never recorded",
+        detail:
+          "the file is here, and nothing beside it says what was checked when it arrived — every model installed before this application began keeping a record reads this way",
+        caveat:
+          "This is not a sign that anything is wrong. It is the honest answer: nothing is known about these bytes either way. Re-checking hashes the file and settles it.",
+      };
+    case "changed":
+      return {
+        text: "Changed since it was installed",
+        detail:
+          integrity.recordedBytes === integrity.bytes
+            ? `still ${integrity.bytes.toLocaleString()} bytes, but its timestamp has moved — something wrote to it, or it was restored from a copy`
+            : `it was ${integrity.recordedBytes.toLocaleString()} bytes when it was checked and is ${integrity.bytes.toLocaleString()} now`,
+        caveat:
+          "The bytes may still be the right ones; a restore moves a timestamp without changing a file. Re-checking hashes it and says which.",
+      };
+  }
+}
+
+/**
+ * What a re-hash found.
+ *
+ * `nothing-pinned` is here for the same reason `unrecorded` is above: "there was
+ * nothing to check" must not be rendered as "checked, and fine". Nothing this
+ * build ships can reach it, and it still gets its own sentence.
+ */
+export function recheckOutcomeLabel(outcome: RecheckOutcome): Stated {
+  switch (outcome.outcome) {
+    case "matched":
+      return {
+        text: "The bytes on disk are the bytes that were downloaded",
+        detail: `hashed just now — ${verificationLabel(outcome.verifiedBy)}`,
+      };
+    case "mismatched":
+      return {
+        text: `${outcome.fileName} does not match the checksum it is pinned to`,
+        detail: `pinned ${outcome.expected}, found ${outcome.actual}`,
+        caveat:
+          "The file was left where it is. Either it has been damaged or replaced since it was installed, or the checksum this build carries for it has gone stale — reinstalling the model is what settles that, and deleting gigabytes on a guess is not something this screen will do for you.",
+      };
+    case "nothing-pinned":
+      return {
+        text: "Nothing to check against",
+        detail:
+          "no checksum is pinned for this model, so hashing it would prove nothing",
+      };
+    case "not-installed":
+      return {
+        text: "Not installed",
+        detail: "there is nothing on disk to hash",
+      };
   }
 }
 

@@ -16,6 +16,7 @@ mod calendar;
 mod commands;
 mod diagnostics;
 mod dictation;
+mod gguf_check;
 mod integrations;
 // Test-only: it renders `apps/desktop/src/generated/ipc-types.ts` and asserts
 // the committed copy still matches the Rust types. Nothing at runtime calls it.
@@ -444,6 +445,7 @@ pub fn run() -> anyhow::Result<()> {
             local_llm::local_llm_install,
             local_llm::local_llm_start,
             local_llm::local_llm_stop,
+            local_llm::local_llm_recheck_model,
             media::media_import_status,
             media::media_import_install_sidecar,
             media::media_import_audio,

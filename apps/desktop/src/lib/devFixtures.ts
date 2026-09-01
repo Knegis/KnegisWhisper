@@ -738,14 +738,21 @@ const LOCAL_LLM: LocalLlmStatus = {
       contextLength: 32768,
       recommended: true,
       supportsThinking: false,
-      installed: false,
+      // Installed and still agreeing with the record written when it was
+      // downloaded. The screen must not call this "verified": two integers
+      // agreeing is not a hash, and the caveat on this state is what says so.
+      integrity: { state: "unchanged-since-install", verifiedBy: "stated-digest" },
       // The ordinary case: thirty-two of the thirty-nine published objects are
       // checked against the publisher's stated digest, not one measured here.
       verifiedBy: "stated-digest",
       draft: {
         fileName: "qwen2.5-0.5b-instruct-q4.gguf",
         sizeBytes: 352_000_000,
-        installed: false,
+        // A drafter can rot on its own, so it carries its own state. This one
+        // has been written to since it was installed and its length has not
+        // moved, which is the case the screen has to describe without calling
+        // the file bad.
+        integrity: { state: "changed", recordedBytes: 352_000_000, bytes: 352_000_000 },
         // Deliberately stronger than its model's, so the screen's "the drafter
         // differs" branch is rendered by a fixture rather than only in theory.
         verifiedBy: "digest",
@@ -760,7 +767,10 @@ const LOCAL_LLM: LocalLlmStatus = {
       contextLength: 131072,
       recommended: false,
       supportsThinking: false,
-      installed: false,
+      // The state every GGUF on a real machine is in the day this ships: the
+      // file is there and nothing beside it says what was checked. It is
+      // rendered as neither good news nor bad, which is the whole point.
+      integrity: { state: "unrecorded" },
       verifiedBy: "digest",
       draft: null,
     },
@@ -773,7 +783,7 @@ const LOCAL_LLM: LocalLlmStatus = {
       contextLength: null,
       recommended: false,
       supportsThinking: true,
-      installed: false,
+      integrity: { state: "not-installed" },
       // The degraded case: a model added to the registry before anybody measured
       // or pinned it. Nothing ships in this state, and the screen still has to
       // say so plainly rather than leaving the row silent.

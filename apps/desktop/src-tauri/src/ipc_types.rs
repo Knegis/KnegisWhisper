@@ -217,6 +217,8 @@ fn render() -> String {
             crate::local_asr::SherpaStatus,
         ],
         "local text generation" => [
+            crate::gguf_check::GgufIntegrity,
+            crate::local_llm::RecheckOutcome,
             crate::local_llm::DraftStatus,
             crate::local_llm::LocalLlmModelStatus,
             crate::local_llm::LocalLlmStatus,
