@@ -34,6 +34,8 @@ been carrying as beliefs, and because each ends with a by-hand check that the me
 | **sherpa's streaming WebSocket protocol, both directions** | `sherpa_ws_probe` against the real `sherpa-onnx-online-websocket-server` and the real reference client. Samples are **`f32` little-endian**, frames are 8000 samples then a short tail, the client's end marker is `Done` and the server's is `Done!`, `text` is cumulative per segment, and the server never closes the socket |
 | **That server has no error channel** | `--fault` sent an unparseable TEXT frame and a three-byte BINARY frame before the audio. The server answered neither and the transcript came back **byte-identical to the clean run** — the odd-length frame did not even break sample alignment |
 | **The control ran first, both times** | The reference client against the real server reproduced the model's own `test_wavs/trans.txt`; only then did our client produce the same transcript; only then was the fault run meaningful |
+| **The shipped client transcribes against the real server** | `crates/meeting-core/tests/nemotron_stream.rs`, `--ignored`, driving `LocalStreaming` — the type the application builds — against a real server on a real model. Audio fed in 4096-byte pieces, which is neither the frame size nor a divisor of it, so `Pending` and its tail are exercised rather than skipped. One event out, not one per update, and its text is the model's own reference transcript |
+| **A server killed mid-session reaches the caller as an error** | The same file's second test. **The failure this provider is most exposed to**: its only fault channel is transport-level, so a wrong path here produces a quiet transcript rather than a failure |
 
 ### Findings
 
@@ -43,7 +45,15 @@ been carrying as beliefs, and because each ends with a by-hand check that the me
    nothing — with no error anywhere, because this server reports none. **A defect with no symptom
    pointing at its cause**, which is the whole return on the afternoon.
 
-2. **A probe can pass its control and still be unreadable.** `mic_users_probe`'s first real run
+2. **The parsing fixture was not what it said it was.** `nemotron.rs`'s `RECORDED` array carried
+   a comment claiming it was verbatim off the wire, and it was uppercase — copied from the model's
+   `test_wavs/trans.txt`. The server emits properly-cased text. **Nothing in that crate could have
+   caught it**, because a parser does not care about case; it took the integration test against the
+   real server, whose first run failed on the casing. Corrected to the real frames, which also
+   revealed that the server repeats an unchanged update — so a revision that changes nothing has
+   to still be a revision, and there is now a test saying so.
+
+3. **A probe can pass its control and still be unreadable.** `mic_users_probe`'s first real run
    printed `nothing is capturing` and `PASS`. Both true, both useless: nothing in the output said
    whether Teams had been *open* at the time, and "Teams is running and not capturing" and "Teams
    is not installed" print the same words while meaning opposite things. Fixed by having the probe
@@ -57,12 +67,16 @@ been carrying as beliefs, and because each ends with a by-hand check that the me
 
 2. **A meeting recorded through `Local streaming model`.** Words should appear as they are spoken,
    not three seconds behind the room — the difference from `Local windowed model`, and the entire
-   reason the provider exists. Nobody has run one.
+   reason the provider exists. The client is now proven against the real server on a WAV; what is
+   unproven is the *live* path: two captures rather than one, a device rather than a file, and
+   whether the words reach the screen as they arrive.
 
-3. **The same meeting with the streaming server killed mid-call.** The fault must reach the screen.
-   This is the one that matters most for this client, because its only fault channel is
-   transport-level: there is no error frame to fall back on, so if this path is wrong a dead server
-   produces a quiet transcript rather than a failure.
+3. **The same meeting with the streaming server killed mid-call.** Narrowed rather than open: the
+   client's own behaviour is now covered by
+   `a_server_that_dies_mid_session_reaches_the_caller_as_an_error`, which kills a real server
+   mid-stream and requires the next `send_audio` to fail. What is unchecked is the rest of the
+   chain — whether that error reaches `MeetingOutcome::Failed` and the screen rather than being
+   turned back into an empty transcript somewhere above it.
 
 4. **A streaming model installed through the screen.** `nemotron-speech-streaming-en-0.6b` was
    downloaded by `tools/model-pin/pin.mjs` on the command line, not by pressing *Install*. The

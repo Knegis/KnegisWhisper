@@ -1,0 +1,4 @@
+[2026-09-01 12:23:16] [error] handle_read_frame error: websocketpp.transport:7 (End of File)
+[2026-09-01 12:23:19] [error] handle_read_frame error: websocketpp.transport:7 (End of File)
+[2026-09-01 12:27:59] [error] handle_read_frame error: websocketpp.transport:7 (End of File)
+[2026-09-01 12:28:02] [error] handle_read_frame error: websocketpp.transport:7 (End of File)

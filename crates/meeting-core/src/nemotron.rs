@@ -33,8 +33,9 @@
 //!
 //! Every update repeats the whole segment so far, growing. A client that
 //! appended would produce *"After After early After early nightfall"*. See
-//! [`Segments`], which is the whole of that rule and is tested against the real
-//! thirteen-update sequence the probe recorded.
+//! [`Segments`], which is the whole of that rule and is tested against frames
+//! recorded off the real socket — including two in a row carrying the same
+//! text, which is why a revision that changes nothing is still a revision.
 //!
 //! # There is no error frame, and that decides how faults are reported
 //!
@@ -388,15 +389,26 @@ pub fn chunk_samples(chunk: &AudioChunk) -> Vec<f32> {
 mod tests {
     use super::*;
 
-    /// The first six updates of the real thirteen the probe recorded, verbatim
-    /// apart from the arrays this client does not read.
+    /// Six real frames off the wire, `test_wavs/0.wav` through the pinned
+    /// model, 2026-09-01. Only the arrays this client does not read
+    /// (`ys_probs`, `lm_probs`, `context_scores`, `words`) are elided; the
+    /// spacing and the casing are the server's own.
+    ///
+    /// **The casing is the point of saying so.** An earlier version of this
+    /// fixture was uppercase, because it had been copied from the model's
+    /// `test_wavs/trans.txt` rather than read off the socket, under a comment
+    /// claiming it was verbatim. Nothing in this file could have caught that --
+    /// a parser does not care about case -- and it took the integration test
+    /// against the real server to notice. Frames 1 and 2 repeating the same
+    /// text is real too, and is why `Revise` has to tolerate an update that
+    /// changes nothing.
     const RECORDED: [&str; 6] = [
-        r#"{"text":"","segment":0,"start_time":0.0,"is_final":false,"is_eof":false}"#,
-        r#"{"text":"AFTER","segment":0,"start_time":0.0,"is_final":false,"is_eof":false}"#,
-        r#"{"text":"AFTER EARLY","segment":0,"start_time":0.0,"is_final":false,"is_eof":false}"#,
-        r#"{"text":"AFTER EARLY NIGHTFALL","segment":0,"start_time":0.0,"is_final":false,"is_eof":false}"#,
-        r#"{"text":"AFTER EARLY NIGHTFALL THE YELLOW LAMPS","segment":0,"start_time":0.0,"is_final":false,"is_eof":false}"#,
-        r#"{"text":"AFTER EARLY NIGHTFALL THE YELLOW LAMPS WOULD LIGHT UP","segment":0,"start_time":0.0,"is_final":true,"is_eof":true}"#,
+        r#"{ "text": "After", "tokens": [" A", "fter"], "timestamps": [0.16, 0.16], "segment": 0, "start_time": 0.00, "is_final": false, "is_eof": false}"#,
+        r#"{ "text": "After", "tokens": [" A", "fter"], "timestamps": [0.16, 0.16], "segment": 0, "start_time": 0.00, "is_final": false, "is_eof": false}"#,
+        r#"{ "text": "After early nightfall", "tokens": [" A", "fter", " ear", "ly", " n", "ight", "f", "all"], "timestamps": [0.16, 0.16, 1.12, 1.12, 1.20, 1.20, 1.52, 1.52], "segment": 0, "start_time": 0.00, "is_final": false, "is_eof": false}"#,
+        r#"{ "text": "After early nightfall the", "tokens": [" A", "fter", " ear", "ly", " n", "ight", "f", "all", " the"], "timestamps": [0.16, 0.16, 1.12, 1.12, 1.20, 1.20, 1.52, 1.52, 1.92], "segment": 0, "start_time": 0.00, "is_final": false, "is_eof": false}"#,
+        r#"{ "text": "After early nightfall the yellow lamps would", "tokens": [" A", "fter", " ear", "ly", " n", "ight", "f", "all", " the", " y", "e", "llow", " l", "am", "ps", " w", "ould"], "timestamps": [0.16, 0.16, 1.12, 1.12, 1.20, 1.20, 1.52, 1.52, 1.92, 2.24, 2.24, 2.24, 2.32, 2.32, 2.40, 2.56, 2.56], "segment": 0, "start_time": 0.00, "is_final": false, "is_eof": false}"#,
+        r#"{ "text": "After early nightfall the yellow lamps would light up", "tokens": [" A", "fter", " ear", "ly", " n", "ight", "f", "all", " the", " y", "e", "llow", " l", "am", "ps", " w", "ould", " l", "ight", " up"], "timestamps": [0.16, 0.16, 1.12, 1.12, 1.20, 1.20, 1.52, 1.52, 1.92, 2.24, 2.24, 2.24, 2.32, 2.32, 2.40, 2.56, 2.56, 2.88, 2.88, 2.96], "segment": 0, "start_time": 0.00, "is_final": true, "is_eof": true}"#,
     ];
 
     #[test]
@@ -505,7 +517,7 @@ mod tests {
                 is_final,
             } => {
                 assert_eq!(segment, 0);
-                assert_eq!(text, "AFTER");
+                assert_eq!(text, "After");
                 assert!(!is_final);
             }
             other => panic!("{other:?}"),
@@ -546,8 +558,8 @@ mod tests {
 
     #[test]
     fn cumulative_text_replaces_and_never_appends() {
-        // The whole recorded sequence, and the assertion is that thirteen
-        // updates produce one event rather than thirteen.
+        // The whole recorded sequence, and the assertion is that six updates
+        // produce one event rather than six.
         let mut segments = Segments::new();
         let mut steps = Vec::new();
         for frame in RECORDED {
@@ -559,11 +571,15 @@ mod tests {
             }
         }
 
-        assert_eq!(steps[0], Step::Idle, "the empty first update shows nothing");
-        assert_eq!(steps[1], Step::Begin("AFTER".to_owned()));
+        assert_eq!(steps[0], Step::Begin("After".to_owned()));
         assert!(
-            steps[2..].iter().all(|s| matches!(s, Step::Revise { .. })),
+            steps[1..].iter().all(|s| matches!(s, Step::Revise { .. })),
             "{steps:?}"
+        );
+        assert_eq!(
+            steps[1],
+            Step::Revise("After".to_owned()),
+            "the server really does repeat an unchanged update, and a revision that changes              nothing must still be a revision"
         );
 
         let Step::Revise(last) = &steps[5] else {
@@ -571,10 +587,10 @@ mod tests {
         };
         assert_eq!(
             last,
-            "AFTER EARLY NIGHTFALL THE YELLOW LAMPS WOULD LIGHT UP"
+            "After early nightfall the yellow lamps would light up"
         );
         assert!(
-            !last.contains("AFTER EARLY AFTER"),
+            !last.contains("After After"),
             "appending would produce a stutter, and this is the test that catches it"
         );
     }
