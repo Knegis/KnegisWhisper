@@ -416,6 +416,45 @@ where the FTS5 table is declared rather than where the query runs, which is
 
 ---
 
+## 2026-09-01 (KNEG-76) — write-only ownership, and a rule that was exact and unwritten
+
+Five orphan tables were really **eight** — `speaker_profiles`, `speaker_mappings` and
+`note_speaker_embeddings` are in the same state — and *"touched only by the importer"* was false for
+four of them. All eight are asserted to exist by a schema test; `agent_messages` is the subject of
+the foreign-key test and `speaker_mappings` of the cascade test; four are named to the user in a
+shipped sentence on `Notes > Upload`; and `contacts` is cited **normatively** by two diarization
+modules as a thing they deliberately do not reach for. The honest phrase is **write-only
+ownership**: the importer writes them, tests and comments depend on them, nothing reads them back.
+
+Two decisions recorded rather than deferred a fourth time. **`snippets` stays** — it is not inert,
+the importer copies it and a shipped sentence promises the user it will, so dropping it discards
+real data to save a five-column table. And **`speaker_mappings` has a candidate owner it did not
+have a week ago**: diarization produces `Speaker 1`, `speaker_name` already prefers a mapping over
+the placeholder, and that table is where a rename to a person would live. The owner is named and
+nothing was built.
+
+### The best thing in this issue was not in the issue
+
+`contacts` is in `COPY_PLAN` and not in `MUST_BE_EMPTY`, which looked like an oversight worth a
+sentence. Checking all sixteen tables against the schema turned it into a rule: **`MUST_BE_EMPTY` is
+exactly the `COPY_PLAN` tables declared `INTEGER PRIMARY KEY AUTOINCREMENT`, with no exception in
+either direction.** The list guards one risk — the importer preserves row ids, so a non-empty target
+could collide — and every table it omits is keyed by something SQLite did not hand out: `contacts`
+by `email`, the two speaker child tables by `(note_id, speaker_id)`, the four calendar tables by a
+provider-supplied `TEXT` id.
+
+Exact, load-bearing, and **written down nowhere**, which made it a coincidence waiting for whoever
+added the next table to either list. It is now on `MUST_BE_EMPTY` as prose and pinned by
+`must_be_empty_is_exactly_the_autoincrement_tables`, which reads the live schema rather than a
+second hand-written list — a test that restates the nine names proves only that someone typed them
+twice. Mutated both ways before being believed: adding `contacts` to the list and removing
+`snippets` from it each turn it red.
+
+**No migration**, and that is the shape of the closing rather than a limitation of it. There is one
+migration file and `migrations_are_idempotent_across_reopens` asserts `applied == 1`.
+
+---
+
 ## 2026-09-01 (KNEG-117) — the depth that was deferred twice cost two and a half hours
 
 **Run: 400 rounds, 35 binaries, 14,000 runs, thread counts 1/2/4/8/16, control passed, not void,

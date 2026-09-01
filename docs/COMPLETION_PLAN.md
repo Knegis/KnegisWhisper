@@ -188,19 +188,58 @@ phase is what makes them mean something.
 
 ## Loose ends worth closing as they are passed
 
-Not chunks of their own; each belonged to whichever chunk touched it first. Two of the three are now
-closed.
+Not chunks of their own; each belonged to whichever chunk touched it first. Two of the three closed
+as work. The third — the orphan tables — closed on 2026-09-01 as a **recorded decision**: the tables
+stay, one of them gained a candidate owner, and the invariant nobody had written down is now pinned
+by a test.
 
 - **All three `RequestPurpose` variants named here now have callers — closed.**
   `UserTriggeredMediaImport` is called from `apps/desktop/src-tauri/src/media.rs`;
   `UserConfiguredCalendarProvider` from `crates/calendar-core`'s exchange and sync code;
   `OwnGithubReleasesUpdater` from `apps/desktop/src-tauri/src/updater.rs`. None of the seven
   `RequestPurpose` variants is still a promise with nothing behind it.
-- **Five orphan tables — still open, untouched this run.** `snippets`, `actions`,
-  `agent_conversations`, `agent_messages` and `contacts` are created by `0001_initial.sql` and
-  touched only by the importer. No crate owns them and no manifest entry mentions them. Phase 10
-  claims four; `snippets` still needs a decision. Nothing in this plan's 19 tasks, or the one added
-  mid-run, touched phase 10.
+- **Eight write-only tables — still open, and one now has a candidate owner.** `snippets`,
+  `actions`, `agent_conversations`, `agent_messages`, `contacts`, `speaker_profiles`,
+  `speaker_mappings` and `note_speaker_embeddings` are created by `0001_initial.sql` and written by
+  `storage::import::from_openwhispr`. Nothing reads any of them back and no manifest entry mentions
+  them. Phase 10 claims four. Nothing in this plan's 19 tasks, or the one added mid-run, touched
+  phase 10.
+
+  **"Touched only by the importer" was wrong, and the honest phrase is *write-only ownership*.**
+  Four of the eight are depended on elsewhere. All eight are asserted to exist by
+  `every_expected_table_exists_and_no_cloud_table_does` (`crates/storage/src/lib.rs:268`);
+  `agent_messages` is the subject of `foreign_keys_are_enforced` (`:464`) and `speaker_mappings` of
+  `deleting_a_note_cascades_to_its_speaker_rows` (`:476`); four are named to the user in a shipped
+  sentence at `apps/desktop/src/views/NotesUpload.tsx:342-343` — snippets, custom actions, agent
+  conversations and speaker profiles; and `contacts` is cited **normatively** by two diarization
+  modules (`apps/desktop/src-tauri/src/diarization.rs:36`,
+  `crates/meeting-core/src/diarization.rs:6`) as a thing they deliberately do not reach for. The
+  importer writes them, tests and comments depend on them, nothing reads them back.
+
+  **`snippets` stays — decided 2026-09-01, not deferred again.** It is not inert:
+  `crates/storage/src/import.rs:106` copies it and the screen above promises the user it will.
+  Dropping it would discard a column of the user's OpenWhispr data that a shipped sentence says is
+  copied, to save a five-column table that costs nothing to keep.
+
+  **`speaker_mappings` has a candidate owner it did not have a week ago.** Diarization writes
+  `speaker_0` with the placeholder `Speaker 1` beside it, and
+  `kw_notes_core::transcript::speaker_name` already prefers a mapping over the placeholder
+  (`crates/notes-core/src/transcript.rs:127-129`), so `speaker_mappings` is exactly where a name a
+  person typed would live. No screen offers that rename and **nothing was built here** — the owner
+  is recorded so the next person past does not have to derive it again.
+
+  **`contacts` is in `COPY_PLAN` and not in `MUST_BE_EMPTY`, and that is deliberate.** The rule was
+  exact and unwritten; it is now written on `MUST_BE_EMPTY` (`import.rs:224-241`) and pinned by
+  `must_be_empty_is_exactly_the_autoincrement_tables`. `MUST_BE_EMPTY` guards one risk — the
+  importer preserves row ids, so a non-empty target could collide — and it holds precisely the
+  `COPY_PLAN` tables declared `INTEGER PRIMARY KEY AUTOINCREMENT`, with no exception in either
+  direction. `contacts` is keyed by `email`, `speaker_mappings` and `note_speaker_embeddings` by
+  `(note_id, speaker_id)`, the four calendar tables by a provider-supplied `TEXT` id: none has a
+  surrogate id to collide. The test fails if a future table joins one list and not the other.
+
+  **No migration, and that is the shape of this closing.** There is one migration file and
+  `migrations_are_idempotent_across_reopens` (`lib.rs:250-265`) asserts `applied == 1`, so adding
+  `0002_*.sql` fails it. This closes as a recorded decision rather than as work.
 - **`storage::import::from_openwhispr` has its manifest entry and its screen — closed.**
   `media:openwhispr-import` is `reachable: true` through `Notes > Upload`, landed together with the
   audio and video importers exactly as planned. The URL importer landed with them and was
