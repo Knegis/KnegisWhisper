@@ -224,6 +224,13 @@ streaming model exists.
 readers upstream and is recorded under `registry.droppedFromBaseline` with the reason
 `removed-vendor-service`.
 
+**The seventh meeting provider is measured, not ported.** `meeting-stream:local-streaming`
+(2026-09-01) has no upstream counterpart that could be read: `parakeetWsServer.js` is not in this
+checkout and sherpa-onnx's WebSocket protocol is undocumented, so the wire format came from a probe
+against the real server. It is the only client here whose format was established by measurement,
+and the only one where a documented fact turned out to be wrong — the reference client's `--help`
+says 16-bit samples and the wire carries `f32`. See `crates/meeting-core/src/nemotron.rs`.
+
 **Meeting-provider capabilities are honest about asymmetry.** There is no formal capability
 object upstream, so `MeetingProviderCapabilities` is new work. It must encode the real
 differences rather than a uniform shape: keyterms are supported by three of five providers with

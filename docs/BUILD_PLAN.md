@@ -55,10 +55,12 @@ integration parity OK — 102 entries against baseline c4000db9802d
   were added for meeting streaming in chunk E). Before chunk A, `provider_credential_set` existed in
   Rust and `setProviderCredential` was exported from `ipc.ts` and **nothing called either**, so
   every cloud provider was unreachable regardless of backend state.
-- **The six that remain unreachable, each for a specific, named reason rather than "not done
-  yet":** two local-ASR models (Nemotron — streaming, over `sherpa-onnx-online-websocket-server`'s
-  own protocol, for which nobody has written a client; listed on the screen with that reason rather
-  than hidden), two Tinfoil entries (batch transcription and meeting-stream,
+- **The five that remain unreachable, each for a specific, named reason rather than "not done
+  yet":** one local-ASR model (`nemotron-3.5-asr-streaming-0.6b`, the multilingual one — its
+  `sha256` is `null`, so `sherpa_models::install` refuses with `MissingPin` rather than downloading
+  something unauthenticated. **Not the reason it had until 2026-09-01**, which was that nobody had
+  written a client for the streaming protocol; `kw_meeting_core::nemotron` is that client and its
+  sibling `nemotron-speech-streaming-en-0.6b` is reachable through it), two Tinfoil entries (batch transcription and meeting-stream,
   both declined on principle — an unattested client would present as Tinfoil while providing none of
   the confidentiality the name means), Apple Calendar (EventKit — described in
   `kw_calendar_core::apple`, implemented nowhere, on any platform, for lack of a macOS machine), and
@@ -90,7 +92,7 @@ state chunk I and chunk E4 describe below.
 | 0 — Audit and contracts | Complete | — |
 | 1 — Tauri foundation | Complete | 4 of 6 window roles exist (Dictation panel, Control panel, Meeting notification, Update notification); Agent overlay is phase 10 scope and Transcription preview has no task in this plan. Linux/macOS hotkey fallbacks unwritten. Modifier-only shortcuts work on Windows through a keyboard hook. Four of the five hotkey actions have no feature behind them and are reported as such rather than registered |
 | — Chunk A (shell, types, Providers) | **Done, unchecked by hand** | Storing a key and passing a connection test has not been done by a person on this machine — still true at the close of this plan; see `BENCH_CHECK.md`'s "still unchecked" list, item 3 |
-| 2 — Dictation | **Verified on Windows** | 6 of 7 transcription providers reachable; Tinfoil declined pending enclave attestation. Both Parakeet local-ASR models are now reachable: `Settings > Transcription > Local` installs the pinned sherpa-onnx CLI and a model and selects it, and dictation resolves to exactly one local engine. `parakeet-unified-en-0.6b` is the one proven end to end; `parakeet-tdt-0.6b-v3` is offered on the same measured layout and has never been run. The 2 Nemotron models stay blocked on a streaming protocol nobody has written a client for — see B4 |
+| 2 — Dictation | **Verified on Windows** | 6 of 7 transcription providers reachable; Tinfoil declined pending enclave attestation. Both Parakeet local-ASR models are now reachable: `Settings > Transcription > Local` installs the pinned sherpa-onnx CLI and a model and selects it, and dictation resolves to exactly one local engine. `parakeet-unified-en-0.6b` is the one proven end to end; `parakeet-tdt-0.6b-v3` is offered on the same measured layout and has never been run. **The streaming half landed 2026-09-01:** the protocol was measured, `meeting-stream:local-streaming` is the client, and `nemotron-speech-streaming-en-0.6b` is reachable for meetings rather than dictation. The multilingual Nemotron is still unpinned — see B4 |
 | 3 — Reasoning | Complete, enterprise unverified | All three enterprise shapes written and tested against vectors and fixtures; no live call, no organisational credentials for any of the three. (The `llama-server` sidecar this phase's own chunk B3 built is done and pinned — the earlier version of this row said it was still missing, which stopped being true the same session it was written) |
 | 4 — Meetings and notes | **Complete**, three refusals kept | System audio, the meeting notification window, all five detectors (`zoom`/`teams`/`webex`/`facetime`/`generic`), and 4 of 5 WebSocket clients (`openai-realtime`/`assemblyai-realtime`/`deepgram-realtime`/`corti-realtime`, plus `meeting-stream:local`) are done. `meeting-stream:tinfoil-realtime` stays declined, for the identical reason as the batch client. The AEC helper stays `temporarily-deferred` — no C++ toolchain on this machine, and it gates quality (double-transcribed far-end audio on speakers), not whether a meeting records at all |
 | 5 — Calendars | **Complete** | Google and Microsoft: loopback PKCE, calendar list and incremental sync, all reachable — no client ID on this machine, so no live call has been made. Apple Calendar: `temporarily-deferred`, described in `kw_calendar_core::apple` and implemented nowhere, for lack of a macOS machine |
@@ -273,7 +275,7 @@ is sherpa. And `local_model` and `local_llm` both had an `InstallProgress`, whic
 TypeScript file is a redeclaration where the later one silently wins; `ipc_types` now refuses a
 name collision by assertion.
 
-### B4. Local ASR — sherpa-onnx (4 models) *(Parakeet done; Nemotron deferred, on purpose)*
+### B4. Local ASR — sherpa-onnx (4 models) *(Parakeet done; one Nemotron done 2026-09-01; one unpinned)*
 
 The plan said "same sidecar pattern". It is not. Looking at
 `k2-fsa/sherpa-onnx` `v1.13.4` — 303 assets — turned up three prerequisites the whisper and llama
@@ -288,8 +290,18 @@ sidecars did not need:
    serves an HTTP API on a port, which is why `Transport::Loopback` and `HttpHealth` fit them.
    sherpa-onnx ships `sherpa-onnx-offline` (a one-shot CLI that reads a WAV and prints) and
    `sherpa-onnx-online-websocket-server` (its own WebSocket protocol). Neither is an HTTP endpoint.
-   The offline CLI would be `Transport::Stdio`, which `sidecar::manifest` already supports; the
-   streaming ones need a client for a bespoke protocol, which is chunk E's kind of work.
+   The offline CLI is `Transport::Stdio`, which `sidecar::manifest` already supported.
+
+   **The streaming half was chunk E's kind of work and was done on 2026-09-01**, as
+   `meeting-stream:local-streaming`. The protocol is undocumented, so it was *measured* rather than
+   read — `crates/meeting-core/examples/sherpa_ws_probe.rs`, both directions, against the real
+   binaries, with the reference client reproducing the model's own transcript first as the control.
+   The decisive finding is that the samples are **`f32` little-endian** while the reference
+   client's own `--help` says 16-bit; as `i16` the values are noise, so a client written from the
+   documentation would connect, send, and transcribe nothing. `sherpa-stream` is a sidecar entry
+   with `not-published` targets, because the server ships inside the offline CLI's own archive and
+   is already on disk — what the entry supplies is a port range and the reaper's command
+   fragment.
 3. **The argument and directory contract is per-model.** An extracted model is a directory of
    encoder/decoder/joiner/tokens files whose layout differs between the Parakeet and Nemotron
    families, and the CLI flags follow. That cannot be written correctly from a release page; it

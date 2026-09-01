@@ -595,11 +595,48 @@ see **What the transducer reports** below. `ys_log_probs` is still unread
 (nothing here reports confidence, and a threshold nobody measured would be
 worse than silence) and `durations` and `words` come back empty.
 
-There is **no persistent server**: `sherpa-onnx-offline` is a one-shot CLI
-that reads one WAV path and exits, unlike `whisper-server`'s HTTP endpoint on
-a port. `SherpaOffline::transcribe` writes the audio to a temp file and spawns
+There is **no persistent server for the offline CLI**: `sherpa-onnx-offline`
+reads one WAV path and exits, unlike `whisper-server`'s HTTP endpoint on a
+port. `SherpaOffline::transcribe` writes the audio to a temp file and spawns
 a fresh child per request rather than holding a `port` the way `WhisperServer`
 does.
+
+### The streaming server, and a protocol that had to be measured
+
+`sherpa-onnx-online-websocket-server` — a different binary out of the same
+archive, already extracted beside the CLI — *is* a persistent server, and since
+2026-09-01 it is the runtime behind the `local-streaming` meeting provider.
+It is not an HTTP endpoint, so there is no `/health` to probe: readiness is a
+real WebSocket handshake, because a bare TCP connect answers "something is
+listening" and a half-initialised server answers that too.
+
+**The wire format is undocumented and one documented fact about it is wrong.**
+`crates/meeting-core/examples/sherpa_ws_probe.rs` measured both directions
+against the real binaries, with the reference client reproducing the model's
+own `test_wavs/trans.txt` first as the control:
+
+| | measured |
+| --- | --- |
+| sample format | **`f32` little-endian** |
+| frame | BINARY, 8000 samples, then a short tail |
+| client end marker | TEXT `Done` |
+| server end marker | TEXT `Done!`, and it never closes the socket |
+| transcript `text` | **cumulative** within a segment — replace, never append |
+| a malformed frame | **no reply at all** |
+
+`sherpa-onnx-online-websocket-client --help` says *"16-bit samples"*. As `f32`
+the values are speech inside ±1; as `i16` they are noise. A client written
+from the documentation would connect, send, and transcribe nothing.
+
+The last row decides how faults are reported. There is **no error frame**, so
+`kw_meeting_core::fault::FaultKind::Reported` is unreachable for this provider
+and a client claiming to surface "what the provider said was wrong" would be
+describing a channel that does not exist. That is the inverse of the four
+cloud clients, which is why it was measured rather than assumed.
+
+**What is not verified:** nobody has recorded a real meeting through it. The
+probe drove the real server with a WAV and got the reference transcript back;
+a meeting is a different path.
 
 **A real bug this measurement caught.** `config/provider-registry.json`'s
 `sizeMb` for a sherpa model (631 for Parakeet Unified EN 0.6B) is **the

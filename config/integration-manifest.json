@@ -556,7 +556,7 @@
       "ui": "Settings > Transcription > Local",
       "reachable": false,
       "runtime": "online",
-      "note": "Still unreachable, but not for the reason previously recorded: Task 17 pinned sherpa-onnx and gave install::extract a tar.bz2 reader, so the archive format is no longer the blocker, and Task 18 measured and implemented the offline CLI contract for the Parakeet family (kw_transcription_core::sherpa, proven end to end against both pinned Parakeet models). This model is not Parakeet, though: it is one of the two Nemotron models, which are streaming over sherpa-onnx-online-websocket-server's own bespoke WebSocket protocol rather than the sherpa-onnx-offline CLI that was measured. Nobody has written or tested a client for that protocol, and the offline path was not attempted against this model -- it is not offline-shaped, so there is no evidence either way about whether it would apply. Deferred with the reason stated, per docs/BUILD_PLAN.md chunk B4 and docs/PLATFORM_SUPPORT.md's 'Local ASR: sherpa-onnx' section."
+      "note": "Still unreachable, and the reason changed on 2026-09-01. It is no longer 'nobody has written a client for the streaming protocol' -- kw_meeting_core::nemotron is that client, measured against the real server, and its sibling local-asr:nemotron-speech-streaming-en-0.6b is reachable through it. This one is unreachable because it has no pin: its sha256 in config/provider-registry.json is null, so sherpa_models::install refuses with MissingPin rather than downloading something unauthenticated. Nothing has downloaded it, so there is nothing to pin; one model was enough to settle the protocol, which is what the download was for. Pinning it is a download and a measured digest away, and the client it would use already exists."
     },
     "local-asr:nemotron-speech-streaming-en-0.6b": {
       "status": "ported-with-new-rust-implementation",
@@ -569,9 +569,9 @@
       ],
       "backend": "crates/transcription-core",
       "ui": "Settings > Transcription > Local",
-      "reachable": false,
-      "runtime": "online",
-      "note": "Still unreachable, but not for the reason previously recorded: Task 17 pinned sherpa-onnx and gave install::extract a tar.bz2 reader, so the archive format is no longer the blocker, and Task 18 measured and implemented the offline CLI contract for the Parakeet family (kw_transcription_core::sherpa, proven end to end against both pinned Parakeet models). This model is not Parakeet, though: it is one of the two Nemotron models, which are streaming over sherpa-onnx-online-websocket-server's own bespoke WebSocket protocol rather than the sherpa-onnx-offline CLI that was measured. Nobody has written or tested a client for that protocol, and the offline path was not attempted against this model -- it is not offline-shaped, so there is no evidence either way about whether it would apply. Deferred with the reason stated, per docs/BUILD_PLAN.md chunk B4 and docs/PLATFORM_SUPPORT.md's 'Local ASR: sherpa-onnx' section."
+      "reachable": true,
+      "runtime": null,
+      "note": "Reachable since 2026-09-01, and this is the model the streaming protocol was measured against. Pinned in config/provider-registry.json from bytes that moved through a real machine (sha256 78e2b79f..., 463,945,051 bytes, extracting to 9 files). It installs on the same screen as the Parakeet pair and is chosen for meetings rather than dictation, because it is a streaming model: Settings > Transcription > Local offers 'Use for meetings', which writes meetings.streamModel, and meeting-stream:local-streaming reads it. The protocol was measured on 2026-09-01 with crates/meeting-core/examples/sherpa_ws_probe.rs against the real server and the real reference client, both directions, with the reference client reproducing the model's own test_wavs/trans.txt first as the control. Three facts are in no documentation and one contradicts it: samples are f32 little-endian (the reference client's --help says 16-bit), the transcript text is cumulative per segment, and the server never closes the socket. A malformed frame draws no reply at all, so this provider has no error channel and fault::FaultKind::Reported is unreachable for it. What is NOT verified: nobody has recorded a real meeting through it. The probe drove the real server with a WAV and got the model's own reference transcript back; a meeting is a different path."
     },
     "local-asr:parakeet-tdt-0.6b-v3": {
       "status": "ported-with-new-rust-implementation",
@@ -687,6 +687,19 @@
       "reachable": true,
       "frontend": "apps/desktop/src/views/SettingsMeetings.tsx",
       "note": "Repeated short passes over the local whisper-server, not the sherpa-onnx WebSocket server upstream used -- that runtime is blocked, see chunk B4. Named 'Local windowed model' so it is not mistaken for word-by-word streaming."
+    },
+    "meeting-stream:local-streaming": {
+      "status": "ported-with-new-rust-implementation",
+      "name": "Local streaming model",
+      "phase": 4,
+      "upstream": [
+        "src/helpers/parakeetWsServer.js"
+      ],
+      "backend": "crates/meeting-core/src/nemotron_socket.rs",
+      "ui": "Settings > Meetings",
+      "reachable": true,
+      "frontend": "apps/desktop/src/views/SettingsMeetings.tsx",
+      "note": "New relative to meeting-stream:local, and what that entry's note said was blocked. sherpa-onnx-online-websocket-server on loopback, two sockets, one per capture -- words as they are recognised rather than a five-second window three seconds late. The protocol was measured on 2026-09-01 with crates/meeting-core/examples/sherpa_ws_probe.rs against the real server and the real reference client, both directions, with the reference client reproducing the model's own test_wavs/trans.txt first as the control. Three facts are in no documentation and one contradicts it: samples are f32 little-endian (the reference client's --help says 16-bit), the transcript text is cumulative per segment, and the server never closes the socket. A malformed frame draws no reply at all, so this provider has no error channel and fault::FaultKind::Reported is unreachable for it. Reachable: pick a streaming model under Settings > Transcription > Local (it writes meetings.streamModel) and choose 'Local streaming model' on Settings > Meetings. The server is started when a meeting starts, not at launch. Not yet run against a real meeting by a person -- the wire is measured and the client is tested, which are different claims."
     },
     "credential:openai": {
       "status": "ported-with-new-rust-implementation",
