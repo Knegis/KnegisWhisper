@@ -181,7 +181,11 @@ only its name was wrong. Both instructions are corrected.
 1. **The server binary refreshed from the screen (KNEG-113, added 2026-09-01).** The button exists,
    the freshness decision is tested and mutation-checked, and the Windows file-locking facts it is
    built on were re-measured on 2026-09-01 by
-   `cargo run -p kw-sidecar --example running_exe_lock_probe`. None of that is a press.
+   `cargo run -p kw-sidecar --example running_exe_lock_probe`. The install underneath it was run
+   against the real network the same day —
+   `cargo test -p kw-sidecar --test real_install -- --ignored` downloads the pinned archive, and
+   now also asserts the record beside the install names the pinned digest and that a junk
+   `whisper.incoming` in the way is cleared rather than fatal. None of that is a press.
 
    This machine is the right one to press it on: `sidecars/whisper` still holds the 2026-08-25
    files and no record, so the row should read *not known whether this is the build this version

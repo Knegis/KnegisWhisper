@@ -418,13 +418,18 @@ every other download here, a refresh happens because somebody pressed a button. 
 `local_asr.rs` install sidecars through the same `kw_sidecar::install` and so get the record for
 free, but neither reports freshness or offers a refresh — only whisper does.
 
-And **no refresh has been run on real hardware.** The record, the freshness decision, the staging
-recovery and the failure wording are covered by 37 tests and 35 mutations, every mutation killed by
-the test that names it; the stop-install-restart sequence itself is reachable only through an
-`AppHandle` and has been exercised by nobody. The by-hand check is: press **Update the server
-binary** on this machine, whose sidecar reports `unknown`, with `tiny` resumed — and confirm the
-directory gains `bench.exe`, the row turns `current`, `whisper.incoming` is gone, and dictation
-still works.
+**The install half is measured; the stop and the restart around it are not.**
+`tests/real_install.rs` was run against the real network on 2026-09-01 — not a fixture — and it now
+asserts three more things: the record beside a fresh install names the digest the manifest pins,
+`freshness` reads `Current` off it, and a reinstall with a junk `whisper.incoming` in the way both
+succeeds and takes the leftover with it. Both halves of the staging fix therefore have real bytes
+behind them. Everything else is 37 tests and 37 mutations, every mutation killed by the test that
+names it.
+
+What has not happened is a **press**. The stop-install-restart sequence is reachable only through an
+`AppHandle`, so nothing has exercised it. The by-hand check is: on this machine, whose sidecar
+reports `unknown`, with `tiny` resumed, press **Update the server binary** and confirm the directory
+gains `bench.exe`, the row turns `current`, `whisper.incoming` is gone, and dictation still works.
 
 ---
 
