@@ -43,6 +43,7 @@ export function Notes() {
   const [exportFormat, setExportFormat] = useState<ExportFormat>("txt");
   const [preview, setPreview] = useState<ExportedTranscript | null>(null);
   const [exportedTo, setExportedTo] = useState<string | null>(null);
+  const [openNoteId, setOpenNoteId] = useState<number | null>(null);
 
   if (!data) {
     return (
@@ -53,6 +54,7 @@ export function Notes() {
   }
 
   const { notes, folders } = data;
+  const openNote = notes.find((note) => note.id === openNoteId) ?? null;
 
   return (
     <div className="view">
@@ -167,6 +169,18 @@ export function Notes() {
                 </span>
                 <button
                   type="button"
+                  aria-expanded={openNoteId === note.id}
+                  aria-controls={`note-body-${note.id}`}
+                  onClick={() => {
+                    setOpenNoteId((current) =>
+                      current === note.id ? null : note.id,
+                    );
+                  }}
+                >
+                  {openNoteId === note.id ? "Close note" : "Read note"}
+                </button>
+                <button
+                  type="button"
                   onClick={() => {
                     void guard(async () => {
                       setExportedTo(null);
@@ -195,6 +209,9 @@ export function Notes() {
                   onClick={() => {
                     void guard(async () => {
                       await deleteNote(note.id);
+                      setOpenNoteId((current) =>
+                        current === note.id ? null : current,
+                      );
                       setPreview(null);
                     });
                   }}
@@ -205,6 +222,33 @@ export function Notes() {
             ))}
           </ul>
         )}
+
+        {openNote ? (
+          <article
+            className="note-detail"
+            aria-labelledby={`note-title-${openNote.id}`}
+          >
+            <header className="note-detail-header">
+              <h3 id={`note-title-${openNote.id}`}>{openNote.title}</h3>
+              <button
+                type="button"
+                onClick={() => {
+                  setOpenNoteId(null);
+                }}
+                aria-label={`Close note ${openNote.title}`}
+              >
+                Close
+              </button>
+            </header>
+            <div id={`note-body-${openNote.id}`} className="note-body">
+              {openNote.content.trim() === "" ? (
+                <span className="muted">This note has no body text.</span>
+              ) : (
+                openNote.content
+              )}
+            </div>
+          </article>
+        ) : null}
 
         <div className="row">
           <span className="row-label">Export format</span>
@@ -242,6 +286,9 @@ export function Notes() {
                   : undefined
               }
             />
+            <p className="muted">
+              This is the exported transcript, not the note body shown above.
+            </p>
             <pre className="preview">{preview.content}</pre>
           </>
         ) : null}
