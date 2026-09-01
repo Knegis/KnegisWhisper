@@ -23,6 +23,10 @@ use ts_rs::TS;
 /// The overlay window's label.
 pub const LABEL: &str = "overlay";
 
+/// Native window size; the frontend lays its recording indicator out inside it.
+const WIDTH: f64 = 280.0;
+const HEIGHT: f64 = 96.0;
+
 /// What the overlay is actually doing, as reported to the settings screen.
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -82,7 +86,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<WebviewWindow> {
     let overlay =
         WebviewWindowBuilder::new(app, LABEL, WebviewUrl::App("index.html#overlay".into()))
             .title("KnegisWhisper overlay")
-            .inner_size(280.0, 96.0)
+            .inner_size(WIDTH, HEIGHT)
             .resizable(false)
             .decorations(false)
             .transparent(true)
@@ -95,6 +99,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<WebviewWindow> {
             .visible(false)
             .build()?;
 
+    crate::window_placement::bottom_center(&overlay, WIDTH, HEIGHT, "dictation overlay");
     Ok(overlay)
 }
 
@@ -216,6 +221,12 @@ pub fn set_visible(app: &AppHandle, visible: bool) {
         }
         return;
     };
+
+    if visible {
+        // A monitor may have moved or changed scale while the overlay was
+        // hidden. Re-read the work area before every recording starts.
+        crate::window_placement::bottom_center(&overlay, WIDTH, HEIGHT, "dictation overlay");
+    }
 
     let result = if visible {
         overlay.show()

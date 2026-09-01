@@ -25,10 +25,7 @@
 //! window rather than assumed.
 
 use crate::overlay::OverlayStatus;
-use tauri::{
-    AppHandle, LogicalPosition, LogicalSize, Manager as _, WebviewUrl, WebviewWindow,
-    WebviewWindowBuilder,
-};
+use tauri::{AppHandle, Manager as _, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
 /// The window label, and the fragment the frontend routes on.
 pub const LABEL: &str = "update";
@@ -37,9 +34,6 @@ pub const LABEL: &str = "update";
 /// notification, which is the row directly above this one.
 const WIDTH: f64 = 392.0;
 const HEIGHT: f64 = 92.0;
-
-/// Gap from the screen edges, so it does not sit against the taskbar.
-const MARGIN: f64 = 24.0;
 
 /// Create the window, hidden.
 ///
@@ -75,42 +69,9 @@ pub fn create(app: &AppHandle) -> tauri::Result<WebviewWindow> {
     Ok(window)
 }
 
-/// Put the window in the bottom-right of the monitor it is on.
-///
-/// Identical to `meeting_window::position`. Not shared as one function across
-/// both modules because the two windows' positions are independent facts that
-/// happen to use the same formula today; a future window role wanting a
-/// different corner should not have to fight a shared implementation to get
-/// it.
+/// Put the window in the bottom-right of the monitor work area it is on.
 pub fn position(window: &WebviewWindow) {
-    let monitor = match window.current_monitor() {
-        Ok(Some(monitor)) => monitor,
-        Ok(None) => {
-            tracing::debug!("no monitor reported; leaving the window where it was placed");
-            return;
-        }
-        Err(err) => {
-            tracing::debug!(error = %err, "could not read the monitor");
-            return;
-        }
-    };
-
-    let scale = monitor.scale_factor();
-    let size = monitor.size().to_logical::<f64>(scale);
-    let origin = monitor.position().to_logical::<f64>(scale);
-
-    // Bottom-right, inside the margin. Not the work area -- Tauri does not
-    // expose it -- so on Windows the taskbar is cleared by the margin rather
-    // than by measurement.
-    let x = origin.x + size.width - WIDTH - MARGIN;
-    let y = origin.y + size.height - HEIGHT - MARGIN * 2.0;
-
-    if let Err(err) = window.set_size(LogicalSize::new(WIDTH, HEIGHT)) {
-        tracing::debug!(error = %err, "could not set the update notification window size");
-    }
-    if let Err(err) = window.set_position(LogicalPosition::new(x, y)) {
-        tracing::warn!(error = %err, "could not position the update notification window");
-    }
+    crate::window_placement::bottom_right(window, WIDTH, HEIGHT, "update notification");
 }
 
 /// Apply the platform treatments and report what happened.
