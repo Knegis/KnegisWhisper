@@ -122,6 +122,18 @@ async fn start_server(executable: &Path, model: &Path) -> Server {
         .arg(format!("--decoder={}", onnx(model, "decoder").display()))
         .arg(format!("--joiner={}", onnx(model, "joiner").display()))
         .arg("--num-work-threads=5")
+        // Not optional, and this test learnt it the hard way: left at its
+        // default the server writes `./log.txt` into whatever the working
+        // directory happens to be, which for `cargo test` is the crate root.
+        // The first run of this file committed two of them. The shipped path
+        // (`sherpa_stream::build_args`) has always passed this flag; the test
+        // that exists to prove the shipped path works had not.
+        .arg(format!(
+            "--log-file={}",
+            std::env::temp_dir()
+                .join("kw-nemotron-stream-test.log")
+                .display()
+        ))
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
 
