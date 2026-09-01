@@ -713,9 +713,16 @@ possibly cheaper half.
 
 **Repeated on a second real Teams call, 2026-08-31**, with the same result and no offer window. Two
 independent calls is what turns "it did not fire that time" into a property of the mechanism, and it
-is the reason KNEG-58's Teams row is now closed as *cannot fire* rather than *unverified* -- a
+is the reason KNEG-58's Teams row was closed as *cannot fire* rather than *unverified* -- a
 distinction worth having, because the two look identical from a bench run and only one of them is
 worth another attempt.
+
+**Superseded on 2026-09-01.** *Cannot fire* was true of the process table and only of the process
+table. `mic_users_probe` measured a different mechanism the same week: `ms-teams.exe` holds a
+capture session during a call and holds none while the client sits idle, controlled both times.
+Teams is now offered on that signal — see item 6 in the open-questions list below for the runs
+and the limits. The two calls above are still the reason nobody wasted a day inventing process
+names.
 
 **`openai-realtime` cannot connect at all: the beta API shape was retired.** Its first live use
 was closed on both sockets within milliseconds:
@@ -854,17 +861,35 @@ wrong with it and watch the indicator change while the timer keeps counting.
    recording. Point it at a model with `KW_SHERPA_MODEL_DIR` and `KW_SHERPA_EXECUTABLE`.
    **Still uncovered:** real speech with hesitations, a recording long enough for the
    200-character backstop to fire, and any language other than English.
-6. **Meeting detection firing on a real call — driven twice now, and it cannot fire for Teams.**
-   Not an open question any more, and not a defect either. Microsoft Teams, in a real call, on
-   2026-08-28 and again on 2026-08-31: no offer window either time. New Teams runs the call inside
-   `ms-teams.exe` and spawns no child process, so the process table shows exactly the same thing
-   during a call as it does with the client idle in the tray. `Settings > Meetings` says so in
-   words — *"open, but not detectably in a call, so recording is not offered for it"* — and
-   offering on "the client is open" would prompt at every Windows launch for anyone whose Teams
-   starts with the machine. **The ceiling is the mechanism, not the table**, so no process name
-   would fix it; KNEG-94 (a microphone-session listener over `IAudioSessionManager2`, which asks
-   whether anything is capturing rather than what is running) is the only thing that changes the
-   answer for this client.
+6. **Meeting detection firing on a real call — the ceiling was the mechanism, and the mechanism
+   changed. Now fires for Teams.** Two real calls, 2026-08-28 and 2026-08-31, produced no offer
+   window either time, and that was correct: new Teams runs the call inside `ms-teams.exe` and
+   spawns no child process, so the process table shows exactly the same thing during a call as it
+   does with the client idle in the tray. No process name would have fixed it.
+
+   **KNEG-94 raised the ceiling on 2026-09-01.** `mic_users_probe` enumerated capture sessions
+   through `IAudioSessionManager2` on this machine, three runs against one Teams install:
+
+   | run | active capture endpoints | `ms-teams.exe` capturing |
+   | --- | --- | --- |
+   | Teams not running | 1 | — |
+   | Teams open, idle | 1 | **no** |
+   | Teams in a real call | 2 | **yes** |
+
+   Every run carried a control: a second process opened a capture stream and had to appear, so the
+   middle row is a measured absence and not a broken enumeration — the failure mode
+   `native_path_probe` was caught by. The two middle rows differing is the entire basis for the
+   signal, and `detect` now takes the capture list beside the process list.
+
+   **What it is worth is bounded and the screen says so.** A held microphone is weaker evidence
+   than a call-only process: Teams holds the device for its own audio test, and for a call nobody
+   joined. The offer window says *"Microsoft Teams is using your microphone — that is usually a
+   call, but a test call looks the same"* rather than asserting a meeting. Windows only; nothing
+   equivalent is read on Linux or macOS, and `Settings > Meetings` reports which of those this
+   machine is.
+
+   **Still not driven by hand:** the offer window appearing during a real Teams call. The signal is
+   measured and the wiring is tested, but nobody has yet joined a call and watched a window appear.
 
    **Still genuinely uncovered:** Zoom's `CptHost.exe` and Webex's `webexmta.exe`, the two in-call
    names that were *written from knowledge rather than ported* and have never been seen to match
@@ -1037,7 +1062,7 @@ dev fixtures and are recorded below as not run rather than as passes. See findin
 | **The application starts and reaches a usable window** | Only after finding 1 was fixed. Before that it panicked in `setup` every time |
 | **`meeting-stream:local` records, transcribes and saves, end to end** | Started from `Settings > Meetings` with the local provider and system audio on; stopped with *Stop and transcribe*; **saved as note 1 (1 min)** with the recording at `…\Roaming\KnegisWhisper\meetings\20260827-140423.wav`. The first genuine end-to-end pass anywhere in chunk E, and the highest-value item on the run's list |
 | **System audio resolves the real default output** | `WASAPI loopback on the default output device — Headphones (Bose QC45)`, a device that appears in no fixture |
-| **Meeting detection distinguishes running from in-a-call** | Microsoft Teams reported as *"open, but not detectably in a call, so recording is not offered for it — detected as ms-teams.exe"*. The distinction the five process-based detectors exist to make, holding on real hardware |
+| **Meeting detection distinguishes running from in-a-call** | Microsoft Teams reported as *"open, but not detectably in a call, so recording is not offered for it — detected as ms-teams.exe"*. The distinction the five process-based detectors exist to make, holding on real hardware. **That wording is gone as of 2026-09-01**: Teams is now separated by the microphone it holds, and an idle client reads *"open, and not using a microphone, so nothing here says a call is in progress"* |
 | **The recording window is capture-excluded** | `verified via GetWindowDisplayAffinity = WDA_EXCLUDEFROMCAPTURE`, read back from the real window |
 
 ### Findings

@@ -353,19 +353,47 @@ below says whether it has actually been seen to match. `cargo run -p kw-platform
 
 | Application | Open | In a call | State |
 | --- | --- | --- | --- |
-| Microsoft Teams | `ms-teams.exe`, `teams.exe`, `msteams`, `teams` | — | **`ms-teams.exe` seen to match** (2026-08-26, 628 processes). New Teams runs the call inside its own process, so there is no in-call signal |
+| Microsoft Teams | `ms-teams.exe`, `teams.exe`, `msteams`, `teams` | *the microphone* | **both states seen** (2026-09-01). New Teams runs the call inside its own process, so there is no in-call process — it is detected by the capture session it holds |
 | Zoom | `zoom.exe`, `zoom`, `zoom.us` | `cpthost.exe`, `caphost` | ⚠️ written, not seen to match |
 | Webex | `webex.exe`, `webexhost.exe`, `ciscocollabhost.exe` | `webexmta.exe` | ⚠️ written, not seen to match |
-| FaceTime | `facetime` | — | ⚠️ macOS only, compiled out elsewhere, unverified |
-| Anything else | the user's own allowlist | — | works by construction |
+| FaceTime | `facetime` | — | ⚠️ macOS only, compiled out elsewhere, unverified. Microphone activity cannot be read there, so it has no second signal either |
+| Anything else | the user's own allowlist | *the microphone* | works by construction |
 
-**Only an in-call process offers to record**, and that is a measurement rather
-than a preference. Teams was found running with no call in progress, and Teams
-starts with Windows on most corporate machines — so offering on "the client is
-open" would put a window on screen at every launch, and the feature would be
-switched off the same day. Teams and FaceTime are therefore reported on
-`Settings > Meetings` and never prompted for, which is a limit worth stating
-rather than leaving somebody to discover.
+**Only a call in progress offers to record**, and which signal says so is
+reported rather than flattened. There are two, and they are not equally strong:
+
+- **A call-only process.** `CptHost.exe` is not started by opening Zoom.
+- **A held microphone.** Real evidence, and weaker — Teams holds the device for
+  its own audio test, and for a call the user placed that nobody joined.
+
+The second exists because of a measurement taken on 2026-09-01 with
+`cargo run -p kw-platform --example mic_users_probe`, on Windows, against one
+Teams install:
+
+| run | active capture endpoints | `ms-teams.exe` capturing |
+| --- | --- | --- |
+| Teams not running | 1 | — |
+| Teams open, idle | 1 | **no** |
+| Teams in a real call | 2 | **yes** |
+
+Every run carried its own control — a second process opened a capture stream and
+had to appear in the list — so the middle row is a measured absence rather than a
+broken enumeration. The two middle rows differing is the whole basis for the
+signal, and until they were taken Teams was permanently unofferable: the only
+thing available was "the client is open", true from login on any machine where
+Teams starts with Windows.
+
+**The microphone can only strengthen a match, never create one.** A process
+holding a capture device that is not a known client and is not on the user's own
+list is not reported at all. Otherwise this application's own dictation would
+offer to record itself.
+
+**It is Windows-only.** `IAudioSessionManager2` is the mechanism and nothing
+equivalent is read on Linux or macOS, so there the capture list is always empty
+and Teams and FaceTime stay reported-but-never-prompted, exactly as before.
+`Settings > Meetings` says which state this machine is in, because "Teams is
+open and not in a call" and "Teams is open and nobody looked" are the same
+sentence with opposite meanings.
 
 Matching is on the **image name and exact**, not the command line and not by
 substring. `kw_sidecar::reap` matches command lines because it must prove a

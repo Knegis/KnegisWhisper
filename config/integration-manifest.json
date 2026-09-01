@@ -1068,7 +1068,7 @@
         "src/helpers/meetingDetectionEngine.js"
       ],
       "backend": "crates/platform/src/meeting_detect.rs",
-      "note": "Detected when the client is open. New Teams runs the call inside ms-teams.exe, so there is no separate in-call process to offer on -- measured with meeting_detect_probe on 2026-08-26 -- and offering on 'the client is open' would prompt on every launch for anyone whose Teams starts with Windows. Reported on Settings > Meetings instead."
+      "note": "Offered when it is in a call, and detected by the microphone rather than by a process. New Teams runs the call inside ms-teams.exe and spawns nothing, measured with meeting_detect_probe on 2026-08-26, which left it unofferable: the only signal was 'the client is open', true from login wherever Teams starts with Windows. mic_users_probe measured the difference on 2026-09-01 -- Teams open and idle holds no capture session, Teams in a call holds one, each run controlled by a second process that had to appear. Windows only; elsewhere the capture list is empty and Teams stays reported rather than offered."
     },
     "meeting-detect:webex": {
       "status": "ported-with-new-rust-implementation",
@@ -1091,7 +1091,7 @@
       "platforms": [
         "macos"
       ],
-      "note": "macOS only, and compiled out elsewhere rather than silently absent. Like Teams it has no separate in-call process, so it is reported and not offered."
+      "note": "macOS only, and compiled out elsewhere rather than silently absent. Like Teams it has no separate in-call process, and unlike Teams it has no second signal either: microphone activity is read through IAudioSessionManager2 and nothing equivalent is read on macOS. Reported, not offered."
     },
     "meeting-detect:generic": {
       "status": "ported-with-new-rust-implementation",
