@@ -44,7 +44,7 @@
  */
 
 import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
-import { join, dirname, resolve } from "node:path";
+import { join, dirname, resolve, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -104,6 +104,9 @@ export const USER_CONFIGURABLE = new Set([
  *   every target, so a caller that forgets it gets a loud failure rather than
  *   a silent pass -- the direction that matters for a check whose whole job is
  *   catching a claim about something that is not there.
+ * @param {(sourcePath: string) => string | null} [input.readEvidence]
+ *   Source named by a deferred entry's interface evidence. Defaults to a
+ *   refusal so a caller cannot accidentally turn the check into a no-op.
  * @returns {{rule: string, key: string, detail: string}[]}
  */
 export function violations({
@@ -112,6 +115,7 @@ export function violations({
   surfaces,
   readComponent,
   hasTarget = () => false,
+  readEvidence = () => null,
 }) {
   const found = [];
   const fail = (rule, key, detail) => found.push({ rule, key, detail });
@@ -265,6 +269,48 @@ export function violations({
         if (!e.upstream) {
           fail("incomplete-deferral", key, "deferral must name the upstream files that implement it");
         }
+
+        const evidence = d.interfaceEvidence;
+        if (!Array.isArray(evidence) || evidence.length === 0) {
+          fail(
+            "incomplete-deferral",
+            key,
+            'deferral must name at least one checkable "interfaceEvidence" source'
+          );
+        } else {
+          for (const item of evidence) {
+            const path = item?.path;
+            const contains = item?.contains;
+            const safePath =
+              typeof path === "string" &&
+              path.length > 0 &&
+              !isAbsolute(path) &&
+              !path.split(/[\\/]+/u).includes("..");
+            if (!safePath || typeof contains !== "string" || contains.length === 0) {
+              fail(
+                "stale-deferral-interface",
+                key,
+                "interfaceEvidence needs a repository-relative path and a non-empty contains literal"
+              );
+              continue;
+            }
+
+            const source = readEvidence(path);
+            if (source === null) {
+              fail(
+                "stale-deferral-interface",
+                key,
+                `interface evidence path "${path}" does not exist`
+              );
+            } else if (!source.includes(contains)) {
+              fail(
+                "stale-deferral-interface",
+                key,
+                `interface evidence "${contains}" is absent from "${path}"`
+              );
+            }
+          }
+        }
       }
     }
 
@@ -359,6 +405,12 @@ function readComponentFromDisk(relative) {
   return existsSync(path) ? readFileSync(path, "utf8") : null;
 }
 
+/** A source file named as evidence, or null for a missing/non-file target. */
+function readEvidenceFromDisk(relative) {
+  const path = join(REPO_ROOT, relative);
+  return existsSync(path) && statSync(path).isFile() ? readFileSync(path, "utf8") : null;
+}
+
 /**
  * Whether a documentation target exists on disk and holds something.
  *
@@ -382,6 +434,7 @@ function main() {
     surfaces,
     readComponent: readComponentFromDisk,
     hasTarget: (target) => hasTargetOnDisk(target),
+    readEvidence: readEvidenceFromDisk,
   });
 
   const total = Object.keys(manifest.entries).length;

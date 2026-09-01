@@ -135,6 +135,12 @@
           "a decision that this project wants to build one, which has not been made"
         ],
         "interface": "crates/transcription-core::route::ProviderClientKind::Tinfoil is the enum member every match must cover; clients::why_tinfoil_is_refused() names the reason and clients::shape() returns TranscriptionError::ClientNotImplemented for it. No attested-client module exists.",
+        "interfaceEvidence": [
+          {
+            "path": "crates/transcription-core/src/clients.rs",
+            "contains": "pub const fn why_tinfoil_is_refused()"
+          }
+        ],
         "expectedPhase": null
       },
       "backend": "crates/transcription-core",
@@ -669,6 +675,12 @@
           "a decision that this project wants to build one, which has not been made"
         ],
         "interface": "crates/meeting-core has no Tinfoil-specific client module. capabilities.rs declares the provider's capabilities and its refusal reason; nothing implements a Tinfoil MeetingTranscriptionProvider.",
+        "interfaceEvidence": [
+          {
+            "path": "crates/meeting-core/src/capabilities.rs",
+            "contains": "Tinfoil requires verifying an enclave attestation"
+          }
+        ],
         "expectedPhase": null
       },
       "backend": "crates/meeting-core",
@@ -998,6 +1010,12 @@
           "a macOS machine to write and verify the binding against, which is not available in this development environment"
         ],
         "interface": "kw_calendar_core::apple::AppleCalendarSource, declared and deliberately unimplemented -- see the module doc.",
+        "interfaceEvidence": [
+          {
+            "path": "crates/calendar-core/src/apple.rs",
+            "contains": "pub trait AppleCalendarSource"
+          }
+        ],
         "expectedPhase": 5
       },
       "backend": "crates/calendar-core",
@@ -1190,6 +1208,12 @@
           "a pinned text-embedding model -- all-MiniLM-L6-v2 or an equivalent: none is pinned by tools/model-pin, and none appears in config/provider-registry.json or anywhere else"
         ],
         "interface": "None is declared anywhere in this repository. The previous value, notes_core::search::SemanticIndex, named a module that has never existed -- crates/notes-core/src is lib.rs, notes.rs and transcript.rs, and SemanticIndex appears nowhere in the tree but in this manifest. The function semantic ranking would have to join is kw_notes_core::notes::search (crates/notes-core/src/notes.rs:255), whose SearchHit is id, title and snippet, with no score field to rank by.",
+        "interfaceEvidence": [
+          {
+            "path": "crates/notes-core/src/notes.rs",
+            "contains": "pub async fn search("
+          }
+        ],
         "expectedPhase": 8,
         "degradation": "Nothing degrades, because nothing was built to degrade from. FTS5 keyword search is the whole of search today rather than a fallback from something richer. The previous value claimed the UI hides semantic ranking rather than failing; apps/desktop/src contains zero occurrences of `semantic`, so there has never been anything to hide."
       },
@@ -1263,6 +1287,12 @@
           "a five-target CI workflow granted contents: write, to publish the built binaries as this project's own release assets rather than fetching OpenWhispr's"
         ],
         "interface": "none written yet -- crates/sidecar::manifest::Transport::Stdio is the existing generic child-process transport this helper would use once built, but no AEC-specific trait or module exists in this codebase",
+        "interfaceEvidence": [
+          {
+            "path": "crates/sidecar/src/manifest.rs",
+            "contains": "pub enum Transport"
+          }
+        ],
         "expectedPhase": 4,
         "degradation": "Meetings still record and transcribe correctly without it. On speakers, the far end's own audio is transcribed twice -- once per capture -- instead of once; on headphones there is nothing to cancel, so the gap does not appear at all. It gates nothing: what actually blocks a meeting from being recorded is system audio capture, which is separate, is Rust, and is already done (platform:system-audio)."
       },
