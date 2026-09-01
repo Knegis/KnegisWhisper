@@ -634,9 +634,15 @@ and a client claiming to surface "what the provider said was wrong" would be
 describing a channel that does not exist. That is the inverse of the four
 cloud clients, which is why it was measured rather than assumed.
 
-**What is not verified:** nobody has recorded a real meeting through it. The
-probe drove the real server with a WAV and got the reference transcript back;
-a meeting is a different path.
+**Verified on 2026-09-01:** a real meeting was recorded through it in the
+application window and the words arrived **as they were spoken** — which is the
+whole difference from the windowed provider beside it, and the reason this one
+is allowed to use the word "streaming".
+
+**What that run did not cover:** *Stop and transcribe*, and the note it saves.
+`meeting.rs`'s `keep` runs a whole-file pass rather than keeping the live
+partials, so words appearing on screen says nothing about what ends up in the
+note.
 
 **A real bug this measurement caught.** `config/provider-registry.json`'s
 `sizeMb` for a sherpa model (631 for Parakeet Unified EN 0.6B) is **the

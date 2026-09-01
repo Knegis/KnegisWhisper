@@ -36,6 +36,7 @@ been carrying as beliefs, and because each ends with a by-hand check that the me
 | **The control ran first, both times** | The reference client against the real server reproduced the model's own `test_wavs/trans.txt`; only then did our client produce the same transcript; only then was the fault run meaningful |
 | **The shipped client transcribes against the real server** | `crates/meeting-core/tests/nemotron_stream.rs`, `--ignored`, driving `LocalStreaming` — the type the application builds — against a real server on a real model. Audio fed in 4096-byte pieces, which is neither the frame size nor a divisor of it, so `Pending` and its tail are exercised rather than skipped. One event out, not one per update, and its text is the model's own reference transcript |
 | **A server killed mid-session reaches the caller as an error** | The same file's second test. **The failure this provider is most exposed to**: its only fault channel is transport-level, so a wrong path here produces a quiet transcript rather than a failure |
+| **A real meeting on `Local streaming model`, and the words arrive as they are spoken** | Driven by the repo owner in the application window, same day. This is what the provider exists for and what `Local windowed model` cannot do — that one is a five-second window every three seconds, arriving three seconds behind the room. Reported as *"words appear as I speak"* |
 
 ### Findings
 
@@ -60,16 +61,34 @@ been carrying as beliefs, and because each ends with a by-hand check that the me
    report what `meeting_detect::detect` itself sees running. A control proves the instrument works;
    it does not prove the sample was in the machine.
 
+### Findings from the first real run
+
+**Three prerequisites, and the screen only names the last one.** Getting from a fresh install to a
+running streaming meeting needs a model installed, that model chosen *for meetings*, and a language
+typed in — and only the third produces a message. The first two produce a provider that is
+selectable and then refuses at `start`. Worth knowing before the next person tries it.
+
+**The wrong Nemotron model is the one that looks obvious.** `nemotron-3.5-asr-streaming-0.6b` sorts
+first and is unpinned, so *Install* on it answers *"has no pinned compressed size; refusing an
+unauthenticated install"* — correct behaviour (KNEG-118), and an odd first impression. The
+pinned one is `nemotron-speech-streaming-en-0.6b`.
+
+**The language caveat pointed the wrong way** and was fixed in `af5e5dc`: it said *"Set one
+below"* while rendering underneath the field it meant. `corti-realtime` has carried
+`language_detection: false` since its client landed, so that sentence had existed for days without
+anyone reaching a screen where it rendered.
+
 ### Still unchecked, and needs a person at the machine
 
 1. **The offer window appearing during a real Teams call.** The signal is measured and the wiring
    is tested. Neither is a window on screen. Join a call and watch.
 
-2. **A meeting recorded through `Local streaming model`.** Words should appear as they are spoken,
-   not three seconds behind the room — the difference from `Local windowed model`, and the entire
-   reason the provider exists. The client is now proven against the real server on a WAV; what is
-   unproven is the *live* path: two captures rather than one, a device rather than a file, and
-   whether the words reach the screen as they arrive.
+2. **~~A meeting recorded through `Local streaming model`.~~ Done, same day** — the live path
+   works and the words arrive as spoken. **What that run did not cover, and is still open:**
+   *Stop and transcribe*, and the saved note it produces. The live transcript and the saved
+   transcript come from different passes — `meeting.rs`'s `keep` runs a whole-file pass rather
+   than keeping the partials — so "words appeared on screen" says nothing about what ends up in
+   the note.
 
 3. **The same meeting with the streaming server killed mid-call.** Narrowed rather than open: the
    client's own behaviour is now covered by

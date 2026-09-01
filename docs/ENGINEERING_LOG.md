@@ -403,15 +403,31 @@ saying streaming models could not be used because no client existed. That
 stopped being true, and a check that can no longer fire is a check that stops
 being read.
 
-### Still not done, and it is not the same claim
+### Driven the same day, and the distinction held all the way to the end
 
-**Nobody has recorded a real meeting through it.** The wire is measured, the
-rules are tested and mutated, the server starts and answers a handshake. None of
-that is a meeting. Recorded in `BENCH_CHECK.md` and in the manifest entry rather
-than left implied by a closed issue — the same distinction KNEG-94 ended on
-earlier the same day, which is not a coincidence: both were finished the moment
-the measurement existed, and finishing the measurement is not finishing the
-feature.
+A real meeting was recorded through it and the words arrived as spoken. So the
+feature works — and the thing worth recording is that **every claim between
+"the wire is measured" and "a person used it" turned out to be a separate claim,
+and one of them was false.**
+
+The wire was measured. The rules were tested and mutated. The integration test
+drove the shipped client against the real server. All green, and the first
+person to try it still could not start a meeting: the language caveat pointed at
+the field *below* it while rendering underneath that field, `corti-realtime` had
+carried the same flag for days without anyone reaching a screen where the
+sentence rendered, and the wrong one of the two Nemotron models sorts first and
+refuses to install. **None of those is reachable from any test in this
+repository.**
+
+The same shape as KNEG-94 earlier the same day, and not a coincidence: both were
+finished the moment the measurement existed, and finishing the measurement is
+not finishing the feature.
+
+**Still not covered by that run:** *Stop and transcribe*, and the saved note.
+The live transcript and the saved one come from different passes, so words on
+screen say nothing about the note. And the fault path — the client raises the
+error, but nobody has watched it reach `MeetingOutcome::Failed` rather than
+being flattened into an empty transcript somewhere above.
 
 ---
 
