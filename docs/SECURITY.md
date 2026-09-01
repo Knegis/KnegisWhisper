@@ -311,11 +311,17 @@ measured extracted total plus headroom, not a measurement — `withHeadroom` in
 hand-chosen figures. Headroom errs high on purpose: being wrong high costs protection, being wrong
 low refuses a legitimate install.
 
-Two gaps are recorded rather than implied. Neither has a `maxExtractedSizeBytes` because neither
-is an archive: a whisper `.bin` and a GGUF are downloaded and never unpacked, so the only thing an
-unverified one can produce is bad output. And `extract_tar_xz` holds the whole decompressed tar in
-memory before reading an entry, so a `.tar.xz` is a memory bomb independent of any output ceiling
-(KNEG-106, behind a mandatory digest, two pinned assets).
+One gap is recorded rather than implied. Neither a whisper `.bin` nor a GGUF has a
+`maxExtractedSizeBytes`, because neither is an archive: both are downloaded and never unpacked, so
+the only thing an unverified one can produce is bad output.
+
+`extract_tar_xz` used to hold the whole decompressed tar in memory before reading an entry, which
+made a `.tar.xz` a memory bomb independent of any output ceiling. **Closed on 2026-08-31
+(KNEG-106):** the decompressor runs on its own thread writing into a bounded channel, so the bytes
+in flight are capped at one megabyte however large the archive decompresses to. What that does
+*not* cover is `lzma-rs`'s own LZMA2 dictionary, whose size the xz header declares and which is
+allocated inside the decompressor — a few megabytes for any real archive, and not attacker-chosen
+here, because extraction only runs after a mandatory SHA-256 matched.
 
 ## Logging
 
@@ -328,6 +334,29 @@ boundary rather than at each call site, so a new call site cannot forget.
 When recording is active the user gets a visible indicator. The application does not record
 silently, and it will not conceal recording from the person using it — a design constraint, not a
 setting.
+
+## Observing other applications
+
+On Windows the application enumerates **which processes currently hold an audio capture session**,
+through `IAudioSessionManager2`, once per detection poll. It exists for one reason: new Microsoft
+Teams runs a call inside `ms-teams.exe` and spawns no child process, so the process table cannot
+tell a call from an open client and the microphone can.
+
+What that reads, exactly, and what it does not:
+
+- **Read:** a process id and image name per active capture session, on every active capture
+  endpoint. Nothing else about those processes.
+- **Not read:** no other application's audio. Enumerating sessions asks Windows for a state it
+  already publishes to any process on the desktop; it does not attach to a stream, open a device,
+  or observe a sample. Nothing here can hear another application.
+- **Not stored and not logged.** The list is held in memory for the life of one poll and reaches
+  only the meeting screen. It is not written to the database and no log line contains it.
+- **Windows only.** Linux and macOS read nothing, and `Settings > Meetings` reports which of those
+  this machine is — because "Teams is open and not in a call" and "Teams is open and nobody
+  looked" are the same sentence with opposite meanings.
+
+**It suggests; it never records.** A detection can only put an offer on screen. Nothing in this
+path can start a recording, which is the same rule the process-based detectors already follow.
 
 ## What we deliberately do not do
 

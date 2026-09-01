@@ -4,12 +4,33 @@
 //! needs a directory (models, sidecar binaries, temporary audio) should agree
 //! with it rather than compute its own.
 //!
-//! One non-obvious rule is ported from upstream and is load-bearing: the model
-//! cache must not sit under a path containing non-ASCII characters or spaces,
-//! because the native whisper.cpp and sherpa-onnx binaries fail on such paths.
-//! A Windows account named `Ann Marie` or `Håkan` is enough to trigger it, and
-//! the failure surfaces as an unexplained transcription error rather than
-//! anything that points at the path. See [`model_cache_dir`].
+//! One non-obvious rule is load-bearing, and it is narrower than the version
+//! this file carried until 2026-08-31: **the native ASR binaries cannot open a
+//! file whose path contains a non-ASCII character.** A Windows account named
+//! `Håkan` is enough to trigger it, and the failure surfaces as an unexplained
+//! transcription error rather than as anything that points at the path. See
+//! [`is_native_readable`] and [`model_cache_dir`].
+//!
+//! The rule ported from upstream said "non-ASCII **or space**", and applied it
+//! to the binaries' own directory as well as to the files they read. Three
+//! quarters of that was never true. Measured on 2026-08-31 with
+//! `cargo run -p kw-storage --example native_path_probe`, against the real
+//! `whisper-server` and `sherpa-onnx-offline` on this machine:
+//!
+//! ```text
+//! model file under a path with a space      whisper: loads   sherpa: transcribes
+//! model file under a non-ASCII path         whisper: dies    sherpa: "Errors in config!"
+//! audio input under a path with a space                      sherpa: transcribes
+//! audio input under a non-ASCII path                         sherpa: "Failed to read"
+//! the binary's own directory, with a space  whisper: loads   sherpa: transcribes
+//! the binary's own directory, non-ASCII     whisper: loads   sherpa: transcribes
+//! ```
+//!
+//! So a space is fine everywhere, and the binaries' own location is fine
+//! everywhere -- `whisper-server` loads its sibling `ggml-cpu-*.dll` out of a
+//! directory called `Håkan Test` without complaint, and so do `llama-server`
+//! and `ffmpeg`. Only a file the ASR binaries *open by path* is affected, which
+//! is the model and the audio. Both failures exit 127.
 
 use std::path::{Path, PathBuf};
 
@@ -33,21 +54,26 @@ pub fn database_path() -> PathBuf {
     data_dir().join("knegiswhisper.db")
 }
 
-/// Whether `path` is safe to hand to the native ASR binaries.
+/// Whether the native ASR binaries can open files under `path`.
 ///
-/// Rejects any non-ASCII byte and any space. Deliberately strict: the failure it
-/// prevents is silent and hard to diagnose, and the cost of being wrong in this
-/// direction is only a slightly less convenient cache location.
+/// **ASCII only. A space is fine** -- see the module documentation for the
+/// measurement, which is also why this is no longer called
+/// `is_native_binary_safe`: it is not about where the binary lives, which turns
+/// out not to matter at all, but about the files it opens.
+///
+/// A path that is not valid UTF-8 is rejected too. On Windows that means
+/// unpaired surrogates, which cannot survive being handed to a process as an
+/// argument, so the answer is the same one for a different reason.
 #[must_use]
-pub fn is_native_binary_safe(path: &Path) -> bool {
-    path.to_str()
-        .is_some_and(|s| s.is_ascii() && !s.contains(' '))
+pub fn is_native_readable(path: &Path) -> bool {
+    path.to_str().is_some_and(str::is_ascii)
 }
 
 /// Where downloaded models live.
 ///
-/// Prefers a subdirectory of [`data_dir`]. If that path is not
-/// [`is_native_binary_safe`], falls back to a machine-wide location that is:
+/// The model file is one of the two things the rule actually applies to, so
+/// this keeps the fallback. Prefers a subdirectory of [`data_dir`]; if that
+/// path is not [`is_native_readable`], falls back to a machine-wide location:
 /// `%ProgramData%\KnegisWhisper\cache` on Windows, `/Library/Caches/KnegisWhisper`
 /// on macOS, `/var/tmp/KnegisWhisper` elsewhere.
 ///
@@ -61,20 +87,35 @@ pub fn model_cache_dir() -> ModelCache {
 
 /// Where downloaded sidecar binaries live.
 ///
-/// The same rule applies for the same reason: `whisper-server` loads its sibling
-/// `ggml` libraries relative to its own directory, and the native code chokes on
-/// a path with a space or a non-ASCII character in it. A Windows account named
-/// `Ann Marie` or `Håkan` is enough to trigger it.
+/// **No fallback, because the rule does not reach here.** This used to relocate
+/// on the same test as [`model_cache_dir`], on the stated grounds that
+/// `whisper-server` loads its sibling `ggml` libraries relative to its own
+/// directory and would choke. Measured on 2026-08-31: it does not.
+/// `whisper-server`, `sherpa-onnx-offline`, `llama-server` and `ffmpeg` all
+/// start, load their DLLs and do their work from a directory named
+/// `Håkan Test`. Four out of four, so this is a measurement rather than an
+/// inference from two.
+///
+/// Dropping it costs a non-ASCII account nothing and saves it something: the
+/// machine-wide fallback is under `%ProgramData%`, which an unprivileged
+/// account may not be able to write to at all.
+///
+/// Still returns a [`ModelCache`] rather than a bare path, so that
+/// `install_dir_fell_back` in `local_model` keeps one shape to read. `fell_back`
+/// is now always false here, and that is the fact, not an omission.
 #[must_use]
 pub fn sidecar_dir() -> ModelCache {
-    native_safe_dir("sidecars")
+    ModelCache {
+        path: data_dir().join("sidecars"),
+        fell_back: false,
+    }
 }
 
-/// A subdirectory of [`data_dir`] that the native binaries can cope with, or a
-/// machine-wide fallback that is more likely to be safe.
+/// A subdirectory of [`data_dir`] the native binaries can read from, or a
+/// machine-wide fallback that is more likely to be one.
 fn native_safe_dir(leaf: &str) -> ModelCache {
     let preferred = data_dir().join(leaf);
-    if is_native_binary_safe(&preferred) {
+    if is_native_readable(&preferred) {
         return ModelCache {
             path: preferred,
             fell_back: false,
@@ -91,8 +132,10 @@ fn native_safe_dir(leaf: &str) -> ModelCache {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModelCache {
     pub path: PathBuf,
-    /// True if the per-user location was rejected as unsafe for the native
+    /// True if the per-user location was rejected as unreadable by the native
     /// binaries. Worth surfacing: it means models are shared machine-wide.
+    ///
+    /// Always false from [`sidecar_dir`], which no longer relocates.
     pub fell_back: bool,
 }
 
@@ -115,12 +158,16 @@ fn machine_wide_cache_dir() -> PathBuf {
     }
 }
 
-/// Scratch directory for in-flight audio. Subject to the same ASCII rule,
-/// because the same binaries read from it.
+/// Scratch directory for in-flight audio.
+///
+/// The other of the two things the rule applies to, and measured rather than
+/// assumed: `sherpa-onnx-offline` takes the wav as an argument and answers
+/// `Failed to read '...'` when its path holds a non-ASCII character, while the
+/// same file under a path with a space in it transcribes.
 #[must_use]
 pub fn audio_temp_dir() -> PathBuf {
     let preferred = data_dir().join("audio");
-    if is_native_binary_safe(&preferred) {
+    if is_native_readable(&preferred) {
         preferred
     } else {
         machine_wide_cache_dir().join("audio")
@@ -138,26 +185,36 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ordinary_ascii_paths_are_safe() {
-        assert!(is_native_binary_safe(Path::new(
+    fn ordinary_ascii_paths_are_readable() {
+        assert!(is_native_readable(Path::new(
             "C:\\Users\\axel\\AppData\\Roaming\\KnegisWhisper"
         )));
-        assert!(is_native_binary_safe(Path::new(
+        assert!(is_native_readable(Path::new(
             "/home/axel/.local/share/KnegisWhisper"
         )));
     }
 
+    /// The half of the old rule that was never true.
+    ///
+    /// `Ann Marie` is an ordinary Windows account name, and until 2026-08-31
+    /// this file sent her models to a machine-wide directory to avoid a failure
+    /// that does not happen. Measured: a model under a path with a space in it
+    /// loads in `whisper-server` and transcribes in `sherpa-onnx-offline`.
     #[test]
-    fn spaces_and_non_ascii_are_not_safe() {
-        // Both of these are ordinary Windows account names, and both break the
-        // native ASR binaries.
-        assert!(!is_native_binary_safe(Path::new(
+    fn a_space_is_readable() {
+        assert!(is_native_readable(Path::new(
             "C:\\Users\\Ann Marie\\AppData"
         )));
-        assert!(!is_native_binary_safe(Path::new(
-            "C:\\Users\\Håkan\\AppData"
-        )));
-        assert!(!is_native_binary_safe(Path::new("/home/José/models")));
+        assert!(is_native_readable(Path::new("/home/ann marie/models")));
+    }
+
+    /// The half that is true, and is the whole of the rule.
+    #[test]
+    fn non_ascii_is_not_readable() {
+        assert!(!is_native_readable(Path::new("C:\\Users\\Håkan\\AppData")));
+        assert!(!is_native_readable(Path::new("/home/José/models")));
+        // A space next to it changes nothing either way.
+        assert!(!is_native_readable(Path::new("/home/José Maria/models")));
     }
 
     #[test]
@@ -166,9 +223,20 @@ mod tests {
         // Whatever this machine's home directory looks like, the two must agree.
         assert_eq!(
             cache.fell_back,
-            !is_native_binary_safe(&data_dir().join("models"))
+            !is_native_readable(&data_dir().join("models"))
         );
         assert!(cache.path.is_absolute() || cache.path.starts_with("."));
+    }
+
+    /// Sidecars stay under the per-user directory whatever it is called.
+    ///
+    /// The measurement this rests on is in the module documentation: all four
+    /// sidecar binaries run from a directory named `Håkan Test`.
+    #[test]
+    fn sidecars_never_relocate() {
+        let dir = sidecar_dir();
+        assert!(!dir.fell_back);
+        assert_eq!(dir.path, data_dir().join("sidecars"));
     }
 
     #[test]

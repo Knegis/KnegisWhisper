@@ -1508,9 +1508,9 @@
         "downloadUrl": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemotron-speech-streaming-en-0.6b-560ms-int8-2026-04-25.tar.bz2",
         "extractDir": "sherpa-onnx-nemotron-speech-streaming-en-0.6b-560ms-int8-2026-04-25",
         "sizeMb": 632,
-        "sha256": null,
-        "expectedSizeBytes": null,
-        "maxExtractedSizeBytes": null,
+        "sha256": "78e2b79fcf7271553a74402a76b771b09ea40117a39566a79f52235b23db6358",
+        "expectedSizeBytes": 463945051,
+        "maxExtractedSizeBytes": 786432000,
         "language": "en",
         "supportedLanguages": [
           "en"

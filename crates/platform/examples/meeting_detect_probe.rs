@@ -26,10 +26,17 @@ use kw_platform::meeting_detect::{self, Lists};
 fn main() {
     println!("supported: {}", meeting_detect::supported());
 
-    let running = meeting_detect::running();
-    println!("{} processes visible\n", running.len());
+    let survey = meeting_detect::survey();
+    let running = survey.running;
+    println!("{} processes visible", running.len());
+    println!("microphone:  {}", survey.microphone.summary());
+    if survey.capturing.is_empty() {
+        println!("nothing is holding a capture device\n");
+    } else {
+        println!("capturing:   {}\n", survey.capturing.join(", "));
+    }
 
-    let found = meeting_detect::detect(&running, &Lists::default());
+    let found = meeting_detect::detect(&running, &survey.capturing, &Lists::default());
     if found.is_empty() {
         println!("no meeting application recognised.");
     } else {
@@ -39,10 +46,12 @@ fn main() {
                 detected.provider,
                 detected.name,
                 detected.evidence,
-                if detected.in_call {
-                    "IN A CALL"
-                } else {
-                    "open, not in a call"
+                match detected.signal {
+                    meeting_detect::CallSignal::CallProcess =>
+                        "IN A CALL (a call-only process is running)",
+                    meeting_detect::CallSignal::Microphone =>
+                        "IN A CALL (it is holding a microphone)",
+                    meeting_detect::CallSignal::None => "open, not in a call",
                 }
             );
         }

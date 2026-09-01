@@ -94,9 +94,12 @@ pub struct SherpaStatus {
     pub models: Vec<SherpaModelStatus>,
     /// Which model dictation is set to use, if any.
     pub selected: Option<String>,
-    /// Where models are kept. Shown because the native binaries cannot load
-    /// from a path with a space or a non-ASCII character in it, so this is
-    /// sometimes not where a person would expect.
+    /// Where models are kept. Shown because the native binaries cannot open a
+    /// file whose path holds a non-ASCII character, so this is sometimes not
+    /// where a person would expect.
+    ///
+    /// A space is fine, despite what this comment said until 2026-08-31 — see
+    /// `kw_storage::paths` for the measurement.
     pub models_dir: String,
 }
 

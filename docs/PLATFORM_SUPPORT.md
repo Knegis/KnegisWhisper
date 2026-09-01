@@ -353,19 +353,47 @@ below says whether it has actually been seen to match. `cargo run -p kw-platform
 
 | Application | Open | In a call | State |
 | --- | --- | --- | --- |
-| Microsoft Teams | `ms-teams.exe`, `teams.exe`, `msteams`, `teams` | — | **`ms-teams.exe` seen to match** (2026-08-26, 628 processes). New Teams runs the call inside its own process, so there is no in-call signal |
+| Microsoft Teams | `ms-teams.exe`, `teams.exe`, `msteams`, `teams` | *the microphone* | **both states seen** (2026-09-01). New Teams runs the call inside its own process, so there is no in-call process — it is detected by the capture session it holds |
 | Zoom | `zoom.exe`, `zoom`, `zoom.us` | `cpthost.exe`, `caphost` | ⚠️ written, not seen to match |
 | Webex | `webex.exe`, `webexhost.exe`, `ciscocollabhost.exe` | `webexmta.exe` | ⚠️ written, not seen to match |
-| FaceTime | `facetime` | — | ⚠️ macOS only, compiled out elsewhere, unverified |
-| Anything else | the user's own allowlist | — | works by construction |
+| FaceTime | `facetime` | — | ⚠️ macOS only, compiled out elsewhere, unverified. Microphone activity cannot be read there, so it has no second signal either |
+| Anything else | the user's own allowlist | *the microphone* | works by construction |
 
-**Only an in-call process offers to record**, and that is a measurement rather
-than a preference. Teams was found running with no call in progress, and Teams
-starts with Windows on most corporate machines — so offering on "the client is
-open" would put a window on screen at every launch, and the feature would be
-switched off the same day. Teams and FaceTime are therefore reported on
-`Settings > Meetings` and never prompted for, which is a limit worth stating
-rather than leaving somebody to discover.
+**Only a call in progress offers to record**, and which signal says so is
+reported rather than flattened. There are two, and they are not equally strong:
+
+- **A call-only process.** `CptHost.exe` is not started by opening Zoom.
+- **A held microphone.** Real evidence, and weaker — Teams holds the device for
+  its own audio test, and for a call the user placed that nobody joined.
+
+The second exists because of a measurement taken on 2026-09-01 with
+`cargo run -p kw-platform --example mic_users_probe`, on Windows, against one
+Teams install:
+
+| run | active capture endpoints | `ms-teams.exe` capturing |
+| --- | --- | --- |
+| Teams not running | 1 | — |
+| Teams open, idle | 1 | **no** |
+| Teams in a real call | 2 | **yes** |
+
+Every run carried its own control — a second process opened a capture stream and
+had to appear in the list — so the middle row is a measured absence rather than a
+broken enumeration. The two middle rows differing is the whole basis for the
+signal, and until they were taken Teams was permanently unofferable: the only
+thing available was "the client is open", true from login on any machine where
+Teams starts with Windows.
+
+**The microphone can only strengthen a match, never create one.** A process
+holding a capture device that is not a known client and is not on the user's own
+list is not reported at all. Otherwise this application's own dictation would
+offer to record itself.
+
+**It is Windows-only.** `IAudioSessionManager2` is the mechanism and nothing
+equivalent is read on Linux or macOS, so there the capture list is always empty
+and Teams and FaceTime stay reported-but-never-prompted, exactly as before.
+`Settings > Meetings` says which state this machine is in, because "Teams is
+open and not in a call" and "Teams is open and nobody looked" are the same
+sentence with opposite meanings.
 
 Matching is on the **image name and exact**, not the command line and not by
 substring. `kw_sidecar::reap` matches command lines because it must prove a
@@ -396,7 +424,7 @@ because modifier-only combinations do not work there.
 | | State |
 | --- | --- |
 | Windows modifier-only | **verified.** One `WH_KEYBOARD_LL` hook on one thread, in-process, not one child per key. `cargo run -p kw-platform --example keyhook_probe` installs it, injects two presses, and asserts it fires exactly twice. |
-| Windows right-side modifiers | **Built and unreachable.** `keys.rs` expresses `RightControl+Super`, because a low-level hook reports the sided virtual keys and the cross-platform API does not — but no accelerator a user can type gets there. `hotkey::MODIFIERS` has no sided spellings, so `classify` reads `RightControl` as *the key* and hands `RightControl+Super` to the system register, the one mechanism that cannot tell the sides apart; and `RightControl+RightShift` comes back `Invalid` — "it names 2 non-modifier keys" — which blames the user's spelling for a missing alias. See [BENCH_CHECK.md](BENCH_CHECK.md). |
+| Windows right-side modifiers | **Built and reachable** since 2026-08-31 (KNEG-35). `RightControl+Super` and `RightControl+RightShift` both classify as `ModifierOnly` and go to the keyboard hook, which is the only mechanism that can see a side at all. The spellings come from one table, `keys::SIDED_MODIFIERS`, read by `Chord::parse` and by `hotkey::classify`, so the set each accepts cannot drift from the other. A side combined with an *ordinary* key (`RightControl+D`) is refused, because neither mechanism can take it — the register cannot see the side and the hook only matches modifiers — and the refusal names both ways out. **Never driven from the screen:** the hook path is measured by `keyhook_probe` and the classifier by unit tests, and nobody has typed one into `Dictation > Shortcuts` (KNEG-47). |
 | Windows mouse buttons, push-to-talk | Not built. Both need a second hook (`WH_MOUSE_LL`) or key-up routing, and neither has a consumer yet. |
 | macOS, Linux | Not built, and the reason is reported rather than the capability being silently absent: macOS needs a `CGEventTap` and the Accessibility permission that goes with it, and Wayland's global-shortcuts portal takes only chords the compositor can register. |
 
@@ -448,9 +476,11 @@ both re-runnable with `cargo run -p kw-platform --example altgr_probe`:
   Control arrives while Shift is already held, completing the chord before the Alt is pressed.
 
 A **sided** chord avoids it entirely, because AltGr is left Control and right Alt specifically:
-`LeftControl+LeftAlt` and `RightControl+Alt` are both unaffected and `keys::Chord` already parses
-them. No settings field accepts a sided spelling, which is KNEG-35 — so the caution states the
-problem and deliberately does not suggest a remedy that cannot be typed.
+`LeftControl+LeftAlt` and `RightControl+Alt` are both unaffected. Until KNEG-35 closed on
+2026-08-31 no settings field accepted a sided spelling, so the caution stated the problem and
+deliberately suggested nothing. It now names an escape — built from the chord that collided by
+`keys::sided_escape`, and passed back through `altgr_collision` before it is offered, so a
+suggestion that still fires on AltGr is never made.
 
 **Standard accelerators are not warned about**, and that is a decision rather than an oversight.
 `Control+Alt+D` goes to the system shortcut register rather than to the hook, and whether *that*
@@ -903,8 +933,29 @@ the keypair procedure and `docs/COMPLETION_PLAN.md` phase 9 for what remains.
 
 ## Known environment constraints
 
-- **Non-ASCII or space characters in the user data path** crash the native whisper and parakeet
-  binaries. Upstream works around this by relocating the model cache to `%ProgramData%`; we keep
-  that fallback. It will bite on any Windows account with a non-ASCII username.
+- **A non-ASCII character in the path of a file the native ASR binaries open** stops them opening
+  it. Both `whisper-server` and `sherpa-onnx-offline` exit 127; whisper says nothing at all past
+  `loading model from ...`, sherpa says `Errors in config!` for a model and `Failed to read '...'`
+  for audio. The model cache and the audio scratch directory relocate to `%ProgramData%` when the
+  user data path is affected, which any Windows account with a non-ASCII username will be.
+
+  **Measured 2026-08-31, and it is narrower than this section claimed until then.** The rule was
+  carried from upstream as "non-ASCII **or space**", applied to the binaries' own directory as well
+  as to the files they read. Three quarters of that was not true:
+
+  | | a space in the path | a non-ASCII character |
+  | --- | --- | --- |
+  | the model file | loads, transcribes | **fails** |
+  | the audio file | transcribes | **fails** |
+  | the binary's own directory | runs | runs |
+
+  `whisper-server` loads its sibling `ggml-cpu-*.dll` out of a directory named `Håkan Test`
+  without complaint, and so do `sherpa-onnx-offline`, `llama-server` and `ffmpeg` — four out of
+  four, so `sidecar_dir` no longer relocates at all. `ffmpeg` handles every case, including a
+  non-ASCII input path, which is the media-import half of the same question.
+
+  Re-runnable: `cargo run -p kw-storage --example native_path_probe`. **Still unmeasured:** a real
+  Windows account whose *own name* is non-ASCII, as opposed to a directory underneath an ASCII one.
+  The relocation is what that would exercise, and nobody has an account like it.
 - **`tauri-nspanel` is an unpinned git branch dependency** upstream. We pin it to a revision;
   a branch move would otherwise break macOS builds with no version change.

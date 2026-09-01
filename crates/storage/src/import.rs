@@ -1009,6 +1009,72 @@ mod tests {
         assert_eq!(token_ref, "calendar-google-1");
     }
 
+    /// Every file the database is made of, as one searchable string.
+    ///
+    /// **SQLite in WAL mode is three files, and a committed row can be in any
+    /// of them.** Reading only `kw.db` is how the assertion below came to pass
+    /// for the wrong reason: on two runs in four hundred under load, the
+    /// checkpoint `Db::close` relies on had not landed by the time the file was
+    /// read, so the main file held neither the token nor the slot. Both "must
+    /// not appear" assertions passed against a file with nothing in it, and the
+    /// only thing that noticed was the positive control (KNEG-88).
+    ///
+    /// Reading all three is the fix and the stronger claim at once: a refresh
+    /// token sitting in `kw.db-wal` is exactly as leaked as one in `kw.db`, and
+    /// the old test would not have seen it.
+    ///
+    /// Built from the `OsStr` rather than from `display()`, which is lossy and
+    /// would look for the wrong file under a path that does not survive it.
+    fn every_database_file(path: &Path) -> String {
+        let mut text = String::new();
+        for suffix in ["", "-wal", "-shm"] {
+            let mut name = path.as_os_str().to_owned();
+            name.push(suffix);
+            if let Ok(bytes) = std::fs::read(PathBuf::from(name)) {
+                text.push_str(&String::from_utf8_lossy(&bytes));
+            }
+        }
+        text
+    }
+
+    /// Reading only the main file is not enough, and this does not wait for luck
+    /// to prove it.
+    ///
+    /// The real intermittent failure needed a loaded machine and appeared twice
+    /// in four hundred runs — which is a poor thing to hang a regression test on.
+    /// Holding the database open forces exactly the same state every time:
+    /// nothing has closed, so nothing has checkpointed, and a committed row is
+    /// in `-wal` and not in `kw.db`.
+    ///
+    /// The first assertion is the premise, not decoration. If SQLite ever
+    /// checkpoints eagerly enough to put the row in the main file, this test
+    /// stops testing anything — and it should say so rather than pass.
+    #[tokio::test]
+    async fn a_row_that_is_only_in_the_wal_is_still_found() {
+        const MARKER: &str = "a-marker-no-schema-would-contain";
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("kw.db");
+        let db = Db::open(&path).await.unwrap();
+        crate::settings::set(db.pool(), "meetings.language", &MARKER)
+            .await
+            .unwrap();
+
+        let main_only = std::fs::read(&path).unwrap();
+        assert!(
+            !String::from_utf8_lossy(&main_only).contains(MARKER),
+            "premise failed: an open WAL database checkpointed on its own, so this test is no \
+             longer exercising the case it was written for"
+        );
+
+        assert!(
+            every_database_file(&path).contains(MARKER),
+            "a committed row was missed because it was still in the write-ahead log"
+        );
+
+        db.close().await;
+    }
+
     #[tokio::test]
     async fn no_plaintext_token_appears_anywhere_in_the_target_file() {
         let dir = tempfile::tempdir().unwrap();
@@ -1021,9 +1087,10 @@ mod tests {
         from_openwhispr(&target, &src_path, &creds).await.unwrap();
         target.close().await;
 
-        // The strongest form of the assertion: grep the bytes on disk.
-        let bytes = std::fs::read(&target_path).unwrap();
-        let haystack = String::from_utf8_lossy(&bytes);
+        // The strongest form of the assertion: grep the bytes on disk -- all of
+        // them. See `every_database_file` for why "all of them" is load-bearing
+        // rather than thorough.
+        let haystack = every_database_file(&target_path);
         assert!(
             !haystack.contains("1//refresh-secret"),
             "refresh token reached the database file"
@@ -1032,9 +1099,14 @@ mod tests {
             !haystack.contains("ya29.access"),
             "access token reached the database file"
         );
+        // The control, and it earns its place: without it the two assertions
+        // above would certify a file that contains nothing at all. It is the
+        // assertion that actually fired, twice in four hundred runs, and it is
+        // how this was found.
         assert!(
             haystack.contains("calendar-google-1"),
-            "the slot reference should be there"
+            "the slot reference should be there, so the two assertions above were reading \
+             a database whose contents had not landed yet"
         );
     }
 

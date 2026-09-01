@@ -204,11 +204,16 @@ test("the committed registry still carries pins for all six whisper models", () 
   // reads still has something in it, so `--verify` would have something to
   // measure. A pin dropped from WHISPER_PINS would otherwise make `--verify`
   // quietly check five models and pass.
+  //
+  // The sherpa count went 2 -> 3 on 2026-09-01 when
+  // `nemotron-speech-streaming-en-0.6b` was measured for KNEG-84. Raised rather
+  // than loosened to `>= 2`: a count is the only thing here that notices a pin
+  // going missing, and a lower bound would notice nothing.
   const targets = pinnedTargets();
   const whisper = targets.filter((t) => t.kind === "whisper");
   const sherpa = targets.filter((t) => t.kind === "sherpa");
   assert.equal(whisper.length, 6, "every whisper model is pinned");
-  assert.equal(sherpa.length, 2, "both installable Parakeet archives are pinned");
+  assert.equal(sherpa.length, 3, "two Parakeet archives and one Nemotron are pinned");
   for (const t of targets) {
     assert.match(t.sha256, /^[0-9a-f]{64}$/, `${t.id} has no usable digest`);
     assert.ok(t.url?.startsWith("https://"), `${t.id} has no https URL`);
@@ -461,12 +466,16 @@ test("githubAssetTargets survives a registry with no sherpa models at all", () =
   assert.deepEqual(githubAssetTargets({}), []);
 });
 
-test("the committed registry still carries both sherpa archives as GitHub assets", () => {
+test("the committed registry still carries every sherpa archive as a GitHub asset", () => {
   // The same argument as the 39-object and six-whisper counts: an archive
   // dropped from SHERPA_PINS would otherwise make --verify-stated check one
   // asset, or none, and report success.
+  //
+  // Three since 2026-09-01, not two. The third is
+  // `nemotron-speech-streaming-en-0.6b`, measured for KNEG-84 because the
+  // streaming protocol could not be measured without a streaming model.
   const targets = githubAssetTargets();
-  assert.equal(targets.length, 2, "both Parakeet archives are pinned");
+  assert.equal(targets.length, 3, "two Parakeet archives and one Nemotron are pinned");
   for (const target of targets) {
     assert.match(target.sha256, /^[0-9a-f]{64}$/, `${target.id} has no usable digest`);
     assert.ok(target.sizeBytes > 0, `${target.id} has no measured size`);

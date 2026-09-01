@@ -463,6 +463,13 @@ crate `sidecar::reap` already uses to verify a command line before signalling. P
 a bench check being run — the only detector row in `PLATFORM_SUPPORT.md` that says "seen to match"
 rather than "written, unverified".
 
+**A second signal since 2026-09-01, and it is not in the upstream design.** The process table
+cannot separate Teams-in-a-call from Teams-idle, because new Teams spawns nothing; measured three
+times. `kw_platform::microphone` enumerates capture sessions through `IAudioSessionManager2` and
+`detect` takes the result beside the process list, so Teams is offered on the microphone it holds.
+Windows only, weaker evidence than a call-only process, and reported as such — see KNEG-94 and
+`PLATFORM_SUPPORT.md` for the three runs and their controls.
+
 ### E2. Three of the five WebSocket clients *(done; the fourth declined; the fifth predates this plan)*
 
 `tokio-tungstenite`, one per provider, against the existing `MeetingTranscriptionProvider` trait

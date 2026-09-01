@@ -63,7 +63,7 @@ whisper path never did. Fixed by giving it the same guard.
 
 **Skipping loses nothing.** The unconditional call looked like a way to keep the sidecar current,
 and never was — it can only succeed when no server is running, which is only the first install, when
-there is nothing to refresh. Keeping a sidecar current after that is **KNEG-114**, which is a real
+there is nothing to refresh. Keeping a sidecar current after that is **KNEG-113**, which is a real
 gap and a different one: the installed whisper sidecar dates from 2026-08-25 and the pinned archive
 has since gained `bench.exe` and `command.exe`, so it is measurably behind.
 
@@ -104,20 +104,26 @@ Debug build via `npm run tauri:dev`, `KNEGISWHISPER_LOG=info,knegiswhisper_lib=d
 
 ### Findings
 
-**1. Sided modifiers are built and unconfigurable.** `crates/platform/src/keys.rs` handles
-`RightControl+Super`, `PLATFORM_SUPPORT.md` said "Built with the same hook", and no accelerator a
-user can type reaches it. `hotkey::MODIFIERS` has no sided spellings, so `classify` sees
-`RightControl` as *the key*:
+**1. Sided modifiers were built and unconfigurable.** *(Fixed 2026-08-31, KNEG-35.)*
+`crates/platform/src/keys.rs` handled `RightControl+Super`, `PLATFORM_SUPPORT.md` said "Built with
+the same hook", and no accelerator a user could type reached it. `hotkey::MODIFIERS` had no sided
+spellings, so `classify` saw `RightControl` as *the key*:
 
 ```
      RightControl+Super -> Standard { accelerator: "RightControl+Super" }
 RightControl+RightShift -> Invalid { reason: "it names 2 non-modifier keys; a shortcut may have one" }
 ```
 
-The first is handed to the system shortcut register, which is the one mechanism that cannot
-distinguish sides. The second is refused with a message blaming the user's spelling for a missing
+The first was handed to the system shortcut register, which is the one mechanism that cannot
+distinguish sides. The second was refused with a message blaming the user's spelling for a missing
 alias — the same shape as the `Ctrl` defect already recorded in `ENGINEERING_LOG.md`. Same class as
-the four dead hotkeys: a capability that exists, is documented, and has no way in.
+the four dead hotkeys: a capability that existed, was documented, and had no way in.
+
+Both now classify as `ModifierOnly` and go to the hook. The spellings live in one table read by both
+`Chord::parse` and `classify`, so the two cannot drift; `RightControl+D` is refused, because neither
+mechanism can take a side *and* an ordinary key, and the refusal names both ways out. The same pass
+found that both AltGr caution sentences had lost their line continuations and were shipping twenty
+spaces mid-sentence — fixed, and now gated. See `docs/ENGINEERING_LOG.md` § 2026-08-31 (KNEG-35).
 
 **2. The local API token file got no permissions of its own on Windows, and the comment saying
 what it inherited was wrong on a real machine. Fixed 2026-08-31 — the measurement below is the
@@ -285,9 +291,17 @@ the Teams row in [PLATFORM_SUPPORT.md](PLATFORM_SUPPORT.md) is the only one that
 says "seen to match". Everything else about chunk E is green tests.
 
 1. **Record a meeting.** Play a video, start a meeting from `Settings > Meetings`,
-   speak, stop. Confirm two transcript streams with the right source on each, a
-   note with the transcript and duration, and — with the speakers muted — that
-   zero system-audio samples reads as *nobody else spoke* rather than a failure.
+   speak, stop. Confirm two transcript streams with the right source on each, and
+   a note with the transcript and duration.
+
+   Then, **with the speakers muted**, record a short one and read the sentence. As
+   of 2026-08-31 (KNEG-38) the outcome names what each capture delivered, and the
+   thing to check is that it says the right one of three: audible audio with no
+   transcript (a fault), digital silence, or nothing delivered at all — which is
+   what an idle output device produces and is therefore *both* "nobody else spoke"
+   and "the capture did not work", stated as such rather than guessed at. All
+   three branches are unit-tested against synthetic blocks; none has been read off
+   a real meeting.
 2. **A meeting longer than thirty minutes**, to prove the old in-memory cap is
    gone and the recording on disk is complete.
 3. **Run `meeting_detect_probe` three times**: nothing open, the client open, and
@@ -491,8 +505,10 @@ of chunk F is green tests and code review; none of it has touched real hardware 
 
 1. **Import a local audio file and a local video file** through `Notes > Upload`. Confirms ffmpeg
    actually strips both to 16 kHz mono WAV on this machine, that the resulting note is transcribed
-   by whatever provider is configured, and that a file with spaces or non-ASCII characters in its
-   path does not crash the pipeline the way whisper's own binary is known to on such paths.
+   by whatever provider is configured. The path-character half of this item is **answered as of
+   2026-08-31**: `ffmpeg` handles a space and a non-ASCII character in the input path, the output
+   path and its own directory, so the pipeline does not inherit whisper's constraint. What remains
+   is the rest of the item — that a real file lands as a real note.
 2. ~~**Paste a URL and import it.**~~ **Withdrawn on 2026-08-27, not performed.** URL import was
    disabled before anyone ran this check: `media_import_url` is no longer a registered command and
    `Notes > Upload` has no URL field, so there is nothing to paste into. Struck rather than deleted,
@@ -676,11 +692,15 @@ next dictation is written without a relaunch — the sink reads the setting per 
 KNEG-104).** `tools/settings-audit/scan.mjs` enumerates every settings key the backend reads and
 fails when one of them names no `#[tauri::command]` that writes it, when that command is
 unregistered, or when the screen it claims never calls the writer. The fourth:
-`meetings.detect` — the allow and deny lists deciding which applications count as a meeting — has
+`meetings.detect` — the allow and deny lists deciding which applications count as a meeting — had
 the command, the registration, the IPC wrapper and a dev fixture, and **no control on
 `Settings > Meetings`**. Found by the gate rather than by anyone reading a screen, which is the
-first time that has happened for this defect class. Filed as KNEG-114 and declared unreachable in
-`config/settings-keys.json` rather than hidden, so it prints on every successful run.
+first time that has happened for this defect class. **Fixed on 2026-08-31 (KNEG-114)**: the two
+lists are edited in the Detection section, under the running applications they act on, and the
+gate's backlog is now empty. Breaking the new control on purpose is what showed the check had
+been satisfied by an *import* since it was written — tightened, and the tightening in turn caught
+red-handed inventing an unreachable setting, because `IntegrationsApi.tsx` calls its wrapper by
+reference. See `docs/ENGINEERING_LOG.md` § 2026-08-31 (KNEG-114).
 
 ### Added by the live Teams meeting, same day
 
@@ -693,9 +713,16 @@ possibly cheaper half.
 
 **Repeated on a second real Teams call, 2026-08-31**, with the same result and no offer window. Two
 independent calls is what turns "it did not fire that time" into a property of the mechanism, and it
-is the reason KNEG-58's Teams row is now closed as *cannot fire* rather than *unverified* -- a
+is the reason KNEG-58's Teams row was closed as *cannot fire* rather than *unverified* -- a
 distinction worth having, because the two look identical from a bench run and only one of them is
 worth another attempt.
+
+**Superseded on 2026-09-01.** *Cannot fire* was true of the process table and only of the process
+table. `mic_users_probe` measured a different mechanism the same week: `ms-teams.exe` holds a
+capture session during a call and holds none while the client sits idle, controlled both times.
+Teams is now offered on that signal — see item 6 in the open-questions list below for the runs
+and the limits. The two calls above are still the reason nobody wasted a day inventing process
+names.
 
 **`openai-realtime` cannot connect at all: the beta API shape was retired.** Its first live use
 was closed on both sockets within milliseconds:
@@ -805,7 +832,11 @@ wrong with it and watch the indicator change while the timer keeps counting.
    with the surprise — a dead port costs the **full two-second timeout**, not a fast refusal.
    **Still needs a person:** the Tauri leg. Kill `whisper-server` from Task Manager while the app
    holds its port, then dictate, and confirm the two log lines appear and a transcript arrives. The
-   remaining half of KNEG-96 — *why* the child exits unattended — is untouched by that fix.
+   remaining half of KNEG-96 — *why* the child exits unattended — is untouched by that fix, and
+   is not answerable without another occurrence. What changed on 2026-08-31 is that the next one
+   will explain itself: a watcher notices the child going away without being asked and logs the exit
+   status, how long it ran, and the tail of its diagnostics. Between "died during startup" and "we
+   killed it" there had been no observer at all.
 3. **Whether a long import is transcribed in full — answered, verified end to end, and the
    diagnosis here was wrong.** The Swedish import *was* transcribed in full: 39,142 characters for
    3,401 seconds. It produced one segment at `00:00:00` because the server was started with
@@ -830,17 +861,35 @@ wrong with it and watch the indicator change while the timer keeps counting.
    recording. Point it at a model with `KW_SHERPA_MODEL_DIR` and `KW_SHERPA_EXECUTABLE`.
    **Still uncovered:** real speech with hesitations, a recording long enough for the
    200-character backstop to fire, and any language other than English.
-6. **Meeting detection firing on a real call — driven twice now, and it cannot fire for Teams.**
-   Not an open question any more, and not a defect either. Microsoft Teams, in a real call, on
-   2026-08-28 and again on 2026-08-31: no offer window either time. New Teams runs the call inside
-   `ms-teams.exe` and spawns no child process, so the process table shows exactly the same thing
-   during a call as it does with the client idle in the tray. `Settings > Meetings` says so in
-   words — *"open, but not detectably in a call, so recording is not offered for it"* — and
-   offering on "the client is open" would prompt at every Windows launch for anyone whose Teams
-   starts with the machine. **The ceiling is the mechanism, not the table**, so no process name
-   would fix it; KNEG-94 (a microphone-session listener over `IAudioSessionManager2`, which asks
-   whether anything is capturing rather than what is running) is the only thing that changes the
-   answer for this client.
+6. **Meeting detection firing on a real call — the ceiling was the mechanism, and the mechanism
+   changed. Now fires for Teams.** Two real calls, 2026-08-28 and 2026-08-31, produced no offer
+   window either time, and that was correct: new Teams runs the call inside `ms-teams.exe` and
+   spawns no child process, so the process table shows exactly the same thing during a call as it
+   does with the client idle in the tray. No process name would have fixed it.
+
+   **KNEG-94 raised the ceiling on 2026-09-01.** `mic_users_probe` enumerated capture sessions
+   through `IAudioSessionManager2` on this machine, three runs against one Teams install:
+
+   | run | active capture endpoints | `ms-teams.exe` capturing |
+   | --- | --- | --- |
+   | Teams not running | 1 | — |
+   | Teams open, idle | 1 | **no** |
+   | Teams in a real call | 2 | **yes** |
+
+   Every run carried a control: a second process opened a capture stream and had to appear, so the
+   middle row is a measured absence and not a broken enumeration — the failure mode
+   `native_path_probe` was caught by. The two middle rows differing is the entire basis for the
+   signal, and `detect` now takes the capture list beside the process list.
+
+   **What it is worth is bounded and the screen says so.** A held microphone is weaker evidence
+   than a call-only process: Teams holds the device for its own audio test, and for a call nobody
+   joined. The offer window says *"Microsoft Teams is using your microphone — that is usually a
+   call, but a test call looks the same"* rather than asserting a meeting. Windows only; nothing
+   equivalent is read on Linux or macOS, and `Settings > Meetings` reports which of those this
+   machine is.
+
+   **Still not driven by hand:** the offer window appearing during a real Teams call. The signal is
+   measured and the wiring is tested, but nobody has yet joined a call and watched a window appear.
 
    **Still genuinely uncovered:** Zoom's `CptHost.exe` and Webex's `webexmta.exe`, the two in-call
    names that were *written from knowledge rather than ported* and have never been seen to match
@@ -1013,7 +1062,7 @@ dev fixtures and are recorded below as not run rather than as passes. See findin
 | **The application starts and reaches a usable window** | Only after finding 1 was fixed. Before that it panicked in `setup` every time |
 | **`meeting-stream:local` records, transcribes and saves, end to end** | Started from `Settings > Meetings` with the local provider and system audio on; stopped with *Stop and transcribe*; **saved as note 1 (1 min)** with the recording at `…\Roaming\KnegisWhisper\meetings\20260827-140423.wav`. The first genuine end-to-end pass anywhere in chunk E, and the highest-value item on the run's list |
 | **System audio resolves the real default output** | `WASAPI loopback on the default output device — Headphones (Bose QC45)`, a device that appears in no fixture |
-| **Meeting detection distinguishes running from in-a-call** | Microsoft Teams reported as *"open, but not detectably in a call, so recording is not offered for it — detected as ms-teams.exe"*. The distinction the five process-based detectors exist to make, holding on real hardware |
+| **Meeting detection distinguishes running from in-a-call** | Microsoft Teams reported as *"open, but not detectably in a call, so recording is not offered for it — detected as ms-teams.exe"*. The distinction the five process-based detectors exist to make, holding on real hardware. **That wording is gone as of 2026-09-01**: Teams is now separated by the microphone it holds, and an idle client reads *"open, and not using a microphone, so nothing here says a call is in progress"* |
 | **The recording window is capture-excluded** | `verified via GetWindowDisplayAffinity = WDA_EXCLUDEFROMCAPTURE`, read back from the real window |
 
 ### Findings
@@ -1133,11 +1182,18 @@ reader of this file alone had no way to know any of it happened.
    Windows' 24 MB, per `config/sidecars.json`'s `sherpa` entry, because `onnxruntime` is statically
    linked into each executable rather than shared from one `.dll`) — nobody has extracted either and
    counted what actually lands on disk the way Windows was.
-3. **A non-ASCII model path.** `docs/PLATFORM_SUPPORT.md`'s "Known environment constraints" section
-   records that a non-ASCII or space character in the user data path crashes the native whisper *and*
-   parakeet binaries, worked around by relocating the model cache to `%ProgramData%`. That workaround
-   predates this run and was carried forward, not exercised here against a real non-ASCII Windows
-   account with a Parakeet model actually installed.
+3. **A non-ASCII model path — measured 2026-08-31, and the claim was three-quarters wrong.**
+   `docs/PLATFORM_SUPPORT.md` had recorded that a non-ASCII *or space* character in the user data
+   path crashes the native whisper *and* parakeet binaries. Measured against both real binaries: a
+   space is fine everywhere, the binaries' own directory is fine with either character, and only a
+   file they open by path — the model, and the audio — fails on non-ASCII. Both exit 127.
+   `cargo run -p kw-storage --example native_path_probe` re-runs it.
+
+   **What still needs a person, and it is now the only part left:** a real Windows account whose
+   *own name* is non-ASCII. Everything above was measured with awkward directory names under an
+   ASCII profile, which exercises the binaries but not the relocation the profile name triggers.
+   Somebody with a `Håkan` account should confirm models land in `%ProgramData%`, that the screen
+   says so, and that a Parakeet model installed there transcribes.
 
 ## 2026-08-25 — phases 2 and 6
 

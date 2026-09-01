@@ -23,6 +23,7 @@ import type {
   ClientAvailability,
   ConfigReview,
   ConnectOutcome,
+  Delivered,
   Detected,
   DictationOutcome,
   DiscoveryPermissions,
@@ -34,7 +35,10 @@ import type {
   MediaImportProgress,
   MediaImportSource,
   MeetingOutcome,
+  MeetingState,
+  MicrophoneSupport,
   NonActivating,
+  Offer,
   RelocatedCredential,
   ShortcutHookStatus,
   Sources,
@@ -497,25 +501,19 @@ export function meetingOutcomeLabel(outcome: MeetingOutcome): string {
       return parts.join(" ");
     }
     case "nothing-transcribed":
-      // Still not a failure, and still not one named cause — but a narrower
-      // set of causes than this used to cover, and the sentence says which.
+      // Still not a failure, and still not one named cause. What changed with
+      // KNEG-38 is that the *captures* are no longer part of the ambiguity:
+      // the recorder now reports what each one actually delivered, so the one
+      // case that is genuinely a fault can be separated from the two that are
+      // not.
       //
-      // A provider that *reports* a fault no longer arrives here. All four
-      // cloud clients now record an error frame, a close frame's reason, a
-      // dead transport, or an unreadable first frame into `SessionFault`, and
+      // A provider that *reports* a fault does not arrive here at all. All four
+      // cloud clients record an error frame, a close frame's reason, a dead
+      // transport or an unreadable first frame into `SessionFault`, and
       // `send_audio` and `finish` turn that into an `Err`, so a rejected
       // session-config frame ends the meeting as `failed` carrying what the
-      // provider said. That was the confusion this comment used to describe
-      // and it is gone.
-      //
-      // What still lands here is genuinely ambiguous and is meant to be: a
-      // quiet room, and a provider that accepted the session, said nothing was
-      // wrong, and produced no transcript anyway — a silently misconfigured
-      // session, or a system-audio loopback with no samples in it. Nothing
-      // this side can separate those, so the sentence names both rather than
-      // picking one. Saying "failed" would send somebody hunting a fault that
-      // may not exist.
-      return `Nothing was transcribed — no speech was recognised, or the provider returned nothing without reporting a fault. The recording is at ${outcome.recordingPath}.`;
+      // provider said.
+      return `Nothing was transcribed. ${deliveryLabel(outcome.mic, outcome.system)} The recording is at ${outcome.recordingPath}.`;
     case "cancelled":
       return "Discarded. The recording was deleted.";
     case "failed":
@@ -524,19 +522,205 @@ export function meetingOutcomeLabel(outcome: MeetingOutcome): string {
 }
 
 /**
- * What a detected meeting application means, and whether it can be offered.
+ * What a detected meeting application means, and how sure the detector is.
  *
- * The distinction is measured, not chosen. `meeting_detect_probe` found
- * `ms-teams.exe` running with no call in progress, because new Teams runs the
- * call inside its own process — so there is no separate signal to offer on, and
- * offering on "the client is open" would prompt on every launch for anyone whose
- * Teams starts with Windows. Saying so here is what keeps that a known limit
- * rather than a bug somebody has to work out.
+ * Every branch is measured, not chosen, and the two in-call branches are not
+ * equally strong. `CptHost.exe` cannot exist unless a Zoom call is running. A
+ * held microphone can also be Teams running its own audio test, or a call the
+ * user placed that nobody joined — so it says which one it saw, and a user
+ * looking at a wrong answer can tell which signal was wrong.
+ *
+ * The "not in a call" wording no longer promises that recording will never be
+ * offered. It was true for the whole of the three weeks Teams had no in-call
+ * signal at all; since 2026-09-01 it has one, and a sentence that outlived its
+ * measurement is the thing this project keeps finding in its own docs.
  */
 export function detectedLabel(d: Detected): string {
-  return d.inCall
-    ? `in a call — detected as ${d.evidence}`
-    : `open, but not detectably in a call, so recording is not offered for it — detected as ${d.evidence}`;
+  switch (d.signal) {
+    case "call-process":
+      return `in a call — ${d.evidence} only runs during one`;
+    case "microphone":
+      return `in a call — ${d.evidence} is using a microphone, which is also true of a test call`;
+    case "none":
+      return `open, and not using a microphone, so nothing here says a call is in progress — detected as ${d.evidence}`;
+  }
+}
+
+/**
+ * Why an offer window appeared, in the words it says out loud.
+ *
+ * The offer is the one place a wrong detection costs the user something: a
+ * window over their work, about a meeting they are not in. So it names the
+ * signal rather than asserting a meeting, and the microphone wording admits
+ * what it cannot rule out.
+ */
+export function offerReason(o: Offer): string {
+  switch (o.signal) {
+    case "call-process":
+      return `${o.evidence} is running, and it only runs during a call`;
+    case "microphone":
+      return `${o.name} is using your microphone — that is usually a call, but a test call looks the same`;
+    case "none":
+      // `consider` never offers on this, so reaching it means the backend
+      // offered something it said was not a call. Say so rather than inventing
+      // a reason that sounds plausible.
+      return `detected as ${o.evidence}, but nothing said a call was in progress`;
+  }
+}
+
+/**
+ * Whether microphone activity can be read at all, in three words.
+ *
+ * The question behind every "not in a call" above. Where this says anything but
+ * "Watching", that line is reporting a measurement nobody took.
+ */
+export function microphoneValue(m: MicrophoneSupport | null): string {
+  if (m === null) return "Not checked yet";
+  switch (m.state) {
+    case "available":
+      // Zero endpoints is not a failure and is not a working signal either: a
+      // machine with no microphone has nothing to watch, and every "not in a
+      // call" on the screen above is then an absence of evidence.
+      return m.endpoints === 0 ? "No microphone to watch" : "Watching";
+    case "failed":
+      return "Could not be read";
+    case "unsupported":
+      return "Not supported here";
+  }
+}
+
+/**
+ * The detail line under {@link microphoneValue}.
+ */
+export function microphoneDetail(m: MicrophoneSupport | null): string {
+  if (m === null) {
+    return "The first detection poll has not run yet.";
+  }
+  switch (m.state) {
+    case "available":
+      return m.endpoints === 0
+        ? `${m.mechanism} — but no capture device is active, so nothing can be seen holding one`
+        : `${m.mechanism} — ${m.endpoints} active capture device${m.endpoints === 1 ? "" : "s"}`;
+    case "failed":
+      return `${m.mechanism} — ${m.reason}`;
+    case "unsupported":
+      return m.reason;
+  }
+}
+
+/* ------------------------------------------------------------------ meetings */
+
+/**
+ * What the two captures delivered, in a sentence, when nothing was transcribed.
+ *
+ * **The ambiguity KNEG-38 named, narrowed rather than pretended away.** WASAPI
+ * loopback from an output device with nothing playing delivers no callback at
+ * all, not silence — so *"nobody else spoke"* and *"the loopback never
+ * worked"* produce byte-for-byte the same nothing, and no amount of code this
+ * side separates them. What can be separated is the third case, which used to
+ * be folded in with them: audio was captured and none of it was transcribed.
+ * That one is a fault, and it now says so.
+ *
+ * The order matters. Audible audio with no transcript is reported first
+ * wherever it happened, because it is the only branch that should send anybody
+ * looking for a cause.
+ */
+export function deliveryLabel(mic: Delivered, system: Delivered): string {
+  if (mic === "audio" || system === "audio") {
+    const which =
+      mic === "audio" && system === "audio"
+        ? "Both the microphone and the other participants were"
+        : mic === "audio"
+          ? "The microphone was"
+          : "The other participants were";
+    return `${which} recorded with audible sound in the recording, and none of it produced a transcript — so this is a transcription problem rather than a quiet meeting.`;
+  }
+
+  if (mic === "silence" || system === "silence") {
+    return "Everything captured was digital silence, so nothing was said within reach of the microphone or the system audio.";
+  }
+
+  // Neither delivered anything. On Windows that is what an output device with
+  // nothing playing produces, so it is the ordinary shape of a call nobody
+  // spoke in -- and it is indistinguishable from a capture that never worked.
+  // Said plainly rather than resolved, because it cannot be resolved from here.
+  if (system === "nothing" && mic === "nothing") {
+    return "Neither capture delivered any audio. An output device with nothing playing delivers no audio at all rather than silence, so this is what a meeting nobody spoke in looks like — and also what a capture that did not work looks like. They cannot be told apart from here.";
+  }
+
+  if (system === "nothing") {
+    return "The other participants' audio never arrived. An output device with nothing playing delivers no audio at all rather than silence, so this is what nobody else speaking looks like — and also what a system-audio capture that did not work looks like. They cannot be told apart from here.";
+  }
+
+  if (mic === "nothing") {
+    return "The microphone never delivered any audio, which is worth looking at: unlike system audio, a working microphone produces a stream whether or not anybody is speaking into it.";
+  }
+
+  // Only the microphone was asked for, and it delivered nothing audible.
+  return "No speech was recognised in what was captured.";
+}
+
+
+/**
+ * Whether a session is on the machine right now, so Stop and Discard belong on
+ * screen.
+ *
+ * **An exhaustive switch, and the `never` at the end is the point.** Adding a
+ * member to a string union does not break a `===` comparison, so when `stalled`
+ * was added for KNEG-116 both screens went on asking `state === "recording" ||
+ * state === "recording-without-transcript"`, compiled without a murmur, and
+ * answered *no*. A meeting whose recorder had died would have shown "Start
+ * recording" with a session still held and a WAV still on disk — the exact
+ * defect KNEG-95 was filed for, reintroduced by a state added to fix a
+ * neighbour of it.
+ *
+ * `tsc` cannot catch the comparison. It can catch this, and does: a sixth state
+ * fails to compile here rather than quietly losing a button somewhere else.
+ *
+ * `finishing` is not live. The recording has stopped and the whole-file pass is
+ * running; there is nothing to stop and nothing to discard.
+ */
+export function meetingIsLive(state: MeetingState): boolean {
+  switch (state) {
+    case "recording":
+    case "recording-without-transcript":
+    case "stalled":
+      return true;
+    case "finishing":
+    case "idle":
+      return false;
+    default: {
+      const unhandled: never = state;
+      return unhandled;
+    }
+  }
+}
+
+/**
+ * What the status row says about a running or finishing meeting.
+ *
+ * Beside [`meetingIsLive`] because the two answer about the same set and would
+ * drift if they lived apart.
+ */
+export function meetingStateLabel(state: MeetingState): string {
+  switch (state) {
+    case "recording":
+      return "Recording";
+    case "recording-without-transcript":
+      return "Recording — the live transcript has stopped";
+    // Leads with what is true. "Recording" would be the one word this state
+    // exists to stop saying.
+    case "stalled":
+      return "Stopped unexpectedly — nothing is being recorded";
+    case "finishing":
+      return "Transcribing the recording…";
+    case "idle":
+      return "Not recording";
+    default: {
+      const unhandled: never = state;
+      return unhandled;
+    }
+  }
 }
 
 /* ------------------------------------------------------------------ updater */

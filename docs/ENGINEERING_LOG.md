@@ -21,15 +21,15 @@ maintained in place rather than appended to, because its purpose is to be curren
 > detail and the by-hand check that found five real defects; [COMPLETION_PLAN.md](COMPLETION_PLAN.md)
 > keeps the phase 7–10 definitions.
 >
-> **Measured, not asserted, as of 2026-08-27 after the security fixes merged:** `cargo test
-> --workspace` — **1296 passing, 0 failed** (941 at the start of the run, 1290 at its close);
-> parity — **102 entries, 8 declared unreachable** (17 at the start), and **all 13 UI surfaces
-> built**, with no "surface not built" entry remaining anywhere. The eight: four local-ASR models
-> (sherpa/Parakeet — runtime measured and proven by a probe re-run cold by the controller, missing
-> only a Settings selector), two Tinfoil entries (batch transcription and meeting-stream, both
-> declined on principle, not unfinished), Apple Calendar (EventKit — described in
-> `kw_calendar_core::apple`, implemented nowhere, on any platform), and URL import (withdrawn as a
-> command after the run closed — see the 2026-08-27 entry on the merged security fixes).
+> **Measured, not asserted, as of 2026-09-01:** `cargo test --workspace` — **1506 passing, 0
+> failed** (941 at the start of the original run, 1296 at its close on 2026-08-27); parity —
+> **102 entries, 6 declared unreachable** (17 at the start, 8 on 2026-08-27), and **all 13 UI
+> surfaces built**, with no "surface not built" entry remaining anywhere. The six: two local-ASR
+> models (sherpa/Parakeet — runtime measured, and the Settings selector that was missing landed
+> in `121dc4c`, which is what took this from eight to six), two Tinfoil entries (batch transcription
+> and meeting-stream, both declined on principle, not unfinished), Apple Calendar (EventKit —
+> described in `kw_calendar_core::apple`, implemented nowhere, on any platform), and URL import
+> (withdrawn as a command — see the 2026-08-27 entry on the merged security fixes).
 >
 > **The reachability rule, settled and applied repeatedly:** `reachable: true` means a user can
 > *configure* the integration through a named, **built** surface — not that the backend code works.
@@ -82,11 +82,14 @@ maintained in place rather than appended to, because its purpose is to be curren
 > corrected to `temporarily-deferred`. See "the ACTIVE-status audit" below.
 >
 > **[BENCH_CHECK.md](BENCH_CHECK.md) remains, in full, the record of what has actually been run on
-> hardware — and nothing from chunks E onward is in it.** The 2026-08-25/26 runs covered phases 2,
-> 6 and chunks A–D. Everything built since (meetings, calendars, media import, MCP/CLI screens,
-> the updater, sherpa) is green tests and code review only; that file's own by-hand lists for E–K
-> and for Task 20 say so item by item, and none of them should be read as done until someone
-> actually presses the buttons.
+> hardware, and chunk E is no longer absent from it.** The 2026-08-25/26 runs covered phases 2, 6
+> and chunks A–D. Bench runs on **2026-08-27, 2026-08-28, 2026-08-31 and 2026-09-01** then reached
+> chunk E: a meeting recorded, transcribed and saved end to end; two real Teams calls; system audio
+> resolving a real output device; and the capture-session measurement behind KNEG-94. Calendars,
+> media import, the MCP/CLI screens and the updater are **still green tests and code review only**.
+> That file's own by-hand lists say which is which item by item, and nothing on them should be read
+> as done until someone actually presses the buttons — including the one KNEG-94 left behind, which
+> is watching the offer window appear during a call.
 >
 > **The cross-cutting gap in all four meeting socket clients is closed at the end of the meeting
 > and still open during it (KNEG-79, 2026-08-31).** All four (`openai_socket.rs`,
@@ -147,12 +150,16 @@ maintained in place rather than appended to, because its purpose is to be curren
 > application start, `dacl_probe` reports `SE_DACL_PROTECTED` set and exactly three access entries,
 > none inherited. `Jobbdator\CodexSandboxUsers` is gone from the real token file.
 >
-> **Three smaller items recorded rather than chased**, each detailed in its own entry below: a
-> `kw-storage` test that failed once and passed on re-run during Task 8 (every other full-suite run
-> this session was clean, so intermittent rather than new); `apps/desktop/src-tauri/src/meeting.rs`
-> at ~1600+ lines, noted repeatedly and deliberately not restructured; and `SherpaModel` in the
-> provider registry carrying no SHA-256 for its model archives, unlike `WhisperModel` and unlike the
-> sidecar binaries in `config/sidecars.json`.
+> **Three smaller items recorded rather than chased.** The `kw-storage` test that failed once and
+> passed on re-run during Task 8 was **found on 2026-08-31**:
+> `import::tests::no_plaintext_token_appears_anywhere_in_the_target_file`, twice in four hundred
+> runs and only under eight threads. The assertion that fired was the positive control — meaning
+> the two "no plaintext token here" assertions beside it had just passed against a database file
+> whose rows were still in the write-ahead log. Fixed by reading every file the database is made
+> of, which is also the stronger claim. See the KNEG-88 entry. The remaining two:
+> `apps/desktop/src-tauri/src/meeting.rs` at ~1600+ lines, noted repeatedly and deliberately not
+> restructured; and `SherpaModel` in the provider registry carrying no SHA-256 for its model
+> archives, unlike `WhisperModel` and unlike the sidecar binaries in `config/sidecars.json`.
 
 Maintained in place. If something here becomes false, edit it rather than adding a note.
 
@@ -274,6 +281,778 @@ Unchanged from the Phases 1–4 entry, restated here so they are not buried:
 
 ---
 
+## 2026-09-01 (KNEG-94) — a defect went looking for a capability, not the other way round
+
+Teams calls are now detected, by the microphone the client holds rather than by a process name.
+The code is small. What is worth recording is the sequence of judgement calls, because four of them
+were about **what a measurement is worth** rather than about what to build.
+
+### The prediction the plan made was backwards, and that is the interesting part
+
+`COMPLETION_PLAN.md` chunk H said the mic listener had no consumer and that a capability with no
+consumer is scaffolding this workspace does not build ahead of time. That reasoning was sound and
+the conclusion was wrong, in a way worth naming: it assumed capabilities wait for features. What
+actually happened is that a **defect nobody could fix any other way went looking for a capability**.
+Teams had been unofferable for three weeks; three separate measurements said no process name would
+ever fix it. That is a much stronger pull than a feature request, and the chunk had no way to
+express it.
+
+Kept in the doc rather than quietly corrected, because "no consumer yet" and "no consumer, and none
+will come" read identically in a backlog and only one of them is safe to act on.
+
+### The control was made cross-process on purpose, and the easy version proves less
+
+`mic_users_probe` could have opened the microphone itself and checked it appeared. That was the
+first design. It was replaced with a second process launched via `--hold`, because an audio session
+belongs to a **process** and the question the issue asks is whether this code can see a session
+belonging to *somebody else*. That those are the same mechanism is true, and it is an argument —
+and an argument is exactly what a measurement is supposed to replace.
+
+### The first real run passed its control and was still unreadable
+
+This is the one worth remembering. The probe printed `nothing is capturing` and `PASS` on the
+control. Both true. Both useless: **nothing in the output said whether Teams had been open at the
+time.** "Teams is running and not capturing" and "Teams is not installed" print the same words and
+mean opposite things, and only one of them is the run the issue needed.
+
+The same failure shape as KNEG-88's empty file, one level up. There, a negative assertion passed
+against nothing and only a positive control noticed. Here the control existed and was passing —
+the missing positive was one layer above it, about the *subject* of the measurement rather than the
+apparatus. A control proves the instrument works. It does not prove the sample was in the machine.
+
+Fixed by having the probe print what `meeting_detect::detect` itself sees running, reusing the real
+detector rather than matching a name by hand: a second opinion computed beside the first is a second
+implementation that can be right when the first is wrong.
+
+### The microphone may strengthen a match and never create one
+
+The rule that keeps this honest. A process holding a capture device that is not a known client and
+not on the user's own list is **not reported at all**, no matter how loudly it is capturing. The
+alternative — report anything holding the microphone — would mean this application's own
+dictation offers to record itself, and would make "something is recording you" a claim a process
+detector has no business making about a browser tab.
+
+Tested, and the test was mutated: a version that lets the capture list invent a detection fails four
+tests.
+
+### Two signals, and refusing to flatten them into one boolean
+
+`CptHost.exe` cannot exist unless a Zoom call is running. A held microphone is also Teams running
+its own audio test, and a call the user placed that nobody joined. Both are `in_call`, and they are
+not the same claim.
+
+So `in_call` became a derived value and `CallSignal` carries which one fired, all the way to the
+offer window, which now says *"Microsoft Teams is using your microphone — that is usually a call,
+but a test call looks the same"* rather than asserting a meeting. The offer is the one place a wrong
+detection costs the user something: a window over their work about a meeting they are not in. A user
+told the wrong thing can only work out which signal was wrong if the window says which one fired.
+
+### Sealing a field rather than trusting a convention
+
+`in_call` and `signal` are two serialised fields carrying one fact, which is how they come to
+disagree. Rather than a comment asking future callers to use the constructor, `in_call` is a
+**private field** with an accessor and `Detected::new` is the only way to set it — serde and
+`ts_rs` both still export it, so the screen is unaffected. The desktop crate's test helper stopped
+compiling immediately, which is the proof it works.
+
+The same argument `MeetingRuntime::live` already makes for deriving "stopping has not begun" from
+the lock instead of keeping a second flag beside it.
+
+### One process table, two readings
+
+`survey()` takes the process list and the capture list from a single `sysinfo` refresh. Two
+refreshes are two instants: a process that starts in between appears in one list and not the other,
+and the resulting `Detected` names evidence that had already gone. Cheaper too, and the poll runs
+every five seconds for as long as the application is open.
+
+### What was deliberately not built
+
+The **calendar cross-check** KNEG-94 named as a possibly cheaper alternative. It is complementary
+rather than competing — it catches scheduled meetings and misses ad-hoc ones, which is the exact
+inverse of what landed — and doing both in one pass would mean neither was measured on its own.
+
+The **UIAutomation text monitor**, KNEG-63's other half, is now closed as declined rather than
+deferred. No consumer, and unlike the microphone half no defect pointing at it either; a continuous
+read of the focused element is a materially larger privacy surface than anything else here and there
+is nothing on the other side of the scale. A decision should read as a decision, not as unfinished
+work.
+
+### Still not done, and it is not the same claim
+
+**Nobody has watched the offer window appear during a real Teams call.** The signal is measured and
+the wiring is tested. Those are two different claims and the second does not imply the first —
+recorded in `BENCH_CHECK.md` item 6 rather than left implied by a closed issue.
+
+---
+
+## 2026-08-31 (KNEG-115) — measuring the cost without choosing the fix
+
+KNEG-115 says its own fix *"belongs to the repo owner rather than being chosen in passing"*, because
+it changes when the **default** hotkey fires. It also says what would inform that decision and had
+not been done: *"whether that is noticed depends on how quickly the overlay appears and whether the
+second press stops it — not measured, and worth measuring before deciding severity."*
+
+That half needs nobody's hands. Five tests now drive the shipped `ChordWatcher` with the exact
+key-down and key-up order a person produces:
+
+```
+Ctrl+Win+Left, once                       1 fire
+Ctrl+Win+Left, twice                      2 fires
+Ctrl+Win held, arrow tapped four times    1 fire
+Ctrl held, Win tapped twice               2 fires
+LeftControl+LeftSuper (a sided chord)     1 fire
+```
+
+### Two fires is the finding, not one
+
+`dictation::on_hotkey` calls `DictationRuntime::toggle`. So an even number of fires is not a pair
+that cancels out: **the first starts recording and the second stops it, transcribes what the
+microphone heard in between, and puts the text at the cursor through a synthetic paste.**
+
+A user on the default binding who switches virtual desktop, works for a while, and switches back has
+recorded that interval and had a transcript of it typed into whatever had focus. The issue said "a
+dictation starts on the way past". It is worse than that, and the difference is the difference
+between an annoyance and something that types your speech into a document.
+
+The toggle-and-paste half is read from `on_hotkey` and the inserter, not executed — the fire counts
+are measured, the consequence of a fire is traced. Both are labelled that way where they are
+written.
+
+### What bounds it, in both directions
+
+Holding Ctrl and Win while cycling four desktops is **one** toggle, not four: rule 2 refuses while a
+non-modifier is held, and the arrow going back down brings one with it. But releasing and
+re-pressing either modifier re-arms, so Control held with the Windows key tapped twice **is** two
+toggles.
+
+And a sided chord is no escape from this one. It is from AltGr, which is why KNEG-37 and this are
+separate issues — `LeftControl+LeftSuper` is a prefix of `Ctrl+Win+Left` exactly as the unsided
+chord is.
+
+### The fix is still not chosen, and the exposure is now disclosed
+
+All three options in the issue cost something real, and the one it calls honest — fire on release
+— adds the hold time to every dictation start, which is the latency `ModifierOnly` exists to
+avoid. That is a trade for the person who lives with the default, and choosing it in passing would
+be deciding the behaviour of the shipped default on the way past — which is, with some irony,
+exactly the failure being warned about.
+
+So `hotkey::prefix_cautions` warns and changes nothing, which is the pattern KNEG-37 established for
+AltGr and needs no decision at all. On screen:
+
+> Control+Super fires as soon as both keys are down, so it also goes off on the way into any longer
+> shortcut that starts with them. On this platform that includes Ctrl+Win+Left, which switches
+> virtual desktop. Dictation is a toggle, so two of those record everything in between and put the
+> transcript wherever the cursor is.
+
+Which chord collides with which keystroke is asked of the **real matcher**, exactly as
+`altgr_collision` is, for the same reason: a predicate reasoning about modifier names would be free
+to drift from the behaviour in precisely the cases nobody wrote a test for.
+
+**Every modifier-only chord gets a caution, not only the five with a named example.**
+`COMMON_PREFIXES` cannot be exhaustive — every two-modifier chord is a prefix of something — and a
+warning that appeared only for the listed keystrokes would read as a clean bill of health for the
+sixth. `Alt+Super` gets the general sentence and no invented example.
+
+**Only the handled action is told what it costs.** Four of the five actions have no handler;
+telling one of those that it records and pastes would invent a consequence it does not have.
+
+### Two cautions, kept apart
+
+`Control+Alt` on a Nordic layout now produces two sentences, and a test that asserted *exactly one*
+had to be re-scoped rather than relaxed. They are different facts: AltGr depends on the layout,
+being a prefix depends only on the chord having two keys, and either holds without the other. On a
+US layout the AltGr one disappears and the prefix one stays — a US keyboard cannot press AltGr and
+can certainly press Ctrl+Alt+Delete.
+
+That also closes a loop worth noticing. KNEG-37's caution now suggests a sided chord as its remedy,
+and KNEG-35 made sided chords typable. Someone who follows that advice gets a chord that is still a
+prefix, and `the_altgr_remedy_is_not_a_remedy_for_this` is the test that says so out loud rather
+than leaving them to find out.
+
+---
+
+## 2026-08-31 (KNEG-117) — the brute force was the weaker half, and the arithmetic says so
+
+KNEG-88 found one intermittent test in `kw-storage`, and its real content was that a credential
+check had been passing against an empty file. The obvious follow-up was to run the same hunt over
+the whole workspace.
+
+**Run: 40 rounds, 33 binaries, 1,320 runs, every thread count, control passed, nothing found.**
+
+### What that is worth, stated rather than rounded up
+
+Not much, and the arithmetic is why. The `kw-storage` flake fired **twice in four hundred runs of
+that binary** — about 0.5% per run. Forty rounds is forty runs of each binary, so the chance of
+catching something at that rate is about **18%**. A clean result at this depth is closer to "not
+looked at properly" than to "clean", and matching KNEG-88's confidence across the workspace would
+be roughly four hundred rounds — several hours of a machine doing nothing else.
+
+Worth writing down because the temptation is to read 1,320 runs as a big number. It is a big number
+of runs and a small number of *rounds*, and rounds are the unit that matters here.
+
+### So the second half was a search rather than a loop
+
+The defect KNEG-88 found has a shape: **an assertion that something is absent, checked against a
+resource that may not have been fully written.** That is greppable, and unlike the loop it does not
+depend on catching a rare event.
+
+Seventeen candidate sites across the workspace; ten had a positive claim beside the negative and
+were fine. Of the remaining seven, five were false positives of the search (a multi-line
+`assert_eq!` the pattern did not see, or a test whose whole subject is that nothing happened). Two
+were real and both are now hardened:
+
+**`sherpa::the_staged_wav_is_cleaned_up_even_when_the_process_cannot_start`.** It asserted no file
+matching `sherpa-input-` remained. That is trivially true of a run that never staged one — so a
+`transcribe` failing before the write, or a rename of the prefix, would have left it green while
+proving nothing. It was not vacuous today, which is exactly the problem: nothing would have said so
+when it became vacuous. It is a claim about raw audio not being left on disk, which is worth more
+than most. The control is the scratch directory, which now does not exist beforehand, so
+`transcribe` creating it proves the function reached `create_dir_all` — and the WAV write is the
+next statement. Mutating `transcribe` to fail before staging turns it red.
+
+**`discovery::no_temporary_file_is_left_behind`.** "Nothing else is in the directory" is also true
+of an empty directory. One line asserting the discovery file is there turns it from a tautology into
+an observation.
+
+### The lesson, in a form that survives
+
+A negative assertion is only as good as the positive one beside it. Neither of these was broken;
+both were one silent change away from being meaningless, and nothing in the tree would have said so.
+The search that finds them takes minutes. The loop that finds them takes hours and mostly does not.
+
+`tools/flake-hunt/hunt.mjs` also learnt something in the process: its first workspace run reported
+`generated_ipc_types_match_the_rust_types` failing nine times in thirty, which was a Rust type and
+its generated TypeScript being edited while the hunt ran. A false finding that names a real test is
+worse than an ordinary one, so a run whose binaries changed underneath it is now reported as **void**
+rather than as a result.
+
+---
+
+## 2026-08-31 (KNEG-38) — the ambiguity is real, so it is named rather than resolved
+
+WASAPI loopback from an output device with nothing playing delivers **no callback at all**, not a
+stream of zeros. So *"nobody else spoke"* and *"the loopback never worked"* produce byte-for-byte
+the same nothing, and both arrived on screen as `MeetingOutcome::NothingTranscribed` — along with a
+third case that is neither of them.
+
+### What could be separated, and what could not
+
+Nothing this side can separate the first two. Any code claiming to would be inventing evidence, and
+the label already said so honestly: *"no speech was recognised, or the provider returned nothing"*.
+
+The third case was hiding in there and **can** be separated: audio was captured, it was audible, and
+none of it was transcribed. That is not a quiet meeting. It was being reported as one.
+
+So `Delivered` is a four-way answer per capture — `NotCaptured`, `Nothing`, `Silence`, `Audio` —
+folded in the recorder's drain loop as the blocks go past. The outcome carries one for the
+microphone and one for the system audio, and the sentence branches on them:
+
+* **either side heard something** — *"and none of it produced a transcript — so this is a
+  transcription problem rather than a quiet meeting."* First in the ordering, because it is the only
+  branch that should send anybody looking for a cause.
+* **everything delivered was digital silence** — nothing was said within reach.
+* **nothing was delivered at all** — *"this is what a meeting nobody spoke in looks like, and also
+  what a capture that did not work looks like. They cannot be told apart from here."*
+
+The last one is the honest version of the thing this issue asked for. The bench check's wording was
+*"zero samples must read as nobody else spoke rather than a failure"*, and reading it that way would
+be a guess in the other direction. What the screen now does is say which of the two it is looking at
+— having ruled out the third — and explain why they look alike.
+
+### An empty block is not a block of silence, and that is the whole fold
+
+`Delivered::plus` distinguishes an empty slice from a slice of zeros. Collapsing them — the obvious
+thing, since both contain no sound — would destroy the distinction before anything downstream could
+see it. It is also the first thing the tests check.
+
+The fold is monotone: `Nothing` to `Silence` to `Audio`, never back. A meeting that goes quiet for
+its last half hour has still heard something, and the question is whether anything was ever audible
+rather than whether the end was.
+
+And it folds the **per-source** blocks, not the mix. The mix is the sum, where a silent system feed
+under a live microphone is invisible, and telling those apart is the point.
+
+### `NotCaptured` is not `Nothing`
+
+A meeting recorded without system audio has a reason on `Sources` and no defect behind it. Starting
+that tally at `NotCaptured` rather than `Nothing` is what stops the screen reporting a capture that
+was never asked for as one that fell silent.
+
+### Still on the by-hand list
+
+With the speakers muted, confirm the sentence a real meeting produces. Everything above is measured
+in unit tests against synthetic blocks; no meeting has been recorded since it landed.
+
+---
+
+## 2026-08-31 (KNEG-116) — asking the thread instead of inferring from its silence, and a state name that stops lying
+
+`pump` returns `Ok` when its audio channel closes. At Stop that is exactly right. Reaching it while
+a session is still held means the recording thread went without being asked — `record` returns on
+`Finish`, on `Cancel` and on its command channel disconnecting, and all three run only after the
+session has been taken. So that arm meant a panicked recorder, and the state reported was
+`RecordingWithoutTranscript`, whose first word was the one thing that had definitely stopped.
+
+KNEG-95 chose to report it anyway, on the grounds that it was strictly less wrong than the plain
+`Recording` it replaced, and filed the rest.
+
+### The fix is to stop inferring
+
+A closed channel and a dead thread look identical from outside, and they are not the same fact. So
+the thread says which, itself: a `Drop` guard reading `std::thread::panicking()`, writing
+`RecorderEnd::OnPurpose` or `RecorderEnd::Panicked` into a `OnceLock` the runtime already holds.
+
+A guard rather than a line at each return, because `record` has five exits and **a panic is not one
+of them** — anything written at the returns would miss the only case worth naming.
+
+**The drop order is load-bearing.** The guard is the first binding in `record` and `audio` is a
+parameter; bindings drop in reverse order of declaration, so the guard runs before the sender does.
+The cell is therefore written before the pump can observe its channel closing. That is the same
+ordering trick `Live::transcript_failure` already depends on, and it is why reading the two together
+is meaningful rather than a race.
+
+### A fifth state, now that there is something to distinguish
+
+`MeetingState::Stalled`: nothing is being recorded and nothing asked for that. `is_running()` stays
+true, deliberately — whatever was captured before the thread went is on disk, and a state that hid
+Stop would throw the recording away in order to report that the recording stopped.
+
+Named for what is true, which is the rule KNEG-95 set for its own state and the rule this one was
+filed for breaking.
+
+### The compiler could not catch what adding it broke
+
+`tsc --noEmit` passed with `stalled` added to the union and both screens still asking
+`state === "recording" || state === "recording-without-transcript"`. **Adding a member to a string
+union does not break a `===` comparison.** So the notification window and `Settings > Meetings`
+compiled cleanly and would both have answered *not recording* — offering "Start recording" for a
+session that was still held, with a WAV still growing on disk. That is the precise defect KNEG-95
+exists to fix, reintroduced by a state added to fix a neighbour of it.
+
+`labels.meetingIsLive` is an exhaustive `switch` with a `never` in the default arm. A sixth state
+now fails to compile there, rather than quietly losing a button somewhere else. `meetingStateLabel`
+sits beside it for the same reason.
+
+That is worth separating from the rest: the type system was consulted, said yes, and was wrong to.
+It was not asked the question it can answer until the switch existed to ask it.
+
+### Verified
+
+`the_recorder_guard_can_tell_a_panic_from_a_return` runs a real thread into a real panic rather than
+reasoning about `std::thread::panicking()`, which is easy to write backwards and impossible to see
+is backwards. The rest is pure: three distinct sentences, asserted distinct from each other, because
+a formatter that collapsed two of them would pass every individual assertion.
+
+### Still not observed
+
+No recorder thread has ever been seen to panic in this project. The case is reached by reading
+`record`'s exits. What changed is that it is now reached by the thread saying so, and that the
+screen says the true thing when it does.
+
+---
+
+## 2026-08-31 (KNEG-96) — between "died during startup" and "we killed it" there was no observer at all
+
+The local whisper server went away twice in one afternoon on 2026-08-28, unused, and the record
+could not say whether it had crashed, been killed, or exited cleanly. `start` reports a child that
+dies *during* startup, and `stop` ends one deliberately. Between those two, nothing was watching:
+the only trace of a death was a later connection refused with no explanation attached to it.
+
+This does not reproduce the exit. It makes the next one explain itself: a watcher task polls the
+child every five seconds and, when it finds it gone without `stop` having been called, logs the
+exit status, how long it had been running, and the tail of its diagnostics — then clears the PID
+record.
+
+### It deliberately does not restart anything
+
+The transcription and import paths already health-check the recorded port and revive the remembered
+model themselves (`2fe5825`). A second thing that restarted servers would race them. What was
+missing was never recovery; it was an explanation, and conflating the two would have produced a
+supervisor nobody asked for.
+
+### stdout is still thrown away, and that is the reason the tail is safe to log
+
+`start` sends stdout to `Stdio::null()` precisely because it can carry recognised text. stderr
+carries the loader and model diagnostics — which is exactly what a post-mortem needs, and is
+already shown to the user by `ProcessError::ExitedDuringStartup`. The distinction was already made
+in the code; this relies on it rather than re-deciding it.
+
+### Two ways to get this wrong, both closed
+
+The child handle moved behind an `Arc<tokio::sync::Mutex<..>>`, because `stop` needs it too and a
+watcher parked in `wait()` would hold it for the life of the process. Polling instead, at five
+seconds: this is a post-mortem, not a supervisor, and nothing acts on the answer.
+
+And `stop` sets a flag **before** it kills. Without it, every deliberate model switch would log an
+unexplained death — which is precisely the noise that makes a real one easy to scroll past. The flag
+is read again on the far side of `try_wait`, because `stop` can set it while the lock is held.
+
+### What a test can see
+
+A log line is not assertable, so the tests watch the PID record instead: same code path, same
+trigger, and a record naming a dead process is independently the thing that makes a reused process
+id look like a live server. Three mutations — removing the watcher, making it notice and say
+nothing, and dropping the flag from `stop` — each caught by the test written for it.
+
+### Still open underneath it
+
+**Why the server exits.** That needs the next occurrence, and until one happens the two candidates
+this issue names are still both live. What has changed is that the next occurrence will say which.
+
+---
+
+## 2026-08-31 (KNEG-88) — the flake was the control, and the control was the only honest thing in the test
+
+One line in the carry-forward: *"a `kw-storage` test failed once and passed on re-run"*. The report
+did not say **which** test, which is half of why answering it needed a session rather than a minute.
+
+`tools/flake-hunt/hunt.mjs`, written for this and committed: build the test binaries, ask **cargo**
+which they are, run a control, then run them repeatedly with the thread count cycling through 1, 2,
+4, 8 and 16. Four hundred rounds. It named the test:
+
+```
+kw_storage-... :: import::tests::no_plaintext_token_appears_anywhere_in_the_target_file
+  failed 2 time(s), at --test-threads=8
+```
+
+Two in four hundred, and only ever under eight threads — which is to say, only ever on a machine
+busy enough to matter.
+
+### Which assertion, and why that is the whole finding
+
+Eighty more runs to catch the message. It was not either of the two security assertions. It was the
+**positive control**:
+
+```
+panicked at crates/storage/src/import.rs:1035: the slot reference should be there
+```
+
+The test greps the bytes of `kw.db` for a refresh token and an access token and asserts neither is
+there, then asserts a slot reference *is*. When the control fired, the main database file contained
+**nothing** — the import had committed, `Db::close` had returned, and the rows were still in the
+write-ahead log. So both "no plaintext token here" assertions had just passed against an empty file.
+
+That is a false green in the exact place a false green is worst: a test whose whole purpose is to
+prove a credential did not reach disk. And the only reason it was visible at all is that somebody
+wrote the third assertion. **The flake was the control doing its job.**
+
+### The fix is also the stronger claim
+
+SQLite in WAL mode is three files, and a committed row can be in any of them. Greping only `kw.db`
+was never what the test's name says: a refresh token sitting in `kw.db-wal` is exactly as leaked as
+one in `kw.db`, and the old test would not have seen it. `every_database_file` reads the main file,
+the `-wal` and the `-shm`. The negatives get stronger and the control becomes deterministic in one
+change, because the row is now found wherever it actually is.
+
+### Not left resting on a 0.5% event
+
+A regression test that reproduces two runs in four hundred is not a regression test. Holding the
+database open forces the same state every time — nothing has closed, so nothing has checkpointed —
+and `a_row_that_is_only_in_the_wal_is_still_found` asserts the helper finds a row the main file does
+not have. Its first assertion is the *premise*: if SQLite ever checkpoints eagerly enough to put the
+row in the main file, the test says so rather than passing. Reverting the helper to the main file
+alone fails it every time.
+
+### `Db::close` was overstating itself
+
+Its comment read *"Called on shutdown so the WAL is checkpointed rather than left for the next
+launch to recover."* Measured: not always. SQLite checkpoints when the last connection closes and
+skips it if it cannot take the lock. Nothing in the application depends on it, because the WAL is
+recovered on the next open — but a test did, silently, and the comment now says which.
+
+### What the hunter's own control caught
+
+Its first version reported **100% failures with no output** under every thread count, including what
+should have been the control. Each binary path carried a trailing carriage return — the producer
+translated newlines, the consumer stripped only the line feed — so nothing was executed at all. A
+harness that fails everything is measuring itself; the same mistake in the other direction would
+have printed a clean result and been believed. The committed tool runs a control first and **refuses
+to report clean unless it passed**.
+
+And the detector has a control of its own: a deliberately unreliable test was planted in
+`crates/storage/src/settings.rs`, the hunter run against it, and it named the test and the thread
+counts it failed under — then removed. A flake hunter that has never caught a flake is a script
+that prints "clean".
+
+### The reporting gap, which was the fixable half of the original report
+
+The tool parses libtest's own `test <name> ... FAILED` lines and reports the name, the count and the
+thread counts. A non-zero exit with no named test — a crash, a binary that would not start — is
+reported as exactly that rather than counted as clean.
+
+---
+
+## 2026-08-31 (KNEG-106) — the backpressure is the bound, and the first test for it was measuring the scheduler
+
+`extract_tar_xz` filled a `Vec<u8>` with the entire decompressed tar before looking at one entry,
+because `lzma_rs::xz_decompress` writes into a `Write` and offers no streaming `Read`. The
+`max_bytes` ceiling counts bytes reaching `dest`, and the `Vec` was full before the first one got
+there, so a `.tar.xz` was a memory bomb no ceiling could touch.
+
+The fix is the option the issue called honest: run the decompressor on its own thread writing into
+a `sync_channel`, and read from the other end. A full channel blocks the producer, so the bytes in
+flight cannot exceed the channel's depth however large the archive decompresses to. **The
+backpressure is the bound** — there is no separate check that could fall out of step with it.
+
+### Two things it does not bound, both said out loud
+
+`lzma-rs` allocates an LZMA2 dictionary whose size the xz header declares, inside the decompressor
+and outside the channel. A few megabytes for any real archive, and not attacker-chosen here anyway,
+since `extract` runs only after a mandatory SHA-256 matched. "Streaming" reads as "constant memory"
+and it is constant *plus a header-declared dictionary*, so the comment says which.
+
+And a decompression failure arriving after the consumer stops is not reported: dropping the reader
+closes the channel and ends the producer. `extract_tar_gz` and `extract_tar_bz2` already have
+exactly that property — their decoders are driven by the tar reader and stop when it does — so
+this matches the module rather than adding a hole. A consumer that reads to the end always sees the
+error, because it travels in-band as the last item rather than through a side channel.
+
+### The first test was measuring the scheduler
+
+It ran a producer and a consumer concurrently, counted how far the producer got ahead, and asserted
+the gap stayed under the bound. It passed. Then the mutation harness widened the channel to a
+hundred thousand blocks — **sixty-four gigabytes of queue** — and it passed again, because a
+consumer that keeps up keeps the observed gap small whatever the queue can hold.
+
+Two of three mutations sailed through. The replacement lets **nothing** read at all and asserts the
+producer cannot finish a stream twice the bound, with a one-second timeout in the safe direction:
+expiring is the pass, and only the producer *finishing* fails it, so a slow machine cannot cause a
+red. An unbounded channel finishes it in milliseconds.
+
+The second miss was subtler. Replacing `buf.chunks(BLOCK)` with `buf.chunks(usize::MAX)` — which
+moves the unbounded buffer out of the `Vec` and into `BlockWriter`, where it is just as unbounded
+and much harder to see — changed nothing observable, because a producer fed exactly one block at a
+time behaves identically either way. It needed its own test writing a single oversized slice, not a
+second assertion in the first one. Three mutations, three tests, each caught by the one written for
+it.
+
+The lesson is the one this repository keeps relearning in a new costume: a test that passes is not
+evidence until something has made it fail.
+
+---
+
+## 2026-08-31 (KNEG-35) — one table, two readers, and a sentence with a hole in it
+
+`keys.rs` has expressed `RightControl+Super` since the hook was written — the headline capability
+of running a low-level hook at all, since no cross-platform shortcut API can see which side a
+modifier is on. No accelerator a user could type reached it. `hotkey::MODIFIERS` had nine unsided
+spellings, so `classify` read `RightControl` as *the key*:
+
+```
+     RightControl+Super -> Standard { accelerator: "RightControl+Super" }
+RightControl+RightShift -> Invalid { reason: "it names 2 non-modifier keys; a shortcut may have one" }
+```
+
+The first went to the system register, the one mechanism that cannot tell the sides apart. The
+second was refused with a message blaming the user's spelling for our own missing alias.
+
+### One table, because two lists put both failures one edit away
+
+The fix is not "add the sided spellings to `MODIFIERS`". Two lists of the same set drift, and they
+drift in two directions with different symptoms: a spelling `classify` accepts and `Chord::parse`
+does not becomes a shortcut the screen calls hookable and `KeyHook::install` then refuses; a
+spelling `Chord::parse` accepts and `classify` does not is this issue.
+
+So `keys::SIDED_MODIFIERS` is the one table, `Chord::parse` reads it, and `classify` reads it
+through `keys::sided_modifier`. The unsided list stays separate and stays in `hotkey.rs`, because it
+answers to something different — the shortcut plugin. That is why `Win` is absent from it and
+present in the chord parser: the plugin rejects `Win`, and being stricter than the platform is a
+different mistake from being looser.
+
+`every_sided_spelling_the_chord_parser_takes_is_a_modifier_here` is what makes the shared table more
+than decoration. A constant only one side actually consults looks identical from the outside.
+
+### The third state nobody had a name for
+
+Adding sided spellings as modifiers creates a case that did not exist before: `RightControl+D`. It
+would have fallen through to `Standard` and been handed to the register, which cannot see the side —
+strictly worse than the old behaviour, because the old behaviour at least refused.
+
+Neither mechanism can take it. The register is the only thing that handles an ordinary key and
+cannot see sides; the hook is the only thing that can see sides and `Chord::parse` refuses anything
+that is not a modifier. So it is `Invalid`, with **both** ways out named — drop the key, or drop the
+side — and a test asserting the classifier accepts each of them. A refusal that suggests something
+the same field then rejects is the defect this issue mostly was.
+
+The same reasoning removed a piece of advice: `explain()` told a user without the hook to *"add a
+regular key, for example {accelerator}+Space"*. For a sided chord that produces an `Invalid`. It now
+says there is no accelerator to fall back to, because there is not one.
+
+### The caution can finally name a remedy, and it is checked rather than asserted
+
+KNEG-37's AltGr warning deliberately named no remedy: a sided chord avoids AltGr completely, and
+the settings field rejected every sided spelling. It accepts them now.
+
+`keys::sided_escape` builds the suggestion from the chord that actually collided and then **passes
+it back through `altgr_collision`** — the same matcher that produced the warning. AltGr being left
+Control and right Alt specifically is a claim about when a chord fires, and this module's standing
+rule is that such claims are answered by running the watcher rather than by reasoning about names.
+If the candidate still collides, no remedy is named. Mutating `RightControl` to `LeftControl` in the
+builder — the AltGr side — makes the re-check reject it and the test fail, which is what says the
+re-check is load-bearing rather than ceremony.
+
+### The hole in the sentence
+
+Both AltGr cautions had shipped like this:
+
+```
+This layout types '@'                      with Control and Alt together, and Windows sends
+```
+
+Line continuations in the Rust string literals had lost their backslashes in an earlier edit, so the
+source indentation became twenty spaces in the middle of a sentence on screen. `cargo fmt` does not
+look inside a string literal, and the tests asserted `reason.contains("AltGr")`, so nothing caught
+it — it was found by printing the text and reading it, which is the only thing that ever finds
+this class.
+
+`no_caution_has_a_hole_where_a_line_continuation_should_be` asserts no caution reason contains a run
+of two spaces. Cheap, and it fails the moment a continuation is lost again.
+
+### Not closed by this
+
+A person typing a sided chord into `Dictation > Shortcuts` and watching it fire. The hook path is
+measured — `keyhook_probe` injects `RightControl+RightShift` and sees two fires for two presses —
+and the classifier is now measured, but the two have never been driven end to end from the screen.
+That is KNEG-47's territory.
+
+---
+
+## 2026-08-31 (KNEG-114) — the control the gate asked for, and the hole the gate turned out to have
+
+`meetings.detect` holds the allow and deny lists deciding which running applications count as a
+meeting. Every link existed except the last one: the key is read by `Detector`, a command writes it,
+a getter reads it, both are registered, both have IPC wrappers, both have dev fixtures — and no
+screen called either. The lists were settable only by editing SQLite by hand. The fourth instance
+of that pattern, and the first found by `tools/settings-audit/scan.mjs` rather than by a person
+reading a screen.
+
+The control is two textareas in the Detection section of `Settings > Meetings`, under the list of
+running applications — deliberately, because the name to type is the one each detection there
+reports. `parseKeyterms` became `onePerLine` and now serves all three fields, since keyterms and
+both lists are the same thing on screen and are normalised the same way in Rust.
+
+### The mutation the fix was supposed to fail, and did not
+
+The habit is to break the fix and watch the gate go red. Replacing the call and leaving the import
+in place kept it **green**.
+
+The check was `new RegExp(`\\b${wrapper}\\b`).test(component)` against the whole file, so an
+import satisfied it. Every one of the nineteen reachable keys had been passing on a test that a
+screen could satisfy by importing a function and never calling it. Nothing was wrong in the tree —
+the finding is that the tree being clean had stopped being evidence, which is the exact failure
+`scan.test.mjs`'s own header warns about two paragraphs before this code.
+
+### The obvious tightening was wrong, and the tree is what said so
+
+Requiring an open parenthesis after the name separates `setMeetingDetectLists({` from
+`setMeetingDetectLists,` in an import list. It also reported `localApi.enabled` as having no way in,
+because `IntegrationsApi.tsx` writes:
+
+```tsx
+void guard(api.running ? stopLocalApi : startLocalApi);
+```
+
+which is a real call by reference with no parenthesis anywhere near the name. **A gate that invents
+an unreachable setting is worse than one that misses a reachable one** — the first sends someone
+to build a control that already exists, and erodes trust in every other line the gate prints.
+
+So the import statements are stripped and the mention is then taken at face value. It cannot tell a
+name in a comment from a name in use; that is written down at the function rather than left to be
+rediscovered.
+
+Two things worth separating: I predicted in the first draft of that doc comment that *"no declared
+surface passes a wrapper by reference"*, and the very next run refuted it. The prediction was cheap
+and running it was cheap; writing the prediction down is what made the refutation visible instead of
+silently shipping a false accusation.
+
+### One test was passing for a reason that had just expired
+
+`an unreachable key must say why` deleted the note from `meetings.detect` — the only key
+declared unreachable. Making it reachable would have left that test green forever without exercising
+anything. It now sets `reachable: false` on a key itself rather than borrowing whichever one the
+backlog happens to hold, so it survives the backlog emptying.
+
+### Not closed by this
+
+Whether the command *works* when called. It has still never been driven — not by a screen, not by
+hand. The round trip through `kw_storage::settings` is the same one every other meeting setting
+uses, and `kw_platform::meeting_detect::detect` has tests for allowing, blocking, duplicate spellings
+and blank entries; what has not happened is a person typing a name into the box and watching the
+offer appear. That is part of KNEG-51.
+
+---
+
+## 2026-08-31 (KNEG-65) — a rule carried from upstream, measured for the first time, and three quarters wrong
+
+`kw_storage::paths` has relocated the model cache away from the user's own directory since the port,
+on a rule written as *"non-ASCII **or space**"* and applied to the binaries' own directory as well
+as to the files they read. Nobody had ever run it. `PLATFORM_SUPPORT.md` said so in as many words:
+*"the fallback has not been exercised here."*
+
+It cost about twenty minutes to find out, and the answer is much narrower:
+
+```text
+                                  a space        a non-ASCII character
+the model file                    loads          FAILS
+the audio file                    transcribes    FAILS
+the binary's own directory        runs           runs
+```
+
+**A space breaks nothing, anywhere.** `whisper-server` loads `ggml-tiny.bin` out of `model space/`
+and `sherpa-onnx-offline` transcribes a wav from `ljud plain/`. So an ordinary Windows account named
+`Ann Marie` was being sent to a machine-wide `%ProgramData%` cache — models shared across every
+account on the machine, and a "fell back" notice on her screen — to avoid a failure that does not
+happen.
+
+**The binaries' own location breaks nothing either.** This was the load-bearing half of the old
+comment: *"`whisper-server` loads its sibling `ggml` libraries relative to its own directory, and
+the native code chokes."* It does not choke. It printed
+`load_backend: loaded CPU backend from ...\Håkan Test\bin\ggml-cpu-cascadelake.dll` and carried on.
+`sherpa-onnx-offline`, `llama-server` and `ffmpeg` all do the same. Four out of four, so `sidecar_dir`
+stopped relocating at all — which is not only tidiness: `%ProgramData%` is a directory an
+unprivileged account may not be able to write to, so the old fallback could turn a cosmetic problem
+into an install failure.
+
+**What is real** is a file the ASR binaries open by path. Both exit 127. `whisper-server` says
+nothing at all after `loading model from ...`; `sherpa-onnx-offline` says `Errors in config!` for a
+model and `Failed to read '...'` for audio. So the fallback stays for `model_cache_dir` and
+`audio_temp_dir`, on evidence rather than on inheritance.
+
+### The decomposition was the whole method
+
+Four confounded variables in one sentence: space against non-ASCII, and the binary's path against
+the files it reads. Testing "a path with a space and a non-ASCII character in it", which is how the
+claim was written and the obvious thing to try, reproduces the failure and teaches nothing — the
+first run did exactly that and looked like a confirmation. Varying one at a time is what turned a
+confirmed folk rule into three findings.
+
+### The probe caught itself being wrong
+
+`crates/storage/examples/native_path_probe.rs` is committed so this can be re-run, in the shape
+`altgr_probe` already set. Its first version used `whisper-server --model X --help`, on the
+assumption that the model is loaded before the usage text is printed. It is not, and the probe
+reported `DIES` for every case **including the control** — which is the only reason the mistake was
+visible at all. A probe with no control would have printed three plausible failures and been
+believed.
+
+The version that ships starts the server and polls the port, because the only honest evidence that a
+model loaded is a server that answers.
+
+### What is still not measured, and is now the only part left
+
+**A real Windows account whose own name is non-ASCII.** Everything above used awkward directory
+names under an ASCII profile, which exercises the binaries but not the relocation a profile name
+triggers. That relocation — models landing in `%ProgramData%`, the screen saying so, a Parakeet
+model installed there transcribing — still needs somebody with a `Håkan` account. It stays in
+`BENCH_CHECK.md` as the remainder rather than being quietly closed with the rest.
+
+Also unmeasured, and named rather than assumed away: no released build exists (KNEG-43), so nobody
+has models in the old location. After a first release, narrowing this rule would move where models
+are looked for and would need a migration; today it moves nothing.
+
+---
+
 ## 2026-08-31 (KNEG-95) — the lock is the arbiter, and the state leads with the word that is still true
 
 The last of the 2026-08-28 meeting silence. Both OpenAI Realtime sockets closed within milliseconds
@@ -348,12 +1127,16 @@ channel closed with no Stop behind it, and `record` has no path that ends by its
 `stop` or `cancel` has taken the session. So that arm means the recording thread panicked, and the
 recording has stopped along with the transcription.
 
-**That is the one case where the state is wrong in its first word, and it is reported anyway.** The
-alternative is the silence this whole change exists to end, and the sentence — which is what a
-person actually reads — says the true thing: *"the recording thread stopped, so nothing further is
-being recorded or transcribed."* Filed as **KNEG-116** (Low) rather than left in a comment: a fifth
-state for a case reachable only by a panic, and untestable without one, was more machinery than the
-fact justified — and that is a judgement somebody should be able to revisit.
+**That is the one case where the state is wrong in its first word, and it was reported anyway.** The
+alternative was the silence this whole change exists to end, and the sentence — which is what a
+person actually reads — said the true thing. Filed as **KNEG-116** (Low) rather than left in a
+comment: a fifth state for a case reachable only by a panic, and untestable without one, was more
+machinery than the fact justified — and that is a judgement somebody should be able to revisit.
+
+**Revisited the same day, and it was the wrong call.** The fifth state was the smaller half; the
+larger one was that the case had to be *inferred* at all. `MeetingState::Stalled` now exists, and
+the recorder thread reports how it ended rather than the runtime guessing from a closed channel.
+See the KNEG-116 entry.
 
 ### Where it shows
 
@@ -463,8 +1246,10 @@ leaving it out is a real gap rather than a tidy boundary — stated rather than 
 
 **A remedy.** A sided chord avoids AltGr entirely, because AltGr is *left* Control and *right* Alt
 specifically: `LeftControl+LeftAlt` and `RightControl+Alt` both come back unaffected, and
-`keys::Chord` already parses them. No settings field accepts a sided spelling — that is KNEG-35 — so
-suggesting one would be advice that cannot be followed. The caution states the problem and stops.
+`keys::Chord` already parses them. No settings field accepted a sided spelling — that was KNEG-35 —
+so suggesting one would have been advice that could not be followed, and the caution stated the
+problem and stopped. **KNEG-35 closed on 2026-08-31**, and the caution now names the escape,
+computed from the colliding chord and re-checked against `altgr_collision` before it is offered.
 
 ### A mutation test that found the wrong reason
 
@@ -618,9 +1403,11 @@ job beside the parity gate and the domain scanner.
 deciding which running applications count as a meeting — has a `#[tauri::command]` that writes it,
 registered in `generate_handler!`, with an IPC wrapper and a dev fixture, and **no screen calls
 it**. Everything except the control exists. Filed as KNEG-114 and declared `reachable: false` with
-a note, so the gate stays green while the gap stays visible — the same treatment the parity gate
+a note, so the gate stayed green while the gap stayed visible — the same treatment the parity gate
 gives its unreachable integrations, and for the same reason: a backlog printed on success is read,
-and a red gate that is red every day is not.
+and a red gate that is red every day is not. **Closed on 2026-08-31**; the backlog is now empty, and
+the attempt to break the new control found that this check had been satisfied by an import all
+along — see the KNEG-114 entry above.
 
 ### Two design decisions that decide whether it means anything
 
@@ -657,9 +1444,10 @@ to hold; it falls out of asking the right question.
 ### Reachability is resolved to a component, not to a string
 
 A key claiming `reachable: true` names a surface in `config/ui-surfaces.json`, and that surface's
-component must call the IPC wrapper for one of the key's writers. Naming a screen is not enough —
-which is precisely how `meetings.detect` is broken, and is the reason that key fails the check
-while every other meeting setting passes. Two surfaces were added to the registry to make this
+component must use the IPC wrapper for one of the key's writers. Naming a screen is not enough —
+which is precisely how `meetings.detect` was broken, and was the reason that key failed the check
+while every other meeting setting passed. (*Use*, not *call*: what "not enough" means was itself too
+weak until KNEG-114 — an import counted. See that entry.) Two surfaces were added to the registry to make this
 sayable, `Dictation > Shortcuts` and `Dictation > History`, both real sections of `Dictation.tsx`
 that had never been declared because no integration entry happened to name them.
 
@@ -1153,7 +1941,7 @@ refresh. Every later call failed outright rather than updating anything.
 
 But the gap it appeared to cover is real and now has nothing covering it: the installed whisper
 sidecar dates from 2026-08-25 and the pinned archive has since gained `bench.exe` and `command.exe`,
-so it is measurably behind. Filed as **KNEG-114** with the rename measurement, rather than solved
+so it is measurably behind. Filed as **KNEG-113** with the rename measurement, rather than solved
 here by a scheme whose cleanup story is unresolved — a displaced directory still cannot be deleted
 while the old executable runs, so it has to survive until a launch where nothing holds it.
 
@@ -1972,12 +2760,14 @@ one is worse than no bound.
 
 ### Filed, not fixed
 
-**KNEG-106** (Low). `extract_tar_xz` decompresses the whole tar into a `Vec<u8>` before looking at
+**KNEG-106** (Low). `extract_tar_xz` decompressed the whole tar into a `Vec<u8>` before looking at
 an entry, because `lzma-rs` decompresses into a `Write` and exposes no streaming `Read`.
-`max_bytes` bounds what reaches `dest` and cannot bound that buffer, so a `.tar.xz` remains a
-memory bomb whatever ceiling is passed — independent of the output ceiling it now honours. Behind a
+`max_bytes` bounds what reaches `dest` and could not bound that buffer, so a `.tar.xz` was a memory
+bomb whatever ceiling was passed — independent of the output ceiling it now honours. Behind a
 mandatory digest, and the only pinned `tar-xz` assets are ffmpeg on Linux at ~100 MB compressed and
-~300 MB extracted. Needs a streaming LZMA2 reader; the function's doc comment now says so.
+~300 MB extracted. **Fixed the same day**: a bounded channel between the decompressor and the tar
+reader. See the KNEG-106 entry above — the interesting part is that the first test for the bound
+passed against a sixty-four-gigabyte queue.
 
 ---
 
@@ -2671,7 +3461,7 @@ the ones between them.
 Injecting `Control+Alt` this time started a real microphone capture **66 ms** after the chord, and
 four presses drove four alternations. That is the link that had been missing.
 
-### Finding: sided modifiers are built and unreachable
+### Finding: sided modifiers are built and unreachable (closed 2026-08-31, KNEG-35)
 
 `keys.rs` expresses `RightControl+Super` — the headline capability of having a low-level hook at
 all, since the cross-platform API cannot see which side a modifier is on. `PLATFORM_SUPPORT.md` said
@@ -2784,7 +3574,9 @@ than a green tick over a path I could not actually drive.
   `Control+Alt`.
 - **WASAPI loopback from an idle output device delivers no callback at all**, not silence. The probe
   says so honestly, but at the API "capture is broken" and "the far end was quiet" look identical.
-  Chunk E should decide what that means before a meeting recording does.
+  Chunk E should decide what that means before a meeting recording does. *(Chunk E shipped without
+  it; settled on 2026-08-31 as KNEG-38 — the two are named rather than separated, because they
+  cannot be separated, and the third case hiding with them can be and now is.)*
 
 ### What the run left on the machine
 

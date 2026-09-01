@@ -80,10 +80,13 @@ export type CredentialStoreStatus = { "state": "available", backend: string, } |
  */
 export type ModelCacheStatus = { path: string,
 /**
- * True when the per-user path contained a space or a non-ASCII character,
- * which makes the native whisper and sherpa binaries fail in ways that do
- * not point at the path. Worth surfacing: it means models are shared
- * machine-wide.
+ * True when the per-user path contained a non-ASCII character, which stops
+ * the native whisper and sherpa binaries opening the model at all -- and
+ * does so without saying why, which is what makes it worth relocating for.
+ * Worth surfacing here too: it means models are shared machine-wide.
+ *
+ * A space no longer counts. It never did; see
+ * `kw_storage::paths`'s module documentation for the measurement.
  */
 fellBack: boolean, };
 
@@ -609,20 +612,44 @@ languageRequired: boolean, sessionLimitSeconds: number | null, };
 /**
  * What a meeting session is doing.
  */
-export type MeetingState = "idle" | "recording" | "recording-without-transcript" | "finishing";
+export type MeetingState = "idle" | "recording" | "recording-without-transcript" | "stalled" | "finishing";
 
 /**
  * Which captures are actually running.
  *
  * Reported rather than assumed, because a meeting works microphone-only and the
- * user should know which one they got. Zero system-audio samples means nobody
- * else spoke; *no system capture at all* is a different fact.
+ * user should know which one they got. *No system capture at all* is a
+ * different fact from a capture that produced nothing.
+ *
+ * It used to say here that zero system-audio samples means nobody else spoke.
+ * It does not, and that was KNEG-38: an output device with nothing playing
+ * delivers no callback at all, so zero samples is equally what a capture that
+ * never worked produces. [`Delivered`] carries which of the possible answers
+ * applies, and says plainly that two of them cannot be told apart.
  */
 export type Sources = { microphone: boolean, systemAudio: boolean,
 /**
  * Why system audio is not being captured, when it is not.
  */
 systemAudioReason: string | null, };
+
+/**
+ * What a capture actually delivered over a meeting, as opposed to whether it
+ * opened.
+ *
+ * **The distinction KNEG-38 is about.** WASAPI loopback from an output device
+ * with nothing playing delivers **no callback at all**, not a stream of zeros.
+ * So at the API a capture that never worked and a call where nobody else spoke
+ * are the same thing, and for a meeting recording that difference is the whole
+ * point. `MeetingOutcome::NothingTranscribed` was where both landed, together
+ * with a third case that is neither.
+ *
+ * This does not make the first two distinguishable — nothing this side can,
+ * and claiming otherwise would be the invention the rest of this file refuses.
+ * What it does is *name* which of them happened, separate the third, and say
+ * on screen why the first two look alike.
+ */
+export type Delivered = "not-captured" | "nothing" | "silence" | "audio";
 
 /**
  * What can be said about the meeting session.
@@ -653,6 +680,15 @@ provider: string | null, elapsedSeconds: number, sources: Sources | null,
  * running.
  */
 systemAudio: SystemAudioSupport,
+/**
+ * Whether microphone activity can be read, from the last poll.
+ *
+ * `None` until the first poll has run. Reported rather than folded into
+ * `detected`, because "Teams is open and not in a call" and "Teams is open
+ * and nobody looked" are the same sentence with opposite meanings, and on
+ * Linux and macOS it is always the second one.
+ */
+microphone: MicrophoneSupport | null,
 /**
  * Meeting applications seen running at the last poll.
  *
@@ -692,7 +728,7 @@ gaps: number,
  * True when the whole-file pass failed and the overlapping live
  * partials were saved instead.
  */
-transcriptIsPartials: boolean, } | { "outcome": "nothing-transcribed", recordingPath: string, } | { "outcome": "cancelled" } | { "outcome": "failed", message: string, };
+transcriptIsPartials: boolean, } | { "outcome": "nothing-transcribed", recordingPath: string, mic: Delivered, system: Delivered, } | { "outcome": "cancelled" } | { "outcome": "failed", message: string, };
 
 /**
  * An offer to record a meeting that appears to be happening.
@@ -709,7 +745,35 @@ name: string,
 /**
  * The process that gave it away, so the offer can say why it appeared.
  */
-evidence: string, };
+evidence: string,
+/**
+ * Which signal fired, so the offer can say how sure it is.
+ *
+ * Never [`CallSignal::None`]: `consider` only offers on a call. Carried as
+ * the enum rather than as a sentence because the wording belongs on the
+ * screen, and because a microphone is the weaker of the two -- an offer
+ * that appeared because Teams was running its own audio test should say
+ * that is what it saw.
+ */
+signal: CallSignal, };
+
+/**
+ * What says a call is in progress, when anything does.
+ *
+ * Two signals, and they are **not** equally strong, which is the whole reason
+ * this is an enum rather than the boolean it replaces the inside of:
+ *
+ * - [`Self::CallProcess`] is a process that cannot exist unless a call is
+ *   running. Zoom's `CptHost.exe` is not started by opening Zoom.
+ * - [`Self::Microphone`] is the application holding a capture device. Real
+ *   evidence, and weaker: Teams holds the microphone for its own audio test
+ *   too, and so does a call the user placed and nobody joined.
+ *
+ * A caller that offers to record is entitled to know which one fired, because
+ * the two deserve different words on screen and a user told the wrong one has
+ * no way to work out which signal was wrong.
+ */
+export type CallSignal = "none" | "call-process" | "microphone";
 
 /**
  * A meeting application that appears to be running.
@@ -731,23 +795,34 @@ name: string,
  */
 evidence: string,
 /**
- * True when the matched process only exists during a call, rather than
- * whenever the application is open.
+ * True when something says a call is in progress, rather than only that the
+ * application is open.
  *
  * The difference between "in a meeting" and "has Zoom installed", and the
  * reason a caller can choose to prompt only on the stronger signal.
+ *
+ * **Private, unlike every other field here**, and serialised all the same
+ * so a screen can read `inCall` without knowing about signals. It is
+ * [`CallSignal::means_call`] of [`Self::signal`] and nothing else, and the
+ * only way to keep two serialised fields carrying one fact from drifting is
+ * to make the second one impossible to set. Read it with [`Self::in_call`].
  */
-inCall: boolean, };
+inCall: boolean,
+/**
+ * Which signal made [`Self::in_call`] true, and how strong it is.
+ */
+signal: CallSignal, };
 
 /**
  * The user's own process names.
  *
  * `meeting-detect:generic` upstream also covered calendar events, microphone
- * activity and system-audio activity. Only the lists are built: calendars are
- * chunk F, and microphone activity needs the `IAudioSessionManager2` listener
- * that is still unwritten. Named here rather than left implied, because a
- * half-built detector that looks whole is how a user comes to trust one that
- * misses half the meetings.
+ * activity and system-audio activity. Microphone activity is now built and
+ * measured -- it reaches [`detect`] as its `capturing` argument, and a name on
+ * this list holding a capture device counts as being in a call. **Calendar
+ * events are still chunk F and system-audio activity is still unbuilt.** Named
+ * here rather than left implied, because a half-built detector that looks whole
+ * is how a user comes to trust one that misses half the meetings.
  */
 export type Lists = {
 /**
@@ -762,6 +837,31 @@ allow: Array<string>,
  * release.
  */
 block: Array<string>, };
+
+/**
+ * Whether this platform can say which applications are capturing.
+ *
+ * Three states rather than a boolean, for the reason
+ * `kw_audio_core::system_audio::SystemAudioSupport` has four: "this platform
+ * cannot" and "this platform can and the call failed" are different problems
+ * with different fixes, and neither of them is "nothing is capturing".
+ *
+ * That distinction is the whole point here. An empty list of capturing
+ * processes and an enumeration that did not run look identical to a caller, and
+ * one of them means "nobody is in a call" while the other means nothing at all.
+ */
+export type MicrophoneSupport = { "state": "available",
+/**
+ * The mechanism, named so a reader can recognise it.
+ */
+mechanism: string,
+/**
+ * How many capture endpoints were examined.
+ *
+ * Zero is not a failure — a machine with no microphone has none — but
+ * it does mean an empty answer says nothing about who is in a call.
+ */
+endpoints: number, } | { "state": "failed", mechanism: string, reason: string, } | { "state": "unsupported", reason: string, };
 
 /* ------------------------------------------------------------------ notes */
 /**
@@ -1072,9 +1172,12 @@ cliInstalled: boolean, models: Array<SherpaModelStatus>,
  */
 selected: string | null,
 /**
- * Where models are kept. Shown because the native binaries cannot load
- * from a path with a space or a non-ASCII character in it, so this is
- * sometimes not where a person would expect.
+ * Where models are kept. Shown because the native binaries cannot open a
+ * file whose path holds a non-ASCII character, so this is sometimes not
+ * where a person would expect.
+ *
+ * A space is fine, despite what this comment said until 2026-08-31 — see
+ * `kw_storage::paths` for the measurement.
  */
 modelsDir: string, };
 

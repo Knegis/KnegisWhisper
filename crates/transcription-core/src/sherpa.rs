@@ -936,23 +936,51 @@ mod tests {
         assert!(err.is_err());
     }
 
+    /// The staged WAV is removed even when the process cannot start.
+    ///
+    /// **The absence needs a control, and this had none.** "No file matching
+    /// `sherpa-input-` exists" is trivially true of a run that never staged one,
+    /// so a `transcribe` that failed before writing anything — or a rename of
+    /// the prefix — would leave this passing while proving nothing. That shape
+    /// cost four hundred runs to find once already (KNEG-88), and this is a
+    /// claim about raw audio not being left on disk, which is worth more than
+    /// most.
+    ///
+    /// The control is the scratch directory. It does not exist beforehand, so
+    /// `transcribe` creating it proves the function reached `create_dir_all` —
+    /// and the write of the WAV is the very next statement.
     #[tokio::test]
     async fn the_staged_wav_is_cleaned_up_even_when_the_process_cannot_start() {
         let dir = tempfile::tempdir().unwrap();
         layout(dir.path());
         let files = discover_transducer_files(dir.path()).unwrap();
         let temp = tempfile::tempdir().unwrap();
+        let scratch = temp.path().join("scratch");
+        assert!(
+            !scratch.exists(),
+            "premise: the scratch directory is not there yet"
+        );
 
         let sherpa = SherpaOffline::new(
             temp.path().join("not-a-real-binary"),
             files,
             None,
-            temp.path().to_path_buf(),
+            scratch.clone(),
             None,
         );
-        let _ = sherpa.transcribe(vec![0_u8; 16], None, None).await;
+        let result = sherpa.transcribe(vec![0_u8; 16], None, None).await;
 
-        let leftover: Vec<_> = std::fs::read_dir(temp.path())
+        assert!(
+            result.is_err(),
+            "premise: a binary that is not there cannot have transcribed anything"
+        );
+        assert!(
+            scratch.is_dir(),
+            "the staging directory was never created, so nothing was ever staged and the \
+             assertion below would pass for the wrong reason"
+        );
+
+        let leftover: Vec<_> = std::fs::read_dir(&scratch)
             .unwrap()
             .flatten()
             .filter(|e| e.file_name().to_string_lossy().starts_with("sherpa-input-"))

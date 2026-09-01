@@ -206,8 +206,8 @@ detection" — and one of the six turned out to be done already.
 | `windows-fast-paste.c` | 342 | `platform::window::send_ctrl_v`, native `SendInput` | **done** |
 | `windows-system-audio-helper.c` | 634 | Rust `wasapi` loopback behind the system-audio trait | chunk 3 |
 | `windows-key-listener.c` | 372 | Rust `SetWindowsHookExW` / `WH_KEYBOARD_LL`. This is the gap `platform/src/hotkey.rs:149` names, and what modifier-only, right-side-modifier, Globe/`Fn`, mouse-button and push-to-talk hotkeys all need | with chunk 3 |
-| `windows-text-monitor.c` | 251 | Rust UIAutomation focused-element read | with chunk 3 |
-| `windows-mic-listener.c` | 1425 | Rust `IAudioSessionManager2` | with chunk 3 |
+| `windows-text-monitor.c` | 251 | Rust UIAutomation focused-element read | **declined** (KNEG-63) — no consumer and no defect asking for it; a continuous read of the focused element needs its own disclosure |
+| `windows-mic-listener.c` | 1425 | Rust `IAudioSessionManager2` in `platform::microphone` | **done** 2026-09-01 (KNEG-94) |
 
 Upstream runs **one key-listener process per watched key**. An in-process hook replaces all of
 them, so this is fewer moving parts rather than a like-for-like port.

@@ -28,7 +28,14 @@ import { readFileSync, existsSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { violations, backendSources, resolveKey, normalise, ipcWrapper } from "./scan.mjs";
+import {
+  violations,
+  backendSources,
+  resolveKey,
+  normalise,
+  ipcWrapper,
+  usesWrapper,
+} from "./scan.mjs";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const read = (p) => JSON.parse(readFileSync(join(REPO_ROOT, p), "utf8"));
@@ -188,13 +195,38 @@ test("reachability must be declared, not defaulted", () => {
 test("a screen that never calls the writer is not a way in", () => {
   const i = inputs();
   // Integrations > MCP is built and real, and its component calls nothing that
-  // writes this key -- which is exactly the shape meetings.detect is in today.
+  // writes this key -- the shape meetings.detect was in until KNEG-114.
   i.manifest.keys["history.enabled"].ui = "Integrations > MCP";
   const found = violations(i);
   assert.ok(
     found.some((v) => v.rule === "unreachable-writer" && v.key === "history.enabled"),
     `naming a screen must not be enough, got ${JSON.stringify(rules(found))}`
   );
+});
+
+test("importing a wrapper is not using it", () => {
+  // The mutation KNEG-114's fix was checked against, and the gate survived it
+  // until the import statements were stripped: replacing the call while leaving
+  // `setMeetingDetectLists` in the import list kept `Settings > Meetings`
+  // looking like a way in.
+  const component = [
+    `import { setMeetingDetectLists } from "../lib/ipc";`,
+    `export function Screen() {`,
+    `  return null;`,
+    `}`,
+  ].join("\n");
+  assert.equal(usesWrapper(component, "setMeetingDetectLists"), false);
+});
+
+test("a wrapper called by reference is using it", () => {
+  // `IntegrationsApi.tsx` really does this, and requiring a parenthesis after
+  // the name reported localApi.enabled as unreachable — a setting whose
+  // screen has had a working button since it was written.
+  const component = [
+    `import { startLocalApi, stopLocalApi } from "../lib/ipc";`,
+    `void guard(api.running ? stopLocalApi : startLocalApi);`,
+  ].join("\n");
+  assert.equal(usesWrapper(component, "startLocalApi"), true);
 });
 
 test("a surface the registry does not declare is caught", () => {
@@ -214,8 +246,13 @@ test("a surface that is not built cannot be a way in", () => {
 });
 
 test("an unreachable key must say why", () => {
+  // Declared here rather than borrowed from the tree. Every key is reachable
+  // as of KNEG-114, so a test that deletes some real key's note would have
+  // gone quietly green the moment the backlog emptied — which is the failure
+  // this whole file exists to refuse.
   const i = inputs();
-  delete i.manifest.keys["meetings.detect"].note;
+  i.manifest.keys["history.enabled"].reachable = false;
+  delete i.manifest.keys["history.enabled"].note;
   assert.ok(violations(i).some((v) => v.rule === "incomplete-reachability"));
 });
 

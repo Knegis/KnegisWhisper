@@ -38,10 +38,11 @@
  *   E. Every command that writes a key is declared as a writer of it, so the
  *      manifest cannot go stale in the other direction.
  *   F. A key claiming to be reachable resolves through `config/ui-surfaces.json`
- *      to a built component whose source calls the IPC wrapper for one of its
- *      writers. `reachable: false` is allowed and must carry a note; those are
- *      printed as a backlog on success, exactly as the parity gate does with
- *      its unreachable integrations.
+ *      to a built component whose source **uses** the IPC wrapper for one of
+ *      its writers — see [`usesWrapper`] for why importing it is not enough.
+ *      `reachable: false` is allowed and must carry a note; those are printed
+ *      as a backlog on success, exactly as the parity gate does with its
+ *      unreachable integrations.
  *
  * **The generic writer does not count.** `settings_set(key, value)` writes any
  * key the renderer names, so counting it as a writer would make this gate pass
@@ -324,6 +325,38 @@ export function registeredCommands(libSource) {
  * export, which is how the file is written throughout: one thin exported
  * function per command, in order.
  */
+/**
+ * Whether `component` uses `wrapper`, rather than merely importing it.
+ *
+ * **An import is a mention, and a mention was enough until 2026-08-31.** This
+ * started life as `\\b${wrapper}\\b` against the whole file, which a screen that
+ * imported the wrapper and never used it satisfied. It was found by mutating
+ * KNEG-114's own fix: the call was replaced and the import left in place, and
+ * the gate stayed green — the one mutation it was supposed to fail against.
+ *
+ * **The obvious tightening is wrong, and the tree said so.** Requiring an open
+ * parenthesis after the name separates a call from an import list, and it also
+ * reported `Integrations > API` as having no way in — because
+ * `IntegrationsApi.tsx` calls `guard(api.running ? stopLocalApi : startLocalApi)`,
+ * which is a real call by reference with no parenthesis anywhere near the name.
+ * A gate that invents an unreachable setting is worse than one that misses a
+ * reachable one, so the import statements are removed and the mention is then
+ * taken at face value.
+ *
+ * What it still cannot tell: a name that appears only in a comment, or only in
+ * a branch nothing reaches, counts as use. This gate answers "can a user change
+ * the value at all", and a mention outside the imports is as close to that as
+ * source text gets without a parser.
+ *
+ * @param {string} component  the screen's source
+ * @param {string} wrapper    the exported IPC wrapper's name
+ * @returns {boolean}
+ */
+export function usesWrapper(component, wrapper) {
+  const body = component.replace(/^import[\s][\s\S]*?from\s+["'][^"']+["'];?/gm, "");
+  return new RegExp(`\\b${wrapper}\\b`).test(body);
+}
+
 export function ipcWrapper(command, ipcSource) {
   const at = ipcSource.search(new RegExp(`invoke(?:<[^>]*>)?\\(\\s*"${command}"`));
   if (at === -1) return null;
@@ -590,7 +623,7 @@ export function violations({
     }
     const reached = writers.some((command) => {
       const wrapper = ipcWrapper(command, ipc);
-      return wrapper !== null && new RegExp(`\\b${wrapper}\\b`).test(component);
+      return wrapper !== null && usesWrapper(component, wrapper);
     });
     if (!reached) {
       fail(

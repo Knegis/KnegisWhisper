@@ -37,6 +37,7 @@ import {
   type Offer,
   type Sources,
 } from "./lib/ipc";
+import { meetingIsLive, offerReason } from "./lib/labels";
 
 /** Which provider a detected application should be recorded with. */
 const RECORD_WITH = "local";
@@ -65,7 +66,11 @@ export function MeetingNotification() {
   }, []);
 
   const transcriptEnded = state === "recording-without-transcript";
-  const recording = state === "recording" || transcriptEnded;
+  const stalled = state === "stalled";
+  // Asked of `meetingIsLive` rather than compared here: a state added to the
+  // union does not break a `===`, so this window would have gone on compiling
+  // and stopped offering Stop. See the note on that function.
+  const recording = state !== null && meetingIsLive(state);
 
   // Counted here rather than asked for every second: the runtime owns the
   // session and the clock, and one command a second to render a timer would be
@@ -91,12 +96,16 @@ export function MeetingNotification() {
            */}
           <span
             className={
-              transcriptEnded ? "notify-detail notify-alert" : "notify-detail"
+              transcriptEnded || stalled
+                ? "notify-detail notify-alert"
+                : "notify-detail"
             }
           >
-            {transcriptEnded
-              ? "live transcript stopped — still recording"
-              : whoIsRecorded(sources)}
+            {stalled
+              ? "recording stopped — press Stop to keep what was captured"
+              : transcriptEnded
+                ? "live transcript stopped — still recording"
+                : whoIsRecorded(sources)}
           </span>
         </span>
         <button
@@ -131,9 +140,7 @@ export function MeetingNotification() {
         <span className="indicator" aria-hidden="true" />
         <span className="notify-body">
           <strong>{offer.name} meeting in progress</strong>
-          <span className="notify-detail">
-            {problem ?? `detected as ${offer.evidence}`}
-          </span>
+          <span className="notify-detail">{problem ?? offerReason(offer)}</span>
         </span>
         <button
           type="button"

@@ -23,11 +23,13 @@ import { useCallback, useEffect, useState } from "react";
 import { Row } from "../components/Row";
 import {
   cancelMeeting,
+  getMeetingDetectLists,
   getMeetingKeyterms,
   getMeetingLanguage,
   getMeetingProviders,
   getMeetingStatus,
   reviewMeetingConfig,
+  setMeetingDetectLists,
   setMeetingKeyterms,
   setMeetingLanguage,
   setMeetingPrompt,
@@ -45,18 +47,31 @@ import {
 import {
   availabilityLabel,
   captureExclusionLabel,
+  meetingIsLive,
+  meetingStateLabel,
   detectedLabel,
   keytermLabel,
   keytermReviewLabel,
   languageRequiredWarning,
   meetingOutcomeLabel,
   sourcesLabel,
+  microphoneDetail,
+  microphoneValue,
   systemAudioValue,
 } from "../lib/labels";
 import { useRefresh } from "../lib/useRefresh";
 
-/** One keyterm per line, trimmed, with blank lines dropped. */
-function parseKeyterms(text: string): string[] {
+/**
+ * One entry per line, trimmed, with blank lines dropped.
+ *
+ * Shared by the keyterms field and by both detection lists, because all three
+ * are the same thing on screen and are normalised the same way in Rust: keyterms
+ * by `normalize_keyterms`, the lists by `kw_platform::meeting_detect::detect`,
+ * which trims every entry and skips the empty ones. One parser rather than
+ * three is what keeps a stray blank line from meaning something different in
+ * one of them.
+ */
+function onePerLine(text: string): string[] {
   return text
     .split("\n")
     .map((k) => k.trim())
@@ -68,13 +83,14 @@ type Live = Partial<Record<TranscriptEvent["source"], string>>;
 
 export function SettingsMeetings() {
   const load = useCallback(async () => {
-    const [providers, status, language, keyterms] = await Promise.all([
+    const [providers, status, language, keyterms, detect] = await Promise.all([
       getMeetingProviders(),
       getMeetingStatus(),
       getMeetingLanguage(),
       getMeetingKeyterms(),
+      getMeetingDetectLists(),
     ]);
-    return { providers, status, language, keyterms };
+    return { providers, status, language, keyterms, detect };
   }, []);
 
   const { data, error, reload, guard } = useRefresh(load);
@@ -90,6 +106,8 @@ export function SettingsMeetings() {
   // provider select.
   const [languageDraft, setLanguageDraft] = useState<string | null>(null);
   const [keytermsDraft, setKeytermsDraft] = useState<string | null>(null);
+  const [allowDraft, setAllowDraft] = useState<string | null>(null);
+  const [blockDraft, setBlockDraft] = useState<string | null>(null);
   const [review, setReview] = useState<ConfigReview | null>(null);
 
   useEffect(() => {
@@ -100,7 +118,11 @@ export function SettingsMeetings() {
       // The state event carries the state and nothing else, and the sentence
       // explaining it lives on `MeetingStatus`. Reloading is how it gets here
       // -- the same thing the outcome listener below does, for the same reason.
-      if (next === "recording-without-transcript") void reload();
+      // Both failure states, because both put a sentence on screen and a state
+      // that arrived without one would render the caveat empty.
+      if (next === "recording-without-transcript" || next === "stalled") {
+        void reload();
+      }
     }).then((fn) => unlisteners.push(fn));
     // Replaced rather than appended: every event is a partial, and the windows
     // that produce them overlap by two seconds, so appending would repeat words.
@@ -134,7 +156,7 @@ export function SettingsMeetings() {
     void reviewMeetingConfig(
       selected,
       effectiveLanguage,
-      parseKeyterms(effectiveKeytermsText),
+      onePerLine(effectiveKeytermsText),
     )
       .then((result) => {
         if (!cancelled) setReview(result);
@@ -155,14 +177,21 @@ export function SettingsMeetings() {
     );
   }
 
-  const { providers, status } = data;
+  const { providers, status, detect } = data;
+  const effectiveAllowText = allowDraft ?? detect.allow.join("\n");
+  const effectiveBlockText = blockDraft ?? detect.block.join("\n");
   const current = state ?? status.state;
   // A meeting whose provider died is still recording, so every control that
   // asks "is a session running" must keep saying yes: Stop and Discard have to
   // stay on screen, and Start has to stay off it. This was the whole shape of
   // the bug `stop` had -- a screen with no working button on it.
   const transcriptEnded = current === "recording-without-transcript";
-  const recording = current === "recording" || transcriptEnded;
+  const stalled = current === "stalled";
+  // Asked of `meetingIsLive` rather than compared here. A state added to the
+  // union does not break a `===`, so when `stalled` arrived this screen kept
+  // compiling and would have offered "Start recording" for a session that was
+  // still held with a WAV still on disk.
+  const recording = meetingIsLive(current);
   const selectedProvider = providers.find((p) => p.id === selected) ?? null;
   const keytermReview =
     review && selectedProvider
@@ -178,7 +207,24 @@ export function SettingsMeetings() {
   // will not use is the defect this task exists to close.
   const persistLanguageAndKeyterms = async () => {
     await setMeetingLanguage(effectiveLanguage.trim());
-    await setMeetingKeyterms(parseKeyterms(effectiveKeytermsText));
+    await setMeetingKeyterms(onePerLine(effectiveKeytermsText));
+  };
+
+  // Both lists go in one write because they are one setting: `meetings.detect`
+  // holds the pair, so saving either alone would have to re-send the other.
+  //
+  // Reloaded afterwards, but the list of running applications above will not
+  // change for up to five seconds: `status.detected` is whatever the detection
+  // timer last computed, not a fresh walk, and the timer is what reads the
+  // lists back. Saying so here rather than reaching for a fresh poll — a walk
+  // costs a pass over every process on the machine, and the screen catching up
+  // one tick later is not worth spending that on every keystroke-and-blur.
+  const persistDetectLists = async () => {
+    await setMeetingDetectLists({
+      allow: onePerLine(effectiveAllowText),
+      block: onePerLine(effectiveBlockText),
+    });
+    await reload();
   };
 
   return (
@@ -190,15 +236,7 @@ export function SettingsMeetings() {
 
         <Row
           label="Status"
-          value={
-            current === "recording"
-              ? "Recording"
-              : transcriptEnded
-                ? "Recording — the live transcript has stopped"
-                : current === "finishing"
-                  ? "Transcribing the recording…"
-                  : "Not recording"
-          }
+          value={meetingStateLabel(current)}
           detail={
             recording
               ? sourcesLabel(sources ?? status.sources)
@@ -207,6 +245,22 @@ export function SettingsMeetings() {
                 : undefined
           }
         />
+        {stalled ? (
+          /*
+           * A different sentence from the one below, because a different thing
+           * has happened: there the recording continues and the transcript
+           * does not, here neither does. The one instruction that matters is
+           * the same in both — press Stop — because that is what turns what
+           * was captured into a note.
+           */
+          <p className="caveat warn">
+            <strong>The recording stopped unexpectedly.</strong>{" "}
+            {status.transcriptFailure ??
+              "The recording thread ended without saying why."}{" "}
+            Nothing further is being captured. Stop will still transcribe what
+            was recorded before it stopped, and Discard will throw it away.
+          </p>
+        ) : null}
         {transcriptEnded ? (
           /*
            * The provider's own sentence, which is why `MeetingError::
@@ -236,6 +290,18 @@ export function SettingsMeetings() {
               ? `${status.systemAudio.mechanism} — ${status.systemAudio.device}`
               : status.systemAudio.reason
           }
+        />
+        {/*
+          * Reported next to system audio because it is the same kind of fact
+          * and the same kind of trap: where this is anything but "Watching",
+          * every "not in a call" further down is an absence of evidence rather
+          * than evidence of absence, and the user is the only one who can tell
+          * that from the screen.
+          */}
+        <Row
+          label="Microphone activity"
+          value={microphoneValue(status.microphone)}
+          detail={microphoneDetail(status.microphone)}
         />
 
         {usable.length === 0 ? (
@@ -431,6 +497,53 @@ export function SettingsMeetings() {
             />
           ))
         )}
+        {/*
+          * The lists are edited here, under the applications they act on,
+          * because the name to type is the one each detection above reports.
+          * Until now `meetings.detect` was honoured by the backend and settable
+          * only by editing SQLite by hand — the fourth instance of that
+          * pattern, and the first found by a gate rather than by a person
+          * reading a screen. See KNEG-114.
+          */}
+        <div className="row">
+          <span className="row-label">Also count as a meeting</span>
+          <span className="row-value controls">
+            <textarea
+              aria-label="Extra process names that count as a meeting, one per line"
+              placeholder="one program name per line, e.g. bluejeans.exe"
+              rows={3}
+              value={effectiveAllowText}
+              onChange={(e) => setAllowDraft(e.target.value)}
+              onBlur={() => {
+                void guard(persistDetectLists);
+              }}
+            />
+          </span>
+        </div>
+        <div className="row">
+          <span className="row-label">Never count as a meeting</span>
+          <span className="row-value controls">
+            <textarea
+              aria-label="Program names that never count as a meeting, one per line"
+              placeholder="one program name per line"
+              rows={3}
+              value={effectiveBlockText}
+              onChange={(e) => setBlockDraft(e.target.value)}
+              onBlur={() => {
+                void guard(persistDetectLists);
+              }}
+            />
+          </span>
+        </div>
+        <p className="caveat">
+          Names are matched against the running program's own filename, not its
+          window title, and capitalisation does not matter — the name each
+          detection above is reported by is the one to copy. A name in the second
+          list is never offered even when this application recognises it on its
+          own, which is how a false positive is silenced without waiting for a
+          release. A program you list yourself is reported as running, never as
+          being in a call: only you know whether it is.
+        </p>
         {status.notificationExcluded ? (
           <Row
             label="The recording window"

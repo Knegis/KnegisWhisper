@@ -37,11 +37,12 @@ either has no consumer yet or has an explicit, permanent reason it stays undone:
    dispatched manually. The triggers remain commented out on purpose this run, not by oversight —
    see `docs/BUILD_PLAN.md` chunk J. The macOS and Linux jobs are still the only runtime evidence
    this project has for those platforms. Chunk A.
-2. **The two remaining Windows natives — a UIAutomation text monitor and an `IAudioSessionManager2`
-   mic listener — are still not written.** Chunk I (meetings) shipped without needing either; five
-   process-based detectors and the meeting screen itself never called for a focused-element read or
-   a "someone else is using the microphone" signal. Chunk H, still open, with no consumer forcing
-   it.
+2. **One of the two remaining Windows natives is written; the other is declined.** The
+   `IAudioSessionManager2` mic listener landed on 2026-09-01 (KNEG-94) because Teams forced it —
+   see chunk H. The UIAutomation text monitor is closed as declined rather than deferred (KNEG-63):
+   chunk I shipped without it, nothing filed since has asked for it, and a continuous read of the
+   focused element is a materially larger privacy surface than anything else here, being weighed
+   with no feature on the other side of the scale.
 
 The other item that used to sit here — *four of five hotkeys register real OS shortcuts and do
 nothing* — was chunk C and is fixed. Those four actions are no longer registered at all, and the
@@ -81,21 +82,32 @@ Two additions the tree has grown since this was written, both belonging here:
   release retagged in place, and a pin that is never re-measured is a pin nobody is checking. Weekly
   is enough.
 
-## H — The two remaining Windows natives
+## H — The two remaining Windows natives *(one built, one declined)*
 
 System audio and the key listener are done and verified on hardware — see
 [BUILD_PLAN.md](BUILD_PLAN.md) chunk D and the tables in
-[PLATFORM_SUPPORT.md](PLATFORM_SUPPORT.md). What this chunk still holds is the other two capabilities
-settled in [PORTING_MATRIX.md](PORTING_MATRIX.md) as Rust rather than inherited binaries:
+[PLATFORM_SUPPORT.md](PLATFORM_SUPPORT.md). The other two capabilities settled in
+[PORTING_MATRIX.md](PORTING_MATRIX.md) as Rust rather than inherited binaries have now ended in
+opposite places, and the difference between them is worth stating because it is the whole argument
+this chunk was making.
 
-- **Text monitor** — a UIAutomation focused-element read.
-- **Mic listener** — `IAudioSessionManager2`, for "another application is using the microphone".
+**Mic listener — built 2026-09-01, KNEG-94.** `kw_platform::microphone` enumerates capture
+sessions through `IAudioSessionManager2`, and `meeting_detect::detect` takes the result beside the
+process list.
 
-Both were said to serve meetings and sit **behind** chunk I. Chunk I (meetings) is now done and
-shipped without either — the five process-based detectors, the meeting screen, and the clients
-never called for a focused-element read or a "someone else is using the microphone" signal. So this
-chunk stays open with genuinely no consumer forcing it, not merely a consumer that has not landed
-yet; a capability with no consumer is the scaffolding this workspace avoids building ahead of time.
+The prediction this chunk made was that the capability would wait for a consumer. What happened was
+the reverse: a defect nobody could fix any other way went looking for a capability. New Teams runs
+the call inside `ms-teams.exe` and spawns nothing — measured 2026-08-26, 2026-08-28 and
+2026-08-31 — so **no process name could ever have separated a call from an open client**, and
+Teams was unofferable for three weeks. `mic_users_probe` measured the difference on 2026-09-01 with
+a cross-process control on every run: Teams idle holds no capture session, Teams in a call holds
+one. Windows only; nothing equivalent is read on Linux or macOS.
+
+**Text monitor — declined, KNEG-63, at no priority beside KNEG-69 and KNEG-77.** No consumer,
+and unlike the microphone half, no defect pointing at it either. A UIAutomation focused-element
+monitor reads what the user is looking at, continuously; that needs its own disclosure and there is
+nothing on the other side of the scale to weigh it against. Closed as a decision rather than left
+in the backlog reading as unfinished work.
 
 Also still open, and not Windows: the Linux and macOS shortcut fallbacks. `zbus` against the GNOME,
 KDE and Hyprland portals, with `PLATFORM_SUPPORT.md` continuing to say per compositor what Wayland
