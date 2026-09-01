@@ -9,10 +9,16 @@
 //! default: injecting Super puts a Start-menu keystroke into whatever the user is
 //! doing, and a probe should not do that.
 //!
+//! Since push-to-talk landed it counts **both edges**, because press-and-release
+//! is what a held chord is and a hook that reported only the press would look
+//! exactly as correct as one that reported both.
+//!
 //! Run with `cargo run -p kw-platform --example keyhook_probe`.
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
+
+use kw_platform::keyhook::Edge;
 
 fn main() {
     let support = kw_platform::keyhook::support();
@@ -21,14 +27,19 @@ fn main() {
         return;
     }
 
-    let fires = Arc::new(AtomicUsize::new(0));
-    let counter = Arc::clone(&fires);
+    let presses = Arc::new(AtomicUsize::new(0));
+    let releases = Arc::new(AtomicUsize::new(0));
+    let down = Arc::clone(&presses);
+    let up = Arc::clone(&releases);
 
     let hook = match kw_platform::keyhook::KeyHook::install(
         &["RightControl+RightShift".to_owned()],
-        move |index| {
-            counter.fetch_add(1, Ordering::SeqCst);
-            println!("  chord {index} fired");
+        move |index, edge| {
+            match edge {
+                Edge::Press => down.fetch_add(1, Ordering::SeqCst),
+                Edge::Release => up.fetch_add(1, Ordering::SeqCst),
+            };
+            println!("  chord {index} {edge:?}");
         },
     ) {
         Ok(hook) => hook,
@@ -49,14 +60,20 @@ fn main() {
     }
     std::thread::sleep(Duration::from_millis(300));
 
-    let count = fires.load(Ordering::SeqCst);
-    println!("\nfired {count} time(s) for two presses");
+    let count = presses.load(Ordering::SeqCst);
+    let ups = releases.load(Ordering::SeqCst);
+    println!("\nfired {count} press(es) and {ups} release(s) for two presses");
     if count == 2 {
         println!("the hook works, and fires once per press.");
     } else if count == 0 {
         println!("the hook never fired.");
     } else {
         println!("the hook fired {count} times, which is not once per press.");
+    }
+    if ups == 2 {
+        println!("and once per release, which is what push-to-talk needs.");
+    } else {
+        println!("but reported {ups} release(s), so push-to-talk would not stop cleanly.");
     }
 
     drop(hook);

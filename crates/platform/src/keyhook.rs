@@ -31,9 +31,39 @@
 //! logging of key events at any level, and that is not an oversight to be
 //! corrected by adding a `trace!` later — a keystroke log is the thing this
 //! mechanism must never become.
+//!
+//! # The mouse hook
+//!
+//! A second hook, `WH_MOUSE_LL`, **on the same thread**, and only when a mouse
+//! button is actually bound. One hook per type per process is the constraint
+//! [`windows_impl::STATE`] already states; the thread is shared because it
+//! already owns a message loop and a `WM_QUIT` shutdown path, and a second
+//! thread would be a second thing to get wrong at exit for no capability.
+//!
+//! Only when bound, because `WH_MOUSE_LL` sits in the path of every mouse
+//! *move* — hundreds a second while the pointer is in use — and the callback
+//! returns immediately for anything that is not an X-button message. The
+//! keyboard hook has no equivalent escape, because every keystroke is a
+//! candidate; the mouse one does, and takes it.
+//!
+//! The encoding is **measured, not read**: `mouseData`'s high word is 1 for
+//! `XBUTTON1` and 2 for `XBUTTON2`, and `SendInput` takes the same numbers
+//! *unshifted* — an asymmetry that is exactly where this goes wrong. See
+//! `cargo run -p kw-platform --example mousehook_probe`.
 
-use crate::keys::{Chord, ChordWatcher, Fired};
+use crate::keys::{Fired, HookWatcher, Watched};
 use crate::PlatformError;
+
+/// Which edge of a press an event is.
+///
+/// Reported to the caller rather than resolved here, because what a release
+/// *means* is a setting — push-to-talk versus toggle — and this module has no
+/// business knowing which one is configured. It reports what the hardware did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Edge {
+    Press,
+    Release,
+}
 
 /// Whether this platform can watch a modifier-only chord, and how.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,17 +87,17 @@ pub fn support() -> HookSupport {
     #[cfg(target_os = "windows")]
     {
         HookSupport::Available {
-            mechanism: "a WH_KEYBOARD_LL hook on a dedicated thread",
+            mechanism: "low-level keyboard and mouse hooks on a dedicated thread",
         }
     }
     #[cfg(not(target_os = "windows"))]
     {
         HookSupport::Unsupported {
-            reason: "modifier-only shortcuts need a low-level keyboard hook. macOS needs a \
-                     CGEventTap and the Accessibility permission that goes with it; Wayland has \
-                     no equivalent at all and its global-shortcuts portal takes only chords the \
-                     compositor itself can register. Neither is written, and neither can be \
-                     verified from the machine this is developed on."
+            reason: "modifier-only shortcuts and mouse buttons need low-level input hooks. macOS \
+                     needs a CGEventTap and the Accessibility permission that goes with it; \
+                     Wayland has no equivalent at all and its global-shortcuts portal takes only \
+                     chords the compositor itself can register. Neither is written, and neither \
+                     can be verified from the machine this is developed on."
                 .to_owned(),
         }
     }
@@ -89,8 +119,13 @@ pub struct KeyHook {
 }
 
 impl KeyHook {
-    /// Install a hook watching `chords`, calling `on_fire` with the index of
-    /// whichever fired.
+    /// Install a hook watching `accelerators`, calling `on_fire` with the index
+    /// of whichever fired and which edge it was.
+    ///
+    /// An accelerator is either a modifier-only chord or a mouse button; the
+    /// index is into the list as given, so a caller with one list of
+    /// accelerators does not have to work out which of two lists an index came
+    /// from. See [`Watched`].
     ///
     /// `on_fire` runs on the hook thread and must not block: a slow callback
     /// delays every keystroke on the machine, because a low-level hook sits in
@@ -101,7 +136,7 @@ impl KeyHook {
     /// user their shortcut works.
     pub fn install<F>(accelerators: &[String], on_fire: F) -> Result<Self, PlatformError>
     where
-        F: Fn(usize) + Send + 'static,
+        F: Fn(usize, Edge) + Send + 'static,
     {
         if accelerators.is_empty() {
             return Err(PlatformError::Unsupported(
@@ -109,16 +144,17 @@ impl KeyHook {
             ));
         }
 
-        let mut chords = Vec::with_capacity(accelerators.len());
+        let mut watched = Vec::with_capacity(accelerators.len());
         for accelerator in accelerators {
-            chords.push(
-                Chord::parse(accelerator).map_err(|e| PlatformError::Unsupported(e.to_string()))?,
+            watched.push(
+                Watched::parse(accelerator)
+                    .map_err(|e| PlatformError::Unsupported(e.to_string()))?,
             );
         }
 
         #[cfg(target_os = "windows")]
         {
-            let inner = windows_impl::install(ChordWatcher::new(chords), on_fire)?;
+            let inner = windows_impl::install(HookWatcher::new(watched), on_fire)?;
             Ok(Self {
                 inner,
                 watching: accelerators.to_vec(),
@@ -127,7 +163,7 @@ impl KeyHook {
 
         #[cfg(not(target_os = "windows"))]
         {
-            let _ = (chords, on_fire);
+            let _ = (watched, on_fire);
             Err(PlatformError::Unsupported(match support() {
                 HookSupport::Unsupported { reason } => reason,
                 HookSupport::Available { .. } => unreachable!("no hook on this platform"),
@@ -151,22 +187,25 @@ mod windows_impl {
     use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
     use windows::Win32::UI::WindowsAndMessaging::{
         CallNextHookEx, DispatchMessageW, GetMessageW, PostThreadMessageA, SetWindowsHookExW,
-        TranslateMessage, UnhookWindowsHookEx, HHOOK, KBDLLHOOKSTRUCT, MSG, WH_KEYBOARD_LL,
-        WM_KEYDOWN, WM_KEYUP, WM_QUIT, WM_SYSKEYDOWN, WM_SYSKEYUP,
+        TranslateMessage, UnhookWindowsHookEx, HHOOK, KBDLLHOOKSTRUCT, MSG, MSLLHOOKSTRUCT,
+        WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN, WM_KEYUP, WM_QUIT, WM_SYSKEYDOWN, WM_SYSKEYUP,
+        WM_XBUTTONDOWN, WM_XBUTTONUP, XBUTTON1, XBUTTON2,
     };
 
-    use super::{ChordWatcher, Fired, PlatformError};
-    use crate::keys::Key;
+    use super::{Edge, Fired, HookWatcher, PlatformError};
+    use crate::keys::{Key, MouseButton};
 
     /// The state the hook callback reaches.
     ///
     /// A `static` because a Win32 hook procedure is a bare `extern "system" fn`
     /// with no user pointer — there is nowhere to put a closure. One hook per
     /// process is the actual constraint, so a single global is not a shortcut
-    /// around a limitation; it *is* the limitation, stated.
+    /// around a limitation; it *is* the limitation, stated. Both procedures
+    /// share it, because both feed one watcher: two watchers would each have
+    /// their own idea of what is held and neither would be right.
     struct HookState {
-        watcher: Mutex<ChordWatcher>,
-        on_fire: Box<dyn Fn(usize) + Send + Sync>,
+        watcher: Mutex<HookWatcher>,
+        on_fire: Box<dyn Fn(usize, Edge) + Send + Sync>,
     }
 
     static STATE: OnceLock<HookState> = OnceLock::new();
@@ -253,10 +292,7 @@ mod windows_impl {
 
             let fired = match wparam.0 as u32 {
                 WM_KEYDOWN | WM_SYSKEYDOWN => watcher.key_down(key),
-                WM_KEYUP | WM_SYSKEYUP => {
-                    watcher.key_up(key);
-                    Fired::Nothing
-                }
+                WM_KEYUP | WM_SYSKEYUP => watcher.key_up(key),
                 _ => Fired::Nothing,
             };
 
@@ -264,9 +300,7 @@ mod windows_impl {
             // re-enter the watcher and deadlock the input path.
             drop(watcher);
 
-            if let Fired::Chord(index) = fired {
-                (state.on_fire)(index);
-            }
+            report(state, fired);
         }
 
         // Always. The shortcut still reaches the rest of the system; nothing is
@@ -275,26 +309,116 @@ mod windows_impl {
         unsafe { CallNextHookEx(None, code, wparam, lparam) }
     }
 
-    pub fn install<F>(watcher: ChordWatcher, on_fire: F) -> Result<Installed, PlatformError>
+    /// Which side button `mouseData` names, if it names one.
+    ///
+    /// **Measured, not read off a header.** `mousehook_probe` injects
+    /// `XBUTTON1` and `XBUTTON2` and reports `mouseData` arriving as
+    /// `0x0001_0000` and `0x0002_0000`: the button number is in the *high*
+    /// word. `SendInput` takes the same two numbers in the *low* word, and that
+    /// asymmetry is the whole reason this was probed rather than reasoned out —
+    /// a decoder that read the low word would find zero for every click and
+    /// report a mouse that never has side buttons.
+    const fn button_of(mouse_data: u32) -> Option<MouseButton> {
+        match ((mouse_data >> 16) & 0xFFFF) as u16 {
+            XBUTTON1 => Some(MouseButton::Four),
+            XBUTTON2 => Some(MouseButton::Five),
+            // A third X button is possible in the API and has never been seen.
+            // Ignored rather than guessed at: reporting it as button 5 would be
+            // inventing hardware.
+            _ => None,
+        }
+    }
+
+    /// The mouse hook procedure.
+    ///
+    /// Installed only when a mouse button is bound, and it still returns
+    /// immediately for everything that is not an X-button message — this runs
+    /// for every mouse *move* on the machine, which is the highest-frequency
+    /// event Windows has.
+    ///
+    /// It never inspects the pointer position. `MSLLHOOKSTRUCT` carries where
+    /// the mouse is, on every event, in every application; nothing here reads
+    /// `pt`, for the same reason nothing in the keyboard procedure reads which
+    /// key was pressed.
+    unsafe extern "system" fn mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+        if code < 0 {
+            // SAFETY: passing the arguments straight on, per the API contract.
+            return unsafe { CallNextHookEx(None, code, wparam, lparam) };
+        }
+
+        let message = wparam.0 as u32;
+        if message == WM_XBUTTONDOWN || message == WM_XBUTTONUP {
+            if let Some(state) = STATE.get() {
+                // SAFETY: for a WH_MOUSE_LL hook with a non-negative code,
+                // lparam points at an MSLLHOOKSTRUCT for the lifetime of this
+                // call.
+                let info = unsafe { &*(lparam.0 as *const MSLLHOOKSTRUCT) };
+
+                if let Some(button) = button_of(info.mouseData) {
+                    let mut watcher = state
+                        .watcher
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+                    let fired = if message == WM_XBUTTONDOWN {
+                        watcher.button_down(button)
+                    } else {
+                        watcher.button_up(button)
+                    };
+
+                    drop(watcher);
+                    report(state, fired);
+                }
+            }
+        }
+
+        // Always, and for the same reason the keyboard hook does: the click
+        // still reaches whatever is under the pointer. On these two buttons
+        // that means a browser still goes Back or Forward, which is stated on
+        // the settings screen rather than left to be discovered.
+        // SAFETY: the next hook in the chain, with our arguments unchanged.
+        unsafe { CallNextHookEx(None, code, wparam, lparam) }
+    }
+
+    /// Hand one decision to the caller, on the hook thread.
+    ///
+    /// Shared by both procedures so the two cannot come to differ about what
+    /// counts as worth reporting.
+    fn report(state: &HookState, fired: Fired) {
+        match fired {
+            Fired::Pressed(index) => (state.on_fire)(index, Edge::Press),
+            Fired::Released(index) => (state.on_fire)(index, Edge::Release),
+            Fired::Nothing => {}
+        }
+    }
+
+    pub fn install<F>(watcher: HookWatcher, on_fire: F) -> Result<Installed, PlatformError>
     where
-        F: Fn(usize) + Send + 'static,
+        F: Fn(usize, Edge) + Send + 'static,
     {
-        // `Fn(usize) + Send` from the caller, stored as `Send + Sync` because the
-        // hook procedure reaches it through a `static`. Wrapping in a mutex-free
-        // way needs `Sync`, so the closure is boxed behind one.
+        // Read before the watcher is moved into the static: whether a mouse
+        // hook is needed is a property of what is being watched, and asking
+        // afterwards would mean reaching back through a lock from the thread
+        // that is about to install it.
+        let needs_mouse = watcher.watches_a_button();
+
+        // `Fn(usize, Edge) + Send` from the caller, stored as `Send + Sync`
+        // because the hook procedure reaches it through a `static`. Wrapping in
+        // a mutex-free way needs `Sync`, so the closure is boxed behind one.
         struct Sendable<F>(F);
         // SAFETY: the closure is only ever called from the single hook thread.
         // `Sync` is required by `OnceLock` and is not exercised.
         unsafe impl<F: Send> Sync for Sendable<F> {}
 
-        impl<F: Fn(usize)> Sendable<F> {
-            fn call(&self, index: usize) {
-                (self.0)(index);
+        impl<F: Fn(usize, Edge)> Sendable<F> {
+            fn call(&self, index: usize, edge: Edge) {
+                (self.0)(index, edge);
             }
         }
 
         let sendable = Sendable(on_fire);
-        let boxed: Box<dyn Fn(usize) + Send + Sync> = Box::new(move |i| sendable.call(i));
+        let boxed: Box<dyn Fn(usize, Edge) + Send + Sync> =
+            Box::new(move |i, edge| sendable.call(i, edge));
 
         STATE
             .set(HookState {
@@ -331,13 +455,39 @@ mod windows_impl {
                     }
                 };
 
+                // The second hook, on this thread, and only when something is
+                // bound to a mouse button. A failure here is fatal to the whole
+                // installation rather than half-succeeding: a caller told the
+                // hook installed, whose mouse binding silently does nothing, is
+                // the "half a path" defect this module's history is made of.
+                let mouse: Option<HHOOK> = if needs_mouse {
+                    // SAFETY: as above, for WH_MOUSE_LL.
+                    match unsafe { SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_proc), None, 0) } {
+                        Ok(mouse) => Some(mouse),
+                        Err(err) => {
+                            // SAFETY: unhooking the keyboard hook this thread
+                            // just installed, before giving up on both.
+                            unsafe {
+                                let _ = UnhookWindowsHookEx(hook);
+                            }
+                            let _ = ready.send(Err(format!("the mouse hook was refused: {err}")));
+                            return;
+                        }
+                    }
+                } else {
+                    None
+                };
+
                 // SAFETY: no arguments.
                 let id = unsafe { windows::Win32::System::Threading::GetCurrentThreadId() };
                 if ready.send(Ok(id)).is_err() {
-                    // Nobody is waiting, so nobody owns this hook.
-                    // SAFETY: unhooking a hook this thread installed.
+                    // Nobody is waiting, so nobody owns these hooks.
+                    // SAFETY: unhooking hooks this thread installed.
                     unsafe {
                         let _ = UnhookWindowsHookEx(hook);
+                        if let Some(mouse) = mouse {
+                            let _ = UnhookWindowsHookEx(mouse);
+                        }
                     }
                     return;
                 }
@@ -351,6 +501,9 @@ mod windows_impl {
                         DispatchMessageW(&message);
                     }
                     let _ = UnhookWindowsHookEx(hook);
+                    if let Some(mouse) = mouse {
+                        let _ = UnhookWindowsHookEx(mouse);
+                    }
                 }
             })
             .map_err(|e| {
@@ -363,7 +516,7 @@ mod windows_impl {
                 join: Some(join),
             }),
             Ok(Err(reason)) => Err(PlatformError::Unsupported(format!(
-                "Windows refused the keyboard hook: {reason}. This usually means another \
+                "Windows refused an input hook: {reason}. This usually means another \
                  application at a higher integrity level owns the input path."
             ))),
             Err(_) => Err(PlatformError::Unsupported(
@@ -399,7 +552,7 @@ mod tests {
     /// nothing, is pure cost.
     #[test]
     fn installing_with_no_chords_is_refused() {
-        let err = KeyHook::install(&[], |_| {}).expect_err("must refuse");
+        let err = KeyHook::install(&[], |_, _| {}).expect_err("must refuse");
         assert!(format!("{err}").contains("nothing to hook"), "{err}");
     }
 
@@ -411,7 +564,7 @@ mod tests {
     #[test]
     fn a_chord_with_an_ordinary_key_is_refused_before_the_hook_is_installed() {
         let err =
-            KeyHook::install(&["Control+Shift+D".to_owned()], |_| {}).expect_err("must refuse");
+            KeyHook::install(&["Control+Shift+D".to_owned()], |_, _| {}).expect_err("must refuse");
         assert!(format!("{err}").contains("not a modifier"), "{err}");
     }
 }

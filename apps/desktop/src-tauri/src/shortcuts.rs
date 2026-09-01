@@ -12,7 +12,8 @@
 
 use std::str::FromStr as _;
 
-use kw_platform::hotkey::{Binding, HotkeyAction};
+use kw_platform::hotkey::{Binding, HotkeyAction, HotkeyMode};
+use kw_platform::keyhook::Edge;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter as _};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt as _, Shortcut, ShortcutState};
@@ -152,6 +153,53 @@ const fn dispatch(action: HotkeyAction) -> Dispatch {
     }
 }
 
+/// What one edge of one accelerator should do, given the action's mode.
+///
+/// **The whole of push-to-talk, and pure.** Everything else this feature needed
+/// was plumbing — a second hook, a second settings key, a release the watcher
+/// could report — and this is the only place a decision is made. It is a `const
+/// fn` over two small enums so it can be tested without a Tauri runtime, a
+/// hook, or a microphone, which is the split the rest of this module already
+/// draws between `dispatch` and the handler it names.
+///
+/// The four cases are written out rather than reduced to "act unless it is a
+/// release in toggle mode", so that adding a third mode has to be thought about
+/// here rather than falling into whichever arm the wildcard covered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Act {
+    /// Start if idle, finish if recording. What a press has always done.
+    Toggle,
+    /// Start, and finish again when the key comes up.
+    BeginHold,
+    /// The key came up: whatever `BeginHold` started should end.
+    EndHold,
+    /// Nothing at all.
+    Nothing,
+}
+
+const fn act(edge: Edge, mode: HotkeyMode) -> Act {
+    match (edge, mode) {
+        // Unchanged, and it has to be: this is the arm the shipped default
+        // takes, and KNEG-115 is about not deciding that one in passing.
+        (Edge::Press, HotkeyMode::Toggle) => Act::Toggle,
+        (Edge::Press, HotkeyMode::Hold) => Act::BeginHold,
+        (Edge::Release, HotkeyMode::Hold) => Act::EndHold,
+        // Under a toggle the key coming up means nothing, and has to keep
+        // meaning nothing: acting on it would double every press.
+        (Edge::Release, HotkeyMode::Toggle) => Act::Nothing,
+    }
+}
+
+/// Whether this edge does anything at all.
+///
+/// Used to decide whether to emit the `hotkey` event as well as to dispatch, so
+/// the event means "the hotkey did something" rather than "a key moved". Under a
+/// toggle, the release does not appear at all — it never did, and a screen
+/// suddenly showing two "last fired" lines per press would read as a regression.
+const fn does_something(action: Act) -> bool {
+    !matches!(action, Act::Nothing)
+}
+
 /// Why nothing handles this action, or `None` if something does.
 ///
 /// Exposed because the settings screen has to say it once per *action*: "nothing
@@ -235,7 +283,7 @@ pub fn register_all(
         }
 
         for accelerator in binding.registrable() {
-            results.push(register_one(app, binding.action, accelerator));
+            results.push(register_one(app, binding.action, accelerator, binding.mode));
         }
 
         reports.push(RegistrationReport {
@@ -335,9 +383,9 @@ impl Hooks {
     fn install(&self, app: &AppHandle, bindings: &[Binding]) -> std::collections::BTreeSet<String> {
         use std::collections::BTreeSet;
 
-        // One flat list, paired with the action it belongs to, because the hook
-        // reports an index rather than a name.
-        let mut wanted: Vec<(HotkeyAction, String)> = Vec::new();
+        // One flat list, paired with the action and mode it belongs to, because
+        // the hook reports an index rather than a name.
+        let mut wanted: Vec<(HotkeyAction, String, HotkeyMode)> = Vec::new();
         for binding in bindings {
             // An action nothing handles gets no hook either. A hook watching a
             // chord for a dead action costs a comparison on every keystroke on
@@ -346,10 +394,17 @@ impl Hooks {
                 continue;
             }
             for accelerator in &binding.accelerators {
-                if let kw_platform::hotkey::Accelerator::ModifierOnly { accelerator, .. } =
-                    accelerator
-                {
-                    wanted.push((binding.action, accelerator.clone()));
+                // Both hooked kinds, in one list, in the order they were
+                // configured. `KeyHook::install` reports the index into exactly
+                // this list, so a mouse button and a chord cannot be told apart
+                // by position here and do not need to be.
+                match accelerator {
+                    kw_platform::hotkey::Accelerator::ModifierOnly { accelerator, .. }
+                    | kw_platform::hotkey::Accelerator::MouseButton { accelerator, .. } => {
+                        wanted.push((binding.action, accelerator.clone(), binding.mode));
+                    }
+                    kw_platform::hotkey::Accelerator::Standard { .. }
+                    | kw_platform::hotkey::Accelerator::Invalid { .. } => {}
                 }
             }
         }
@@ -367,16 +422,22 @@ impl Hooks {
             return BTreeSet::new();
         }
 
-        let accelerators: Vec<String> = wanted.iter().map(|(_, a)| a.clone()).collect();
+        let accelerators: Vec<String> = wanted.iter().map(|(_, a, _)| a.clone()).collect();
         let app = app.clone();
         let routes = wanted.clone();
 
-        match kw_platform::keyhook::KeyHook::install(&accelerators, move |index| {
+        match kw_platform::keyhook::KeyHook::install(&accelerators, move |index, edge| {
             // Runs on the hook thread, which is in the input path of every
             // keystroke on the machine. Everything here has to return promptly.
-            let Some((action, accelerator)) = routes.get(index) else {
+            let Some((action, accelerator, mode)) = routes.get(index) else {
                 return;
             };
+
+            let what = act(edge, *mode);
+            if !does_something(what) {
+                return;
+            }
+
             let payload = HotkeyFired {
                 action: *action,
                 accelerator: accelerator.clone(),
@@ -392,7 +453,7 @@ impl Hooks {
             // handler was never reached. The handler spawns, so this returns
             // promptly enough for the input path.
             match dispatch(*action) {
-                Dispatch::Dictation => crate::dictation::on_hotkey(&app),
+                Dispatch::Dictation => crate::dictation::on_hotkey(&app, what),
                 Dispatch::Missing(_) => {}
             }
         }) {
@@ -411,7 +472,23 @@ impl Hooks {
     }
 }
 
-fn register_one(app: &AppHandle, action: HotkeyAction, accelerator: &str) -> Registration {
+/// Register one accelerator with the platform's own shortcut API.
+///
+/// **The release half here is believed, not measured.** The plugin delivers a
+/// `Released` state and this routes it through the same [`act`] the hook path
+/// uses, so push-to-talk on an ordinary accelerator like `Control+Shift+D`
+/// should work — but nothing in this repository has run it. Reaching it needs a
+/// built application with a WebView2 beside it and a person holding a key, which
+/// is the same by-hand check `docs/PLATFORM_SUPPORT.md` records as outstanding
+/// for the sided chords. The hook path, by contrast, is measured:
+/// `cargo run -p kw-platform --example keyhook_probe` reports two presses and
+/// two releases for two injected chords.
+fn register_one(
+    app: &AppHandle,
+    action: HotkeyAction,
+    accelerator: &str,
+    mode: HotkeyMode,
+) -> Registration {
     let shortcut = match Shortcut::from_str(accelerator) {
         Ok(s) => s,
         Err(err) => {
@@ -428,9 +505,19 @@ fn register_one(app: &AppHandle, action: HotkeyAction, accelerator: &str) -> Reg
     let result = app
         .global_shortcut()
         .on_shortcut(shortcut, move |_app, _shortcut, event| {
-            // Press only. Without this filter every hotkey fires twice, which for
-            // dictation means starting and immediately restarting the recording.
-            if event.state() != ShortcutState::Pressed {
+            // Which edge, rather than "press only". The unconditional filter
+            // that used to live here was right for a toggle -- without it every
+            // hotkey fired twice, starting and immediately restarting the
+            // recording -- and it is exactly what push-to-talk needs *not* to
+            // do. `act` is the one place that knows which, and the hook path
+            // reads the same function.
+            let edge = match event.state() {
+                ShortcutState::Pressed => Edge::Press,
+                ShortcutState::Released => Edge::Release,
+            };
+
+            let what = act(edge, mode);
+            if !does_something(what) {
                 return;
             }
 
@@ -439,7 +526,7 @@ fn register_one(app: &AppHandle, action: HotkeyAction, accelerator: &str) -> Reg
                 accelerator: accelerator_owned.clone(),
             };
 
-            tracing::debug!(action = %action, "hotkey fired");
+            tracing::debug!(action = %action, ?edge, "hotkey fired");
 
             if let Err(err) = app_for_handler.emit(HOTKEY_EVENT, payload) {
                 tracing::warn!(error = %err, "could not deliver the hotkey event");
@@ -449,7 +536,7 @@ fn register_one(app: &AppHandle, action: HotkeyAction, accelerator: &str) -> Reg
             // worth registering at all. The event above is emitted either way,
             // so the UI can still show that a key fired.
             match dispatch(action) {
-                Dispatch::Dictation => crate::dictation::on_hotkey(&app_for_handler),
+                Dispatch::Dictation => crate::dictation::on_hotkey(&app_for_handler, what),
                 // Unreachable: an unhandled action is never registered, so
                 // nothing can fire. Doing nothing is still the truthful
                 // response, and this runs in the input path where a panic
@@ -658,6 +745,70 @@ mod tests {
             modifier_only.is_err(),
             "the plugin now accepts modifier-only accelerators; revisit hotkey::classify"
         );
+    }
+
+    /* ------------------------------------------------------- push-to-talk */
+
+    /// A toggle behaves exactly as it did: the press acts, the release does not.
+    ///
+    /// The arm that carries the shipped default. If push-to-talk ever changed
+    /// what a toggle does, `Control+Super` would double-fire on every press —
+    /// which is the defect the old unconditional `state() != Pressed` filter was
+    /// there to prevent, and this is that filter's replacement being held to the
+    /// same promise.
+    #[test]
+    fn a_toggle_acts_on_the_press_and_ignores_the_release() {
+        assert_eq!(act(Edge::Press, HotkeyMode::Toggle), Act::Toggle);
+        assert_eq!(act(Edge::Release, HotkeyMode::Toggle), Act::Nothing);
+    }
+
+    /// A hold acts on both edges, and they are different acts.
+    ///
+    /// `BeginHold` and `EndHold` are not two names for `Toggle`: the press has
+    /// to arrange for the release to be waited on in the same task, because two
+    /// separately spawned tasks have no order between them and the release would
+    /// otherwise be free to run before the microphone had finished opening.
+    #[test]
+    fn a_hold_acts_on_both_edges_and_they_are_not_the_same_act() {
+        assert_eq!(act(Edge::Press, HotkeyMode::Hold), Act::BeginHold);
+        assert_eq!(act(Edge::Release, HotkeyMode::Hold), Act::EndHold);
+        assert_ne!(act(Edge::Press, HotkeyMode::Hold), Act::Toggle);
+    }
+
+    /// Exactly one of the four cases does nothing, and it is the right one.
+    ///
+    /// Written as a sweep over every mode and edge rather than as three
+    /// assertions, so a third `HotkeyMode` gets counted here the moment
+    /// `ALL_MODES` grows -- the same tripwire shape as
+    /// `nothing_handles_an_action_that_is_not_dictation`.
+    #[test]
+    fn only_a_release_under_a_toggle_does_nothing() {
+        let mut idle = Vec::new();
+        for mode in kw_platform::hotkey::ALL_MODES {
+            for edge in [Edge::Press, Edge::Release] {
+                let what = act(edge, mode);
+                assert_eq!(does_something(what), what != Act::Nothing);
+                if !does_something(what) {
+                    idle.push((mode, edge));
+                }
+            }
+        }
+        assert_eq!(idle, vec![(HotkeyMode::Toggle, Edge::Release)]);
+    }
+
+    /// A press always does something, whatever the mode.
+    ///
+    /// The half a user would notice immediately: a mode that swallowed its own
+    /// press would be a hotkey that does nothing at all, which is the state this
+    /// whole module exists to stop reporting as success.
+    #[test]
+    fn no_mode_swallows_its_own_press() {
+        for mode in kw_platform::hotkey::ALL_MODES {
+            assert!(
+                does_something(act(Edge::Press, mode)),
+                "{mode} ignores its press"
+            );
+        }
     }
 
     #[test]

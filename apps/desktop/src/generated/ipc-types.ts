@@ -161,14 +161,48 @@ systemAudio: SystemAudioSupport, };
 export type HotkeyAction = "dictation" | "chat-agent" | "voice-agent" | "translation" | "meeting";
 
 /**
+ * Whether a hotkey toggles on each press or acts for as long as it is held.
+ *
+ * # The default is `Toggle`, and that is deliberate, not inertia
+ *
+ * Push-to-talk is one of the answers to **KNEG-115** — a two-modifier chord
+ * fires on the way into any longer shortcut, and a chord that acts on release
+ * cannot fire as a prefix in the damaging way, because the accidental press
+ * and the accidental release bracket almost no audio instead of bracketing
+ * everything the user did in between. That makes `Hold` a candidate for the
+ * shipped default, and **shipping it as the default here would settle KNEG-115
+ * in passing**, which is exactly the failure that issue is about. The mode
+ * exists; the default is unchanged; the choice stays with the repo owner.
+ *
+ * # What holding costs, said here rather than found out
+ *
+ * A hold shorter than a syllable produces a recording shorter than a syllable.
+ * The audio gate then reports `InsufficientSpeech` and nothing is transcribed
+ * — which is correct behaviour and is also, under push-to-talk, a **routine**
+ * outcome rather than the rare one it is under a toggle. Every mistimed tap,
+ * every accidental prefix, every "I let go too early" ends that way. A user
+ * who reads `InsufficientSpeech` as a fault will go looking for one.
+ */
+export type HotkeyMode = "toggle" | "hold";
+
+/**
  * What an accelerator string can be registered as.
  */
-export type Accelerator = { "kind": "standard", accelerator: string, } | { "kind": "modifier-only", accelerator: string, modifiers: Array<string>, } | { "kind": "invalid", input: string, reason: string, };
+export type Accelerator = { "kind": "standard", accelerator: string, } | { "kind": "modifier-only", accelerator: string, modifiers: Array<string>, } | { "kind": "mouse-button", accelerator: string,
+/**
+ * What the click still does elsewhere, because the hook does not
+ * consume it. `Back` or `Forward`.
+ */
+alsoDoes: string, } | { "kind": "invalid", input: string, reason: string, };
 
 /**
  * One action's configured hotkeys, classified.
  */
-export type Binding = { action: HotkeyAction, accelerators: Array<Accelerator>, };
+export type Binding = { action: HotkeyAction, accelerators: Array<Accelerator>,
+/**
+ * Whether these accelerators toggle or are held. See [`HotkeyMode`].
+ */
+mode: HotkeyMode, };
 
 /**
  * An action nothing in the application handles, and the sentence saying so.

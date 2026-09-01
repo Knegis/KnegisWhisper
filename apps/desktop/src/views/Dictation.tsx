@@ -31,10 +31,12 @@ import {
   onHotkey,
   setHistoryEnabled,
   setHotkey,
+  setHotkeyMode,
   setInputDevice,
   setKeepRawText,
   toggleDictation,
   type Binding,
+  type HotkeyMode,
   type ShortcutHookStatus,
   type UnhandledAction,
 } from "../lib/ipc";
@@ -42,6 +44,7 @@ import {
   acceleratorLabel,
   acceleratorText,
   changeLabel,
+  hotkeyModeLabel,
   outcomeLabel,
 } from "../lib/labels";
 import { useRefresh } from "../lib/useRefresh";
@@ -155,6 +158,22 @@ export function DictationView({
     });
   };
 
+  /**
+   * Switch one action between toggling and being held.
+   *
+   * Takes effect immediately, like the accelerator does, and reports through the
+   * same row: the backend re-registers everything and hands back the same
+   * `HotkeyChange`, so "saved but nothing was registered" cannot happen silently
+   * for a mode change any more than it can for a key.
+   */
+  const applyMode = (b: Binding, mode: HotkeyMode) => {
+    void guard(async () => {
+      const change = await setHotkeyMode(b.action, mode);
+      setHotkeyResult((prev) => ({ ...prev, [b.action]: changeLabel(change) }));
+      await reload();
+    });
+  };
+
   if (!data) {
     return (
       <div className="view">
@@ -233,6 +252,26 @@ export function DictationView({
               <button type="button" onClick={() => applyHotkey(b)}>
                 Set
               </button>
+              {/*
+                Toggle or hold, per action. The shipped default is Toggle for
+                every one of them and deliberately stays that way: holding is
+                one of the answers to the prefix problem the caution below
+                describes (KNEG-115), and making it the default would settle
+                that question by accident. The option exists; the decision does
+                not come from here.
+              */}
+              <select
+                aria-label={`mode for ${b.action}`}
+                value={b.mode}
+                onChange={(e) => applyMode(b, e.target.value as HotkeyMode)}
+              >
+                {(["toggle", "hold"] as const).map((m) => (
+                  <option key={m} value={m}>
+                    {hotkeyModeLabel(m).text}
+                  </option>
+                ))}
+              </select>
+              <em className="row-detail">{hotkeyModeLabel(b.mode).detail}</em>
               {hotkeyResult[b.action] ? (
                 <em className="row-detail">{hotkeyResult[b.action]}</em>
               ) : null}
@@ -278,6 +317,13 @@ export function DictationView({
           {hook.state === "available"
             ? `It works here anyway, through ${hook.mechanism} — and unlike a registered shortcut it does not take the keys away from anything else, so Windows still does whatever it does with them.`
             : "It therefore does nothing here and has to be changed. Try Control+Shift+D."}
+        </p>
+        <p className="caveat">
+          The same hooks watch the two side buttons on a mouse: type{" "}
+          <code>Mouse4</code> or <code>Mouse5</code> as the accelerator. Left,
+          right and middle are deliberately refused — the click is not
+          swallowed, so binding one would start this action on every click in
+          every application while the click still went through.
         </p>
       </section>
 
