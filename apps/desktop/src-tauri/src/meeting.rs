@@ -386,6 +386,10 @@ pub enum MeetingOutcome {
         recording_path: String,
         mic: Delivered,
         system: Delivered,
+        /// Scheduled live-session reconnects still happened even when no words
+        /// were produced. Keeping the count makes this successful provider work
+        /// visible instead of discarding it on the empty-transcript branch.
+        reconnects: u32,
     },
     Cancelled,
     Failed {
@@ -1258,6 +1262,7 @@ impl MeetingRuntime {
                     recording_path: path,
                     mic: finished.mic_delivered,
                     system: finished.system_delivered,
+                    reconnects: transcript.reconnects,
                 },
             };
         }
@@ -1939,6 +1944,16 @@ mod tests {
         assert_eq!(json["gaps"], 2);
         assert_eq!(json["reconnects"], 1);
         assert_eq!(json["transcriptIsPartials"], true);
+
+        let quiet = MeetingOutcome::NothingTranscribed {
+            recording_path: "C:/quiet.wav".to_owned(),
+            mic: Delivered::Silence,
+            system: Delivered::Nothing,
+            reconnects: 2,
+        };
+        let json = serde_json::to_value(&quiet).unwrap();
+        assert_eq!(json["outcome"], "nothing-transcribed");
+        assert_eq!(json["reconnects"], 2);
     }
 
     #[test]

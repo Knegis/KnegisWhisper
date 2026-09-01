@@ -760,7 +760,13 @@ reconnects: number,
  * True when the whole-file pass failed and the overlapping live
  * partials were saved instead.
  */
-transcriptIsPartials: boolean, } | { "outcome": "nothing-transcribed", recordingPath: string, mic: Delivered, system: Delivered, } | { "outcome": "cancelled" } | { "outcome": "failed", message: string, };
+transcriptIsPartials: boolean, } | { "outcome": "nothing-transcribed", recordingPath: string, mic: Delivered, system: Delivered,
+/**
+ * Scheduled live-session reconnects still happened even when no words
+ * were produced. Keeping the count makes this successful provider work
+ * visible instead of discarding it on the empty-transcript branch.
+ */
+reconnects: number, } | { "outcome": "cancelled" } | { "outcome": "failed", message: string, };
 
 /**
  * An offer to record a meeting that appears to be happening.

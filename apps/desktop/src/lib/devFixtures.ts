@@ -1498,6 +1498,7 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
     return sources;
   },
   meeting_stop: () => {
+    const provider = meetingStatus.provider;
     meetingStatus = {
       ...meetingStatus,
       state: "idle",
@@ -1505,6 +1506,19 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
       elapsedSeconds: 0,
       sources: null,
     };
+    // OpenAI is the provider whose capped sessions reconnect. Its fixture uses
+    // the quiet outcome so the second public shape carrying `reconnects` can be
+    // inspected in the browser; every other provider keeps the saved-note path.
+    if (provider === "meeting:openai-realtime") {
+      return {
+        outcome: "nothing-transcribed",
+        recordingPath:
+          "C:\\Users\\dev\\AppData\\Roaming\\KnegisWhisper\\recordings\\2026-08-26T09-00.wav",
+        mic: "silence",
+        system: "nothing",
+        reconnects: 1,
+      } satisfies MeetingOutcome;
+    }
     return {
       outcome: "saved",
       noteId: 101,
