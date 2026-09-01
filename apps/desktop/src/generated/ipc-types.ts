@@ -751,6 +751,12 @@ recordingPath: string,
  */
 gaps: number,
 /**
+ * How many scheduled live-session reconnects completed. Kept separate
+ * from gaps: reconnecting is expected for providers with a session
+ * limit, while missing audio is not.
+ */
+reconnects: number,
+/**
  * True when the whole-file pass failed and the overlapping live
  * partials were saved instead.
  */

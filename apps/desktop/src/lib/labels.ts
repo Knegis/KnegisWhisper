@@ -744,6 +744,10 @@ export function meetingOutcomeLabel(outcome: MeetingOutcome): string {
           `${outcome.gaps} stretch(es) of audio were never transcribed — the transcriber could not keep up.`,
         );
       }
+      if (outcome.reconnects > 0) {
+        const times = outcome.reconnects === 1 ? "time" : "times";
+        parts.push(`The live transcription reconnected ${outcome.reconnects} ${times}.`);
+      }
       parts.push(`The recording is at ${outcome.recordingPath}.`);
       return parts.join(" ");
     }

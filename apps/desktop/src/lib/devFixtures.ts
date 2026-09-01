@@ -1512,6 +1512,7 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
       recordingPath:
         "C:\\Users\\dev\\AppData\\Roaming\\KnegisWhisper\\recordings\\2026-08-26T09-00.wav",
       gaps: 0,
+      reconnects: 1,
       transcriptIsPartials: false,
     } satisfies MeetingOutcome;
   },

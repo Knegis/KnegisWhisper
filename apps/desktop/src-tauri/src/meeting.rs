@@ -364,6 +364,10 @@ pub enum MeetingOutcome {
         /// Non-zero when audio was never transcribed. A transcript with a hole in
         /// it must not look complete.
         gaps: u32,
+        /// How many scheduled live-session reconnects completed. Kept separate
+        /// from gaps: reconnecting is expected for providers with a session
+        /// limit, while missing audio is not.
+        reconnects: u32,
         /// True when the whole-file pass failed and the overlapping live
         /// partials were saved instead.
         transcript_is_partials: bool,
@@ -1192,6 +1196,7 @@ impl MeetingRuntime {
                 duration_seconds: finished.duration_seconds,
                 recording_path: path,
                 gaps: transcript.gaps,
+                reconnects: transcript.reconnects,
                 transcript_is_partials: from_partials,
             },
             Err(err) => {
@@ -1746,12 +1751,14 @@ mod tests {
             duration_seconds: 61.0,
             recording_path: "C:/x.wav".to_owned(),
             gaps: 2,
+            reconnects: 1,
             transcript_is_partials: true,
         };
         let json = serde_json::to_value(&outcome).unwrap();
         assert_eq!(json["outcome"], "saved");
         assert_eq!(json["noteId"], 7);
         assert_eq!(json["gaps"], 2);
+        assert_eq!(json["reconnects"], 1);
         assert_eq!(json["transcriptIsPartials"], true);
     }
 
