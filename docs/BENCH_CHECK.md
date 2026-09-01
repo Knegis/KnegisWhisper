@@ -84,11 +84,19 @@ anyone reaching a screen where it rendered.
    is tested. Neither is a window on screen. Join a call and watch.
 
 2. **~~A meeting recorded through `Local streaming model`.~~ Done, same day** — the live path
-   works and the words arrive as spoken. **What that run did not cover, and is still open:**
-   *Stop and transcribe*, and the saved note it produces. The live transcript and the saved
-   transcript come from different passes — `meeting.rs`'s `keep` runs a whole-file pass rather
-   than keeping the partials — so "words appeared on screen" says nothing about what ends up in
-   the note.
+   works and the words arrive as spoken.
+
+   **_Stop and transcribe_ was then run too, and found a defect.** The note saved, and said *"the
+   whole-recording pass did not complete, so the saved transcript is the live one"*. The fallback
+   working and disclosing itself is the good half; why it fired is the bad half.
+   `transcribe_whole` built a `WhisperServer` directly, so it failed on any machine with a sherpa
+   model selected — which is the documented one-local-engine state and the state this machine was
+   in. Every meeting on such a machine had been saving partials. **Not caused by the streaming
+   provider**: `meeting-stream:local` did it too, and has since `keep` was written. Fixed in
+   `ebe715a` by routing through `dictation::local_engine`, the rule dictation already used.
+
+   **Still open, and now a different check:** a note from a whole-recording pass that actually
+   runs. The unit test proves the rule; it cannot prove a note.
 
 3. **The same meeting with the streaming server killed mid-call.** Narrowed rather than open: the
    client's own behaviour is now covered by
