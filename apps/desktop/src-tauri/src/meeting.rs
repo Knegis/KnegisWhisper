@@ -442,6 +442,10 @@ struct Live {
     recording_path: std::path::PathBuf,
     sources: Sources,
     started: std::time::Instant,
+    /// Present only for the local streaming provider. Released after the pump
+    /// is finished (or immediately on cancellation) so its loaded model can be
+    /// kept warm for five minutes, but never indefinitely.
+    stream_lease: Option<crate::sherpa_stream::StreamLease>,
     /// How the recorder thread ended, once it has.
     ///
     /// Written by the thread itself rather than inferred from its audio channel
@@ -470,6 +474,20 @@ struct Live {
     /// the ending task compares the cell it was given with the one it found
     /// rather than trusting that a session it can see is its own.
     transcript_failure: Arc<OnceLock<String>>,
+}
+
+struct ProviderBuild {
+    provider: Box<dyn MeetingTranscriptionProvider>,
+    stream_lease: Option<crate::sherpa_stream::StreamLease>,
+}
+
+impl ProviderBuild {
+    fn without_stream_lease(provider: Box<dyn MeetingTranscriptionProvider>) -> Self {
+        Self {
+            provider,
+            stream_lease: None,
+        }
+    }
 }
 
 impl std::fmt::Debug for MeetingRuntime {
@@ -613,7 +631,7 @@ impl MeetingRuntime {
         &self,
         client: Client,
         events: mpsc::UnboundedSender<TranscriptEvent>,
-    ) -> Result<Box<dyn MeetingTranscriptionProvider>, String> {
+    ) -> Result<ProviderBuild, String> {
         match client {
             Client::LocalWindow => {
                 let port =
@@ -637,9 +655,9 @@ impl MeetingRuntime {
                     port,
                     model,
                 );
-                Ok(Box::new(
+                Ok(ProviderBuild::without_stream_lease(Box::new(
                     LocalWindowProvider::new(Arc::new(server)).with_live_events(events),
-                ))
+                )))
             }
             Client::LocalStreaming => {
                 // Started here rather than at launch: the model is 630 MB in
@@ -660,31 +678,34 @@ impl MeetingRuntime {
                         .to_owned());
                 }
 
-                let port = self.stream.start(&model_id).await?;
-                Ok(Box::new(
-                    kw_meeting_core::nemotron_socket::LocalStreaming::new(
-                        self.policy.clone(),
-                        port,
-                    )
-                    .with_live_events(events),
-                ))
+                let (port, stream_lease) = self.stream.start(&model_id).await?;
+                Ok(ProviderBuild {
+                    provider: Box::new(
+                        kw_meeting_core::nemotron_socket::LocalStreaming::new(
+                            self.policy.clone(),
+                            port,
+                        )
+                        .with_live_events(events),
+                    ),
+                    stream_lease: Some(stream_lease),
+                })
             }
-            Client::OpenAiRealtime => Ok(Box::new(
+            Client::OpenAiRealtime => Ok(ProviderBuild::without_stream_lease(Box::new(
                 kw_meeting_core::openai_socket::OpenAiRealtime::new(Arc::clone(&self.credentials))
                     .with_live_events(events),
-            )),
-            Client::AssemblyAi => Ok(Box::new(
+            ))),
+            Client::AssemblyAi => Ok(ProviderBuild::without_stream_lease(Box::new(
                 kw_meeting_core::assemblyai_socket::AssemblyAiRealtime::new(Arc::clone(
                     &self.credentials,
                 ))
                 .with_live_events(events),
-            )),
-            Client::DeepgramRealtime => Ok(Box::new(
+            ))),
+            Client::DeepgramRealtime => Ok(ProviderBuild::without_stream_lease(Box::new(
                 kw_meeting_core::deepgram_socket::DeepgramRealtime::new(Arc::clone(
                     &self.credentials,
                 ))
                 .with_live_events(events),
-            )),
+            ))),
             Client::CortiRealtime => {
                 // Read from the same settings the batch Corti client uses,
                 // not a second pair of meeting-only ones -- see
@@ -700,7 +721,7 @@ impl MeetingRuntime {
                         .unwrap_or_default();
                 let (environment, tenant) = resolve_corti_scope(&settings)?;
 
-                Ok(Box::new(
+                Ok(ProviderBuild::without_stream_lease(Box::new(
                     kw_meeting_core::corti_socket::CortiRealtime::new(
                         Arc::clone(&self.credentials),
                         self.policy.clone(),
@@ -708,7 +729,7 @@ impl MeetingRuntime {
                         tenant,
                     )
                     .with_live_events(events),
-                ))
+                )))
             }
         }
     }
@@ -732,19 +753,26 @@ impl MeetingRuntime {
         let key_ref = resolve_key_ref(provider_id, client, self.credentials.as_ref())?;
 
         let (events_tx, events_rx) = mpsc::unbounded_channel();
-        let mut provider = self.provider(client, events_tx).await?;
+        let ProviderBuild {
+            mut provider,
+            stream_lease,
+        } = self.provider(client, events_tx).await?;
 
         let caps = provider.capabilities();
         // The provider's own first declared rate, and the pump converts to it.
         // This used to be hardcoded to 16 kHz, which meant OpenAI Realtime -- 24
         // kHz only -- could never have connected at all: `connect` would have
         // refused every time, correctly, and the client would have looked broken.
-        let session_rate = *caps.sample_rates.first().ok_or_else(|| {
-            format!(
-                "{} declares no sample rate, so nothing can be sent to it",
-                caps.name
-            )
-        })?;
+        let session_rate = match caps.sample_rates.first() {
+            Some(rate) => *rate,
+            None => {
+                self.release_stream(stream_lease).await;
+                return Err(format!(
+                    "{} declares no sample rate, so nothing can be sent to it",
+                    caps.name
+                ));
+            }
+        };
 
         let language: String =
             kw_storage::settings::get_or(self.db.pool(), LANGUAGE_KEY, String::new())
@@ -759,21 +787,37 @@ impl MeetingRuntime {
         // detect a language and none is set -- see `resolve_provider_config`'s
         // doc comment. A guessed language would be a worse transcript that
         // looks like a working one, so this never picks one on its own.
-        let config = resolve_provider_config(
+        let config = match resolve_provider_config(
             provider_id,
             caps,
             key_ref,
             session_rate,
             &language,
             &keyterms,
-        )?;
-        provider.connect(config).await.map_err(|e| e.to_string())?;
+        ) {
+            Ok(config) => config,
+            Err(err) => {
+                self.release_stream(stream_lease).await;
+                return Err(err);
+            }
+        };
+        if let Err(err) = provider.connect(config).await {
+            self.release_stream(stream_lease).await;
+            return Err(err.to_string());
+        }
 
         let path = Self::recording_dir().join(format!(
             "{}.wav",
             chrono::Utc::now().format("%Y%m%d-%H%M%S")
         ));
-        let (audio, commands, sources, recorder_end) = spawn_recorder(path.clone(), system_audio)?;
+        let (audio, commands, sources, recorder_end) =
+            match spawn_recorder(path.clone(), system_audio) {
+                Ok(parts) => parts,
+                Err(err) => {
+                    self.release_stream(stream_lease).await;
+                    return Err(err);
+                }
+            };
 
         // The pump announces its own ending, which is the whole of KNEG-95's
         // fix: until now the failure was detected at second zero and reported
@@ -808,6 +852,7 @@ impl MeetingRuntime {
             recording_path: path,
             sources: sources.clone(),
             started: std::time::Instant::now(),
+            stream_lease,
             transcript_failure,
         });
 
@@ -854,6 +899,7 @@ impl MeetingRuntime {
             commands,
             pump,
             recording_path,
+            stream_lease,
             ..
         } = live;
 
@@ -862,6 +908,7 @@ impl MeetingRuntime {
         let outcome = self
             .finish_recording(&provider_id, &commands, pump, &recording_path)
             .await;
+        self.release_stream(stream_lease).await;
 
         self.emit_state(MeetingState::Idle);
         crate::meeting_window::set_visible(&self.app, false);
@@ -936,6 +983,7 @@ impl MeetingRuntime {
 
         let _ = live.commands.send(RecorderCommand::Cancel);
         live.pump.abort();
+        self.release_stream(live.stream_lease).await;
         self.emit_state(MeetingState::Idle);
         crate::meeting_window::set_visible(&self.app, false);
         self.watch.lock().await.watcher.forget(&live.provider_id);
@@ -944,6 +992,12 @@ impl MeetingRuntime {
             tracing::warn!(error = %err, "could not report the cancellation");
         }
         Ok(())
+    }
+
+    async fn release_stream(&self, lease: Option<crate::sherpa_stream::StreamLease>) {
+        if let Some(lease) = lease {
+            self.stream.release(lease).await;
+        }
     }
 
     /// What is happening, for the screen.

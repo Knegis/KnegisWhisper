@@ -34,7 +34,8 @@
 //! the location of is one it cannot make promises about.
 
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use std::time::Duration;
 
 use kw_provider_registry::SherpaModel;
 use kw_sidecar::{port, process, Catalog, Launch, PidStore, Running, StartTimings};
@@ -52,27 +53,82 @@ const EXECUTABLE: &str = "sherpa-onnx-online-websocket-server";
 /// Which streaming model the meeting provider should use, across restarts.
 pub const STREAM_MODEL_KEY: &str = "meetings.streamModel";
 
+/// How long a loaded streaming model is kept warm after its meeting ends.
+const IDLE_STOP: Duration = Duration::from_secs(5 * 60);
+
+/// The right to use the streaming server for one meeting.
+///
+/// The generation is deliberately opaque to the meeting runtime. It only hands
+/// the value back to [`SherpaStream::release`], where it prevents an idle timer
+/// belonging to an earlier meeting from stopping the server under a later one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StreamLease {
+    generation: u64,
+}
+
+#[derive(Default)]
+struct StreamState {
+    running: Option<Running>,
+    port: Option<u16>,
+    model: Option<String>,
+    generation: u64,
+    lease: Option<StreamLease>,
+}
+
+impl StreamState {
+    fn acquire_lease(&mut self) -> StreamLease {
+        self.generation = self.generation.wrapping_add(1);
+        let lease = StreamLease {
+            generation: self.generation,
+        };
+        self.lease = Some(lease);
+        lease
+    }
+
+    fn release_lease(&mut self, lease: StreamLease) -> bool {
+        if self.lease != Some(lease) {
+            return false;
+        }
+        self.lease = None;
+        true
+    }
+
+    fn timer_is_current(&self, generation: u64) -> bool {
+        self.lease.is_none() && self.generation == generation
+    }
+
+    fn invalidate(&mut self) {
+        self.generation = self.generation.wrapping_add(1);
+        self.lease = None;
+    }
+
+    fn forget(&mut self) {
+        self.port = None;
+        self.model = None;
+    }
+}
+
+struct StreamInner {
+    pids: PidStore,
+    state: tokio::sync::Mutex<StreamState>,
+}
+
 /// The running streaming server, if there is one.
 pub struct SherpaStream {
     catalog: Catalog,
-    pids: PidStore,
-    running: tokio::sync::Mutex<Option<Running>>,
-    /// Where it is listening, published only once it has answered.
-    ///
-    /// Not handed out as a `SharedStream` the way `local_model::SharedLocal` is,
-    /// because the meeting runtime *starts* this server rather than only reading
-    /// a port somebody else started. It holds the whole supervisor, and a second
-    /// handle carrying half of it would be a second way to be wrong about the
-    /// same fact.
-    port: Arc<RwLock<Option<u16>>>,
-    /// Which model it loaded.
-    model: Arc<RwLock<Option<String>>>,
+    /// Process state and lease state share one lock. An idle timer must decide
+    /// that its generation is still idle and take the process under the same
+    /// lock; otherwise a later meeting can acquire between the check and stop.
+    inner: Arc<StreamInner>,
 }
 
 impl std::fmt::Debug for SherpaStream {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SherpaStream")
-            .field("port", &self.port.read().ok().and_then(|p| *p))
+            .field(
+                "port",
+                &self.inner.state.try_lock().ok().and_then(|s| s.port),
+            )
             .finish_non_exhaustive()
     }
 }
@@ -83,10 +139,10 @@ impl SherpaStream {
         let catalog = Catalog::shipped().map_err(|err| err.to_string())?;
         Ok(Self {
             catalog,
-            pids: PidStore::new(&paths::data_dir()),
-            running: tokio::sync::Mutex::new(None),
-            port: Arc::new(RwLock::new(None)),
-            model: Arc::new(RwLock::new(None)),
+            inner: Arc::new(StreamInner {
+                pids: PidStore::new(&paths::data_dir()),
+                state: tokio::sync::Mutex::new(StreamState::default()),
+            }),
         })
     }
 
@@ -104,7 +160,7 @@ impl SherpaStream {
 
         let outcome = kw_sidecar::reap_one(
             spec,
-            &self.pids,
+            &self.inner.pids,
             &kw_sidecar::SystemProcessTable,
             kw_sidecar::reap::Timings::default(),
         )
@@ -116,34 +172,19 @@ impl SherpaStream {
         }
     }
 
-    /// Stop the server, if one is running.
-    pub async fn stop(&self) {
-        let mut held = self.running.lock().await;
-        if let Some(running) = held.take() {
-            running.stop(&self.pids).await.unwrap_or_else(|err| {
-                tracing::warn!(error = %err, "could not stop the streaming server cleanly");
-            });
-        }
-        self.forget();
-    }
-
-    fn forget(&self) {
-        if let Ok(mut port) = self.port.write() {
-            *port = None;
-        }
-        if let Ok(mut model) = self.model.write() {
-            *model = None;
-        }
-    }
-
     /// Start the server on `model_id`, and answer with the port it came up on.
     ///
     /// Already running on the same model is a no-op returning the same port: the
     /// meeting runtime asks for this every time a meeting starts, and restarting
     /// a loaded model between two meetings would cost the load time for nothing.
-    pub async fn start(&self, model_id: &str) -> Result<u16, String> {
-        if let Some(port) = self.running_on(model_id).await {
-            return Ok(port);
+    pub async fn start(&self, model_id: &str) -> Result<(u16, StreamLease), String> {
+        let mut held = self.inner.state.lock().await;
+        if held.model.as_deref() == Some(model_id) && held.running.is_some() {
+            let port = held.port.ok_or_else(|| {
+                "the streaming server is running without a published port".to_owned()
+            })?;
+            let lease = held.acquire_lease();
+            return Ok((port, lease));
         }
 
         let spec = self
@@ -177,12 +218,18 @@ impl SherpaStream {
         // is started rather than after: two of these hold two copies of a 630 MB
         // model, and the port allocator would happily give the second one a
         // different port and leave the first running.
-        self.stop().await;
+        held.invalidate();
+        if let Some(running) = held.running.take() {
+            running.stop(&self.inner.pids).await.unwrap_or_else(|err| {
+                tracing::warn!(error = %err, "could not stop the streaming server cleanly");
+            });
+        }
+        held.forget();
 
         let running = process::start(
             spec,
             &launch,
-            &self.pids,
+            &self.inner.pids,
             &WebSocketHealth,
             StartTimings::default(),
         )
@@ -191,35 +238,45 @@ impl SherpaStream {
 
         // Published only once it has answered a handshake, so a meeting never
         // routes to a server still loading its model.
-        if let Ok(mut port) = self.port.write() {
-            *port = Some(chosen);
-        }
-        if let Ok(mut held) = self.model.write() {
-            *held = Some(model_id.to_owned());
-        }
-        *self.running.lock().await = Some(running);
+        held.port = Some(chosen);
+        held.model = Some(model_id.to_owned());
+        held.running = Some(running);
+        let lease = held.acquire_lease();
 
-        Ok(chosen)
+        Ok((chosen, lease))
     }
 
-    /// The port, if a server for `model_id` is already up.
-    async fn running_on(&self, model_id: &str) -> Option<u16> {
-        let same = self
-            .model
-            .read()
-            .ok()
-            .and_then(|held| held.clone())
-            .is_some_and(|held| held == model_id);
-        if !same {
-            return None;
-        }
-        // The recorded model is only worth acting on while the child is still
-        // there. `watch_for_death` clears the record when it is not, but this is
-        // asked directly rather than trusted to a five-second poll.
-        if self.running.lock().await.is_none() {
-            return None;
-        }
-        self.port.read().ok().and_then(|held| *held)
+    /// Release one meeting's use and stop the server after five idle minutes.
+    pub async fn release(&self, lease: StreamLease) {
+        let generation = {
+            let mut held = self.inner.state.lock().await;
+            if !held.release_lease(lease) {
+                return;
+            }
+            lease.generation
+        };
+
+        let inner = Arc::clone(&self.inner);
+        tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(IDLE_STOP).await;
+            let mut held = inner.state.lock().await;
+            if !held.timer_is_current(generation) {
+                return;
+            }
+
+            // The current-generation check and taking the process are one
+            // critical section. A new meeting cannot acquire in between them.
+            if let Some(running) = held.running.take() {
+                tracing::info!(
+                    idle_minutes = IDLE_STOP.as_secs() / 60,
+                    "stopping the streaming model server after being idle"
+                );
+                running.stop(&inner.pids).await.unwrap_or_else(|err| {
+                    tracing::warn!(error = %err, "could not stop the streaming server cleanly");
+                });
+            }
+            held.forget();
+        });
     }
 }
 
@@ -464,5 +521,27 @@ mod tests {
     fn an_unknown_model_names_itself_in_the_refusal() {
         let err = model_named("not-a-model").expect_err("unknown is refused");
         assert!(err.contains("not-a-model"), "{err}");
+    }
+
+    #[test]
+    fn a_released_lease_arms_only_its_own_generation() {
+        let mut state = StreamState::default();
+        let first = state.acquire_lease();
+        assert!(state.release_lease(first));
+        assert!(state.timer_is_current(first.generation));
+
+        let second = state.acquire_lease();
+        assert!(!state.timer_is_current(first.generation));
+        assert!(!state.release_lease(first), "a stale release is ignored");
+        assert_eq!(state.lease, Some(second));
+    }
+
+    #[test]
+    fn an_explicit_stop_invalidates_an_armed_idle_timer() {
+        let mut state = StreamState::default();
+        let lease = state.acquire_lease();
+        assert!(state.release_lease(lease));
+        state.invalidate();
+        assert!(!state.timer_is_current(lease.generation));
     }
 }
