@@ -380,6 +380,114 @@ one-speaker fixture, which proves the flags, the exit-status reading and the ren
 and says nothing about attribution — one voice cannot be confused with another. That is the same
 distinction KNEG-84 and KNEG-94 both ended on, and it is not a coincidence: finishing the
 measurement is not finishing the feature.
+## 2026-09-01 (KNEG-107) — a boolean that described a path, and the third state it could not hold
+
+`local_llm_status` reported `installed: gguf_path(&m.file_name).exists()`. That is a claim about a
+**path**, not about a file. The install had hashed the bytes against a pinned SHA-256 and then
+nothing looked at them again, so a GGUF corrupted, truncated or replaced months later rendered
+identically to one checked five minutes ago — and was loaded without complaint.
+
+The window is specific to these files. They are the largest thing this application writes to disk
+(19.8 GB for `qwen3-32b-q4_k_m`), they sit in a user-writable cache directory for months, and a bad
+block in one is a far more ordinary event than in a 148 MB whisper model.
+
+### Why the whisper answer was not copied
+
+`kw_transcription_core::models::is_installed` calls `check`, which calls
+`kw_sidecar::integrity::verify` — it re-hashes on **every status call**. That is the right answer at
+3.1 GB and the wrong one at 19.8: `Settings > Intelligence > Local` would stall for about a minute
+per visit. Hashing inside `local_llm_start` instead was considered and rejected on the same
+arithmetic, and it is worse there — it makes starting the server feel broken.
+
+So the trade this project already made stands, and it is the *reporting* that changed.
+
+### A record beside the file, and a sentence saying what it is not worth
+
+`gguf_check::write_record` writes `<name>.gguf.checked.json` after the rename, holding the digest
+the bytes were hashed against, the exact length, and the modification time. A file whose length and
+mtime still agree with that record counts as unchanged since it was installed. Two stat calls and a
+small read, against a minute of hashing.
+
+**The sentence that matters is the one about what it does not catch**, and it is in the module doc,
+in the type, and on the screen: different bytes written into the same length with the timestamp set
+back would still read as unchanged. That is a different threat from the one this closes, and it has
+to be said rather than left for a reader to assume the file is authenticated on every load.
+
+The state is therefore called `UnchangedSinceInstall`, not `Verified`. A test asserts that no state
+spells itself "verified": two integers agreeing is not a hash, and the weaker word is the point.
+
+### Three states, because two of them used to render alike
+
+`installed: bool` became `integrity: GgufIntegrity`, with four answers:
+
+| state | what it means |
+| --- | --- |
+| `not-installed` | nothing at the path |
+| `unchanged-since-install` | a record, and the length and mtime still agree with it |
+| `unrecorded` | the file is there and nothing beside it says what was checked |
+| `changed` | a record, and it disagrees |
+
+`unrecorded` is the one the design turns on. **Every GGUF installed before this landed is in it** —
+including the 1.28 GB `qwen2.5-1.5b-instruct-q5_k_m.gguf` on the developer's machine right now — and
+rendering it as either "verified" or "corrupt" would be the same overclaim in opposite directions.
+It gets the neutral treatment `labels.ts` already gives `unknown` everywhere else.
+
+`changed` reports both lengths, so `recordedBytes === bytes` is how the screen tells "something wrote
+to this" from "this is the wrong size". A restore from backup moves a timestamp without touching a
+byte, and the two deserve different sentences.
+
+### The re-hash is a button, and the button says what it costs
+
+`local_llm_recheck_model` reads the whole file and compares it to the pinned digest — the only thing
+that proves the bytes. It returns a `RecheckOutcome` rather than a `Result<(), String>`, because a
+file that does not match its digest is a **finding**, not a transport failure, and the two must not
+arrive through the same red line.
+
+Two decisions inside it:
+
+- **A mismatch removes the record and keeps the file.** A record that survived a mismatch is a
+  record that is wrong — length and mtime unchanged while the bytes are not — which is exactly the
+  replacement the cheap check documents itself as unable to see. Left in place it would have the
+  screen make the strongest available claim about the worst available file. The weights stay: they
+  may be twenty gigabytes somebody chose to keep, and a stale pin here is as likely as rot there.
+- **`nothing-pinned` is its own answer.** Nothing shipped today can reach it, and "there was nothing
+  to check" still must not render as "checked, and fine".
+
+### `start_model` warns and does not refuse
+
+One stat, no hashing. A disagreement is logged with both lengths and the load proceeds: a moved
+timestamp is a restore as often as it is anything else, and refusing to load a working model on
+evidence this deliberately calls weak is a worse failure than the one being guarded against. The
+screen is where a person sees it.
+
+### What the mutation pass found
+
+Twenty mutations, and the eighteenth was the useful one. Every three-state mutation was caught —
+including the defect itself, an absent record rendering as `UnchangedSinceInstall` — except one:
+making every status row report `NotInstalled` survived, because the mapping was inlined in a
+`#[tauri::command]` that takes a `State` nothing outside a running application can construct. That
+is the `media.rs:1334-1340` line again. Extracting `model_status(provider, dir, model)` moved the
+whole mapping to the testable side and left the command holding one call to
+`paths::model_cache_dir()`; three further mutations aimed at it were all caught.
+
+A second finding came out of a test rather than the code. Written with `Duration::new(0, 1)`, the
+`Mtime` round-trip failed on Windows with "`Mtime { seconds: 0, nanos: 0 }` was produced twice":
+`SystemTime` there is a `FILETIME`, which counts in 100 ns ticks, so one nanosecond either side of
+the epoch *is* the epoch. A limit of the input rather than of the function — and the same 100 ns
+NTFS stores an mtime at, so nothing finer could reach it from a real file.
+
+### What is believed rather than measured
+
+The four states were exercised against real files in a temporary directory: written, recorded,
+rewritten at the same length, truncated, and had the record removed, with the answer asserted at
+each step. **They have not been exercised against a real model in the real cache directory**, which
+needs a person at a machine with a GGUF on it. In particular the *unrecorded* state in the wild —
+the installed Qwen2.5 with nothing beside it — is believed to render as `unrecorded` on the strength
+of the same code path answering that way for a 4 KB file in a tempdir. Nobody has opened the screen.
+
+`local_llm_recheck_model` itself has never been run: its verdict and its record-settling are tested
+as pure functions against real files, and the command that wires them to `spawn_blocking` and the
+registry is the untestable edge. The first real 1.28 GB hash is a by-hand check.
 
 ---
 
@@ -2802,11 +2910,13 @@ Two deliberate limits, recorded rather than implied:
 - **Length first, then hash.** The length is free — it is already on the filesystem — and a
   truncated transfer is the common failure, so checking it first turns the common case into a
   specific message rather than a digest mismatch that could mean anything.
-- **The check happens at install and is not repeated.** `installed: true` afterwards means the path
-  exists. The whisper path *does* re-hash on every status call, and gets away with it because its
-  largest model is 3 GB; re-reading 20 GB every time a settings screen opens is not a trade worth
-  making. A model corrupted after a successful install is therefore not caught. Filed as KNEG-107,
-  not hidden.
+- **The hash happens at install and is still not repeated.** The whisper path *does* re-hash on
+  every status call, and gets away with it because its largest model is 3 GB; re-reading 20 GB every
+  time a settings screen opens is not a trade worth making. What changed on 2026-09-01 is what the
+  screen says afterwards: `installed: true` used to mean only that the path existed, so a model
+  corrupted after a successful install was not caught and did not look any different. KNEG-107
+  replaced that boolean with a four-state `GgufIntegrity` read from a record written beside the
+  file, and added a re-hash a user can ask for. See the dated entry.
 
 ### An install is as verified as its weakest half
 

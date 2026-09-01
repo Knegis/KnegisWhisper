@@ -220,6 +220,8 @@ fn render() -> String {
             crate::diarization::DiarizationStatus,
         ],
         "local text generation" => [
+            crate::gguf_check::GgufIntegrity,
+            crate::local_llm::RecheckOutcome,
             crate::local_llm::DraftStatus,
             crate::local_llm::LocalLlmModelStatus,
             crate::local_llm::LocalLlmStatus,

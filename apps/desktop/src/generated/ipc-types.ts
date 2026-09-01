@@ -1228,9 +1228,34 @@ ready: boolean, modelsDir: string, };
 
 /* -------------------------------------------------- local text generation */
 /**
+ * What the Intelligence > Local screen may say about one GGUF.
+ *
+ * Four answers, and the third is the reason this is not a boolean. See the
+ * module documentation for what each one is worth.
+ */
+export type GgufIntegrity = { "state": "not-installed" } | { "state": "unchanged-since-install", verifiedBy: VerifiedBy, } | { "state": "unrecorded" } | { "state": "changed", recordedBytes: number, bytes: number, };
+
+/**
+ * What a re-hash of an installed model found.
+ *
+ * Its own type rather than a `Result<(), String>` because **a file that does
+ * not match its digest is a finding, not a failure**. Returning it as an error
+ * would put it through the same red line a dropped connection uses, and the two
+ * deserve entirely different sentences: one says try again, the other says the
+ * bytes on this disk are not the bytes that were downloaded.
+ */
+export type RecheckOutcome = { "outcome": "matched", verifiedBy: VerifiedBy, } | { "outcome": "mismatched", fileName: string, expected: string, actual: string, } | { "outcome": "nothing-pinned" } | { "outcome": "not-installed" };
+
+/**
  * A drafter alongside the main model.
  */
-export type DraftStatus = { fileName: string, sizeBytes: number | null, installed: boolean,
+export type DraftStatus = { fileName: string, sizeBytes: number | null,
+/**
+ * On the same terms as [`LocalLlmModelStatus::integrity`], and tracked
+ * apart from it because a drafter is a separate file that can rot on its
+ * own.
+ */
+integrity: GgufIntegrity,
 /**
  * On the same terms as [`LocalLlmModelStatus::verified_by`]. Reported
  * separately because a drafter is a different object in a different
@@ -1250,7 +1275,18 @@ provider: string,
  * `None` when the registry does not say. Shown before anyone commits to a
  * download that can be six gigabytes.
  */
-sizeBytes: number | null, quantization: string | null, contextLength: number | null, recommended: boolean, supportsThinking: boolean, installed: boolean,
+sizeBytes: number | null, quantization: string | null, contextLength: number | null, recommended: boolean, supportsThinking: boolean,
+/**
+ * Whether the file is on disk and, if it is, what is still known about it.
+ *
+ * This replaced an `installed: bool`, and the replacement is the whole of
+ * KNEG-107. A boolean over `path.exists()` cannot tell a file that was
+ * hashed at install and has not moved since from one nothing has ever
+ * looked at, and it rendered both as "installed" — so a GGUF corrupted
+ * months after a successful install was loaded without complaint. The
+ * states, and exactly what each is worth, are [`GgufIntegrity`].
+ */
+integrity: GgufIntegrity,
 /**
  * What integrity check this model can be held to, on the same terms the
  * whisper screen already states. Shown before the button, for the reason
@@ -1261,8 +1297,8 @@ sizeBytes: number | null, quantization: string | null, contextLength: number | n
  */
 verifiedBy: VerifiedBy,
 /**
- * Whether this model has a speculative-decoding drafter, and whether that
- * drafter is installed. Absent for the models without one.
+ * This model's speculative-decoding drafter, and what is known about it.
+ * `None` for the models without one.
  */
 draft: DraftStatus | null, };
 

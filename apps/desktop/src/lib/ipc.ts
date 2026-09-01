@@ -61,6 +61,7 @@ import type {
   Folder,
   Format,
   GateReason,
+  GgufIntegrity,
   HotkeyAction,
   HotkeyChange,
   HotkeyReport,
@@ -104,6 +105,7 @@ import type {
   ReasoningModelSummary,
   ReasoningProviderSummary,
   ReasoningStatus,
+  RecheckOutcome,
   Registration,
   RelocatedCredential,
   RouteReport,
@@ -169,6 +171,7 @@ export type {
   ExportedTranscript,
   Folder,
   GateReason,
+  GgufIntegrity,
   HotkeyAction,
   HotkeyChange,
   HotkeyReport,
@@ -209,6 +212,7 @@ export type {
   ReasoningModelSummary,
   ReasoningProviderSummary,
   ReasoningStatus,
+  RecheckOutcome,
   Registration,
   RelocatedCredential,
   RouteReport,
@@ -919,6 +923,25 @@ export async function startLocalLlm(modelId: string): Promise<number> {
 
 export async function stopLocalLlm(): Promise<void> {
   return invoke<void>("local_llm_stop");
+}
+
+/**
+ * Hash an installed model against its pinned digest.
+ *
+ * **Slow, on purpose, and only when asked.** Everything else the screen reports
+ * about an installed file compares two integers against a record written when it
+ * was downloaded; this reads the whole file back, which is a minute or more for
+ * the largest models. It is the only thing that proves the bytes.
+ *
+ * Resolves with the finding rather than rejecting on one: a file that does not
+ * match its digest is an answer, not a transport failure, and the two must not
+ * arrive through the same channel. It rejects only when the check could not be
+ * made at all.
+ */
+export async function recheckLocalLlmModel(
+  modelId: string,
+): Promise<RecheckOutcome> {
+  return invoke<RecheckOutcome>("local_llm_recheck_model", { modelId });
 }
 
 /**
