@@ -21,9 +21,9 @@ maintained in place rather than appended to, because its purpose is to be curren
 > detail and the by-hand check that found five real defects; [COMPLETION_PLAN.md](COMPLETION_PLAN.md)
 > keeps the phase 7–10 definitions.
 >
-> **Measured, not asserted, as of 2026-09-01:** `cargo test --workspace` — **1664 passing, 0
+> **Measured, not asserted, as of 2026-09-01:** `cargo test --workspace` — **1678 passing, 0
 > failed** (941 at the start of the original run, 1296 at its close on 2026-08-27); parity —
-> **103 entries, 5 declared unreachable** (17 at the start, 8 on 2026-08-27), and **all 13 UI
+> **103 entries, 4 declared unreachable** (17 at the start, 8 on 2026-08-27), and **all 13 UI
 > surfaces built**, with no "surface not built" entry remaining anywhere. The four: **no local-ASR
 > model any longer** — all four sherpa models are pinned and installable as of 2026-09-01 — two
 > Tinfoil entries (batch transcription
