@@ -19,6 +19,57 @@ unchecked rather than left implied.
 
 ---
 
+## 2026-09-01 — two protocols measured, and what that is *not*
+
+A probe day rather than a bench run. Nothing was clicked; two mechanisms were measured against real
+binaries with a control on every run. Recorded here because both settled questions the docs had
+been carrying as beliefs, and because each ends with a by-hand check that the measurement does
+**not** cover.
+
+### Verified
+
+| Claim | Evidence |
+| --- | --- |
+| **An audio-session listener separates Teams-in-a-call from Teams-idle** | `mic_users_probe`, three runs on one Teams install: not running (1 capture endpoint), open and idle (1 endpoint, `ms-teams.exe` **absent** from the capture list), in a real call (2 endpoints, `ms-teams.exe` **present**). Every run carried a cross-process control — a second process opened a capture stream and had to appear — so the middle row is a measured absence rather than a broken enumeration |
+| **sherpa's streaming WebSocket protocol, both directions** | `sherpa_ws_probe` against the real `sherpa-onnx-online-websocket-server` and the real reference client. Samples are **`f32` little-endian**, frames are 8000 samples then a short tail, the client's end marker is `Done` and the server's is `Done!`, `text` is cumulative per segment, and the server never closes the socket |
+| **That server has no error channel** | `--fault` sent an unparseable TEXT frame and a three-byte BINARY frame before the audio. The server answered neither and the transcript came back **byte-identical to the clean run** — the odd-length frame did not even break sample alignment |
+| **The control ran first, both times** | The reference client against the real server reproduced the model's own `test_wavs/trans.txt`; only then did our client produce the same transcript; only then was the fault run meaningful |
+
+### Findings
+
+1. **The reference client's `--help` is wrong about the sample format.** It says *"16-bit
+   samples"*; the wire carries `f32`. As `i16` the same bytes are noise. A client written from that
+   sentence would connect, complete a handshake, send every frame successfully and transcribe
+   nothing — with no error anywhere, because this server reports none. **A defect with no symptom
+   pointing at its cause**, which is the whole return on the afternoon.
+
+2. **A probe can pass its control and still be unreadable.** `mic_users_probe`'s first real run
+   printed `nothing is capturing` and `PASS`. Both true, both useless: nothing in the output said
+   whether Teams had been *open* at the time, and "Teams is running and not capturing" and "Teams
+   is not installed" print the same words while meaning opposite things. Fixed by having the probe
+   report what `meeting_detect::detect` itself sees running. A control proves the instrument works;
+   it does not prove the sample was in the machine.
+
+### Still unchecked, and needs a person at the machine
+
+1. **The offer window appearing during a real Teams call.** The signal is measured and the wiring
+   is tested. Neither is a window on screen. Join a call and watch.
+
+2. **A meeting recorded through `Local streaming model`.** Words should appear as they are spoken,
+   not three seconds behind the room — the difference from `Local windowed model`, and the entire
+   reason the provider exists. Nobody has run one.
+
+3. **The same meeting with the streaming server killed mid-call.** The fault must reach the screen.
+   This is the one that matters most for this client, because its only fault channel is
+   transport-level: there is no error frame to fall back on, so if this path is wrong a dead server
+   produces a quiet transcript rather than a failure.
+
+4. **A streaming model installed through the screen.** `nemotron-speech-streaming-en-0.6b` was
+   downloaded by `tools/model-pin/pin.mjs` on the command line, not by pressing *Install*. The
+   install path is the one the Parakeet models proved; this model has never been through it.
+
+---
+
 ## 2026-08-31 (later) — the first press of *Install*, and two things it found
 
 Two by-hand checks run on the machine against a debug build. One passed, one failed, and the failure
