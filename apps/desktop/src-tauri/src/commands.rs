@@ -748,9 +748,8 @@ impl DialogGrants {
     /// `canonicalize` needs: it takes no `AppHandle`, so it is unit-testable on
     /// its own. That is the same reason `media::check_importable_file` and
     /// [`import_pick_dialog`] are separate functions rather than inline
-    /// branches — nothing outside a running application can construct an
-    /// `AppHandle`, so anything reachable only through a command is untested by
-    /// construction.
+    /// branches. The exported command boundary is covered separately with
+    /// Tauri's mock webview runtime.
     ///
     /// A path that cannot be canonicalised and a path nobody granted get the
     /// *same* refusal, deliberately. Telling them apart would answer "does this
@@ -864,11 +863,10 @@ fn import_pick_dialog(
 /// commands authorise against that set before reading anything. A path no
 /// dialog produced is refused.
 ///
-/// **What that does not cover.** A unit test asserts the policy; only a real
-/// call against the running application proves the policy is consulted on this
-/// path, and that check has not been run — see `docs/BENCH_CHECK.md`'s Task 12
-/// entry, and `docs/SECURITY.md`'s Webview section for the exposure this
-/// closed.
+/// The pure policy tests are backed by a mock-webview IPC test which invokes
+/// all three import commands by their exported names. A real picker check still
+/// belongs in the bench sequence because only the OS dialog can prove the
+/// person-facing flow; see `docs/BENCH_CHECK.md`'s Task 12 entry.
 #[tauri::command]
 pub async fn pick_import_file(
     app: AppHandle,
