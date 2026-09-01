@@ -1479,9 +1479,9 @@
         "downloadUrl": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-560ms-int8-2026-06-11.tar.bz2",
         "extractDir": "sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-560ms-int8-2026-06-11",
         "sizeMb": 650,
-        "sha256": null,
-        "expectedSizeBytes": null,
-        "maxExtractedSizeBytes": null,
+        "sha256": "c6bf5e0df765f9d5b43bc9e0536d4b4b3e7d40bdf5ecf13e45f134c51c05ae3a",
+        "expectedSizeBytes": 475271763,
+        "maxExtractedSizeBytes": 838860800,
         "language": "multilingual",
         "supportedLanguages": [
           "en",

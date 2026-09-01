@@ -1064,10 +1064,18 @@ for (const repo of Object.keys(HF_REVISIONS)) {
  * against and the pin is what makes downloading one legitimate. Same standard as
  * the two above: the bytes moved through this machine and were hashed here.
  *
- * **`nemotron-3.5-asr-streaming-0.6b`, the multilingual one, is still absent.**
- * Not an oversight: nothing has downloaded it, so there is nothing to pin, and
- * it stays uninstallable until something does. One model was enough to settle
- * the protocol, which is what the download was for.
+ * **`nemotron-3.5-asr-streaming-0.6b`, the multilingual one, is measured too**
+ * (2026-09-01, later the same day). It was absent because nothing had
+ * downloaded it and one model was enough to settle the protocol; it was
+ * downloaded because somebody tried to install it three times. Both Nemotron
+ * models are pinned now and every sherpa model in this registry is
+ * installable.
+ *
+ * Its digest carries a control the others do not: it was downloaded **twice**,
+ * because the first run was invoked without a path for `--keep` and discarded
+ * the archive before the extracted size could be measured. The two independent
+ * downloads produced the same SHA-256, which is a reproducibility check nobody
+ * planned and is worth more than the minute it cost.
  */
 const SHERPA_PINS = {
   "parakeet-tdt-0.6b-v3": {
@@ -1089,6 +1097,20 @@ const SHERPA_PINS = {
     sha256: "78e2b79fcf7271553a74402a76b771b09ea40117a39566a79f52235b23db6358",
     expectedSizeBytes: 463_945_051,
     maxExtractedSizeBytes: 750 * 1024 * 1024,
+  },
+  // Measured 2026-09-01, and twice: see the note above about the two downloads
+  // agreeing. Extracted total 14 files, 684,574,872 bytes (652.9 MiB), nearly
+  // all of it one 657 MB encoder -- the multilingual model is a fifteen-language
+  // encoder where its English sibling is one.
+  //
+  // 800 MiB rather than the 750 the two above take, and not for symmetry with
+  // `parakeet-tdt`: 750 MiB over a 652.9 MiB footprint is 15% of headroom where
+  // the others have 19%, and the stated rule here is that this figure errs high
+  // because being wrong low rejects a legitimate install.
+  "nemotron-3.5-asr-streaming-0.6b": {
+    sha256: "c6bf5e0df765f9d5b43bc9e0536d4b4b3e7d40bdf5ecf13e45f134c51c05ae3a",
+    expectedSizeBytes: 475_271_763,
+    maxExtractedSizeBytes: 800 * 1024 * 1024,
   },
 };
 

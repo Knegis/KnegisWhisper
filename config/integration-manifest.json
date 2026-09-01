@@ -554,9 +554,9 @@
       ],
       "backend": "crates/transcription-core",
       "ui": "Settings > Transcription > Local",
-      "reachable": false,
-      "runtime": "online",
-      "note": "Still unreachable, and the reason changed on 2026-09-01. It is no longer 'nobody has written a client for the streaming protocol' -- kw_meeting_core::nemotron is that client, measured against the real server, and its sibling local-asr:nemotron-speech-streaming-en-0.6b is reachable through it. This one is unreachable because it has no pin: its sha256 in config/provider-registry.json is null, so sherpa_models::install refuses with MissingPin rather than downloading something unauthenticated. Nothing has downloaded it, so there is nothing to pin; one model was enough to settle the protocol, which is what the download was for. Pinning it is a download and a measured digest away, and the client it would use already exists."
+      "reachable": true,
+      "runtime": null,
+      "note": "Reachable since 2026-09-01. Both blockers this entry ever had are gone, and they were different blockers: first there was no client for sherpa's streaming WebSocket protocol (KNEG-84 wrote one, measured against the real server), and then there was no pin (KNEG-118 downloaded and hashed it here: sha256 c6bf5e0d..., 475,271,763 bytes, extracting to 14 files and 684,574,872 bytes). Downloaded twice by accident, and both runs produced the same digest -- an unplanned reproducibility control. Reachable the same way as its English sibling: install it under Settings > Transcription > Local and choose 'Use for meetings', which writes meetings.streamModel for meeting-stream:local-streaming to read. Driven on the real server the same day and it transcribed its own German sample (test_wavs/de.wav) over an identical protocol: cumulative text, is_final and is_eof both turning true on the last frame, then TEXT Done!. So 'the same wire as its English sibling' is measured rather than inferred, which matters because that inference was the only thing this entry rested on. It is the only multilingual option in the local streaming path: fifteen languages against the English model's one. What is NOT verified: a meeting through it. The probe drove the server with a WAV; nobody has recorded with it, and no language other than German has been tried."
     },
     "local-asr:nemotron-speech-streaming-en-0.6b": {
       "status": "ported-with-new-rust-implementation",

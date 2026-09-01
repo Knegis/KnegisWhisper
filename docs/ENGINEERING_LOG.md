@@ -24,18 +24,22 @@ maintained in place rather than appended to, because its purpose is to be curren
 > **Measured, not asserted, as of 2026-09-01:** `cargo test --workspace` — **1537 passing, 0
 > failed** (941 at the start of the original run, 1296 at its close on 2026-08-27); parity —
 > **103 entries, 5 declared unreachable** (17 at the start, 8 on 2026-08-27), and **all 13 UI
-> surfaces built**, with no "surface not built" entry remaining anywhere. The five: **one** local-ASR
-> model (`nemotron-3.5-asr-streaming-0.6b`, the multilingual one — its `sha256` is `null`, so
-> `sherpa_models::install` refuses with `MissingPin`), two Tinfoil entries (batch transcription
+> surfaces built**, with no "surface not built" entry remaining anywhere. The four: **no local-ASR
+> model any longer** — all four sherpa models are pinned and installable as of 2026-09-01 — two
+> Tinfoil entries (batch transcription
 > and meeting-stream, both declined on principle, not unfinished), Apple Calendar (EventKit —
 > described in `kw_calendar_core::apple`, implemented nowhere, on any platform), and URL import
 > (withdrawn as a command — see the 2026-08-27 entry on the merged security fixes).
 >
 > Eight became six when `121dc4c` gave the two **Parakeet** models the Settings selector their
-> measured runtime had been waiting for, and six became five on 2026-09-01 when the streaming
-> protocol was measured and `nemotron-speech-streaming-en-0.6b` got a client. Worth spelling out
-> because an earlier version of this paragraph named Parakeet as one of the unreachable pair, which
-> is the opposite of what happened to it.
+> measured runtime had been waiting for; six became five on 2026-09-01 when the streaming protocol
+> was measured and `nemotron-speech-streaming-en-0.6b` got a client; and five became four hours
+> later when the multilingual Nemotron was pinned. Worth spelling out because an earlier version of
+> this paragraph named Parakeet as one of the unreachable pair, which is the opposite of what
+> happened to it.
+>
+> Also worth spelling out: the last of those four moved because a **person pressed the button and
+> reported what he saw**, three times. Nothing in the repository was going to.
 >
 > **The reachability rule, settled and applied repeatedly:** `reachable: true` means a user can
 > *configure* the integration through a named, **built** surface — not that the backend code works.

@@ -205,15 +205,19 @@ test("the committed registry still carries pins for all six whisper models", () 
   // measure. A pin dropped from WHISPER_PINS would otherwise make `--verify`
   // quietly check five models and pass.
   //
-  // The sherpa count went 2 -> 3 on 2026-09-01 when
-  // `nemotron-speech-streaming-en-0.6b` was measured for KNEG-84. Raised rather
-  // than loosened to `>= 2`: a count is the only thing here that notices a pin
-  // going missing, and a lower bound would notice nothing.
+  // The sherpa count went 2 -> 3 -> 4 on 2026-09-01: first
+  // `nemotron-speech-streaming-en-0.6b` for KNEG-84, then
+  // `nemotron-3.5-asr-streaming-0.6b` for KNEG-118 the same day. Raised each
+  // time rather than loosened to `>= 2`: a count is the only thing here that
+  // notices a pin going *missing*, and a lower bound would notice nothing.
+  //
+  // Four is now every sherpa model the registry declares, so the next change to
+  // this number is either a new model or a regression.
   const targets = pinnedTargets();
   const whisper = targets.filter((t) => t.kind === "whisper");
   const sherpa = targets.filter((t) => t.kind === "sherpa");
   assert.equal(whisper.length, 6, "every whisper model is pinned");
-  assert.equal(sherpa.length, 3, "two Parakeet archives and one Nemotron are pinned");
+  assert.equal(sherpa.length, 4, "both Parakeet archives and both Nemotron archives are pinned");
   for (const t of targets) {
     assert.match(t.sha256, /^[0-9a-f]{64}$/, `${t.id} has no usable digest`);
     assert.ok(t.url?.startsWith("https://"), `${t.id} has no https URL`);
@@ -471,11 +475,12 @@ test("the committed registry still carries every sherpa archive as a GitHub asse
   // dropped from SHERPA_PINS would otherwise make --verify-stated check one
   // asset, or none, and report success.
   //
-  // Three since 2026-09-01, not two. The third is
-  // `nemotron-speech-streaming-en-0.6b`, measured for KNEG-84 because the
-  // streaming protocol could not be measured without a streaming model.
+  // Four since 2026-09-01, not two. Both Nemotron models were measured that
+  // day: the English one for KNEG-84, because the streaming protocol could not
+  // be measured without a streaming model, and the multilingual one for
+  // KNEG-118 because somebody tried to install it.
   const targets = githubAssetTargets();
-  assert.equal(targets.length, 3, "two Parakeet archives and one Nemotron are pinned");
+  assert.equal(targets.length, 4, "both Parakeet archives and both Nemotron archives are pinned");
   for (const target of targets) {
     assert.match(target.sha256, /^[0-9a-f]{64}$/, `${target.id} has no usable digest`);
     assert.ok(target.sizeBytes > 0, `${target.id} has no measured size`);

@@ -55,12 +55,11 @@ integration parity OK — 102 entries against baseline c4000db9802d
   were added for meeting streaming in chunk E). Before chunk A, `provider_credential_set` existed in
   Rust and `setProviderCredential` was exported from `ipc.ts` and **nothing called either**, so
   every cloud provider was unreachable regardless of backend state.
-- **The five that remain unreachable, each for a specific, named reason rather than "not done
-  yet":** one local-ASR model (`nemotron-3.5-asr-streaming-0.6b`, the multilingual one — its
-  `sha256` is `null`, so `sherpa_models::install` refuses with `MissingPin` rather than downloading
-  something unauthenticated. **Not the reason it had until 2026-09-01**, which was that nobody had
-  written a client for the streaming protocol; `kw_meeting_core::nemotron` is that client and its
-  sibling `nemotron-speech-streaming-en-0.6b` is reachable through it), two Tinfoil entries (batch transcription and meeting-stream,
+- **The four that remain unreachable, each for a specific, named reason rather than "not done
+  yet":** **no local-ASR model any longer** — all four sherpa models are pinned and installable as
+  of 2026-09-01, the last of them (`nemotron-3.5-asr-streaming-0.6b`) because somebody tried to
+  install it three times. That entry had carried two different blockers in one day: no client for
+  the streaming protocol, then no pin. Neither is true now. The four are two Tinfoil entries (batch transcription and meeting-stream,
   both declined on principle — an unattested client would present as Tinfoil while providing none of
   the confidentiality the name means), Apple Calendar (EventKit — described in
   `kw_calendar_core::apple`, implemented nowhere, on any platform, for lack of a macOS machine), and
