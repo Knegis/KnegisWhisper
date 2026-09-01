@@ -958,6 +958,24 @@ export async function stopLocalLlm(): Promise<void> {
 }
 
 /**
+ * Replace the installed llama.cpp server binary with the build this version
+ * pins.
+ *
+ * The same stop-replace-restart `refreshLocalServer` performs for
+ * `whisper-server`, and it resolves with the same `RefreshOutcome` -- one shape
+ * for both, because the two answer the same three questions and a second Rust
+ * type rendering to the same TypeScript name is a failing `ipc_types` test
+ * rather than a duplicate nobody notices.
+ *
+ * The llama server stops itself when idle, and a refresh that restarts it
+ * re-arms that timer. Without it the replaced server would hold several
+ * gigabytes until the application exits.
+ */
+export async function refreshLocalLlmServer(): Promise<RefreshOutcome> {
+  return invoke<RefreshOutcome>("local_llm_refresh_server");
+}
+
+/**
  * Hash an installed model against its pinned digest.
  *
  * **Slow, on purpose, and only when asked.** Everything else the screen reports

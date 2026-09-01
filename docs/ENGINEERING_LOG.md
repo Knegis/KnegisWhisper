@@ -291,6 +291,123 @@ Unchanged from the Phases 1–4 entry, restated here so they are not buried:
 
 ---
 
+## 2026-09-01 (KNEG-128) — four installers wrote the record and one screen read it
+
+`kw_sidecar::install` writes `.kw-install.json` into every sidecar directory it promotes, naming the
+digest of the archive the files came out of. That landed with KNEG-113 earlier the same day, and it
+landed for all of them: four modules install through that function. **One read it back.**
+
+`local_llm.rs`, `local_asr.rs`, `diarization.rs` and `media.rs` all had the evidence sitting beside
+their binaries and none of them looked, so each went on claiming *Installed* — a fact about a path —
+while the binary fell behind the manifest. That is the exact state KNEG-113 was written to end, left
+standing in four places by the change that ended it in the fifth.
+
+Two are fixed here, llama.cpp and sherpa. ffmpeg and yt-dlp stay out: a different status shape,
+neither observed stale, and widening would be the speculative reach that issue's own argument for
+being Low warns against.
+
+### The exhaustiveness guard went in first, and that ordering was the point
+
+`freshnessLabel` returns `string | undefined`, so falling off the end of its switch was legal. A
+fifth `SidecarFreshness` variant would have compiled without a murmur and rendered **no sentence at
+all**, and both call sites compare the tag with a bare `===`, which `tsc` cannot check either.
+
+Measured rather than argued, in both directions: a sixth variant added to `ipc-types.ts` by hand
+passed `tsc --noEmit` cleanly before the guard and fails with `Type '{ state: "withdrawn"; ... }' is
+not assignable to type 'never'` after it. Same defect `meetingIsLive` records being bitten by when
+`stalled` arrived for KNEG-116 — *"both screens compiled without a murmur, and answered no"* — and
+the same `never` guard closes it.
+
+It went in **before** the call sites, because this issue takes that function from one screen to
+three. Fixing it afterwards would have tripled the silent-failure surface first and then asked
+somebody to notice.
+
+### llama.cpp: one call for two answers, and a trap that had nothing to do with freshness
+
+`local_llm_status` resolved the asset, located the installation and **threw the `Installation` away**
+to keep a bare `bool`. `server_state` replaces the chain and returns both answers from one
+`sidecar_freshness`, so `server_installed` is a reading of the freshness rather than a second
+question — the disagreement `local_model_status` is arranged to prevent.
+
+`RefreshOutcome` is **shared**, not copied. `ipc_types` asserts that no two Rust types render to the
+same TypeScript name, so a second one would have been a failing test rather than a duplicate nobody
+noticed; the two refreshes answer the same three questions, so sharing was the right resolution.
+`Restart` and `refresh_failure` widened to `pub(crate)` with it.
+
+The refresh reads the running model through `running_model()` and never `LocalEndpoint::port`, which
+records a use and holds the idle clock open — the same choice `local_llm_status` makes and for the
+same reason.
+
+**And then the thing that was not in the issue.** `local_llm_start` armed the idle watcher;
+`LocalLlm::start_model` did not. A refresh that restarts through `start_model` and stops there brings
+the server back with **nothing left to ever stop it** — six gigabytes resident until the application
+exits, which is worse than any staleness this issue was filed about, and nothing in the tree would
+have caught it. Found by reading the start path before copying it, not by a failure.
+
+Fixed two ways, and the split matters. `start_and_watch` is now the only way the ordinary path
+reaches a running server, so the pairing is structural. The refresh consults
+`must_arm_idle_watcher`, which is pure and tested in both directions — `Restarted` must arm, and
+`NothingWasRunning` and `Failed` must not, because a watcher over a server that is not running is a
+task spawned to discover that on its first tick. What no test can do is observe a
+`tauri::async_runtime::spawn`; that half is held by construction.
+
+### sherpa: the fix is worth more than the feature, and the button is declined
+
+`installed_cli()` hand-built `cli_root()/sherpa/<exe>` and never consulted the catalogue, so
+`cli_installed` and any freshness reading were two independent answers to one question. Both now go
+through `locate` against the published asset. It is **not** a live bug — all five published targets
+ship `.../bin/sherpa-onnx-offline`, so the two spellings agree today — and that is precisely the
+condition under which this kind of duplication survives until it does not.
+
+`resolve_id` is reached from `dictation.rs` and `media.rs` through a bare `Selection`, so threading a
+`Catalog` to it would mean threading one through `DictationRuntime` and `MediaImportRuntime` as well.
+`installed_cli()` parses the shipped catalogue itself instead: an embedded-string `from_str` on a
+path that is about to spawn a process and transcribe a WAV, with `LocalAsr::new` having already
+proved at startup that it parses.
+
+**No refresh button, and the reason is the streaming server's lifecycle rather than the archive.**
+`meeting.rs:656` is the only caller of `SherpaStream::start` and **nothing anywhere calls
+`SherpaStream::stop`** — the only stop is the one `start` performs on itself when switching models.
+So a running streaming server means *a meeting has happened this session*, not *a meeting is
+happening now*. A refresh would either stop it unconditionally, ending the live transcript of a
+meeting in progress from a dictation settings screen that never mentions meetings, or need a
+live-meeting guard reaching into a second runtime's state. Neither version is testable — the whole
+sequence is reachable only through an `AppHandle`, exactly as whisper's button is, and that button
+has still never been pressed.
+
+So the screen reports the staleness and says plainly that it cannot fix it, including that one
+archive serves dictation, meetings and speaker separation, and that reinstalling means closing the
+application. A screen that reports honestly and cannot act beats a button that is wrong at the worst
+possible moment.
+
+Worth recording separately, observed and not chased: if nothing ever calls `SherpaStream::stop`, the
+streaming server **outlives every meeting**, holding a 630 MB model from the first meeting until the
+process exits. That may be deliberate reuse — `running_on` already argues for keeping a loaded server
+between meetings — or it may be the defect llama's five-minute idle timer exists to prevent, one
+runtime over. It is outside both issues and it is not guessed at here.
+
+### The mutation that survived
+
+Six mutations for this half; five killed, **one did not**. Replacing `located_cli`'s `locate` call
+with a hand-built path to a nonexistent executable left the suite green, because the function reached
+for `cli_root()` internally and no test could point it anywhere. That is the `media.rs:1334-1340` line
+again, in a function written an hour earlier by someone who had just finished writing about it.
+
+Split into `located_cli_in(catalog, root)` and a one-line wrapper, the same mutation now fails with
+`left: None, right: Some(...sherpa-onnx-offline.exe)`. The gap was real and the mutation pass is the
+only reason it is not still there.
+
+### What is believed rather than measured
+
+Everything on both screens. The freshness reads are exercised against real directories with the
+catalogue's own executable name in them, and `server_state`, `server_progress`,
+`must_arm_idle_watcher` and `located_cli_in` are all tested. **Nothing has been pressed.** The
+llama refresh's stop-install-restart, whether the restarted server actually idle-stops five minutes
+later, and how the sherpa sentence reads on a machine whose runtime really is unrecorded are all
+by-hand checks, and they go to Linear rather than being claimed here.
+
+---
+
 ## 2026-09-01 (KNEG-130) — the response to the finding destroyed the finding
 
 `local_llm_recheck_model` hashes an installed GGUF against its pinned digest. It is the only thing in
@@ -934,9 +1051,13 @@ the same advice, so every non-permission failure stays a plain `Io`.
 
 Nothing re-hashes the installed executable, so a file corrupted or replaced on disk after an install
 still reads as whatever the record says. Nothing checks freshness at startup or on a schedule: like
-every other download here, a refresh happens because somebody pressed a button. `local_llm.rs` and
-`local_asr.rs` install sidecars through the same `kw_sidecar::install` and so get the record for
-free, but neither reports freshness or offers a refresh — only whisper does.
+every other download here, a refresh happens because somebody pressed a button.
+
+`local_llm.rs` and `local_asr.rs` install sidecars through the same `kw_sidecar::install` and so get
+the record for free, and at the time this was written neither read it. **Both report freshness now**
+— KNEG-128, same day, which also found that `diarization.rs` and `media.rs` make four non-readers
+rather than two. llama.cpp gained a refresh button with it; sherpa deliberately did not, because the
+streaming meeting server runs out of that directory and nothing ever stops it. See that entry.
 
 **The install half is measured; the stop and the restart around it are not.**
 `tests/real_install.rs` was run against the real network on 2026-09-01 — not a fixture — and it now

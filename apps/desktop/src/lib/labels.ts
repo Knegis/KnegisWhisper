@@ -42,6 +42,7 @@ import type {
   NonActivating,
   Offer,
   RecheckOutcome,
+  RefreshOutcome,
   RelocatedCredential,
   ShortcutHookStatus,
   SidecarFreshness,
@@ -401,6 +402,21 @@ export function recheckOutcomeLabel(outcome: RecheckOutcome): Stated {
  * The digests are shown short. Both are in `SidecarFreshness` in full, for a
  * bug report; twelve characters is enough to tell two builds apart on screen
  * and a 64-character hex string in a settings row is unreadable.
+ *
+ * **The `never` at the end is not decoration, and it was missing.** This
+ * function returns `string | undefined`, so falling off the end of the switch
+ * was legal: a fifth `SidecarFreshness` variant would have compiled without a
+ * murmur and rendered **no sentence at all** — and both call sites compare the
+ * tag with a bare `===`, which `tsc` cannot check either. Measured before it was
+ * fixed: a sixth variant added to `ipc-types.ts` by hand passed `tsc --noEmit`
+ * cleanly.
+ *
+ * That is the same defect `meetingIsLive` records being bitten by when `stalled`
+ * was added for KNEG-116 — *"both screens compiled without a murmur, and
+ * answered no"* — and the guard is the same one. It went in **before** KNEG-128
+ * took this type from one screen to three, because adding the call sites first
+ * would have multiplied the silent-failure surface by three and then asked
+ * somebody to notice.
  */
 export function freshnessLabel(freshness: SidecarFreshness): string | undefined {
   switch (freshness.state) {
@@ -416,12 +432,42 @@ export function freshnessLabel(freshness: SidecarFreshness): string | undefined 
       )}, pinned ${short(freshness.expected)}`;
     case "unknown":
       return `it is not known whether this is the build this version pins: ${freshness.why}`;
+    default: {
+      const unhandled: never = freshness;
+      return unhandled;
+    }
   }
 }
 
 /** Enough of a digest to tell two builds apart, and no more. */
 function short(digest: string): string {
   return `${digest.slice(0, 12)}…`;
+}
+
+/**
+ * What a completed refresh of a local server binary should say.
+ *
+ * Two facts, and the second is the one that would otherwise go missing: a
+ * refresh stops the server before replacing it, so whether it came back is
+ * separate news from whether the replacement worked. `restartError` is not an
+ * error — the binary *was* replaced — but a user whose dictation or local model
+ * has just gone quiet needs to be told why.
+ *
+ * Lives here rather than in a screen because two screens use it since KNEG-128:
+ * `Settings > Transcription > Local` for `whisper-server` and
+ * `Settings > Intelligence > Local` for `llama-server`. It was a private
+ * function in the first of those, and copying it into the second would have been
+ * two sentences about one mechanism, drifting apart.
+ */
+export function refreshOutcomeLabel(outcome: RefreshOutcome): string {
+  const replaced = `The server binary was replaced (${outcome.files} files).`;
+  if (outcome.restartError) {
+    return `${replaced} The model that was running could not be started again: ${outcome.restartError}`;
+  }
+  if (outcome.restarted) {
+    return `${replaced} ${outcome.restarted} is running again.`;
+  }
+  return replaced;
 }
 
 export function bytes(written: number, total: number | null): string {

@@ -715,6 +715,15 @@ const LOCAL_MODELS: LocalStatus = {
 const SHERPA: SherpaStatus = {
   availability: { state: "installable" },
   cliInstalled: true,
+  // `unknown` rather than `stale`, and deliberately the opposite choice from
+  // the whisper block above: this is the commoner state in the wild -- what
+  // every install made before records existed reports -- and the sherpa row is
+  // the one with no Update button beside it, so the sentence has to carry the
+  // whole weight on its own.
+  cliFreshness: {
+    state: "unknown",
+    why: "it was installed before this application started recording what it installs",
+  },
   // One installed and selected, one installable, and the two streaming models
   // carrying the reason they cannot be picked -- the three states this list has,
   // so the screen is worked on against all of them rather than the easy one.
@@ -760,6 +769,10 @@ const LOCAL_LLM: LocalLlmStatus = {
     tracking: "https://github.com/ggml-org/llama.cpp/releases",
   },
   serverInstalled: false,
+  // Nothing is installed on this fixture's platform, so there is nothing to be
+  // out of date. The `stale` and `unknown` branches are rendered by the two
+  // blocks above; a third copy here would be a third thing to keep in step.
+  serverFreshness: { state: "not-installed" },
   models: [
     {
       id: "qwen2.5-7b-instruct-q4",

@@ -39,6 +39,7 @@ use tokio::sync::Mutex;
 use ts_rs::TS;
 
 use crate::gguf_check::{self, GgufIntegrity};
+use crate::local_model::Restart;
 
 /// The sidecar this module runs.
 const SIDECAR: &str = "llama";
@@ -423,6 +424,44 @@ fn watch_for_idle(llm: Arc<LocalLlm>, app: AppHandle) {
     });
 }
 
+/// Start a model **and** arm the watcher that will stop it, in one call.
+///
+/// The two were separate for exactly as long as it took to write a second
+/// caller. `local_llm_start` did both; [`LocalLlm::start_model`] did only the
+/// first -- so the refresh added in KNEG-128, which restarts through
+/// `start_model`, would have brought a server back with **nothing left to ever
+/// stop it**. Six gigabytes resident until the application exits, which is worse
+/// than anything that issue was filed about, and no test would have seen it.
+///
+/// So there is one way to reach a running server from a command, and it arms the
+/// timer. Found while reading, not by a failure.
+async fn start_and_watch(
+    llm: &Arc<LocalLlm>,
+    app: AppHandle,
+    model_id: &str,
+) -> Result<u16, String> {
+    let port = llm.start_model(model_id).await?;
+    watch_for_idle(Arc::clone(llm), app);
+    Ok(port)
+}
+
+/// Whether a finished refresh has left a server that needs an idle watcher.
+///
+/// Pure, and its own function for the reason
+/// [`crate::local_model::refresh_failure`] is one: the judgement sits inside a
+/// command that cannot be constructed outside a running application, so without
+/// this nothing could reach it.
+///
+/// The rule is that **anything which brought a server back owes it a watcher**,
+/// and equally that nothing else may arm one. Arming after
+/// [`Restart::NothingWasRunning`] or [`Restart::Failed`] would spawn a task to
+/// watch a server that is not running -- harmless today, because the loop
+/// returns on the first tick that finds no port, and precisely the kind of
+/// "harmless" that stops being true when the loop grows a second reason to act.
+const fn must_arm_idle_watcher(restart: &Restart) -> bool {
+    matches!(restart, Restart::Restarted(_))
+}
+
 /* ------------------------------------------------------------------- status */
 
 /// One local model on offer.
@@ -484,6 +523,18 @@ pub struct LocalLlmStatus {
     /// Whether a server binary is published for this platform.
     pub availability: crate::local_model::Availability,
     pub server_installed: bool,
+    /// Whether the binary on disk is the build this version pins.
+    ///
+    /// `server_installed` was the only claim this screen made about the server
+    /// binary, and it stays true while the binary falls releases behind the
+    /// manifest -- the state `local_model` reported for `whisper-server` in
+    /// KNEG-113 and the state this one has been in, unreported, ever since.
+    /// `install` has written the record since KNEG-113; nothing here read it.
+    /// KNEG-128.
+    ///
+    /// Derived from the same call as `server_installed`, so the two cannot
+    /// disagree. See [`server_state`].
+    pub server_freshness: crate::local_model::SidecarFreshness,
     pub models: Vec<LocalLlmModelStatus>,
     /// The port the server is on, if it is running.
     pub port: Option<f64>,
@@ -592,32 +643,63 @@ fn model_status(
     }
 }
 
+/// Whether the server binary is on disk, and whether it is the one this build
+/// pins -- from **one** call.
+///
+/// This replaced a chain that resolved the asset, located the installation and
+/// then threw the `Installation` away to keep a bare `bool`. Asking twice is how
+/// `server_installed` and a freshness sentence come to answer differently about
+/// the same directory, which is the disagreement `local_model` avoids the same
+/// way (`local_model.rs`, `local_model_status`).
+///
+/// `Freshness::NotInstalled` is exactly the case `locate` reports as absent or
+/// incomplete, so the boolean is a reading of the freshness rather than a second
+/// question. A platform with no published asset answers `NotInstalled` too, and
+/// that is correct rather than an error to report: `availability` already
+/// carries that fact and says why.
+fn server_state(
+    catalog: &Catalog,
+    root: &std::path::Path,
+) -> (bool, crate::local_model::SidecarFreshness) {
+    let freshness = crate::local_model::sidecar_freshness(catalog, SIDECAR, root);
+    (
+        !matches!(freshness, kw_sidecar::Freshness::NotInstalled),
+        crate::local_model::SidecarFreshness::of(&freshness),
+    )
+}
+
+/// One `kw_sidecar` install event as this screen's progress line, if it is one
+/// worth showing.
+///
+/// Extracted so the install path and the refresh path cannot drift into
+/// describing the same download two ways, and so the mapping is reachable by a
+/// test -- both closures it replaced lived inside `#[tauri::command]`s.
+///
+/// `Verifying` maps to nothing, exactly as it did inline before. That is not an
+/// oversight: [`LocalLlmProgress::Verifying`] names a model id, and the server
+/// binary is not a model. The archive is still checked against its pinned digest
+/// by `kw_sidecar::install`; what is missing is a sentence about it, and a
+/// sentence naming the wrong thing would be worse than none.
+fn server_progress(progress: &kw_sidecar::install::Progress) -> Option<LocalLlmProgress> {
+    match progress {
+        kw_sidecar::install::Progress::Downloading { written, total } => {
+            Some(LocalLlmProgress::Server {
+                written: *written as f64,
+                total: total.map(|t| t as f64),
+            })
+        }
+        kw_sidecar::install::Progress::Extracting => Some(LocalLlmProgress::Extracting),
+        kw_sidecar::install::Progress::Verifying => None,
+    }
+}
+
 #[tauri::command]
 pub async fn local_llm_status(llm: State<'_, Arc<LocalLlm>>) -> Result<LocalLlmStatus, String> {
     let registry = kw_provider_registry::registry().map_err(|e| e.to_string())?;
     let availability = crate::local_model::Availability::of(&llm.catalog, SIDECAR);
 
-    // `resolve` fails on a platform with no published binary, which is not an
-    // error to report: it is the answer, and `availability` already carries it.
     let sidecars = paths::sidecar_dir();
-    let server_installed = llm
-        .catalog
-        .resolve(SIDECAR)
-        .ok()
-        .and_then(|(_, asset)| {
-            kw_sidecar::locate(
-                SIDECAR,
-                asset,
-                &kw_sidecar::SearchPath {
-                    bundled: None,
-                    downloaded: sidecars.path.clone(),
-                },
-                &kw_sidecar::RealFs,
-            )
-            .executable()
-            .map(|_| ())
-        })
-        .is_some();
+    let (server_installed, server_freshness) = server_state(&llm.catalog, &sidecars.path);
 
     let dir = paths::model_cache_dir().path;
     let models = registry
@@ -634,6 +716,7 @@ pub async fn local_llm_status(llm: State<'_, Arc<LocalLlm>>) -> Result<LocalLlmS
     Ok(LocalLlmStatus {
         availability,
         server_installed,
+        server_freshness,
         models,
         // Read directly rather than through `LocalEndpoint::port`, which would
         // record a use and keep the idle timer from ever firing while a settings
@@ -676,15 +759,10 @@ pub async fn local_llm_install(
     );
 
     if installation.executable().is_none() {
-        kw_sidecar::install::install(&llm.policy, spec, asset, &sidecars.path, &mut |p| match p {
-            kw_sidecar::install::Progress::Downloading { written, total } => {
-                emit(LocalLlmProgress::Server {
-                    written: written as f64,
-                    total: total.map(|t| t as f64),
-                });
+        kw_sidecar::install::install(&llm.policy, spec, asset, &sidecars.path, &mut |p| {
+            if let Some(progress) = server_progress(&p) {
+                emit(progress);
             }
-            kw_sidecar::install::Progress::Extracting => emit(LocalLlmProgress::Extracting),
-            _ => {}
         })
         .await
         .map_err(|e| e.to_string())?;
@@ -1307,7 +1385,10 @@ pub async fn local_llm_start(
     llm: State<'_, Arc<LocalLlm>>,
     model_id: String,
 ) -> Result<u16, String> {
-    let port = llm.start_model(&model_id).await?;
+    // Armed as the server comes up rather than after the settings write below:
+    // the write can fail, and an idle timer is not something to make conditional
+    // on remembering a preference.
+    let port = start_and_watch(&llm, app, &model_id).await?;
 
     // Remembered only after it came up, so a model that fails to start is not
     // the one resumed at the next launch.
@@ -1317,8 +1398,85 @@ pub async fn local_llm_start(
         tracing::warn!(error = %err, "could not remember the local text-generation model");
     }
 
-    watch_for_idle(Arc::clone(&llm), app);
     Ok(port)
+}
+
+/// Replace the installed llama.cpp server with the build this version pins.
+///
+/// **Stop, replace, restart** -- the same sequence, and the same reasoning, as
+/// `local_model::local_server_refresh`, whose doc records why rename-aside was
+/// measured and rejected. That argument is not repeated here; what differs is
+/// this runtime's two extra facts.
+///
+/// **The running model is read through [`LocalLlm::running_model`], never
+/// through [`LocalEndpoint::port`].** Reading the port records a use and resets
+/// the idle clock, which is why `local_llm_status` avoids it, and a refresh that
+/// reset it would leave the restarted server holding several gigabytes for a
+/// further five minutes for no reason anybody asked for.
+///
+/// **The restart re-arms the idle watcher**, via [`must_arm_idle_watcher`].
+/// Without it the replaced server would run until the application exits.
+///
+/// Nothing calls this on its own. Like every other download here, it happens
+/// because somebody pressed a button.
+#[tauri::command]
+pub async fn local_llm_refresh_server(
+    app: AppHandle,
+    llm: State<'_, Arc<LocalLlm>>,
+) -> Result<crate::local_model::RefreshOutcome, String> {
+    let (spec, asset) = llm.catalog.resolve(SIDECAR).map_err(|e| e.to_string())?;
+    let sidecars = paths::sidecar_dir();
+
+    // Read before the stop: `stop` clears it, and this is the only record of
+    // what has to be put back.
+    let was_running = llm.running_model();
+    llm.stop().await;
+
+    // The progress closure owns its own handle so `app` is free to be moved into
+    // the watcher below.
+    let installed = {
+        let app = app.clone();
+        kw_sidecar::install::install(&llm.policy, spec, asset, &sidecars.path, &mut move |p| {
+            if let Some(progress) = server_progress(&p) {
+                if let Err(err) = app.emit(PROGRESS_EVENT, progress) {
+                    tracing::debug!(error = %err, "could not report refresh progress");
+                }
+            }
+        })
+        .await
+    };
+
+    // Whichever way the install went. A refused download must not leave someone
+    // with a server that was loaded a moment ago and is now simply gone.
+    let restart = match &was_running {
+        None => Restart::NothingWasRunning,
+        Some(model) => match llm.start_model(model).await {
+            Ok(port) => {
+                tracing::info!(port, model = %model, "restarted the local text-generation server after a refresh");
+                Restart::Restarted(model.clone())
+            }
+            Err(error) => Restart::Failed {
+                model: model.clone(),
+                error,
+            },
+        },
+    };
+
+    if must_arm_idle_watcher(&restart) {
+        watch_for_idle(Arc::clone(&llm), app);
+    }
+
+    match installed {
+        Ok(installed) => Ok(crate::local_model::RefreshOutcome {
+            files: installed.files,
+            restarted: restart.restarted().cloned(),
+            restart_error: restart.error().cloned(),
+        }),
+        Err(err) => Err(crate::local_model::refresh_failure(
+            &err.to_string(),
+            &restart,
+        )),
+    }
 }
 
 #[tauri::command]
@@ -2148,6 +2306,153 @@ mod tests {
             GgufIntegrity::NotInstalled,
             "one file's verdict must not spread to the other half of the row"
         );
+    }
+
+    /* ------------------------------------------------ the server binary */
+
+    /// An empty sidecar root answers *not installed* to both halves at once.
+    ///
+    /// `server_installed` is read straight off the freshness, so the pair cannot
+    /// disagree by construction; this is the shape of the pair, and the two
+    /// tests below walk the states where disagreeing would matter.
+    #[test]
+    fn an_empty_sidecar_root_reports_the_llama_server_as_not_installed() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let catalog = Catalog::shipped().expect("the shipped catalogue parses");
+
+        let (installed, freshness) = server_state(&catalog, dir.path());
+        assert!(!installed);
+        assert_eq!(
+            serde_json::to_value(&freshness).expect("wire")["state"],
+            "not-installed"
+        );
+    }
+
+    /// An executable with no record is installed **and** of unknown provenance.
+    ///
+    /// The state this machine is in, and the one KNEG-128 exists for: the binary
+    /// is plainly there, so `server_installed` says yes, and until now that was
+    /// the only thing the screen ever claimed about it -- which stayed true while
+    /// the binary fell releases behind the manifest. `install` has written the
+    /// record since KNEG-113; nothing on this path read it.
+    ///
+    /// The `assert!(exe.is_file())` is the positive control. Without it the
+    /// assertions below would be measured against a directory that might simply
+    /// be empty, and would pass for the wrong reason.
+    ///
+    /// **Mutation that turns it red:** have `server_state` return `false` for
+    /// `installed`, or point `sidecar_freshness` at the root instead of the
+    /// sidecar's own directory.
+    #[test]
+    fn an_executable_with_no_record_is_installed_and_of_unknown_provenance() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let catalog = Catalog::shipped().expect("catalogue");
+        let Ok((spec, asset)) = catalog.resolve(SIDECAR) else {
+            // Nothing published for this target. Asserted rather than returned
+            // silently: a test that exits here having checked nothing is the
+            // shape this wave was called to find.
+            let (installed, _) = server_state(&catalog, dir.path());
+            assert!(!installed, "nothing is published, so nothing is installed");
+            return;
+        };
+
+        let install = dir.path().join(SIDECAR);
+        std::fs::create_dir_all(&install).expect("mkdir");
+        let exe = install.join(asset.executable_name());
+        std::fs::write(&exe, b"MZ").expect("write");
+        assert!(exe.is_file(), "the subject of the assertions must be there");
+
+        let (installed, freshness) = server_state(&catalog, dir.path());
+        assert!(
+            installed,
+            "an executable that is there must report installed"
+        );
+        assert_eq!(
+            serde_json::to_value(&freshness).expect("wire")["state"],
+            "unknown",
+            "an install this application did not record cannot be compared with \
+             anything, and must not be rounded to either neighbour"
+        );
+
+        // Recorded, and the same pair now reads current -- the control that
+        // stops the assertion above passing because everything is `unknown`.
+        kw_sidecar::record::write(&install, &kw_sidecar::InstallRecord::of(spec, asset))
+            .expect("record");
+        let (installed, freshness) = server_state(&catalog, dir.path());
+        assert!(installed);
+        assert_eq!(
+            serde_json::to_value(&freshness).expect("wire")["state"],
+            "current"
+        );
+    }
+
+    /// The install path and the refresh path describe a download the same way.
+    ///
+    /// One mapping, so the two cannot drift into two vocabularies for one
+    /// download. `Verifying` maps to nothing on purpose and the two `Some`s
+    /// beside it are what keep that from being a mapping that reports nothing at
+    /// all.
+    #[test]
+    fn the_server_progress_mapping_is_shared_by_both_paths() {
+        let downloading = server_progress(&kw_sidecar::install::Progress::Downloading {
+            written: 1_024,
+            total: Some(17_287_711),
+        })
+        .expect("a download is worth a progress line");
+        let json = serde_json::to_value(&downloading).expect("wire");
+        assert_eq!(json["stage"], "server");
+        assert_eq!(json["written"], 1_024.0);
+        assert_eq!(json["total"], 17_287_711.0);
+
+        let extracting =
+            server_progress(&kw_sidecar::install::Progress::Extracting).expect("unpacking too");
+        assert_eq!(
+            serde_json::to_value(&extracting).expect("wire")["stage"],
+            "extracting"
+        );
+
+        // `LocalLlmProgress::Verifying` names a model id and the server binary
+        // is not a model. The archive is still checked against its pinned
+        // digest; what is missing is a sentence, and one naming the wrong thing
+        // would be worse than none.
+        assert!(server_progress(&kw_sidecar::install::Progress::Verifying).is_none());
+    }
+
+    /// A restarted server is owed an idle watcher, and nothing else is.
+    ///
+    /// **The rule behind a defect found while reading rather than by a failure.**
+    /// `local_llm_start` armed the idle watcher; `LocalLlm::start_model` did not.
+    /// A refresh that restarts through `start_model` and stops there brings the
+    /// server back with **nothing left to ever stop it** -- six gigabytes
+    /// resident until the application exits, which is worse than the staleness
+    /// KNEG-128 was filed about, and no test would have seen it.
+    ///
+    /// Both directions are asserted. Arming for `Restarted` is the defect;
+    /// *not* arming for the other two is the noise fixing it would create, since
+    /// a watcher over a server that is not running is a task spawned to discover
+    /// that on its first tick.
+    ///
+    /// **Mutations that turn it red:** return `false` unconditionally; return
+    /// `true` unconditionally.
+    ///
+    /// **What it does not prove:** that the refresh actually calls
+    /// `watch_for_idle`. Nothing can observe a `tauri::async_runtime::spawn`
+    /// without an `AppHandle`. That half is held by there being one function --
+    /// `start_and_watch` -- which starts a server on the ordinary path, and by
+    /// this rule being consulted on the other.
+    #[test]
+    fn a_restarted_server_is_owed_an_idle_watcher_and_nothing_else_is() {
+        assert!(
+            must_arm_idle_watcher(&Restart::Restarted("qwen2.5-7b-instruct-q4".to_owned())),
+            "a server brought back by a refresh with no watcher holds several \
+             gigabytes until the application exits"
+        );
+
+        assert!(!must_arm_idle_watcher(&Restart::NothingWasRunning));
+        assert!(!must_arm_idle_watcher(&Restart::Failed {
+            model: "qwen2.5-7b-instruct-q4".to_owned(),
+            error: "the port was taken".to_owned(),
+        }));
     }
 
     /* --------------------------------------------------------- the re-hash */
