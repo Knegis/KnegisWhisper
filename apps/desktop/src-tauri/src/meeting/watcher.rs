@@ -20,6 +20,18 @@ use kw_platform::microphone::MicrophoneSupport;
 
 use super::Offer;
 
+/// What the detection fold asks the runtime to do with the offer window.
+///
+/// `None` is deliberately a named transition rather than `Option<Offer>`: the
+/// runtime must distinguish "there is nothing new" from "the call behind the
+/// visible offer ended, so clear it".
+#[derive(Debug)]
+pub enum Transition {
+    Offer(Offer),
+    Withdraw(String),
+    None,
+}
+
 /// Decides what to offer, and remembers what it has already offered.
 ///
 /// Pure, and separate from the polling for that reason: "does this prompt, and
@@ -27,25 +39,71 @@ use super::Offer;
 /// of it needs a process table.
 #[derive(Debug, Default)]
 pub struct Watcher {
-    /// Providers already offered and not yet gone away.
+    /// Providers already offered during their current call.
     ///
     /// Keyed on the provider rather than on a timestamp: an offer dismissed
     /// during a two-hour call must stay dismissed for that call, and must come
     /// back for the next one. A time-based suppression would either re-prompt
     /// mid-meeting or swallow the next meeting, depending which way it was tuned.
     offered: std::collections::BTreeSet<String>,
+    /// The provider whose offer is currently in the one notification window.
+    ///
+    /// Separate from `offered`: dismissing an offer clears the window but must
+    /// keep that call suppressed, while a call ending must both withdraw its
+    /// window and release its suppression.
+    outstanding: Option<String>,
 }
 
 impl Watcher {
-    /// What to offer for this poll, if anything.
+    /// What the offer window should do for this poll.
     ///
-    /// Returns at most one offer. Two meetings at once is possible and offering
-    /// both would stack windows; the first is the one to ask about.
-    pub fn consider(&mut self, detected: &[Detected]) -> Option<Offer> {
-        // Anything that has stopped running can be offered again next time.
-        let live: std::collections::BTreeSet<String> =
-            detected.iter().map(|d| d.provider.to_owned()).collect();
+    /// Returns at most one transition. Two meetings at once is possible, but
+    /// the window can represent only one; another provider waits until the
+    /// outstanding offer is dismissed or withdrawn rather than overwriting it.
+    pub fn consider(&mut self, detected: &[Detected], prompt: bool) -> Transition {
+        // A client being open is not a live meeting. Retaining on every detected
+        // provider was KNEG-134: Teams stays open all day, so the first call was
+        // suppressed until the process exited instead of until that call ended.
+        let live: std::collections::BTreeSet<String> = detected
+            .iter()
+            .filter(|d| d.in_call())
+            .map(|d| d.provider.to_owned())
+            .collect();
         self.offered.retain(|provider| live.contains(provider));
+
+        let withdrawn = if self
+            .outstanding
+            .as_deref()
+            .is_some_and(|provider| !live.contains(provider))
+        {
+            self.outstanding.take()
+        } else {
+            None
+        };
+
+        // Detection keeps folding while prompts are disabled so switching the
+        // setting on halfway through a call does not immediately offer that old
+        // call. If a visible offer existed when the setting was switched off,
+        // withdraw it now.
+        if !prompt {
+            self.offered.extend(live);
+            return if let Some(provider) = self.outstanding.take().or(withdrawn) {
+                Transition::Withdraw(provider)
+            } else {
+                Transition::None
+            };
+        }
+
+        // Clear the ended call before offering another one. This gives the
+        // renderer one unambiguous event per poll and prevents an old window
+        // from being silently overwritten with a different provider.
+        if let Some(provider) = withdrawn {
+            return Transition::Withdraw(provider);
+        }
+
+        if self.outstanding.is_some() {
+            return Transition::None;
+        }
 
         // Only a meeting actually in progress. Prompting on "the client is open"
         // would fire on every launch for most corporate machines -- and for
@@ -57,12 +115,33 @@ impl Watcher {
         // the first in-call provider and then discarding it for being a repeat
         // meant a second meeting running alongside the first was never offered at
         // all -- silently, which is the part that matters. A test caught it.
-        let candidate = detected
+        let Some(candidate) = detected
             .iter()
-            .find(|d| d.in_call() && !self.offered.contains(d.provider))?;
+            .find(|d| d.in_call() && !self.offered.contains(d.provider))
+        else {
+            return Transition::None;
+        };
 
         self.offered.insert(candidate.provider.to_owned());
-        Some(Offer::from(candidate))
+        self.outstanding = Some(candidate.provider.to_owned());
+        Transition::Offer(Offer::from(candidate))
+    }
+
+    /// The user closed the offer without recording this call.
+    ///
+    /// Only the visible identity is cleared. `offered` keeps the call suppressed
+    /// until detection sees it end, so dismiss does not become a five-second
+    /// snooze button.
+    pub fn dismiss(&mut self) {
+        self.outstanding = None;
+    }
+
+    /// A recording replaced whatever the offer window was showing.
+    ///
+    /// This also covers a manual start for a different provider: the window is
+    /// now the recording indicator, so no offer remains outstanding behind it.
+    pub fn recording_started(&mut self) {
+        self.outstanding = None;
     }
 
     /// Forget that a provider was offered, so it can be offered again.
@@ -71,6 +150,9 @@ impl Watcher {
     /// the next one being offered, even if Zoom never quit in between.
     pub fn forget(&mut self, provider: &str) {
         self.offered.remove(provider);
+        if self.outstanding.as_deref() == Some(provider) {
+            self.outstanding = None;
+        }
     }
 
     /// Whether `provider` has an outstanding offer.
@@ -83,6 +165,12 @@ impl Watcher {
     #[must_use]
     pub fn has_offered(&self, provider: &str) -> bool {
         self.offered.contains(provider)
+    }
+
+    #[cfg(test)]
+    #[must_use]
+    pub fn outstanding(&self) -> Option<&str> {
+        self.outstanding.as_deref()
     }
 }
 
@@ -132,6 +220,17 @@ mod tests {
         )
     }
 
+    fn offer(watcher: &mut Watcher, detected: &[Detected]) -> Offer {
+        match watcher.consider(detected, true) {
+            Transition::Offer(offer) => offer,
+            other => panic!("expected an offer, got {other:?}"),
+        }
+    }
+
+    fn is_none(transition: &Transition) -> bool {
+        matches!(transition, Transition::None)
+    }
+
     #[test]
     fn an_offer_carries_the_signal_that_produced_it() {
         // The offer window says why it appeared, and "Teams is holding your
@@ -145,7 +244,7 @@ mod tests {
             "ms-teams.exe".to_owned(),
             CallSignal::Microphone,
         );
-        let offer = watcher.consider(&[mic]).expect("a call is offered");
+        let offer = offer(&mut watcher, &[mic]);
         assert_eq!(offer.signal, CallSignal::Microphone);
         assert_eq!(offer.evidence, "ms-teams.exe");
     }
@@ -157,12 +256,12 @@ mod tests {
         let mut watcher = Watcher::default();
         let running = vec![detected("zoom", true)];
 
-        let offer = watcher.consider(&running).expect("the first poll offers");
+        let offer = offer(&mut watcher, &running);
         assert_eq!(offer.provider, "zoom");
         assert_eq!(offer.evidence, "zoom.exe");
 
         for _ in 0..10 {
-            assert!(watcher.consider(&running).is_none(), "offered twice");
+            assert!(is_none(&watcher.consider(&running, true)), "offered twice");
         }
     }
 
@@ -173,7 +272,9 @@ mod tests {
         // inside its own process. Offering on "the client is open" would fire on
         // every launch for anyone whose Teams starts with Windows.
         let mut watcher = Watcher::default();
-        assert!(watcher.consider(&[detected("teams", false)]).is_none());
+        assert!(is_none(
+            &watcher.consider(&[detected("teams", false)], true)
+        ));
         assert!(!watcher.has_offered("teams"));
     }
 
@@ -182,12 +283,52 @@ mod tests {
         let mut watcher = Watcher::default();
         let running = vec![detected("zoom", true)];
 
-        assert!(watcher.consider(&running).is_some());
+        let _ = offer(&mut watcher, &running);
         // Zoom quits.
-        assert!(watcher.consider(&[]).is_none());
+        assert!(matches!(
+            watcher.consider(&[], true),
+            Transition::Withdraw(provider) if provider == "zoom"
+        ));
         assert!(!watcher.has_offered("zoom"), "the suppression was released");
         // And a new call is offered.
-        assert!(watcher.consider(&running).is_some());
+        let _ = offer(&mut watcher, &running);
+    }
+
+    #[test]
+    fn an_ended_call_with_its_client_still_open_withdraws_and_rearms() {
+        // The exact Teams sequence behind KNEG-134: ms-teams.exe remains in the
+        // process table, while microphone use is the call boundary.
+        let mut watcher = Watcher::default();
+        let calling = vec![detected("teams", true)];
+        let open = vec![detected("teams", false)];
+
+        let _ = offer(&mut watcher, &calling);
+        assert!(matches!(
+            watcher.consider(&open, true),
+            Transition::Withdraw(provider) if provider == "teams"
+        ));
+        assert_eq!(watcher.outstanding(), None);
+        assert!(!watcher.has_offered("teams"));
+
+        let second = offer(&mut watcher, &calling);
+        assert_eq!(second.provider, "teams");
+    }
+
+    #[test]
+    fn dismiss_suppresses_only_the_current_call() {
+        let mut watcher = Watcher::default();
+        let calling = vec![detected("teams", true)];
+        let open = vec![detected("teams", false)];
+
+        let _ = offer(&mut watcher, &calling);
+        watcher.dismiss();
+        assert_eq!(watcher.outstanding(), None);
+        assert!(is_none(&watcher.consider(&calling, true)));
+
+        // The idle signal releases the suppression even though there was no
+        // visible offer left to withdraw.
+        assert!(is_none(&watcher.consider(&open, true)));
+        let _ = offer(&mut watcher, &calling);
     }
 
     #[test]
@@ -198,22 +339,71 @@ mod tests {
         let mut watcher = Watcher::default();
         let running = vec![detected("zoom", true)];
 
-        assert!(watcher.consider(&running).is_some());
+        let _ = offer(&mut watcher, &running);
+        watcher.recording_started();
         watcher.forget("zoom");
-        assert!(watcher.consider(&running).is_some());
+        let _ = offer(&mut watcher, &running);
     }
 
     #[test]
-    fn only_one_offer_is_made_when_two_meetings_are_running() {
-        // Two windows stacked on top of each other is worse than one question.
+    fn another_meeting_cannot_overwrite_an_outstanding_offer() {
+        // One notification window cannot honestly hold two outstanding offers.
         let mut watcher = Watcher::default();
         let running = vec![detected("zoom", true), detected("webex", true)];
 
-        assert!(watcher.consider(&running).is_some());
-        // The second is offered on the next poll, not simultaneously.
-        let second = watcher.consider(&running).expect("the other one follows");
+        let first = offer(&mut watcher, &running);
+        assert_eq!(first.provider, "zoom");
+        assert!(is_none(&watcher.consider(&running, true)));
+        assert_eq!(watcher.outstanding(), Some("zoom"));
+
+        // Dismissing Zoom frees the window but keeps that call suppressed. The
+        // next poll may then offer Webex without re-offering Zoom.
+        watcher.dismiss();
+        let second = offer(&mut watcher, &running);
         assert_eq!(second.provider, "webex");
-        assert!(watcher.consider(&running).is_none());
+        assert!(is_none(&watcher.consider(&running, true)));
+    }
+
+    #[test]
+    fn another_provider_ending_cannot_withdraw_the_visible_offer() {
+        let mut watcher = Watcher::default();
+        let both = vec![detected("zoom", true), detected("webex", true)];
+        let zoom_only = vec![detected("zoom", true), detected("webex", false)];
+
+        let first = offer(&mut watcher, &both);
+        assert_eq!(first.provider, "zoom");
+        assert!(is_none(&watcher.consider(&zoom_only, true)));
+        assert_eq!(watcher.outstanding(), Some("zoom"));
+    }
+
+    #[test]
+    fn calls_seen_while_prompting_is_off_stay_suppressed_until_they_end() {
+        let mut watcher = Watcher::default();
+        let calling = vec![detected("teams", true)];
+        let open = vec![detected("teams", false)];
+
+        assert!(is_none(&watcher.consider(&calling, false)));
+        assert!(watcher.has_offered("teams"));
+        // Turning prompts on during the same call must not produce a late offer.
+        assert!(is_none(&watcher.consider(&calling, true)));
+
+        assert!(is_none(&watcher.consider(&open, true)));
+        let _ = offer(&mut watcher, &calling);
+    }
+
+    #[test]
+    fn disabling_prompts_with_an_offer_visible_withdraws_it() {
+        let mut watcher = Watcher::default();
+        let calling = vec![detected("zoom", true)];
+
+        let _ = offer(&mut watcher, &calling);
+        assert!(matches!(
+            watcher.consider(&calling, false),
+            Transition::Withdraw(provider) if provider == "zoom"
+        ));
+        assert_eq!(watcher.outstanding(), None);
+        // The same call remains suppressed when prompts are enabled again.
+        assert!(is_none(&watcher.consider(&calling, true)));
     }
 
     #[test]
@@ -221,7 +411,7 @@ mod tests {
         // The sequence a real Zoom meeting produces: the client is open first and
         // must not be offered, then the call starts and must be.
         let mut watcher = Watcher::default();
-        assert!(watcher.consider(&[detected("zoom", false)]).is_none());
-        assert!(watcher.consider(&[detected("zoom", true)]).is_some());
+        assert!(is_none(&watcher.consider(&[detected("zoom", false)], true)));
+        let _ = offer(&mut watcher, &[detected("zoom", true)]);
     }
 }

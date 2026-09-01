@@ -107,7 +107,7 @@ use config::{
 use notes::{labelled, pcm_bytes, segment, WholePass};
 pub use recorder::Delivered;
 use recorder::{spawn_recorder, Drained, Finished, RecorderCommand, RecorderEnd};
-use watcher::WatchState;
+use watcher::{Transition, WatchState};
 
 use std::sync::mpsc as sync_mpsc;
 use std::sync::{Arc, OnceLock};
@@ -526,7 +526,7 @@ impl MeetingRuntime {
         let survey = meeting_detect::survey();
         let detected = meeting_detect::detect(&survey.running, &survey.capturing, &lists);
 
-        let offer = {
+        let transition = {
             let mut held = self.watch.lock().await;
             held.detected = detected.clone();
             held.microphone = Some(survey.microphone);
@@ -534,32 +534,39 @@ impl MeetingRuntime {
             // already-offered bookkeeping stays correct if the setting is turned
             // on mid-call -- otherwise switching it on would immediately prompt
             // for a meeting that started an hour ago.
-            let offer = held.watcher.consider(&detected);
-            if prompt {
-                offer
-            } else {
-                None
-            }
+            held.watcher.consider(&detected, prompt)
         };
 
-        if let Some(offer) = offer {
-            tracing::info!(
-                provider = %offer.provider,
-                evidence = %offer.evidence,
-                "a meeting appears to be in progress; offering to record it"
-            );
-            if let Err(err) = self.app.emit(OFFER_EVENT, &offer) {
-                tracing::warn!(error = %err, "could not deliver the recording offer");
+        match transition {
+            Transition::Offer(offer) => {
+                tracing::info!(
+                    provider = %offer.provider,
+                    evidence = %offer.evidence,
+                    "a meeting appears to be in progress; offering to record it"
+                );
+                if let Err(err) = self.app.emit(OFFER_EVENT, &offer) {
+                    tracing::warn!(error = %err, "could not deliver the recording offer");
+                }
+                crate::meeting_window::set_visible(&self.app, true);
             }
-            crate::meeting_window::set_visible(&self.app, true);
+            Transition::Withdraw(provider) => {
+                tracing::info!(%provider, "the meeting behind the recording offer ended");
+                if let Err(err) = self.app.emit(OFFER_EVENT, Option::<Offer>::None) {
+                    tracing::warn!(error = %err, "could not withdraw the recording offer");
+                }
+                crate::meeting_window::set_visible(&self.app, false);
+            }
+            Transition::None => {}
         }
     }
 
     /// Dismiss the outstanding offer without recording.
     ///
-    /// The provider stays suppressed until its process goes away, which is what
-    /// stops a dismissed offer coming back five seconds later.
+    /// The provider stays suppressed until its current call ends, which is what
+    /// stops a dismissed offer coming back five seconds later without swallowing
+    /// the next call in a client that remains open.
     pub async fn dismiss(&self) {
+        self.watch.lock().await.watcher.dismiss();
         crate::meeting_window::set_visible(&self.app, false);
         if let Err(err) = self.app.emit(OFFER_EVENT, Option::<Offer>::None) {
             tracing::warn!(error = %err, "could not clear the recording offer");
@@ -803,6 +810,11 @@ impl MeetingRuntime {
             started: std::time::Instant::now(),
             transcript_failure,
         });
+
+        // The one notification window is now the recording indicator, whether
+        // this start came from its offer or from Settings. No invisible offer
+        // may remain outstanding behind it.
+        self.watch.lock().await.watcher.recording_started();
 
         tracing::info!(
             provider = provider_id,
