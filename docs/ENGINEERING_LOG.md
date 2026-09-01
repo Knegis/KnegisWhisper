@@ -459,6 +459,169 @@ nobody was looking for it systematically.
 
 No production behaviour changed. Nothing here was vacuous because the code was wrong; every one was
 vacuous because of what the test did or did not say.
+---
+
+## 2026-09-01 (KNEG-129) — a table that overstated a capability, and two sentences that invented one
+
+Three sentences that were true when they were written, and one rename. Nothing here changes
+behaviour, and deliberately not: **when a modifier-only chord should fire is KNEG-115 and it is
+still open.**
+
+### `is_usable` had drifted, and the codebase already knew
+
+`Binding::is_usable` said *"Whether this action has at least one working hotkey"* and computed
+`!self.registrable().is_empty()`. On Windows that is false twice over: a `ModifierOnly` chord and a
+`MouseButton` are both unregistrable by construction and both fire through the low-level hook.
+`Accelerator::explain` says so on the screen in as many words — *"It still works"*, and *"It works,
+and the click is not swallowed"* — and `Accelerator::is_registrable` had the honest wording next
+door the whole time: *"Whether `tauri-plugin-global-shortcut` can register this today."* The drift
+was confined to one method and one field. It is `has_registrable` now, which pairs with the
+`registrable()` immediately above it.
+
+**No user-visible string changed.** `Dictation.tsx` renders `bindings`, `unhandled`, `conflicts` and
+`cautions`, and has never read the field this issue is about.
+
+### The field is worse than its name, and the rename says so rather than hiding it
+
+`HotkeyReport::unusable` is the union of *no registrable accelerator* and *no handler*, which are
+two unrelated properties. The first stopped meaning "does not work" the moment a hooked platform
+existed — on the shipped default, dictation is in that set and it **fires**. The second is the
+opposite shape: chat agent's `Control+Shift+Space` is a faultless registrable accelerator and it is
+the *action* that has nowhere to go. Neither half implies the other and the union implies neither,
+so no short name for it can be true.
+
+It is `unregistrable_or_unhandled` now. The clumsiness is the finding rather than a cost to be
+minimised: **a field whose only truthful name is a conjunction is a field that should not exist**,
+and this one has no consumer at all — nothing in Rust outside its own tests, nothing in
+`apps/desktop/src`. Renaming it stops it lying; deleting it is a separate decision and is filed
+rather than taken here. `unhandled` already carries the reason and
+`RegistrationReport::is_live` already carries the outcome.
+
+The 2026-08-26 and 2026-08-31 entries below still call it `unusable`. They are dated records of what
+was true then and are left alone; rewriting them to use a name that did not exist yet would be its
+own small dishonesty.
+
+### `PLATFORM_SUPPORT.md` was wrong eight times more than the issue thought
+
+The issue named two false cells. Against `keyhook::support()`, which returns `Unsupported` for every
+target that is not Windows, there were **sixteen** — five macOS, four X11, three Wayland
+modifier-only, and the whole push-to-talk row on five platforms — plus three registration mechanisms
+(`gsettings + D-Bus`, `KGlobalAccel`, `hyprctl`) that appear nowhere in the repository, and one
+Windows cell, `native hook per key`, that contradicted line 426 of its own section eight lines
+further down. Line 426 names one-hook-per-key as the upstream design this project deliberately did
+not copy.
+
+**But the ranking is the transferable part, and it is not the count.** A cell overstating a
+capability is a table being generous. A sentence describing behaviour is a different failure, and
+this section had two:
+
+- *"On X11 and GNOME the effective default is adjusted because modifier-only combinations do not
+  work there."* No such adjustment has ever existed. `default_accelerator` is a bare `match` with no
+  conditional compilation anywhere near it — `grep -n "cfg(target_os"` over `hotkey.rs` and
+  `shortcuts.rs` returns nothing — and `nothing_ships_holding_by_default` pins the value. Every
+  platform ships `Control+Super`. This one invents a behaviour.
+- *"Push-to-talk on Linux needs read access to `/dev/input`; without it the app reports the
+  limitation and falls back to toggle mode rather than silently failing."* **This is the worst thing
+  in the section and nobody had noticed it.** There is no `/dev/input` reader in this repository —
+  zero matches — and nothing falls back to toggle mode; `hotkey.<action>.mode` is a stored per-action
+  setting and no code consults the platform when reading it. It invents *two* behaviours, and both
+  of them are the careful, self-aware engineering the rest of the document is genuinely full of,
+  which is exactly why it reads as true.
+
+A capability cell that is too generous costs a reader an expectation. A sentence like the second one
+costs them a belief that the problem was already thought about.
+
+### And one stale reason, folded in
+
+`commands.rs` built an empty speaker map under *"which nothing writes yet because there is no
+diarisation."* There is diarisation now, and the **behaviour is right and unchanged** — the map is
+empty because nothing renames a speaker, not because nothing diarises. `meeting::notes` writes
+`speaker_0` with the placeholder `Speaker 1`, `transcript::speaker_name` renders it from the segment
+alone, and what the table would add is a name a person typed, which no screen offers. Only the
+reason was false.
+
+---
+
+## 2026-09-01 (KNEG-73) — the deferral was narrowed, not dissolved, and the gate still cannot tell
+
+`search:semantic` made four checkable claims and **two were false on their face**:
+
+| claim | verdict |
+| --- | --- |
+| `"interface": "notes_core::search::SemanticIndex"` | **Never existed.** `crates/notes-core/src` is `lib.rs`, `notes.rs`, `transcript.rs`; the name appears nowhere in the tree but in this manifest |
+| `"degradation": "the UI hides semantic ranking rather than failing"` | **False.** Zero occurrences of `semantic` in `apps/desktop/src`. Nothing is hidden, nothing was built, and `SearchHit` has no score field to rank by |
+| ONNX Runtime | **Already in the tree**, as `onnxruntime.dll` inside the pinned sherpa archive — the same discovery that collapsed diarization's identical claim the day before |
+| the `ort` crate | **Not required.** `kw_meeting_core::diarization` drives an ONNX model with no `ort` in `Cargo.lock`, by shelling out to a binary that links the runtime itself |
+| Qdrant, MiniLM | **Genuinely absent**, and the deferral survives on these two alone |
+
+So it **stays deferred** and nothing was built — no sidecar, no embedding path, no `search` module.
+What changed is that the entry now rests on the one argument that holds rather than on three, and
+says which parts are measured and which are not.
+
+### The instruction was to delete the deferral block, and that turned out to be impossible
+
+The plan said to correct this the way the diarization entries were corrected: delete the `deferral`
+block, move the truth into `note`. That could not be done. `verify-parity.mjs` fails
+`incomplete-deferral` when a `temporarily-deferred` entry has no block, and there is no vocabulary
+term for "deferred without one". Diarization could delete its block **because its status changed to
+built** — that is what made it the model, and it is precisely the part that does not transfer to an
+entry that is still deferred. So every field of the block was corrected in place instead.
+
+Worth writing down because the mistake is a natural one: *"correct it the way that one was
+corrected"* silently assumes the two entries are in the same state, and these two were in opposite
+states.
+
+### The general defect, now with a second instance
+
+`verify-parity.mjs` checks that a deferred entry **has** `why`, `dependencies`, `interface` and
+`expectedPhase`. Five existence checks, no type check, no resolution of `interface` against the
+source tree, and no way at all to ask whether any of it is still true. That is how this entry named
+a nonexistent module for months, and it is the same lesson the KNEG-123 entry drew one day earlier —
+*"a deferral block ages exactly like a status claim and nothing gates it."* One instance is an
+anecdote; two in two days is the gate's shape.
+
+`search:sqlite-fts` was stale in the same pass, in a smaller way: `"backend": "crates/storage"` named
+where the FTS5 table is declared rather than where the query runs, which is
+`kw_notes_core::notes::search`.
+
+---
+
+## 2026-09-01 (KNEG-76) — write-only ownership, and a rule that was exact and unwritten
+
+Five orphan tables were really **eight** — `speaker_profiles`, `speaker_mappings` and
+`note_speaker_embeddings` are in the same state — and *"touched only by the importer"* was false for
+four of them. All eight are asserted to exist by a schema test; `agent_messages` is the subject of
+the foreign-key test and `speaker_mappings` of the cascade test; four are named to the user in a
+shipped sentence on `Notes > Upload`; and `contacts` is cited **normatively** by two diarization
+modules as a thing they deliberately do not reach for. The honest phrase is **write-only
+ownership**: the importer writes them, tests and comments depend on them, nothing reads them back.
+
+Two decisions recorded rather than deferred a fourth time. **`snippets` stays** — it is not inert,
+the importer copies it and a shipped sentence promises the user it will, so dropping it discards
+real data to save a five-column table. And **`speaker_mappings` has a candidate owner it did not
+have a week ago**: diarization produces `Speaker 1`, `speaker_name` already prefers a mapping over
+the placeholder, and that table is where a rename to a person would live. The owner is named and
+nothing was built.
+
+### The best thing in this issue was not in the issue
+
+`contacts` is in `COPY_PLAN` and not in `MUST_BE_EMPTY`, which looked like an oversight worth a
+sentence. Checking all sixteen tables against the schema turned it into a rule: **`MUST_BE_EMPTY` is
+exactly the `COPY_PLAN` tables declared `INTEGER PRIMARY KEY AUTOINCREMENT`, with no exception in
+either direction.** The list guards one risk — the importer preserves row ids, so a non-empty target
+could collide — and every table it omits is keyed by something SQLite did not hand out: `contacts`
+by `email`, the two speaker child tables by `(note_id, speaker_id)`, the four calendar tables by a
+provider-supplied `TEXT` id.
+
+Exact, load-bearing, and **written down nowhere**, which made it a coincidence waiting for whoever
+added the next table to either list. It is now on `MUST_BE_EMPTY` as prose and pinned by
+`must_be_empty_is_exactly_the_autoincrement_tables`, which reads the live schema rather than a
+second hand-written list — a test that restates the nine names proves only that someone typed them
+twice. Mutated both ways before being believed: adding `contacts` to the list and removing
+`snippets` from it each turn it red.
+
+**No migration**, and that is the shape of the closing rather than a limitation of it. There is one
+migration file and `migrations_are_idempotent_across_reopens` asserts `applied == 1`.
 
 ---
 
