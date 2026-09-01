@@ -291,6 +291,129 @@ Unchanged from the Phases 1–4 entry, restated here so they are not buried:
 
 ---
 
+## 2026-09-01 (KNEG-130) — the response to the finding destroyed the finding
+
+`local_llm_recheck_model` hashes an installed GGUF against its pinned digest. It is the only thing in
+this application that actually proves the bytes of a model, and when it found a file that did not
+match, `settle_record` **deleted the record beside it**.
+
+That looks like the safe direction and is not. The reasoning behind the deletion was sound as far as
+it went — a record that survived a mismatch is a record that is *wrong*, because it says the length
+and the timestamp are what they were at install while the bytes say they are not, and leaving it
+would have the screen answer *unchanged since it was installed* about a file just proved otherwise.
+The mistake was in what deleting leaves behind.
+
+It leaves `GgufIntegrity::Unrecorded`, which `gguf_check` documents at length as **not an
+accusation**: it is the state every GGUF installed before records existed is in, including the
+1.28 GB Qwen2.5 on the developer's machine. So a file that had been read in full and refused became
+indistinguishable from one nobody had ever looked at.
+
+**And it was worse than a display problem.** `start_model`'s warning matched `GgufIntegrity::Changed`
+and nothing else. A failed re-check deleted the record, the row fell to `Unrecorded`, the warning
+stopped firing — so the log went quiet on exactly the file the application had just proved was not
+the one that was installed. Responding to the finding was what destroyed it. The verdict survived
+only as long as the command that produced it, and a restart erased it entirely.
+
+### The verdict goes in the one record
+
+Not a second file beside it. Two files describing one model are two things that can disagree, and
+the disagreement would be about whether a model can be trusted.
+
+`SCHEMA` moves 1 → 2 and `InstallRecord` gains a `verdict`: `Passed`, or `Failed` carrying the pair
+of digests that disagreed. The digests live in the verdict rather than being read back off the
+record's own `sha256`, and that is not duplication — `sha256` records what the *install* pinned and
+these record what the *re-check* actually compared. They are the same string today. A pin updated in
+the registry after a model was installed is exactly when a person reading the file needs both.
+
+**The precedent is `calendar.rs`, not something invented here.** It already persists negative
+verdicts — `SyncOutcome::{Failed, TokenUnavailable}` — and folds them into live status through the
+pure `combine_token_status`, whose doc makes the argument this needed: one shape for both, so a
+screen can never see a different answer from a check it just ran than from the record read back
+later. What is new is only the medium. This is the first negative verdict this application writes to
+**a file beside an artefact** rather than into SQLite, and the module doc says so plainly, because
+the record is ordinary JSON in a user-writable directory — a place to keep a finding, never a place
+to enforce one.
+
+### Where the verdict is read is the whole design
+
+Inside the branch where the two integers already agree, never before it. Both halves are load-bearing
+and each has its own test:
+
+- **Only there** is what stops a recorded failure rendering as `UnchangedSinceInstall`. A failed
+  re-check writes the file's *current* length and mtime, so the cheap comparison agrees — and reading
+  only those two integers would have this application make its strongest positive claim about the one
+  file it has proved is wrong.
+- **Not before it**, which is the obvious way to write it and the wrong one. A verdict describes the
+  bytes it was measured against. Once the length or the timestamp moves, those bytes are gone —
+  somebody has reinstalled the model — and the state falls back to `Changed` whatever the verdict
+  said. An accusation carried forward over a file that has since been repaired is a screen nobody can
+  clear.
+
+`integrity_of` stays pure over two integers and a small enum. Nothing here hashes anything; the
+branch is chosen by the *recorded* verdict.
+
+`FailedRecheck` is therefore worth exactly the sentence it carries: the file was read in full and
+refused, **and nothing has written to it since**.
+
+### Backward compatibility was the part that could have gone wrong quietly
+
+`read_record` compared `record.schema == SCHEMA`. Bumping the constant with that line in place would
+have discarded every record already on disk — every installed model dropping from *unchanged since
+it was installed* to *installed, never recorded*, for no reason a user could see. That is the same
+overclaim this module exists to prevent, running in reverse.
+
+There are two constants now, `SCHEMA` for what is written and `READABLE_SCHEMAS` for what is
+understood, because those are different facts. A schema 1 record has no `verdict` key and
+`#[serde(default)]` reads it as `Passed`, which is the correct reading: a record written by an
+install is a record of a check that passed.
+
+**Proved against a fixture, not a fresh install.** The test writes the JSON by hand, with no
+`verdict` key, against a real file whose length and mtime it names — a record built through
+`InstallRecord { .. }` would acquire the field from the struct and prove nothing about what is on
+somebody's disk today. Its control is a schema 3 fixture in the same test, so the acceptance is a
+decision rather than serde taking whatever it is handed.
+
+### `forget_record` is gone, and its argument is not
+
+Deleted rather than left uncalled. Its reasoning moved into `write_failed_record`'s doc, because the
+reasoning was never "forget it" — it was *never let the screen say unchanged about this file* — and
+writing the verdict satisfies that better than deleting did.
+
+The failed record writes `verified_by: nothing`. Nothing about those bytes was verified; the last
+thing that looked at them refused them. Carrying the install's old strength forward would put this
+file's strongest word beside its worst verdict.
+
+### The one assertion that carries the argument, and the gate that actually guards it
+
+`start_model`'s warning was the reason this mattered, so the branch had to become reachable.
+`load_warning(&GgufIntegrity) -> Option<String>` is pure and tested over all five states: `Changed`
+and `FailedRecheck` speak, and `UnchangedSinceInstall`, `Unrecorded` and `NotInstalled` are silent.
+Both directions are asserted, because only one of them is the defect and the other is the noise
+fixing it would create — a warning that fires for every `Unrecorded` model on disk is a warning
+nobody reads.
+
+The cost is honest and small: the structured `recorded_bytes`/`bytes` tracing fields become part of
+the message text. A branch nothing can reach is worth less than two log fields.
+
+**What that test does not prove is that `start_model` still calls it**, and this is worth recording
+because it is the interesting half. Mutating `load_warning`'s body proves the function; it says
+nothing about the call. What catches a deleted call site is not a test at all — `load_warning` is
+private, so removing its only caller makes it dead code and `clippy --workspace --all-targets -D
+warnings` fails the build. Verified by doing it. The gate is the guard here, not the suite, and those
+are different claims.
+
+### What is believed rather than measured
+
+The five states were exercised against real files in a temporary directory, and the failed verdict
+was written, read back, cleared by a passing re-check, and invalidated by a subsequent write. **No
+real GGUF has been through this.** `local_llm_recheck_model` had never been run before this change
+and still has not been: its verdict and its record-settling are tested as pure functions and against
+small real files, and the command that wires them to `spawn_blocking` and the registry is the
+untestable edge. The first genuine 1.28 GB hash, and the first `failed-recheck` row on a real screen,
+are still by-hand checks.
+
+---
+
 ## 2026-09-01 (KNEG-117) — the depth that was deferred twice cost two and a half hours
 
 **Run: 400 rounds, 35 binaries, 14,000 runs, thread counts 1/2/4/8/16, control passed, not void,
@@ -491,6 +614,10 @@ spells itself "verified": two integers agreeing is not a hash, and the weaker wo
 | `unchanged-since-install` | a record, and the length and mtime still agree with it |
 | `unrecorded` | the file is there and nothing beside it says what was checked |
 | `changed` | a record, and it disagrees |
+| `failed-recheck` | a re-hash read the file and refused it, and nothing has written to it since |
+
+The fifth arrived hours later, with KNEG-130 — see that entry. It is listed here rather than left to
+be discovered, because the four-state framing above is the thing that made the defect possible.
 
 `unrecorded` is the one the design turns on. **Every GGUF installed before this landed is in it** —
 including the 1.28 GB `qwen2.5-1.5b-instruct-q5_k_m.gguf` on the developer's machine right now — and
@@ -515,6 +642,12 @@ Two decisions inside it:
   replacement the cheap check documents itself as unable to see. Left in place it would have the
   screen make the strongest available claim about the worst available file. The weights stay: they
   may be twenty gigabytes somebody chose to keep, and a stale pin here is as likely as rot there.
+
+  **The removal lasted a few hours.** The requirement was right and the remedy was not: deleting the
+  record dropped the row to `unrecorded` — the *nothing is known* state, which is not an accusation
+  and which every pre-record model reports — and silenced `start_model`'s warning with it, so
+  responding to the finding was what destroyed it. A mismatch now **writes** the verdict instead.
+  KNEG-130, same day.
 - **`nothing-pinned` is its own answer.** Nothing shipped today can reach it, and "there was nothing
   to check" still must not render as "checked, and fine".
 

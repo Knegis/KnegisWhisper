@@ -245,17 +245,8 @@ impl LocalLlm {
         // is a worse failure than the one being guarded against. The screen
         // reports the state and offers a re-hash; this only makes sure the fact
         // reaches the log of a session that is about to load the file anyway.
-        if let GgufIntegrity::Changed {
-            recorded_bytes,
-            bytes,
-        } = gguf_check::integrity(&path)
-        {
-            tracing::warn!(
-                model = %model_id,
-                recorded_bytes,
-                bytes,
-                "this model has changed since it was checked at install; loading it anyway"
-            );
+        if let Some(reason) = load_warning(&gguf_check::integrity(&path)) {
+            tracing::warn!(model = %model_id, "{reason}");
         }
 
         let chosen = port::allocate(
@@ -317,6 +308,46 @@ impl LocalLlm {
         *self.running.lock().await = Some(running);
 
         Ok(chosen)
+    }
+}
+
+/// What the log should say about a file the server is about to load, if
+/// anything.
+///
+/// **Pure, and extracted for the reason `media.rs:1334-1340` records.** The
+/// judgement used to sit inside [`LocalLlm::start_model`], which allocates a
+/// port and spawns a child process, so nothing outside a running application
+/// could reach it -- and it was wrong in a way that mattered. It matched
+/// [`GgufIntegrity::Changed`] alone, so when a failed re-hash *deleted* the
+/// record the row fell to [`GgufIntegrity::Unrecorded`], this warning stopped
+/// firing, and **the log went quiet on exactly the file the application had just
+/// proved was not the one that was installed.** That is the argument KNEG-130
+/// rests on, and it is asserted here rather than described in a comment.
+///
+/// The two silent states are as deliberate as the two loud ones.
+/// `UnchangedSinceInstall` has nothing to report. `Unrecorded` is every GGUF
+/// installed before records existed, and warning about those would train a user
+/// to ignore the line that matters.
+///
+/// The cost of the extraction, stated because it is a real one: the structured
+/// `recorded_bytes` and `bytes` tracing fields become part of the message text.
+/// A branch nothing can reach is worth less than two log fields.
+fn load_warning(integrity: &GgufIntegrity) -> Option<String> {
+    match integrity {
+        GgufIntegrity::Changed {
+            recorded_bytes,
+            bytes,
+        } => Some(format!(
+            "this model has changed since it was checked at install \
+             (recorded {recorded_bytes} bytes, found {bytes}); loading it anyway"
+        )),
+        GgufIntegrity::FailedRecheck { expected, actual } => Some(format!(
+            "this model failed a checksum re-check and has not been written to since \
+             (pinned {expected}, hashed {actual}); loading it anyway"
+        )),
+        GgufIntegrity::NotInstalled
+        | GgufIntegrity::UnchangedSinceInstall { .. }
+        | GgufIntegrity::Unrecorded => None,
     }
 }
 
@@ -1080,6 +1111,11 @@ pub enum RecheckOutcome {
     /// having gone stale rather than the file having rotted, and deleting
     /// somebody's data on a hunch is not this command's decision to make. It
     /// names both digests and leaves the choice with them.
+    ///
+    /// **The verdict is written down beside the file**, so this survives the
+    /// process that found it -- see [`settle_record`]. Both digests go into the
+    /// record for the same reason they are in this variant: a message with only
+    /// one of them cannot be acted on.
     Mismatched {
         file_name: String,
         expected: String,
@@ -1133,8 +1169,18 @@ fn recheck_verdict(digest: &DigestCheck, file_name: &str, actual: &str) -> Reche
 /// replacement [`crate::gguf_check`] documents itself as unable to catch.
 /// Leaving it in place would have the screen answer "unchanged since it was
 /// installed" about a file this application has just proved is not the one that
-/// was installed, so the record goes and the state falls back to "nothing is
-/// known".
+/// was installed.
+///
+/// **It used to delete the record, and that was the defect KNEG-130 fixed.**
+/// Deleting satisfied the letter of the requirement -- the screen stopped saying
+/// *unchanged* -- and lost the finding. The row fell to
+/// [`GgufIntegrity::Unrecorded`], which `gguf_check` documents as *nothing is
+/// known* and which every model installed before records existed also reports,
+/// so a file that had been read in full and refused became indistinguishable
+/// from one nobody had ever looked at. Worse, [`load_warning`] fires for
+/// [`GgufIntegrity::Changed`] and not for `Unrecorded`, so the deletion also
+/// silenced the log line about that exact file. The verdict is written instead,
+/// and it survives a restart.
 ///
 /// Neither arm fails the command. The answer is the hash; the record is a
 /// convenience for the next screen paint, and a convenience that could not be
@@ -1152,12 +1198,14 @@ fn settle_record(path: &std::path::Path, digest: &DigestCheck, outcome: &Recheck
                 );
             }
         }
-        RecheckOutcome::Mismatched { .. } => {
-            if let Err(err) = gguf_check::forget_record(path) {
+        RecheckOutcome::Mismatched {
+            expected, actual, ..
+        } => {
+            if let Err(err) = gguf_check::write_failed_record(path, expected, actual) {
                 tracing::warn!(
                     error = %err,
-                    "the re-check failed and the record that disagrees with it could not \
-                     be removed; the screen may still call this file unchanged"
+                    "the re-check failed and the verdict could not be written beside the \
+                     file; the screen may still call this file unchanged"
                 );
             }
         }
@@ -2075,6 +2123,31 @@ mod tests {
             model_status(&provider.id, dir.path(), model).integrity,
             GgufIntegrity::Changed { .. }
         ));
+
+        // 5. A re-hash has refused it. The wiring claim for KNEG-130: every
+        //    assertion about the fifth state elsewhere is about `gguf_check` in
+        //    isolation, and a `model_status` that ignored the verdict would pass
+        //    all of them while the screen said nothing.
+        gguf_check::write_failed_record(&path, &"1".repeat(64), &"2".repeat(64)).expect("verdict");
+        let row = model_status(&provider.id, dir.path(), model);
+        assert_eq!(
+            row.integrity,
+            GgufIntegrity::FailedRecheck {
+                expected: "1".repeat(64),
+                actual: "2".repeat(64),
+            }
+        );
+        assert_ne!(
+            row.integrity,
+            GgufIntegrity::Unrecorded,
+            "the row must not report a refused file the way it reports one \
+             nobody has looked at"
+        );
+        assert_eq!(
+            row.draft.as_ref().expect("drafter row").integrity,
+            GgufIntegrity::NotInstalled,
+            "one file's verdict must not spread to the other half of the row"
+        );
     }
 
     /* --------------------------------------------------------- the re-hash */
@@ -2192,19 +2265,31 @@ mod tests {
         );
     }
 
-    /// A re-hash that disagrees takes the record with it.
+    /// A re-hash that disagrees records the verdict instead of forgetting it.
     ///
     /// This is the one case where the cheap check and the real one contradict
     /// each other, and it is exactly the replacement `gguf_check` documents
     /// itself as unable to see: same length, same timestamp, different bytes.
-    /// The record has to go, because leaving it would have the screen answer
-    /// "unchanged since it was installed" about a file just proved otherwise —
-    /// the strongest available claim, made about the worst available file.
+    /// The record cannot be left as it is, because that would have the screen
+    /// answer "unchanged since it was installed" about a file just proved
+    /// otherwise -- the strongest available claim, made about the worst
+    /// available file.
+    ///
+    /// **Until KNEG-130 it was deleted, and this test asserted that.** Deleting
+    /// met the letter of the requirement and threw the finding away: the row
+    /// dropped to `Unrecorded`, which `gguf_check` documents as *nothing is
+    /// known* and which every model installed before records existed also
+    /// reports, so a file read in full and refused became indistinguishable from
+    /// one nobody had looked at -- and `load_warning` went quiet about it too.
+    /// The two negative assertions below are the old behaviour, now forbidden.
     ///
     /// The file itself stays. It may be twenty gigabytes somebody chose to keep,
     /// and the pin going stale is as likely an explanation as the bytes rotting.
+    ///
+    /// **Mutation that turns it red:** make the `Mismatched` arm of
+    /// `settle_record` a no-op, or restore the deletion.
     #[test]
-    fn a_failed_recheck_removes_the_record_that_contradicts_it_and_keeps_the_file() {
+    fn a_failed_recheck_records_the_verdict_instead_of_forgetting_it() {
         use crate::gguf_check::{self, GgufIntegrity};
         use crate::local_model::VerifiedBy;
 
@@ -2222,21 +2307,114 @@ mod tests {
             "the record claims the strongest thing there is, before the re-hash"
         );
 
-        let digest = DigestCheck::Measured(pinned);
-        let outcome = recheck_verdict(&digest, "weights.gguf", &"8".repeat(64));
+        let found = "8".repeat(64);
+        let digest = DigestCheck::Measured(pinned.clone());
+        let outcome = recheck_verdict(&digest, "weights.gguf", &found);
         assert!(matches!(outcome, RecheckOutcome::Mismatched { .. }));
         settle_record(&path, &digest, &outcome);
 
+        let after = gguf_check::integrity(&path);
         assert_eq!(
-            gguf_check::integrity(&path),
+            after,
+            GgufIntegrity::FailedRecheck {
+                expected: pinned,
+                actual: found,
+            },
+            "the verdict has to outlive the command that found it"
+        );
+        assert_ne!(
+            after,
             GgufIntegrity::Unrecorded,
+            "the old behaviour: deleting the record hid the finding behind the \
+             state every un-recorded model on disk already reports"
+        );
+        assert!(
+            !matches!(after, GgufIntegrity::UnchangedSinceInstall { .. }),
             "a record that survived a mismatch would be the strongest claim in \
              this application, standing on bytes it has just been shown are wrong"
         );
         assert!(
             path.exists(),
-            "the weights are the user's, not ours to delete"
+            "the weights are the user\u{27}s, not ours to delete"
         );
+
+        // The control: the matched arm on the same file writes the other
+        // verdict, so this is not passing because `settle_record` writes a
+        // failure whatever it is handed.
+        let real = kw_sidecar::integrity::hash_file(&path).expect("hash");
+        let good = DigestCheck::Stated(real.clone());
+        settle_record(&path, &good, &recheck_verdict(&good, "weights.gguf", &real));
+        assert_eq!(
+            gguf_check::integrity(&path),
+            GgufIntegrity::UnchangedSinceInstall {
+                verified_by: VerifiedBy::StatedDigest
+            },
+            "a passing re-check must be able to clear a recorded failure"
+        );
+    }
+
+    /// The start path warns about a file a re-hash has already refused.
+    ///
+    /// **This assertion carries the whole argument KNEG-130 rests on.** The
+    /// warning `start_model` emits used to match `GgufIntegrity::Changed` alone.
+    /// A failed re-check deleted the record, the row fell to `Unrecorded`, and
+    /// the warning stopped firing -- so the application went silent about
+    /// precisely the file it had just proved was not the one that was installed.
+    /// A recorded verdict fixes nothing on its own unless the start path can see
+    /// it, which is what this asserts.
+    ///
+    /// The three `None` arms are the controls and they are not padding. Without
+    /// them a `load_warning` that returned `Some` for everything would pass, and
+    /// a warning that fires for every model on disk -- most of which are
+    /// `Unrecorded`, which is not a fault -- is a warning nobody reads.
+    ///
+    /// **Mutations that turn it red:** return `None` for `FailedRecheck`; return
+    /// `Some` for `UnchangedSinceInstall`. Both directions are checked because
+    /// only one of them is the defect and the other is the noise it would create.
+    ///
+    /// **What this does not prove**, said here rather than left to be assumed:
+    /// that `start_model` still calls this. Nothing can reach that call without
+    /// spawning a server. What catches its removal is not a test -- it is
+    /// `clippy -D warnings`, for which a private function with no call site is
+    /// dead code.
+    #[test]
+    fn the_start_path_warns_about_a_file_a_recheck_has_already_failed() {
+        use crate::gguf_check::GgufIntegrity;
+        use crate::local_model::VerifiedBy;
+
+        let refused = load_warning(&GgufIntegrity::FailedRecheck {
+            expected: "1".repeat(64),
+            actual: "2".repeat(64),
+        })
+        .expect("a file proved wrong must reach the log of a session loading it");
+        assert!(refused.contains(&"1".repeat(64)), "{refused}");
+        assert!(refused.contains(&"2".repeat(64)), "{refused}");
+
+        let changed = load_warning(&GgufIntegrity::Changed {
+            recorded_bytes: 4_680_000_000,
+            bytes: 2_048,
+        })
+        .expect("the state this warning was originally written for");
+        assert!(changed.contains("4680000000"), "{changed}");
+
+        // The two sentences must not be the same sentence: one is two integers
+        // disagreeing, the other is the whole file having been read and refused.
+        assert_ne!(refused, changed);
+
+        // The controls. Silence is as much a decision as the warning is.
+        assert_eq!(
+            load_warning(&GgufIntegrity::UnchangedSinceInstall {
+                verified_by: VerifiedBy::Digest
+            }),
+            None
+        );
+        assert_eq!(
+            load_warning(&GgufIntegrity::Unrecorded),
+            None,
+            "every GGUF installed before records existed is in this state; \
+             warning about them would train a user to ignore the line that matters"
+        );
+        assert_eq!(load_warning(&GgufIntegrity::NotInstalled), None);
     }
 
     /// Nothing pinned changes nothing on disk.

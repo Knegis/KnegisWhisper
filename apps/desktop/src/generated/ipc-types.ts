@@ -1309,10 +1309,14 @@ ready: boolean, modelsDir: string, };
 /**
  * What the Intelligence > Local screen may say about one GGUF.
  *
- * Four answers, and the third is the reason this is not a boolean. See the
+ * Five answers, and the third is the reason this is not a boolean. See the
  * module documentation for what each one is worth.
+ *
+ * **Not `Copy` since KNEG-130.** [`Self::FailedRecheck`] carries two 64-character
+ * digests, and a state that can be duplicated by accident is one a caller can
+ * report twice about a file it read once.
  */
-export type GgufIntegrity = { "state": "not-installed" } | { "state": "unchanged-since-install", verifiedBy: VerifiedBy, } | { "state": "unrecorded" } | { "state": "changed", recordedBytes: number, bytes: number, };
+export type GgufIntegrity = { "state": "not-installed" } | { "state": "unchanged-since-install", verifiedBy: VerifiedBy, } | { "state": "unrecorded" } | { "state": "changed", recordedBytes: number, bytes: number, } | { "state": "failed-recheck", expected: string, actual: string, };
 
 /**
  * What a re-hash of an installed model found.

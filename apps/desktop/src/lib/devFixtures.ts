@@ -807,6 +807,29 @@ const LOCAL_LLM: LocalLlmStatus = {
       draft: null,
     },
     {
+      id: "qwen2.5-14b-instruct-q4",
+      name: "Qwen2.5 14B Instruct (Q4_K_M)",
+      provider: "qwen",
+      sizeBytes: 8_990_000_000,
+      quantization: "Q4_K_M",
+      contextLength: 32768,
+      recommended: false,
+      supportsThinking: false,
+      // The one state here that is an accusation, and the one that was
+      // impossible to render before KNEG-130: a re-hash read the whole file and
+      // refused it. Until then the verdict was thrown away with the record and
+      // the row fell back to `unrecorded` -- the *nothing is known* answer --
+      // so the worst finding this application can make looked exactly like the
+      // ordinary state of every model installed before records existed.
+      integrity: {
+        state: "failed-recheck",
+        expected: "9f2c1d4a6b8e0357c1a9d2f4b6e8071932a5c7d9e1f3054627b8d0a2c4e6f819",
+        actual: "0a1b2c3d4e5f60718293a4b5c6d7e8f90112233445566778899aabbccddeeff0",
+      },
+      verifiedBy: "digest",
+      draft: null,
+    },
+    {
       id: "phi-4-mini-q8",
       name: "Phi-4 Mini (Q8_0)",
       provider: "phi",

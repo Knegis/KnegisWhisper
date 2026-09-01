@@ -287,10 +287,11 @@ export function verificationLabel(verifiedBy: VerifiedBy): string {
 /**
  * What is still known about an installed GGUF, without overstating it.
  *
- * Four states, and the reason there are four rather than two is the whole of
- * KNEG-107. The field this replaced was a boolean over `path.exists()`, so a
- * file hashed at install and untouched since rendered identically to one nobody
- * has ever looked at — and a model corrupted months later rendered that way too.
+ * Five states, and the reason there are five rather than two is the whole of
+ * KNEG-107 and then KNEG-130. The field this replaced was a boolean over
+ * `path.exists()`, so a file hashed at install and untouched since rendered
+ * identically to one nobody has ever looked at — and a model corrupted months
+ * later rendered that way too.
  *
  * The rule this file opens with does the rest of the work here. **`unrecorded`
  * is not a warning.** Every GGUF installed before the record existed is in that
@@ -302,6 +303,15 @@ export function verificationLabel(verifiedBy: VerifiedBy): string {
  * the caveat rather than burying it: two integers agreeing is not a hash. The
  * one thing that proves the bytes is `recheckLocalLlmModel`, and the caveat is
  * what points a reader at it.
+ *
+ * **`failed-recheck` is the only state here that is an accusation**, and it is
+ * the one state that was previously impossible to render. A failed re-hash used
+ * to delete the record beside the file, which dropped the row to `unrecorded` —
+ * the *nothing is known* answer — so the worst finding this application can
+ * make looked exactly like the ordinary state of every model installed before
+ * records existed. It is written down now and it survives a restart, which is
+ * why this arm can say "and nothing has written to it since": once the file
+ * moves, the state falls back to `changed` and the verdict is discarded.
  */
 export function ggufIntegrityLabel(integrity: GgufIntegrity): Stated {
   switch (integrity.state) {
@@ -333,6 +343,13 @@ export function ggufIntegrityLabel(integrity: GgufIntegrity): Stated {
             : `it was ${integrity.recordedBytes.toLocaleString()} bytes when it was checked and is ${integrity.bytes.toLocaleString()} now`,
         caveat:
           "The bytes may still be the right ones; a restore moves a timestamp without changing a file. Re-checking hashes it and says which.",
+      };
+    case "failed-recheck":
+      return {
+        text: "This file did not match its checksum",
+        detail: `it was hashed in full and compared against the checksum it is pinned to — pinned ${integrity.expected}, found ${integrity.actual}`,
+        caveat:
+          "This is the one finding here that was not guessed from a file's size and timestamp: the whole file was read. It was left where it is, and nothing has written to it since that check. Either it has been damaged or replaced since it was installed, or the checksum this build carries for it has gone stale — reinstalling the model is what settles that, and deleting gigabytes on a guess is not something this screen will do for you.",
       };
   }
 }
