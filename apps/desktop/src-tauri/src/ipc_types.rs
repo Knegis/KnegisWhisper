@@ -212,6 +212,7 @@ fn render() -> String {
             crate::local_model::ModelStatus,
             crate::local_model::LocalStatus,
             crate::local_model::InstallProgress,
+            crate::local_asr::UsedFor,
             crate::local_asr::SherpaModelStatus,
             crate::local_asr::SherpaStatus,
         ],

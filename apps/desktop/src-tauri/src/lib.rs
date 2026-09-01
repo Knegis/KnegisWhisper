@@ -30,6 +30,7 @@ mod meeting;
 mod meeting_window;
 mod overlay;
 mod reasoning;
+mod sherpa_stream;
 mod shortcuts;
 mod state;
 mod tray;
@@ -161,9 +162,20 @@ pub fn run() -> anyhow::Result<()> {
                     .context("could not load config/sidecars.json")?,
             );
 
+            // The streaming model server behind the `local-streaming` meeting
+            // provider. Not started here -- a 630 MB model held from launch for
+            // a user who never records a meeting is a cost nobody asked for --
+            // but reaped here, beside the others, before any port is allocated.
+            let stream = std::sync::Arc::new(
+                sherpa_stream::SherpaStream::new()
+                    .map_err(|e| anyhow::anyhow!(e))
+                    .context("could not load config/sidecars.json")?,
+            );
+
             // Before anything asks for a port: a previous run that crashed may
             // have left a server holding one.
             tauri::async_runtime::block_on(local.reap_stale());
+            tauri::async_runtime::block_on(stream.reap_stale());
 
             let shared = local.shared();
 
@@ -302,11 +314,13 @@ pub fn run() -> anyhow::Result<()> {
                 meeting_policy,
                 meeting_credentials,
                 local.shared(),
+                std::sync::Arc::clone(&stream),
             ));
             // Polls the process table while idle and offers to record a meeting
             // in progress. There is no path from it to `start` without a click.
             meetings.watch();
             app.manage(meetings);
+            app.manage(std::sync::Arc::clone(&stream));
 
             // Calendars. Nothing here reaches the network either: connecting an
             // account and syncing one are both explicit clicks on
@@ -418,6 +432,7 @@ pub fn run() -> anyhow::Result<()> {
             local_asr::sherpa_status,
             local_asr::sherpa_install_model,
             local_asr::sherpa_use_model,
+            local_asr::sherpa_use_stream_model,
             local_api::local_api_status,
             local_api::local_api_start,
             local_api::local_api_stop,

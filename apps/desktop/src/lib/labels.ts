@@ -45,6 +45,7 @@ import type {
   SyncOutcome,
   SystemAudioSupport,
   TokenStatus,
+  UsedFor,
   UpdateCheckResult,
   VerifiedBy,
 } from "./ipc";
@@ -543,6 +544,38 @@ export function detectedLabel(d: Detected): string {
       return `in a call — ${d.evidence} is using a microphone, which is also true of a test call`;
     case "none":
       return `open, and not using a microphone, so nothing here says a call is in progress — detected as ${d.evidence}`;
+  }
+}
+
+/**
+ * What a local model is for, as the button that selects it.
+ *
+ * Two engines, and a model runs on exactly one: `sherpa-onnx-offline` reads a
+ * WAV at a time and `sherpa-onnx-online-websocket-server` emits words as they
+ * are recognised. Offering the wrong one would start a server that accepts a
+ * socket and transcribes nothing.
+ *
+ * Exhaustive with no `default`, so a third engine is a build failure here
+ * rather than a button that silently says the wrong thing.
+ */
+export function useForLabel(used: UsedFor, inUse: boolean): string {
+  switch (used) {
+    case "dictation":
+      return inUse ? "In use for dictation" : "Use for dictation";
+    case "meetings":
+      return inUse ? "In use for meetings" : "Use for meetings";
+  }
+}
+
+/**
+ * The one-line note under a local model, saying which engine it runs on.
+ */
+export function useForDetail(used: UsedFor): string {
+  switch (used) {
+    case "dictation":
+      return "offline model — dictation";
+    case "meetings":
+      return "streaming model — meetings, word by word";
   }
 }
 

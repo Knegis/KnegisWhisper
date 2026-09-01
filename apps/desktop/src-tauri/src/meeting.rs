@@ -804,6 +804,14 @@ pub struct MeetingRuntime {
     credentials: Arc<dyn kw_security::CredentialStore>,
     /// Where the local model server is listening, and what it loaded.
     local: crate::local_model::SharedLocal,
+    /// The streaming model server, started on demand for `local-streaming`.
+    ///
+    /// The whole supervisor rather than a `SharedStream`, unlike `local` above:
+    /// this one is *started* from here, because a 630 MB model held from launch
+    /// for a user who never records a meeting is a cost nobody asked for. The
+    /// windowed provider's server is started from its own settings screen and
+    /// only read from here.
+    stream: Arc<crate::sherpa_stream::SherpaStream>,
     /// The session in progress.
     ///
     /// Behind an `Arc` so the pump's own task can hold it too, and **the lock
@@ -1043,6 +1051,7 @@ impl MeetingRuntime {
         policy: NetworkPolicy,
         credentials: Arc<dyn kw_security::CredentialStore>,
         local: crate::local_model::SharedLocal,
+        stream: Arc<crate::sherpa_stream::SherpaStream>,
     ) -> Self {
         Self {
             app,
@@ -1051,6 +1060,7 @@ impl MeetingRuntime {
             credentials,
             live: Arc::new(Mutex::new(None)),
             local,
+            stream,
             watch: Mutex::new(WatchState::default()),
         }
     }
@@ -1185,6 +1195,34 @@ impl MeetingRuntime {
                 );
                 Ok(Box::new(
                     LocalWindowProvider::new(Arc::new(server)).with_live_events(events),
+                ))
+            }
+            Client::LocalStreaming => {
+                // Started here rather than at launch: the model is 630 MB in
+                // memory and a user who never records a meeting should never
+                // pay for it. `start` is a no-op when the same model is
+                // already up, which is what makes calling it per meeting
+                // cheap.
+                let model_id = kw_storage::settings::get_or(
+                    self.db.pool(),
+                    crate::sherpa_stream::STREAM_MODEL_KEY,
+                    String::new(),
+                )
+                .await
+                .unwrap_or_default();
+                if model_id.is_empty() {
+                    return Err("no streaming model is chosen. Pick one under Settings > \
+                                Transcription > Local."
+                        .to_owned());
+                }
+
+                let port = self.stream.start(&model_id).await?;
+                Ok(Box::new(
+                    kw_meeting_core::nemotron_socket::LocalStreaming::new(
+                        self.policy.clone(),
+                        port,
+                    )
+                    .with_live_events(events),
                 ))
             }
             Client::OpenAiRealtime => Ok(Box::new(

@@ -302,6 +302,48 @@ pub const PROVIDERS: &[MeetingProviderCapabilities] = &[
         reconnect: true,
         batch_fallback: true,
     },
+    MeetingProviderCapabilities {
+        id: "local-streaming",
+        // "Streaming" without hedging, and it is the one place in this table
+        // where that word is earned by a measurement rather than by a vendor
+        // saying so: the server emits a transcript update roughly twice a
+        // second while the audio is still arriving, measured on 2026-09-01.
+        // `local` beside it deliberately does not use the word.
+        name: "Local streaming model",
+        // The second provider for which this is false, and the reason someone
+        // would choose either. The server is a child process on loopback.
+        audio_leaves_device: false,
+        // sherpa-onnx online models take a hotwords file, and this client does
+        // not write one. Declared unsupported rather than left to look
+        // supported: `validate` then reports every term as dropped, which is
+        // the honest answer to "will my keyterms be used".
+        keyterms: KeytermSupport::Unsupported,
+        // A local process has no billing clock to run out.
+        session_limit: None,
+        token_rotation: false,
+        // The rate sherpa's online models are trained at. Only one, and
+        // offering audio at any other would transcribe chipmunks.
+        sample_rates: &[16_000],
+        // The server labels no speakers. `AudioSource` attributes the meeting
+        // instead, which is why this client opens two sockets.
+        speaker_labels: false,
+        // Every update before the last is a partial, and they are cumulative
+        // -- see `nemotron::Segments`.
+        partials: true,
+        // **False, and this is the one capability that differs from `local`
+        // in a way a user would feel.** A sherpa online model is built for one
+        // language: `nemotron-speech-streaming-en-0.6b` is English, and there
+        // is no per-request detection the way `whisper-server` has. Declaring
+        // this true would make `validate` accept a session with no language
+        // and quietly transcribe English whatever was spoken.
+        language_detection: false,
+        // Nothing to reconnect around, and no reconnect implemented. Saying
+        // true would claim a recovery path that does not exist.
+        reconnect: false,
+        // The whole-file local pass in `meeting.rs` covers this the same way it
+        // covers every other provider.
+        batch_fallback: true,
+    },
 ];
 
 /// What this provider is described by, whether or not it can be used.
@@ -348,6 +390,15 @@ pub enum Client {
     /// authenticates with an OAuth2 client-credentials exchange before either
     /// socket opens.
     CortiRealtime,
+    /// `sherpa-onnx-online-websocket-server` on loopback, over two WebSockets
+    /// -- the same two-socket shape as the cloud clients and for the same
+    /// reason, even though nothing here leaves the machine.
+    ///
+    /// The only client in this list whose wire format was **measured** rather
+    /// than read from a specification: sherpa's protocol is undocumented and
+    /// its own reference client's `--help` describes the sample format wrongly.
+    /// See `crate::nemotron`.
+    LocalStreaming,
 }
 
 /// The client for `id`, or `None` when there is none.
@@ -358,6 +409,7 @@ pub enum Client {
 pub fn client(id: &str) -> Option<Client> {
     match id {
         "local" => Some(Client::LocalWindow),
+        "local-streaming" => Some(Client::LocalStreaming),
         "openai-realtime" => Some(Client::OpenAiRealtime),
         "assemblyai-realtime" => Some(Client::AssemblyAi),
         "deepgram-realtime" => Some(Client::DeepgramRealtime),
@@ -385,7 +437,7 @@ pub fn client(id: &str) -> Option<Client> {
 #[must_use]
 pub const fn credential_slot(client: Client) -> Option<&'static str> {
     match client {
-        Client::LocalWindow => None,
+        Client::LocalWindow | Client::LocalStreaming => None,
         Client::OpenAiRealtime => Some("openai"),
         Client::AssemblyAi => Some("assemblyai"),
         Client::DeepgramRealtime => Some("deepgram"),
@@ -622,7 +674,8 @@ mod tests {
                 "assemblyai-realtime",
                 "deepgram-realtime",
                 "corti-realtime",
-                "local"
+                "local",
+                "local-streaming"
             ]
         );
     }
@@ -630,6 +683,7 @@ mod tests {
     #[test]
     fn local_window_needs_no_credential_and_the_cloud_clients_name_their_slots() {
         assert_eq!(credential_slot(Client::LocalWindow), None);
+        assert_eq!(credential_slot(Client::LocalStreaming), None);
         assert_eq!(credential_slot(Client::OpenAiRealtime), Some("openai"));
         assert_eq!(credential_slot(Client::AssemblyAi), Some("assemblyai"));
         assert_eq!(credential_slot(Client::DeepgramRealtime), Some("deepgram"));
@@ -659,7 +713,10 @@ mod tests {
             let Some(client) = client(provider.id) else {
                 continue;
             };
-            if client == Client::LocalWindow {
+            // Both local clients: neither reaches a credential store, and
+            // asking the registry for a slot they do not have would fail here
+            // for the right reason and the wrong provider.
+            if matches!(client, Client::LocalWindow | Client::LocalStreaming) {
                 continue;
             }
             let slot = credential_slot(client).unwrap_or_else(|| {
@@ -830,10 +887,16 @@ mod tests {
             .filter(|p| !p.audio_leaves_device)
             .map(|p| p.id)
             .collect();
-        assert_eq!(local, vec!["local"]);
+        // Two since 2026-09-01, and the second is the reason this assertion is
+        // a list rather than a count: `local-streaming` is a sherpa server on
+        // loopback, so the claim is the same claim and had to be made
+        // deliberately rather than inherited.
+        assert_eq!(local, vec!["local", "local-streaming"]);
 
-        let local = listed.iter().find(|p| p.id == "local").unwrap();
-        assert!(local.availability.is_available());
+        for id in local {
+            let entry = listed.iter().find(|p| p.id == id).unwrap();
+            assert!(entry.availability.is_available(), "{id}");
+        }
     }
 
     #[test]
@@ -950,7 +1013,9 @@ mod tests {
             .filter(|p| !p.audio_leaves_device)
             .map(|p| p.id)
             .collect();
-        assert_eq!(local, vec!["local"]);
+        // The windowed whisper pass and the sherpa streaming server. Both are
+        // child processes on loopback; nothing else in this table is.
+        assert_eq!(local, vec!["local", "local-streaming"]);
 
         let tinfoil = capabilities("tinfoil-realtime").unwrap();
         assert!(

@@ -16,8 +16,9 @@
 //! different facts and the code now keeps them apart, which is also what lets
 //! the settings screen list a provider it cannot offer and say why.
 //!
-//! Of the six, `local`, `openai-realtime`, `assemblyai-realtime`,
-//! `deepgram-realtime` and `corti-realtime` have clients — Corti's is the
+//! Of the seven, `local`, `local-streaming`, `openai-realtime`,
+//! `assemblyai-realtime`, `deepgram-realtime` and `corti-realtime` have clients
+//! — Corti's is the
 //! most involved of the four cloud ones, because it authenticates with an
 //! OAuth2 exchange before either socket opens. `tinfoil-realtime` is
 //! [`declined`] rather than pending — see [`availability`]. None of the
@@ -36,6 +37,8 @@ pub mod deepgram;
 pub mod deepgram_socket;
 pub mod fault;
 pub mod local;
+pub mod nemotron;
+pub mod nemotron_socket;
 pub mod openai;
 pub mod openai_socket;
 

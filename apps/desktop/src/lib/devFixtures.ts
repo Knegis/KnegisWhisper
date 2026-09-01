@@ -693,7 +693,7 @@ const SHERPA: SherpaStatus = {
       sizeMb: 630,
       language: "en",
       installed: true,
-      notOffered: null,
+      usedFor: "dictation",
     },
     {
       id: "parakeet-tdt-0.6b-v3",
@@ -701,19 +701,23 @@ const SHERPA: SherpaStatus = {
       sizeMb: 660,
       language: null,
       installed: false,
-      notOffered: null,
+      usedFor: "dictation",
     },
     {
-      id: "nemotron-streaming-en",
-      name: "Nemotron Streaming EN",
-      sizeMb: 480,
+      // The measured one. Installed and chosen for meetings in the harness,
+      // because "a streaming model that cannot be used" was the state this
+      // screen showed until 2026-09-01 and a fixture still showing it would
+      // keep that dead branch alive in the only place anyone looks at it.
+      id: "nemotron-speech-streaming-en-0.6b",
+      name: "Nemotron Speech Streaming EN 0.6B",
+      sizeMb: 442,
       language: "en",
-      installed: false,
-      notOffered:
-        "streaming model — it is served over sherpa-onnx's own WebSocket protocol, and no client for that protocol has been written",
+      installed: true,
+      usedFor: "meetings",
     },
   ],
   selected: "parakeet-unified-en-0.6b",
+  selectedStream: "nemotron-speech-streaming-en-0.6b",
   modelsDir: "C:\\ProgramData\\KnegisWhisper\\models\\sherpa",
 };
 

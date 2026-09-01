@@ -118,6 +118,7 @@ import type {
   SystemAudioSupport,
   TableReport,
   TokenStatus,
+  UsedFor,
   TranscriptEvent,
   Transcription,
   UnhandledAction,
@@ -219,6 +220,7 @@ export type {
   SystemAudioSupport,
   TableReport,
   TokenStatus,
+  UsedFor,
   TranscriptEvent,
   Transcription,
   UnhandledAction,
@@ -837,6 +839,22 @@ export async function installSherpaModel(modelId: string): Promise<void> {
 /** Send dictation to one installed sherpa model. */
 export async function useSherpaModel(modelId: string): Promise<void> {
   return invoke<void>("sherpa_use_model", { modelId });
+}
+
+/**
+ * Record meetings with one installed streaming model.
+ *
+ * A separate call writing a separate setting, not a second use of
+ * {@link useSherpaModel}: the two engines run different models, and one
+ * selection would mean choosing a Parakeet model for dictation silently
+ * changed what a meeting recorded with.
+ *
+ * Does not start the server. That happens when a meeting starts, because a
+ * 630 MB model loaded by a settings click is a cost the click did not
+ * advertise.
+ */
+export async function useSherpaStreamModel(modelId: string): Promise<void> {
+  return invoke<void>("sherpa_use_stream_model", { modelId });
 }
 
 export async function onInstallProgress(

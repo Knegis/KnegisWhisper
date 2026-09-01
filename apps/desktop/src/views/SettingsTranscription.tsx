@@ -29,10 +29,16 @@ import {
   stopLocalServer,
   useLocalModel,
   useSherpaModel,
+  useSherpaStreamModel,
   type Dispatch,
   type ProviderSummary,
 } from "../lib/ipc";
-import { progressLabel, verificationLabel } from "../lib/labels";
+import {
+  progressLabel,
+  useForDetail,
+  useForLabel,
+  verificationLabel,
+} from "../lib/labels";
 import { useRefresh } from "../lib/useRefresh";
 
 /**
@@ -413,32 +419,46 @@ export function SettingsTranscription({
                 <Row label="Models kept in" value={sherpa.modelsDir} />
                 <ul className="list">
                   {sherpa.models.map((m) => {
-                    const inUse = sherpa.selected === m.id && route.isLocal;
+                    // Which selection this row's button reads is decided by the
+                    // engine the model runs on, not by which one the screen
+                    // happens to be showing. A streaming model is "in use" when
+                    // meetings are set to it, and dictation's route has nothing
+                    // to say about that.
+                    const inUse =
+                      m.usedFor === "meetings"
+                        ? sherpa.selectedStream === m.id
+                        : sherpa.selected === m.id && route.isLocal;
                     return (
                       <li key={m.id}>
                         <code>{m.id}</code> {m.name}
                         {m.sizeMb ? ` · ${m.sizeMb} MB` : ""}
                         {m.language ? ` · ${m.language}` : ""}
-                        {m.notOffered ? (
-                          <em className="row-detail warn">{m.notOffered}</em>
-                        ) : (
-                          <em className="row-detail">
-                            {m.installed ? "installed" : "not installed"}
-                          </em>
-                        )}
-                        {m.notOffered ? null : m.installed ? (
+                        <em className="row-detail">
+                          {useForDetail(m.usedFor)} ·{" "}
+                          {m.installed ? "installed" : "not installed"}
+                        </em>
+                        {m.installed ? (
                           <button
                             type="button"
                             className={inUse ? "marked" : undefined}
                             aria-pressed={inUse}
                             onClick={() => {
                               void guard(async () => {
-                                await useSherpaModel(m.id);
-                                await useLocalModel(true);
+                                if (m.usedFor === "meetings") {
+                                  // No `useLocalModel` beside it: choosing a
+                                  // meeting model says nothing about where
+                                  // dictation goes, and flipping the dictation
+                                  // route here would be the silent
+                                  // cross-setting this split exists to prevent.
+                                  await useSherpaStreamModel(m.id);
+                                } else {
+                                  await useSherpaModel(m.id);
+                                  await useLocalModel(true);
+                                }
                               });
                             }}
                           >
-                            {inUse ? "In use for dictation" : "Use for dictation"}
+                            {useForLabel(m.usedFor, inUse)}
                           </button>
                         ) : (
                           <button

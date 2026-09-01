@@ -303,6 +303,52 @@
           "maxExtractedSizeBytes": 973078528
         }
       }
+    },
+    {
+      "name": "sherpa-stream",
+      "description": "sherpa-onnx's streaming speech-to-text WebSocket server, the runtime behind the 'local-streaming' meeting provider. Runs entirely on this machine, bound to loopback; no audio leaves the device. The binary comes from the 'sherpa' sidecar's archive -- see the targets below.",
+      "source": {
+        "repo": "k2-fsa/sherpa-onnx",
+        "release": "v1.13.4",
+        "pinnedBecause": "Whatever release the 'sherpa' sidecar is pinned at, because this is a binary out of that same archive. Bumping one bumps both, which is the point of not pinning it twice. The WebSocket protocol this server speaks is undocumented and was measured against v1.13.4 on 2026-09-01 (crates/meeting-core/examples/sherpa_ws_probe.rs); a release bump has to re-run that probe, because nothing upstream promises the wire format is stable."
+      },
+      "transport": {
+        "kind": "loopback",
+        "portRange": {
+          "first": 8250,
+          "last": 8269
+        }
+      },
+      "commandFragments": [
+        "sherpa-onnx-online-websocket-server"
+      ],
+      "targets": {
+        "windows-x86_64": {
+          "availability": "not-published",
+          "reason": "Not separately published, and not separately downloaded. This executable ships inside the same sherpa-onnx archive as the sherpa sidecar and is extracted beside it, so installing 'sherpa' is what puts it on disk -- there is nothing here to pin that is not already pinned one entry above. This entry exists for the two things a spec supplies that a path cannot: a loopback port range to allocate from, and the command fragment that lets the reaper prove a running server is ours before signalling it. Marking the targets published would describe an install path this application does not use and would download 24 MB a second time.",
+          "tracking": "KNEG-84"
+        },
+        "linux-x86_64": {
+          "availability": "not-published",
+          "reason": "Not separately published, and not separately downloaded. This executable ships inside the same sherpa-onnx archive as the sherpa sidecar and is extracted beside it, so installing 'sherpa' is what puts it on disk -- there is nothing here to pin that is not already pinned one entry above. This entry exists for the two things a spec supplies that a path cannot: a loopback port range to allocate from, and the command fragment that lets the reaper prove a running server is ours before signalling it. Marking the targets published would describe an install path this application does not use and would download 24 MB a second time.",
+          "tracking": "KNEG-84"
+        },
+        "linux-aarch64": {
+          "availability": "not-published",
+          "reason": "Not separately published, and not separately downloaded. This executable ships inside the same sherpa-onnx archive as the sherpa sidecar and is extracted beside it, so installing 'sherpa' is what puts it on disk -- there is nothing here to pin that is not already pinned one entry above. This entry exists for the two things a spec supplies that a path cannot: a loopback port range to allocate from, and the command fragment that lets the reaper prove a running server is ours before signalling it. Marking the targets published would describe an install path this application does not use and would download 24 MB a second time.",
+          "tracking": "KNEG-84"
+        },
+        "macos-x86_64": {
+          "availability": "not-published",
+          "reason": "Not separately published, and not separately downloaded. This executable ships inside the same sherpa-onnx archive as the sherpa sidecar and is extracted beside it, so installing 'sherpa' is what puts it on disk -- there is nothing here to pin that is not already pinned one entry above. This entry exists for the two things a spec supplies that a path cannot: a loopback port range to allocate from, and the command fragment that lets the reaper prove a running server is ours before signalling it. Marking the targets published would describe an install path this application does not use and would download 24 MB a second time.",
+          "tracking": "KNEG-84"
+        },
+        "macos-aarch64": {
+          "availability": "not-published",
+          "reason": "Not separately published, and not separately downloaded. This executable ships inside the same sherpa-onnx archive as the sherpa sidecar and is extracted beside it, so installing 'sherpa' is what puts it on disk -- there is nothing here to pin that is not already pinned one entry above. This entry exists for the two things a spec supplies that a path cannot: a loopback port range to allocate from, and the command fragment that lets the reaper prove a running server is ours before signalling it. Marking the targets published would describe an install path this application does not use and would download 24 MB a second time.",
+          "tracking": "KNEG-84"
+        }
+      }
     }
   ]
 }

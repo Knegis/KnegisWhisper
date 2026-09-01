@@ -1132,6 +1132,15 @@ export type InstallProgress = { "stage": "server", written: number, total: numbe
 verifiedBy: VerifiedBy, };
 
 /**
+ * What a model can be used for.
+ *
+ * Two engines, and a model runs on exactly one of them. Not a boolean, for the
+ * reason every other three-state answer in this codebase is not a boolean: the
+ * screen needs to name the use, not just permit it.
+ */
+export type UsedFor = "dictation" | "meetings";
+
+/**
  * Why a model this build knows about is not on offer.
  *
  * A reason rather than absence, for the same purpose
@@ -1148,9 +1157,9 @@ export type SherpaModelStatus = { id: string, name: string, sizeMb: number | nul
  */
 installed: boolean,
 /**
- * `None` when the model can be installed and used.
+ * Which engine it runs on, and therefore which button it gets.
  */
-notOffered: string | null, };
+usedFor: UsedFor, };
 
 /**
  * Everything the sherpa half of the screen needs, with no network access.
@@ -1171,6 +1180,14 @@ cliInstalled: boolean, models: Array<SherpaModelStatus>,
  * Which model dictation is set to use, if any.
  */
 selected: string | null,
+/**
+ * Which streaming model meetings are set to use, if any.
+ *
+ * A separate setting from `selected`, not a second reading of it: the two
+ * engines run different models and choosing one for dictation must not
+ * silently change what a meeting records with.
+ */
+selectedStream: string | null,
 /**
  * Where models are kept. Shown because the native binaries cannot open a
  * file whose path holds a non-ASCII character, so this is sometimes not
