@@ -335,6 +335,29 @@ When recording is active the user gets a visible indicator. The application does
 silently, and it will not conceal recording from the person using it — a design constraint, not a
 setting.
 
+## Observing other applications
+
+On Windows the application enumerates **which processes currently hold an audio capture session**,
+through `IAudioSessionManager2`, once per detection poll. It exists for one reason: new Microsoft
+Teams runs a call inside `ms-teams.exe` and spawns no child process, so the process table cannot
+tell a call from an open client and the microphone can.
+
+What that reads, exactly, and what it does not:
+
+- **Read:** a process id and image name per active capture session, on every active capture
+  endpoint. Nothing else about those processes.
+- **Not read:** no other application's audio. Enumerating sessions asks Windows for a state it
+  already publishes to any process on the desktop; it does not attach to a stream, open a device,
+  or observe a sample. Nothing here can hear another application.
+- **Not stored and not logged.** The list is held in memory for the life of one poll and reaches
+  only the meeting screen. It is not written to the database and no log line contains it.
+- **Windows only.** Linux and macOS read nothing, and `Settings > Meetings` reports which of those
+  this machine is — because "Teams is open and not in a call" and "Teams is open and nobody
+  looked" are the same sentence with opposite meanings.
+
+**It suggests; it never records.** A detection can only put an offer on screen. Nothing in this
+path can start a recording, which is the same rule the process-based detectors already follow.
+
 ## What we deliberately do not do
 
 No process hiding, no anti-forensics, no security-software evasion, no attempt to bypass

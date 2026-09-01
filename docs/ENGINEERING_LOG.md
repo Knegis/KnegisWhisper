@@ -21,15 +21,15 @@ maintained in place rather than appended to, because its purpose is to be curren
 > detail and the by-hand check that found five real defects; [COMPLETION_PLAN.md](COMPLETION_PLAN.md)
 > keeps the phase 7–10 definitions.
 >
-> **Measured, not asserted, as of 2026-08-27 after the security fixes merged:** `cargo test
-> --workspace` — **1296 passing, 0 failed** (941 at the start of the run, 1290 at its close);
-> parity — **102 entries, 8 declared unreachable** (17 at the start), and **all 13 UI surfaces
-> built**, with no "surface not built" entry remaining anywhere. The eight: four local-ASR models
-> (sherpa/Parakeet — runtime measured and proven by a probe re-run cold by the controller, missing
-> only a Settings selector), two Tinfoil entries (batch transcription and meeting-stream, both
-> declined on principle, not unfinished), Apple Calendar (EventKit — described in
-> `kw_calendar_core::apple`, implemented nowhere, on any platform), and URL import (withdrawn as a
-> command after the run closed — see the 2026-08-27 entry on the merged security fixes).
+> **Measured, not asserted, as of 2026-09-01:** `cargo test --workspace` — **1506 passing, 0
+> failed** (941 at the start of the original run, 1296 at its close on 2026-08-27); parity —
+> **102 entries, 6 declared unreachable** (17 at the start, 8 on 2026-08-27), and **all 13 UI
+> surfaces built**, with no "surface not built" entry remaining anywhere. The six: two local-ASR
+> models (sherpa/Parakeet — runtime measured, and the Settings selector that was missing landed
+> in `121dc4c`, which is what took this from eight to six), two Tinfoil entries (batch transcription
+> and meeting-stream, both declined on principle, not unfinished), Apple Calendar (EventKit —
+> described in `kw_calendar_core::apple`, implemented nowhere, on any platform), and URL import
+> (withdrawn as a command — see the 2026-08-27 entry on the merged security fixes).
 >
 > **The reachability rule, settled and applied repeatedly:** `reachable: true` means a user can
 > *configure* the integration through a named, **built** surface — not that the backend code works.
@@ -82,11 +82,14 @@ maintained in place rather than appended to, because its purpose is to be curren
 > corrected to `temporarily-deferred`. See "the ACTIVE-status audit" below.
 >
 > **[BENCH_CHECK.md](BENCH_CHECK.md) remains, in full, the record of what has actually been run on
-> hardware — and nothing from chunks E onward is in it.** The 2026-08-25/26 runs covered phases 2,
-> 6 and chunks A–D. Everything built since (meetings, calendars, media import, MCP/CLI screens,
-> the updater, sherpa) is green tests and code review only; that file's own by-hand lists for E–K
-> and for Task 20 say so item by item, and none of them should be read as done until someone
-> actually presses the buttons.
+> hardware, and chunk E is no longer absent from it.** The 2026-08-25/26 runs covered phases 2, 6
+> and chunks A–D. Bench runs on **2026-08-27, 2026-08-28, 2026-08-31 and 2026-09-01** then reached
+> chunk E: a meeting recorded, transcribed and saved end to end; two real Teams calls; system audio
+> resolving a real output device; and the capture-session measurement behind KNEG-94. Calendars,
+> media import, the MCP/CLI screens and the updater are **still green tests and code review only**.
+> That file's own by-hand lists say which is which item by item, and nothing on them should be read
+> as done until someone actually presses the buttons — including the one KNEG-94 left behind, which
+> is watching the offer window appear during a call.
 >
 > **The cross-cutting gap in all four meeting socket clients is closed at the end of the meeting
 > and still open during it (KNEG-79, 2026-08-31).** All four (`openai_socket.rs`,
@@ -275,6 +278,110 @@ Unchanged from the Phases 1–4 entry, restated here so they are not buried:
   porting matrix. Upstream pins both by commit and verifies neither.
 - ~~**`nircmd`**~~ — **dropped**, as leaned towards: third-tier Windows paste fallback only, and
   `SendInput` works.
+
+---
+
+## 2026-09-01 (KNEG-94) — a defect went looking for a capability, not the other way round
+
+Teams calls are now detected, by the microphone the client holds rather than by a process name.
+The code is small. What is worth recording is the sequence of judgement calls, because four of them
+were about **what a measurement is worth** rather than about what to build.
+
+### The prediction the plan made was backwards, and that is the interesting part
+
+`COMPLETION_PLAN.md` chunk H said the mic listener had no consumer and that a capability with no
+consumer is scaffolding this workspace does not build ahead of time. That reasoning was sound and
+the conclusion was wrong, in a way worth naming: it assumed capabilities wait for features. What
+actually happened is that a **defect nobody could fix any other way went looking for a capability**.
+Teams had been unofferable for three weeks; three separate measurements said no process name would
+ever fix it. That is a much stronger pull than a feature request, and the chunk had no way to
+express it.
+
+Kept in the doc rather than quietly corrected, because "no consumer yet" and "no consumer, and none
+will come" read identically in a backlog and only one of them is safe to act on.
+
+### The control was made cross-process on purpose, and the easy version proves less
+
+`mic_users_probe` could have opened the microphone itself and checked it appeared. That was the
+first design. It was replaced with a second process launched via `--hold`, because an audio session
+belongs to a **process** and the question the issue asks is whether this code can see a session
+belonging to *somebody else*. That those are the same mechanism is true, and it is an argument —
+and an argument is exactly what a measurement is supposed to replace.
+
+### The first real run passed its control and was still unreadable
+
+This is the one worth remembering. The probe printed `nothing is capturing` and `PASS` on the
+control. Both true. Both useless: **nothing in the output said whether Teams had been open at the
+time.** "Teams is running and not capturing" and "Teams is not installed" print the same words and
+mean opposite things, and only one of them is the run the issue needed.
+
+The same failure shape as KNEG-88's empty file, one level up. There, a negative assertion passed
+against nothing and only a positive control noticed. Here the control existed and was passing —
+the missing positive was one layer above it, about the *subject* of the measurement rather than the
+apparatus. A control proves the instrument works. It does not prove the sample was in the machine.
+
+Fixed by having the probe print what `meeting_detect::detect` itself sees running, reusing the real
+detector rather than matching a name by hand: a second opinion computed beside the first is a second
+implementation that can be right when the first is wrong.
+
+### The microphone may strengthen a match and never create one
+
+The rule that keeps this honest. A process holding a capture device that is not a known client and
+not on the user's own list is **not reported at all**, no matter how loudly it is capturing. The
+alternative — report anything holding the microphone — would mean this application's own
+dictation offers to record itself, and would make "something is recording you" a claim a process
+detector has no business making about a browser tab.
+
+Tested, and the test was mutated: a version that lets the capture list invent a detection fails four
+tests.
+
+### Two signals, and refusing to flatten them into one boolean
+
+`CptHost.exe` cannot exist unless a Zoom call is running. A held microphone is also Teams running
+its own audio test, and a call the user placed that nobody joined. Both are `in_call`, and they are
+not the same claim.
+
+So `in_call` became a derived value and `CallSignal` carries which one fired, all the way to the
+offer window, which now says *"Microsoft Teams is using your microphone — that is usually a call,
+but a test call looks the same"* rather than asserting a meeting. The offer is the one place a wrong
+detection costs the user something: a window over their work about a meeting they are not in. A user
+told the wrong thing can only work out which signal was wrong if the window says which one fired.
+
+### Sealing a field rather than trusting a convention
+
+`in_call` and `signal` are two serialised fields carrying one fact, which is how they come to
+disagree. Rather than a comment asking future callers to use the constructor, `in_call` is a
+**private field** with an accessor and `Detected::new` is the only way to set it — serde and
+`ts_rs` both still export it, so the screen is unaffected. The desktop crate's test helper stopped
+compiling immediately, which is the proof it works.
+
+The same argument `MeetingRuntime::live` already makes for deriving "stopping has not begun" from
+the lock instead of keeping a second flag beside it.
+
+### One process table, two readings
+
+`survey()` takes the process list and the capture list from a single `sysinfo` refresh. Two
+refreshes are two instants: a process that starts in between appears in one list and not the other,
+and the resulting `Detected` names evidence that had already gone. Cheaper too, and the poll runs
+every five seconds for as long as the application is open.
+
+### What was deliberately not built
+
+The **calendar cross-check** KNEG-94 named as a possibly cheaper alternative. It is complementary
+rather than competing — it catches scheduled meetings and misses ad-hoc ones, which is the exact
+inverse of what landed — and doing both in one pass would mean neither was measured on its own.
+
+The **UIAutomation text monitor**, KNEG-63's other half, is now closed as declined rather than
+deferred. No consumer, and unlike the microphone half no defect pointing at it either; a continuous
+read of the focused element is a materially larger privacy surface than anything else here and there
+is nothing on the other side of the scale. A decision should read as a decision, not as unfinished
+work.
+
+### Still not done, and it is not the same claim
+
+**Nobody has watched the offer window appear during a real Teams call.** The signal is measured and
+the wiring is tested. Those are two different claims and the second does not imply the first —
+recorded in `BENCH_CHECK.md` item 6 rather than left implied by a closed issue.
 
 ---
 
