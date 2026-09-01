@@ -658,6 +658,16 @@ const ROUTE: RouteReport = {
 const LOCAL_MODELS: LocalStatus = {
   availability: { state: "installable" },
   serverInstalled: true,
+  // `stale` rather than `current`, so the branch that only appears when the
+  // installed binary has fallen behind is one somebody can look at. The
+  // `unknown` branch is the commoner one in the wild -- it is what every
+  // install made before records existed reports -- but a fixture can only show
+  // one, and this is the one nothing else in the app renders.
+  serverFreshness: {
+    state: "stale",
+    installed: "6cdbf1cfd7bc4d0eaa6a4a2f6cfe83b2e0cb0e2c1b9dbb1f5f0e1a4d3c2b1a09",
+    expected: "c2a4b60edb11f7e11a9191ffb50929535527d4d91c9903dbe3e554583bbbc63d",
+  },
   models: [
     {
       id: "whisper-large-v3-turbo-q5",
@@ -1414,6 +1424,11 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
   local_model_install: () => "whisper-large-v3-turbo-q5",
   local_server_start: () => 8178,
   local_server_stop: () => null,
+  local_server_refresh: () => ({
+    files: 37,
+    restarted: "whisper-large-v3-turbo-q5",
+    restartError: null,
+  }),
 
   /* local text generation */
   local_llm_status: () => LOCAL_LLM,

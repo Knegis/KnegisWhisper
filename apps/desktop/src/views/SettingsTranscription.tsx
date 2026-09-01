@@ -24,6 +24,7 @@ import {
   installLocalModel,
   installSherpaModel,
   onInstallProgress,
+  refreshLocalServer,
   setCloudProvider,
   startLocalServer,
   stopLocalServer,
@@ -32,8 +33,10 @@ import {
   useSherpaStreamModel,
   type Dispatch,
   type ProviderSummary,
+  type RefreshOutcome,
 } from "../lib/ipc";
 import {
+  freshnessLabel,
   progressLabel,
   useForDetail,
   useForLabel,
@@ -65,6 +68,36 @@ function dispatchLabel(d: Dispatch): string {
   }
 }
 
+/**
+ * The row id the server-binary progress line belongs to.
+ *
+ * `runInstall` scopes its progress line to whichever row started the run, so
+ * the server binary needs an id of its own. Not a model id, and it cannot
+ * collide with one: model ids come from the registry and none of them is a
+ * dotted path.
+ */
+const SERVER_ROW = "sidecar.whisper";
+
+/**
+ * What a completed refresh should say.
+ *
+ * Two facts, and the second is the one that would otherwise go missing: a
+ * refresh stops the server before replacing it, so whether it came back is
+ * separate news from whether the replacement worked. `restartError` is not an
+ * error -- the binary was replaced -- but a user whose dictation has just gone
+ * quiet needs to be told why.
+ */
+function refreshOutcomeLabel(outcome: RefreshOutcome): string {
+  const replaced = `The server binary was replaced (${outcome.files} files).`;
+  if (outcome.restartError) {
+    return `${replaced} The model that was running could not be started again: ${outcome.restartError}`;
+  }
+  if (outcome.restarted) {
+    return `${replaced} ${outcome.restarted} is running again.`;
+  }
+  return replaced;
+}
+
 export function SettingsTranscription({
   onGoToProviders,
 }: {
@@ -93,6 +126,8 @@ export function SettingsTranscription({
    * to put the line on the row whose button was pressed.
    */
   const [installingId, setInstallingId] = useState<string | null>(null);
+  /** What the last press of the server-binary button did. */
+  const [refreshed, setRefreshed] = useState<string | null>(null);
   /** Per-provider model choice, before it is committed. */
   const [selected, setSelected] = useState<Record<string, string>>({});
   /**
@@ -328,6 +363,47 @@ export function SettingsTranscription({
                 local.port ? `running on 127.0.0.1:${local.port}` : undefined
               }
             />
+            {/*
+              Which build is installed, said out loud. "Installed" was the only
+              thing this screen ever claimed about the server binary, and it
+              stayed true while the binary fell two releases behind the manifest
+              the application ships -- the state this machine was in when
+              KNEG-113 was written. The three answers are kept apart: `unknown`
+              is not a polite `stale`, and the button below is offered for both
+              because pressing it is how either one is settled.
+            */}
+            {freshnessLabel(local.serverFreshness) ? (
+              <p
+                className={
+                  local.serverFreshness.state === "current" ? "muted" : "muted warn"
+                }
+              >
+                {freshnessLabel(local.serverFreshness)}
+              </p>
+            ) : null}
+            {local.serverFreshness.state !== "not-installed" ? (
+              <button
+                type="button"
+                onClick={() => {
+                  runInstall(SERVER_ROW, async () => {
+                    const outcome = await refreshLocalServer();
+                    setRefreshed(refreshOutcomeLabel(outcome));
+                  });
+                }}
+              >
+                {local.serverFreshness.state === "current"
+                  ? "Reinstall the server binary"
+                  : "Update the server binary"}
+              </button>
+            ) : null}
+            {/*
+              Always rendered, so a press fills a slot rather than growing the
+              section under the pointer -- the same reason the providers block
+              above holds its status line open.
+            */}
+            <p className="status-slot row-detail" role="status">
+              {refreshed}
+            </p>
             <Row
               label="Installed to"
               value={local.installDir}

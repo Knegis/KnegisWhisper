@@ -108,6 +108,7 @@ import type {
   ReasoningStatus,
   RecheckOutcome,
   Registration,
+  RefreshOutcome,
   RelocatedCredential,
   RouteReport,
   SearchHit,
@@ -115,6 +116,7 @@ import type {
   ShortcutHookStatus,
   SherpaModelStatus,
   SherpaStatus,
+  SidecarFreshness,
   SidecarStatus,
   SkipReason,
   Sources,
@@ -216,6 +218,7 @@ export type {
   ReasoningStatus,
   RecheckOutcome,
   Registration,
+  RefreshOutcome,
   RelocatedCredential,
   RouteReport,
   SearchHit,
@@ -223,6 +226,7 @@ export type {
   ShortcutHookStatus,
   SherpaModelStatus,
   SherpaStatus,
+  SidecarFreshness,
   SidecarStatus,
   Sources,
   SyncOutcome,
@@ -869,6 +873,17 @@ export async function startLocalServer(modelId: string): Promise<number> {
 
 export async function stopLocalServer(): Promise<void> {
   return invoke<void>("local_server_stop");
+}
+
+/**
+ * Replace the installed server binary with the one this build pins.
+ *
+ * Stops the running server, installs, and starts it again. The outcome says
+ * whether it came back -- see `RefreshOutcome`, which reports that separately
+ * from the replacement because they can go different ways.
+ */
+export async function refreshLocalServer(): Promise<RefreshOutcome> {
+  return invoke<RefreshOutcome>("local_server_refresh");
 }
 
 /* ---------------------------------------------------- local ASR (sherpa) */

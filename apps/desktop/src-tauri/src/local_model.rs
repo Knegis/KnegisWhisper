@@ -163,6 +163,14 @@ pub struct LocalStatus {
     pub availability: Availability,
     /// Whether the server binary is installed.
     pub server_installed: bool,
+    /// Whether the installed one is the build this version pins.
+    ///
+    /// Separate from `server_installed`, and it has to be: "a `whisper-server.exe`
+    /// is there" and "it is *our* `whisper-server.exe`" are different claims,
+    /// and until KNEG-113 only the first was ever made. The screen showed
+    /// *Installed* for a binary two releases behind the manifest and nothing
+    /// anywhere would have said so.
+    pub server_freshness: SidecarFreshness,
     /// The models on offer, and what is known about each.
     pub models: Vec<ModelStatus>,
     /// The port the server is listening on, if it is running.
@@ -219,6 +227,82 @@ impl Availability {
             _ => Self::Unknown,
         }
     }
+}
+
+/// Whether the installed server binary is the build this version pins.
+///
+/// The wire form of [`kw_sidecar::Freshness`]. A separate type for the reason
+/// [`Availability`] is one: the crate's enum carries `Sha256Digest` and a
+/// structured reason, neither of which should become a TypeScript shape that
+/// then has to be kept in step across the boundary.
+///
+/// **`Unknown` is not a rounded-down `Stale`.** An install this application did
+/// not record cannot be compared with anything, and the screen says exactly
+/// that rather than picking whichever of the other two answers reads better.
+/// The machine this was written on is in that state right now.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(
+    tag = "state",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
+pub enum SidecarFreshness {
+    /// Nothing is installed, so there is nothing to be out of date.
+    NotInstalled,
+    /// What is installed came from the archive this build pins.
+    Current,
+    /// It came from a different archive. Both digests, so a bug report can be
+    /// checked rather than believed.
+    Stale { installed: String, expected: String },
+    /// Something is installed and this build cannot say what it is.
+    Unknown { why: String },
+}
+
+impl SidecarFreshness {
+    /// The wire form of a verdict.
+    #[must_use]
+    pub fn of(freshness: &kw_sidecar::Freshness) -> Self {
+        match freshness {
+            kw_sidecar::Freshness::NotInstalled => Self::NotInstalled,
+            kw_sidecar::Freshness::Current => Self::Current,
+            kw_sidecar::Freshness::Stale {
+                installed,
+                expected,
+            } => Self::Stale {
+                installed: installed.to_string(),
+                expected: expected.to_string(),
+            },
+            kw_sidecar::Freshness::Unknown(why) => Self::Unknown { why: why.explain() },
+        }
+    }
+}
+
+/// What this build knows about the sidecar on disk.
+///
+/// The filesystem half of the question, kept in one place because three callers
+/// want it and each of them getting the search path slightly wrong is exactly
+/// how `server_installed` and the start path would come to disagree.
+fn sidecar_freshness(
+    catalog: &Catalog,
+    sidecar: &str,
+    root: &std::path::Path,
+) -> kw_sidecar::Freshness {
+    let Ok((_, asset)) = catalog.resolve(sidecar) else {
+        // No published asset for this platform. Nothing is pinned, so nothing
+        // can be behind it.
+        return kw_sidecar::Freshness::NotInstalled;
+    };
+    let installation = kw_sidecar::locate(
+        sidecar,
+        asset,
+        &kw_sidecar::SearchPath {
+            bundled: None,
+            downloaded: root.to_path_buf(),
+        },
+        &kw_sidecar::RealFs,
+    );
+    let record = kw_sidecar::record::read(&root.join(sidecar));
+    kw_sidecar::freshness(&installation, &record, sidecar, &asset.sha256)
 }
 
 /// How firmly a model's identity can be established.
@@ -343,22 +427,10 @@ pub async fn local_model_status(
 
     let availability = Availability::of(&local.catalog, SIDECAR);
 
-    let server_installed = local
-        .catalog
-        .resolve(SIDECAR)
-        .ok()
-        .is_some_and(|(_, asset)| {
-            kw_sidecar::locate(
-                SIDECAR,
-                asset,
-                &kw_sidecar::SearchPath {
-                    bundled: None,
-                    downloaded: cache.path.clone(),
-                },
-                &kw_sidecar::RealFs,
-            )
-            .is_installed()
-        });
+    // One call for both, so they cannot disagree: `Freshness::NotInstalled` is
+    // exactly the case `locate` reports as absent or incomplete.
+    let freshness = sidecar_freshness(&local.catalog, SIDECAR, &cache.path);
+    let server_installed = !matches!(freshness, kw_sidecar::Freshness::NotInstalled);
 
     let registry = kw_provider_registry::registry().map_err(|err| err.to_string())?;
     let models = registry
@@ -378,6 +450,7 @@ pub async fn local_model_status(
     Ok(LocalStatus {
         availability,
         server_installed,
+        server_freshness: SidecarFreshness::of(&freshness),
         models,
         port: local.port.read().ok().and_then(|p| *p),
         running_model: local.model.read().ok().and_then(|m| m.clone()),
@@ -529,6 +602,156 @@ pub async fn local_model_install(
     emit(InstallProgress::Done { verified_by });
 
     Ok(verified_by.as_str().to_owned())
+}
+
+/* ------------------------------------------------------------------ refresh */
+
+/// What became of the server a refresh had to stop.
+///
+/// Three states rather than an `Option<String>`, because "nothing was running"
+/// and "something was running and could not be started again" are opposite
+/// news and the second one is the whole risk of doing this at all.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Restart {
+    NothingWasRunning,
+    Restarted(String),
+    Failed { model: String, error: String },
+}
+
+impl Restart {
+    const fn restarted(&self) -> Option<&String> {
+        match self {
+            Self::Restarted(model) => Some(model),
+            _ => None,
+        }
+    }
+
+    const fn error(&self) -> Option<&String> {
+        match self {
+            Self::Failed { error, .. } => Some(error),
+            _ => None,
+        }
+    }
+}
+
+/// The sentence a failed refresh leaves the user with.
+///
+/// A refresh **stops the server before it replaces it**, so a refused download
+/// ends with the old binary still on disk and nothing serving it unless it was
+/// started again. The install error on its own would not say that, and the
+/// difference between "your download failed" and "your download failed and
+/// dictation is now down" is the whole of what the user needs to know.
+///
+/// Pure, and separated from the command for the reason `media.rs:1334-1340`
+/// records: a judgement reachable only through an `AppHandle` is a judgement
+/// nothing can test.
+fn refresh_failure(install_error: &str, restart: &Restart) -> String {
+    match restart {
+        Restart::NothingWasRunning => install_error.to_owned(),
+        Restart::Restarted(model) => format!(
+            "{install_error} The server was not replaced, and the one that was running \
+             ({model}) has been started again."
+        ),
+        Restart::Failed { model, error } => format!(
+            "{install_error} The server was not replaced, and the one that was running \
+             ({model}) could not be started again: {error}"
+        ),
+    }
+}
+
+/// What a refresh of the server binary did.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RefreshOutcome {
+    /// How many files the replacement unpacked. Reported for the reason
+    /// [`kw_sidecar::Installed::files`] is: one would mean the sibling `ggml`
+    /// libraries were missed and the server will not start.
+    pub files: usize,
+    /// The model the server was running before, now running again.
+    pub restarted: Option<String>,
+    /// Why it could not be started again, when it could not. Not an error —
+    /// the replacement succeeded — but not something to leave unsaid either.
+    pub restart_error: Option<String>,
+}
+
+/// Replace the installed server binary with the one this build pins.
+///
+/// **Stop, replace, restart.** The application owns the process, so it can put
+/// it down for the length of the install and bring it back afterwards; that is
+/// the whole reason this is a few lines rather than a mechanism.
+///
+/// The alternative considered and rejected was renaming the running install
+/// aside and unpacking over the vacated name. Measured on 2026-09-01 with
+/// `cargo run -p kw-sidecar --example running_exe_lock_probe`, that does work
+/// as far as it goes — on Windows, `rename` of a directory holding a running
+/// executable succeeds where `remove_dir_all` fails with `os error 5`, and the
+/// vacated name can be created immediately. It was rejected because of the
+/// probe's third line: **the renamed-aside directory is still undeletable.**
+/// The lock is on the mapped image file, not on the path. So rename-aside buys
+/// a shorter outage and inherits a directory that cannot be removed until the
+/// process ends, which needs a cleanup pass at some later moment and an
+/// `install` that tolerates finding one. More machinery, for the case where the
+/// user has explicitly asked to replace the thing they are using.
+///
+/// Nothing calls this on its own. Like every other download in this
+/// application, it happens because somebody pressed a button.
+#[tauri::command]
+pub async fn local_server_refresh(
+    app: AppHandle,
+    local: State<'_, Arc<LocalTranscription>>,
+) -> Result<RefreshOutcome, String> {
+    let (spec, asset) = local
+        .catalog
+        .resolve(SIDECAR)
+        .map_err(|err| err.to_string())?;
+    let sidecars = paths::sidecar_dir();
+
+    let emit = |progress: InstallProgress| {
+        if let Err(err) = app.emit(PROGRESS_EVENT, progress) {
+            tracing::debug!(error = %err, "could not report refresh progress");
+        }
+    };
+
+    // Read before the stop: `stop` clears it, and this is the only record of
+    // what has to be put back.
+    let was_running = local.model.read().ok().and_then(|held| held.clone());
+    local.stop().await;
+
+    let installed = kw_sidecar::install(&local.policy, spec, asset, &sidecars.path, &mut |p| {
+        emit(match p {
+            kw_sidecar::Progress::Downloading { written, total } => {
+                InstallProgress::Server { written, total }
+            }
+            kw_sidecar::Progress::Verifying => InstallProgress::Verifying,
+            kw_sidecar::Progress::Extracting => InstallProgress::Extracting,
+        });
+    })
+    .await;
+
+    // Whichever way the install went. A refused download must not leave the
+    // user with a server that was working a moment ago and is now simply gone.
+    let restart = match &was_running {
+        None => Restart::NothingWasRunning,
+        Some(model) => match local.start_model(model).await {
+            Ok(port) => {
+                tracing::info!(port, model = %model, "restarted the local model server after a refresh");
+                Restart::Restarted(model.clone())
+            }
+            Err(error) => Restart::Failed {
+                model: model.clone(),
+                error,
+            },
+        },
+    };
+
+    match installed {
+        Ok(installed) => Ok(RefreshOutcome {
+            files: installed.files,
+            restarted: restart.restarted().cloned(),
+            restart_error: restart.error().cloned(),
+        }),
+        Err(err) => Err(refresh_failure(&err.to_string(), &restart)),
+    }
 }
 
 /// Start the local server with an installed model.
@@ -881,6 +1104,195 @@ mod tests {
             dir: std::path::PathBuf::from("sidecars/whisper"),
             expected: std::path::PathBuf::from("sidecars/whisper/whisper-server.exe"),
         }));
+    }
+
+    /* ---------------------------------------------- freshness on the wire */
+
+    fn digest(hex: &str) -> kw_sidecar::Sha256Digest {
+        kw_sidecar::Sha256Digest::parse(hex).unwrap()
+    }
+
+    const PINNED: &str = "c2a4b60edb11f7e11a9191ffb50929535527d4d91c9903dbe3e554583bbbc63d";
+    const OTHER: &str = "1111111111111111111111111111111111111111111111111111111111111111";
+
+    fn wire(freshness: &kw_sidecar::Freshness) -> serde_json::Value {
+        serde_json::to_value(SidecarFreshness::of(freshness)).unwrap()
+    }
+
+    #[test]
+    fn a_stale_sidecar_sends_both_digests_so_a_report_can_be_checked() {
+        let json = wire(&kw_sidecar::Freshness::Stale {
+            installed: digest(OTHER),
+            expected: digest(PINNED),
+        });
+        assert_eq!(json["state"], "stale");
+        assert_eq!(json["installed"], OTHER);
+        assert_eq!(json["expected"], PINNED);
+    }
+
+    /// The state the machine this was written on is in, carried all the way to
+    /// the wire.
+    ///
+    /// `unknown` must not arrive at the screen as either of the other two.
+    /// Rounding it to `current` would excuse a binary the manifest has moved
+    /// past; rounding it to `stale` would claim a comparison nobody made.
+    #[test]
+    fn an_unrecorded_sidecar_is_unknown_on_the_wire_and_says_why() {
+        let json = wire(&kw_sidecar::Freshness::Unknown(
+            kw_sidecar::Unrecorded::NoRecord,
+        ));
+        assert_eq!(json["state"], "unknown");
+        assert_ne!(json["state"], "stale");
+        assert_ne!(json["state"], "current");
+        assert!(
+            json["why"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("before this application started recording"),
+            "{json}"
+        );
+    }
+
+    #[test]
+    fn a_current_sidecar_and_a_missing_one_are_different_wire_states() {
+        assert_eq!(wire(&kw_sidecar::Freshness::Current)["state"], "current");
+        assert_eq!(
+            wire(&kw_sidecar::Freshness::NotInstalled)["state"],
+            "not-installed"
+        );
+    }
+
+    #[test]
+    fn a_sidecar_nothing_is_published_for_is_reported_as_not_installed() {
+        // `Catalog::resolve` fails on a name the manifest does not carry.
+        // Answering anything but `NotInstalled` there would be a staleness
+        // claim about a binary that does not exist for this platform.
+        let dir = tempfile::tempdir().unwrap();
+        let catalog = kw_sidecar::Catalog::shipped().unwrap();
+        assert_eq!(
+            sidecar_freshness(&catalog, "no-such-sidecar", dir.path()),
+            kw_sidecar::Freshness::NotInstalled
+        );
+    }
+
+    #[test]
+    fn an_empty_sidecar_root_reports_the_whisper_server_as_not_installed() {
+        // Reads the real shipped catalogue against an empty directory, so the
+        // search path this function builds is exercised rather than described.
+        let dir = tempfile::tempdir().unwrap();
+        let catalog = kw_sidecar::Catalog::shipped().unwrap();
+        assert_eq!(
+            sidecar_freshness(&catalog, SIDECAR, dir.path()),
+            kw_sidecar::Freshness::NotInstalled
+        );
+    }
+
+    #[test]
+    fn an_executable_with_no_record_beside_it_is_unknown_rather_than_current() {
+        // Exactly what is on this machine: a `sidecars/whisper` full of files
+        // from 2026-08-25 and nothing saying what they are.
+        let dir = tempfile::tempdir().unwrap();
+        let catalog = kw_sidecar::Catalog::shipped().unwrap();
+        let Ok((_, asset)) = catalog.resolve(SIDECAR) else {
+            // No published asset on this platform; the case above covers it.
+            return;
+        };
+        let install = dir.path().join(SIDECAR);
+        std::fs::create_dir_all(&install).unwrap();
+        std::fs::write(install.join(asset.executable_name()), b"MZ").unwrap();
+
+        assert_eq!(
+            sidecar_freshness(&catalog, SIDECAR, dir.path()),
+            kw_sidecar::Freshness::Unknown(kw_sidecar::Unrecorded::NoRecord)
+        );
+    }
+
+    #[test]
+    fn a_record_beside_the_executable_is_found_and_read() {
+        // The path, not the decision -- `kw_sidecar::freshness` is tested in the
+        // crate. What this asserts is that the record is looked for *in the
+        // sidecar's own directory*: reading one directory too high would report
+        // every install as unrecorded for ever, and would look exactly like the
+        // state this whole change exists to end.
+        let dir = tempfile::tempdir().unwrap();
+        let catalog = kw_sidecar::Catalog::shipped().unwrap();
+        let Ok((spec, asset)) = catalog.resolve(SIDECAR) else {
+            return;
+        };
+        let install = dir.path().join(SIDECAR);
+        std::fs::create_dir_all(&install).unwrap();
+        std::fs::write(install.join(asset.executable_name()), b"MZ").unwrap();
+        kw_sidecar::record::write(&install, &kw_sidecar::InstallRecord::of(spec, asset)).unwrap();
+
+        assert_eq!(
+            sidecar_freshness(&catalog, SIDECAR, dir.path()),
+            kw_sidecar::Freshness::Current
+        );
+    }
+
+    /* --------------------------------------------------------- refreshing */
+
+    #[test]
+    fn a_refresh_that_failed_with_nothing_running_reports_only_the_failure() {
+        // No server was stopped, so there is no second fact to report and
+        // adding one would be noise.
+        assert_eq!(
+            refresh_failure("the download was refused.", &Restart::NothingWasRunning),
+            "the download was refused."
+        );
+    }
+
+    /// The reason a refresh reports two things rather than one.
+    ///
+    /// A refresh stops the server before replacing it. If the download then
+    /// fails, the user is left with the old binary and — unless it was started
+    /// again — nothing serving it. An install error on its own does not say
+    /// which of those two states they are in.
+    #[test]
+    fn a_refresh_that_failed_says_the_old_server_came_back() {
+        let message = refresh_failure(
+            "the download was refused.",
+            &Restart::Restarted("tiny".to_owned()),
+        );
+        assert!(message.contains("the download was refused."), "{message}");
+        assert!(message.contains("started again"), "{message}");
+        assert!(message.contains("tiny"), "{message}");
+    }
+
+    #[test]
+    fn a_refresh_that_failed_twice_says_dictation_is_down() {
+        // The worst outcome, and the one that must never be summarised as
+        // "install failed": the server that was working when the button was
+        // pressed is now gone.
+        let message = refresh_failure(
+            "the download was refused.",
+            &Restart::Failed {
+                model: "tiny".to_owned(),
+                error: "port 8178 is taken".to_owned(),
+            },
+        );
+        assert!(message.contains("could not be started again"), "{message}");
+        assert!(message.contains("port 8178 is taken"), "{message}");
+    }
+
+    #[test]
+    fn the_outcome_of_a_restart_is_reported_as_one_thing_or_the_other() {
+        // `restarted` and `restart_error` are never both set, and never both
+        // clear when something was running. A caller reading one without the
+        // other must not be able to see a half-truth.
+        let restarted = Restart::Restarted("tiny".to_owned());
+        assert_eq!(restarted.restarted().map(String::as_str), Some("tiny"));
+        assert_eq!(restarted.error(), None);
+
+        let failed = Restart::Failed {
+            model: "tiny".to_owned(),
+            error: "no".to_owned(),
+        };
+        assert_eq!(failed.restarted(), None);
+        assert_eq!(failed.error().map(String::as_str), Some("no"));
+
+        assert_eq!(Restart::NothingWasRunning.restarted(), None);
+        assert_eq!(Restart::NothingWasRunning.error(), None);
     }
 
     /* -------------------------------------------------------- reviving */
