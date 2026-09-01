@@ -684,10 +684,13 @@ item is therefore no longer a decision to make; only the check below remains.
 3. **Run `knegiswhisper` against a machine where the local API is off**, and confirm the CLI's
    error is the one the screen would predict rather than a generic connection failure.
 
-### Added by Task 20 (the SSRF boundary fix), and unchecked
+### Added by Task 20 (the SSRF boundary fix)
 
-The most significant change of this whole run, verified so far only by unit tests and by re-running
-the parity and gate suite — never by a person driving real traffic through it.
+The repeatable host-dependent probe is
+`cargo test -p kw-network-policy --test live_boundary -- --ignored --nocapture`. It discovers the
+active private IPv4 interface, drives real HTTP and a TLS ClientHello to listeners on that
+non-loopback address, and verifies that every non-self-hosted purpose refuses the private targets
+before a request can be built. Ordinary test runs skip it because it opens listeners on the host.
 
 1. **Point a self-hosted transcription or inference endpoint at a plain-HTTP server on the local
    network** (not loopback) and confirm it still works — the exemption this fix was careful not to
@@ -703,9 +706,9 @@ the parity and gate suite — never by a person driving real traffic through it.
    `reqwest` call at a real listening address on this specific machine to confirm the refusal
    happens before any byte leaves the process.
 4. **Confirm CGNAT and `0.0.0.0/8` addresses behave as documented**: refused for a cloud provider,
-   reachable in the clear for the self-hosted purpose. Low-probability in ordinary use, but this is
-   the one place the fix deliberately *widened* what a purpose may reach, and a widening deserves a
-   real check as much as a narrowing does.
+   admitted in the clear for the self-hosted purpose. The probe checks both policy decisions. It
+   does not claim network reachability unless the validation machine actually owns a route and a
+   peer in those ranges; manufacturing that topology would test Windows routing, not this boundary.
 
 ### What this run changed on the machine
 
