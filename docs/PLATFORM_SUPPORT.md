@@ -408,16 +408,36 @@ listener that is still unwritten.
 
 | Capability | Windows | macOS | Linux X11 | GNOME Wayland | KDE Wayland | Hyprland |
 | --- | --- | --- | --- | --- | --- | --- |
-| Standard accelerators | yes | yes | yes | gsettings + D-Bus | KGlobalAccel | `hyprctl` |
-| Modifier-only (`Control+Super`) | native hook | native hook | limited | native slot | native slot | native slot |
-| Right-side modifiers | native hook | native hook | limited | limited | limited | limited |
-| Globe / `Fn` | not applicable | native hook | not applicable | not applicable | not applicable | not applicable |
-| Mouse buttons 4/5 | native hook | native hook | limited | limited | limited | limited |
-| Push-to-talk | native hook per key | native hook | `/dev/input` access required | portal-dependent | portal-dependent | portal-dependent |
+| Standard accelerators | **verified** | plugin, unverified | plugin, unverified | plugin, unverified | plugin, unverified | plugin, unverified |
+| Modifier-only (`Control+Super`) | **verified** — `WH_KEYBOARD_LL` | not built | not built | not built | not built | not built |
+| Right-side modifiers | built — same hook | not built | not built | not built | not built | not built |
+| Globe / `Fn` | not built | not built | not built | not built | not built | not built |
+| Mouse buttons 4/5 | **measured** — `WH_MOUSE_LL` | not built | not built | not built | not built | not built |
+| Push-to-talk, hooked accelerators | **measured** — one hook, both edges | not built | not built | not built | not built | not built |
+| Push-to-talk, standard accelerators | believed, never run | believed, never run | believed, never run | believed, never run | believed, never run | believed, never run |
 
-The default hotkey is `Control+Super`, which is modifier-only and therefore invisible to the
-cross-platform API — hence the native hooks. On X11 and GNOME the effective default is adjusted
-because modifier-only combinations do not work there.
+**"not built" and "unverified" are different answers and the distinction is the point.** *Not built*
+means there is no code for it anywhere, on any platform: `keyhook::support()` returns `Unsupported`
+for every target that is not Windows, so no hook-dependent capability exists off Windows at all.
+*Unverified* means the code is cross-platform, compiles in CI, and **has never been run there** — see
+the verification table at the top of this document, which records macOS and Linux as compile-only.
+
+**There is one registration mechanism and it is the same on every platform.** Everything in the
+Standard-accelerators row goes through `tauri_plugin_global_shortcut` (`shortcuts.rs:19`), and there
+is no second path beside it — no `gsettings`, no `KGlobalAccel`, no `hyprctl`, and no
+desktop-portal client anywhere in this repository. A compositor-native shortcut slot is therefore
+not something this application can reach for on Wayland, whatever the compositor offers; the
+portal's own limit — it takes only chords the compositor can register — is described in the next
+section and would apply on top.
+
+The default dictation hotkey is `Control+Super`, which is modifier-only and therefore invisible to
+the cross-platform API — hence the native hook. **The default is not adjusted per platform.**
+`HotkeyAction::default_accelerator` is a bare `match` on the action with no conditional compilation
+in it: `grep -n "cfg(target_os" crates/platform/src/hotkey.rs apps/desktop/src-tauri/src/shortcuts.rs`
+returns nothing, and `nothing_ships_holding_by_default` pins the value. Every platform ships
+`Control+Super`. Where there is no hook it classifies as `ModifierOnly`, is not registered, and
+`Settings > Dictation` says it does nothing and to add an ordinary key — rather than the shipped
+default silently becoming something else.
 
 **What is built, as against what the table says is possible:**
 
@@ -553,8 +573,17 @@ ever, and `ChordWatcher::reset` deliberately does **not** synthesise a release: 
 lost track of the keyboard cannot also claim the key came up, and inventing one would stop a
 dictation on a key the user is still holding.
 
-Push-to-talk on Linux needs read access to `/dev/input`; without it the app reports the
-limitation and falls back to toggle mode rather than silently failing.
+**Push-to-talk off Windows is the plugin path only, and it has never been run.** On a hooked
+accelerator — a modifier-only chord or a mouse button — push-to-talk needs the low-level hook, which
+exists on Windows and nowhere else. On an ordinary accelerator it rides
+`tauri-plugin-global-shortcut`'s release event through the same `shortcuts::act`, so it is
+cross-platform code by construction; nothing in this repository has run it, on any platform
+including Windows, and `register_one`'s own doc says so.
+
+There is no `/dev/input` reader here and nothing falls back to toggle mode. `hotkey.<action>.mode`
+is a stored per-action setting and no code consults the platform when reading it, so a `hold` on a
+platform with no hook does not degrade to a toggle — the accelerator it applies to simply never
+registers, and the screen says why.
 
 ## Text insertion
 

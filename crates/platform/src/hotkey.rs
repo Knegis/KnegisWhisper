@@ -621,9 +621,22 @@ impl Binding {
             .collect()
     }
 
-    /// Whether this action has at least one working hotkey.
+    /// Whether any of this action's accelerators is one
+    /// `tauri-plugin-global-shortcut` can register today.
+    ///
+    /// **Not "whether this action has a working hotkey".** That is what this
+    /// said until 2026-09-01, and on Windows it was false for both hooked
+    /// kinds: a [`Accelerator::ModifierOnly`] chord and an
+    /// [`Accelerator::MouseButton`] are unregistrable by construction and both
+    /// fire through the low-level hook. [`Accelerator::explain`] says so in as
+    /// many words — *"It still works"*, and *"It works, and the click is not
+    /// swallowed"*. [`Accelerator::is_registrable`] had the honest wording all
+    /// along; this converges on it.
+    ///
+    /// Whether an action ended up live is `shortcuts::RegistrationReport::is_live`,
+    /// which counts `Hooked` as a success. This cannot answer that and never could.
     #[must_use]
-    pub fn is_usable(&self) -> bool {
+    pub fn has_registrable(&self) -> bool {
         !self.registrable().is_empty()
     }
 
@@ -1248,14 +1261,14 @@ mod tests {
     /* ---------------------------------------------------------------------- bindings */
 
     #[test]
-    fn a_binding_reports_only_its_working_accelerators() {
+    fn a_binding_reports_only_its_registrable_accelerators() {
         let b = Binding::from_stored(
             HotkeyAction::Dictation,
             "Control+Super, Alt+D, Control+",
             HotkeyMode::Toggle,
         );
         assert_eq!(b.registrable(), vec!["Alt+D"]);
-        assert!(b.is_usable());
+        assert!(b.has_registrable());
         assert_eq!(
             b.problems().len(),
             2,
@@ -1264,11 +1277,52 @@ mod tests {
     }
 
     #[test]
-    fn a_binding_with_nothing_registrable_is_not_usable() {
+    fn a_binding_with_nothing_registrable_says_so() {
         let b = Binding::from_stored(HotkeyAction::Dictation, "Control+Super", HotkeyMode::Toggle);
-        assert!(!b.is_usable());
+        assert!(!b.has_registrable());
         assert!(b.registrable().is_empty());
         assert_eq!(b.problems().len(), 1);
+    }
+
+    /// `has_registrable` is about the register, and never about whether the
+    /// hotkey works.
+    ///
+    /// The name it replaced — `is_usable` — claimed the second, and on Windows
+    /// that was false for both hooked kinds: `Control+Super` is the shipped
+    /// dictation default and it fires. This is the tripwire against the name
+    /// drifting back to the claim it cannot support.
+    ///
+    /// Mutation that turns it red: widen [`Binding::registrable`]'s filter to
+    /// accept `ModifierOnly`, and the `has_registrable` negatives fail. Delete
+    /// the `Alt+D` control and a `from_stored` that parsed nothing at all would
+    /// satisfy every remaining assertion — which is exactly what the control is
+    /// here to stop.
+    #[test]
+    fn nothing_registrable_does_not_mean_nothing_works() {
+        // The control. An accelerator the register does take, so the negatives
+        // below are measured against a parser that is demonstrably working.
+        let ordinary = Binding::from_stored(HotkeyAction::Dictation, "Alt+D", HotkeyMode::Toggle);
+        assert!(ordinary.has_registrable());
+        assert_eq!(ordinary.registrable(), vec!["Alt+D"]);
+
+        for stored in ["Control+Super", "Mouse4"] {
+            let b = Binding::from_stored(HotkeyAction::Dictation, stored, HotkeyMode::Toggle);
+            // The premise: it parsed to one accelerator. Without this the two
+            // assertions below hold for a binding with no accelerators at all.
+            assert_eq!(b.accelerators.len(), 1, "{stored} did not parse to one");
+            assert!(!b.has_registrable(), "{stored} is not registrable");
+
+            // And where the hook exists it is live all the same. This is the
+            // claim the old name got wrong, asserted rather than described.
+            if crate::keyhook::support().is_available() {
+                let problems = b.problems();
+                assert_eq!(problems.len(), 1, "{stored}: {problems:?}");
+                assert!(
+                    !problems[0].contains("does nothing"),
+                    "a platform with the hook must not call {stored} dead: {problems:?}"
+                );
+            }
+        }
     }
 
     #[test]

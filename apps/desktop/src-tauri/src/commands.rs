@@ -91,19 +91,38 @@ pub struct HotkeyReport {
     pub bindings: Vec<Binding>,
     /// Accelerators claimed by more than one action.
     pub conflicts: Vec<hotkey::Conflict>,
-    /// Actions with no working hotkey at all, for any reason — a bad accelerator
-    /// or a missing handler. The union, so a caller asking "is this action
-    /// dead?" gets one answer.
-    pub unusable: Vec<HotkeyAction>,
-    /// The subset of `unusable` that is dead because nothing handles it, with
-    /// the reason. Separate because the two need different words: one is the
-    /// user's to fix and the other is not.
+    /// Actions with no registrable accelerator, **or** with no handler.
+    ///
+    /// Two unrelated properties under one field, which is the whole of what is
+    /// wrong with it. The first half stopped meaning "does not work" the moment
+    /// a hooked platform existed: on Windows the shipped dictation default
+    /// `Control+Super` is in this set and fires perfectly well through the
+    /// low-level hook, and so does `Mouse4`. The second half is the opposite
+    /// shape — chat agent's `Control+Shift+Space` is a faultless registrable
+    /// accelerator and it is the *action* that has nowhere to go, so
+    /// [`crate::shortcuts::register_all`] deliberately never offers it. Neither
+    /// half implies the other, and their union implies neither.
+    ///
+    /// It was called `unusable` until 2026-09-01, which asserted the one thing
+    /// no member of the set is guaranteed to have in common.
+    ///
+    /// **Nothing reads this.** There is no caller in Rust outside this module's
+    /// tests and none in `apps/desktop/src`, where `Dictation.tsx` renders
+    /// `bindings`, `unhandled`, `conflicts` and `cautions`. Whether an action
+    /// ended up live is [`crate::shortcuts::RegistrationReport::is_live`], which
+    /// counts `Hooked`; *why* it is dead is `unhandled`, which carries the
+    /// sentence a screen can show.
+    pub unregistrable_or_unhandled: Vec<HotkeyAction>,
+    /// The subset of `unregistrable_or_unhandled` that is dead because nothing
+    /// handles it, with the reason. Separate because the two need different
+    /// words: one is the user's to fix and the other is not.
     pub unhandled: Vec<UnhandledAction>,
     /// Hotkeys that work and also fire when the user meant something else.
     ///
-    /// A third category, not a third spelling of the first two. `unusable` and
-    /// `conflicts` both mean the hotkey will not do its job; a caution means it
-    /// will, and will do it at times nobody asked for. Today the only source is
+    /// A third category, not a third spelling of the first two.
+    /// `unregistrable_or_unhandled` and `conflicts` both mean the hotkey will
+    /// not do its job through the shortcut register; a caution means it will,
+    /// and will do it at times nobody asked for. Today the only source is
     /// AltGr (KNEG-37).
     pub cautions: Vec<hotkey::Caution>,
 }
@@ -147,9 +166,10 @@ fn report_with_layout(
     cautions.extend(hotkey::prefix_cautions(&bindings));
 
     // Asked of the registration module rather than recomputed, because that is
-    // the module that decides. `Binding::is_usable` can only speak about the
-    // accelerator: it called chat agent's `Control+Shift+Space` usable, and it
-    // was right about the accelerator and wrong about the hotkey.
+    // the module that decides. `Binding::has_registrable` can only speak about
+    // the accelerator: it says chat agent's `Control+Shift+Space` is
+    // registrable, and it is right about the accelerator and says nothing about
+    // the hotkey.
     let unhandled: Vec<UnhandledAction> = hotkey::ALL_ACTIONS
         .into_iter()
         .filter_map(|action| {
@@ -160,16 +180,16 @@ fn report_with_layout(
         })
         .collect();
 
-    let unusable = bindings
+    let unregistrable_or_unhandled = bindings
         .iter()
-        .filter(|b| !b.is_usable() || unhandled.iter().any(|u| u.action == b.action))
+        .filter(|b| !b.has_registrable() || unhandled.iter().any(|u| u.action == b.action))
         .map(|b| b.action)
         .collect();
 
     HotkeyReport {
         bindings,
         conflicts,
-        unusable,
+        unregistrable_or_unhandled,
         unhandled,
         cautions,
     }
@@ -1218,10 +1238,15 @@ async fn render_export(
         participants: note.participants.clone(),
     };
 
-    // Speaker names live in `speaker_mappings`, which nothing writes yet because
-    // there is no diarisation. An empty map is the honest input rather than a
-    // missing one: `transcript::speaker_name` then falls back to the segment's
-    // label or capture source, which is exactly what it should do.
+    // Speaker names live in `speaker_mappings`, and the map is empty because
+    // nothing renames a speaker yet -- not because nothing diarises. There is
+    // diarisation as of 2026-09-01: `meeting::notes` writes `speaker_0` with
+    // the placeholder `Speaker 1` beside it, and `transcript::speaker_name`
+    // renders `speaker_0` as `Speaker 1` from the segment alone. What this
+    // table would add is a name a *person* typed, and no screen offers that, so
+    // an empty map is the honest input rather than a missing one:
+    // `transcript::speaker_name` then falls through to the segment's label or
+    // capture source, which is exactly what it should do.
     let mappings = std::collections::BTreeMap::new();
 
     let content = transcript::export(
@@ -1330,10 +1355,10 @@ mod tests {
             .unwrap();
 
         // Upstream's default is Control+Super, which is modifier-only. The
-        // cross-platform shortcut register still cannot take it — `is_usable`
-        // is about that register — so it comes back with an explanation rather
-        // than looking fine.
-        assert!(!dictation.is_usable());
+        // cross-platform shortcut register still cannot take it —
+        // `has_registrable` is about that register and only that — so it comes
+        // back with an explanation rather than looking fine.
+        assert!(!dictation.has_registrable());
         assert_eq!(dictation.problems().len(), 1);
 
         // What the explanation *says* now depends on the platform, because the
@@ -1374,7 +1399,7 @@ mod tests {
             .unwrap();
         // The accelerator itself is still fine, and the report still says so.
         // The two facts are separate and both are reported.
-        assert!(chat.is_usable(), "the accelerator is not the problem");
+        assert!(chat.has_registrable(), "the accelerator is not the problem");
         assert!(chat.problems().is_empty());
 
         let reason = report
@@ -1385,8 +1410,11 @@ mod tests {
             .expect("chat agent has no handler, so it must appear here");
         assert!(reason.contains("not built yet"), "{reason}");
 
-        // And it counts as unusable, which is the question the interface asks.
-        assert!(report.unusable.contains(&HotkeyAction::ChatAgent));
+        // And it lands in the union field, by the second half of it: the
+        // accelerator is registrable and the action has no handler.
+        assert!(report
+            .unregistrable_or_unhandled
+            .contains(&HotkeyAction::ChatAgent));
     }
 
     /// The report carries the AltGr caution, and does it without asking the
@@ -1450,18 +1478,20 @@ mod tests {
             "the caution must not also be reported as a problem: {:?}",
             dictation.problems()
         );
-        // `unusable` does contain it, and that is about the accelerator being
-        // modifier-only rather than about AltGr -- the same is true of the
-        // shipped `Control+Super` default, which works. Asserted so the two are
-        // not confused later: nothing here made this hotkey unusable.
+        // The union field does contain it, and that is about the accelerator
+        // being modifier-only rather than about AltGr -- the same is true of
+        // the shipped `Control+Super` default, which fires through the hook.
+        // Asserted so the two are not confused later: nothing here made this
+        // hotkey stop working, and membership of that field never claimed it
+        // did.
         assert!(
             report_with_layout(
                 bindings.clone(),
                 &kw_platform::keyboard_layout::AltGr::Absent
             )
-            .unusable
-                == report.unusable,
-            "the caution must not change what counts as unusable"
+            .unregistrable_or_unhandled
+                == report.unregistrable_or_unhandled,
+            "the caution must not change what the register can take"
         );
 
         // The same bindings on a layout with no AltGr lose the AltGr caution and
@@ -1504,7 +1534,7 @@ mod tests {
             .iter()
             .find(|b| b.action == HotkeyAction::Dictation)
             .unwrap();
-        assert!(dictation.is_usable());
+        assert!(dictation.has_registrable());
         assert_eq!(dictation.registrable(), vec!["Control+Shift+D"]);
     }
 

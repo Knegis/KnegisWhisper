@@ -291,6 +291,87 @@ Unchanged from the Phases 1–4 entry, restated here so they are not buried:
 
 ---
 
+## 2026-09-01 (KNEG-129) — a table that overstated a capability, and two sentences that invented one
+
+Three sentences that were true when they were written, and one rename. Nothing here changes
+behaviour, and deliberately not: **when a modifier-only chord should fire is KNEG-115 and it is
+still open.**
+
+### `is_usable` had drifted, and the codebase already knew
+
+`Binding::is_usable` said *"Whether this action has at least one working hotkey"* and computed
+`!self.registrable().is_empty()`. On Windows that is false twice over: a `ModifierOnly` chord and a
+`MouseButton` are both unregistrable by construction and both fire through the low-level hook.
+`Accelerator::explain` says so on the screen in as many words — *"It still works"*, and *"It works,
+and the click is not swallowed"* — and `Accelerator::is_registrable` had the honest wording next
+door the whole time: *"Whether `tauri-plugin-global-shortcut` can register this today."* The drift
+was confined to one method and one field. It is `has_registrable` now, which pairs with the
+`registrable()` immediately above it.
+
+**No user-visible string changed.** `Dictation.tsx` renders `bindings`, `unhandled`, `conflicts` and
+`cautions`, and has never read the field this issue is about.
+
+### The field is worse than its name, and the rename says so rather than hiding it
+
+`HotkeyReport::unusable` is the union of *no registrable accelerator* and *no handler*, which are
+two unrelated properties. The first stopped meaning "does not work" the moment a hooked platform
+existed — on the shipped default, dictation is in that set and it **fires**. The second is the
+opposite shape: chat agent's `Control+Shift+Space` is a faultless registrable accelerator and it is
+the *action* that has nowhere to go. Neither half implies the other and the union implies neither,
+so no short name for it can be true.
+
+It is `unregistrable_or_unhandled` now. The clumsiness is the finding rather than a cost to be
+minimised: **a field whose only truthful name is a conjunction is a field that should not exist**,
+and this one has no consumer at all — nothing in Rust outside its own tests, nothing in
+`apps/desktop/src`. Renaming it stops it lying; deleting it is a separate decision and is filed
+rather than taken here. `unhandled` already carries the reason and
+`RegistrationReport::is_live` already carries the outcome.
+
+The 2026-08-26 and 2026-08-31 entries below still call it `unusable`. They are dated records of what
+was true then and are left alone; rewriting them to use a name that did not exist yet would be its
+own small dishonesty.
+
+### `PLATFORM_SUPPORT.md` was wrong eight times more than the issue thought
+
+The issue named two false cells. Against `keyhook::support()`, which returns `Unsupported` for every
+target that is not Windows, there were **sixteen** — five macOS, four X11, three Wayland
+modifier-only, and the whole push-to-talk row on five platforms — plus three registration mechanisms
+(`gsettings + D-Bus`, `KGlobalAccel`, `hyprctl`) that appear nowhere in the repository, and one
+Windows cell, `native hook per key`, that contradicted line 426 of its own section eight lines
+further down. Line 426 names one-hook-per-key as the upstream design this project deliberately did
+not copy.
+
+**But the ranking is the transferable part, and it is not the count.** A cell overstating a
+capability is a table being generous. A sentence describing behaviour is a different failure, and
+this section had two:
+
+- *"On X11 and GNOME the effective default is adjusted because modifier-only combinations do not
+  work there."* No such adjustment has ever existed. `default_accelerator` is a bare `match` with no
+  conditional compilation anywhere near it — `grep -n "cfg(target_os"` over `hotkey.rs` and
+  `shortcuts.rs` returns nothing — and `nothing_ships_holding_by_default` pins the value. Every
+  platform ships `Control+Super`. This one invents a behaviour.
+- *"Push-to-talk on Linux needs read access to `/dev/input`; without it the app reports the
+  limitation and falls back to toggle mode rather than silently failing."* **This is the worst thing
+  in the section and nobody had noticed it.** There is no `/dev/input` reader in this repository —
+  zero matches — and nothing falls back to toggle mode; `hotkey.<action>.mode` is a stored per-action
+  setting and no code consults the platform when reading it. It invents *two* behaviours, and both
+  of them are the careful, self-aware engineering the rest of the document is genuinely full of,
+  which is exactly why it reads as true.
+
+A capability cell that is too generous costs a reader an expectation. A sentence like the second one
+costs them a belief that the problem was already thought about.
+
+### And one stale reason, folded in
+
+`commands.rs` built an empty speaker map under *"which nothing writes yet because there is no
+diarisation."* There is diarisation now, and the **behaviour is right and unchanged** — the map is
+empty because nothing renames a speaker, not because nothing diarises. `meeting::notes` writes
+`speaker_0` with the placeholder `Speaker 1`, `transcript::speaker_name` renders it from the segment
+alone, and what the table would add is a name a person typed, which no screen offers. Only the
+reason was false.
+
+---
+
 ## 2026-09-01 (KNEG-117) — the depth that was deferred twice cost two and a half hours
 
 **Run: 400 rounds, 35 binaries, 14,000 runs, thread counts 1/2/4/8/16, control passed, not void,

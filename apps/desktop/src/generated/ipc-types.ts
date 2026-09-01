@@ -238,23 +238,42 @@ export type HotkeyReport = { bindings: Array<Binding>,
  */
 conflicts: Array<Conflict>,
 /**
- * Actions with no working hotkey at all, for any reason — a bad accelerator
- * or a missing handler. The union, so a caller asking "is this action
- * dead?" gets one answer.
+ * Actions with no registrable accelerator, **or** with no handler.
+ *
+ * Two unrelated properties under one field, which is the whole of what is
+ * wrong with it. The first half stopped meaning "does not work" the moment
+ * a hooked platform existed: on Windows the shipped dictation default
+ * `Control+Super` is in this set and fires perfectly well through the
+ * low-level hook, and so does `Mouse4`. The second half is the opposite
+ * shape — chat agent's `Control+Shift+Space` is a faultless registrable
+ * accelerator and it is the *action* that has nowhere to go, so
+ * [`crate::shortcuts::register_all`] deliberately never offers it. Neither
+ * half implies the other, and their union implies neither.
+ *
+ * It was called `unusable` until 2026-09-01, which asserted the one thing
+ * no member of the set is guaranteed to have in common.
+ *
+ * **Nothing reads this.** There is no caller in Rust outside this module's
+ * tests and none in `apps/desktop/src`, where `Dictation.tsx` renders
+ * `bindings`, `unhandled`, `conflicts` and `cautions`. Whether an action
+ * ended up live is [`crate::shortcuts::RegistrationReport::is_live`], which
+ * counts `Hooked`; *why* it is dead is `unhandled`, which carries the
+ * sentence a screen can show.
  */
-unusable: Array<HotkeyAction>,
+unregistrableOrUnhandled: Array<HotkeyAction>,
 /**
- * The subset of `unusable` that is dead because nothing handles it, with
- * the reason. Separate because the two need different words: one is the
- * user's to fix and the other is not.
+ * The subset of `unregistrable_or_unhandled` that is dead because nothing
+ * handles it, with the reason. Separate because the two need different
+ * words: one is the user's to fix and the other is not.
  */
 unhandled: Array<UnhandledAction>,
 /**
  * Hotkeys that work and also fire when the user meant something else.
  *
- * A third category, not a third spelling of the first two. `unusable` and
- * `conflicts` both mean the hotkey will not do its job; a caution means it
- * will, and will do it at times nobody asked for. Today the only source is
+ * A third category, not a third spelling of the first two.
+ * `unregistrable_or_unhandled` and `conflicts` both mean the hotkey will
+ * not do its job through the shortcut register; a caution means it will,
+ * and will do it at times nobody asked for. Today the only source is
  * AltGr (KNEG-37).
  */
 cautions: Array<Caution>, };
