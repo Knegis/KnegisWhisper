@@ -202,7 +202,6 @@ const HOTKEYS: HotkeyReport = {
   conflicts: [
     { accelerator: "Control+Shift+V", actions: ["voice-agent", "meeting"] },
   ],
-  unregistrableOrUnhandled: ["translation", "voice-agent"],
   unhandled: [
     {
       action: "voice-agent",
