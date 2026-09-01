@@ -84,10 +84,16 @@ pub struct McpStatus {
     /// path when this found the binary, or the bare name otherwise — legible
     /// either way, but nothing here claims a bare name will actually resolve.
     pub command: String,
+    /// Where the MCP server reads the same port and token as the CLI.
+    pub discovery_path: String,
     /// Whether the local API is running right now. The server is a second
     /// front end over it and does nothing on its own, so a client configured
     /// with `command` will fail every call until this is `true`.
     pub local_api_running: bool,
+    /// The same live permission read-back shown on the CLI screen. The two
+    /// clients consume one file, so they must never make different claims
+    /// about who can read it.
+    pub discovery_permissions: Option<DiscoveryPermissions>,
 }
 
 /// Report the exact stdio command line to configure in an MCP client, and
@@ -101,11 +107,17 @@ pub fn mcp_status(api: State<'_, Arc<LocalApiRuntime>>) -> McpStatus {
         .map(str::to_owned)
         .unwrap_or_else(|| binary_name.clone());
 
+    // Read this now for the same reason `cli_status` does: the ACL can change
+    // while the application is running, and both screens must report the same
+    // current fact rather than separate startup memories.
+    let permissions = api.permissions_now();
     McpStatus {
         binary_name,
         binary_location: location,
         command,
+        discovery_path: api.discovery_path().display().to_string(),
         local_api_running: api.is_running(),
+        discovery_permissions: permissions.as_ref().map(DiscoveryPermissions::from),
     }
 }
 

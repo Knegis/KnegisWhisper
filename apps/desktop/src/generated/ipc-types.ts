@@ -1594,11 +1594,21 @@ binaryLocation: BinaryLocation,
  */
 command: string,
 /**
+ * Where the MCP server reads the same port and token as the CLI.
+ */
+discoveryPath: string,
+/**
  * Whether the local API is running right now. The server is a second
  * front end over it and does nothing on its own, so a client configured
  * with `command` will fail every call until this is `true`.
  */
-localApiRunning: boolean, };
+localApiRunning: boolean,
+/**
+ * The same live permission read-back shown on the CLI screen. The two
+ * clients consume one file, so they must never make different claims
+ * about who can read it.
+ */
+discoveryPermissions: DiscoveryPermissions | null, };
 
 /* ----------------------------------------------------------- media import */
 /**

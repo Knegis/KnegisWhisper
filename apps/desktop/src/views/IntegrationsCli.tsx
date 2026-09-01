@@ -21,9 +21,10 @@
 
 import { useCallback } from "react";
 
+import { DiscoveryFileRows } from "../components/DiscoveryFileRows";
 import { Row } from "../components/Row";
 import { getCliStatus } from "../lib/ipc";
-import { binaryLocationLabel, discoveryPermissionsLabel } from "../lib/labels";
+import { binaryLocationLabel } from "../lib/labels";
 import { useRefresh } from "../lib/useRefresh";
 
 export function IntegrationsCli() {
@@ -39,10 +40,6 @@ export function IntegrationsCli() {
   }
 
   const location = binaryLocationLabel(status.binaryLocation);
-  const permissions = status.discoveryPermissions
-    ? discoveryPermissionsLabel(status.discoveryPermissions)
-    : null;
-
   return (
     <div className="view">
       {error ? <p className="error">{error}</p> : null}
@@ -58,7 +55,10 @@ export function IntegrationsCli() {
         </p>
 
         <Row label="Binary" value={location.text} detail={location.detail} />
-        <Row label="Discovery file" value={status.discoveryPath} />
+        <DiscoveryFileRows
+          discoveryPath={status.discoveryPath}
+          permissions={status.discoveryPermissions}
+        />
         <Row
           label="Local API"
           value={status.localApiRunning ? "Running" : "Not running"}
@@ -68,21 +68,6 @@ export function IntegrationsCli() {
               : "the discovery file above does not exist while this is off — see Integrations > API"
           }
         />
-        {permissions ? (
-          <Row
-            label="Discovery file permissions"
-            value={permissions.text}
-            detail={permissions.detail}
-          />
-        ) : (
-          <p className="muted">
-            Nothing to report about the discovery file's permissions: it does
-            not exist while the local API is not running.
-          </p>
-        )}
-        {permissions?.caveat ? (
-          <p className="caveat">{permissions.caveat}</p>
-        ) : null}
       </section>
     </div>
   );

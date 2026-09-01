@@ -899,7 +899,12 @@ const MCP: McpStatus = {
    * locate, and a fixture that always finds one never shows it. */
   binaryLocation: { state: "not-found" },
   command: "knegiswhisper-mcp --stdio",
+  discoveryPath:
+    "C:\\Users\\dev\\AppData\\Roaming\\KnegisWhisper\\local-api.json",
   localApiRunning: true,
+  // It is the same file the CLI reads, so this must stay byte-for-byte the
+  // same fixture state and exercise the shared rendering block on both pages.
+  discoveryPermissions: { state: "owner-and-administrators" },
 };
 
 const SIDECARS: SidecarStatus[] = [
