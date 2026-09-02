@@ -60,6 +60,11 @@ jobs:
       - name: Generated TypeScript types are current
         run: node tools/integration-audit/generate-ts-types.mjs --check
 
+      # A Cargo feature nothing enables is a test nothing runs. KNEG-147 was
+      # exactly that: a mock-webview IPC test behind a feature declared in one
+      # Cargo.toml and named by no invocation anywhere.
+      - name: Cargo features are enabled somewhere
+        run: node tools/feature-audit/scan.mjs
       - name: Domain scanner self-tests
         run: node --test tools/domain-scanner/scan.test.mjs
 
@@ -80,6 +85,10 @@ jobs:
       # checks nothing does not fail, it reports success.
       - name: Model pin self-tests
         run: node --test tools/model-pin/pin.test.mjs
+
+
+      - name: Feature audit self-tests
+        run: node --test tools/feature-audit/scan.test.mjs
 
       # The baseline is generated from an OpenWhispr checkout that CI does not
       # have, so --check cannot run here. Assert instead that it is valid JSON
@@ -177,3 +186,15 @@ jobs:
 
       - name: Build
         run: cargo build --workspace
+
+      # Last on purpose. This is the only step that resolves `tauri` with a
+      # different feature set, so it rebuilds tauri and everything downstream;
+      # earlier in the sequence it would invalidate the cache for every step
+      # after it. `--lib` keeps the application binary out of this build, which
+      # matters because build.rs swaps the Windows manifest under this feature.
+      #
+      # Without this step the mock-webview IPC test compiles nowhere and runs
+      # nowhere, which is what KNEG-147 recorded. `tools/feature-audit/scan.mjs`
+      # in the Contracts job is what keeps it from silently going away again.
+      - name: Test (Tauri IPC boundary)
+        run: cargo test -p knegiswhisper --lib --features tauri-test
