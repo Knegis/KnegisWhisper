@@ -21,8 +21,9 @@ maintained in place rather than appended to, because its purpose is to be curren
 > detail and the by-hand check that found five real defects; [COMPLETION_PLAN.md](COMPLETION_PLAN.md)
 > keeps the phase 7–10 definitions.
 >
-> **Measured, not asserted, as of 2026-09-02:** `cargo test --workspace` — **1704 passing, 0
-> failed** (941 at the start of the original run, 1296 at its close on 2026-08-27); parity —
+> **Measured, not asserted, as of 2026-09-02 (after KNEG-152):** `cargo test --workspace` — **1734
+> passing, 0 failed, 12 ignored** (941 at the start of the original run, 1296 at its close on
+> 2026-08-27, 1704 earlier on 2026-09-02); parity —
 > **103 entries, 4 declared unreachable** (17 at the start, 8 on 2026-08-27), and **all 13 UI
 > surfaces built**, with no "surface not built" entry remaining anywhere. The four: **no local-ASR
 > model any longer** — all four sherpa models are pinned and installable as of 2026-09-01 — two
@@ -288,6 +289,113 @@ Unchanged from the Phases 1–4 entry, restated here so they are not buried:
   porting matrix. Upstream pins both by commit and verifies neither.
 - ~~**`nircmd`**~~ — **dropped**, as leaned towards: third-tier Windows paste fallback only, and
   `SendInput` works.
+
+---
+
+## 2026-09-02 (KNEG-152) — a Markdown editor on the note, and the transcript kept out of it
+
+The Notes screen rendered a note's body as read-only text. KNEG-152 replaces that with the
+Milkdown Crepe editor, autosaving, and — for a note recorded from a meeting — a transcript panel
+whose rows play the matching stretch of the WAV. Six decisions are worth the record, three of them
+measured rather than argued.
+
+### The transcript is not in the Markdown
+
+The obvious design embeds timestamps in the note text. It was rejected before a line was written:
+editing splits, merges and deletes paragraphs, and every one of those operations silently breaks a
+link carried inside the text. The stored segments (`notes.transcript`, a `Vec<transcript::Segment>`
+with `timestamp`/`end_timestamp`) already carry the timing; what was missing was a durable
+statement of *which file* that timing refers to. That is the whole of the new table:
+`note_recordings` (migration `0002`), one row per note, holding a bare file name inside
+`data_dir()/meetings`, the duration, an original filename where one exists, and nothing else.
+Rows, not phrases: word-level timing is not retained consistently across providers, and estimating
+a phrase's interval from character positions would feel precise and often be wrong.
+
+### The renderer names a note id, never a path
+
+The brief suggested Tauri's asset protocol behind a narrow filesystem scope. That would have worked
+and was still the worse shape: the renderer supplies a path, a Cargo feature has to be enabled, and
+a scope glob has to describe the data directory. What landed is a custom `recording` URI scheme
+(`apps/desktop/src-tauri/src/recordings.rs`): the `<audio>` element asks for `/<note_id>`, Rust
+looks the row up, `resolve` accepts only a plain file name — no separators, no `.`/`..`, no
+surrounding whitespace, `file_name() == key` — and joins it onto the recordings directory. Nothing
+crosses the IPC boundary in either direction, `capabilities/default.json` stays at `core:default`,
+and the CSP gains one directive, `media-src 'self' recording: http://recording.localhost`, spelled
+the way `img-src` already spells the asset scheme.
+
+Range requests are not optional: Chromium's media loader seeks by issuing them, and without `206`
+a whole recording is read into memory per request and the scrub bar does nothing. `response_for`
+mirrors Tauri's own `protocol/asset.rs` — single range, 1 MiB cap per chunk, `416` with
+`bytes */len` for anything unsatisfiable, `HEAD` answered with the `GET` headers — and is pure apart
+from the file read, so its fourteen tests need no Tauri runtime. Multi-range headers are ignored
+and answered with the whole file, which HTTP permits and nothing here needs.
+
+### Rust computes the rows, so the screen and the exports cannot disagree
+
+`transcript::rows` normalises epoch-millisecond timestamps the way export does, resolves speakers
+through the same `identified_speaker` export uses, and emits one row per stored segment without
+`merge` — a merged paragraph would play the wrong stretch. A live-partials transcript has no
+`end_timestamp` on any segment, so a missing end falls to the next row's start and the last one is
+`None`, meaning "to the end". A second copy of that arithmetic in TypeScript is exactly the drift
+the generated IPC types exist to prevent, so there is none.
+
+### Two Crepe features are out, and the reason was measured before the dependency was added
+
+A probe bundle of the full `Crepe` class was built and read before `@milkdown/crepe` went into
+`package.json`: 1.49 MB of JavaScript plus ~1.5 MB of KaTeX fonts, none of
+`config/forbidden-domains.json`'s patterns, and exactly one runtime `<style>` injection — CodeMirror's
+`style-mod`, which the production CSP's `style-src 'self'` blocks. The editor is therefore
+assembled from `@milkdown/crepe/builder` with eight explicit features and per-feature CSS imports;
+CodeMirror and LaTeX are left out (KNEG-156 records that as a decision), and code blocks render as
+plain `<pre>`. The check is repeated on the built bundle: the only `createElement("style")` in
+`dist/assets/*.js` is react-dom's hoistable-style path, present in the base bundle with the same
+single occurrence. The JS bundle grows from 296 KB to about 1 MB minified. Vue, which Crepe's
+components run on, injects nothing.
+
+### Autosave is serialised, and the editor is uncontrolled
+
+`lib/useAutosave.ts` debounces at 800 ms and allows one save in flight: a newer edit waits and then
+runs with the latest patch, so a slow older response can never overwrite newer typing; a failure
+keeps the unsent patch behind a Retry button and never retries on its own. The editor reads its
+initial Markdown once and the view re-reads the list from Rust after every save, which is the
+pattern every other screen already follows (`useRefresh`'s header says why). Deleting a note now
+asks first, and the question names the recording that goes with it.
+
+### How it was built, and what that proved
+
+This was the first real run of the `/codex-orchestrator` skill: two Codex workers in the warm
+worktree pool, one on the Rust slice (`gpt-5.6-sol`), one on the frontend (`gpt-5.6-terra`), each
+against a base commit (`3110b12`) that pre-wired the shared surface — the migration, the two
+`TS`-derived boundary types, the regenerated `ipc-types.ts`, the `ipc.ts` wrappers and the npm
+dependencies. Disjoint write surfaces meant both merges were conflict-free. The frontend needed one
+repair round for eight mechanical findings; the Rust slice needed none. Two things the run
+measured about the harness itself: a worker cannot compile `knegiswhisper` until its slot has a
+frontend build, and the harness's quota detection fired on a docs line the model had read — fixed
+to require an actual codex failure.
+
+### Not verified, and said so
+
+Nobody has yet opened the application with this change and played a row. The CSP claim rests on the
+bundle checks above; the seek behaviour rests on Tauri's asset protocol doing the same thing for
+years. Both are believed, not observed, and the by-hand check is a sub-issue of KNEG-152. Known
+gaps filed under it: the local API's `DELETE /notes/{id}` orphans the WAV (KNEG-153), notes saved
+before today have a WAV and no way to attach it (KNEG-154), imports are transcribed and discarded
+(KNEG-155), and an attach that fails after the note is saved is only a log line (KNEG-157).
+
+Measured on the merged tree (`111f1e0`), not on the slices:
+
+    14 node gates                                                  all green
+    npx tsc --noEmit / npx vite build / domain scan of dist         clean
+    cargo fmt --all --check                                        clean
+    cargo clippy --workspace --all-targets -- -D warnings          exit 0
+    cargo test --workspace                     1734 passed, 0 failed, 12 ignored (1704 before)
+    cargo test -p knegiswhisper --lib --features tauri-test        355 passed
+    cargo build --workspace --exclude knegiswhisper                exit 0
+    cargo build -p knegiswhisper --lib                             exit 0
+    cargo build --workspace (desktop binary relink)                blocked: knegiswhisper-desktop.exe
+                                                                   was running from a `cargo run` started
+                                                                   17:44, before the merge; everything it
+                                                                   links was compiled by the two lines above
 
 ---
 
