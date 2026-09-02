@@ -1,0 +1,4 @@
+{
+  "note": "Cargo features that deliberately have no CI invocation enabling them, each with the reason. Read by tools/feature-audit/scan.mjs rule A. An entry here is a recorded decision that code behind a feature is never compiled in CI, which is a real cost, so prefer adding the invocation. Keys are a bare feature name or 'package/feature'. Empty is the healthy state.",
+  "exempt": {}
+}

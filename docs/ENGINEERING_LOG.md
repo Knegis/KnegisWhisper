@@ -21,7 +21,7 @@ maintained in place rather than appended to, because its purpose is to be curren
 > detail and the by-hand check that found five real defects; [COMPLETION_PLAN.md](COMPLETION_PLAN.md)
 > keeps the phase 7–10 definitions.
 >
-> **Measured, not asserted, as of 2026-09-01:** `cargo test --workspace` — **1678 passing, 0
+> **Measured, not asserted, as of 2026-09-02:** `cargo test --workspace` — **1704 passing, 0
 > failed** (941 at the start of the original run, 1296 at its close on 2026-08-27); parity —
 > **103 entries, 4 declared unreachable** (17 at the start, 8 on 2026-08-27), and **all 13 UI
 > surfaces built**, with no "surface not built" entry remaining anywhere. The four: **no local-ASR
@@ -288,6 +288,402 @@ Unchanged from the Phases 1–4 entry, restated here so they are not buried:
   porting matrix. Upstream pins both by commit and verifies neither.
 - ~~**`nircmd`**~~ — **dropped**, as leaned towards: third-tier Windows paste fallback only, and
   `SendInput` works.
+
+---
+
+## 2026-09-02 (KNEG-147, KNEG-150) — the better fix was refused by cargo, and running the
+gate list found a gate that was already red
+
+`2a5af33` added `every_import_command_enforces_the_dialog_grant_at_the_ipc_boundary`, which drives
+real IPC requests through Tauri's mock webview and asserts all three import commands refuse an
+ungranted path. It is good coverage of a boundary that had been untestable, and the note closing
+the issue it was written for said the gap was now "permanently covered".
+
+**It had never run once.** The body was `#[cfg(feature = "tauri-test")]`, and that feature was
+declared in one line of one `Cargo.toml` and named by nothing else in the repository — no workflow,
+no script, no document. Measured: with the feature on, the lib block is **340 passing**; with it
+off, **339**, and `grep -c every_import_command_enforces` over a whole workspace run returns **0**.
+
+Two consequences, and the second is worse. The assertions did not run. And because the module was
+not compiled at all, `cargo clippy --workspace --all-targets` never saw it either, so the test
+could have stopped compiling without anything failing. That is how feature-gated coverage usually
+dies — not with a red run, but by being dropped from the build graph.
+
+### The fix that should have been right, and the exact reason it is not
+
+The obvious move is to delete the feature and make Tauri's mock runtime a **dev-dependency**:
+
+```toml
+[dev-dependencies]
+tauri = { workspace = true, features = ["test"] }
+```
+
+That looks strictly better on every axis. `cargo test --workspace` and `cargo clippy --all-targets`
+both compile and run the test with **no flag to forget**, which closes the worse of the two
+consequences by construction rather than by discipline. It needs no CI edit at all. And it makes
+the `Cargo.toml` comment's intent — *"Never enabled by the application build"* — a property instead
+of a convention, because a dev-dependency cannot be switched on in a release build whereas a
+feature can. The workspace is `resolver = "2"`, the version that keeps dev-dependency features out
+of non-test builds, so that isolation is real and not hoped for.
+
+It was implemented, and cargo refused it:
+
+```
+error: invalid instruction `cargo:rustc-link-arg-tests` from build script of `knegiswhisper`
+The package knegiswhisper does not have a test target.
+```
+
+The reason the feature exists at all is that `build.rs` must know whether it is building the test
+executable. Tauri's mock runtime links dialog support that imports `TaskDialogIndirect`, so the
+test binary needs a Common Controls v6 manifest — and that manifest must **not** reach the shipped
+application. The un-suffixed `cargo:rustc-link-arg` applies to every target in the package, which
+is why the committed version had to strip Tauri's own manifest with `new_without_app_manifest()`;
+harmless while the feature was never on for an app build, and unacceptable the moment it is always
+on. `cargo:rustc-link-arg-tests` is the only key that expresses the needed scope, and as the error
+says, it means a `tests/` target. This is a `--lib` unit test.
+
+**So the remaining route was to move the test to `tests/`, and that is worse than the problem.**
+Every one of the 27 modules in `lib.rs` is private — `mod`, not `pub mod`. An integration test
+would need `commands`, `state` and `media` made public, plus `MAX_DIALOG_GRANTS` and
+`DialogGrants::grant` widened from `pub(crate)`, plus a reconstruction of the `runtime()` helper
+that only exists under `cfg(test)`. Opening up a deliberately closed crate to relocate one test
+buys nothing the flag does not, and costs the encapsulation permanently.
+
+**Decision: the feature stays, and the reason is now written in `Cargo.toml` beside it** — because
+the next person to look at this will try the dev-dependency, and the argument against it is a
+cargo error message they will not guess.
+
+### Paying the cost the feature has
+
+A feature's cost is that an invocation can forget it, and for a while every invocation did. So the
+flag went into both places that run — `ci.yml`'s rust job and the by-hand list in `README.md` — and
+then `tools/feature-audit/scan.mjs` was added so that forgetting fails loudly: every feature
+declared in a `[features]` table must be named by some CI invocation, or be exempt in
+`config/cargo-features.json` with a reason.
+
+This is `tools/settings-audit/scan.mjs` one layer down, and the parallel is exact. There, a setting
+the backend honoured that no shipped screen could change (KNEG-104). Here, a test the repository
+declared that no invocation could run. In both cases the artefact existed, had a green suite around
+it, and was unreachable — and in both cases the suite was no help, because a suite reports on what
+it ran.
+
+**It was checked against the defect it was written for, not only against a clean tree.** With
+the `--features tauri-test` dropped from the step but the step left in place — the shape a
+careless edit would produce — `node tools/feature-audit/scan.mjs` exits 1 naming
+`knegiswhisper/tauri-test` and the remedy. `ci.yml` was restored byte-identically afterwards,
+verified by SHA-256, and the gate is green again. So this gate would have caught KNEG-147 on the
+day it was introduced, which is a different and stronger claim than "the gate passes".
+
+**The gate's own self-test found a hole in the gate**, which is the reason these self-tests exist.
+The first draft dropped a line only when its first non-space character was `#`. The test mutated
+the real workflow by commenting out the command — producing `run: # cargo test … --features
+tauri-test` — and the gate still counted it, because the line still began with `run:`. A gate
+against dead checks that accepts a commented-out check is the same defect one level up. Fixed with
+a quote-aware `stripComment`, and the direction of its remaining approximation is deliberate: an
+unbalanced quote over-strips and fails rule A loudly, where under-stripping would pass silently.
+
+### Running the gate list found a red gate nobody had run (KNEG-150)
+
+This was not read out of the code; it fell out of running the checks before committing.
+`cargo clippy --workspace --all-targets -- -D warnings` **exits 101 on `dev`**:
+
+```
+error: used `expect()` on a `Result` value
+  --> apps\desktop\src-tauri\build.rs:12:9
+   = note: requested on the command line with `-D clippy::expect-used`
+```
+
+`Cargo.toml:171-173` denies `unwrap_used`, `expect_used` and `panic` across the workspace, and
+says why: this application runs unattended and a panic is a crash the user cannot diagnose. A
+build script is inside that policy and nothing exempted it. `git log` on that file has two
+entries and the newest is `2a5af33` — **the same commit that introduced KNEG-147.** One commit
+added a test that never ran and turned a gate red, and neither was noticed.
+
+It hid because the `.expect` is inside `#[cfg(windows)]`: on macOS and Linux the block is
+compiled out and clippy is clean, so only `windows-latest` would have gone red, one job of
+three. And CI has not run since well before it.
+
+Fixed by making `main` return `Result<(), Box<dyn std::error::Error>>` and using `?`. **No**
+`allow` **was added**, deliberately: a build script does not need an exemption from the panic
+policy, because cargo prints an `Err` from `main` and fails the build exactly as it would a
+panic. Silencing the lint would have been the easier edit and the wrong one — the policy is
+right, and the call really was fallible.
+
+**Worth stating plainly: this pass found the red gate only because it ran the gate.** A green
+claim in a document, a closed issue, and a passing local run of a *different* command are three
+things that all look like evidence and are not. That is KNEG-147 one level up.
+
+### What did not close with this
+
+- **`cargo clippy --all-targets` still does not lint the boundary test**, since clippy runs without
+  the feature. The compile check is now covered by the new test step; the lints are not. Cheap to
+  add and it doubles a clippy pass, so it was left. Note that test modules here carry blanket
+  `#[allow]`s anyway, which is most of what clippy would have said. Measured while fixing
+  KNEG-150: `cargo clippy -p knegiswhisper --lib --features tauri-test -- -D warnings` is
+  green at this commit, so the gap is "not enforced", not "unknown".
+- **The test builds its own handler list.** `media.rs:1478-1482` calls `generate_handler!` with the
+  three import commands rather than sharing `lib.rs:388`'s registration, so it proves *those three
+  functions* enforce the grant — not that the application's import surface does. A fourth import
+  command added without a grant check would not be noticed, and dropping one of the three from the
+  app leaves this test green. Filed as KNEG-151.
+- **CI still does not run.** `push` and `pull_request` have been commented out by Actions budget
+  since before any of this, so what landed is a correct entry in the declared gate list and a
+  correct entry in the by-hand list. Which of those two is doing the work today is the by-hand one.
+
+Measured on the merged tree: `cargo test --workspace` — **1704 passing, 0 failed, 12 ignored**
+across 55 blocks, unchanged, plus **340 passing** in the feature-on invocation; `node
+tools/feature-audit/scan.mjs` — 1 feature declared, 1 enabling invocation, 0 exempt; its self-tests
+13 passing.
+
+---
+
+## 2026-09-02 (KNEG-149) — the decisions that landed in seventeen commits
+
+`e10bc85..2a5af33` is seventeen commits. Two edited a document as part of their product change;
+none added the decision record below. This entry is deliberately not reconstructed from diff shape
+alone. Each choice and rejected alternative comes from the corresponding Linear issue's problem
+statement and implementation note, then is checked against the merged source. Where only the
+automatable half landed, that boundary is kept: KNEG-44, KNEG-52 and KNEG-108 are still open.
+
+### A status document describes this build, not a platform's possibilities (KNEG-138, `dac5f22`)
+
+The text-insertion table used to list `CGEvent`, XTEST/`xdotool`, and Wayland portal mechanisms as
+though the application implemented them. The backend already answered `unsupported` on every
+non-Windows platform. The chosen shape is therefore an implementation-state table: Windows says
+what this build does; macOS, X11 and Wayland say plainly that no paste backend is written.
+
+The alternative was not to delete the platform research. It remains in `PORTING_MATRIX.md`, where
+candidate mechanisms belong. Keeping it in `PLATFORM_SUPPORT.md` with softer wording was rejected:
+a reader cannot reliably distinguish a proposal in a support table from a shipped capability.
+
+### A deferred interface needs evidence the gate can read (KNEG-140, `d2618c5`)
+
+The parity gate used to require a prose `interface` field and never resolve it. That let a deferral
+name `notes_core::search::SemanticIndex`, a module that has never existed, for months. Deferred
+entries now carry one or more `interfaceEvidence` pairs: a repository-relative file and a non-empty
+literal that must still occur in it. The reader fails closed when it is absent, the path escapes the
+repository, the file disappears, or the literal moves. All five current `temporarily-deferred`
+entries carry evidence; four integrations are unreachable, which is a separate parity count.
+
+A `checkedAt` expiry was considered and not used. A date can be advanced without reading anything,
+so it would turn review theatre into a green gate. A naked Rust-looking path was also rejected: the
+gate would need to guess how prose maps to modules, traits and deliberate absences. The small
+path-plus-literal contract catches the two failures already observed without claiming semantic
+proof it cannot provide. It proves that the stated interface evidence remains present, not that the
+whole deferral rationale is still correct.
+
+### Product availability cannot be a test precondition (KNEG-137, `7153ee1`)
+
+Three freshness tests used the real sidecar catalogue. Because whisper-server is deliberately not
+published for macOS, the two positive controls returned before asserting and the remaining test
+reached `NotInstalled` through the wrong branch. The fix uses a synthetic catalogue that publishes
+a valid fake asset for all five supported targets and still drives the real wrapper, path lookup,
+record I/O and freshness decision. Seven tests now cover `NotInstalled`, `Current`, `Stale`, and all
+four `Unrecorded` reasons without depending on a third party's release matrix.
+
+Publishing a fake product asset was rejected: it would make the application claim support that does
+not exist. Merely printing "skipped" was also insufficient; that makes vacuity audible but leaves
+the decision table uncovered. The fake belongs to the test input, where it can make coverage
+portable without changing product availability.
+
+### A union nobody consumes should be removed, not renamed (KNEG-139, `97f166e`)
+
+`unregistrable_or_unhandled` combined two unrelated facts: the cross-platform registrar would not
+accept an accelerator, and no implementation handled an action. The shipped dictation shortcut is
+in the first set and works through the Windows hook; a chat shortcut could be in the second set and
+register successfully. No Rust or TypeScript caller consumed the union.
+
+Another rename was rejected because no truthful single name exists and no caller needs the answer.
+The field, computation, fixture value, generated IPC member and assertions were deleted. The useful
+signals remain separate: `unhandled` carries why an action is dead, conflicts and cautions describe
+configuration, and the registration result says what is live.
+
+### Host-dependent network evidence is an ignored test, not a universal claim (KNEG-92, `c30e1cc`)
+
+The SSRF boundary needed proof at a real socket, including the exemption it intentionally grants to
+self-hosted endpoints. The chosen probe discovers this machine's active private IPv4 address,
+listens there, drives real HTTP and a TLS ClientHello, and checks that non-self-hosted purposes are
+refused before the listener sees a connection. It also checks policy decisions for CGNAT and
+`0.0.0.0/8`, and fixed the refusal text so a plaintext-scheme error names its target host.
+
+The probe is `#[ignore]` because opening host listeners is not a hermetic workspace-test property.
+Fabricating routes or peers for CGNAT and `0.0.0.0/8` was rejected: that would test Windows routing,
+not this policy. The recorded result therefore claims real LAN reachability where a listener existed
+and policy admission/refusal for the synthetic ranges, never reachability the host did not possess.
+
+### An offer is a call lifecycle, not a client-process flag (KNEG-134, `0c81f65`)
+
+Teams normally remains open between calls. Keying `offered` to the process both left a stale offer
+visible after hang-up and suppressed the next call. `Watcher` now returns an explicit `Offer`,
+`Withdraw`, or `None` transition. Same-call suppression and the currently visible provider are
+separate state: dismissing clears the window but suppresses only that call; hang-up withdraws and
+releases suppression; recording start clears any offer behind the recording indicator. One poll
+emits one unambiguous transition, so a second provider cannot silently overwrite the first.
+
+Adding another hide call in the window layer was rejected because it would cure only the visible
+symptom and leave re-arming broken. Clearing `offered` on dismissal was also rejected because the
+same call would be offered again at the next poll. Both symptoms needed one call-scoped model.
+
+### A warm streaming server is leased and bounded (KNEG-132, `e1041f2`; KNEG-144, `4d0ac15`)
+
+Restarting a 630 MB model between adjacent meetings wastes its load time; keeping it until process
+exit wastes memory and leaves a stale process indistinguishable from the live one. The selected
+middle ground matches the local-LLM precedent: a meeting acquires an opaque generation-bound
+`StreamLease`, release starts a five-minute idle timer, and a later acquisition invalidates that
+timer. Lease and process state share one lock so an old timer cannot decide "still idle" and stop a
+new meeting's server between the check and the take.
+
+Immediate stop was rejected because the existing same-model warm reuse is deliberate. An unbounded
+cache was rejected because it has no owner or release point. A bare delayed task without a
+generation was rejected because its stale completion could kill a later session. Every start,
+configuration, connection, recorder-start, stop and cancel path either transfers or releases the
+lease.
+
+The release point is the end of the live pump, before the independent whole-file transcription
+pass. Releasing after offline processing was rejected: that work can take minutes and uses neither
+the WebSocket nor the streaming model, so it must not postpone the five-minute clock (KNEG-144).
+
+### `None` in the live slot is not the same thing as idle (KNEG-143, `5848ff6`)
+
+Stopping removes `Live` before the potentially long whole-file pass. Treating that empty slot as
+idle let a new meeting start or a new offer appear, after which the old completion could emit Idle
+and hide the shared window. The runtime now has an explicit `Idle` / `Starting` / `Recording` /
+`Finishing` lifecycle. A start reserves the lifecycle across provider setup; stop moves it to
+`Finishing` before taking the resources; both new starts and offer polling are refused until that
+session completes.
+
+A generation accompanies the phase. It is deliberately a second defence, not permission for two
+meetings: even if a future caller relaxes the no-overlap rule, an older completion cannot publish
+Idle, hide a newer window, or clear newer state. Keeping only a `finishing: bool` was rejected
+because it cannot identify which asynchronous completion owns the transition. Keeping `Live` in
+place until post-processing returned was rejected because those resources have already ended and
+the long work needs its own honest state.
+
+### Reconnects and gaps are different evidence (KNEG-52, `9aeb4d5`; KNEG-145, `b5ab930`)
+
+OpenAI Realtime has a hard session limit, so a scheduled reconnect can be successful and expected;
+an audio gap is lost work. They remain separate fields and separate sentences. `9aeb4d5` carried
+completed reconnects through `MeetingOutcome::Saved`, generated IPC, fixtures and the visible
+outcome. That was an observability prerequisite, not completion of KNEG-52: the authorised 62–65
+minute live run still has not happened.
+
+The first implementation copied the count only when transcript segments existed. That alternative
+lost the very evidence an all-silence meeting could still produce, so `b5ab930` added reconnects to
+`NothingTranscribed` as well. An empty transcript means no words were emitted; it does not mean the
+provider performed no session work.
+
+### A saved note keeps observations, not diagnoses (KNEG-133, `de009d9`)
+
+The recorder already knew whether each capture source delivered anything but discarded the facts
+on the successful-note path. Each source now records one of four observations: not captured, opened
+but no blocks delivered, blocks containing only digital silence, or at least one non-zero sample.
+Both microphone and system-audio facts are appended to the saved note.
+
+A Boolean was rejected because "nothing" and "digital silence" are operationally different. A
+sentence blaming clipping, echo cancellation, a muted device or a failed capture was also rejected:
+the run that found the defect could not distinguish those causes. The note says only what the
+recorder measured, preserving the evidence without inventing an explanation.
+
+### Note body and transcript preview are two different artefacts (KNEG-136, `8f223e6`)
+
+Meeting provenance was stored in `Note.content` while every Notes surface rendered only an exported
+transcript. The Notes screen now has accessible Read note / Close note controls and a semantic,
+paragraph-preserving body region for the canonical note content. Empty bodies are stated explicitly.
+
+Folding this text into the transcript export preview was rejected. The body contains provenance and
+failure disclosures about how the transcript was produced; the preview is a selectable rendering
+of transcript segments in TXT, Markdown, JSON, SRT or VTT. Making one masquerade as the other would
+either change exported formats or keep the saved artefact undiscoverable.
+
+### Absence of identity is not a speaker named "Unknown" (KNEG-135, `d5f2667`)
+
+Whole-recording transcription has neither capture-source attribution nor diarisation by default.
+Repeating `Unknown speaker` on every cue therefore added no information to the common path. Export
+now asks whether the stored fields carry a real identity; anonymous segments omit the label in text,
+Markdown, SRT and VTT, and use `null` in JSON. Typed names, diarised identities, microphone and
+system identities remain, and anonymous segments remain in segment counts but not speaker counts.
+
+Comparing rendered text with the localised `Unknown speaker` label was rejected. A user may type
+those words as a real name, and localisation is not identity metadata. The stored speaker, typed-name
+and source fields decide whether an identity exists.
+
+### Shared security evidence gets one renderer and a fresh read (KNEG-146, `d58be7b`)
+
+CLI and MCP consume the same discovery file, but only the CLI screen showed its path, read-back
+permissions, evidence and administrator caveat. `McpStatus` now carries the same fresh permission
+read, and both screens render one `DiscoveryFileRows` component through the same label helper.
+
+Copying the CLI markup into MCP was rejected because the next wording or caveat change could drift
+again while both screens continued to compile. Remembering the startup verdict was also rejected:
+the status is evidence about the file now, so each status request reads it now.
+
+### Work-area placement is platform evidence, with an honest fallback (KNEG-44, `c6d7450`)
+
+Windows now reads `MONITORINFO.rcWork`, which excludes taskbars and docked app bars. Meeting and
+update notifications use a 24-pixel bottom-right margin; dictation uses deterministic bottom-centre
+placement. Arithmetic stays in physical pixels until placement so mixed-DPI coordinates and
+negative monitor origins are preserved.
+
+Using full monitor bounds plus a guessed taskbar margin was rejected on Windows because the OS
+already exposes the usable rectangle. Pretending the same API exists elsewhere was also rejected:
+other platforms retain Tauri's monitor-bounds fallback and log the weaker evidence. KNEG-44 remains
+open for the exclusive visual check; unit arithmetic and a real `rcWork` read do not prove where a
+person sees all three windows.
+
+### Mock IPC proves the import policy; the OS picker remains by hand (KNEG-108, `2a5af33`)
+
+Pure `DialogGrants` tests proved the policy but not that the exported Tauri commands consulted it.
+The command functions were made runtime-generic and a Tauri mock-webview test now invokes
+`media_import_audio`, `media_import_video`, and `import_openwhispr` by their IPC names. An existing
+ungranted canary is refused by all three; one granted invalid audio path reaches the later sidecar
+error twice, proving that failure does not consume the session-lifetime grant.
+
+Keeping a devtools-console simulation as the only boundary check was rejected because this part is
+deterministic and repeatable in-process. Enabling Tauri's test runtime in production was also
+rejected. It sits behind `tauri-test`, and Windows test executables get a Common Controls v6
+manifest while the production build retains Tauri's original manifest.
+
+The boundary of the evidence matters. The test hand-builds the three-command handler list and the
+feature is not exercised by the normal workspace command; KNEG-147 tracks enforcement and handler
+drift. KNEG-108 remains open for the real OS picker, renderer retry and lossy-path observations.
+
+### An unnamed failure earns a frozen hunt, not a story (KNEG-141; no product commit)
+
+One workspace run failed once while its tree was being edited, without preserving the test name;
+eight immediate reruns were clean. It was not dismissed because KNEG-88's similarly rare failure
+had exposed a real vacuous credential test. It was also not attributed to concurrent rebuilding,
+because that explanation was plausible and unmeasured.
+
+The settling run used a locked detached worktree at `2a5af33` and a dedicated target. A full locked
+workspace baseline ran first because the hunt harness's internal control exercises only its first
+discovered binary. The frozen 400-round run then executed 36 binaries 14,400 times across thread
+counts 1, 2, 4, 8 and 16, with zero failures, a passing control and unchanged binary fingerprints.
+The result is **not reproduced at depth 400**. It bounds how common the failure can be; it does not
+prove there is no flake. Ignored network, model, real-server and hardware tests were outside it.
+
+### Commit-to-decision index
+
+This index is the coverage check for the landing range; the sections above are the record.
+
+| Commit | Decision recorded under |
+| --- | --- |
+| `dac5f22` | KNEG-138 — support docs report the implementation, not candidate mechanisms |
+| `d2618c5` | KNEG-140 — deferrals carry repository-readable interface evidence |
+| `c30e1cc` | KNEG-92 — a host-dependent SSRF probe makes narrow, repeatable claims |
+| `0c81f65` | KNEG-134 — offers transition with calls rather than client processes |
+| `8f223e6` | KNEG-136 — canonical note content is rendered apart from transcript preview |
+| `de009d9` | KNEG-133 — saved notes retain source-delivery observations |
+| `d5f2667` | KNEG-135 — anonymous cues do not invent a speaker identity |
+| `97f166e` | KNEG-139 — the unused, untruthful union report is deleted |
+| `e1041f2` | KNEG-132 — local streaming is owned by generation-bound leases |
+| `9aeb4d5` | KNEG-52 — successful scheduled reconnects are visible and distinct from gaps |
+| `7153ee1` | KNEG-137 — freshness coverage uses a cross-platform synthetic catalogue |
+| `c6d7450` | KNEG-44 — Windows placement uses the real work area; visual proof remains open |
+| `5848ff6` | KNEG-143 — explicit phases and generations serialize meeting completion |
+| `4d0ac15` | KNEG-144 — streaming becomes idle before independent offline processing |
+| `b5ab930` | KNEG-145 — quiet outcomes retain completed reconnect evidence |
+| `d58be7b` | KNEG-146 — CLI and MCP share live discovery-file evidence |
+| `2a5af33` | KNEG-108 — import commands are exercised through mock IPC; picker proof remains open |
 
 ---
 
