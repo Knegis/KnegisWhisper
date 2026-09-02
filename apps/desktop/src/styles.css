@@ -629,6 +629,166 @@ button.marked:hover:not(:disabled) {
   margin-top: 0;
 }
 
+/* The frame theme is imported after this stylesheet. These variables read the
+ * app tokens, which already switch in the light-theme media query, so one
+ * higher-specificity block keeps the editor in step with both application themes. */
+.note-editor .milkdown {
+  --crepe-color-background: var(--bg);
+  --crepe-color-on-background: var(--text);
+  --crepe-color-surface: var(--surface);
+  --crepe-color-surface-low: var(--wash);
+  --crepe-color-on-surface: var(--text);
+  --crepe-color-on-surface-variant: var(--muted);
+  --crepe-color-outline: var(--faint);
+  --crepe-color-primary: var(--text);
+  --crepe-color-secondary: var(--control);
+  --crepe-color-on-secondary: var(--text);
+  --crepe-color-inverse: var(--band);
+  --crepe-color-on-inverse: var(--band-ink);
+  --crepe-color-inline-code: var(--accent);
+  --crepe-color-error: var(--error);
+  --crepe-color-hover: var(--control);
+  --crepe-color-selected: var(--band);
+  --crepe-color-inline-area: var(--control);
+  --crepe-font-default: var(--font-sans);
+  --crepe-font-title: var(--font-sans);
+  --crepe-font-code: var(--font-mono);
+  --crepe-base-font-size: 14px;
+}
+
+.note-detail-header input[aria-label="Title"] {
+  min-width: min(20rem, 100%);
+  flex: 1 1 20rem;
+  padding: 0.25rem 0;
+  color: var(--text);
+  font: inherit;
+  font-size: 1.25rem;
+  background: transparent;
+  border: 0;
+}
+
+.save-status {
+  color: var(--muted);
+}
+
+.save-status.error,
+.save-status .save-error {
+  color: var(--error);
+}
+
+.save-status button {
+  margin: 0;
+  color: inherit;
+}
+
+.note-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 22rem;
+  gap: var(--row-gap);
+  align-items: start;
+  margin-top: var(--row-gap);
+}
+
+.note-editor {
+  min-width: 0;
+  min-height: 16rem;
+}
+
+.note-editor .milkdown .ProseMirror {
+  min-height: 16rem;
+  padding: 0;
+  background: transparent;
+}
+
+.transcript {
+  min-width: 0;
+}
+
+.transcript > .muted {
+  margin-top: 0;
+}
+
+.transcript > button {
+  margin: 0.5rem 0 0;
+}
+
+.transcript-rows {
+  max-height: 32rem;
+  margin: 0.75rem 0 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.transcript-rows li {
+  display: grid;
+  grid-template-columns: auto auto auto minmax(0, 1fr);
+  gap: 0.4rem;
+  align-items: baseline;
+  padding: 0.45rem 0.35rem;
+  cursor: pointer;
+}
+
+.transcript-row-current {
+  color: var(--band-ink);
+  background: var(--band);
+}
+
+.transcript-row-current .transcript-speaker,
+.transcript-row-current .transcript-clock {
+  color: var(--band-ink);
+}
+
+.transcript-row-muted {
+  color: var(--muted);
+  cursor: default;
+}
+
+.transcript-clock,
+.recording-clock {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 16px;
+  letter-spacing: 0.5px;
+}
+
+.transcript-speaker {
+  color: var(--muted);
+}
+
+.recording-player {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.recording-audio,
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.recording-player input[type="range"] {
+  min-width: 7rem;
+  flex: 1 1 8rem;
+}
+
+.recording-player .error {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+@media (max-width: 64rem) {
+  .note-workspace {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 /*
  * Several controls on one settings row lay out across, not down.
  *
@@ -788,13 +948,12 @@ label:has(> input[type="checkbox"]) {
 }
 
 /*
- * The saved note itself, deliberately separate from `.preview` above. The
- * preview is exact export bytes and cannot wrap; a note body is prose and has
- * to wrap while preserving the paragraphs and disclosure lines Rust stored in
- * `Note.content`.
+ * The editable saved-note surface, deliberately separate from `.preview` above.
+ * The preview is exact export bytes; this surface hosts the editor and optional
+ * transcript workspace.
  */
 .note-detail {
-  margin: 1rem 0;
+  margin: var(--row-gap) 0 1rem;
   padding: 0.9rem 1rem;
   background: var(--wash);
 }
@@ -803,19 +962,10 @@ label:has(> input[type="checkbox"]) {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  gap: 1rem;
-}
-
-.note-detail-header h3 {
-  margin: 0;
-}
-
-.note-body {
-  margin-top: 0.75rem;
-  max-width: 72ch;
-  line-height: 1.55;
-  overflow-wrap: anywhere;
-  white-space: pre-wrap;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--faint);
 }
 
 /* ------------------------------------------------------------------ overlay */
