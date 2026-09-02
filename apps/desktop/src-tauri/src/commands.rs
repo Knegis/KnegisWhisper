@@ -667,6 +667,37 @@ pub async fn probe_providers(state: State<'_, AppState>) -> CmdResult<ProbeRepor
 /// `pick_import_file` in a loop cannot grow the set without limit.
 pub(crate) const MAX_DIALOG_GRANTS: usize = 32;
 
+/// Every command that takes a filesystem path from the renderer, with the
+/// dotted path to that argument inside the command's JSON body.
+///
+/// **One list, so the boundary test cannot fall behind the application.** The
+/// doc on [`DialogGrants`] below says these are "the only three commands that
+/// take a path, so the surface is closed". Until this list existed that was
+/// prose with nothing behind it: `media.rs`'s IPC test named the three in its
+/// own `generate_handler!` and again in its own loop, so a fourth path-taking
+/// command was covered by neither, and removing one from the application left
+/// the test green (KNEG-151).
+///
+/// Three things read this, which is what turns that sentence into a check:
+///
+///   * `media.rs`'s `every_import_command_enforces_the_dialog_grant_at_the_ipc_boundary`
+///     drives **every entry** over real IPC, so a new one is asserted by being added.
+///   * [`tests::every_path_taking_command_is_registered`] ties the list to
+///     `lib.rs`'s `generate_handler!`, so dropping one from the application fails.
+///   * `tools/command-audit/scan.mjs` fails when a registered command takes a
+///     renderer-supplied path and is **not** listed here, which is the direction
+///     neither test can see.
+///
+/// The second element is dotted because the body shapes differ:
+/// `import_openwhispr` takes an `ImportRequest` struct, the other two take the
+/// string directly. It is the JSON shape, not the Rust one.
+#[cfg(test)]
+pub(crate) const PATH_TAKING_COMMANDS: [(&str, &str); 3] = [
+    ("media_import_audio", "path"),
+    ("media_import_video", "path"),
+    ("import_openwhispr", "request.path"),
+];
+
 /// What an import command says when it was handed a path no dialog produced.
 ///
 /// One sentence for two cases on purpose — see [`DialogGrants::authorise`].
@@ -1304,6 +1335,47 @@ pub async fn note_export_to_file(
 )]
 mod tests {
     use super::*;
+
+    /// Every entry in [`PATH_TAKING_COMMANDS`] is registered by the application.
+    ///
+    /// **The mutation this exists for:** delete `media::media_import_video` from
+    /// `lib.rs`'s `generate_handler!`. Before this test that was invisible — the
+    /// IPC boundary test invokes a handler list it builds itself, so the
+    /// application could stop exposing a command while every assertion about
+    /// that command stayed green (KNEG-151).
+    ///
+    /// Reading `lib.rs` as text is the only way in: Rust has no reflection over
+    /// `#[tauri::command]` registration, and `generate_handler!` needs literal
+    /// paths, so the list cannot be generated from a const. The same parse is
+    /// already done one language over by `tools/settings-audit/scan.mjs`.
+    #[test]
+    fn every_path_taking_command_is_registered() {
+        const OPEN: &str = "generate_handler![";
+        let lib = include_str!("lib.rs");
+        let at = lib
+            .find(OPEN)
+            .expect("lib.rs registers with generate_handler!");
+        let open = at + OPEN.len();
+        let close = open + lib[open..].find("])").expect("the handler list is closed");
+        let registered = &lib[open..close];
+
+        // Controls, and the reason they are not obvious: the assertions below are
+        // `contains` over a slice, so a parse that returned the *whole file* would
+        // satisfy every one of them while proving nothing at all. These pin both
+        // ends of the slice to the handler list itself.
+        assert!(
+            registered.contains("diagnostics::diagnostics"),
+            "the parse did not reach the first registered command"
+        );
+        assert!(
+            !registered.contains("prevent_close"),
+            "the parse ran past the handler list into the window handlers"
+        );
+
+        for (command, _) in PATH_TAKING_COMMANDS {
+            assert!(registered.contains(command), "{command} takes a renderer path and is not registered in lib.rs; register it, or drop it from PATH_TAKING_COMMANDS");
+        }
+    }
 
     async fn state() -> AppState {
         AppState::in_memory().await.unwrap()

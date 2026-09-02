@@ -291,6 +291,106 @@ Unchanged from the Phases 1–4 entry, restated here so they are not buried:
 
 ---
 
+## 2026-09-02 (KNEG-151) — a doc comment asserted the surface was closed, and now something checks
+
+`DialogGrants`'s doc says of the import commands: *"the only three commands that take a path, so the
+surface is closed."* That sentence closed KNEG-80 and two things downstream leaned on it. Nothing
+checked it.
+
+KNEG-151 is what happened when it started to drift. `media.rs`'s IPC boundary test named the three
+commands in a `generate_handler!` it built itself, and named them **again** in its own assertion
+loop. So it proved those three functions refuse an ungranted path, and nothing whatever about the
+application's import surface: a fourth path-taking command was in neither list, and dropping one
+from `lib.rs:388` left every assertion about it green.
+
+### The audit came first, because it decided the design
+
+Before changing anything, every registered command was read for a renderer-supplied path.
+**Exactly three, all three already authorising.** `note_export_to_file` looked like a fourth and is
+not — it takes `id` and `format` and opens its own save dialog, so the path never crosses the IPC
+boundary; `pick_import_file` is the grant *source*. So the list was not wrong. What was wrong is
+that nothing kept it right, which is a different defect and wants a different fix.
+
+### One list, and why not the macro the issue asked for
+
+The issue proposed extracting `lib.rs:388`'s `generate_handler!` so the app and the test share
+tokens. That was tried on paper and rejected: `generate_handler!` needs literal paths at expansion
+time, so sharing the *import subset* means a callback macro that also has to carry the other 93
+commands through it. A ninety-six entry list restructured into macro arguments is a large, risky
+diff, and it buys only one of the two directions.
+
+What landed instead is `commands::PATH_TAKING_COMMANDS` — the command's IPC name and the dotted
+position of its path argument, once — read by three things:
+
+- **The boundary test drives every entry** over real IPC, building the JSON body from the dotted
+  shape. `import_openwhispr` wraps its path in an `ImportRequest` and the other two take the string
+  directly; writing those two shapes out by hand is exactly what made the old loop a second copy of
+  the list. A fourth entry is asserted by being added.
+- **`every_path_taking_command_is_registered`** ties the list to `lib.rs` by reading it with
+  `include_str!`. Rust has no reflection over `#[tauri::command]` registration, so text is the only
+  way in — the same parse `tools/settings-audit/scan.mjs` already does one language over.
+- **`tools/command-audit/scan.mjs`** fails when a registered command takes a renderer path and is
+  **not** in the list. That is the direction neither test can see, and the reason a node gate exists
+  for it at all.
+
+One consequence of that shape, worth recording because the easy answer was wrong: the list has no
+consumer outside tests — the application enforces the grant inside each command, it never
+enumerates them — so `-D warnings` called it dead code. `#[cfg(test)]` on the const and
+`#[cfg(feature = "tauri-test")]` on the body builder say that plainly, and the node gate is
+unaffected because it reads the source as text. An `#[allow(dead_code)]` would have silenced the
+lint rather than answered it, which is the same call as the build script in the entry below.
+
+### Three mutations, each confirmed real before being believed
+
+- Delete `media::media_import_video` from `lib.rs`'s `generate_handler!` → `every_path_taking_command_is_registered` fails, naming the command and both remedies. This is the mutation that was invisible before.
+- Change `import_openwhispr`'s shape from `request.path` to `path` → the boundary test fails with
+  *"missing required key request"*, so the dotted shape is load-bearing rather than decoration.
+- Drop `grants.authorise` from `media_import_audio` → the boundary test fails, and instructively:
+  the command runs *past* the absent guard and dies at ffmpeg instead. The test is detecting a
+  missing check, not a coincidence.
+
+Each mutated file was SHA-256'd before and after restoration. That is not ceremony —
+`ENGINEERING_LOG.md` § 2026-09-01 (KNEG-131) records a harness whose `shutil.copy2` preserved mtime
+so cargo never rebuilt, and a mutation appeared to survive that had never been compiled.
+
+### The gate's first draft passed, and was wrong
+
+It printed **two** path-taking commands where there are three. `import_openwhispr` was missing —
+the one whose path reaches `kw_storage::import::from_openwhispr` and its `exists()` check, which is
+to say the one the threat model cares most about.
+
+The cause was a comma. `ImportRequest::path`'s doc comment reads *"the source `transcriptions.db`,
+as […] returned it"*, and the field splitter treated that comma as a field boundary. The resulting
+"field" ended in `pub path`, so the name test saw a blob instead of a name and the struct-following
+case silently did not fire.
+
+**It was caught by comparing the printed count against the hand audit, not by the gate going red.**
+It never went red. That is the whole argument for printing the counts that would make a gate
+vacuous on every successful run, and for doing the audit by hand first: without a number to compare
+against, "OK — 2 take a renderer path" reads exactly like success.
+`the_struct_following_case_is_found` is the regression, and it asserts the full set of three rather
+than just the one that was missed.
+
+### What did not close with this
+
+- **`authorise` is read for, not placed.** The gate checks the call appears in the body, not that it
+  precedes the use of the path. The four pure policy tests and the boundary test cover the
+  behaviour; a gate that understood order would need a parser rather than a scanner.
+- **A path under a name the scanner does not recognise.** `PATH_NAME` is deliberately generous —
+  `path|file|dir|dest|target|location|filename` — because a false positive costs a line of argument
+  and a false negative is the defect. A command taking `name: String` and treating it as a filename
+  is still missed, and that is the honest limit of reading signatures as text.
+- **The test's own `generate_handler!` is still its own.** It has to be, for the expansion-time
+  reason above. An entry added to the list and not to that list fails on the assertion, carrying the
+  real Tauri error, which is loud enough.
+
+Measured: `cargo test --workspace` — **1705 passing, 0 failed, 12 ignored** across 55 blocks
+(1704 + the registration test); the feature-on invocation **341 passing**; `node
+tools/command-audit/scan.mjs` — 95 registered, 3 take a renderer path, 3 declared; its self-tests
+8 passing; all 14 node gates green.
+
+---
+
 ## 2026-09-02 (KNEG-147, KNEG-150) — the better fix was refused by cargo, and running the
 gate list found a gate that was already red
 
