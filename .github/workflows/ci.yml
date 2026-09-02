@@ -48,6 +48,12 @@ jobs:
       - name: Binary name collisions
         run: node tools/integration-audit/verify-binaries.mjs
 
+      # DialogGrants closed KNEG-80 and its doc comment states the closure as a
+      # fact -- "the only three commands that take a path". KNEG-151 is what
+      # happens when that stops being true quietly.
+      - name: Import commands check their dialog grant
+        run: node tools/command-audit/scan.mjs
+
       - name: Forbidden domains
         run: node tools/domain-scanner/scan.mjs
 
@@ -89,6 +95,9 @@ jobs:
 
       - name: Feature audit self-tests
         run: node --test tools/feature-audit/scan.test.mjs
+
+      - name: Command audit self-tests
+        run: node --test tools/command-audit/scan.test.mjs
 
       # The baseline is generated from an OpenWhispr checkout that CI does not
       # have, so --check cannot run here. Assert instead that it is valid JSON

@@ -1390,6 +1390,24 @@ mod tests {
         .map(|response| response.deserialize::<serde_json::Value>().unwrap())
     }
 
+    /// The JSON body for a command, with `path` at the dotted position
+    /// `PATH_TAKING_COMMANDS` records for it.
+    ///
+    /// Built rather than written out because the shapes differ:
+    /// `import_openwhispr` wraps the path in an `ImportRequest`, the other two
+    /// take the string directly. Writing them out is what made the old loop a
+    /// second copy of the list.
+    #[cfg(feature = "tauri-test")]
+    fn body_with_path(shape: &str, path: &str) -> serde_json::Value {
+        let mut value = serde_json::Value::String(path.to_owned());
+        for key in shape.split('.').rev() {
+            let mut map = serde_json::Map::new();
+            map.insert(key.to_owned(), value);
+            value = serde_json::Value::Object(map);
+        }
+        value
+    }
+
     /// A file that exists, so `canonicalize` has something to resolve.
     fn touch(dir: &std::path::Path, name: &str) -> PathBuf {
         let path = dir.join(name);
@@ -1475,6 +1493,12 @@ mod tests {
             .manage(crate::state::AppState::in_memory().await.unwrap())
             .manage(std::sync::Arc::new(runtime))
             .manage(grants)
+            // Still this test's own list, and it has to be: `generate_handler!`
+            // needs literal paths at expansion time, so it cannot be driven from
+            // a const. What ties it to the application is
+            // `commands::tests::every_path_taking_command_is_registered`, and what
+            // ties it to the loop below is `PATH_TAKING_COMMANDS`. An entry added
+            // there and not here fails on the assertion, carrying the real error.
             .invoke_handler(tauri::generate_handler![
                 media_import_audio,
                 media_import_video,
@@ -1486,15 +1510,13 @@ mod tests {
             .build()
             .unwrap();
 
+        // Driven by the shared list rather than by a copy of it. A fourth
+        // path-taking command is asserted by being added to
+        // `PATH_TAKING_COMMANDS`, which is the whole point (KNEG-151); the array
+        // is a fixed-length const, so this loop cannot silently become empty.
         let path = never_picked.display().to_string();
-        for (command, body) in [
-            ("media_import_audio", serde_json::json!({ "path": path })),
-            ("media_import_video", serde_json::json!({ "path": path })),
-            (
-                "import_openwhispr",
-                serde_json::json!({ "request": { "path": path } }),
-            ),
-        ] {
+        for (command, shape) in crate::commands::PATH_TAKING_COMMANDS {
+            let body = body_with_path(shape, &path);
             let error = invoke_import(&webview, command, body).unwrap_err();
             let message = error.as_str().unwrap();
             assert!(
