@@ -69,6 +69,7 @@ import type {
   MeetingStatus,
   NewNoteRequest,
   Note,
+  NoteRecording,
   NoteUpdateRequest,
   Offer,
   Outcome,
@@ -80,6 +81,7 @@ import type {
   SessionState,
   Sources,
   TranscriptEvent,
+  TranscriptRow,
   Transcription,
   UpdateCheckResult,
 } from "../generated/ipc-types";
@@ -1132,6 +1134,41 @@ let notes: Note[] = [
   },
 ];
 
+const noteRecordings = new Map<number, NoteRecording>([
+  [
+    101,
+    {
+      noteId: 101,
+      storageKey: "20260901-101500.wav",
+      durationSeconds: 1847,
+      originalFilename: null,
+      createdAt: "2026-08-26T09:00:00Z",
+    },
+  ],
+]);
+
+const noteTranscriptRows = new Map<number, TranscriptRow[]>([
+  [
+    101,
+    [
+      {
+        index: 0,
+        startSeconds: 72,
+        endSeconds: 86,
+        speaker: "Anna",
+        text: "The localisation pass needs two more days.",
+      },
+      {
+        index: 1,
+        startSeconds: 88,
+        endSeconds: 101,
+        speaker: "Ravi",
+        text: "Then Thursday is the earliest honest date.",
+      },
+    ],
+  ],
+]);
+
 let nextNoteId = 105;
 let nextFolderId = 4;
 
@@ -1336,9 +1373,22 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
   },
   notes_delete: (a) => {
     const id = arg<number>(a, "id");
+    if (typeof id !== "number") return false;
     const before = notes.length;
     notes = notes.filter((n) => n.id !== id);
+    noteRecordings.delete(id);
+    noteTranscriptRows.delete(id);
     return notes.length !== before;
+  },
+  // `mockIPC` also stubs convertFileSrc. It intentionally has no recording
+  // server, so the recording player's honest error state appears in browser dev.
+  note_recording_get: (a) => {
+    const id = arg<number>(a, "id");
+    return typeof id === "number" ? noteRecordings.get(id) ?? null : null;
+  },
+  note_transcript_rows: (a) => {
+    const id = arg<number>(a, "id");
+    return typeof id === "number" ? noteTranscriptRows.get(id) ?? [] : [];
   },
   folders_list: () => folders,
   folder_create: (a) => {
