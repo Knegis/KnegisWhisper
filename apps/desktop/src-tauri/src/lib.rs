@@ -32,6 +32,7 @@ mod meeting;
 mod meeting_window;
 mod overlay;
 mod reasoning;
+mod recordings;
 mod sherpa_stream;
 mod shortcuts;
 mod state;
@@ -115,6 +116,7 @@ pub fn run() -> anyhow::Result<()> {
     );
 
     tauri::Builder::default()
+        .register_asynchronous_uri_scheme_protocol(recordings::SCHEME, recordings::serve)
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         // Registered so `commands::note_export_to_file` can open a save dialog
         // from Rust. The renderer has no dialog permission and never sees a
@@ -417,6 +419,8 @@ pub fn run() -> anyhow::Result<()> {
             commands::notes_create,
             commands::notes_update,
             commands::notes_delete,
+            commands::note_recording_get,
+            commands::note_transcript_rows,
             commands::folders_list,
             commands::folder_create,
             commands::folder_delete,

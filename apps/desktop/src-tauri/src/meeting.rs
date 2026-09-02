@@ -701,11 +701,6 @@ impl MeetingRuntime {
         });
     }
 
-    /// Where recordings are kept.
-    fn recording_dir() -> std::path::PathBuf {
-        kw_storage::paths::data_dir().join("meetings")
-    }
-
     /// Build the provider for an already-resolved `client`.
     ///
     /// An exhaustive match on [`Client`], which is the point of it being data: a
@@ -928,7 +923,7 @@ impl MeetingRuntime {
             return Err(err.to_string());
         }
 
-        let path = Self::recording_dir().join(format!(
+        let path = crate::recordings::recording_dir().join(format!(
             "{}.wav",
             chrono::Utc::now().format("%Y%m%d-%H%M%S")
         ));
@@ -1332,14 +1327,39 @@ impl MeetingRuntime {
         };
 
         match kw_notes_core::notes::create(self.db.pool(), &note).await {
-            Ok(note_id) => MeetingOutcome::Saved {
-                note_id,
-                duration_seconds: finished.duration_seconds,
-                recording_path: path,
-                gaps: transcript.gaps,
-                reconnects: transcript.reconnects,
-                transcript_is_partials: from_partials,
-            },
+            Ok(note_id) => {
+                match crate::recordings::storage_key_for(&finished.path) {
+                    Some(key) => {
+                        if let Err(error) = kw_notes_core::recordings::attach(
+                            self.db.pool(),
+                            note_id,
+                            &key,
+                            Some(finished.duration_seconds),
+                            None,
+                        )
+                        .await
+                        {
+                            // The note and WAV still exist, but this note loses
+                            // playback; attaching must not turn Saved into Failed.
+                            tracing::error!(note_id, path = %path, error = %error, "could not attach the meeting recording");
+                        }
+                    }
+                    None => {
+                        // The note and WAV still exist, but this note loses
+                        // playback; attaching must not turn Saved into Failed.
+                        tracing::error!(note_id, path = %path, error = "recording path has no valid storage key", "could not attach the meeting recording");
+                    }
+                }
+
+                MeetingOutcome::Saved {
+                    note_id,
+                    duration_seconds: finished.duration_seconds,
+                    recording_path: path,
+                    gaps: transcript.gaps,
+                    reconnects: transcript.reconnects,
+                    transcript_is_partials: from_partials,
+                }
+            }
             Err(err) => {
                 tracing::error!(error = %err, provider = provider_id, "could not save the meeting note");
                 MeetingOutcome::Failed {
