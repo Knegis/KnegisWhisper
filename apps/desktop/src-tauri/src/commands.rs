@@ -13,7 +13,9 @@
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 
-use kw_notes_core::{notes, transcript};
+use kw_notes_core::{
+    notes, recordings as note_recordings, transcript, NoteRecording, TranscriptRow,
+};
 use kw_platform::hotkey::{self, Binding, HotkeyAction, HotkeyMode};
 use kw_provider_probe::{ProbeAudio, ProbeReport};
 use kw_storage::{settings, transcriptions};
@@ -1128,12 +1130,39 @@ pub async fn notes_update(
         .map_err(|e| fail("could not save the note", e))
 }
 
-/// Delete a note. Returns whether it existed.
+/// Delete a note and its application-owned recording. Returns whether the note
+/// existed.
+///
+/// The renderer tells the user the file goes with the note before asking for
+/// confirmation. The local API's DELETE in `crates/local-api/src/server.rs:320`
+/// does not remove the file; that known gap is tracked by the orchestrator.
 #[tauri::command]
 pub async fn notes_delete(state: State<'_, AppState>, id: i64) -> CmdResult<bool> {
-    notes::delete(state.db().pool(), id)
+    let recording = note_recordings::get(state.db().pool(), id)
         .await
-        .map_err(|e| fail("could not delete the note", e))
+        .map_err(|e| fail("could not read the note's recording", e))?;
+    let deleted = notes::delete(state.db().pool(), id)
+        .await
+        .map_err(|e| fail("could not delete the note", e))?;
+
+    if deleted {
+        if let Some(recording) = recording {
+            crate::recordings::remove_file_for(&recording).await;
+        }
+    }
+
+    Ok(deleted)
+}
+
+/// The recording attached to a note, if it has one.
+#[tauri::command]
+pub async fn note_recording_get(
+    state: State<'_, AppState>,
+    id: i64,
+) -> CmdResult<Option<NoteRecording>> {
+    note_recordings::get(state.db().pool(), id)
+        .await
+        .map_err(|e| fail("could not read the note's recording", e))
 }
 
 /// Folders in display order.
@@ -1209,6 +1238,56 @@ fn export_filename(title: &str, format: transcript::Format) -> String {
     format!("{stem}.{}", format.extension())
 }
 
+/// Parse the single stored transcript representation shared by export and
+/// playback rows.
+fn transcript_segments(note: &notes::Note) -> CmdResult<Vec<transcript::Segment>> {
+    // A note with no transcript is legitimate: typed notes export and render as
+    // an empty transcript rather than failing.
+    match note.transcript.as_deref() {
+        Some(raw) if !raw.trim().is_empty() => serde_json::from_str(raw)
+            .map_err(|e| fail("the note's transcript is not a list of segments", e)),
+        _ => Ok(Vec::new()),
+    }
+}
+
+fn transcript_meta(note: &notes::Note) -> transcript::NoteMeta {
+    transcript::NoteMeta {
+        title: note.title.clone(),
+        created_at: note.created_at.clone(),
+        participants: note.participants.clone(),
+    }
+}
+
+/// Speaker names live in `speaker_mappings`, and this is empty because nothing
+/// renames a speaker yet -- not because nothing diarises. There is diarisation
+/// as of 2026-09-01: `meeting::notes` writes `speaker_0` with the placeholder
+/// `Speaker 1` beside it, and `transcript::speaker_name` renders that segment
+/// from its own label. The table would add a name a person typed, and no screen
+/// offers that, so falling through to the segment label or source is honest.
+fn transcript_mappings() -> std::collections::BTreeMap<String, String> {
+    std::collections::BTreeMap::new()
+}
+
+/// Load one note's transcript as playable, unmerged rows.
+#[tauri::command]
+pub async fn note_transcript_rows(
+    state: State<'_, AppState>,
+    id: i64,
+) -> CmdResult<Vec<TranscriptRow>> {
+    let note = notes::get(state.db().pool(), id)
+        .await
+        .map_err(|e| fail("could not read the note", e))?
+        .ok_or_else(|| "there is no note with that id".to_owned())?;
+    let segments = transcript_segments(&note)?;
+
+    Ok(transcript::rows(
+        &segments,
+        &transcript_meta(&note),
+        &transcript_mappings(),
+        &transcript::SpeakerLabels::default(),
+    ))
+}
+
 /// Load a note and render its transcript.
 async fn render_export(
     state: &AppState,
@@ -1220,37 +1299,13 @@ async fn render_export(
         .map_err(|e| fail("could not read the note", e))?
         .ok_or_else(|| "there is no note with that id".to_owned())?;
 
-    // A note with no transcript exports as an empty one rather than failing:
-    // a typed note is a legitimate thing to export, and `segment_count` tells
-    // the caller which case it got.
-    let segments: Vec<transcript::Segment> = match note.transcript.as_deref() {
-        Some(raw) if !raw.trim().is_empty() => serde_json::from_str(raw)
-            .map_err(|e| fail("the note's transcript is not a list of segments", e))?,
-        _ => Vec::new(),
-    };
-
-    let meta = transcript::NoteMeta {
-        title: note.title.clone(),
-        created_at: note.created_at.clone(),
-        participants: note.participants.clone(),
-    };
-
-    // Speaker names live in `speaker_mappings`, and the map is empty because
-    // nothing renames a speaker yet -- not because nothing diarises. There is
-    // diarisation as of 2026-09-01: `meeting::notes` writes `speaker_0` with
-    // the placeholder `Speaker 1` beside it, and `transcript::speaker_name`
-    // renders `speaker_0` as `Speaker 1` from the segment alone. What this
-    // table would add is a name a *person* typed, and no screen offers that, so
-    // an empty map is the honest input rather than a missing one:
-    // `transcript::speaker_name` then falls through to the segment's label or
-    // capture source, which is exactly what it should do.
-    let mappings = std::collections::BTreeMap::new();
+    let segments = transcript_segments(&note)?;
 
     let content = transcript::export(
         format,
-        &meta,
+        &transcript_meta(&note),
         &segments,
-        &mappings,
+        &transcript_mappings(),
         &transcript::SpeakerLabels::default(),
     );
 

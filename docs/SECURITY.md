@@ -207,6 +207,13 @@ arbitrary filesystem access, no process spawning, no direct database or credenti
 HTTP. Command payloads are typed and validated at the boundary; paths and URLs are validated
 before use.
 
+The `recording` URI scheme serves the application-owned WAV attached to a note, addressed only by
+note id. `recordings::serve` looks up that id and `recordings::resolve` accepts only a plain file
+name and resolves it inside the app-owned recordings directory, so no path crosses the IPC boundary
+in either direction. `recordings::response_for` answers byte-range requests for media seeking; the
+handler refuses keys that are not plain file names, notes with no recording row, and every method
+except `GET` and `HEAD`.
+
 **`Notes > Upload`'s file pickers take a different shape from the rest, worth naming precisely
 rather than folding into the paragraph above.** `pick_import_file` opens a real OS dialog and
 returns the chosen path *to the renderer*, which holds it in React state and passes it as a plain
