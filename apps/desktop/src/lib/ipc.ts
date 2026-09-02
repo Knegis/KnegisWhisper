@@ -20,7 +20,7 @@
  * Rust method and are asserted against it by a Rust test.
  */
 
-import { invoke } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 import type {
@@ -92,6 +92,7 @@ import type {
   NewNoteRequest,
   NonActivating,
   Note,
+  NoteRecording,
   NoteUpdateRequest,
   Offer,
   Outcome,
@@ -128,6 +129,7 @@ import type {
   UsedFor,
   TranscriptEvent,
   Transcription,
+  TranscriptRow,
   UnhandledAction,
   UpdateCheckResult,
   VerifiedBy,
@@ -204,6 +206,7 @@ export type {
   ModelStatus,
   NonActivating,
   Note,
+  NoteRecording,
   Offer,
   OverlayStatus,
   ProbeKind,
@@ -237,6 +240,7 @@ export type {
   UsedFor,
   TranscriptEvent,
   Transcription,
+  TranscriptRow,
   UnhandledAction,
   UpdateCheckResult,
   VerifiedBy,
@@ -700,6 +704,50 @@ export async function createFolder(name: string): Promise<number> {
 /** Delete a folder. Its notes survive, with no folder. */
 export async function deleteFolder(id: number): Promise<boolean> {
   return invoke<boolean>("folder_delete", { id });
+}
+
+/* --------------------------------------------------------------- recordings */
+
+/**
+ * The recording a note was made from, or `null` for a typed note and for any
+ * note saved before recordings were attached to notes (2026-09-02).
+ *
+ * Nothing here is a path. `storageKey` is the file's bare name inside the
+ * application's recordings directory, and playback goes through
+ * `recordingSrc`, so the renderer never names a file to Rust in either
+ * direction.
+ */
+export async function getNoteRecording(
+  id: number,
+): Promise<NoteRecording | null> {
+  return invoke<NoteRecording | null>("note_recording_get", { id });
+}
+
+/**
+ * The stored transcript as playable rows: seconds from the start of the
+ * recording, speaker resolved the way export resolves it. Empty for a note
+ * with no transcript. Rust does the normalising so this screen and the export
+ * files cannot disagree about a timestamp or a name.
+ */
+export async function getNoteTranscriptRows(
+  id: number,
+): Promise<TranscriptRow[]> {
+  return invoke<TranscriptRow[]>("note_transcript_rows", { id });
+}
+
+/**
+ * The URL an `<audio>` element plays a note's recording from.
+ *
+ * The `recording` scheme is served by Rust (`src-tauri/src/recordings.rs`),
+ * which looks the note up in `note_recordings` and streams the file from inside
+ * the recordings directory with HTTP range support. The only thing in the URL
+ * is the note id, so no path crosses the boundary in either direction.
+ * `convertFileSrc` spells the scheme the way the platform's webview needs:
+ * `http://recording.localhost/<id>` on Windows, `recording://localhost/<id>`
+ * elsewhere.
+ */
+export function recordingSrc(noteId: number): string {
+  return convertFileSrc(String(noteId), "recording");
 }
 
 /* --------------------------------------------------------- transcript export */

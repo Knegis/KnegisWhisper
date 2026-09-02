@@ -237,9 +237,11 @@ by a test.
   `(note_id, speaker_id)`, the four calendar tables by a provider-supplied `TEXT` id: none has a
   surrogate id to collide. The test fails if a future table joins one list and not the other.
 
-  **No migration, and that is the shape of this closing.** There is one migration file and
-  `migrations_are_idempotent_across_reopens` (`lib.rs:250-265`) asserts `applied == 1`, so adding
-  `0002_*.sql` fails it. This closes as a recorded decision rather than as work.
+  **No migration, and that is the shape of this closing.** The orphan-table decision added none.
+  (`0002_note_recordings.sql` exists since 2026-09-02 for an unrelated reason -- the note-to-recording
+  relation behind KNEG-152 -- and `migrations_are_idempotent_across_reopens` (`lib.rs:250-265`) now
+  asserts `applied == 2`, so the count still pins the migration list.) This closes as a recorded
+  decision rather than as work.
 - **`storage::import::from_openwhispr` has its manifest entry and its screen — closed.**
   `media:openwhispr-import` is `reachable: true` through `Notes > Upload`, landed together with the
   audio and video importers exactly as planned. The URL importer landed with them and was

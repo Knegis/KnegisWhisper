@@ -80,6 +80,32 @@ pub struct NoteMeta {
     pub participants: Option<String>,
 }
 
+/// One transcript segment as a playable row: normalised to seconds from the
+/// start of the recording, with its speaker resolved the way export resolves
+/// it, so the screen and the export files never disagree about who said what.
+///
+/// Rows rather than merged paragraphs: [`merge`] joins consecutive utterances
+/// for readable export, but a row that is played back has to keep the
+/// segment's own boundaries or it plays the wrong stretch of audio.
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct TranscriptRow {
+    /// Position in the stored segment list, so a selection can be stable.
+    pub index: usize,
+    /// Seconds from the start of the recording. `None` when the segment carried
+    /// no timestamp at all, in which case the row cannot be played.
+    pub start_seconds: Option<f64>,
+    /// Seconds from the start of the recording. When the segment carried no end
+    /// of its own -- a live partial does not -- this is the next segment's
+    /// start, and `None` for the last such segment, meaning "to the end".
+    pub end_seconds: Option<f64>,
+    /// The display name, resolved as [`speaker_name`] does, or `None` for an
+    /// anonymous segment -- one carrying no name, label or capture source --
+    /// which export leaves unlabelled for the same reason.
+    pub speaker: Option<String>,
+    pub text: String,
+}
+
 /// Which format to emit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "lowercase")]

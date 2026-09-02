@@ -193,6 +193,8 @@ fn render() -> String {
             crate::commands::NoteUpdateRequest,
             kw_notes_core::transcript::Format,
             crate::commands::ExportedTranscript,
+            kw_notes_core::transcript::TranscriptRow,
+            kw_notes_core::recordings::NoteRecording,
         ],
         "import" => [
             kw_storage::import::TableReport,

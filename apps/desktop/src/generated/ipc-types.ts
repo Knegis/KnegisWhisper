@@ -967,6 +967,53 @@ filename: string, content: string,
  */
 segmentCount: number, };
 
+/**
+ * One transcript segment as a playable row: normalised to seconds from the
+ * start of the recording, with its speaker resolved the way export resolves
+ * it, so the screen and the export files never disagree about who said what.
+ *
+ * Rows rather than merged paragraphs: [`merge`] joins consecutive utterances
+ * for readable export, but a row that is played back has to keep the
+ * segment's own boundaries or it plays the wrong stretch of audio.
+ */
+export type TranscriptRow = {
+/**
+ * Position in the stored segment list, so a selection can be stable.
+ */
+index: number,
+/**
+ * Seconds from the start of the recording. `None` when the segment carried
+ * no timestamp at all, in which case the row cannot be played.
+ */
+startSeconds: number | null,
+/**
+ * Seconds from the start of the recording. When the segment carried no end
+ * of its own -- a live partial does not -- this is the next segment's
+ * start, and `None` for the last such segment, meaning "to the end".
+ */
+endSeconds: number | null,
+/**
+ * The display name, resolved as [`speaker_name`] does, or `None` for an
+ * anonymous segment -- one carrying no name, label or capture source --
+ * which export leaves unlabelled for the same reason.
+ */
+speaker: string | null, text: string, };
+
+/**
+ * A recording attached to a note, as stored.
+ */
+export type NoteRecording = { noteId: number,
+/**
+ * The file name inside the application's recordings directory. Never a
+ * path, and never resolved anywhere but inside that directory.
+ */
+storageKey: string, durationSeconds: number | null,
+/**
+ * What the file was called before it became application-owned, where
+ * there was such a name. A meeting recording has none.
+ */
+originalFilename: string | null, createdAt: string | null, };
+
 /* ----------------------------------------------------------------- import */
 /**
  * What one table's copy achieved.
