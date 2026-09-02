@@ -42,6 +42,7 @@ function inputs() {
     manifest: read("config/integration-manifest.json"),
     surfaces: read("config/ui-surfaces.json"),
     readComponent,
+    readEvidence: readComponent,
     // The same predicate the CLI passes. Without it every test below would run
     // with the `() => false` default, and the documentation rule would be
     // measured against something the gate never does.
@@ -221,6 +222,83 @@ test("the rules that were already there still bite", () => {
   assert.ok(rulesOf(drifted).has("baseline-drift"));
 });
 
+/* ------------------------------------------------- deferred interfaces */
+
+function aDeferredKey(manifest) {
+  const key = Object.keys(manifest.entries).find(
+    (k) => manifest.entries[k].status === "temporarily-deferred"
+  );
+  assert.ok(key, "the manifest should hold at least one deferred entry");
+  return key;
+}
+
+test("a deferred entry without interface evidence is caught", () => {
+  const found = newViolations((input) => {
+    const key = aDeferredKey(input.manifest);
+    delete input.manifest.entries[key].deferral.interfaceEvidence;
+  });
+
+  assert.deepEqual(rulesOf(found), new Set(["incomplete-deferral"]));
+});
+
+test("empty interface evidence is caught", () => {
+  const found = newViolations((input) => {
+    const key = aDeferredKey(input.manifest);
+    input.manifest.entries[key].deferral.interfaceEvidence = [];
+  });
+
+  assert.deepEqual(rulesOf(found), new Set(["incomplete-deferral"]));
+});
+
+test("interface evidence needs a non-empty literal", () => {
+  const found = newViolations((input) => {
+    const key = aDeferredKey(input.manifest);
+    input.manifest.entries[key].deferral.interfaceEvidence[0].contains = "";
+  });
+
+  assert.deepEqual(rulesOf(found), new Set(["stale-deferral-interface"]));
+});
+
+test("interface evidence cannot escape the repository", () => {
+  const found = newViolations((input) => {
+    const key = aDeferredKey(input.manifest);
+    input.manifest.entries[key].deferral.interfaceEvidence = [
+      { path: "../outside.rs", contains: "anything" },
+    ];
+  });
+
+  assert.deepEqual(rulesOf(found), new Set(["stale-deferral-interface"]));
+});
+
+test("a missing interface evidence path is caught", () => {
+  const found = newViolations((input) => {
+    const key = aDeferredKey(input.manifest);
+    input.manifest.entries[key].deferral.interfaceEvidence = [
+      { path: "crates/no-such-interface.rs", contains: "anything" },
+    ];
+  });
+
+  assert.deepEqual(rulesOf(found), new Set(["stale-deferral-interface"]));
+});
+
+test("an interface symbol that disappeared is caught", () => {
+  const found = newViolations((input) => {
+    const key = aDeferredKey(input.manifest);
+    const evidence = input.manifest.entries[key].deferral.interfaceEvidence[0];
+    evidence.contains = "SymbolThatDoesNotExistAnywhere";
+  });
+
+  assert.deepEqual(rulesOf(found), new Set(["stale-deferral-interface"]));
+});
+
+test("violations refuses deferred interface evidence when nobody injects a reader", () => {
+  const input = inputs();
+  delete input.readEvidence;
+
+  const found = violations(input).filter((v) => v.rule === "stale-deferral-interface");
+  assert.ok(found.length > 0, "the default must not wave interface evidence through");
+});
+
 /* ------------------------------------------------- documentation targets */
 
 test("a documentation entry claiming ported docs that are not there is caught", () => {
@@ -266,6 +344,7 @@ test("a documentation entry that does not claim the docs exist is left alone", (
       why: "nobody has written it",
       dependencies: ["somebody to write it"],
       interface: "none -- documentation only",
+      interfaceEvidence: [{ path: "README.md", contains: "Development" }],
       expectedPhase: 7,
     };
   });

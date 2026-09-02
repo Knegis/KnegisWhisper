@@ -38,6 +38,7 @@ mod state;
 mod tray;
 mod update_window;
 mod updater;
+mod window_placement;
 
 use anyhow::Context as _;
 use tauri::Manager as _;

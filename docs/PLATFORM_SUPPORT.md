@@ -587,16 +587,16 @@ registers, and the screen says why.
 
 ## Text insertion
 
-| Capability | Windows | macOS | Linux X11 | Linux Wayland |
-| --- | --- | --- | --- | --- |
-| Insert at cursor | SendInput | CGEvent ⌘V | XTEST / `xdotool` | portal RemoteDesktop, `ydotool`, `wtype` |
-| Restore foreground app | by HWND | by PID | by window id | compositor-dependent |
-| Preserve clipboard | yes | yes | yes + PRIMARY selection | yes + PRIMARY selection |
-| Permission required | none | **Accessibility** | `/dev/uinput` for `ydotool` | portal grant |
+| Platform | Implementation state | What the application does |
+| --- | --- | --- |
+| Windows | **Built and verified** | Borrows the clipboard, sends `Ctrl+V` with `SendInput`, then restores the previous clipboard value only if the user has not replaced it in the meantime. The non-activating overlay leaves the target application focused; there is no separate foreground-window restore step. |
+| macOS | **Not implemented** | `kw_platform::paste_keystroke()` returns `None`, so the application reports text insertion as unsupported. No `CGEvent` or Accessibility path is written. |
+| Linux X11 | **Not implemented** | `kw_platform::paste_keystroke()` returns `None`. No XTEST or `xdotool` path is written. |
+| Linux Wayland | **Not implemented** | `kw_platform::paste_keystroke()` returns `None`. No RemoteDesktop portal, `ydotool`, or `wtype` path is written. |
 
-Without macOS Accessibility permission, dictated text is copied to the clipboard but not
-inserted, and the user is told so. On Wayland, insertion depends on a portal implementation being
-present; where it is not, the app reports `unsupported` rather than appearing to work.
+The clipboard-preservation algorithm is platform-neutral and unit-tested, but it is unreachable
+off Windows until that platform has a real paste-keystroke backend. Candidate upstream mechanisms
+remain recorded in `PORTING_MATRIX.md`; they are porting inputs, not claims about this build.
 
 ## Calendars
 

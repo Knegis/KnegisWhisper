@@ -8,6 +8,11 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 
+[features]
+# Enables Tauri's mock runtime and the Windows manifest needed by its test
+# executable. Never enabled by the application build.
+tauri-test = ["tauri/test"]
+
 [lib]
 # Tauri convention: the binary is a thin wrapper so the app can also be driven
 # from integration tests and, later, from the mobile targets.

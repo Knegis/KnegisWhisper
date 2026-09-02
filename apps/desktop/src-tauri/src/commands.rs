@@ -91,39 +91,14 @@ pub struct HotkeyReport {
     pub bindings: Vec<Binding>,
     /// Accelerators claimed by more than one action.
     pub conflicts: Vec<hotkey::Conflict>,
-    /// Actions with no registrable accelerator, **or** with no handler.
-    ///
-    /// Two unrelated properties under one field, which is the whole of what is
-    /// wrong with it. The first half stopped meaning "does not work" the moment
-    /// a hooked platform existed: on Windows the shipped dictation default
-    /// `Control+Super` is in this set and fires perfectly well through the
-    /// low-level hook, and so does `Mouse4`. The second half is the opposite
-    /// shape — chat agent's `Control+Shift+Space` is a faultless registrable
-    /// accelerator and it is the *action* that has nowhere to go, so
-    /// [`crate::shortcuts::register_all`] deliberately never offers it. Neither
-    /// half implies the other, and their union implies neither.
-    ///
-    /// It was called `unusable` until 2026-09-01, which asserted the one thing
-    /// no member of the set is guaranteed to have in common.
-    ///
-    /// **Nothing reads this.** There is no caller in Rust outside this module's
-    /// tests and none in `apps/desktop/src`, where `Dictation.tsx` renders
-    /// `bindings`, `unhandled`, `conflicts` and `cautions`. Whether an action
-    /// ended up live is [`crate::shortcuts::RegistrationReport::is_live`], which
-    /// counts `Hooked`; *why* it is dead is `unhandled`, which carries the
-    /// sentence a screen can show.
-    pub unregistrable_or_unhandled: Vec<HotkeyAction>,
-    /// The subset of `unregistrable_or_unhandled` that is dead because nothing
-    /// handles it, with the reason. Separate because the two need different
-    /// words: one is the user's to fix and the other is not.
+    /// Actions that are dead because nothing handles them, with the reason.
+    /// Registration outcome is reported separately by
+    /// [`crate::shortcuts::RegistrationReport::is_live`].
     pub unhandled: Vec<UnhandledAction>,
     /// Hotkeys that work and also fire when the user meant something else.
     ///
-    /// A third category, not a third spelling of the first two.
-    /// `unregistrable_or_unhandled` and `conflicts` both mean the hotkey will
-    /// not do its job through the shortcut register; a caution means it will,
-    /// and will do it at times nobody asked for. Today the only source is
-    /// AltGr (KNEG-37).
+    /// A caution means the hotkey works and also fires at times nobody asked
+    /// for. Today the sources are AltGr and modifier-only prefix chords.
     pub cautions: Vec<hotkey::Caution>,
 }
 
@@ -180,16 +155,9 @@ fn report_with_layout(
         })
         .collect();
 
-    let unregistrable_or_unhandled = bindings
-        .iter()
-        .filter(|b| !b.has_registrable() || unhandled.iter().any(|u| u.action == b.action))
-        .map(|b| b.action)
-        .collect();
-
     HotkeyReport {
         bindings,
         conflicts,
-        unregistrable_or_unhandled,
         unhandled,
         cautions,
     }
@@ -780,9 +748,8 @@ impl DialogGrants {
     /// `canonicalize` needs: it takes no `AppHandle`, so it is unit-testable on
     /// its own. That is the same reason `media::check_importable_file` and
     /// [`import_pick_dialog`] are separate functions rather than inline
-    /// branches — nothing outside a running application can construct an
-    /// `AppHandle`, so anything reachable only through a command is untested by
-    /// construction.
+    /// branches. The exported command boundary is covered separately with
+    /// Tauri's mock webview runtime.
     ///
     /// A path that cannot be canonicalised and a path nobody granted get the
     /// *same* refusal, deliberately. Telling them apart would answer "does this
@@ -896,11 +863,10 @@ fn import_pick_dialog(
 /// commands authorise against that set before reading anything. A path no
 /// dialog produced is refused.
 ///
-/// **What that does not cover.** A unit test asserts the policy; only a real
-/// call against the running application proves the policy is consulted on this
-/// path, and that check has not been run — see `docs/BENCH_CHECK.md`'s Task 12
-/// entry, and `docs/SECURITY.md`'s Webview section for the exposure this
-/// closed.
+/// The pure policy tests are backed by a mock-webview IPC test which invokes
+/// all three import commands by their exported names. A real picker check still
+/// belongs in the bench sequence because only the OS dialog can prove the
+/// person-facing flow; see `docs/BENCH_CHECK.md`'s Task 12 entry.
 #[tauri::command]
 pub async fn pick_import_file(
     app: AppHandle,
@@ -1409,12 +1375,6 @@ mod tests {
             .map(|u| u.reason.clone())
             .expect("chat agent has no handler, so it must appear here");
         assert!(reason.contains("not built yet"), "{reason}");
-
-        // And it lands in the union field, by the second half of it: the
-        // accelerator is registrable and the action has no handler.
-        assert!(report
-            .unregistrable_or_unhandled
-            .contains(&HotkeyAction::ChatAgent));
     }
 
     /// The report carries the AltGr caution, and does it without asking the
@@ -1478,22 +1438,6 @@ mod tests {
             "the caution must not also be reported as a problem: {:?}",
             dictation.problems()
         );
-        // The union field does contain it, and that is about the accelerator
-        // being modifier-only rather than about AltGr -- the same is true of
-        // the shipped `Control+Super` default, which fires through the hook.
-        // Asserted so the two are not confused later: nothing here made this
-        // hotkey stop working, and membership of that field never claimed it
-        // did.
-        assert!(
-            report_with_layout(
-                bindings.clone(),
-                &kw_platform::keyboard_layout::AltGr::Absent
-            )
-            .unregistrable_or_unhandled
-                == report.unregistrable_or_unhandled,
-            "the caution must not change what the register can take"
-        );
-
         // The same bindings on a layout with no AltGr lose the AltGr caution and
         // keep the other one. That is the separation earning its place: a US
         // keyboard cannot press AltGr, and it can press Ctrl+Alt+Delete.

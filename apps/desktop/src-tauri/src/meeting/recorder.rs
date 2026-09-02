@@ -93,6 +93,21 @@ pub enum Delivered {
 }
 
 impl Delivered {
+    /// A neutral description for the saved meeting note.
+    ///
+    /// Facts only. In particular, `Nothing` does not say the capture failed:
+    /// an idle WASAPI output endpoint produces the same result. The note keeps
+    /// that ambiguity instead of turning an observation into a diagnosis.
+    #[must_use]
+    pub(super) const fn note_fact(self) -> &'static str {
+        match self {
+            Self::NotCaptured => "was not captured",
+            Self::Nothing => "opened but delivered no audio blocks",
+            Self::Silence => "delivered only digital silence",
+            Self::Audio => "delivered non-silent audio",
+        }
+    }
+
     /// Fold one drained block into the running answer.
     ///
     /// Monotone by construction — `Nothing` to `Silence` to `Audio`, never

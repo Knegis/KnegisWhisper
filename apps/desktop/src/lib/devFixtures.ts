@@ -202,7 +202,6 @@ const HOTKEYS: HotkeyReport = {
   conflicts: [
     { accelerator: "Control+Shift+V", actions: ["voice-agent", "meeting"] },
   ],
-  unregistrableOrUnhandled: ["translation", "voice-agent"],
   unhandled: [
     {
       action: "voice-agent",
@@ -900,7 +899,12 @@ const MCP: McpStatus = {
    * locate, and a fixture that always finds one never shows it. */
   binaryLocation: { state: "not-found" },
   command: "knegiswhisper-mcp --stdio",
+  discoveryPath:
+    "C:\\Users\\dev\\AppData\\Roaming\\KnegisWhisper\\local-api.json",
   localApiRunning: true,
+  // It is the same file the CLI reads, so this must stay byte-for-byte the
+  // same fixture state and exercise the shared rendering block on both pages.
+  discoveryPermissions: { state: "owner-and-administrators" },
 };
 
 const SIDECARS: SidecarStatus[] = [
@@ -1499,6 +1503,7 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
     return sources;
   },
   meeting_stop: () => {
+    const provider = meetingStatus.provider;
     meetingStatus = {
       ...meetingStatus,
       state: "idle",
@@ -1506,6 +1511,19 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
       elapsedSeconds: 0,
       sources: null,
     };
+    // OpenAI is the provider whose capped sessions reconnect. Its fixture uses
+    // the quiet outcome so the second public shape carrying `reconnects` can be
+    // inspected in the browser; every other provider keeps the saved-note path.
+    if (provider === "meeting:openai-realtime") {
+      return {
+        outcome: "nothing-transcribed",
+        recordingPath:
+          "C:\\Users\\dev\\AppData\\Roaming\\KnegisWhisper\\recordings\\2026-08-26T09-00.wav",
+        mic: "silence",
+        system: "nothing",
+        reconnects: 1,
+      } satisfies MeetingOutcome;
+    }
     return {
       outcome: "saved",
       noteId: 101,
@@ -1513,6 +1531,7 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
       recordingPath:
         "C:\\Users\\dev\\AppData\\Roaming\\KnegisWhisper\\recordings\\2026-08-26T09-00.wav",
       gaps: 0,
+      reconnects: 1,
       transcriptIsPartials: false,
     } satisfies MeetingOutcome;
   },

@@ -1198,149 +1198,184 @@ mod tests {
         );
     }
 
-    /// The published asset for [`SIDECAR`], or `None` — said out loud.
+    /// A catalogue with a published asset for every target the application
+    /// supports.
     ///
-    /// **The three tests below have a platform on which their subject does not
-    /// exist.** `config/sidecars.json` marks whisper `not-published` on both
-    /// macOS targets, and `.github/workflows/ci.yml` runs `macos-latest`. Two of
-    /// them used to `return` here: green, having executed nothing, while being
-    /// the only positive controls `sidecar_freshness` has — so the whole cluster
-    /// vacated together on a third of every CI run, and nothing said a word.
-    ///
-    /// This does the two things that stop that. It asserts the one claim that
-    /// *is* true with no published asset, and it **prints that it skipped**,
-    /// following `crates/sidecar/tests/real_install.rs` — which was the only one
-    /// of the three that ever admitted to checking nothing.
-    ///
-    /// **Mutation:** make `sidecar_freshness`'s no-asset arm answer `Current`
-    /// rather than `NotInstalled` and every caller of this goes red wherever
-    /// whisper is unpublished, which running the suite under a macOS
-    /// `Target::current` simulates on any host.
-    fn published_asset_or_skip<'a>(
-        catalog: &'a Catalog,
-        root: &std::path::Path,
-    ) -> Option<(&'a kw_sidecar::SidecarSpec, &'a kw_sidecar::Asset)> {
-        match catalog.resolve(SIDECAR) {
-            Ok(pair) => Some(pair),
-            Err(err) => {
-                assert_eq!(
-                    sidecar_freshness(catalog, SIDECAR, root),
-                    kw_sidecar::Freshness::NotInstalled,
-                    "nothing is pinned for this target, so nothing can be behind it"
-                );
-                println!(
-                    "skipped: no published {SIDECAR} asset for this target ({err}); \
-                     asserted only that it reports not-installed"
-                );
-                None
+    /// Product availability is not a testing invariant: whisper is deliberately
+    /// not published on macOS today, which made the old positive controls return
+    /// before testing anything on that CI job. This fixture pins synthetic
+    /// assets for all five targets, so `Catalog::resolve`, `locate`, record I/O,
+    /// and the freshness decision execute on every supported host.
+    fn freshness_catalog() -> Catalog {
+        fn asset(executable: &str) -> serde_json::Value {
+            serde_json::json!({
+                "availability": "published",
+                "url": "https://example.invalid/fake-sidecar",
+                "archive": "bare",
+                "sha256": PINNED,
+                "sizeBytes": 2,
+                "maxExtractedSizeBytes": 2,
+                "executableInArchive": executable,
+            })
+        }
+
+        let document = serde_json::json!({
+            "schemaVersion": kw_sidecar::catalog::SCHEMA_VERSION,
+            "sidecars": [{
+                "name": SIDECAR,
+                "description": "Synthetic freshness fixture",
+                "source": {
+                    "repo": "example.invalid/fake",
+                    "release": "test",
+                    "pinnedBecause": "Deterministic cross-platform freshness coverage",
+                },
+                "transport": { "kind": "stdio" },
+                "commandFragments": ["fake-sidecar"],
+                "targets": {
+                    "windows-x86_64": asset("fake-sidecar.exe"),
+                    "linux-x86_64": asset("fake-sidecar"),
+                    "linux-aarch64": asset("fake-sidecar"),
+                    "macos-x86_64": asset("fake-sidecar"),
+                    "macos-aarch64": asset("fake-sidecar"),
+                },
+            }],
+        });
+        Catalog::parse(&document.to_string()).unwrap()
+    }
+
+    struct FreshnessFixture {
+        root: tempfile::TempDir,
+        catalog: Catalog,
+    }
+
+    impl FreshnessFixture {
+        fn new() -> Self {
+            Self {
+                root: tempfile::tempdir().unwrap(),
+                catalog: freshness_catalog(),
             }
+        }
+
+        fn install_dir(&self) -> std::path::PathBuf {
+            self.root.path().join(SIDECAR)
+        }
+
+        fn resolved(&self) -> (&kw_sidecar::SidecarSpec, &kw_sidecar::Asset) {
+            self.catalog.resolve(SIDECAR).unwrap()
+        }
+
+        fn install_executable(&self) {
+            let install = self.install_dir();
+            let executable = self.resolved().1.executable_name();
+            std::fs::create_dir_all(&install).unwrap();
+            std::fs::write(install.join(executable), b"MZ").unwrap();
+        }
+
+        fn record(&self) -> kw_sidecar::InstallRecord {
+            let (spec, asset) = self.resolved();
+            kw_sidecar::InstallRecord::at(spec, asset, 1)
+        }
+
+        fn write_record(&self, record: &kw_sidecar::InstallRecord) {
+            kw_sidecar::record::write(&self.install_dir(), record).unwrap();
+        }
+
+        fn freshness(&self) -> kw_sidecar::Freshness {
+            sidecar_freshness(&self.catalog, SIDECAR, self.root.path())
         }
     }
 
-    /// An empty directory is not-installed **because the search path found
-    /// nothing in it**, which is a different sentence from the one above.
-    ///
-    /// `sidecar_freshness` reaches `NotInstalled` by two roads: the manifest has
-    /// no asset for this target, or `locate` walked the search path and came
-    /// back empty. Only the second is what this test is named after. The comment
-    /// here used to claim it — *"the search path this function builds is
-    /// exercised rather than described"* — while asserting nothing that could
-    /// tell the two apart, and on macOS it is the first road, so the sentence
-    /// was false exactly where it mattered.
-    ///
-    /// The control is the second call. Putting the executable where an install
-    /// lands has to change the answer; if it does not, the empty-directory
-    /// answer above was the manifest talking and this proves nothing about any
-    /// path.
-    ///
-    /// **Mutation:** point `SearchPath.downloaded` at `root.join("nope")`. The
-    /// first assertion goes on passing and the control fails, because the search
-    /// path is no longer looking where an install actually lands.
     #[test]
-    fn an_empty_sidecar_root_reports_the_whisper_server_as_not_installed() {
-        let dir = tempfile::tempdir().unwrap();
-        let catalog = kw_sidecar::Catalog::shipped().unwrap();
-        let Some((_, asset)) = published_asset_or_skip(&catalog, dir.path()) else {
-            return;
-        };
+    fn sidecar_freshness_reports_a_fake_missing_install_as_not_installed() {
+        let fixture = FreshnessFixture::new();
+        assert_eq!(fixture.freshness(), kw_sidecar::Freshness::NotInstalled);
+    }
+
+    #[test]
+    fn sidecar_freshness_reports_a_fake_pinned_install_as_current() {
+        let fixture = FreshnessFixture::new();
+        fixture.install_executable();
+        fixture.write_record(&fixture.record());
+        assert_eq!(fixture.freshness(), kw_sidecar::Freshness::Current);
+    }
+
+    #[test]
+    fn sidecar_freshness_reports_a_fake_older_install_as_stale() {
+        let fixture = FreshnessFixture::new();
+        fixture.install_executable();
+        let mut record = fixture.record();
+        record.asset_sha256 = digest(OTHER);
+        fixture.write_record(&record);
 
         assert_eq!(
-            sidecar_freshness(&catalog, SIDECAR, dir.path()),
-            kw_sidecar::Freshness::NotInstalled
-        );
-
-        let install = dir.path().join(SIDECAR);
-        std::fs::create_dir_all(&install).unwrap();
-        std::fs::write(install.join(asset.executable_name()), b"MZ").unwrap();
-        assert_ne!(
-            sidecar_freshness(&catalog, SIDECAR, dir.path()),
-            kw_sidecar::Freshness::NotInstalled,
-            "the control: the empty-directory answer above has to be the search \
-             path reporting an empty directory rather than the manifest reporting \
-             no asset, and those are the same word from two different lines"
+            fixture.freshness(),
+            kw_sidecar::Freshness::Stale {
+                installed: digest(OTHER),
+                expected: digest(PINNED),
+            }
         );
     }
 
-    /// An executable with no record beside it is `Unknown`, never `Current`.
-    ///
-    /// Exactly what is on this machine: a `sidecars/whisper` full of files from
-    /// 2026-08-25 and nothing saying what they are.
-    ///
-    /// **This used to return before asserting anything** wherever whisper is
-    /// unpublished. See [`published_asset_or_skip`], which now makes that road
-    /// audible and gives it something to check.
-    ///
-    /// **Mutation:** point `SearchPath.downloaded` at `root.join("nope")`. The
-    /// executable is no longer found, the answer falls to `NotInstalled`, and
-    /// this goes red. Reading the record one directory too high does *not* turn
-    /// this red — that is the next test's job, and the two are kept apart on
-    /// purpose.
     #[test]
-    fn an_executable_with_no_record_beside_it_is_unknown_rather_than_current() {
-        let dir = tempfile::tempdir().unwrap();
-        let catalog = kw_sidecar::Catalog::shipped().unwrap();
-        let Some((_, asset)) = published_asset_or_skip(&catalog, dir.path()) else {
-            return;
-        };
-        let install = dir.path().join(SIDECAR);
-        std::fs::create_dir_all(&install).unwrap();
-        std::fs::write(install.join(asset.executable_name()), b"MZ").unwrap();
-
+    fn sidecar_freshness_reports_a_fake_install_without_a_record_as_unknown() {
+        let fixture = FreshnessFixture::new();
+        fixture.install_executable();
         assert_eq!(
-            sidecar_freshness(&catalog, SIDECAR, dir.path()),
+            fixture.freshness(),
             kw_sidecar::Freshness::Unknown(kw_sidecar::Unrecorded::NoRecord)
         );
     }
 
-    /// The record is looked for in the sidecar's own directory.
-    ///
-    /// The path, not the decision -- `kw_sidecar::freshness` is tested in the
-    /// crate. What this asserts is that the record is looked for *in the
-    /// sidecar's own directory*: reading one directory too high would report
-    /// every install as unrecorded for ever, and would look exactly like the
-    /// state this whole change exists to end.
-    ///
-    /// **This used to return before asserting anything** wherever whisper is
-    /// unpublished. See [`published_asset_or_skip`].
-    ///
-    /// **Mutation:** `root.join(sidecar)` becomes `root.to_path_buf()` in
-    /// `sidecar_freshness`, so the record is read one directory too high. The
-    /// answer falls to `Unknown(NoRecord)` and this goes red.
     #[test]
-    fn a_record_beside_the_executable_is_found_and_read() {
-        let dir = tempfile::tempdir().unwrap();
-        let catalog = kw_sidecar::Catalog::shipped().unwrap();
-        let Some((spec, asset)) = published_asset_or_skip(&catalog, dir.path()) else {
-            return;
-        };
-        let install = dir.path().join(SIDECAR);
-        std::fs::create_dir_all(&install).unwrap();
-        std::fs::write(install.join(asset.executable_name()), b"MZ").unwrap();
-        kw_sidecar::record::write(&install, &kw_sidecar::InstallRecord::of(spec, asset)).unwrap();
+    fn sidecar_freshness_reports_a_fake_unreadable_record_as_unknown() {
+        let fixture = FreshnessFixture::new();
+        fixture.install_executable();
+        std::fs::write(
+            fixture.install_dir().join(kw_sidecar::record::RECORD_FILE),
+            b"not json",
+        )
+        .unwrap();
+
+        match fixture.freshness() {
+            kw_sidecar::Freshness::Unknown(kw_sidecar::Unrecorded::Unreadable { detail }) => {
+                assert!(
+                    !detail.is_empty(),
+                    "the parse failure must remain actionable"
+                );
+            }
+            other => panic!("expected an unreadable record, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn sidecar_freshness_reports_a_fake_newer_record_schema_as_unknown() {
+        let fixture = FreshnessFixture::new();
+        fixture.install_executable();
+        let mut record = fixture.record();
+        record.schema = kw_sidecar::record::SCHEMA + 1;
+        fixture.write_record(&record);
 
         assert_eq!(
-            sidecar_freshness(&catalog, SIDECAR, dir.path()),
-            kw_sidecar::Freshness::Current
+            fixture.freshness(),
+            kw_sidecar::Freshness::Unknown(kw_sidecar::Unrecorded::UnsupportedSchema {
+                found: kw_sidecar::record::SCHEMA + 1,
+            })
+        );
+    }
+
+    #[test]
+    fn sidecar_freshness_reports_a_fake_wrong_sidecar_record_as_unknown() {
+        let fixture = FreshnessFixture::new();
+        fixture.install_executable();
+        let mut record = fixture.record();
+        record.sidecar = "some-other-sidecar".to_owned();
+        fixture.write_record(&record);
+
+        assert_eq!(
+            fixture.freshness(),
+            kw_sidecar::Freshness::Unknown(kw_sidecar::Unrecorded::DifferentSidecar {
+                recorded: "some-other-sidecar".to_owned(),
+            })
         );
     }
 

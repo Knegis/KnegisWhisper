@@ -744,6 +744,9 @@ export function meetingOutcomeLabel(outcome: MeetingOutcome): string {
           `${outcome.gaps} stretch(es) of audio were never transcribed — the transcriber could not keep up.`,
         );
       }
+      if (outcome.reconnects > 0) {
+        parts.push(reconnectLabel(outcome.reconnects));
+      }
       parts.push(`The recording is at ${outcome.recordingPath}.`);
       return parts.join(" ");
     }
@@ -760,12 +763,21 @@ export function meetingOutcomeLabel(outcome: MeetingOutcome): string {
       // `send_audio` and `finish` turn that into an `Err`, so a rejected
       // session-config frame ends the meeting as `failed` carrying what the
       // provider said.
-      return `Nothing was transcribed. ${deliveryLabel(outcome.mic, outcome.system)} The recording is at ${outcome.recordingPath}.`;
+      return [
+        `Nothing was transcribed. ${deliveryLabel(outcome.mic, outcome.system)}`,
+        ...(outcome.reconnects > 0 ? [reconnectLabel(outcome.reconnects)] : []),
+        `The recording is at ${outcome.recordingPath}.`,
+      ].join(" ");
     case "cancelled":
       return "Discarded. The recording was deleted.";
     case "failed":
       return outcome.message;
   }
+}
+
+function reconnectLabel(reconnects: number): string {
+  const times = reconnects === 1 ? "time" : "times";
+  return `The live transcription reconnected ${reconnects} ${times}.`;
 }
 
 /**

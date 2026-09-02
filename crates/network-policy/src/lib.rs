@@ -141,9 +141,9 @@ pub enum PolicyError {
     MissingHost,
 
     #[error(
-        "scheme {scheme:?} is not permitted; only https is, or http to a private address          for an explicitly configured self-hosted endpoint"
+        "scheme {scheme:?} is not permitted for host {host:?}; only https is, or http to a private address for an explicitly configured self-hosted endpoint"
     )]
-    SchemeNotPermitted { scheme: String },
+    SchemeNotPermitted { scheme: String, host: String },
 
     #[error("host {host:?} is a blocked vendor service and must never be contacted")]
     BlockedVendorHost { host: String },
@@ -519,6 +519,7 @@ pub fn validate(url: &str, purpose: RequestPurpose) -> Result<Url, PolicyError> 
         }
         scheme => Err(PolicyError::SchemeNotPermitted {
             scheme: scheme.to_owned(),
+            host: host.to_owned(),
         }),
     }
 }
@@ -569,6 +570,7 @@ pub fn validate_websocket(url: &str, purpose: RequestPurpose) -> Result<Url, Pol
         }
         scheme => Err(PolicyError::SchemeNotPermitted {
             scheme: scheme.to_owned(),
+            host: host.to_owned(),
         }),
     }
 }
@@ -2045,7 +2047,10 @@ mod tests {
         // cannot use.
         let err = validate("wss://api.openai.com/v1/realtime", AI).unwrap_err();
         match err {
-            PolicyError::SchemeNotPermitted { scheme } => assert_eq!(scheme, "wss"),
+            PolicyError::SchemeNotPermitted { scheme, host } => {
+                assert_eq!(scheme, "wss");
+                assert_eq!(host, "api.openai.com");
+            }
             other => panic!("{other:?}"),
         }
     }

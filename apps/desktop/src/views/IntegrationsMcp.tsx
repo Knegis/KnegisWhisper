@@ -23,6 +23,7 @@
 
 import { useCallback } from "react";
 
+import { DiscoveryFileRows } from "../components/DiscoveryFileRows";
 import { Row } from "../components/Row";
 import { getMcpStatus } from "../lib/ipc";
 import { binaryLocationLabel } from "../lib/labels";
@@ -63,6 +64,10 @@ export function IntegrationsMcp() {
         </p>
 
         <Row label="Binary" value={location.text} detail={location.detail} />
+        <DiscoveryFileRows
+          discoveryPath={status.discoveryPath}
+          permissions={status.discoveryPermissions}
+        />
         <Row
           label="Local API"
           value={status.localApiRunning ? "Running" : "Not running"}

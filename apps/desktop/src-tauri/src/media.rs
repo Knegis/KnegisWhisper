@@ -97,7 +97,7 @@ use kw_storage::Db;
 use kw_transcription_core::local::WhisperServer;
 use kw_transcription_core::{Executor, Transport};
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter as _, State};
+use tauri::{AppHandle, Emitter as _, Runtime, State};
 use ts_rs::TS;
 
 /// The event import and sidecar-install progress is reported on.
@@ -728,9 +728,9 @@ impl MediaImportRuntime {
 
     /// Download, verify and unpack a media-import sidecar, reporting progress
     /// on [`PROGRESS_EVENT`].
-    pub async fn install_sidecar(
+    pub async fn install_sidecar<R: Runtime>(
         &self,
-        app: &AppHandle,
+        app: &AppHandle<R>,
         sidecar: MediaSidecar,
     ) -> Result<(), MediaImportError> {
         let name = sidecar.catalog_name();
@@ -900,9 +900,9 @@ impl MediaImportRuntime {
     /// provider never leaves a converted file on disk longer than it has to,
     /// and a failure here or later leaves nothing behind to be mistaken for a
     /// finished import.
-    async fn convert_and_transcribe(
+    async fn convert_and_transcribe<R: Runtime>(
         &self,
-        app: &AppHandle,
+        app: &AppHandle<R>,
         ffmpeg: &Path,
         input: &Path,
         scratch: &Path,
@@ -949,9 +949,9 @@ impl MediaImportRuntime {
     /// here re-derives that: this function is reachable only through
     /// [`media_import_audio`] and [`media_import_video`], both of which
     /// authorise first.
-    pub async fn import_local_file(
+    pub async fn import_local_file<R: Runtime>(
         &self,
-        app: &AppHandle,
+        app: &AppHandle<R>,
         path: &Path,
         source: MediaImportSource,
     ) -> Result<MediaImportResult, MediaImportError> {
@@ -981,9 +981,9 @@ impl MediaImportRuntime {
     /// doc for exactly what protection applies to the fetch and what does
     /// not.
     #[allow(dead_code)] // dormant: see URL IMPORT, DORMANT in the module doc.
-    pub async fn import_url(
+    pub async fn import_url<R: Runtime>(
         &self,
-        app: &AppHandle,
+        app: &AppHandle<R>,
         url: &str,
     ) -> Result<MediaImportResult, MediaImportError> {
         let validated = validate_import_url(url)?;
@@ -1012,9 +1012,9 @@ impl MediaImportRuntime {
     }
 
     #[allow(dead_code)] // dormant: see URL IMPORT, DORMANT in the module doc.
-    async fn fetch_and_transcribe(
+    async fn fetch_and_transcribe<R: Runtime>(
         &self,
-        app: &AppHandle,
+        app: &AppHandle<R>,
         ytdlp: &Path,
         ffmpeg: &Path,
         url: &str,
@@ -1044,7 +1044,7 @@ impl MediaImportRuntime {
     }
 }
 
-fn emit_progress(app: &AppHandle, progress: MediaImportProgress) {
+fn emit_progress<R: Runtime>(app: &AppHandle<R>, progress: MediaImportProgress) {
     if let Err(err) = app.emit(PROGRESS_EVENT, progress) {
         tracing::debug!(error = %err, "could not report media import progress");
     }
@@ -1065,8 +1065,8 @@ pub async fn media_import_status(
 
 /// Install one media-import sidecar. Explicit: nothing downloads on its own.
 #[tauri::command]
-pub async fn media_import_install_sidecar(
-    app: AppHandle,
+pub async fn media_import_install_sidecar<R: Runtime>(
+    app: AppHandle<R>,
     runtime: State<'_, Arc<MediaImportRuntime>>,
     sidecar: MediaSidecar,
 ) -> Result<(), String> {
@@ -1086,8 +1086,8 @@ pub async fn media_import_install_sidecar(
 /// contents leave the machine. See [`crate::commands::DialogGrants`] and
 /// `docs/SECURITY.md`'s Webview section.
 #[tauri::command]
-pub async fn media_import_audio(
-    app: AppHandle,
+pub async fn media_import_audio<R: Runtime>(
+    app: AppHandle<R>,
     runtime: State<'_, Arc<MediaImportRuntime>>,
     grants: State<'_, crate::commands::DialogGrants>,
     path: String,
@@ -1103,8 +1103,8 @@ pub async fn media_import_audio(
 /// ffmpeg strips any video track either way, and the same dialog grant is
 /// required.
 #[tauri::command]
-pub async fn media_import_video(
-    app: AppHandle,
+pub async fn media_import_video<R: Runtime>(
+    app: AppHandle<R>,
     runtime: State<'_, Arc<MediaImportRuntime>>,
     grants: State<'_, crate::commands::DialogGrants>,
     path: String,
@@ -1358,11 +1358,9 @@ mod tests {
 
     /* ------------------------------------------------------ local file guard */
     //
-    // `import_local_file` itself takes a `&AppHandle`, which nothing outside a
-    // running application can construct -- so it is untestable directly, on
-    // purpose. `check_importable_file` and `DialogGrants::authorise` are the
-    // pure extractions of its two decisions that do not need one, following
-    // the same pattern `meeting.rs`, `updater.rs` and `calendar.rs` use.
+    // `check_importable_file` and `DialogGrants::authorise` are the pure
+    // extractions of the two decisions around an import. The IPC test below
+    // additionally runs the exported commands through a mock Tauri webview.
     //
     // The two are deliberately separate questions. `authorise` answers "may
     // this path be read at all", and is the guard a compromised renderer meets;
@@ -1370,6 +1368,27 @@ mod tests {
     // ever sees a path that already passed the first.
 
     use crate::commands::DialogGrants;
+
+    #[cfg(feature = "tauri-test")]
+    fn invoke_import(
+        webview: &tauri::WebviewWindow<tauri::test::MockRuntime>,
+        command: &str,
+        body: serde_json::Value,
+    ) -> Result<serde_json::Value, serde_json::Value> {
+        tauri::test::get_ipc_response(
+            webview,
+            tauri::webview::InvokeRequest {
+                cmd: command.to_owned(),
+                callback: tauri::ipc::CallbackFn(0),
+                error: tauri::ipc::CallbackFn(1),
+                url: "http://tauri.localhost".parse().unwrap(),
+                body: tauri::ipc::InvokeBody::Json(body),
+                headers: Default::default(),
+                invoke_key: tauri::test::INVOKE_KEY.to_owned(),
+            },
+        )
+        .map(|response| response.deserialize::<serde_json::Value>().unwrap())
+    }
 
     /// A file that exists, so `canonicalize` has something to resolve.
     fn touch(dir: &std::path::Path, name: &str) -> PathBuf {
@@ -1439,6 +1458,66 @@ mod tests {
         let first = grants.authorise(file.to_str().unwrap()).unwrap();
         let second = grants.authorise(file.to_str().unwrap()).unwrap();
         assert_eq!(first, second);
+    }
+
+    #[cfg(feature = "tauri-test")]
+    #[tokio::test]
+    async fn every_import_command_enforces_the_dialog_grant_at_the_ipc_boundary() {
+        let dir = tempfile::tempdir().unwrap();
+        let never_picked = touch(dir.path(), "credentials");
+        let retry = touch(dir.path(), "retry.mp3");
+
+        let grants = DialogGrants::default();
+        grants.grant(&retry).unwrap();
+        let (runtime, _sidecar_root) = runtime().await;
+
+        let app = tauri::test::mock_builder()
+            .manage(crate::state::AppState::in_memory().await.unwrap())
+            .manage(std::sync::Arc::new(runtime))
+            .manage(grants)
+            .invoke_handler(tauri::generate_handler![
+                media_import_audio,
+                media_import_video,
+                crate::commands::import_openwhispr,
+            ])
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .unwrap();
+
+        let path = never_picked.display().to_string();
+        for (command, body) in [
+            ("media_import_audio", serde_json::json!({ "path": path })),
+            ("media_import_video", serde_json::json!({ "path": path })),
+            (
+                "import_openwhispr",
+                serde_json::json!({ "request": { "path": path } }),
+            ),
+        ] {
+            let error = invoke_import(&webview, command, body).unwrap_err();
+            let message = error.as_str().unwrap();
+            assert!(
+                message.contains("not chosen through the import dialog"),
+                "{command} did not enforce DialogGrants: {message}"
+            );
+        }
+
+        // A failed conversion leaves NotesUpload's chosen path in renderer
+        // state. The command must therefore accept the same dialog grant on a
+        // retry; the empty sidecar root makes both attempts fail safely after
+        // authorisation, without reading or uploading anything useful.
+        let retry_body = serde_json::json!({ "path": retry.display().to_string() });
+        let first = invoke_import(&webview, "media_import_audio", retry_body.clone()).unwrap_err();
+        let second = invoke_import(&webview, "media_import_audio", retry_body).unwrap_err();
+        assert_eq!(first, second);
+        assert!(
+            !first
+                .as_str()
+                .unwrap()
+                .contains("not chosen through the import dialog"),
+            "the grant was consumed by the first attempt: {first}"
+        );
     }
 
     #[test]

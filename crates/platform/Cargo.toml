@@ -32,6 +32,9 @@ kw-overlay.workspace = true
 workspace = true
 features = [
     "Win32_Foundation",
+    # MonitorFromWindow and GetMonitorInfoW. rcWork is the usable desktop area
+    # after taskbars and docked app bars, unlike the full monitor rectangle.
+    "Win32_Graphics_Gdi",
     "Win32_System_Threading",
     "Win32_System_Registry",
     "Win32_UI_Input_KeyboardAndMouse",

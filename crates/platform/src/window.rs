@@ -35,6 +35,62 @@ impl NativeWindow {
     }
 }
 
+/// The usable physical-pixel rectangle of a monitor.
+///
+/// On Windows this is `MONITORINFO.rcWork`, not `rcMonitor`: taskbars and other
+/// docked app bars are excluded. Physical pixels keep negative monitor origins
+/// and mixed-DPI desktop coordinates intact until the caller places its window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WorkArea {
+    pub left: i32,
+    pub top: i32,
+    pub right: i32,
+    pub bottom: i32,
+}
+
+impl WorkArea {
+    /// Build a non-empty work area from OS rectangle edges.
+    pub fn from_edges(left: i32, top: i32, right: i32, bottom: i32) -> Result<Self, PlatformError> {
+        if right <= left || bottom <= top {
+            return Err(PlatformError::Window(format!(
+                "the monitor work area is empty or inverted: ({left}, {top})-({right}, {bottom})"
+            )));
+        }
+        Ok(Self {
+            left,
+            top,
+            right,
+            bottom,
+        })
+    }
+}
+
+/// Read the usable monitor rectangle nearest `window`.
+///
+/// Windows supplies this as `MONITORINFO.rcWork`. Other platforms return
+/// `Unsupported`; the desktop shell retains its Tauri monitor-bounds fallback
+/// there instead of pretending those bounds account for a panel or dock.
+pub fn work_area(window: NativeWindow) -> Result<WorkArea, PlatformError> {
+    if !window.is_valid() {
+        return Err(PlatformError::Window(
+            "the window has no native handle yet".to_owned(),
+        ));
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        windows_impl::work_area(window)
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = window;
+        Err(PlatformError::Unsupported(
+            "monitor work-area lookup is implemented for Windows only so far".to_owned(),
+        ))
+    }
+}
+
 /// Ask the platform to exclude `window` from screen capture, then ask it
 /// whether that worked.
 ///
@@ -146,9 +202,12 @@ impl crate::insertion::PasteKeystroke for WindowsPaste {
 
 #[cfg(target_os = "windows")]
 mod windows_impl {
-    use super::{CaptureExclusion, Evidence, NativeWindow, PlatformError};
+    use super::{CaptureExclusion, Evidence, NativeWindow, PlatformError, WorkArea};
 
     use windows::Win32::Foundation::HWND;
+    use windows::Win32::Graphics::Gdi::{
+        GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+    };
     use windows::Win32::UI::Input::KeyboardAndMouse::{
         SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP,
         VK_CONTROL, VK_V,
@@ -160,6 +219,36 @@ mod windows_impl {
 
     fn hwnd(window: NativeWindow) -> HWND {
         HWND(window.0 as *mut core::ffi::c_void)
+    }
+
+    pub(super) fn work_area(window: NativeWindow) -> Result<WorkArea, PlatformError> {
+        let monitor = unsafe { MonitorFromWindow(hwnd(window), MONITOR_DEFAULTTONEAREST) };
+        if monitor.is_invalid() {
+            return Err(PlatformError::Window(
+                "MonitorFromWindow(MONITOR_DEFAULTTONEAREST) returned no monitor".to_owned(),
+            ));
+        }
+
+        let mut info = MONITORINFO {
+            cbSize: u32::try_from(core::mem::size_of::<MONITORINFO>()).map_err(|_| {
+                PlatformError::Window("MONITORINFO size does not fit in u32".to_owned())
+            })?,
+            ..Default::default()
+        };
+        let read = unsafe { GetMonitorInfoW(monitor, &mut info) };
+        if !read.as_bool() {
+            return Err(PlatformError::Window(format!(
+                "GetMonitorInfoW failed: {}",
+                windows::core::Error::from_win32()
+            )));
+        }
+
+        WorkArea::from_edges(
+            info.rcWork.left,
+            info.rcWork.top,
+            info.rcWork.right,
+            info.rcWork.bottom,
+        )
     }
 
     pub(super) fn exclude_from_capture(window: NativeWindow) -> CaptureExclusion {
@@ -299,6 +388,36 @@ mod tests {
     #[test]
     fn an_invalid_handle_cannot_be_made_non_activating() {
         assert!(set_non_activating(NativeWindow(0)).is_err());
+    }
+
+    #[test]
+    fn an_invalid_handle_has_no_work_area() {
+        assert!(work_area(NativeWindow(0)).is_err());
+    }
+
+    #[test]
+    fn work_areas_preserve_negative_monitor_origins() {
+        let area = WorkArea::from_edges(-1_920, -40, 0, 1_040).unwrap();
+        assert_eq!(area.left, -1_920);
+        assert_eq!(area.top, -40);
+        assert_eq!(area.right, 0);
+        assert_eq!(area.bottom, 1_040);
+    }
+
+    #[test]
+    fn empty_or_inverted_work_areas_are_refused() {
+        assert!(WorkArea::from_edges(0, 0, 0, 100).is_err());
+        assert!(WorkArea::from_edges(0, 100, 100, 100).is_err());
+        assert!(WorkArea::from_edges(100, 0, 0, 100).is_err());
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn the_windows_desktop_returns_a_real_work_area() {
+        let desktop = unsafe { windows::Win32::UI::WindowsAndMessaging::GetDesktopWindow() };
+        let area = work_area(NativeWindow(desktop.0 as isize)).unwrap();
+        assert!(area.right > area.left);
+        assert!(area.bottom > area.top);
     }
 
     #[test]
