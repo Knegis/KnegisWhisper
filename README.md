@@ -73,17 +73,33 @@ when you configure them with your own credentials, and requests go straight to t
 Requires Rust 1.90+, Node 22+, and a platform C toolchain.
 
 ```sh
-# Repository contracts — the same checks CI gates on
-node tools/integration-audit/verify-parity.mjs   # integration parity
-node tools/settings-audit/scan.mjs               # settings keys a user can reach
-node tools/domain-scanner/scan.mjs               # forbidden vendor domains
-node --test tools/domain-scanner/scan.test.mjs   # scanner self-tests
-node --test tools/settings-audit/scan.test.mjs   # settings gate self-tests
+# Repository contracts — every check CI's Contracts job gates on, in its order.
+# This list is what actually runs: ci.yml has had its push and pull_request
+# triggers commented out by Actions budget, so nothing checks a pushed commit.
+node tools/integration-audit/verify-parity.mjs               # integration parity
+node tools/settings-audit/scan.mjs                           # settings keys a user can reach
+node tools/integration-audit/verify-binaries.mjs             # binary name collisions
+node tools/domain-scanner/scan.mjs                           # forbidden vendor domains
+node tools/integration-audit/generate-provider-registry.mjs --check
+node tools/integration-audit/generate-ts-types.mjs --check
+node tools/feature-audit/scan.mjs                            # cargo features nothing enables
+node --test tools/domain-scanner/scan.test.mjs               # scanner self-tests
+node --test tools/integration-audit/verify-parity.test.mjs   # parity gate self-tests
+node --test tools/settings-audit/scan.test.mjs               # settings gate self-tests
+node --test tools/model-pin/pin.test.mjs                     # model pin self-tests
+node --test tools/feature-audit/scan.test.mjs                # feature audit self-tests
+# The one step not repeated here is Baseline integrity, an inline node -e in
+# ci.yml: it asserts the manifest and the baseline file name the same commit.
 
 # Rust
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
+
+# The mock-webview IPC boundary test, which is behind a feature and so runs in
+# neither invocation above. Last on purpose: it resolves tauri with a different
+# feature set, so it rebuilds tauri and everything downstream.
+cargo test -p knegiswhisper --lib --features tauri-test
 
 # Frontend
 cd apps/desktop && npm ci && npx tsc --noEmit && npx vite build

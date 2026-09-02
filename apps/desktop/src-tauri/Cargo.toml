@@ -11,6 +11,28 @@ repository.workspace = true
 [features]
 # Enables Tauri's mock runtime and the Windows manifest needed by its test
 # executable. Never enabled by the application build.
+#
+# A feature, and deliberately not a dev-dependency. That was tried and
+# measured, because it looks strictly better -- `cargo test` and
+# `cargo clippy --all-targets` would pick the tests up with no flag to
+# forget. It does not work. build.rs has to know whether it is building the
+# test executable, since the Common Controls v6 manifest that executable
+# needs must not reach the shipped binary, and the only link-arg key that
+# expresses per-target scope is refused here:
+#
+#   error: invalid instruction `cargo:rustc-link-arg-tests`
+#   The package knegiswhisper does not have a test target.
+#
+# It applies to `tests/` targets and this test is a `--lib` unit test.
+# Moving it to `tests/` would mean making `commands`, `state` and `media`
+# public modules -- every module in lib.rs is private by design -- plus
+# widening `MAX_DIALOG_GRANTS` and `DialogGrants::grant`, and rebuilding a
+# `runtime()` helper that only exists under cfg(test). Opening the crate up
+# to place one test is a worse trade than keeping the flag.
+#
+# The cost of a feature is that an invocation can forget it, and for a while
+# every invocation did (KNEG-147). `tools/feature-audit/scan.mjs` is the
+# answer to that: it fails when a declared feature is named by no CI step.
 tauri-test = ["tauri/test"]
 
 [lib]

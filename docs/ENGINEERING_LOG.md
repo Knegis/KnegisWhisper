@@ -291,6 +291,152 @@ Unchanged from the Phases 1–4 entry, restated here so they are not buried:
 
 ---
 
+## 2026-09-02 (KNEG-147, KNEG-150) — the better fix was refused by cargo, and running the
+gate list found a gate that was already red
+
+`2a5af33` added `every_import_command_enforces_the_dialog_grant_at_the_ipc_boundary`, which drives
+real IPC requests through Tauri's mock webview and asserts all three import commands refuse an
+ungranted path. It is good coverage of a boundary that had been untestable, and the note closing
+the issue it was written for said the gap was now "permanently covered".
+
+**It had never run once.** The body was `#[cfg(feature = "tauri-test")]`, and that feature was
+declared in one line of one `Cargo.toml` and named by nothing else in the repository — no workflow,
+no script, no document. Measured: with the feature on, the lib block is **340 passing**; with it
+off, **339**, and `grep -c every_import_command_enforces` over a whole workspace run returns **0**.
+
+Two consequences, and the second is worse. The assertions did not run. And because the module was
+not compiled at all, `cargo clippy --workspace --all-targets` never saw it either, so the test
+could have stopped compiling without anything failing. That is how feature-gated coverage usually
+dies — not with a red run, but by being dropped from the build graph.
+
+### The fix that should have been right, and the exact reason it is not
+
+The obvious move is to delete the feature and make Tauri's mock runtime a **dev-dependency**:
+
+```toml
+[dev-dependencies]
+tauri = { workspace = true, features = ["test"] }
+```
+
+That looks strictly better on every axis. `cargo test --workspace` and `cargo clippy --all-targets`
+both compile and run the test with **no flag to forget**, which closes the worse of the two
+consequences by construction rather than by discipline. It needs no CI edit at all. And it makes
+the `Cargo.toml` comment's intent — *"Never enabled by the application build"* — a property instead
+of a convention, because a dev-dependency cannot be switched on in a release build whereas a
+feature can. The workspace is `resolver = "2"`, the version that keeps dev-dependency features out
+of non-test builds, so that isolation is real and not hoped for.
+
+It was implemented, and cargo refused it:
+
+```
+error: invalid instruction `cargo:rustc-link-arg-tests` from build script of `knegiswhisper`
+The package knegiswhisper does not have a test target.
+```
+
+The reason the feature exists at all is that `build.rs` must know whether it is building the test
+executable. Tauri's mock runtime links dialog support that imports `TaskDialogIndirect`, so the
+test binary needs a Common Controls v6 manifest — and that manifest must **not** reach the shipped
+application. The un-suffixed `cargo:rustc-link-arg` applies to every target in the package, which
+is why the committed version had to strip Tauri's own manifest with `new_without_app_manifest()`;
+harmless while the feature was never on for an app build, and unacceptable the moment it is always
+on. `cargo:rustc-link-arg-tests` is the only key that expresses the needed scope, and as the error
+says, it means a `tests/` target. This is a `--lib` unit test.
+
+**So the remaining route was to move the test to `tests/`, and that is worse than the problem.**
+Every one of the 27 modules in `lib.rs` is private — `mod`, not `pub mod`. An integration test
+would need `commands`, `state` and `media` made public, plus `MAX_DIALOG_GRANTS` and
+`DialogGrants::grant` widened from `pub(crate)`, plus a reconstruction of the `runtime()` helper
+that only exists under `cfg(test)`. Opening up a deliberately closed crate to relocate one test
+buys nothing the flag does not, and costs the encapsulation permanently.
+
+**Decision: the feature stays, and the reason is now written in `Cargo.toml` beside it** — because
+the next person to look at this will try the dev-dependency, and the argument against it is a
+cargo error message they will not guess.
+
+### Paying the cost the feature has
+
+A feature's cost is that an invocation can forget it, and for a while every invocation did. So the
+flag went into both places that run — `ci.yml`'s rust job and the by-hand list in `README.md` — and
+then `tools/feature-audit/scan.mjs` was added so that forgetting fails loudly: every feature
+declared in a `[features]` table must be named by some CI invocation, or be exempt in
+`config/cargo-features.json` with a reason.
+
+This is `tools/settings-audit/scan.mjs` one layer down, and the parallel is exact. There, a setting
+the backend honoured that no shipped screen could change (KNEG-104). Here, a test the repository
+declared that no invocation could run. In both cases the artefact existed, had a green suite around
+it, and was unreachable — and in both cases the suite was no help, because a suite reports on what
+it ran.
+
+**It was checked against the defect it was written for, not only against a clean tree.** With
+the `--features tauri-test` dropped from the step but the step left in place — the shape a
+careless edit would produce — `node tools/feature-audit/scan.mjs` exits 1 naming
+`knegiswhisper/tauri-test` and the remedy. `ci.yml` was restored byte-identically afterwards,
+verified by SHA-256, and the gate is green again. So this gate would have caught KNEG-147 on the
+day it was introduced, which is a different and stronger claim than "the gate passes".
+
+**The gate's own self-test found a hole in the gate**, which is the reason these self-tests exist.
+The first draft dropped a line only when its first non-space character was `#`. The test mutated
+the real workflow by commenting out the command — producing `run: # cargo test … --features
+tauri-test` — and the gate still counted it, because the line still began with `run:`. A gate
+against dead checks that accepts a commented-out check is the same defect one level up. Fixed with
+a quote-aware `stripComment`, and the direction of its remaining approximation is deliberate: an
+unbalanced quote over-strips and fails rule A loudly, where under-stripping would pass silently.
+
+### Running the gate list found a red gate nobody had run (KNEG-150)
+
+This was not read out of the code; it fell out of running the checks before committing.
+`cargo clippy --workspace --all-targets -- -D warnings` **exits 101 on `dev`**:
+
+```
+error: used `expect()` on a `Result` value
+  --> apps\desktop\src-tauri\build.rs:12:9
+   = note: requested on the command line with `-D clippy::expect-used`
+```
+
+`Cargo.toml:171-173` denies `unwrap_used`, `expect_used` and `panic` across the workspace, and
+says why: this application runs unattended and a panic is a crash the user cannot diagnose. A
+build script is inside that policy and nothing exempted it. `git log` on that file has two
+entries and the newest is `2a5af33` — **the same commit that introduced KNEG-147.** One commit
+added a test that never ran and turned a gate red, and neither was noticed.
+
+It hid because the `.expect` is inside `#[cfg(windows)]`: on macOS and Linux the block is
+compiled out and clippy is clean, so only `windows-latest` would have gone red, one job of
+three. And CI has not run since well before it.
+
+Fixed by making `main` return `Result<(), Box<dyn std::error::Error>>` and using `?`. **No**
+`allow` **was added**, deliberately: a build script does not need an exemption from the panic
+policy, because cargo prints an `Err` from `main` and fails the build exactly as it would a
+panic. Silencing the lint would have been the easier edit and the wrong one — the policy is
+right, and the call really was fallible.
+
+**Worth stating plainly: this pass found the red gate only because it ran the gate.** A green
+claim in a document, a closed issue, and a passing local run of a *different* command are three
+things that all look like evidence and are not. That is KNEG-147 one level up.
+
+### What did not close with this
+
+- **`cargo clippy --all-targets` still does not lint the boundary test**, since clippy runs without
+  the feature. The compile check is now covered by the new test step; the lints are not. Cheap to
+  add and it doubles a clippy pass, so it was left. Note that test modules here carry blanket
+  `#[allow]`s anyway, which is most of what clippy would have said. Measured while fixing
+  KNEG-150: `cargo clippy -p knegiswhisper --lib --features tauri-test -- -D warnings` is
+  green at this commit, so the gap is "not enforced", not "unknown".
+- **The test builds its own handler list.** `media.rs:1478-1482` calls `generate_handler!` with the
+  three import commands rather than sharing `lib.rs:388`'s registration, so it proves *those three
+  functions* enforce the grant — not that the application's import surface does. A fourth import
+  command added without a grant check would not be noticed, and dropping one of the three from the
+  app leaves this test green. Filed as KNEG-151.
+- **CI still does not run.** `push` and `pull_request` have been commented out by Actions budget
+  since before any of this, so what landed is a correct entry in the declared gate list and a
+  correct entry in the by-hand list. Which of those two is doing the work today is the by-hand one.
+
+Measured on the merged tree: `cargo test --workspace` — **1704 passing, 0 failed, 12 ignored**
+across 55 blocks, unchanged, plus **340 passing** in the feature-on invocation; `node
+tools/feature-audit/scan.mjs` — 1 feature declared, 1 enabling invocation, 0 exempt; its self-tests
+13 passing.
+
+---
+
 ## 2026-09-01 (KNEG-131) — three tests had been green on macOS for weeks by checking nothing
 
 KNEG-117 found the shape and hardened two instances of it: **an assertion that something is absent,
