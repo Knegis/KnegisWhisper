@@ -624,6 +624,8 @@ let meetingStatus: MeetingStatus = {
       signal: "call-process",
     },
   ],
+  // The harness's offer() control emits an event but does not set this field.
+  offer: null,
   promptOnDetect: true,
   notificationExcluded: {
     state: "unsupported",
