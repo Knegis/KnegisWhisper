@@ -292,6 +292,83 @@ Unchanged from the Phases 1–4 entry, restated here so they are not buried:
 
 ---
 
+## 2026-09-03 (KNEG-159) — every gate green, and the window was blank
+
+The first time anyone opened the merged KNEG-152 tree, `npm run tauri:dev` showed a white window
+with nothing in it. Fourteen node gates, `tsc`, `vite build`, the domain scan of the built
+assets, clippy, 1734 tests and the mock-webview IPC suite had all passed the same tree an hour
+earlier. This entry is about the gap between those two facts, because the gap is structural and
+will be there for the next dependency too.
+
+### The cause, measured before anything was changed
+
+The webview and a browser differ in one thing that matters here: Tauri runs every script after
+`Object.freeze(Object.prototype)` (`tauri.conf.json` > `app.security.freezePrototype`). Once
+frozen, every property a plain object inherits — `toString`, `constructor`, `valueOf` — is
+non-writable, and a strict-mode assignment to one of them on an object that has no own property of
+that name is a `TypeError`. That was reproduced without the webview: a throwaway page served by the
+running Vite dev server with the freeze inline, loaded in headless Edge 152 with console logging,
+died at module load with *Cannot assign to read only property 'toString' of object '#<Object>'*.
+The same page with the dev CSP applied and no freeze rendered the whole shell, so the CSP — the
+thing the whole KNEG-152 design had been careful about — was not the cause. WebView2 and Edge were
+the same build, so neither was engine version.
+
+Two modules do the assignment, and they fail differently:
+
+- **`lodash-es/lodash.default.js`** builds the `_` wrapper at load by copying every method onto a
+  plain `{}`, `toString` included. Milkdown imports three lodash functions by name; Rollup drops the
+  module from the production bundle, but Vite's esbuild pre-bundle for the dev server kept it
+  beside `debounce` and `throttle`. It throws before React mounts. **This is the blank window**, and
+  it is a dev-only artifact: the packaged application never had it.
+- **`@milkdown/transformer`**'s serializer sets `this.toString = …` in its constructor, one line.
+  This one is in production too. It does not blank the application — the shell renders — but
+  Crepe's `create()` rejects and the editor never mounts. Found by a second probe that mounted
+  `NoteEditor` directly under the freeze, which is the check the first probe did not make.
+
+Every pre-bundled chunk was then read for assignments to inherited `Object.prototype` names. Those
+two are the whole list. `rope-sequence` and `prosemirror-transform` write `__proto__`, which is an
+accessor and still works when frozen; React's dev build writes `constructor` on an object that
+inherits a writable one from `Component.prototype`. Nothing else.
+
+### What landed, and why each piece
+
+- **`src/shims/lodash-es.ts`, aliased from the bare specifier in `vite.config.ts`**: the three
+  functions from their per-method modules, so the package index — and with it `lodash.default.js`
+  — is never evaluated. Applied in build too, so dev and production load the same modules. Narrow
+  on purpose: a fourth import fails loudly rather than reopening the package index.
+- **A one-line patch to `@milkdown/transformer` 7.22.1**, carried by `patch-package` on
+  `postinstall` (`apps/desktop/patches/`). `Object.defineProperty(this, "toString", …)` defines an
+  own property, which a frozen prototype permits; the assignment did not. Chosen over turning
+  `freezePrototype` off: that is a hardening this project switched on deliberately, Tauri's default
+  is off, and giving it up for one upstream line is the wrong trade. `npm ci` fails loudly when a
+  future Milkdown no longer matches the patch.
+- **`src/lib/devPrototypeFreeze.ts`, imported first in `main.tsx`**: in a plain-browser dev session
+  with no Tauri host, freeze `Object.prototype` before the rest of the graph evaluates. This is the
+  structural fix. The frontend worker ran the fixtures in a browser and saw a working editor; the
+  browser was lying by omission. Now `npm run dev` fails the way the webview fails.
+- **`tools/dev-bundle-audit/scan.mjs`**: runs Vite's own optimizer into a scratch cache — the dev
+  pre-bundle is a different artifact from the production bundle and nothing gated it — and fails
+  on the lodash module's banner or the transformer's unpatched line. Its first draft matched the
+  banner's `// node_modules/` prefix and **passed against a pre-bundle that contained the
+  offender**: esbuild writes the path relative to the output directory. That is the gate failure
+  mode this repository keeps finding — green because it measured nothing — caught here only
+  because the rule was run against the known-bad tree before being trusted, and now pinned by
+  self-tests over every path shape seen.
+- Vue's esm-bundler feature flags are defined in `vite.config.ts`, which silences a dev warning and
+  is what Vue asks of bundlers.
+
+### Verified, and the shape of the evidence
+
+Against an isolated Vite instance on the patched `node_modules`, headless Edge with the prototype
+frozen rendered the shell, and mounted `NoteEditor` with a heading, a table and list items and
+fired `markdownUpdated` — 45 `.milkdown` elements, zero console errors. `tsc`, `vite build`
+(the patched line present in the bundle, the unpatched one absent, lodash's full build absent),
+the domain scan and the new gate are green. **Not verified:** the Tauri window itself with these
+changes, because the running `tauri:dev` session predates them and must be restarted; the by-hand
+script is KNEG-158.
+
+---
+
 ## 2026-09-02 (KNEG-152) — a Markdown editor on the note, and the transcript kept out of it
 
 The Notes screen rendered a note's body as read-only text. KNEG-152 replaces that with the
@@ -375,10 +452,12 @@ to require an actual codex failure.
 
 ### Not verified, and said so
 
-Nobody has yet opened the application with this change and played a row. The CSP claim rests on the
-bundle checks above; the seek behaviour rests on Tauri's asset protocol doing the same thing for
-years. Both are believed, not observed, and the by-hand check is a sub-issue of KNEG-152. Known
-gaps filed under it: the local API's `DELETE /notes/{id}` orphans the WAV (KNEG-153), notes saved
+Nobody had opened the application with this change when this was written. It was opened the next
+morning and the window was blank — see the 2026-09-03 (KNEG-159) entry above for why every gate
+here was green anyway. The CSP claim rests on the bundle checks above and was **not** the cause;
+the seek behaviour rests on Tauri's asset protocol doing the same thing for years. Both remain
+believed, not observed, and the by-hand check is a sub-issue of KNEG-152. Known gaps filed under
+it: the local API's `DELETE /notes/{id}` orphans the WAV (KNEG-153), notes saved
 before today have a WAV and no way to attach it (KNEG-154), imports are transcribed and discarded
 (KNEG-155), and an attach that fails after the note is saved is only a log line (KNEG-157).
 

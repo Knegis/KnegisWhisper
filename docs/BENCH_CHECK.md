@@ -19,6 +19,37 @@ unchecked rather than left implied.
 
 ---
 
+## 2026-09-03 — the first opening of the note editor build, and a blank window
+
+The merged KNEG-152 tree (`111f1e0`) was opened by hand with `npm run tauri:dev`. This is what one
+opening exercised and nothing further.
+
+### Verified
+
+| Claim | Evidence |
+| --- | --- |
+| **The blank window was the dev pre-bundle, not the CSP and not production** | Reproduced in headless Edge 152 against the running dev server with `Object.freeze(Object.prototype)` inline: `TypeError: Cannot assign to read only property 'toString'` from `lodash-es/lodash.default.js` at module load. The same page with the dev CSP and no freeze rendered the shell. The production bundle has no trace of that module |
+| **Milkdown's serializer cannot construct under a frozen prototype** | A second probe mounted `NoteEditor` under the freeze: `create()` rejected with the same error from `@milkdown/transformer`'s `this.toString = …`. With the one-line `patch-package` patch applied, the same probe mounted the editor — 45 `.milkdown` elements, a heading, a table, two list items, `markdownUpdated` fired — with no console error |
+| **Those are the only two** | Every pre-bundled chunk grepped for assignments to inherited `Object.prototype` names; the `__proto__` writes in `rope-sequence` and `prosemirror-transform` go through an accessor and survive the freeze, and React's dev build shadows `constructor` through `Component.prototype` |
+
+### Findings
+
+1. **`npm run tauri:dev` opened to a white window** (KNEG-159, fixed the same morning). Root cause,
+   fix and the new gate are in `ENGINEERING_LOG.md`, 2026-09-03.
+2. **Every gate was green.** The dev pre-bundle is a different artifact from the production bundle
+   and nothing measured it; a plain browser does not freeze the prototype and so could not show
+   the failure. Both gaps now have a check: `tools/dev-bundle-audit/scan.mjs`, and
+   `src/lib/devPrototypeFreeze.ts` in every browser dev session.
+
+### Still unchecked, and needs a person at the machine
+
+Everything in KNEG-158: the Tauri window with the fix (the running session predates it and must be
+restarted), typing and autosave, a recorded meeting's rows and player, seeking, range playback,
+delete with recording, and a pre-2026-09-02 note. The probes above ran in Edge, not in WebView2,
+and mounted the editor with fixture content, not a stored note.
+
+---
+
 ## 2026-09-01 — two protocols measured, and what that is *not*
 
 A probe day rather than a bench run. Nothing was clicked; two mechanisms were measured against real

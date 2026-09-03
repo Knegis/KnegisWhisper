@@ -1,3 +1,7 @@
+// First on purpose: it must evaluate before anything that follows it. See
+// the module for why a browser dev session freezes Object.prototype.
+import "./lib/devPrototypeFreeze";
+
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
