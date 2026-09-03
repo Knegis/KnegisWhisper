@@ -292,6 +292,136 @@ Unchanged from the Phases 1–4 entry, restated here so they are not buried:
 
 ---
 
+## 2026-09-03 (KNEG-160) — a cap that made the window irrelevant, and a class that styled nothing
+
+Two requests arrived together: pin the list of screens to the left edge so the content can be
+wider, and stop thirteen screens sitting in one flat list.
+
+### The cap, not the window, was the width
+
+`.shell` was `grid-template-columns: 12rem minmax(0, 1fr)` inside `max-width: 60rem; margin: 0
+auto`. Measured: the content pane was **736px in the default 1000×720 window and 736px on a
+maximised 4K display**. Every pixel of a larger monitor went into the two margins. That is the
+whole defect, and it means "make the content wider" is one deletion — the cap — plus somewhere for
+the freed width to stop.
+
+The rail is `position: fixed` now, `.shell` reserves its width with `padding-left: var(--nav-col)`,
+and `.content` is what is capped: `--content-max`, 68rem, centred in what is left.
+
+**68rem is derived rather than picked.** The widest layout in the application is `.note-workspace`,
+`minmax(0, 1fr) 22rem` — an editor beside a transcript. 44.5rem of editor, `--row-gap`, 22rem of
+transcript is 68rem. And the honest accounting, which is in the token's comment: in the default
+window the pane goes 736px → ~728px, a wash, because the 60rem cap was already nearly the whole
+window. The gain is that it now *grows* — to 1088px, about +48% maximised on 1920px — where before
+it was frozen.
+
+Two dead measurements came out with it. `.note-workspace`'s collapse rule was `@media (max-width:
+64rem)`, testing the **viewport** while its container was 46rem — so at the 62.5rem default window
+it fired every time and **that layout has never shown two columns in the shipped application**.
+Re-derived against the real container width to 80rem. And `.shell`'s comment claimed the sidebar
+"scrolls with the page rather than being sticky" while the rule twelve lines below it was
+`position: sticky`; it was false when it was written.
+
+### Thirteen peers is a list with no shape
+
+Four top-level destinations — Dictation, Meetings, Notes, Upload — plus **Settings** (Providers,
+Transcription, Intelligence, Local models, Calendar) and **Developer** (Local API, CLI, MCP,
+Diagnostics). All thirteen destinations survive with the label they already shipped; the two group
+names are the only new user-visible strings in the change.
+
+The one filing decision worth recording is **Local models**, which was requested beside CLI and
+MCP and is in Settings instead. `config/ui-surfaces.json` calls its surface
+`settings.intelligence.local` and files it under `Settings > Intelligence`. A rail that disagreed
+with the config describing the same screen would be a second, quieter answer to where that screen
+lives, and the config is the one a gate reads. Calendar is in Settings for a plainer reason: it is
+an OAuth client-ID paste and a sync. Developer is the four surfaces whose audience is another
+program.
+
+The old flat list carried an ordering argument — "a key is useless without a shortcut to dictate
+with, and both are useless without knowing where the audio goes". That ordered the *setup* path,
+and the setup path is now the Settings group in the same relative order. The argument was moved,
+not overturned.
+
+`ViewId` is **derived from the tree** by a conditional type, and the view switch took the `never`
+guard from `labels.ts:952`. The chain of `{view === "x" ? <X /> : null}` ternaries it replaced was
+exhaustive over nothing: an entry with no matching line rendered an empty pane and no error.
+
+### The reversal, and what caused it
+
+A mechanical check — every class the TSX emits has a rule in `styles.css` — found that
+**`nav-group` was on every group header and had no rule at all.** A collapsed `Settings` was
+pixel-identical to `Dictation`: nothing said one opened a list and the other opened a screen. CSS
+has no equivalent of an unused-variable error, so nothing had objected.
+
+Fixing it broke the design. Expansion was first **derived** from the current view: no state, and a
+header selected its group's first child. Add a `+`/`−` marker to that and it promises a press that
+cannot happen — a derived-open group cannot be collapsed. Add `aria-expanded` and it says the same
+thing to a screen reader. And a header that navigates means looking inside `Developer` from
+Dictation lands you on Local API, which is the opposite of putting the options where they can be
+seen.
+
+So expansion is explicit state in `App.tsx`, a header discloses only, and `groupOf(view)` opens the
+group holding a screen however you arrived. That last part is load-bearing rather than tidy:
+Transcription and Intelligence both navigate sideways to Providers, and the error boundary resets
+to Diagnostics under `Developer` — without it, all three would leave a collapsed rail with nothing
+marked. Collapsing the group you are standing in is allowed, which is what a sidebar with sections
+does.
+
+**The smaller design was wrong in a way only visible once drawn**, and the check that exposed it
+was looking for a dangling class, not for a design error. Worth remembering which one found it.
+
+### What was verified, and by what
+
+`tsc --noEmit` and `vite build` clean; all 14 node gates green with 118 self-test assertions; both
+`--check` generators clean. No `config/` file and no screen component was touched — the parity and
+settings gates resolve a surface to its *component* and its `data-surface` marker, so a nav
+restructure is invisible to them by construction, which was checked by reading them rather than
+assumed.
+
+Three mutations, each red on both checks, each restored byte-identically by SHA-256: dropping the
+`mcp` case from the switch, adding a fourteenth nav leaf with no branch, and making `groupOf`
+always return `null`. The third is the instructive one — `tsc` caught it only incidentally, as an
+unused parameter, so the behavioural assertions are what actually prove that function.
+
+No Rust source changed, and the merged tree is byte-identical to the branch tip, so the Rust suite
+is unchanged from `d71fcc9` and was not re-measured. Saying so rather than quoting a number nobody
+ran this session.
+
+### What did not close with this
+
+- **Nothing here has been looked at.** `tsc` and `vite build` are the entire frontend gate and
+  neither renders a pixel, so every claim about appearance — the fixed rail, the `+`/`−` markers,
+  the indent, two columns above 80rem, the narrow fallback below 44rem — is believed from reading
+  the CSS. KNEG-161 is the by-hand list.
+- **`navigation.ts`'s invariants are gated nowhere.** They were asserted by compiling the module to
+  a scratch directory and running `node:assert` over it, which proves it today and catches nothing
+  tomorrow. That is the KNEG-147 shape one language over: a check that lives somewhere nothing runs
+  it. KNEG-162 records the runner decision it needs.
+
+### Codex was unreachable, and the commit gate is what saved the work
+
+This was invoked as a Codex orchestration and no Codex worker ran. `codex exec` returned **HTTP 404
+from `chatgpt.com/backend-api/codex/responses`** on both the WebSocket and HTTPS transports, five
+retries each — reproduced on a bare probe in an empty directory outside this repository, on the
+cheapest model, and on CLI 0.148.0 and 0.153.0 alike. The upgrade to 0.153.0 was tried on a
+diagnosis that turned out wrong: the model cache had been refreshed that afternoon stamped
+`client_version: 0.153.0` against an installed 0.148.0, which looked exactly like version skew and
+was not. The token's own claims give the real cause — `chatgpt_plan_type:
+self_serve_business_prolite`, `chatgpt_subscription_active_until: 2026-07-11` — which is
+account-side and not fixable from here.
+
+Claude wrote the patch instead, which is a deviation from that skill's division of labour and is
+recorded as one. Everything else about the run was unchanged: worktree, base, ownership, gates, and
+the commit as the approval gate.
+
+**And the gate earned itself.** Minutes after `fd22135` was committed, another run allocated the
+same `worker-1` slot, reset it to base, and wiped the working tree — the slot's HEAD now reads
+`codex/20260903-170718/worker-1-offer-status`. Had the work still been uncommitted in that tree it
+would be gone. "Claude owns the commit" reads like ceremony until a concurrent run resets the
+directory underneath you.
+
+---
+
 ## 2026-09-03 (KNEG-159) — every gate green, and the window was blank
 
 The first time anyone opened the merged KNEG-152 tree, `npm run tauri:dev` showed a white window

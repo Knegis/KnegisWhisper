@@ -161,7 +161,9 @@ that already exist. Hand-written `invoke()` wrappers stay — the defect was nev
 exist **and** render `data-surface="<surfaceId>"`.
 
 ```
-src/App.tsx                  shell, sidebar, view state, error boundary
+src/App.tsx                  shell, view state, open-group state, error boundary
+src/lib/navigation.ts        the nav tree; `ViewId` is derived from it   (added 2026-09-03)
+src/components/Sidebar.tsx   the fixed left rail, rendered from the tree (added 2026-09-03)
 src/views/Dictation.tsx      moved out of App.tsx
 src/views/SettingsTranscription.tsx        (settings.transcription, + .local)
 src/views/SettingsProviders.tsx            (settings.providers)          NEW
@@ -173,7 +175,10 @@ src/lib/useRefresh.ts         the shared refresh/guard pattern from App.tsx:312
 
 Keep the existing `refresh()` + `guard()` shape — it already re-reads after every mutation, which
 is why the hotkey row updates correctly. Lift it into a hook rather than reimplementing per view.
-`styles.css` (261 lines) gains a two-column layout; no CSS framework.
+`styles.css` (261 lines) gains a two-column layout; no CSS framework. Since 2026-09-03 (KNEG-160)
+that layout is a rail fixed to the window's left edge plus a 68rem content column centred in what
+is left, and the thirteen screens sit under four top-level entries and two groups rather than in
+one flat list — still no CSS framework and still no router.
 
 ### A3. Settings > Providers *(done)*
 
