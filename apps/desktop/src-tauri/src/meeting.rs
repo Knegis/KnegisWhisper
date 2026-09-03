@@ -306,6 +306,13 @@ pub struct MeetingStatus {
     /// open" even though Teams cannot be prompted for, because that is more
     /// useful than silence and it is where the reason lives.
     pub detected: Vec<Detected>,
+    /// The offer waiting in the notification window, if one exists.
+    ///
+    /// A broadcast event is not recoverable: a window created hidden may mount
+    /// before or after it was sent. This is the read-back path the update
+    /// notification already has through `get_last_update_check`, so either
+    /// mounting order reaches the same outstanding offer.
+    pub offer: Option<Offer>,
     /// Whether a detected meeting offers to record.
     pub prompt_on_detect: bool,
     /// Whether the notification window is confirmed absent from screen shares.
@@ -1128,9 +1135,13 @@ impl MeetingRuntime {
         let phase = self.lifecycle.lock().await.phase;
         let held = self.live.lock().await;
         let system_audio = kw_audio_core::system_audio::support();
-        let (detected, microphone) = {
+        let (detected, microphone, offer) = {
             let held = self.watch.lock().await;
-            (held.detected.clone(), held.microphone.clone())
+            (
+                held.detected.clone(),
+                held.microphone.clone(),
+                held.watcher.outstanding_offer().cloned(),
+            )
         };
         let prompt_on_detect =
             kw_storage::settings::get_or(self.db.pool(), PROMPT_KEY, PROMPT_BY_DEFAULT)
@@ -1154,6 +1165,7 @@ impl MeetingRuntime {
                 system_audio,
                 microphone,
                 detected,
+                offer,
                 prompt_on_detect,
                 notification_excluded,
             }
@@ -1172,6 +1184,7 @@ impl MeetingRuntime {
                     system_audio,
                     microphone,
                     detected,
+                    offer,
                     prompt_on_detect,
                     notification_excluded,
                 },
@@ -1184,6 +1197,7 @@ impl MeetingRuntime {
                     system_audio,
                     microphone,
                     detected,
+                    offer,
                     prompt_on_detect,
                     notification_excluded,
                 },
