@@ -10,9 +10,12 @@
     "typecheck": "tsc --noEmit",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build"
+    "tauri:build": "tauri build",
+    "postinstall": "patch-package"
   },
   "dependencies": {
+    "@milkdown/crepe": "^7.22.1",
+    "@milkdown/kit": "^7.22.1",
     "@tauri-apps/api": "^2.9.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
@@ -23,6 +26,7 @@
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
     "@vitejs/plugin-react": "^5.0.0",
+    "patch-package": "^8.0.1",
     "typescript": "^5.9.0",
     "vite": "^7.1.0"
   }

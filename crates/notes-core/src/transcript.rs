@@ -80,6 +80,32 @@ pub struct NoteMeta {
     pub participants: Option<String>,
 }
 
+/// One transcript segment as a playable row: normalised to seconds from the
+/// start of the recording, with its speaker resolved the way export resolves
+/// it, so the screen and the export files never disagree about who said what.
+///
+/// Rows rather than merged paragraphs: [`merge`] joins consecutive utterances
+/// for readable export, but a row that is played back has to keep the
+/// segment's own boundaries or it plays the wrong stretch of audio.
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct TranscriptRow {
+    /// Position in the stored segment list, so a selection can be stable.
+    pub index: usize,
+    /// Seconds from the start of the recording. `None` when the segment carried
+    /// no timestamp at all, in which case the row cannot be played.
+    pub start_seconds: Option<f64>,
+    /// Seconds from the start of the recording. When the segment carried no end
+    /// of its own -- a live partial does not -- this is the next segment's
+    /// start, and `None` for the last such segment, meaning "to the end".
+    pub end_seconds: Option<f64>,
+    /// The display name, resolved as [`speaker_name`] does, or `None` for an
+    /// anonymous segment -- one carrying no name, label or capture source --
+    /// which export leaves unlabelled for the same reason.
+    pub speaker: Option<String>,
+    pub text: String,
+}
+
 /// Which format to emit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "lowercase")]
@@ -375,6 +401,45 @@ fn identified_speaker(
         .filter(|name| !name.trim().is_empty())
 }
 
+/// Shape stored transcript segments into independently playable rows.
+///
+/// Unlike [`export`], this does not call [`merge`]: the index and timing must
+/// continue to describe every stored segment after ordinary note editing.
+#[must_use]
+pub fn rows(
+    segments: &[Segment],
+    note: &NoteMeta,
+    mappings: &BTreeMap<String, String>,
+    labels: &SpeakerLabels,
+) -> Vec<TranscriptRow> {
+    let normalised = normalise_timestamps(segments, note);
+    let starts: Vec<Option<f64>> = normalised
+        .iter()
+        .map(|segment| segment.timestamp.filter(|timestamp| timestamp.is_finite()))
+        .collect();
+
+    normalised
+        .iter()
+        .zip(starts.iter().copied())
+        .enumerate()
+        .map(|(index, (segment, start_seconds))| {
+            let own_end = segment
+                .end_timestamp
+                .filter(|end| end.is_finite() && start_seconds.is_some_and(|start| *end >= start));
+            let end_seconds =
+                own_end.or_else(|| starts.iter().skip(index + 1).flatten().next().copied());
+
+            TranscriptRow {
+                index,
+                start_seconds,
+                end_seconds,
+                speaker: identified_speaker(segment, mappings, labels),
+                text: segment.text.clone(),
+            }
+        })
+        .collect()
+}
+
 /// How long an unterminated final cue lasts, in seconds.
 const TRAILING_CUE_SECONDS: f64 = 3.0;
 
@@ -584,6 +649,148 @@ mod tests {
             speaker: speaker.map(str::to_owned),
             ..Default::default()
         }
+    }
+
+    /* ------------------------------------------------------- playable rows */
+
+    #[test]
+    fn row_seconds_and_stored_text_pass_through_unchanged() {
+        let segments = vec![Segment {
+            end_timestamp: Some(4.5),
+            ..segment("  x  ", 1.5, None)
+        }];
+        let rows = rows(&segments, &note(), &no_mappings(), &labels());
+
+        assert_eq!(rows[0].start_seconds, Some(1.5));
+        assert_eq!(rows[0].end_seconds, Some(4.5));
+        assert_eq!(rows[0].text, "  x  ");
+    }
+
+    #[test]
+    fn row_epoch_milliseconds_become_seconds_from_the_earliest() {
+        let base = 1_756_000_000_000.0;
+        let segments = vec![
+            Segment {
+                end_timestamp: None,
+                ..segment("first", base, None)
+            },
+            Segment {
+                end_timestamp: Some(base + 7_000.0),
+                ..segment("second", base + 5_000.0, None)
+            },
+        ];
+        let rows = rows(&segments, &note(), &no_mappings(), &labels());
+
+        assert_eq!(rows[0].start_seconds, Some(0.0));
+        assert_eq!(rows[0].end_seconds, Some(5.0));
+        assert_eq!(rows[1].start_seconds, Some(5.0));
+        assert_eq!(rows[1].end_seconds, Some(7.0));
+    }
+
+    #[test]
+    fn a_missing_row_end_falls_to_the_next_start() {
+        let segments = vec![
+            Segment {
+                end_timestamp: None,
+                ..segment("first", 2.0, None)
+            },
+            segment("second", 8.0, None),
+        ];
+        let rows = rows(&segments, &note(), &no_mappings(), &labels());
+
+        assert_eq!(rows[0].end_seconds, Some(8.0));
+    }
+
+    #[test]
+    fn the_last_rows_missing_end_means_to_the_recording_end() {
+        let segments = vec![Segment {
+            end_timestamp: None,
+            ..segment("last", 2.0, None)
+        }];
+
+        assert_eq!(
+            rows(&segments, &note(), &no_mappings(), &labels())[0].end_seconds,
+            None
+        );
+    }
+
+    #[test]
+    fn an_end_before_its_start_falls_to_the_next_start() {
+        let segments = vec![
+            Segment {
+                end_timestamp: Some(1.0),
+                ..segment("first", 5.0, None)
+            },
+            segment("second", 9.0, None),
+        ];
+
+        assert_eq!(
+            rows(&segments, &note(), &no_mappings(), &labels())[0].end_seconds,
+            Some(9.0)
+        );
+    }
+
+    #[test]
+    fn non_finite_row_times_are_treated_as_absent() {
+        let segments = vec![
+            Segment {
+                text: "non-finite".to_owned(),
+                timestamp: Some(f64::NAN),
+                end_timestamp: Some(f64::INFINITY),
+                ..Default::default()
+            },
+            segment("next", 4.0, None),
+        ];
+        let rows = rows(&segments, &note(), &no_mappings(), &labels());
+
+        assert_eq!(rows[0].start_seconds, None);
+        assert_eq!(rows[0].end_seconds, Some(4.0));
+    }
+
+    #[test]
+    fn rows_resolve_diarized_sourced_and_anonymous_speakers() {
+        let segments = vec![
+            segment("diarized", 0.0, Some("speaker_0")),
+            Segment {
+                source: Some("mic".to_owned()),
+                ..segment("microphone", 1.0, None)
+            },
+            segment("anonymous", 2.0, None),
+        ];
+        let rows = rows(&segments, &note(), &no_mappings(), &labels());
+
+        assert_eq!(rows[0].speaker.as_deref(), Some("Speaker 1"));
+        assert_eq!(rows[1].speaker.as_deref(), Some("You"));
+        assert_eq!(rows[2].speaker, None);
+    }
+
+    #[test]
+    fn an_empty_segment_list_gives_no_rows() {
+        assert!(rows(&[], &note(), &no_mappings(), &labels()).is_empty());
+    }
+
+    #[test]
+    fn row_indexes_count_segments_without_timestamps() {
+        let segments = vec![
+            Segment {
+                end_timestamp: None,
+                ..segment("first", 0.0, None)
+            },
+            Segment {
+                text: "untimed".to_owned(),
+                ..Default::default()
+            },
+            segment("third", 3.0, None),
+        ];
+        let rows = rows(&segments, &note(), &no_mappings(), &labels());
+
+        assert_eq!(
+            rows.iter().map(|row| row.index).collect::<Vec<_>>(),
+            [0, 1, 2]
+        );
+        assert_eq!(rows[0].end_seconds, Some(3.0));
+        assert_eq!(rows[1].start_seconds, None);
+        assert_eq!(rows[1].end_seconds, Some(3.0));
     }
 
     /* ------------------------------------------------------------- merging */

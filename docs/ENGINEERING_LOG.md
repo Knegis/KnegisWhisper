@@ -21,8 +21,9 @@ maintained in place rather than appended to, because its purpose is to be curren
 > detail and the by-hand check that found five real defects; [COMPLETION_PLAN.md](COMPLETION_PLAN.md)
 > keeps the phase 7–10 definitions.
 >
-> **Measured, not asserted, as of 2026-09-02:** `cargo test --workspace` — **1704 passing, 0
-> failed** (941 at the start of the original run, 1296 at its close on 2026-08-27); parity —
+> **Measured, not asserted, as of 2026-09-02 (after KNEG-152):** `cargo test --workspace` — **1734
+> passing, 0 failed, 12 ignored** (941 at the start of the original run, 1296 at its close on
+> 2026-08-27, 1704 earlier on 2026-09-02); parity —
 > **103 entries, 4 declared unreachable** (17 at the start, 8 on 2026-08-27), and **all 13 UI
 > surfaces built**, with no "surface not built" entry remaining anywhere. The four: **no local-ASR
 > model any longer** — all four sherpa models are pinned and installable as of 2026-09-01 — two
@@ -288,6 +289,292 @@ Unchanged from the Phases 1–4 entry, restated here so they are not buried:
   porting matrix. Upstream pins both by commit and verifies neither.
 - ~~**`nircmd`**~~ — **dropped**, as leaned towards: third-tier Windows paste fallback only, and
   `SendInput` works.
+
+---
+
+## 2026-09-03 (KNEG-159) — every gate green, and the window was blank
+
+The first time anyone opened the merged KNEG-152 tree, `npm run tauri:dev` showed a white window
+with nothing in it. Fourteen node gates, `tsc`, `vite build`, the domain scan of the built
+assets, clippy, 1734 tests and the mock-webview IPC suite had all passed the same tree an hour
+earlier. This entry is about the gap between those two facts, because the gap is structural and
+will be there for the next dependency too.
+
+### The cause, measured before anything was changed
+
+The webview and a browser differ in one thing that matters here: Tauri runs every script after
+`Object.freeze(Object.prototype)` (`tauri.conf.json` > `app.security.freezePrototype`). Once
+frozen, every property a plain object inherits — `toString`, `constructor`, `valueOf` — is
+non-writable, and a strict-mode assignment to one of them on an object that has no own property of
+that name is a `TypeError`. That was reproduced without the webview: a throwaway page served by the
+running Vite dev server with the freeze inline, loaded in headless Edge 152 with console logging,
+died at module load with *Cannot assign to read only property 'toString' of object '#<Object>'*.
+The same page with the dev CSP applied and no freeze rendered the whole shell, so the CSP — the
+thing the whole KNEG-152 design had been careful about — was not the cause. WebView2 and Edge were
+the same build, so neither was engine version.
+
+Two modules do the assignment, and they fail differently:
+
+- **`lodash-es/lodash.default.js`** builds the `_` wrapper at load by copying every method onto a
+  plain `{}`, `toString` included. Milkdown imports three lodash functions by name; Rollup drops the
+  module from the production bundle, but Vite's esbuild pre-bundle for the dev server kept it
+  beside `debounce` and `throttle`. It throws before React mounts. **This is the blank window**, and
+  it is a dev-only artifact: the packaged application never had it.
+- **`@milkdown/transformer`**'s serializer sets `this.toString = …` in its constructor, one line.
+  This one is in production too. It does not blank the application — the shell renders — but
+  Crepe's `create()` rejects and the editor never mounts. Found by a second probe that mounted
+  `NoteEditor` directly under the freeze, which is the check the first probe did not make.
+
+Every pre-bundled chunk was then read for assignments to inherited `Object.prototype` names. Those
+two are the whole list. `rope-sequence` and `prosemirror-transform` write `__proto__`, which is an
+accessor and still works when frozen; React's dev build writes `constructor` on an object that
+inherits a writable one from `Component.prototype`. Nothing else.
+
+### What landed, and why each piece
+
+- **`src/shims/lodash-es.ts`, aliased from the bare specifier in `vite.config.ts`**: the three
+  functions from their per-method modules, so the package index — and with it `lodash.default.js`
+  — is never evaluated. Applied in build too, so dev and production load the same modules. Narrow
+  on purpose: a fourth import fails loudly rather than reopening the package index.
+- **A one-line patch to `@milkdown/transformer` 7.22.1**, carried by `patch-package` on
+  `postinstall` (`apps/desktop/patches/`). `Object.defineProperty(this, "toString", …)` defines an
+  own property, which a frozen prototype permits; the assignment did not. Chosen over turning
+  `freezePrototype` off: that is a hardening this project switched on deliberately, Tauri's default
+  is off, and giving it up for one upstream line is the wrong trade. `npm ci` fails loudly when a
+  future Milkdown no longer matches the patch.
+- **`src/lib/devPrototypeFreeze.ts`, imported first in `main.tsx`**: in a plain-browser dev session
+  with no Tauri host, freeze `Object.prototype` before the rest of the graph evaluates. This is the
+  structural fix. The frontend worker ran the fixtures in a browser and saw a working editor; the
+  browser was lying by omission. Now `npm run dev` fails the way the webview fails.
+- **`tools/dev-bundle-audit/scan.mjs`**: runs Vite's own optimizer into a scratch cache — the dev
+  pre-bundle is a different artifact from the production bundle and nothing gated it — and fails
+  on the lodash module's banner or the transformer's unpatched line. Its first draft matched the
+  banner's `// node_modules/` prefix and **passed against a pre-bundle that contained the
+  offender**: esbuild writes the path relative to the output directory. That is the gate failure
+  mode this repository keeps finding — green because it measured nothing — caught here only
+  because the rule was run against the known-bad tree before being trusted, and now pinned by
+  self-tests over every path shape seen.
+- Vue's esm-bundler feature flags are defined in `vite.config.ts`, which silences a dev warning and
+  is what Vue asks of bundlers.
+
+### Verified, and the shape of the evidence
+
+Against an isolated Vite instance on the patched `node_modules`, headless Edge with the prototype
+frozen rendered the shell, and mounted `NoteEditor` with a heading, a table and list items and
+fired `markdownUpdated` — 45 `.milkdown` elements, zero console errors. `tsc`, `vite build`
+(the patched line present in the bundle, the unpatched one absent, lodash's full build absent),
+the domain scan and the new gate are green. **Not verified:** the Tauri window itself with these
+changes, because the running `tauri:dev` session predates them and must be restarted; the by-hand
+script is KNEG-158.
+
+---
+
+## 2026-09-02 (KNEG-152) — a Markdown editor on the note, and the transcript kept out of it
+
+The Notes screen rendered a note's body as read-only text. KNEG-152 replaces that with the
+Milkdown Crepe editor, autosaving, and — for a note recorded from a meeting — a transcript panel
+whose rows play the matching stretch of the WAV. Six decisions are worth the record, three of them
+measured rather than argued.
+
+### The transcript is not in the Markdown
+
+The obvious design embeds timestamps in the note text. It was rejected before a line was written:
+editing splits, merges and deletes paragraphs, and every one of those operations silently breaks a
+link carried inside the text. The stored segments (`notes.transcript`, a `Vec<transcript::Segment>`
+with `timestamp`/`end_timestamp`) already carry the timing; what was missing was a durable
+statement of *which file* that timing refers to. That is the whole of the new table:
+`note_recordings` (migration `0002`), one row per note, holding a bare file name inside
+`data_dir()/meetings`, the duration, an original filename where one exists, and nothing else.
+Rows, not phrases: word-level timing is not retained consistently across providers, and estimating
+a phrase's interval from character positions would feel precise and often be wrong.
+
+### The renderer names a note id, never a path
+
+The brief suggested Tauri's asset protocol behind a narrow filesystem scope. That would have worked
+and was still the worse shape: the renderer supplies a path, a Cargo feature has to be enabled, and
+a scope glob has to describe the data directory. What landed is a custom `recording` URI scheme
+(`apps/desktop/src-tauri/src/recordings.rs`): the `<audio>` element asks for `/<note_id>`, Rust
+looks the row up, `resolve` accepts only a plain file name — no separators, no `.`/`..`, no
+surrounding whitespace, `file_name() == key` — and joins it onto the recordings directory. Nothing
+crosses the IPC boundary in either direction, `capabilities/default.json` stays at `core:default`,
+and the CSP gains one directive, `media-src 'self' recording: http://recording.localhost`, spelled
+the way `img-src` already spells the asset scheme.
+
+Range requests are not optional: Chromium's media loader seeks by issuing them, and without `206`
+a whole recording is read into memory per request and the scrub bar does nothing. `response_for`
+mirrors Tauri's own `protocol/asset.rs` — single range, 1 MiB cap per chunk, `416` with
+`bytes */len` for anything unsatisfiable, `HEAD` answered with the `GET` headers — and is pure apart
+from the file read, so its fourteen tests need no Tauri runtime. Multi-range headers are ignored
+and answered with the whole file, which HTTP permits and nothing here needs.
+
+### Rust computes the rows, so the screen and the exports cannot disagree
+
+`transcript::rows` normalises epoch-millisecond timestamps the way export does, resolves speakers
+through the same `identified_speaker` export uses, and emits one row per stored segment without
+`merge` — a merged paragraph would play the wrong stretch. A live-partials transcript has no
+`end_timestamp` on any segment, so a missing end falls to the next row's start and the last one is
+`None`, meaning "to the end". A second copy of that arithmetic in TypeScript is exactly the drift
+the generated IPC types exist to prevent, so there is none.
+
+### Two Crepe features are out, and the reason was measured before the dependency was added
+
+A probe bundle of the full `Crepe` class was built and read before `@milkdown/crepe` went into
+`package.json`: 1.49 MB of JavaScript plus ~1.5 MB of KaTeX fonts, none of
+`config/forbidden-domains.json`'s patterns, and exactly one runtime `<style>` injection — CodeMirror's
+`style-mod`, which the production CSP's `style-src 'self'` blocks. The editor is therefore
+assembled from `@milkdown/crepe/builder` with eight explicit features and per-feature CSS imports;
+CodeMirror and LaTeX are left out (KNEG-156 records that as a decision), and code blocks render as
+plain `<pre>`. The check is repeated on the built bundle: the only `createElement("style")` in
+`dist/assets/*.js` is react-dom's hoistable-style path, present in the base bundle with the same
+single occurrence. The JS bundle grows from 296 KB to about 1 MB minified. Vue, which Crepe's
+components run on, injects nothing.
+
+### Autosave is serialised, and the editor is uncontrolled
+
+`lib/useAutosave.ts` debounces at 800 ms and allows one save in flight: a newer edit waits and then
+runs with the latest patch, so a slow older response can never overwrite newer typing; a failure
+keeps the unsent patch behind a Retry button and never retries on its own. The editor reads its
+initial Markdown once and the view re-reads the list from Rust after every save, which is the
+pattern every other screen already follows (`useRefresh`'s header says why). Deleting a note now
+asks first, and the question names the recording that goes with it.
+
+### How it was built, and what that proved
+
+This was the first real run of the `/codex-orchestrator` skill: two Codex workers in the warm
+worktree pool, one on the Rust slice (`gpt-5.6-sol`), one on the frontend (`gpt-5.6-terra`), each
+against a base commit (`3110b12`) that pre-wired the shared surface — the migration, the two
+`TS`-derived boundary types, the regenerated `ipc-types.ts`, the `ipc.ts` wrappers and the npm
+dependencies. Disjoint write surfaces meant both merges were conflict-free. The frontend needed one
+repair round for eight mechanical findings; the Rust slice needed none. Two things the run
+measured about the harness itself: a worker cannot compile `knegiswhisper` until its slot has a
+frontend build, and the harness's quota detection fired on a docs line the model had read — fixed
+to require an actual codex failure.
+
+### Not verified, and said so
+
+Nobody had opened the application with this change when this was written. It was opened the next
+morning and the window was blank — see the 2026-09-03 (KNEG-159) entry above for why every gate
+here was green anyway. The CSP claim rests on the bundle checks above and was **not** the cause;
+the seek behaviour rests on Tauri's asset protocol doing the same thing for years. Both remain
+believed, not observed, and the by-hand check is a sub-issue of KNEG-152. Known gaps filed under
+it: the local API's `DELETE /notes/{id}` orphans the WAV (KNEG-153), notes saved
+before today have a WAV and no way to attach it (KNEG-154), imports are transcribed and discarded
+(KNEG-155), and an attach that fails after the note is saved is only a log line (KNEG-157).
+
+Measured on the merged tree (`111f1e0`), not on the slices:
+
+    14 node gates                                                  all green
+    npx tsc --noEmit / npx vite build / domain scan of dist         clean
+    cargo fmt --all --check                                        clean
+    cargo clippy --workspace --all-targets -- -D warnings          exit 0
+    cargo test --workspace                     1734 passed, 0 failed, 12 ignored (1704 before)
+    cargo test -p knegiswhisper --lib --features tauri-test        355 passed
+    cargo build --workspace --exclude knegiswhisper                exit 0
+    cargo build -p knegiswhisper --lib                             exit 0
+    cargo build --workspace (desktop binary relink)                blocked: knegiswhisper-desktop.exe
+                                                                   was running from a `cargo run` started
+                                                                   17:44, before the merge; everything it
+                                                                   links was compiled by the two lines above
+
+---
+
+## 2026-09-02 (KNEG-151) — a doc comment asserted the surface was closed, and now something checks
+
+`DialogGrants`'s doc says of the import commands: *"the only three commands that take a path, so the
+surface is closed."* That sentence closed KNEG-80 and two things downstream leaned on it. Nothing
+checked it.
+
+KNEG-151 is what happened when it started to drift. `media.rs`'s IPC boundary test named the three
+commands in a `generate_handler!` it built itself, and named them **again** in its own assertion
+loop. So it proved those three functions refuse an ungranted path, and nothing whatever about the
+application's import surface: a fourth path-taking command was in neither list, and dropping one
+from `lib.rs:388` left every assertion about it green.
+
+### The audit came first, because it decided the design
+
+Before changing anything, every registered command was read for a renderer-supplied path.
+**Exactly three, all three already authorising.** `note_export_to_file` looked like a fourth and is
+not — it takes `id` and `format` and opens its own save dialog, so the path never crosses the IPC
+boundary; `pick_import_file` is the grant *source*. So the list was not wrong. What was wrong is
+that nothing kept it right, which is a different defect and wants a different fix.
+
+### One list, and why not the macro the issue asked for
+
+The issue proposed extracting `lib.rs:388`'s `generate_handler!` so the app and the test share
+tokens. That was tried on paper and rejected: `generate_handler!` needs literal paths at expansion
+time, so sharing the *import subset* means a callback macro that also has to carry the other 93
+commands through it. A ninety-six entry list restructured into macro arguments is a large, risky
+diff, and it buys only one of the two directions.
+
+What landed instead is `commands::PATH_TAKING_COMMANDS` — the command's IPC name and the dotted
+position of its path argument, once — read by three things:
+
+- **The boundary test drives every entry** over real IPC, building the JSON body from the dotted
+  shape. `import_openwhispr` wraps its path in an `ImportRequest` and the other two take the string
+  directly; writing those two shapes out by hand is exactly what made the old loop a second copy of
+  the list. A fourth entry is asserted by being added.
+- **`every_path_taking_command_is_registered`** ties the list to `lib.rs` by reading it with
+  `include_str!`. Rust has no reflection over `#[tauri::command]` registration, so text is the only
+  way in — the same parse `tools/settings-audit/scan.mjs` already does one language over.
+- **`tools/command-audit/scan.mjs`** fails when a registered command takes a renderer path and is
+  **not** in the list. That is the direction neither test can see, and the reason a node gate exists
+  for it at all.
+
+One consequence of that shape, worth recording because the easy answer was wrong: the list has no
+consumer outside tests — the application enforces the grant inside each command, it never
+enumerates them — so `-D warnings` called it dead code. `#[cfg(test)]` on the const and
+`#[cfg(feature = "tauri-test")]` on the body builder say that plainly, and the node gate is
+unaffected because it reads the source as text. An `#[allow(dead_code)]` would have silenced the
+lint rather than answered it, which is the same call as the build script in the entry below.
+
+### Three mutations, each confirmed real before being believed
+
+- Delete `media::media_import_video` from `lib.rs`'s `generate_handler!` → `every_path_taking_command_is_registered` fails, naming the command and both remedies. This is the mutation that was invisible before.
+- Change `import_openwhispr`'s shape from `request.path` to `path` → the boundary test fails with
+  *"missing required key request"*, so the dotted shape is load-bearing rather than decoration.
+- Drop `grants.authorise` from `media_import_audio` → the boundary test fails, and instructively:
+  the command runs *past* the absent guard and dies at ffmpeg instead. The test is detecting a
+  missing check, not a coincidence.
+
+Each mutated file was SHA-256'd before and after restoration. That is not ceremony —
+`ENGINEERING_LOG.md` § 2026-09-01 (KNEG-131) records a harness whose `shutil.copy2` preserved mtime
+so cargo never rebuilt, and a mutation appeared to survive that had never been compiled.
+
+### The gate's first draft passed, and was wrong
+
+It printed **two** path-taking commands where there are three. `import_openwhispr` was missing —
+the one whose path reaches `kw_storage::import::from_openwhispr` and its `exists()` check, which is
+to say the one the threat model cares most about.
+
+The cause was a comma. `ImportRequest::path`'s doc comment reads *"the source `transcriptions.db`,
+as […] returned it"*, and the field splitter treated that comma as a field boundary. The resulting
+"field" ended in `pub path`, so the name test saw a blob instead of a name and the struct-following
+case silently did not fire.
+
+**It was caught by comparing the printed count against the hand audit, not by the gate going red.**
+It never went red. That is the whole argument for printing the counts that would make a gate
+vacuous on every successful run, and for doing the audit by hand first: without a number to compare
+against, "OK — 2 take a renderer path" reads exactly like success.
+`the_struct_following_case_is_found` is the regression, and it asserts the full set of three rather
+than just the one that was missed.
+
+### What did not close with this
+
+- **`authorise` is read for, not placed.** The gate checks the call appears in the body, not that it
+  precedes the use of the path. The four pure policy tests and the boundary test cover the
+  behaviour; a gate that understood order would need a parser rather than a scanner.
+- **A path under a name the scanner does not recognise.** `PATH_NAME` is deliberately generous —
+  `path|file|dir|dest|target|location|filename` — because a false positive costs a line of argument
+  and a false negative is the defect. A command taking `name: String` and treating it as a filename
+  is still missed, and that is the honest limit of reading signatures as text.
+- **The test's own `generate_handler!` is still its own.** It has to be, for the expansion-time
+  reason above. An entry added to the list and not to that list fails on the assertion, carrying the
+  real Tauri error, which is loud enough.
+
+Measured: `cargo test --workspace` — **1705 passing, 0 failed, 12 ignored** across 55 blocks
+(1704 + the registration test); the feature-on invocation **341 passing**; `node
+tools/command-audit/scan.mjs` — 95 registered, 3 take a renderer path, 3 declared; its self-tests
+8 passing; all 14 node gates green.
 
 ---
 

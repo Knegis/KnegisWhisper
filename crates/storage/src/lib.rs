@@ -254,13 +254,16 @@ mod tests {
         let first = Db::open(&path).await.unwrap();
         first.close().await;
 
-        // The second open must not try to re-apply 0001.
+        // The second open must not try to re-apply either migration.
         let second = Db::open(&path).await.unwrap();
         let applied: i64 = sqlx::query_scalar("SELECT count(*) FROM _sqlx_migrations")
             .fetch_one(second.pool())
             .await
             .unwrap();
-        assert_eq!(applied, 1);
+        assert_eq!(
+            applied, 2,
+            "0001_initial and 0002_note_recordings, each recorded exactly once"
+        );
         second.close().await;
     }
 
@@ -292,6 +295,7 @@ mod tests {
             "speaker_profiles",
             "speaker_mappings",
             "note_speaker_embeddings",
+            "note_recordings",
             "settings",
         ] {
             assert!(

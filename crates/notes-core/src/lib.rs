@@ -11,7 +11,9 @@
 //! Users type prose; FTS5 reads expressions.
 
 pub mod notes;
+pub mod recordings;
 pub mod transcript;
 
 pub use notes::{escape_query, search, Folder, NewNote, Note, NoteUpdate, SearchHit};
-pub use transcript::{export, Format, NoteMeta, Segment, SpeakerLabels};
+pub use recordings::NoteRecording;
+pub use transcript::{export, Format, NoteMeta, Segment, SpeakerLabels, TranscriptRow};

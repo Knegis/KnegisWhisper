@@ -13,7 +13,9 @@
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 
-use kw_notes_core::{notes, transcript};
+use kw_notes_core::{
+    notes, recordings as note_recordings, transcript, NoteRecording, TranscriptRow,
+};
 use kw_platform::hotkey::{self, Binding, HotkeyAction, HotkeyMode};
 use kw_provider_probe::{ProbeAudio, ProbeReport};
 use kw_storage::{settings, transcriptions};
@@ -667,6 +669,37 @@ pub async fn probe_providers(state: State<'_, AppState>) -> CmdResult<ProbeRepor
 /// `pick_import_file` in a loop cannot grow the set without limit.
 pub(crate) const MAX_DIALOG_GRANTS: usize = 32;
 
+/// Every command that takes a filesystem path from the renderer, with the
+/// dotted path to that argument inside the command's JSON body.
+///
+/// **One list, so the boundary test cannot fall behind the application.** The
+/// doc on [`DialogGrants`] below says these are "the only three commands that
+/// take a path, so the surface is closed". Until this list existed that was
+/// prose with nothing behind it: `media.rs`'s IPC test named the three in its
+/// own `generate_handler!` and again in its own loop, so a fourth path-taking
+/// command was covered by neither, and removing one from the application left
+/// the test green (KNEG-151).
+///
+/// Three things read this, which is what turns that sentence into a check:
+///
+///   * `media.rs`'s `every_import_command_enforces_the_dialog_grant_at_the_ipc_boundary`
+///     drives **every entry** over real IPC, so a new one is asserted by being added.
+///   * [`tests::every_path_taking_command_is_registered`] ties the list to
+///     `lib.rs`'s `generate_handler!`, so dropping one from the application fails.
+///   * `tools/command-audit/scan.mjs` fails when a registered command takes a
+///     renderer-supplied path and is **not** listed here, which is the direction
+///     neither test can see.
+///
+/// The second element is dotted because the body shapes differ:
+/// `import_openwhispr` takes an `ImportRequest` struct, the other two take the
+/// string directly. It is the JSON shape, not the Rust one.
+#[cfg(test)]
+pub(crate) const PATH_TAKING_COMMANDS: [(&str, &str); 3] = [
+    ("media_import_audio", "path"),
+    ("media_import_video", "path"),
+    ("import_openwhispr", "request.path"),
+];
+
 /// What an import command says when it was handed a path no dialog produced.
 ///
 /// One sentence for two cases on purpose — see [`DialogGrants::authorise`].
@@ -1097,12 +1130,39 @@ pub async fn notes_update(
         .map_err(|e| fail("could not save the note", e))
 }
 
-/// Delete a note. Returns whether it existed.
+/// Delete a note and its application-owned recording. Returns whether the note
+/// existed.
+///
+/// The renderer tells the user the file goes with the note before asking for
+/// confirmation. The local API's DELETE in `crates/local-api/src/server.rs:320`
+/// does not remove the file; that known gap is tracked by the orchestrator.
 #[tauri::command]
 pub async fn notes_delete(state: State<'_, AppState>, id: i64) -> CmdResult<bool> {
-    notes::delete(state.db().pool(), id)
+    let recording = note_recordings::get(state.db().pool(), id)
         .await
-        .map_err(|e| fail("could not delete the note", e))
+        .map_err(|e| fail("could not read the note's recording", e))?;
+    let deleted = notes::delete(state.db().pool(), id)
+        .await
+        .map_err(|e| fail("could not delete the note", e))?;
+
+    if deleted {
+        if let Some(recording) = recording {
+            crate::recordings::remove_file_for(&recording).await;
+        }
+    }
+
+    Ok(deleted)
+}
+
+/// The recording attached to a note, if it has one.
+#[tauri::command]
+pub async fn note_recording_get(
+    state: State<'_, AppState>,
+    id: i64,
+) -> CmdResult<Option<NoteRecording>> {
+    note_recordings::get(state.db().pool(), id)
+        .await
+        .map_err(|e| fail("could not read the note's recording", e))
 }
 
 /// Folders in display order.
@@ -1178,6 +1238,56 @@ fn export_filename(title: &str, format: transcript::Format) -> String {
     format!("{stem}.{}", format.extension())
 }
 
+/// Parse the single stored transcript representation shared by export and
+/// playback rows.
+fn transcript_segments(note: &notes::Note) -> CmdResult<Vec<transcript::Segment>> {
+    // A note with no transcript is legitimate: typed notes export and render as
+    // an empty transcript rather than failing.
+    match note.transcript.as_deref() {
+        Some(raw) if !raw.trim().is_empty() => serde_json::from_str(raw)
+            .map_err(|e| fail("the note's transcript is not a list of segments", e)),
+        _ => Ok(Vec::new()),
+    }
+}
+
+fn transcript_meta(note: &notes::Note) -> transcript::NoteMeta {
+    transcript::NoteMeta {
+        title: note.title.clone(),
+        created_at: note.created_at.clone(),
+        participants: note.participants.clone(),
+    }
+}
+
+/// Speaker names live in `speaker_mappings`, and this is empty because nothing
+/// renames a speaker yet -- not because nothing diarises. There is diarisation
+/// as of 2026-09-01: `meeting::notes` writes `speaker_0` with the placeholder
+/// `Speaker 1` beside it, and `transcript::speaker_name` renders that segment
+/// from its own label. The table would add a name a person typed, and no screen
+/// offers that, so falling through to the segment label or source is honest.
+fn transcript_mappings() -> std::collections::BTreeMap<String, String> {
+    std::collections::BTreeMap::new()
+}
+
+/// Load one note's transcript as playable, unmerged rows.
+#[tauri::command]
+pub async fn note_transcript_rows(
+    state: State<'_, AppState>,
+    id: i64,
+) -> CmdResult<Vec<TranscriptRow>> {
+    let note = notes::get(state.db().pool(), id)
+        .await
+        .map_err(|e| fail("could not read the note", e))?
+        .ok_or_else(|| "there is no note with that id".to_owned())?;
+    let segments = transcript_segments(&note)?;
+
+    Ok(transcript::rows(
+        &segments,
+        &transcript_meta(&note),
+        &transcript_mappings(),
+        &transcript::SpeakerLabels::default(),
+    ))
+}
+
 /// Load a note and render its transcript.
 async fn render_export(
     state: &AppState,
@@ -1189,37 +1299,13 @@ async fn render_export(
         .map_err(|e| fail("could not read the note", e))?
         .ok_or_else(|| "there is no note with that id".to_owned())?;
 
-    // A note with no transcript exports as an empty one rather than failing:
-    // a typed note is a legitimate thing to export, and `segment_count` tells
-    // the caller which case it got.
-    let segments: Vec<transcript::Segment> = match note.transcript.as_deref() {
-        Some(raw) if !raw.trim().is_empty() => serde_json::from_str(raw)
-            .map_err(|e| fail("the note's transcript is not a list of segments", e))?,
-        _ => Vec::new(),
-    };
-
-    let meta = transcript::NoteMeta {
-        title: note.title.clone(),
-        created_at: note.created_at.clone(),
-        participants: note.participants.clone(),
-    };
-
-    // Speaker names live in `speaker_mappings`, and the map is empty because
-    // nothing renames a speaker yet -- not because nothing diarises. There is
-    // diarisation as of 2026-09-01: `meeting::notes` writes `speaker_0` with
-    // the placeholder `Speaker 1` beside it, and `transcript::speaker_name`
-    // renders `speaker_0` as `Speaker 1` from the segment alone. What this
-    // table would add is a name a *person* typed, and no screen offers that, so
-    // an empty map is the honest input rather than a missing one:
-    // `transcript::speaker_name` then falls through to the segment's label or
-    // capture source, which is exactly what it should do.
-    let mappings = std::collections::BTreeMap::new();
+    let segments = transcript_segments(&note)?;
 
     let content = transcript::export(
         format,
-        &meta,
+        &transcript_meta(&note),
         &segments,
-        &mappings,
+        &transcript_mappings(),
         &transcript::SpeakerLabels::default(),
     );
 
@@ -1304,6 +1390,47 @@ pub async fn note_export_to_file(
 )]
 mod tests {
     use super::*;
+
+    /// Every entry in [`PATH_TAKING_COMMANDS`] is registered by the application.
+    ///
+    /// **The mutation this exists for:** delete `media::media_import_video` from
+    /// `lib.rs`'s `generate_handler!`. Before this test that was invisible — the
+    /// IPC boundary test invokes a handler list it builds itself, so the
+    /// application could stop exposing a command while every assertion about
+    /// that command stayed green (KNEG-151).
+    ///
+    /// Reading `lib.rs` as text is the only way in: Rust has no reflection over
+    /// `#[tauri::command]` registration, and `generate_handler!` needs literal
+    /// paths, so the list cannot be generated from a const. The same parse is
+    /// already done one language over by `tools/settings-audit/scan.mjs`.
+    #[test]
+    fn every_path_taking_command_is_registered() {
+        const OPEN: &str = "generate_handler![";
+        let lib = include_str!("lib.rs");
+        let at = lib
+            .find(OPEN)
+            .expect("lib.rs registers with generate_handler!");
+        let open = at + OPEN.len();
+        let close = open + lib[open..].find("])").expect("the handler list is closed");
+        let registered = &lib[open..close];
+
+        // Controls, and the reason they are not obvious: the assertions below are
+        // `contains` over a slice, so a parse that returned the *whole file* would
+        // satisfy every one of them while proving nothing at all. These pin both
+        // ends of the slice to the handler list itself.
+        assert!(
+            registered.contains("diagnostics::diagnostics"),
+            "the parse did not reach the first registered command"
+        );
+        assert!(
+            !registered.contains("prevent_close"),
+            "the parse ran past the handler list into the window handlers"
+        );
+
+        for (command, _) in PATH_TAKING_COMMANDS {
+            assert!(registered.contains(command), "{command} takes a renderer path and is not registered in lib.rs; register it, or drop it from PATH_TAKING_COMMANDS");
+        }
+    }
 
     async fn state() -> AppState {
         AppState::in_memory().await.unwrap()
