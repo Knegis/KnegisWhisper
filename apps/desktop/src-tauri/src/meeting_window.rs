@@ -115,6 +115,37 @@ pub fn set_visible(app: &AppHandle, visible: bool) {
     }
 }
 
+/// Correct an edge-driven visibility state that has no other corrective.
+///
+/// KNEG-167 measured a visible, empty notification window after a missed hide
+/// edge. Detection polling is the later observation that can repair that state.
+/// This is deliberately one-directional: `start` owns showing the window at
+/// the end of its work, because showing while `Starting` would flash an empty
+/// panel before there is state to render.
+pub fn reconcile(app: &AppHandle, has_something_to_say: bool) {
+    let Some(window) = app.get_webview_window(LABEL) else {
+        return;
+    };
+
+    let visible = match window.is_visible() {
+        Ok(visible) => visible,
+        Err(err) => {
+            tracing::debug!(
+                error = %err,
+                "could not read the meeting notification visibility while reconciling"
+            );
+            return;
+        }
+    };
+
+    if visible && !has_something_to_say {
+        tracing::warn!(
+            "a stranded meeting notification window was visible with nothing to render; hiding it"
+        );
+        set_visible(app, false);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
