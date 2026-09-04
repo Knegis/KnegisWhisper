@@ -21,9 +21,9 @@ maintained in place rather than appended to, because its purpose is to be curren
 > detail and the by-hand check that found five real defects; [COMPLETION_PLAN.md](COMPLETION_PLAN.md)
 > keeps the phase 7–10 definitions.
 >
-> **Measured, not asserted, as of 2026-09-02 (after KNEG-152):** `cargo test --workspace` — **1734
-> passing, 0 failed, 12 ignored** (941 at the start of the original run, 1296 at its close on
-> 2026-08-27, 1704 earlier on 2026-09-02); parity —
+> **Measured, not asserted, as of 2026-09-03 (after KNEG-163/164/165):** `cargo test --workspace` —
+> **1739 passing, 0 failed, 12 ignored** (941 at the start of the original run, 1296 at its close on
+> 2026-08-27, 1704 and then 1734 on 2026-09-02); parity —
 > **103 entries, 4 declared unreachable** (17 at the start, 8 on 2026-08-27), and **all 13 UI
 > surfaces built**, with no "surface not built" entry remaining anywhere. The four: **no local-ASR
 > model any longer** — all four sherpa models are pinned and installable as of 2026-09-01 — two
@@ -289,6 +289,122 @@ Unchanged from the Phases 1–4 entry, restated here so they are not buried:
   porting matrix. Upstream pins both by commit and verifies neither.
 - ~~**`nircmd`**~~ — **dropped**, as leaned towards: third-tier Windows paste fallback only, and
   `SendInput` works.
+
+---
+
+## 2026-09-03 (KNEG-163/164/165) — the white box in the corner, and what one sentence was worth
+
+Started from a user sentence — *"what is the white box that shows up in the bottom right corner
+that is immovable"* — and ended as four Linear issues and two commits, `b20acaf` and `2f143b57`.
+Worth recording because **nothing in it was found by looking at the window**, the fix was designed
+and landed the same way, and KNEG-166 is the by-hand check that still has not happened.
+
+### Immovable needed no investigation
+
+`decorations(false)`, `always_on_top(true)`, `skip_taskbar(true)`, `focused(false)`, plus the
+imperative non-activating treatment from `overlay::apply_treatments`, and no
+`data-tauri-drag-region` anywhere in `apps/desktop/src`. No frame and no drag surface means
+nothing to grab. That half was answerable by reading and stayed answered.
+
+### White was three causes, and separating them was most of the work
+
+1. **`body { background: var(--bg) }` painted inside a `transparent(true)` window.** One bundle
+   serves four surfaces, so a rule written for the shell lands in the panels. `--bg` is `#fdfdfd`
+   in light mode. Unconditional. In dark mode it paints `#181818`, which reads as deliberate —
+   which is the likeliest reason it survived this long unremarked.
+2. **`.overlay` and `.notify` asked for `height: 100%` with no chain to resolve against.** No
+   `html`, `body` or `#root` rule set a height anywhere in `styles.css`, so it computed to `auto`.
+   A 92px window held a ~35px panel with background below it, and `.notify-recording`'s inset red
+   edge — the thing that makes "recording" read at a glance — was drawn around the content box.
+   Its own comment, "the panel is 92px of fixed height", was describing a panel that did not fill
+   them. Also unconditional.
+3. **The empty state is then entirely background.** `.notify-empty` is transparent with no
+   children, so zero height, and its comment already said it only shows "through a stray render".
+   With 1 and 2 present, a stray render is a 392×92 rectangle of `#fdfdfd`.
+
+### A correction worth keeping
+
+The first answer given to the user leaned on cause 3, driven by a missed `meeting-offer` event.
+That was overweighted, and KNEG-134 is why: it records the offer window appearing on a real Teams
+call on 2026-09-01 "with the right words", so delivery demonstrably works at least sometimes and
+the race is intermittent at most. Causes 1 and 2 are the load-bearing ones. KNEG-164 was rewritten
+to say so rather than leaving the stronger claim standing.
+
+### The race is real anyway, and is now recoverable
+
+`poll` broadcasts `meeting-offer` and *then* shows the window; the read-once on mount recovered
+nothing, because `MeetingStatus` carried no offer and `Watcher::outstanding` held only a provider
+id; and `consider` returns `Transition::None` while an offer is outstanding, which is correct for
+"one offer per meeting, not one per poll" and is exactly what makes one lost delivery permanent for
+the length of the call. `UpdateNotification` never had the defect — `get_last_update_check` exists.
+That asymmetry between two sibling windows was the argument for the fix rather than any new
+mechanism.
+
+Consuming it has a trap worth naming because a later simplification will want to reintroduce it:
+`getMeetingStatus()` is awaited and a withdrawal arrives as `null`, so `prev ?? fromStatus` would
+resurrect an offer the user had just dismissed. The event has to win outright, via a ref set in the
+listener.
+
+### The caption needed no Rust at all
+
+`meeting-transcript` was already broadcast to every window by `app.emit` — a broadcast to all
+webviews, not a targeted send — so the window simply had no listener. The round-2 brief said so and
+told the worker to report `wrong_premise` rather than invent an event if it disagreed; it did not.
+
+Decisions, with what they were chosen over. **A third line inside the existing panel**, window
+unchanged at 392×92 — three 16px lines plus two 0.15rem gaps is ~53px inside a 92px panel that
+centres its content. The alternative was the porting matrix's own unbuilt 460×132 "transcription
+preview" role, rejected as a larger claim than the request and recorded in KNEG-166 as the fallback
+if ~39 characters proves too few. **Newest event wins regardless of source, with no prefix** —
+one line at 392px is about 39 monospace characters and a prefix would spend an eighth of it on
+attribution `Settings > Meetings` already shows with room. **Replace, never append** — partials
+overlap by two seconds. **`text-transform: none`** — the stylesheet's own rule keeps uppercase off
+anything the user authored, and this is speech. **Cleared on `recording-without-transcript` and
+`stalled`**, not only on outcome: a caption frozen under "live transcript stopped" would claim words
+were still arriving.
+
+One edge was considered and left alone: a transcript event arriving *after* the failure state would
+put the caption back under the amber line. It is not reachable — `pump` drains its remaining events
+before returning, and the failure state is emitted after `pump` finishes — so guarding it would be
+code for a case the ordering already prevents.
+
+### `data-window`, not `data-surface`
+
+CSS cannot ask which window it is, and `:has()` on rendered content would flash the wrong background
+before React mounts, so the surface is stamped on the root element from `main.tsx` before
+`createRoot`. The attribute name is deliberate: `data-surface` is load-bearing for
+`verify-parity.mjs` rule 7, which greps component sources for `data-surface="<surfaceId>"` to prove
+a declared UI surface exists. The hash mapping now lives once in `lib/surface.ts`, read by both the
+stamp and the router, and `App.tsx`'s switch lost its `default` arm — which is what finally delivers
+what its comment had claimed since it was written, that a fifth window is a compile-visible
+addition.
+
+### Process: `dev` moved under the run, and a lapsed entitlement stopped it dead
+
+Two things worth carrying forward.
+
+`dev` gained three commits (KNEG-160) between preflight and the first merge, and KNEG-160's scope —
+`App.tsx`, `styles.css` — overlapped the frontend half's. The merge was clean because the file sets
+were disjoint, but the *plan* was stale, so the diagnosis was re-checked against the merged tree
+before the second worker launched rather than after. It held: the rail was pinned with
+`position: fixed`, which needs no height chain, which is how it added 251 lines of `styles.css`
+without touching either defect. The same run also reset the `worker-1` slot out from under KNEG-160's
+own in-flight worker; its branch ref survived, but a shared pool wants a liveness check before
+allocation.
+
+And both workers first exited 20 with zero-byte patches: `codex exec` returned 404 from
+`chatgpt.com/backend-api/codex/responses` on both transports. The identity token refreshes
+independently of the entitlement and the model-list route stays open, so it reads exactly like CLI
+version skew. It was not — the `id_token` claims gave
+`chatgpt_subscription_active_until: 2026-07-11`. After `codex login` the same claim read
+`2026-09-11` and both rounds ran normally.
+
+### What this does not establish
+
+Every appearance claim. The gates prove compilation, bundling, audit parity, 1739 passing tests and
+a clean `clippy -D warnings`; they prove nothing about how the panel looks. Light mode is the case
+that matters, because in dark mode the defect painted `#181818` and would hide its own fix.
+KNEG-166 is open for it.
 
 ---
 
