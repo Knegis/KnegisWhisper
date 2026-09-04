@@ -51,6 +51,7 @@ export function MeetingNotification() {
   const [elapsed, setElapsed] = useState(0);
   const [liveTranscript, setLiveTranscript] = useState<string | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
+  const [stateReadProblem, setStateReadProblem] = useState<string | null>(null);
   const offerFromEvent = useRef(false);
   const stateFromEvent = useRef(false);
 
@@ -58,15 +59,17 @@ export function MeetingNotification() {
     // Read once as well as subscribing: the window is hidden until there is
     // something to say, so by the time it is shown the event that caused it may
     // already have been delivered.
-    void getMeetingStatus().then((status) => {
-      // Events win over the asynchronous read. In particular, an offer event
-      // carrying `null` is a withdrawal; applying this older status afterward
-      // would resurrect the offer the user just dismissed.
-      if (!stateFromEvent.current) setState(status.state);
-      if (!offerFromEvent.current) setOffer(status.offer);
-      setSources(status.sources);
-      setElapsed(status.elapsedSeconds);
-    });
+    void getMeetingStatus()
+      .then((status) => {
+        // Events win over the asynchronous read. In particular, an offer event
+        // carrying `null` is a withdrawal; applying this older status afterward
+        // would resurrect the offer the user just dismissed.
+        if (!stateFromEvent.current) setState(status.state);
+        if (!offerFromEvent.current) setOffer(status.offer);
+        setSources(status.sources);
+        setElapsed(status.elapsedSeconds);
+      })
+      .catch((err: unknown) => setStateReadProblem(String(err)));
 
     const unlisteners: Array<() => void> = [];
     void onMeetingState((next) => {
@@ -199,6 +202,18 @@ export function MeetingNotification() {
         >
           Not now
         </button>
+      </div>
+    );
+  }
+
+  if (stateReadProblem && state === null) {
+    return (
+      <div className="notify">
+        <span className="indicator" aria-hidden="true" />
+        <span className="notify-body">
+          <strong>State unknown</strong>
+          <span className="notify-detail notify-alert">{stateReadProblem}</span>
+        </span>
       </div>
     );
   }

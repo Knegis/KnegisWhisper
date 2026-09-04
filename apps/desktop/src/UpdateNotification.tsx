@@ -30,12 +30,15 @@ import { updateCheckLabel } from "./lib/labels";
 
 export function UpdateNotification() {
   const [result, setResult] = useState<UpdateCheckResult | null>(null);
+  const [stateReadProblem, setStateReadProblem] = useState<string | null>(null);
 
   useEffect(() => {
     // Read once as well as subscribing: this window is created hidden at
     // startup, so by the time it is shown the event that caused it may
     // already have been delivered to a component that had not mounted yet.
-    void getLastUpdateCheck().then(setResult);
+    void getLastUpdateCheck()
+      .then(setResult)
+      .catch((err: unknown) => setStateReadProblem(String(err)));
 
     let unlisten: (() => void) | undefined;
     void onUpdateCheckResult(setResult).then((fn) => {
@@ -43,6 +46,21 @@ export function UpdateNotification() {
     });
     return () => unlisten?.();
   }, []);
+
+  // Nothing was readable and no event has arrived since, so this window cannot
+  // say whether a release exists. Saying so beats the empty panel that used to
+  // stand in for it, which was indistinguishable from "no update" (KNEG-167).
+  if (stateReadProblem && result === null) {
+    return (
+      <div className="notify">
+        <span className="indicator" aria-hidden="true" />
+        <span className="notify-body">
+          <strong>Update state unknown</strong>
+          <span className="notify-detail notify-alert">{stateReadProblem}</span>
+        </span>
+      </div>
+    );
+  }
 
   // The window is shown by Rust only for this one state; every other result
   // is for whichever screen asked. A stray render in another state shows an
