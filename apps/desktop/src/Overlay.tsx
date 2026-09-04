@@ -30,12 +30,15 @@ export function Overlay() {
    * as long as the first read takes.
    */
   const [state, setState] = useState<SessionState | null>(null);
+  const [stateReadFailed, setStateReadFailed] = useState(false);
 
   useEffect(() => {
     // Read once as well as subscribing. The window is created hidden and shown
     // when recording starts, so the state may already have changed before this
     // component mounted and the event for it is gone.
-    void getDictationState().then(setState);
+    void getDictationState()
+      .then(setState)
+      .catch(() => setStateReadFailed(true));
 
     let unlisten: (() => void) | undefined;
     void onDictationState(setState).then((fn) => {
@@ -48,9 +51,14 @@ export function Overlay() {
   // and the honest word for each differs. Transcribing is not recording, and
   // saying "Recording" through it would be the overclaim; saying "Ready" would
   // be worse.
+  // This window exists to answer whether the microphone is open. Once that
+  // answer cannot be read, "Ready" would repeat the idle-state guess KNEG-167
+  // fixes rather than honestly say it is unavailable.
   const label =
     state === null
-      ? "…"
+      ? stateReadFailed
+        ? "State unknown"
+        : "…"
       : state === "recording"
         ? "Recording"
         : state === "transcribing"
