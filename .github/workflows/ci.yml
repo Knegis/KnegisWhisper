@@ -71,6 +71,12 @@ jobs:
       # Cargo.toml and named by no invocation anywhere.
       - name: Cargo features are enabled somewhere
         run: node tools/feature-audit/scan.mjs
+
+      # KNEG-168: a window in no capability can receive no event, and nothing
+      # else notices because denied listen() rejects a promise the frontend discards.
+      - name: Created windows have capabilities
+        run: node tools/capability-audit/scan.mjs
+
       - name: Domain scanner self-tests
         run: node --test tools/domain-scanner/scan.test.mjs
 
@@ -95,6 +101,9 @@ jobs:
 
       - name: Feature audit self-tests
         run: node --test tools/feature-audit/scan.test.mjs
+
+      - name: Capability audit self-tests
+        run: node --test tools/capability-audit/scan.test.mjs
 
       - name: Command audit self-tests
         run: node --test tools/command-audit/scan.test.mjs
