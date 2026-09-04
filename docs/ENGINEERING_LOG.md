@@ -21,7 +21,7 @@ maintained in place rather than appended to, because its purpose is to be curren
 > detail and the by-hand check that found five real defects; [COMPLETION_PLAN.md](COMPLETION_PLAN.md)
 > keeps the phase 7–10 definitions.
 >
-> **Measured, not asserted, as of 2026-09-04 (after KNEG-167):** `cargo test --workspace` —
+> **Measured, not asserted, as of 2026-09-04 (after KNEG-168):** `cargo test --workspace` —
 > **1740 passing, 0 failed, 12 ignored** (941 at the start of the original run, 1296 at its close on
 > 2026-08-27, 1704 and then 1734 on 2026-09-02); parity —
 > **103 entries, 4 declared unreachable** (17 at the start, 8 on 2026-08-27), and **all 13 UI
@@ -289,6 +289,118 @@ Unchanged from the Phases 1–4 entry, restated here so they are not buried:
   porting matrix. Upstream pins both by commit and verifies neither.
 - ~~**`nircmd`**~~ — **dropped**, as leaned towards: third-tier Windows paste fallback only, and
   `SendInput` works.
+
+---
+
+## 2026-09-04 (KNEG-168) — four issues, one root cause: two windows were in no capability
+
+The corner-window saga ends with the thing none of it was about. `e0c0250` and `74ca215`.
+
+### What it was
+
+`capabilities/default.json` was the only capability file, granting `core:default` to
+`["main", "overlay"]`. The application creates four windows: `main` from `tauri.conf.json`, and
+`overlay`, `meeting` and `update` from `pub const LABEL` in their own modules. Tauri v2 scopes
+capabilities by window label, and **a window matching no capability has an empty permission set.**
+`core:default` is what contains `core:event:default`, which is what `listen()` needs.
+
+So the meeting and update notification panels could not subscribe to any event, and never could.
+Every `onMeetingState`, `onMeetingOffer`, `onMeetingTranscript`, `onMeetingOutcome` and
+`onUpdateCheckResult` in the two windows written to render them was denied.
+
+The capability's own description said how it happened: *"Least-privilege permissions for the
+dashboard and overlay windows."* True when written. The notification windows were built later and
+nobody added them.
+
+### The measurement, which is the part worth keeping
+
+A meeting was started with `local-streaming`. The log:
+
+```
+11:12:24 INFO meeting notification window ready capture_exclusion=Active{...} non_activating=Active{...}
+11:14:35 INFO sidecar ready sidecar=sherpa-stream port=8250 pid=18604
+11:14:35 INFO starting microphone capture device="Microphone Array (AMD Audio Device)"
+11:14:36 INFO starting system audio capture device="Headphones (Bose QC45)"
+11:14:36 INFO meeting started provider="local-streaming" system_audio=true
+```
+
+Zero `WARN`. Zero `ERROR`. `set_visible(true)` succeeded — it logs at `error` when `show()` fails.
+Microphone and system audio both captured for the whole session. **And the window rendered
+nothing.**
+
+The panel's only surviving data source was its mount-time `invoke`, which ran at 11:12:24 when the
+state genuinely was idle — custom `#[tauri::command]` calls are not ACL-gated, so that one worked.
+The state event two minutes later was emitted and dropped. The panel still believed idle.
+
+The overlay was unaffected because it *is* in the capability list. That is why this survived: the
+one panel anybody watched was the one that worked.
+
+### Why four issues explained a symptom each
+
+* **KNEG-163** — the empty panel was *white*. Real, and fixed; confirmed by eye when it went
+  transparent.
+* **KNEG-164** — the offer was unrecoverable after a missed event. Real code, correct, and
+  **unreachable**: the offer event never arrives, and the window is only shown at the moment that
+  same undelivered event fires.
+* **KNEG-165** — the caption. Its design note recorded the assumption that killed the whole
+  investigation: *"`AppHandle::emit` is a broadcast, so the notification window is already a
+  recipient."* True of the Rust side. False in practice, because the ACL sits between the
+  broadcast and the listener. That line is corrected there now.
+* **KNEG-167** — the window visible with nothing to render. The reconciliation is right and useful,
+  but the panel was empty because its information was two minutes stale, not because a read failed,
+  so the `.catch()` half never fired either.
+
+Each of those was diagnosed by reading, each was internally consistent, and each was downstream of
+a permission file nobody thought to open. The lesson is not "read the ACL"; it is that four
+consecutive explanations that all fit and none of which was verified on screen should itself have
+been the signal.
+
+### The fix, and why it is narrow
+
+A second capability, `notifications.json`, granting **only** `core:event:default` to
+`["meeting", "update"]`. What the panels use from JavaScript was enumerated rather than assumed:
+`invoke` of this application's own commands, which the ACL does not gate, and `listen` plus the
+`unlisten` callback it returns. Nothing else is reachable from either panel, including through
+`lib/ipc.ts`. `core:default` would additionally grant window, path, webview, menu, tray, image and
+resources permissions to windows that call none of them.
+
+Checked against the regenerated ACL rather than believed: `core:event`'s `default_permission` is
+`["allow-listen", "allow-unlisten", "allow-emit", "allow-emit-to"]`. So the grant covers both calls
+the panels make — and two they do not. Narrowing to the pair was left undone on purpose: `:default`
+is the plugin's own unit of grant, and a bespoke pair would break confusingly the first time a
+panel legitimately emits.
+
+### The gate, and the rule that keeps it honest
+
+`tools/capability-audit/scan.mjs`, the ninth of its shape here. Rule A is the defect: a label from
+`tauri.conf.json` or a Rust `pub const LABEL` that no capability matches. Rule B is its mirror, so
+a fix-by-typo fails. Rule C keeps the exemption manifest attached to reality.
+
+**Rule D is the interesting one.** Rule A finds only labels it can *see*, and it sees them by
+recognising a convention — so a future window written without a `pub const LABEL` would be
+invisible and A would pass while the defect recurred. D therefore requires every
+`WebviewWindowBuilder::new(` to resolve to either a same-file `LABEL` const or a string literal
+that is already a known label. A literal naming an unknown window still fails. Both shapes present
+today are legitimate, including `media.rs`'s mock-webview test passing `"main"`, so no
+test-module special case was needed.
+
+It was proved to fire rather than assumed to: its own `violations()` was run over the real parsed
+labels and real builder sites with only the capability list swapped for its pre-fix contents, and
+produced exactly the two rule A violations the defect had.
+
+What it cannot check is in its module doc — that a window is *covered*, not that the permission set
+is *sufficient*. Expanding `core:default` needs `gen/schemas/acl-manifests.json`, which is
+git-ignored and built by cargo, while the Contracts job runs on ubuntu-latest with no Rust
+toolchain. A capability that covers a window but omits `core:event` would still pass. Only running
+the application catches that.
+
+### Still not verified
+
+That an event now arrives. The build proves the capability is well-formed and the permission
+exists; `tauri dev` picked the change up and restarted at 11:33. Nobody has yet seen the recording
+indicator, the offer panel or the caption. **Every appearance claim in KNEG-163/164/165/167 was made
+against a window that could not receive events**, so all of them need re-checking, not just this
+one. KNEG-166 carries the list.
 
 ---
 
