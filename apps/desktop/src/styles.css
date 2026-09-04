@@ -1173,6 +1173,35 @@ label:has(> input[type="checkbox"]) {
   border-bottom: 1px solid var(--faint);
 }
 
+/* ----------------------------------------------------------- panel windows */
+/*
+ * These windows are built with `transparent(true)`, so only their panels may
+ * paint. `body`'s `var(--bg)` is right for the shell, but was painting the
+ * near-white rectangle behind these panels in light mode. The height chain is
+ * equally local: it gives `.overlay` and `.notify`'s existing `height: 100%`
+ * the window to resolve against instead of letting them collapse to `auto`.
+ */
+:root[data-window="overlay"],
+:root[data-window="meeting"],
+:root[data-window="update"] {
+  height: 100%;
+  background: transparent;
+  scrollbar-gutter: auto;
+}
+
+:root[data-window="overlay"] body,
+:root[data-window="meeting"] body,
+:root[data-window="update"] body {
+  height: 100%;
+  background: transparent;
+}
+
+:root[data-window="overlay"] #root,
+:root[data-window="meeting"] #root,
+:root[data-window="update"] #root {
+  height: 100%;
+}
+
 /* ------------------------------------------------------------------ overlay */
 /*
  * The overlay window is transparent, so the panel paints its own background.
@@ -1233,7 +1262,7 @@ label:has(> input[type="checkbox"]) {
 /* ------------------------------------------------- meeting notification */
 /*
  * 392x92, transparent window, so the panel paints itself. Wider than the
- * overlay because it carries two lines and up to two buttons, and it must stay
+ * overlay because it carries three lines and up to two buttons, and it must stay
  * legible over a video call -- which is the one thing guaranteed to be behind
  * it.
  */
@@ -1274,6 +1303,16 @@ label:has(> input[type="checkbox"]) {
    * uppercase is switched back off here. */
   text-transform: none;
   /* A process name or an error can be long; the panel cannot grow. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.notify-live {
+  /* Speech is authored content, so casing is information rather than panel
+   * chrome; it is brighter than the label below because it is live content. */
+  color: #d4d4d8;
+  text-transform: none;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

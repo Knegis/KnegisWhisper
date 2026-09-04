@@ -12,7 +12,8 @@
  * A `view` state and a switch, not a router. The URL fragment is already claimed
  * — `#overlay`, `#meeting`, and `#update` each select a window out of the same
  * bundle — and a router would be a dependency that makes one `switch` look
- * like a different `switch`.
+ * like a different `switch`. `currentSurface()` owns the fragment mapping, so
+ * this module never repeats it for routing or root-element setup.
  * There is nothing to link to from outside and no history worth preserving: this
  * is a settings window, not a site.
  *
@@ -43,6 +44,7 @@ import { Component, useCallback, useState, type ReactNode } from "react";
 import { Sidebar } from "./components/Sidebar";
 import { getDiagnostics, type Diagnostics } from "./lib/ipc";
 import { DEFAULT_VIEW, groupOf, type ViewId } from "./lib/navigation";
+import { currentSurface } from "./lib/surface";
 import { useRefresh } from "./lib/useRefresh";
 import { MeetingNotification } from "./MeetingNotification";
 import { Overlay } from "./Overlay";
@@ -254,20 +256,20 @@ function Shell() {
 }
 
 /**
- * Both windows are served by one bundle, routed on the URL fragment. One bundle
- * means one CSP and one build.
+ * Four windows are served by one bundle, routed through `currentSurface()`. One
+ * bundle means one CSP and one build.
  */
 export default function App() {
-  // One bundle, four surfaces, routed on the fragment. A `switch` rather than
-  // a chain of ternaries so a fifth window is a compile-visible addition.
-  switch (window.location.hash) {
-    case "#overlay":
-      return <Overlay />;
-    case "#meeting":
-      return <MeetingNotification />;
-    case "#update":
-      return <UpdateNotification />;
-    default:
+  // One bundle, four surfaces. The closed union and no `default` make a fifth
+  // surface a compile-visible addition rather than a quiet fall-through.
+  switch (currentSurface()) {
+    case "main":
       return <Shell />;
+    case "overlay":
+      return <Overlay />;
+    case "meeting":
+      return <MeetingNotification />;
+    case "update":
+      return <UpdateNotification />;
   }
 }
