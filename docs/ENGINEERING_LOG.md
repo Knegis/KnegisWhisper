@@ -21,8 +21,8 @@ maintained in place rather than appended to, because its purpose is to be curren
 > detail and the by-hand check that found five real defects; [COMPLETION_PLAN.md](COMPLETION_PLAN.md)
 > keeps the phase 7–10 definitions.
 >
-> **Measured, not asserted, as of 2026-09-03 (after KNEG-163/164/165):** `cargo test --workspace` —
-> **1739 passing, 0 failed, 12 ignored** (941 at the start of the original run, 1296 at its close on
+> **Measured, not asserted, as of 2026-09-04 (after KNEG-167):** `cargo test --workspace` —
+> **1740 passing, 0 failed, 12 ignored** (941 at the start of the original run, 1296 at its close on
 > 2026-08-27, 1704 and then 1734 on 2026-09-02); parity —
 > **103 entries, 4 declared unreachable** (17 at the start, 8 on 2026-08-27), and **all 13 UI
 > surfaces built**, with no "surface not built" entry remaining anywhere. The four: **no local-ASR
@@ -289,6 +289,107 @@ Unchanged from the Phases 1–4 entry, restated here so they are not buried:
   porting matrix. Upstream pins both by commit and verifies neither.
 - ~~**`nircmd`**~~ — **dropped**, as leaned towards: third-tier Windows paste fallback only, and
   `SendInput` works.
+
+---
+
+## 2026-09-04 (KNEG-167) — the box was still there, and the by-hand check earned its keep
+
+The entry below fixed why the corner box was *white*. A person then looked at it — the check
+KNEG-166 was filed for — and reported: **transparent with a dark border, and completely empty.**
+Two commits followed, `53b19c7` and `84790cf`. This is the entry where the by-hand check paid for
+itself twice over, so it is worth being precise about what each observation bought.
+
+### What two sentences from a user settled
+
+*"Transparent with a dark border"* confirmed KNEG-163's background fix, by eye. That was the first
+claim in the whole KNEG-163/164/165 set verified by looking rather than by reading, and it needed
+no further work.
+
+*"The box is not there directly after launch"*, plus *"only bottom-right"*, killed the leading
+hypothesis outright. The suspicion had been that positioning or `always_on_top` was showing a
+window built `.visible(false)` — which would have been a much larger defect, affecting all three
+panels. Two observations disposed of it: the box is absent at launch, and the dictation overlay at
+bottom-centre is never visible, though it is created and positioned identically. Consistent with
+the code, checked afterwards: nothing in `crates/platform/src/window.rs` calls `ShowWindow` or
+`SetWindowPos`.
+
+`meeting_detect_probe`, run at the same moment, reported Teams **open but not in a call** and
+**nothing holding a capture device**. So the window was up while the runtime had nothing to say.
+
+### Every existing pair was already correct, and that was the finding
+
+The instinct is to hunt for a missing `set_visible(false)`. There isn't one. `dismiss` hides;
+`recording_started` shows; both `forget` calls follow a hide; both `Idle` emits have a hide on the
+next line; `Transition::Withdraw` hides. All checked.
+
+The defect was structural: **visibility was set only by edges, and nothing ever re-checked it.** A
+lost, failed or skipped edge was therefore permanent. Three known ways to lose one — `window.hide()`
+failing, which is a warning and then forgotten; the hide in `stop` sitting inside
+`if ... finished(generation)`, skipped when a stop is superseded; and a detection poll that ended,
+after which no `Withdraw` can ever fire again.
+
+That is a class, not an instance, and it is why the fix is a reconciliation rather than a fourth
+paired call.
+
+### Why the reconciliation is safe where it sits, and why it only hides
+
+It runs at the end of `poll_for_meetings`, and needs no new lock and no new ordering. The reason is
+worth recording because the whole design rests on it: `may_poll` is `matches!(phase, Idle)` and the
+`lifecycle` guard is held for the remainder of the function — its own comment says a start cannot
+slip in — so **past the early return the phase is provably `Idle`**. Reading the outstanding offer
+under `watch` while holding `lifecycle` matches this file's established `lifecycle` → `live` →
+`watch` order, and `live` is never needed.
+
+**It hides only.** The symmetric version was considered and rejected: `set_visible(true)` runs at
+the *end* of `start`, so forcing the window up whenever a session was active would flash an empty
+panel part-way through `Starting` — the same defect from the other side. It would also fight
+`dismiss`, whose entire purpose is a visible offer going away while its suppression stays. So the
+show path stays edge-triggered, and the brief said so three times because a worker improving it
+into symmetry was the obvious failure mode.
+
+One benign interleaving was found and deliberately left: `stop` releases the lifecycle lock when
+`finished()` returns and only then hides, so a poll landing in that gap may hide the window a moment
+before `stop` would have. The outcome is identical; the cost is a `warn` line that reads as a defect
+when it was a race. Guarding it would mean holding the lock across a window operation, which is how
+deadlocks get written.
+
+### The frontend half was a defect nobody had asked about
+
+Found while chasing the first one: **none of the three panel windows handled its mount read
+failing.** `void getMeetingStatus().then(...)` with no `.catch()` — and the `void` that tells a
+linter the promise is deliberately unawaited also discards the rejection. A failed read set no
+state, left the component at `null`, and every one of them renders `null` as "nothing to say".
+Permanently, silently.
+
+`Overlay.tsx` was the worst case, and the argument is its own module doc: *"the local user is never
+in doubt about whether they are being recorded."* A failed read left it rendering as though the
+answer were no, on a window Rust only shows *because* a recording is running. It says
+`State unknown` now, with the indicator in its non-recording form — asserting a recording it could
+not read would be the opposite overclaim, and both are worse than admitting ignorance.
+
+The fallback is gated on having nothing from *either* source, not merely on the read failing: the
+subscription is the other half, and state arriving by event afterwards must render normally. In the
+meeting window that falls out of the existing branch order for free.
+
+### Process notes
+
+Both slices were independent — no shared type, disjoint files — so no foundation round was needed;
+the sequencing was purely a memory ceiling, and the second worker was launched the moment the first
+finished rather than after its merge, so its run overlapped the first one's review.
+
+One change in `84790cf` is the orchestrator's, disclosed in that commit: inserting the new branch
+into `UpdateNotification.tsx` left a pre-existing comment describing an `if` two blocks below it.
+The comment was moved back onto the branch it explains. A comment-truth defect, not a logic one,
+and too small to spend the available repair round on — but not the kind of thing this repository
+leaves sitting either.
+
+### What is still not verified
+
+Everything about how any of it looks. The gates prove compilation, bundling, audit parity, 1740
+passing tests and a clean `clippy -D warnings`. Nobody has made a panel fail its read, nobody has
+seen the caption from KNEG-165, and `cargo build --workspace` has now twice been unable to relink
+the desktop binary because a running instance holds it — so the final link step is unverified on
+this tree. KNEG-166 remains open with the list.
 
 ---
 
