@@ -306,6 +306,13 @@ pub struct MeetingStatus {
     /// open" even though Teams cannot be prompted for, because that is more
     /// useful than silence and it is where the reason lives.
     pub detected: Vec<Detected>,
+    /// The offer waiting in the notification window, if one exists.
+    ///
+    /// A broadcast event is not recoverable: a window created hidden may mount
+    /// before or after it was sent. This is the read-back path the update
+    /// notification already has through `get_last_update_check`, so either
+    /// mounting order reaches the same outstanding offer.
+    pub offer: Option<Offer>,
     /// Whether a detected meeting offers to record.
     pub prompt_on_detect: bool,
     /// Whether the notification window is confirmed absent from screen shares.
@@ -449,6 +456,15 @@ enum SessionPhase {
     Starting,
     Recording,
     Finishing,
+}
+
+/// Decide whether the notification window has state to render.
+///
+/// A pure decision over the lifecycle phase and outstanding-offer flag rather
+/// than over `AppHandle`, so a test can exercise the visibility invariant
+/// without touching Tauri -- the same reason as `updater::is_configured`.
+const fn window_has_something_to_say(phase: SessionPhase, offer_outstanding: bool) -> bool {
+    !matches!(phase, SessionPhase::Idle) || offer_outstanding
 }
 
 /// Serialises meeting transitions and identifies the session completing them.
@@ -662,6 +678,16 @@ impl MeetingRuntime {
             }
             Transition::None => {}
         }
+
+        // This must run after every poll that reached the transition, including
+        // `None`: KNEG-167 is specifically the case where a missed hide edge
+        // leaves no transition to correct the empty visible window.
+        let offer_outstanding = {
+            let held = self.watch.lock().await;
+            held.watcher.outstanding_offer().is_some()
+        };
+        let has_something_to_say = window_has_something_to_say(lifecycle.phase, offer_outstanding);
+        crate::meeting_window::reconcile(&self.app, has_something_to_say);
     }
 
     /// Dismiss the outstanding offer without recording.
@@ -1128,9 +1154,13 @@ impl MeetingRuntime {
         let phase = self.lifecycle.lock().await.phase;
         let held = self.live.lock().await;
         let system_audio = kw_audio_core::system_audio::support();
-        let (detected, microphone) = {
+        let (detected, microphone, offer) = {
             let held = self.watch.lock().await;
-            (held.detected.clone(), held.microphone.clone())
+            (
+                held.detected.clone(),
+                held.microphone.clone(),
+                held.watcher.outstanding_offer().cloned(),
+            )
         };
         let prompt_on_detect =
             kw_storage::settings::get_or(self.db.pool(), PROMPT_KEY, PROMPT_BY_DEFAULT)
@@ -1154,6 +1184,7 @@ impl MeetingRuntime {
                 system_audio,
                 microphone,
                 detected,
+                offer,
                 prompt_on_detect,
                 notification_excluded,
             }
@@ -1172,6 +1203,7 @@ impl MeetingRuntime {
                     system_audio,
                     microphone,
                     detected,
+                    offer,
                     prompt_on_detect,
                     notification_excluded,
                 },
@@ -1184,6 +1216,7 @@ impl MeetingRuntime {
                     system_audio,
                     microphone,
                     detected,
+                    offer,
                     prompt_on_detect,
                     notification_excluded,
                 },
@@ -1891,6 +1924,39 @@ mod tests {
     use super::*;
 
     /* ----------------------------------------------- session interleavings */
+
+    #[test]
+    fn notification_window_has_something_to_say_except_when_idle_without_an_offer() {
+        let cases = [
+            (SessionPhase::Idle, false, false),
+            (SessionPhase::Idle, true, true),
+            (SessionPhase::Starting, false, true),
+            (SessionPhase::Starting, true, true),
+            (SessionPhase::Recording, false, true),
+            (SessionPhase::Recording, true, true),
+            (SessionPhase::Finishing, false, true),
+            (SessionPhase::Finishing, true, true),
+        ];
+
+        for (phase, offer_outstanding, expected) in cases {
+            assert_eq!(
+                window_has_something_to_say(phase, offer_outstanding),
+                expected
+            );
+        }
+
+        // Idle with no offer is the sole state in which the window is empty.
+        assert!(!window_has_something_to_say(SessionPhase::Idle, false));
+        assert!(window_has_something_to_say(SessionPhase::Idle, true));
+        for phase in [
+            SessionPhase::Starting,
+            SessionPhase::Recording,
+            SessionPhase::Finishing,
+        ] {
+            assert!(window_has_something_to_say(phase, false));
+            assert!(window_has_something_to_say(phase, true));
+        }
+    }
 
     #[test]
     fn finishing_blocks_both_a_new_start_and_detection_polling() {

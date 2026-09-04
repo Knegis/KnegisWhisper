@@ -724,6 +724,15 @@ microphone: MicrophoneSupport | null,
  */
 detected: Array<Detected>,
 /**
+ * The offer waiting in the notification window, if one exists.
+ *
+ * A broadcast event is not recoverable: a window created hidden may mount
+ * before or after it was sent. This is the read-back path the update
+ * notification already has through `get_last_update_check`, so either
+ * mounting order reaches the same outstanding offer.
+ */
+offer: Offer | null,
+/**
  * Whether a detected meeting offers to record.
  */
 promptOnDetect: boolean,

@@ -24,13 +24,15 @@
  * which is the thing the brief forbids.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   dismissMeetingOffer,
   getMeetingStatus,
   onMeetingOffer,
+  onMeetingOutcome,
   onMeetingState,
+  onMeetingTranscript,
   startMeeting,
   stopMeeting,
   type MeetingState,
@@ -47,21 +49,54 @@ export function MeetingNotification() {
   const [offer, setOffer] = useState<Offer | null>(null);
   const [sources, setSources] = useState<Sources | null>(null);
   const [elapsed, setElapsed] = useState(0);
+  const [liveTranscript, setLiveTranscript] = useState<string | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
+  const [stateReadProblem, setStateReadProblem] = useState<string | null>(null);
+  const offerFromEvent = useRef(false);
+  const stateFromEvent = useRef(false);
 
   useEffect(() => {
     // Read once as well as subscribing: the window is hidden until there is
     // something to say, so by the time it is shown the event that caused it may
     // already have been delivered.
-    void getMeetingStatus().then((status) => {
-      setState(status.state);
-      setSources(status.sources);
-      setElapsed(status.elapsedSeconds);
-    });
+    void getMeetingStatus()
+      .then((status) => {
+        // Events win over the asynchronous read. In particular, an offer event
+        // carrying `null` is a withdrawal; applying this older status afterward
+        // would resurrect the offer the user just dismissed.
+        if (!stateFromEvent.current) setState(status.state);
+        if (!offerFromEvent.current) setOffer(status.offer);
+        setSources(status.sources);
+        setElapsed(status.elapsedSeconds);
+      })
+      .catch((err: unknown) => setStateReadProblem(String(err)));
 
     const unlisteners: Array<() => void> = [];
-    void onMeetingState(setState).then((fn) => unlisteners.push(fn));
-    void onMeetingOffer(setOffer).then((fn) => unlisteners.push(fn));
+    void onMeetingState((next) => {
+      stateFromEvent.current = true;
+      setState(next);
+      // A caption is a claim that words are still arriving. Failure states keep
+      // recording visible, but must not leave its last partial looking live.
+      if (
+        !meetingIsLive(next) ||
+        next === "recording-without-transcript" ||
+        next === "stalled"
+      ) {
+        setLiveTranscript(null);
+      }
+    }).then((fn) => unlisteners.push(fn));
+    void onMeetingOffer((next) => {
+      offerFromEvent.current = true;
+      setOffer(next);
+    }).then((fn) => unlisteners.push(fn));
+    // Replaced rather than appended: every event is a partial, and overlapping
+    // provider windows would repeat words if their text were accumulated.
+    void onMeetingTranscript((event) => {
+      if (event.text.trim().length > 0) setLiveTranscript(event.text);
+    }).then((fn) => unlisteners.push(fn));
+    void onMeetingOutcome(() => {
+      setLiveTranscript(null);
+    }).then((fn) => unlisteners.push(fn));
     return () => unlisteners.forEach((fn) => fn());
   }, []);
 
@@ -107,6 +142,9 @@ export function MeetingNotification() {
                 ? "live transcript stopped — still recording"
                 : whoIsRecorded(sources)}
           </span>
+          {liveTranscript ? (
+            <span className="notify-live">{liveTranscript}</span>
+          ) : null}
         </span>
         <button
           type="button"
@@ -164,6 +202,18 @@ export function MeetingNotification() {
         >
           Not now
         </button>
+      </div>
+    );
+  }
+
+  if (stateReadProblem && state === null) {
+    return (
+      <div className="notify">
+        <span className="indicator" aria-hidden="true" />
+        <span className="notify-body">
+          <strong>State unknown</strong>
+          <span className="notify-detail notify-alert">{stateReadProblem}</span>
+        </span>
       </div>
     );
   }

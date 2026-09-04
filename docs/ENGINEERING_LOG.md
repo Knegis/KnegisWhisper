@@ -21,9 +21,9 @@ maintained in place rather than appended to, because its purpose is to be curren
 > detail and the by-hand check that found five real defects; [COMPLETION_PLAN.md](COMPLETION_PLAN.md)
 > keeps the phase 7–10 definitions.
 >
-> **Measured, not asserted, as of 2026-09-02 (after KNEG-152):** `cargo test --workspace` — **1734
-> passing, 0 failed, 12 ignored** (941 at the start of the original run, 1296 at its close on
-> 2026-08-27, 1704 earlier on 2026-09-02); parity —
+> **Measured, not asserted, as of 2026-09-04 (after KNEG-168):** `cargo test --workspace` —
+> **1740 passing, 0 failed, 12 ignored** (941 at the start of the original run, 1296 at its close on
+> 2026-08-27, 1704 and then 1734 on 2026-09-02); parity —
 > **103 entries, 4 declared unreachable** (17 at the start, 8 on 2026-08-27), and **all 13 UI
 > surfaces built**, with no "surface not built" entry remaining anywhere. The four: **no local-ASR
 > model any longer** — all four sherpa models are pinned and installable as of 2026-09-01 — two
@@ -289,6 +289,465 @@ Unchanged from the Phases 1–4 entry, restated here so they are not buried:
   porting matrix. Upstream pins both by commit and verifies neither.
 - ~~**`nircmd`**~~ — **dropped**, as leaned towards: third-tier Windows paste fallback only, and
   `SendInput` works.
+
+---
+
+## 2026-09-04 (KNEG-168) — four issues, one root cause: two windows were in no capability
+
+The corner-window saga ends with the thing none of it was about. `e0c0250` and `74ca215`.
+
+### What it was
+
+`capabilities/default.json` was the only capability file, granting `core:default` to
+`["main", "overlay"]`. The application creates four windows: `main` from `tauri.conf.json`, and
+`overlay`, `meeting` and `update` from `pub const LABEL` in their own modules. Tauri v2 scopes
+capabilities by window label, and **a window matching no capability has an empty permission set.**
+`core:default` is what contains `core:event:default`, which is what `listen()` needs.
+
+So the meeting and update notification panels could not subscribe to any event, and never could.
+Every `onMeetingState`, `onMeetingOffer`, `onMeetingTranscript`, `onMeetingOutcome` and
+`onUpdateCheckResult` in the two windows written to render them was denied.
+
+The capability's own description said how it happened: *"Least-privilege permissions for the
+dashboard and overlay windows."* True when written. The notification windows were built later and
+nobody added them.
+
+### The measurement, which is the part worth keeping
+
+A meeting was started with `local-streaming`. The log:
+
+```
+11:12:24 INFO meeting notification window ready capture_exclusion=Active{...} non_activating=Active{...}
+11:14:35 INFO sidecar ready sidecar=sherpa-stream port=8250 pid=18604
+11:14:35 INFO starting microphone capture device="Microphone Array (AMD Audio Device)"
+11:14:36 INFO starting system audio capture device="Headphones (Bose QC45)"
+11:14:36 INFO meeting started provider="local-streaming" system_audio=true
+```
+
+Zero `WARN`. Zero `ERROR`. `set_visible(true)` succeeded — it logs at `error` when `show()` fails.
+Microphone and system audio both captured for the whole session. **And the window rendered
+nothing.**
+
+The panel's only surviving data source was its mount-time `invoke`, which ran at 11:12:24 when the
+state genuinely was idle — custom `#[tauri::command]` calls are not ACL-gated, so that one worked.
+The state event two minutes later was emitted and dropped. The panel still believed idle.
+
+The overlay was unaffected because it *is* in the capability list. That is why this survived: the
+one panel anybody watched was the one that worked.
+
+### Why four issues explained a symptom each
+
+* **KNEG-163** — the empty panel was *white*. Real, and fixed; confirmed by eye when it went
+  transparent.
+* **KNEG-164** — the offer was unrecoverable after a missed event. Real code, correct, and
+  **unreachable**: the offer event never arrives, and the window is only shown at the moment that
+  same undelivered event fires.
+* **KNEG-165** — the caption. Its design note recorded the assumption that killed the whole
+  investigation: *"`AppHandle::emit` is a broadcast, so the notification window is already a
+  recipient."* True of the Rust side. False in practice, because the ACL sits between the
+  broadcast and the listener. That line is corrected there now.
+* **KNEG-167** — the window visible with nothing to render. The reconciliation is right and useful,
+  but the panel was empty because its information was two minutes stale, not because a read failed,
+  so the `.catch()` half never fired either.
+
+Each of those was diagnosed by reading, each was internally consistent, and each was downstream of
+a permission file nobody thought to open. The lesson is not "read the ACL"; it is that four
+consecutive explanations that all fit and none of which was verified on screen should itself have
+been the signal.
+
+### The fix, and why it is narrow
+
+A second capability, `notifications.json`, granting **only** `core:event:default` to
+`["meeting", "update"]`. What the panels use from JavaScript was enumerated rather than assumed:
+`invoke` of this application's own commands, which the ACL does not gate, and `listen` plus the
+`unlisten` callback it returns. Nothing else is reachable from either panel, including through
+`lib/ipc.ts`. `core:default` would additionally grant window, path, webview, menu, tray, image and
+resources permissions to windows that call none of them.
+
+Checked against the regenerated ACL rather than believed: `core:event`'s `default_permission` is
+`["allow-listen", "allow-unlisten", "allow-emit", "allow-emit-to"]`. So the grant covers both calls
+the panels make — and two they do not. Narrowing to the pair was left undone on purpose: `:default`
+is the plugin's own unit of grant, and a bespoke pair would break confusingly the first time a
+panel legitimately emits.
+
+### The gate, and the rule that keeps it honest
+
+`tools/capability-audit/scan.mjs`, the ninth of its shape here. Rule A is the defect: a label from
+`tauri.conf.json` or a Rust `pub const LABEL` that no capability matches. Rule B is its mirror, so
+a fix-by-typo fails. Rule C keeps the exemption manifest attached to reality.
+
+**Rule D is the interesting one.** Rule A finds only labels it can *see*, and it sees them by
+recognising a convention — so a future window written without a `pub const LABEL` would be
+invisible and A would pass while the defect recurred. D therefore requires every
+`WebviewWindowBuilder::new(` to resolve to either a same-file `LABEL` const or a string literal
+that is already a known label. A literal naming an unknown window still fails. Both shapes present
+today are legitimate, including `media.rs`'s mock-webview test passing `"main"`, so no
+test-module special case was needed.
+
+It was proved to fire rather than assumed to: its own `violations()` was run over the real parsed
+labels and real builder sites with only the capability list swapped for its pre-fix contents, and
+produced exactly the two rule A violations the defect had.
+
+What it cannot check is in its module doc — that a window is *covered*, not that the permission set
+is *sufficient*. Expanding `core:default` needs `gen/schemas/acl-manifests.json`, which is
+git-ignored and built by cargo, while the Contracts job runs on ubuntu-latest with no Rust
+toolchain. A capability that covers a window but omits `core:event` would still pass. Only running
+the application catches that.
+
+### Still not verified
+
+That an event now arrives. The build proves the capability is well-formed and the permission
+exists; `tauri dev` picked the change up and restarted at 11:33. Nobody has yet seen the recording
+indicator, the offer panel or the caption. **Every appearance claim in KNEG-163/164/165/167 was made
+against a window that could not receive events**, so all of them need re-checking, not just this
+one. KNEG-166 carries the list.
+
+---
+
+## 2026-09-04 (KNEG-167) — the box was still there, and the by-hand check earned its keep
+
+The entry below fixed why the corner box was *white*. A person then looked at it — the check
+KNEG-166 was filed for — and reported: **transparent with a dark border, and completely empty.**
+Two commits followed, `53b19c7` and `84790cf`. This is the entry where the by-hand check paid for
+itself twice over, so it is worth being precise about what each observation bought.
+
+### What two sentences from a user settled
+
+*"Transparent with a dark border"* confirmed KNEG-163's background fix, by eye. That was the first
+claim in the whole KNEG-163/164/165 set verified by looking rather than by reading, and it needed
+no further work.
+
+*"The box is not there directly after launch"*, plus *"only bottom-right"*, killed the leading
+hypothesis outright. The suspicion had been that positioning or `always_on_top` was showing a
+window built `.visible(false)` — which would have been a much larger defect, affecting all three
+panels. Two observations disposed of it: the box is absent at launch, and the dictation overlay at
+bottom-centre is never visible, though it is created and positioned identically. Consistent with
+the code, checked afterwards: nothing in `crates/platform/src/window.rs` calls `ShowWindow` or
+`SetWindowPos`.
+
+`meeting_detect_probe`, run at the same moment, reported Teams **open but not in a call** and
+**nothing holding a capture device**. So the window was up while the runtime had nothing to say.
+
+### Every existing pair was already correct, and that was the finding
+
+The instinct is to hunt for a missing `set_visible(false)`. There isn't one. `dismiss` hides;
+`recording_started` shows; both `forget` calls follow a hide; both `Idle` emits have a hide on the
+next line; `Transition::Withdraw` hides. All checked.
+
+The defect was structural: **visibility was set only by edges, and nothing ever re-checked it.** A
+lost, failed or skipped edge was therefore permanent. Three known ways to lose one — `window.hide()`
+failing, which is a warning and then forgotten; the hide in `stop` sitting inside
+`if ... finished(generation)`, skipped when a stop is superseded; and a detection poll that ended,
+after which no `Withdraw` can ever fire again.
+
+That is a class, not an instance, and it is why the fix is a reconciliation rather than a fourth
+paired call.
+
+### Why the reconciliation is safe where it sits, and why it only hides
+
+It runs at the end of `poll_for_meetings`, and needs no new lock and no new ordering. The reason is
+worth recording because the whole design rests on it: `may_poll` is `matches!(phase, Idle)` and the
+`lifecycle` guard is held for the remainder of the function — its own comment says a start cannot
+slip in — so **past the early return the phase is provably `Idle`**. Reading the outstanding offer
+under `watch` while holding `lifecycle` matches this file's established `lifecycle` → `live` →
+`watch` order, and `live` is never needed.
+
+**It hides only.** The symmetric version was considered and rejected: `set_visible(true)` runs at
+the *end* of `start`, so forcing the window up whenever a session was active would flash an empty
+panel part-way through `Starting` — the same defect from the other side. It would also fight
+`dismiss`, whose entire purpose is a visible offer going away while its suppression stays. So the
+show path stays edge-triggered, and the brief said so three times because a worker improving it
+into symmetry was the obvious failure mode.
+
+One benign interleaving was found and deliberately left: `stop` releases the lifecycle lock when
+`finished()` returns and only then hides, so a poll landing in that gap may hide the window a moment
+before `stop` would have. The outcome is identical; the cost is a `warn` line that reads as a defect
+when it was a race. Guarding it would mean holding the lock across a window operation, which is how
+deadlocks get written.
+
+### The frontend half was a defect nobody had asked about
+
+Found while chasing the first one: **none of the three panel windows handled its mount read
+failing.** `void getMeetingStatus().then(...)` with no `.catch()` — and the `void` that tells a
+linter the promise is deliberately unawaited also discards the rejection. A failed read set no
+state, left the component at `null`, and every one of them renders `null` as "nothing to say".
+Permanently, silently.
+
+`Overlay.tsx` was the worst case, and the argument is its own module doc: *"the local user is never
+in doubt about whether they are being recorded."* A failed read left it rendering as though the
+answer were no, on a window Rust only shows *because* a recording is running. It says
+`State unknown` now, with the indicator in its non-recording form — asserting a recording it could
+not read would be the opposite overclaim, and both are worse than admitting ignorance.
+
+The fallback is gated on having nothing from *either* source, not merely on the read failing: the
+subscription is the other half, and state arriving by event afterwards must render normally. In the
+meeting window that falls out of the existing branch order for free.
+
+### Process notes
+
+Both slices were independent — no shared type, disjoint files — so no foundation round was needed;
+the sequencing was purely a memory ceiling, and the second worker was launched the moment the first
+finished rather than after its merge, so its run overlapped the first one's review.
+
+One change in `84790cf` is the orchestrator's, disclosed in that commit: inserting the new branch
+into `UpdateNotification.tsx` left a pre-existing comment describing an `if` two blocks below it.
+The comment was moved back onto the branch it explains. A comment-truth defect, not a logic one,
+and too small to spend the available repair round on — but not the kind of thing this repository
+leaves sitting either.
+
+### What is still not verified
+
+Everything about how any of it looks. The gates prove compilation, bundling, audit parity, 1740
+passing tests and a clean `clippy -D warnings`. Nobody has made a panel fail its read, nobody has
+seen the caption from KNEG-165, and `cargo build --workspace` has now twice been unable to relink
+the desktop binary because a running instance holds it — so the final link step is unverified on
+this tree. KNEG-166 remains open with the list.
+
+---
+
+## 2026-09-03 (KNEG-163/164/165) — the white box in the corner, and what one sentence was worth
+
+Started from a user sentence — *"what is the white box that shows up in the bottom right corner
+that is immovable"* — and ended as four Linear issues and two commits, `b20acaf` and `2f143b57`.
+Worth recording because **nothing in it was found by looking at the window**, the fix was designed
+and landed the same way, and KNEG-166 is the by-hand check that still has not happened.
+
+### Immovable needed no investigation
+
+`decorations(false)`, `always_on_top(true)`, `skip_taskbar(true)`, `focused(false)`, plus the
+imperative non-activating treatment from `overlay::apply_treatments`, and no
+`data-tauri-drag-region` anywhere in `apps/desktop/src`. No frame and no drag surface means
+nothing to grab. That half was answerable by reading and stayed answered.
+
+### White was three causes, and separating them was most of the work
+
+1. **`body { background: var(--bg) }` painted inside a `transparent(true)` window.** One bundle
+   serves four surfaces, so a rule written for the shell lands in the panels. `--bg` is `#fdfdfd`
+   in light mode. Unconditional. In dark mode it paints `#181818`, which reads as deliberate —
+   which is the likeliest reason it survived this long unremarked.
+2. **`.overlay` and `.notify` asked for `height: 100%` with no chain to resolve against.** No
+   `html`, `body` or `#root` rule set a height anywhere in `styles.css`, so it computed to `auto`.
+   A 92px window held a ~35px panel with background below it, and `.notify-recording`'s inset red
+   edge — the thing that makes "recording" read at a glance — was drawn around the content box.
+   Its own comment, "the panel is 92px of fixed height", was describing a panel that did not fill
+   them. Also unconditional.
+3. **The empty state is then entirely background.** `.notify-empty` is transparent with no
+   children, so zero height, and its comment already said it only shows "through a stray render".
+   With 1 and 2 present, a stray render is a 392×92 rectangle of `#fdfdfd`.
+
+### A correction worth keeping
+
+The first answer given to the user leaned on cause 3, driven by a missed `meeting-offer` event.
+That was overweighted, and KNEG-134 is why: it records the offer window appearing on a real Teams
+call on 2026-09-01 "with the right words", so delivery demonstrably works at least sometimes and
+the race is intermittent at most. Causes 1 and 2 are the load-bearing ones. KNEG-164 was rewritten
+to say so rather than leaving the stronger claim standing.
+
+### The race is real anyway, and is now recoverable
+
+`poll` broadcasts `meeting-offer` and *then* shows the window; the read-once on mount recovered
+nothing, because `MeetingStatus` carried no offer and `Watcher::outstanding` held only a provider
+id; and `consider` returns `Transition::None` while an offer is outstanding, which is correct for
+"one offer per meeting, not one per poll" and is exactly what makes one lost delivery permanent for
+the length of the call. `UpdateNotification` never had the defect — `get_last_update_check` exists.
+That asymmetry between two sibling windows was the argument for the fix rather than any new
+mechanism.
+
+Consuming it has a trap worth naming because a later simplification will want to reintroduce it:
+`getMeetingStatus()` is awaited and a withdrawal arrives as `null`, so `prev ?? fromStatus` would
+resurrect an offer the user had just dismissed. The event has to win outright, via a ref set in the
+listener.
+
+### The caption needed no Rust at all
+
+`meeting-transcript` was already broadcast to every window by `app.emit` — a broadcast to all
+webviews, not a targeted send — so the window simply had no listener. The round-2 brief said so and
+told the worker to report `wrong_premise` rather than invent an event if it disagreed; it did not.
+
+Decisions, with what they were chosen over. **A third line inside the existing panel**, window
+unchanged at 392×92 — three 16px lines plus two 0.15rem gaps is ~53px inside a 92px panel that
+centres its content. The alternative was the porting matrix's own unbuilt 460×132 "transcription
+preview" role, rejected as a larger claim than the request and recorded in KNEG-166 as the fallback
+if ~39 characters proves too few. **Newest event wins regardless of source, with no prefix** —
+one line at 392px is about 39 monospace characters and a prefix would spend an eighth of it on
+attribution `Settings > Meetings` already shows with room. **Replace, never append** — partials
+overlap by two seconds. **`text-transform: none`** — the stylesheet's own rule keeps uppercase off
+anything the user authored, and this is speech. **Cleared on `recording-without-transcript` and
+`stalled`**, not only on outcome: a caption frozen under "live transcript stopped" would claim words
+were still arriving.
+
+One edge was considered and left alone: a transcript event arriving *after* the failure state would
+put the caption back under the amber line. It is not reachable — `pump` drains its remaining events
+before returning, and the failure state is emitted after `pump` finishes — so guarding it would be
+code for a case the ordering already prevents.
+
+### `data-window`, not `data-surface`
+
+CSS cannot ask which window it is, and `:has()` on rendered content would flash the wrong background
+before React mounts, so the surface is stamped on the root element from `main.tsx` before
+`createRoot`. The attribute name is deliberate: `data-surface` is load-bearing for
+`verify-parity.mjs` rule 7, which greps component sources for `data-surface="<surfaceId>"` to prove
+a declared UI surface exists. The hash mapping now lives once in `lib/surface.ts`, read by both the
+stamp and the router, and `App.tsx`'s switch lost its `default` arm — which is what finally delivers
+what its comment had claimed since it was written, that a fifth window is a compile-visible
+addition.
+
+### Process: `dev` moved under the run, and a lapsed entitlement stopped it dead
+
+Two things worth carrying forward.
+
+`dev` gained three commits (KNEG-160) between preflight and the first merge, and KNEG-160's scope —
+`App.tsx`, `styles.css` — overlapped the frontend half's. The merge was clean because the file sets
+were disjoint, but the *plan* was stale, so the diagnosis was re-checked against the merged tree
+before the second worker launched rather than after. It held: the rail was pinned with
+`position: fixed`, which needs no height chain, which is how it added 251 lines of `styles.css`
+without touching either defect. The same run also reset the `worker-1` slot out from under KNEG-160's
+own in-flight worker; its branch ref survived, but a shared pool wants a liveness check before
+allocation.
+
+And both workers first exited 20 with zero-byte patches: `codex exec` returned 404 from
+`chatgpt.com/backend-api/codex/responses` on both transports. The identity token refreshes
+independently of the entitlement and the model-list route stays open, so it reads exactly like CLI
+version skew. It was not — the `id_token` claims gave
+`chatgpt_subscription_active_until: 2026-07-11`. After `codex login` the same claim read
+`2026-09-11` and both rounds ran normally.
+
+### What this does not establish
+
+Every appearance claim. The gates prove compilation, bundling, audit parity, 1739 passing tests and
+a clean `clippy -D warnings`; they prove nothing about how the panel looks. Light mode is the case
+that matters, because in dark mode the defect painted `#181818` and would hide its own fix.
+KNEG-166 is open for it.
+
+---
+
+## 2026-09-03 (KNEG-160) — a cap that made the window irrelevant, and a class that styled nothing
+
+Two requests arrived together: pin the list of screens to the left edge so the content can be
+wider, and stop thirteen screens sitting in one flat list.
+
+### The cap, not the window, was the width
+
+`.shell` was `grid-template-columns: 12rem minmax(0, 1fr)` inside `max-width: 60rem; margin: 0
+auto`. Measured: the content pane was **736px in the default 1000×720 window and 736px on a
+maximised 4K display**. Every pixel of a larger monitor went into the two margins. That is the
+whole defect, and it means "make the content wider" is one deletion — the cap — plus somewhere for
+the freed width to stop.
+
+The rail is `position: fixed` now, `.shell` reserves its width with `padding-left: var(--nav-col)`,
+and `.content` is what is capped: `--content-max`, 68rem, centred in what is left.
+
+**68rem is derived rather than picked.** The widest layout in the application is `.note-workspace`,
+`minmax(0, 1fr) 22rem` — an editor beside a transcript. 44.5rem of editor, `--row-gap`, 22rem of
+transcript is 68rem. And the honest accounting, which is in the token's comment: in the default
+window the pane goes 736px → ~728px, a wash, because the 60rem cap was already nearly the whole
+window. The gain is that it now *grows* — to 1088px, about +48% maximised on 1920px — where before
+it was frozen.
+
+Two dead measurements came out with it. `.note-workspace`'s collapse rule was `@media (max-width:
+64rem)`, testing the **viewport** while its container was 46rem — so at the 62.5rem default window
+it fired every time and **that layout has never shown two columns in the shipped application**.
+Re-derived against the real container width to 80rem. And `.shell`'s comment claimed the sidebar
+"scrolls with the page rather than being sticky" while the rule twelve lines below it was
+`position: sticky`; it was false when it was written.
+
+### Thirteen peers is a list with no shape
+
+Four top-level destinations — Dictation, Meetings, Notes, Upload — plus **Settings** (Providers,
+Transcription, Intelligence, Local models, Calendar) and **Developer** (Local API, CLI, MCP,
+Diagnostics). All thirteen destinations survive with the label they already shipped; the two group
+names are the only new user-visible strings in the change.
+
+The one filing decision worth recording is **Local models**, which was requested beside CLI and
+MCP and is in Settings instead. `config/ui-surfaces.json` calls its surface
+`settings.intelligence.local` and files it under `Settings > Intelligence`. A rail that disagreed
+with the config describing the same screen would be a second, quieter answer to where that screen
+lives, and the config is the one a gate reads. Calendar is in Settings for a plainer reason: it is
+an OAuth client-ID paste and a sync. Developer is the four surfaces whose audience is another
+program.
+
+The old flat list carried an ordering argument — "a key is useless without a shortcut to dictate
+with, and both are useless without knowing where the audio goes". That ordered the *setup* path,
+and the setup path is now the Settings group in the same relative order. The argument was moved,
+not overturned.
+
+`ViewId` is **derived from the tree** by a conditional type, and the view switch took the `never`
+guard from `labels.ts:952`. The chain of `{view === "x" ? <X /> : null}` ternaries it replaced was
+exhaustive over nothing: an entry with no matching line rendered an empty pane and no error.
+
+### The reversal, and what caused it
+
+A mechanical check — every class the TSX emits has a rule in `styles.css` — found that
+**`nav-group` was on every group header and had no rule at all.** A collapsed `Settings` was
+pixel-identical to `Dictation`: nothing said one opened a list and the other opened a screen. CSS
+has no equivalent of an unused-variable error, so nothing had objected.
+
+Fixing it broke the design. Expansion was first **derived** from the current view: no state, and a
+header selected its group's first child. Add a `+`/`−` marker to that and it promises a press that
+cannot happen — a derived-open group cannot be collapsed. Add `aria-expanded` and it says the same
+thing to a screen reader. And a header that navigates means looking inside `Developer` from
+Dictation lands you on Local API, which is the opposite of putting the options where they can be
+seen.
+
+So expansion is explicit state in `App.tsx`, a header discloses only, and `groupOf(view)` opens the
+group holding a screen however you arrived. That last part is load-bearing rather than tidy:
+Transcription and Intelligence both navigate sideways to Providers, and the error boundary resets
+to Diagnostics under `Developer` — without it, all three would leave a collapsed rail with nothing
+marked. Collapsing the group you are standing in is allowed, which is what a sidebar with sections
+does.
+
+**The smaller design was wrong in a way only visible once drawn**, and the check that exposed it
+was looking for a dangling class, not for a design error. Worth remembering which one found it.
+
+### What was verified, and by what
+
+`tsc --noEmit` and `vite build` clean; all 14 node gates green with 118 self-test assertions; both
+`--check` generators clean. No `config/` file and no screen component was touched — the parity and
+settings gates resolve a surface to its *component* and its `data-surface` marker, so a nav
+restructure is invisible to them by construction, which was checked by reading them rather than
+assumed.
+
+Three mutations, each red on both checks, each restored byte-identically by SHA-256: dropping the
+`mcp` case from the switch, adding a fourteenth nav leaf with no branch, and making `groupOf`
+always return `null`. The third is the instructive one — `tsc` caught it only incidentally, as an
+unused parameter, so the behavioural assertions are what actually prove that function.
+
+No Rust source changed, and the merged tree is byte-identical to the branch tip, so the Rust suite
+is unchanged from `d71fcc9` and was not re-measured. Saying so rather than quoting a number nobody
+ran this session.
+
+### What did not close with this
+
+- **Nothing here has been looked at.** `tsc` and `vite build` are the entire frontend gate and
+  neither renders a pixel, so every claim about appearance — the fixed rail, the `+`/`−` markers,
+  the indent, two columns above 80rem, the narrow fallback below 44rem — is believed from reading
+  the CSS. KNEG-161 is the by-hand list.
+- **`navigation.ts`'s invariants are gated nowhere.** They were asserted by compiling the module to
+  a scratch directory and running `node:assert` over it, which proves it today and catches nothing
+  tomorrow. That is the KNEG-147 shape one language over: a check that lives somewhere nothing runs
+  it. KNEG-162 records the runner decision it needs.
+
+### Codex was unreachable, and the commit gate is what saved the work
+
+This was invoked as a Codex orchestration and no Codex worker ran. `codex exec` returned **HTTP 404
+from `chatgpt.com/backend-api/codex/responses`** on both the WebSocket and HTTPS transports, five
+retries each — reproduced on a bare probe in an empty directory outside this repository, on the
+cheapest model, and on CLI 0.148.0 and 0.153.0 alike. The upgrade to 0.153.0 was tried on a
+diagnosis that turned out wrong: the model cache had been refreshed that afternoon stamped
+`client_version: 0.153.0` against an installed 0.148.0, which looked exactly like version skew and
+was not. The token's own claims give the real cause — `chatgpt_plan_type:
+self_serve_business_prolite`, `chatgpt_subscription_active_until: 2026-07-11` — which is
+account-side and not fixable from here.
+
+Claude wrote the patch instead, which is a deviation from that skill's division of labour and is
+recorded as one. Everything else about the run was unchanged: worktree, base, ownership, gates, and
+the commit as the approval gate.
+
+**And the gate earned itself.** Minutes after `fd22135` was committed, another run allocated the
+same `worker-1` slot, reset it to base, and wiped the working tree — the slot's HEAD now reads
+`codex/20260903-170718/worker-1-offer-status`. Had the work still been uncommitted in that tree it
+would be gone. "Claude owns the commit" reads like ceremony until a concurrent run resets the
+directory underneath you.
 
 ---
 

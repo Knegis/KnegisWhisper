@@ -624,6 +624,7 @@ let meetingStatus: MeetingStatus = {
       signal: "call-process",
     },
   ],
+  offer: null,
   promptOnDetect: true,
   notificationExcluded: {
     state: "unsupported",
@@ -1560,6 +1561,7 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
       provider: null,
       elapsedSeconds: 0,
       sources: null,
+      offer: null,
     };
     // OpenAI is the provider whose capped sessions reconnect. Its fixture uses
     // the quiet outcome so the second public shape carrying `reconnects` can be
@@ -1592,10 +1594,14 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
       provider: null,
       elapsedSeconds: 0,
       sources: null,
+      offer: null,
     };
     return null;
   },
-  meeting_dismiss: () => null,
+  meeting_dismiss: () => {
+    meetingStatus = { ...meetingStatus, offer: null };
+    return null;
+  },
   meeting_set_prompt: (a) => {
     meetingStatus = {
       ...meetingStatus,
@@ -1732,6 +1738,7 @@ const devConsole = {
     meetingStatus = {
       ...meetingStatus,
       state,
+      offer: state === "idle" ? null : meetingStatus.offer,
       transcriptFailure:
         state === "recording-without-transcript"
           ? "openai-realtime accepted the connection and then stopped transcribing: on the system audio stream the provider reported: The Realtime Beta API is no longer supported."
@@ -1751,24 +1758,29 @@ const devConsole = {
     } satisfies TranscriptEvent);
   },
   offer(name = "Zoom") {
-    void emit("meeting-offer", {
+    const next: Offer = {
       provider: "meeting-detect:zoom",
       name,
       evidence: "CptHost.exe",
       signal: "call-process",
-    } satisfies Offer);
+    };
+    meetingStatus = { ...meetingStatus, offer: next };
+    void emit("meeting-offer", next);
   },
   /** The other offer, and the one worth looking at: it appeared on the weaker
    * signal, so the window has to say so rather than claiming a meeting. */
   micOffer(name = "Microsoft Teams") {
-    void emit("meeting-offer", {
+    const next: Offer = {
       provider: "meeting-detect:teams",
       name,
       evidence: "ms-teams.exe",
       signal: "microphone",
-    } satisfies Offer);
+    };
+    meetingStatus = { ...meetingStatus, offer: next };
+    void emit("meeting-offer", next);
   },
   clearOffer() {
+    meetingStatus = { ...meetingStatus, offer: null };
     void emit("meeting-offer", null);
   },
   modelProgress(written: number, total: number | null = 574_000_000) {

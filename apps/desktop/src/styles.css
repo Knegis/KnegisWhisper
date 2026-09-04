@@ -124,6 +124,31 @@
   --label-col: 14rem;
   --row-gap: 1.5rem;
 
+  /*
+   * The shell's two horizontal measurements, as tokens because three rules and
+   * one media query all have to agree with them.
+   *
+   * `--nav-col` is the fixed rail's width, and `.shell` reserves exactly that
+   * much with `padding-left` -- the rail is out of flow, so nothing else holds
+   * the space open.
+   *
+   * `--content-max` is derived, not chosen by feel. The widest layout in the
+   * application is `.note-workspace`, `minmax(0, 1fr) 22rem`: a markdown editor
+   * beside a 22rem transcript. A comfortable editor is about 44rem, so
+   * 44.5 + 1.5 (`--row-gap`) + 22 is where that layout stops being cramped, and
+   * 68rem is that number. Wider would only stretch prose past a readable
+   * measure; the cap on `.row-detail` below exists for the same reason.
+   *
+   * What this is worth, stated honestly: in the default 1000px window the
+   * content pane goes from 736px to about 728px, which is a wash, because the
+   * 60rem cap this replaced was already nearly the whole window. The gain is at
+   * every size above that. The pane used to be 736px on a 4K display -- frozen
+   * by the cap, not by the window -- and now grows to 1088px, about +48% on a
+   * maximised 1920px screen.
+   */
+  --nav-col: 13rem;
+  --content-max: 68rem;
+
   --font-sans: Switzer, "Helvetica Neue", Arial, sans-serif;
   --font-mono: ProFontWindows, ui-monospace, "SF Mono", Menlo, Consolas,
     monospace;
@@ -175,9 +200,12 @@
  * Reserve the scrollbar's gutter for the whole session.
  *
  * Without this the layout slides sideways on most navigations, and it is the
- * centring that moves rather than anything in the view: `.shell` is a 60rem
- * column held in the middle by `margin: 0 auto` inside a 1000px window, so the
- * ~15px a Windows scrollbar occupies comes out of the two margins evenly.
+ * centring that moves rather than anything in the view: `.content` is held in
+ * the middle of the space right of the rail by `margin: 0 auto`, so the ~15px a
+ * Windows scrollbar occupies comes out of its two margins evenly. That was true
+ * of the 60rem `.shell` column this replaced and it is true of `.content` now --
+ * the rail is `position: fixed` and does not move, which makes the jump easier
+ * to see rather than harder.
  * Diagnostics is four sections and scrolls; Local API is one and does not.
  * Switching between them moves every element on the page about 7px, which is
  * too small to read as a scrollbar arriving and too large not to notice.
@@ -221,29 +249,65 @@ h2,
 }
 
 /*
- * Two columns: a fixed sidebar and a scrolling content pane.
+ * A rail pinned to the window, and a capped content column centred in what is
+ * left of it.
  *
- * The sidebar scrolls with the page rather than being sticky, because the list
- * is short and a sticky element in a small window steals height from the thing
- * being read. `min-width: 0` on the content column is what stops a long path or
- * a wide <pre> from pushing the sidebar off screen -- a grid item's default
- * `min-width: auto` refuses to shrink below its content.
+ * This was a two-column grid capped at 60rem and centred, which had one
+ * measurable consequence: with a 12rem sidebar and a 2rem gap the content pane
+ * was 736px wide in the default 1000px window **and 736px wide on a 4K
+ * display**. The cap was what limited it, not the window, so removing the cap is
+ * where the extra width comes from -- see `--content-max` for the arithmetic and
+ * for what it is actually worth.
+ *
+ * `.shell` is no longer a grid and no longer positions anything. The rail is out
+ * of flow, so all this does is reserve its width; `.content` carries the padding
+ * the shell used to.
+ *
+ * The comment that stood here claimed the sidebar "scrolls with the page rather
+ * than being sticky" while the rule twelve lines below it was `position:
+ * sticky`. That sentence was false when it was written and is deleted rather
+ * than corrected, because the rail is now fixed and neither half applies.
  */
 .shell {
-  display: grid;
-  grid-template-columns: 12rem minmax(0, 1fr);
-  gap: 2rem;
-  max-width: 60rem;
-  margin: 0 auto;
-  padding: 2rem 1.5rem 3rem;
-  align-items: start;
+  padding-left: var(--nav-col);
 }
 
-/* One column below the width where two would leave neither usable. */
+/*
+ * The loading and error state, which has no rail to reserve space for.
+ *
+ * `App.tsx` renders that state before diagnostics arrive, so there is no version
+ * string and no nav yet. Left with the shell's `padding-left` the message would
+ * sit 13rem in from the left edge with nothing beside it.
+ */
+.shell-bare {
+  padding-left: 0;
+}
+
+/*
+ * One column below the width where two would leave neither usable.
+ *
+ * The main window's `minWidth` is 720px (45rem, `src-tauri/tauri.conf.json`), so
+ * this block is unreachable in the shipped window and reachable only in
+ * `npm run dev` in a browser. That is a reason to keep it honest, not a reason
+ * to delete it: the rail goes back into flow across the top rather than being
+ * pinned to an edge it would take half the width of.
+ */
 @media (max-width: 44rem) {
   .shell {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 1rem;
+    padding-left: 0;
+  }
+
+  .sidebar {
+    position: static;
+    width: auto;
+    padding: 1.5rem 1.5rem 1rem;
+    overflow: visible;
+    border-right: 0;
+    border-bottom: 1px solid var(--faint);
+  }
+
+  .content {
+    padding: 1rem 1.5rem 3rem;
   }
 
   /*
@@ -267,9 +331,36 @@ h2,
   }
 }
 
+/*
+ * Fixed to the window, not sticky inside the page.
+ *
+ * `position: sticky; top: 2rem` kept the rail in view while the page scrolled
+ * under it, which is nearly the same effect and is not the same thing: a sticky
+ * element is still a column in a centred layout, so the rail moved sideways
+ * whenever the content column's width changed. Fixed puts it against the
+ * window's left edge and leaves it there, which is what "the list of screens is
+ * on the left" should mean.
+ *
+ * `overflow-y: auto` because the height is now the window's rather than the
+ * list's: sixteen rows fit the 720px default and not the 520px minimum, and a
+ * rail that scrolls at the minimum size is better than one that clips.
+ *
+ * The `border-right` is the one mark on it. This file draws no outline around
+ * anything, but it does use a 1px `--faint` rule to separate two pieces of data
+ * -- `border-top` between rows, `border-bottom` between list items -- and this
+ * is that same rule, separating the rail from the page. A background fill would
+ * have been the other option and is wrong here: `--surface` equals `--bg`
+ * deliberately, and washing the rail would make it a panel.
+ */
 .sidebar {
-  position: sticky;
-  top: 2rem;
+  position: fixed;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: var(--nav-col);
+  padding: 2rem 0.75rem 2rem 1.5rem;
+  overflow-y: auto;
+  border-right: 1px solid var(--faint);
 }
 
 .sidebar ul {
@@ -327,8 +418,85 @@ h2,
   outline-offset: 2px;
 }
 
+/*
+ * A group's children, indented under it.
+ *
+ * `.sidebar ul` above puts 1.5rem above the list, which is right for the one
+ * list under the version string and wrong for a list nested inside it. Two
+ * classes outscore one class plus a type, so this wins on specificity without
+ * `!important`.
+ */
+.sidebar .nav-children {
+  margin: 0;
+}
+
+/*
+ * The indent is the only thing that says "inside `Settings`", so it is the whole
+ * signal and it beats `.sidebar button`'s `padding: 0.4rem 0.6rem` by
+ * specificity rather than by order.
+ */
+.sidebar button.nav-child {
+  padding-left: 1.7rem;
+}
+
+/*
+ * A section header, marked as one.
+ *
+ * Without this a collapsed `Settings` was indistinguishable from `Dictation` --
+ * same face, same colour, same indent, one opening a list and the other opening
+ * a screen. The `+` is what separates them, and it is a character rather than an
+ * icon because there is no icon set in this project and the machine-voice face
+ * is already loaded: `::after` content in ProFontWindows is the same typographic
+ * gesture as the identifiers in `.purposes code`.
+ *
+ * ASCII `+` and `-`, not `U+2212` or a disclosure triangle. ProFontWindows is a
+ * programming face and its coverage outside ASCII is not something this file
+ * should bet a visible glyph on; a missing character would render as a box in
+ * the one element whose whole job is to say what pressing it does.
+ */
+.sidebar button.nav-group {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.sidebar button.nav-group::after {
+  content: "+";
+}
+
+/*
+ * The section you are in, which is a different claim from the screen you are on.
+ *
+ * A group header takes the ink colour and **not** the fill. There is exactly one
+ * filled element on screen at a time and it is the current leaf -- that is the
+ * pattern `.sidebar button.nav-current` and `button.marked` both follow, and
+ * filling the header as well would put two "this one" marks in one column and
+ * make neither mean anything.
+ */
+.sidebar button.nav-group-open {
+  color: var(--text);
+}
+
+.sidebar button.nav-group-open::after {
+  content: "-";
+}
+
+/*
+ * The page, centred in the space the rail does not occupy.
+ *
+ * This is the element that is capped now, and it carries the padding `.shell`
+ * used to. `min-width: 0` is gone with the grid: it was there because a grid
+ * item's default `min-width: auto` refuses to shrink below its content, so a
+ * long path or a wide <pre> could push the sidebar off screen. Neither half of
+ * that is still true -- a block's min-width is already 0, and the rail is fixed,
+ * so nothing in the content can displace it. The `minmax(0, 1fr)` tracks inside
+ * `.row` and `.note-workspace` are where that concern actually lives.
+ */
 .content {
-  min-width: 0;
+  max-width: var(--content-max);
+  margin: 0 auto;
+  padding: 2rem 2rem 3rem;
 }
 
 /* The first section in a view sits level with the sidebar heading. */
@@ -450,13 +618,32 @@ section {
  * Machine voice, but not uppercase: this carries paths, reasons and error
  * strings, and their casing is information.
  */
+/*
+ * `max-width` in `ch`, because this column got wider and prose does not want
+ * all of it.
+ *
+ * At the 60rem shell this replaced, the value track was 46 - 14 - 1.5 = 30.5rem,
+ * which is about 68 characters of ProFontWindows at 13px. 76ch is therefore
+ * slightly wider than what shipped rather than a lot wider -- the point is to
+ * stop a four-line reason becoming a two-line one 115 characters across, which
+ * is what an uncapped 68rem column would do. `<pre>`, `.list`, the `.row` grid
+ * itself and `.note-workspace` are deliberately left uncapped: those carry data
+ * and layout, where the extra width is the whole gain.
+ */
 .row-detail {
+  max-width: 76ch;
   font-family: var(--font-mono);
   color: var(--muted);
   font-size: 13px;
   line-height: 16px;
   letter-spacing: 0.5px;
   font-style: normal;
+}
+
+/* The same measure for a section's own prose, which is Switzer rather than
+ * ProFontWindows and so runs a little further per character. */
+section > .muted {
+  max-width: 76ch;
 }
 
 /*
@@ -783,7 +970,25 @@ button.marked:hover:not(:disabled) {
   margin: 0;
 }
 
-@media (max-width: 64rem) {
+/*
+ * The transcript drops below the editor when there is not room for both.
+ *
+ * The threshold is re-derived rather than kept. This was `64rem`, which tested
+ * the *viewport* while the container was 46rem -- so in the 1000px default
+ * window (62.5rem) it fired every time, and this layout has **never** shown two
+ * columns in the shipped application. The container is now
+ * `viewport - var(--nav-col) - 4rem` of `.content` padding, and two columns want
+ * 44.5 + 1.5 + 22 = 68rem of it, so the viewport threshold is 68 + 13 + 4 =
+ * 85rem... which the cap makes unnecessary: `.content` stops growing at
+ * `--content-max`, and the narrowest container that still holds both columns
+ * without squeezing the editor below ~40rem is 63.5rem, i.e. a viewport of
+ * 80.5rem.
+ *
+ * So: one column at or below 80rem, two above. At the default window it is one
+ * column exactly as before -- no change there -- and on a maximised display it
+ * is two, which it never was.
+ */
+@media (max-width: 80rem) {
   .note-workspace {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -968,6 +1173,35 @@ label:has(> input[type="checkbox"]) {
   border-bottom: 1px solid var(--faint);
 }
 
+/* ----------------------------------------------------------- panel windows */
+/*
+ * These windows are built with `transparent(true)`, so only their panels may
+ * paint. `body`'s `var(--bg)` is right for the shell, but was painting the
+ * near-white rectangle behind these panels in light mode. The height chain is
+ * equally local: it gives `.overlay` and `.notify`'s existing `height: 100%`
+ * the window to resolve against instead of letting them collapse to `auto`.
+ */
+:root[data-window="overlay"],
+:root[data-window="meeting"],
+:root[data-window="update"] {
+  height: 100%;
+  background: transparent;
+  scrollbar-gutter: auto;
+}
+
+:root[data-window="overlay"] body,
+:root[data-window="meeting"] body,
+:root[data-window="update"] body {
+  height: 100%;
+  background: transparent;
+}
+
+:root[data-window="overlay"] #root,
+:root[data-window="meeting"] #root,
+:root[data-window="update"] #root {
+  height: 100%;
+}
+
 /* ------------------------------------------------------------------ overlay */
 /*
  * The overlay window is transparent, so the panel paints its own background.
@@ -1028,7 +1262,7 @@ label:has(> input[type="checkbox"]) {
 /* ------------------------------------------------- meeting notification */
 /*
  * 392x92, transparent window, so the panel paints itself. Wider than the
- * overlay because it carries two lines and up to two buttons, and it must stay
+ * overlay because it carries three lines and up to two buttons, and it must stay
  * legible over a video call -- which is the one thing guaranteed to be behind
  * it.
  */
@@ -1069,6 +1303,16 @@ label:has(> input[type="checkbox"]) {
    * uppercase is switched back off here. */
   text-transform: none;
   /* A process name or an error can be long; the panel cannot grow. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.notify-live {
+  /* Speech is authored content, so casing is information rather than panel
+   * chrome; it is brighter than the label below because it is live content. */
+  color: #d4d4d8;
+  text-transform: none;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

@@ -46,12 +46,14 @@ pub struct Watcher {
     /// back for the next one. A time-based suppression would either re-prompt
     /// mid-meeting or swallow the next meeting, depending which way it was tuned.
     offered: std::collections::BTreeSet<String>,
-    /// The provider whose offer is currently in the one notification window.
+    /// The offer currently in the one notification window.
     ///
     /// Separate from `offered`: dismissing an offer clears the window but must
     /// keep that call suppressed, while a call ending must both withdraw its
-    /// window and release its suppression.
-    outstanding: Option<String>,
+    /// window and release its suppression. Kept whole because an emitted event
+    /// cannot be recovered by a window that mounts after the broadcast; status
+    /// reads this same offer back rather than inventing a second source.
+    outstanding: Option<Offer>,
 }
 
 impl Watcher {
@@ -73,10 +75,10 @@ impl Watcher {
 
         let withdrawn = if self
             .outstanding
-            .as_deref()
-            .is_some_and(|provider| !live.contains(provider))
+            .as_ref()
+            .is_some_and(|offer| !live.contains(&offer.provider))
         {
-            self.outstanding.take()
+            self.outstanding.take().map(|offer| offer.provider)
         } else {
             None
         };
@@ -87,7 +89,12 @@ impl Watcher {
         // withdraw it now.
         if !prompt {
             self.offered.extend(live);
-            return if let Some(provider) = self.outstanding.take().or(withdrawn) {
+            return if let Some(provider) = self
+                .outstanding
+                .take()
+                .map(|offer| offer.provider)
+                .or(withdrawn)
+            {
                 Transition::Withdraw(provider)
             } else {
                 Transition::None
@@ -122,9 +129,10 @@ impl Watcher {
             return Transition::None;
         };
 
-        self.offered.insert(candidate.provider.to_owned());
-        self.outstanding = Some(candidate.provider.to_owned());
-        Transition::Offer(Offer::from(candidate))
+        let offer = Offer::from(candidate);
+        self.offered.insert(offer.provider.clone());
+        self.outstanding = Some(offer.clone());
+        Transition::Offer(offer)
     }
 
     /// The user closed the offer without recording this call.
@@ -150,9 +158,24 @@ impl Watcher {
     /// the next one being offered, even if Zoom never quit in between.
     pub fn forget(&mut self, provider: &str) {
         self.offered.remove(provider);
-        if self.outstanding.as_deref() == Some(provider) {
+        if self
+            .outstanding
+            .as_ref()
+            .is_some_and(|offer| offer.provider == provider)
+        {
             self.outstanding = None;
         }
+    }
+
+    /// The offer a late-mounting notification window must read back.
+    ///
+    /// Events only reach listeners that already exist, while this window may be
+    /// created hidden and mount on either side of the broadcast. Returning the
+    /// retained offer makes that race recoverable without a second detection
+    /// source or a later re-emission.
+    #[must_use]
+    pub fn outstanding_offer(&self) -> Option<&Offer> {
+        self.outstanding.as_ref()
     }
 
     /// Whether `provider` has an outstanding offer.
@@ -170,7 +193,8 @@ impl Watcher {
     #[cfg(test)]
     #[must_use]
     pub fn outstanding(&self) -> Option<&str> {
-        self.outstanding.as_deref()
+        self.outstanding_offer()
+            .map(|offer| offer.provider.as_str())
     }
 }
 
@@ -247,6 +271,72 @@ mod tests {
         let offer = offer(&mut watcher, &[mic]);
         assert_eq!(offer.signal, CallSignal::Microphone);
         assert_eq!(offer.evidence, "ms-teams.exe");
+    }
+
+    #[test]
+    fn an_outstanding_offer_keeps_the_offer_transition_for_readback() {
+        // A window can mount after the event that made it visible. Its initial
+        // status read must carry the same facts as that missed transition.
+        let mut watcher = Watcher::default();
+        let detected = Detected::new(
+            "teams",
+            "Microsoft Teams",
+            "ms-teams.exe".to_owned(),
+            CallSignal::Microphone,
+        );
+
+        let offered = offer(&mut watcher, &[detected]);
+        let outstanding = watcher.outstanding_offer().unwrap();
+        assert_eq!(outstanding.provider, offered.provider);
+        assert_eq!(outstanding.name, offered.name);
+        assert_eq!(outstanding.evidence, offered.evidence);
+        assert_eq!(outstanding.signal, offered.signal);
+    }
+
+    #[test]
+    fn dismiss_clears_the_outstanding_offer() {
+        let mut watcher = Watcher::default();
+        let _ = offer(&mut watcher, &[detected("zoom", true)]);
+
+        watcher.dismiss();
+        assert!(watcher.outstanding_offer().is_none());
+    }
+
+    #[test]
+    fn recording_started_clears_the_outstanding_offer() {
+        let mut watcher = Watcher::default();
+        let _ = offer(&mut watcher, &[detected("zoom", true)]);
+
+        watcher.recording_started();
+        assert!(watcher.outstanding_offer().is_none());
+    }
+
+    #[test]
+    fn forget_clears_only_the_matching_outstanding_offer() {
+        let mut watcher = Watcher::default();
+        let _ = offer(&mut watcher, &[detected("zoom", true)]);
+
+        watcher.forget("teams");
+        assert_eq!(
+            watcher
+                .outstanding_offer()
+                .map(|offer| offer.provider.as_str()),
+            Some("zoom")
+        );
+        watcher.forget("zoom");
+        assert!(watcher.outstanding_offer().is_none());
+    }
+
+    #[test]
+    fn an_ended_call_withdraws_and_clears_the_outstanding_offer() {
+        let mut watcher = Watcher::default();
+        let _ = offer(&mut watcher, &[detected("zoom", true)]);
+
+        assert!(matches!(
+            watcher.consider(&[], true),
+            Transition::Withdraw(provider) if provider == "zoom"
+        ));
+        assert!(watcher.outstanding_offer().is_none());
     }
 
     #[test]
