@@ -97,6 +97,14 @@ struct Connection {
     closed: Closed,
 }
 
+impl Drop for Connection {
+    fn drop(&mut self) {
+        // A dropped JoinHandle detaches its task, which still owns the socket's
+        // read half. This also covers aborted connects and timed-out cleanup.
+        self.reader.abort();
+    }
+}
+
 impl Connection {
     /// Close the socket and stop its reader.
     async fn close(mut self) {
@@ -254,8 +262,12 @@ impl OpenAiRealtime {
         // sentence rather than a lost failure.
         self.fault = SessionFault::new();
 
-        self.mic = Some(self.open(AudioSource::Mic).await?);
-        self.system = Some(self.open(AudioSource::System).await?);
+        let mic = self.open(AudioSource::Mic).await?;
+        let system = self.open(AudioSource::System).await?;
+        // Keep the first socket local until both opens succeed. Its Drop guard
+        // closes the reader if the second open fails or this future is cancelled.
+        self.mic = Some(mic);
+        self.system = Some(system);
 
         if let Some(clock) = self.clock.as_mut() {
             clock.reconnected(Instant::now());
@@ -397,8 +409,12 @@ impl MeetingTranscriptionProvider for OpenAiRealtime {
 
         // Both, before returning. A session with only the microphone open would
         // transcribe half the meeting and report success.
-        self.mic = Some(self.open(AudioSource::Mic).await?);
-        self.system = Some(self.open(AudioSource::System).await?);
+        let mic = self.open(AudioSource::Mic).await?;
+        let system = self.open(AudioSource::System).await?;
+        // Keep the first socket local until both opens succeed. Its Drop guard
+        // closes the reader if the second open fails or this future is cancelled.
+        self.mic = Some(mic);
+        self.system = Some(system);
         self.paused = false;
         Ok(())
     }
@@ -689,5 +705,41 @@ mod tests {
         let provider = OpenAiRealtime::new(store());
         assert_eq!(provider.capabilities().id, PROVIDER_ID);
         assert_eq!(provider.capabilities().sample_rates, &[24_000]);
+    }
+}
+
+#[cfg(test)]
+mod connection_drop_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn dropping_connection_closes_the_remote_socket() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let client = tokio::net::TcpStream::connect(listener.local_addr()?).await?;
+        let (mut server, _) = listener.accept().await?;
+        let socket = tokio_tungstenite::WebSocketStream::from_raw_socket(
+            tokio_tungstenite::MaybeTlsStream::Plain(client),
+            tokio_tungstenite::tungstenite::protocol::Role::Client,
+            None,
+        )
+        .await;
+        let (sink, mut stream) = socket.split();
+        let reader = tokio::spawn(async move { while stream.next().await.is_some() {} });
+        let connection = Connection {
+            sink,
+            reader,
+            closed: Arc::new(std::sync::Mutex::new(None)),
+        };
+        drop(connection);
+        use tokio::io::AsyncReadExt as _;
+        let mut byte = [0];
+        let read = tokio::time::timeout(std::time::Duration::from_secs(2), server.read(&mut byte))
+            .await??;
+        assert_eq!(
+            read, 0,
+            "the detached reader must not keep the TCP connection open"
+        );
+        Ok(())
     }
 }

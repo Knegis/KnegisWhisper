@@ -50,10 +50,13 @@ export function MeetingNotification() {
   const [sources, setSources] = useState<Sources | null>(null);
   const [elapsed, setElapsed] = useState(0);
   const [liveTranscript, setLiveTranscript] = useState<string | null>(null);
+  const [notificationCaptureExcluded, setNotificationCaptureExcluded] =
+    useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const [stateReadProblem, setStateReadProblem] = useState<string | null>(null);
   const offerFromEvent = useRef(false);
   const stateFromEvent = useRef(false);
+  const notificationCaptureExcludedRef = useRef(false);
 
   useEffect(() => {
     // Read once as well as subscribing: the window is hidden until there is
@@ -68,6 +71,10 @@ export function MeetingNotification() {
         if (!offerFromEvent.current) setOffer(status.offer);
         setSources(status.sources);
         setElapsed(status.elapsedSeconds);
+        const excluded = status.notificationExcluded?.state === "active";
+        notificationCaptureExcludedRef.current = excluded;
+        setNotificationCaptureExcluded(excluded);
+        if (!excluded) setLiveTranscript(null);
       })
       .catch((err: unknown) => setStateReadProblem(String(err)));
 
@@ -92,7 +99,12 @@ export function MeetingNotification() {
     // Replaced rather than appended: every event is a partial, and overlapping
     // provider windows would repeat words if their text were accumulated.
     void onMeetingTranscript((event) => {
-      if (event.text.trim().length > 0) setLiveTranscript(event.text);
+      if (
+        notificationCaptureExcludedRef.current &&
+        event.text.trim().length > 0
+      ) {
+        setLiveTranscript(event.text);
+      }
     }).then((fn) => unlisteners.push(fn));
     void onMeetingOutcome(() => {
       setLiveTranscript(null);
@@ -142,7 +154,7 @@ export function MeetingNotification() {
                 ? "live transcript stopped — still recording"
                 : whoIsRecorded(sources)}
           </span>
-          {liveTranscript ? (
+          {notificationCaptureExcluded && liveTranscript ? (
             <span className="notify-live">{liveTranscript}</span>
           ) : null}
         </span>
