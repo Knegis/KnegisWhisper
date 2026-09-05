@@ -167,7 +167,10 @@ pub fn transcript(value: &Value) -> String {
         .and_then(Value::as_str)
         .unwrap_or("unknown");
     match data.get("errorMessage").and_then(Value::as_str) {
-        Some(why) if !why.trim().is_empty() => format!("{status}: {why}"),
+        Some(why) if !why.trim().is_empty() => {
+            let why = terminal_safe(why);
+            format!("{status}: {}", why.trim())
+        }
         // No message is not the same as no failure, and saying "failed" with
         // nothing after it is the honest version of that.
         _ => format!("{status}, and no transcript was stored"),
@@ -346,18 +349,7 @@ fn detail(row: &Value, field: &str) -> Option<String> {
 /// character-boundary take matters: a byte slice would panic on the `å`
 /// this is tested with.
 fn one_line(raw: &str, limit: usize) -> Option<String> {
-    // Newlines would break the table; a transcript is one logical line here,
-    // and so is a provider error that arrived as a JSON blob.
-    let flat: String = raw
-        .chars()
-        .map(|c| {
-            if c == '\n' || c == '\r' || c == '\t' {
-                ' '
-            } else {
-                c
-            }
-        })
-        .collect();
+    let flat = terminal_safe(raw);
     let flat = flat.trim();
 
     if flat.is_empty() {
@@ -369,6 +361,15 @@ fn one_line(raw: &str, limit: usize) -> Option<String> {
 
     let cut: String = flat.chars().take(limit - 1).collect();
     Some(format!("{cut}…"))
+}
+
+/// Prevent untrusted text from being interpreted as terminal instructions.
+///
+/// This also makes newlines and tabs safe for the single-line table layout.
+fn terminal_safe(raw: &str) -> String {
+    raw.chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect()
 }
 
 #[cfg(test)]
@@ -586,6 +587,18 @@ mod tests {
         }
     }
 
+    #[test]
+    fn terminal_controls_in_a_history_reason_are_neutralized() {
+        let rendered = history(&json!({
+            "data": [{"id": 1, "createdAt": "now", "status": "failed", "text": "",
+                      "errorMessage": "provider said \u{1b}]52;c;QUJD\u{7}no"}],
+            "has_more": false
+        }));
+        assert!(!rendered.contains('\u{1b}'), "{rendered:?}");
+        assert!(!rendered.contains('\u{7}'), "{rendered:?}");
+        assert!(rendered.contains("provider said"), "{rendered}");
+    }
+
     /* ------------------------------------------------------------ history get */
 
     /// `history get` stays pipeable.
@@ -608,6 +621,17 @@ mod tests {
         assert!(!rendered.trim().is_empty());
         assert!(rendered.contains("failed"), "{rendered}");
         assert!(rendered.contains("provider returned 429"), "{rendered}");
+    }
+
+    #[test]
+    fn terminal_controls_in_one_failed_transcription_are_neutralized() {
+        let rendered = transcript(&json!({
+            "data": {"id": 19, "status": "failed", "text": "",
+                     "errorMessage": "provider said \u{1b}]52;c;QUJD\u{7}no"}
+        }));
+        assert!(!rendered.contains('\u{1b}'), "{rendered:?}");
+        assert!(!rendered.contains('\u{7}'), "{rendered:?}");
+        assert!(rendered.contains("provider said"), "{rendered}");
     }
 
     /// No message is not the same as no failure.
