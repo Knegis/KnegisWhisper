@@ -10,8 +10,13 @@
 //! use. They are constructed from `Display`, which for every error type in this
 //! workspace is redacted where it needs to be.
 
-use kw_notes_core::{notes, transcript};
-use kw_platform::hotkey::{self, Binding, HotkeyAction};
+use std::collections::VecDeque;
+use std::path::{Path, PathBuf};
+
+use kw_notes_core::{
+    notes, recordings as note_recordings, transcript, NoteRecording, TranscriptRow,
+};
+use kw_platform::hotkey::{self, Binding, HotkeyAction, HotkeyMode};
 use kw_provider_probe::{ProbeAudio, ProbeReport};
 use kw_storage::{settings, transcriptions};
 use serde::{Deserialize, Serialize};
@@ -88,14 +93,15 @@ pub struct HotkeyReport {
     pub bindings: Vec<Binding>,
     /// Accelerators claimed by more than one action.
     pub conflicts: Vec<hotkey::Conflict>,
-    /// Actions with no working hotkey at all, for any reason — a bad accelerator
-    /// or a missing handler. The union, so a caller asking "is this action
-    /// dead?" gets one answer.
-    pub unusable: Vec<HotkeyAction>,
-    /// The subset of `unusable` that is dead because nothing handles it, with
-    /// the reason. Separate because the two need different words: one is the
-    /// user's to fix and the other is not.
+    /// Actions that are dead because nothing handles them, with the reason.
+    /// Registration outcome is reported separately by
+    /// [`crate::shortcuts::RegistrationReport::is_live`].
     pub unhandled: Vec<UnhandledAction>,
+    /// Hotkeys that work and also fire when the user meant something else.
+    ///
+    /// A caution means the hotkey works and also fires at times nobody asked
+    /// for. Today the sources are AltGr and modifier-only prefix chords.
+    pub cautions: Vec<hotkey::Caution>,
 }
 
 /// Read the configured hotkeys and say what will actually work.
@@ -116,12 +122,31 @@ pub async fn hotkeys(state: State<'_, AppState>) -> CmdResult<HotkeyReport> {
 /// user's to fix — has nothing to do with Tauri, and leaving it inside the
 /// command is what made it untested.
 fn report_for(bindings: Vec<Binding>) -> HotkeyReport {
+    report_with_layout(bindings, &kw_platform::keyboard_layout::altgr())
+}
+
+/// [`report_for`], with the keyboard layout supplied.
+///
+/// Injected for the reason the parity gate injects `readComponent`: the
+/// interesting half is which accelerators an AltGr layout makes dangerous, and
+/// a test that could only assert it on a machine whose layout happens to have
+/// AltGr would pass here and prove nothing in CI, which is Linux.
+fn report_with_layout(
+    bindings: Vec<Binding>,
+    altgr: &kw_platform::keyboard_layout::AltGr,
+) -> HotkeyReport {
     let conflicts = hotkey::conflicts(&bindings);
+    // Two kinds, kept separate because they are different facts about the same
+    // chord and either can hold without the other: AltGr depends on the layout,
+    // and being a prefix depends only on the chord having two keys.
+    let mut cautions = hotkey::cautions(&bindings, altgr);
+    cautions.extend(hotkey::prefix_cautions(&bindings));
 
     // Asked of the registration module rather than recomputed, because that is
-    // the module that decides. `Binding::is_usable` can only speak about the
-    // accelerator: it called chat agent's `Control+Shift+Space` usable, and it
-    // was right about the accelerator and wrong about the hotkey.
+    // the module that decides. `Binding::has_registrable` can only speak about
+    // the accelerator: it says chat agent's `Control+Shift+Space` is
+    // registrable, and it is right about the accelerator and says nothing about
+    // the hotkey.
     let unhandled: Vec<UnhandledAction> = hotkey::ALL_ACTIONS
         .into_iter()
         .filter_map(|action| {
@@ -132,17 +157,11 @@ fn report_for(bindings: Vec<Binding>) -> HotkeyReport {
         })
         .collect();
 
-    let unusable = bindings
-        .iter()
-        .filter(|b| !b.is_usable() || unhandled.iter().any(|u| u.action == b.action))
-        .map(|b| b.action)
-        .collect();
-
     HotkeyReport {
         bindings,
         conflicts,
-        unusable,
         unhandled,
+        cautions,
     }
 }
 
@@ -159,7 +178,22 @@ pub async fn load_bindings(state: &AppState) -> CmdResult<Vec<Binding>> {
         .await
         .map_err(|e| fail("could not read a hotkey setting", e))?;
 
-        bindings.push(Binding::from_stored(action, &stored));
+        // The shipped default, spelled by the type rather than written out
+        // here, so the one place that decides what ships is `HotkeyMode`'s
+        // `Default` and the reasoning next to it.
+        let mode: String = settings::get_or(
+            state.db().pool(),
+            &action.mode_settings_key(),
+            HotkeyMode::default().id().to_owned(),
+        )
+        .await
+        .map_err(|e| fail("could not read a hotkey mode setting", e))?;
+
+        bindings.push(Binding::from_stored(
+            action,
+            &stored,
+            HotkeyMode::from_stored(&mode),
+        ));
     }
 
     Ok(bindings)
@@ -179,6 +213,10 @@ pub struct HotkeyChange {
     pub registrations: Vec<crate::shortcuts::Registration>,
     /// True when at least one accelerator for this action is now live.
     pub live: bool,
+    /// What this hotkey will *also* do. Returned here as well as from
+    /// [`hotkeys`] because the moment to learn that `Control+Alt` is AltGr is
+    /// when you press Set, not the next time the screen is opened.
+    pub cautions: Vec<hotkey::Caution>,
 }
 
 /// Change one action's hotkey.
@@ -212,8 +250,56 @@ pub async fn hotkey_set(
     // Every action is re-registered rather than just this one, because
     // `unregister_all` is the only way to drop the previous binding for this
     // action and it drops the others with it.
-    let bindings = load_bindings(&state).await?;
-    let reports = crate::shortcuts::register_all(&app, &bindings, &hooks);
+    reapply(&app, &state, &hooks, action).await
+}
+
+/// Change whether one action is toggled or held.
+///
+/// A separate command from [`hotkey_set`] because it writes a separate key, and
+/// the two change for different reasons — rebinding a key is not choosing
+/// push-to-talk. It re-registers everything for the same reason `hotkey_set`
+/// does: the mode is read at registration time by both the hook path and the
+/// plugin path, so a mode saved and not applied until the next launch would be a
+/// setting that lies about having taken effect.
+#[tauri::command]
+pub async fn hotkey_set_mode(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    action: String,
+    mode: String,
+    hooks: State<'_, std::sync::Arc<crate::shortcuts::Hooks>>,
+) -> CmdResult<HotkeyChange> {
+    let action = HotkeyAction::from_id(&action)
+        .ok_or_else(|| format!("{action:?} is not a hotkey action"))?;
+
+    // Refused rather than defaulted. `HotkeyMode::from_stored` falls back for a
+    // value already on disk, which is recovery; a value arriving from the
+    // renderer is a request, and answering an unrecognised request with "toggle,
+    // then" would report success for something that did not happen.
+    let mode =
+        HotkeyMode::from_id(mode.trim()).ok_or_else(|| format!("{mode:?} is not a hotkey mode"))?;
+
+    settings::set(state.db().pool(), &action.mode_settings_key(), &mode.id())
+        .await
+        .map_err(|e| fail("could not save the hotkey mode", e))?;
+
+    reapply(&app, &state, &hooks, action).await
+}
+
+/// Re-register every hotkey and report what became of `action`'s.
+///
+/// Shared by the two writers above so they cannot come to disagree about what a
+/// change achieved. Every action is re-registered rather than just this one,
+/// because `unregister_all` is the only way to drop the previous binding for one
+/// action and it drops the others with it.
+async fn reapply(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    hooks: &std::sync::Arc<crate::shortcuts::Hooks>,
+    action: HotkeyAction,
+) -> CmdResult<HotkeyChange> {
+    let bindings = load_bindings(state).await?;
+    let reports = crate::shortcuts::register_all(app, &bindings, hooks);
     let live = reports.iter().filter(|r| r.is_live()).count();
     tracing::info!(live, total = reports.len(), "hotkeys re-registered");
 
@@ -223,10 +309,29 @@ pub async fn hotkey_set(
     // with no results rather than inventing a success.
     let mine = reports.into_iter().find(|r| r.action == action);
 
+    // Read back out of what was just loaded rather than rebuilt from the
+    // argument. Rebuilding was fine while the only thing a writer changed was
+    // the accelerator; with two keys behind one binding, rebuilding from one of
+    // them means the returned binding disagrees with the one that was
+    // registered about the other.
+    let binding = bindings
+        .into_iter()
+        .find(|b| b.action == action)
+        .unwrap_or_else(|| {
+            Binding::from_stored(action, action.default_accelerator(), HotkeyMode::default())
+        });
+
+    let mut cautions = hotkey::cautions(
+        std::slice::from_ref(&binding),
+        &kw_platform::keyboard_layout::altgr(),
+    );
+    cautions.extend(hotkey::prefix_cautions(std::slice::from_ref(&binding)));
+
     Ok(HotkeyChange {
-        binding: Binding::from_stored(action, &canonical),
+        binding,
         registrations: mine.as_ref().map(|r| r.results.clone()).unwrap_or_default(),
         live: mine.is_some_and(|r| r.is_live()),
+        cautions,
     })
 }
 
@@ -258,6 +363,76 @@ pub async fn history_clear(state: State<'_, AppState>) -> CmdResult<u64> {
     transcriptions::clear(state.db().pool())
         .await
         .map_err(|e| fail("could not clear history", e))
+}
+
+/// Whether dictation history is being written at all.
+///
+/// Read from settings rather than from the running session, for the same reason
+/// as `history_keep_raw_text` below: `DbHistory::enabled` reads it per
+/// dictation, so there is no cached copy that could disagree with the stored
+/// one. The default here is `true` because the default there is `true` -- two
+/// defaults for one key is how a screen comes to report the opposite of what the
+/// sink is doing.
+#[tauri::command]
+pub async fn history_enabled(state: State<'_, AppState>) -> CmdResult<bool> {
+    Ok(kw_storage::settings::get_or(
+        state.db().pool(),
+        crate::dictation::HISTORY_ENABLED_KEY,
+        true,
+    )
+    .await
+    .unwrap_or(true))
+}
+
+/// Start, or stop, writing dictation history.
+///
+/// Stopping is not deleting. Rows already written stay exactly where they are;
+/// `history_clear` above is the only thing that removes them. The two controls
+/// sit next to each other on the Dictation screen and sound alike, so the screen
+/// spells the difference out rather than leaving it to be found out.
+///
+/// Takes effect on the next dictation, not after a relaunch: the sink reads the
+/// setting each time it is about to write a row.
+#[tauri::command]
+pub async fn history_set_enabled(state: State<'_, AppState>, enabled: bool) -> CmdResult<()> {
+    kw_storage::settings::set(
+        state.db().pool(),
+        crate::dictation::HISTORY_ENABLED_KEY,
+        &enabled,
+    )
+    .await
+    .map_err(|e| fail("could not save the setting", e))
+}
+
+/// Whether the pre-cleanup transcript is kept alongside the cleaned one.
+///
+/// Read from settings rather than from the running session, because
+/// `DbHistory::keep_raw_text` reads it per dictation and there is no cached copy
+/// that could disagree with the stored one.
+#[tauri::command]
+pub async fn history_keep_raw_text(state: State<'_, AppState>) -> CmdResult<bool> {
+    Ok(kw_storage::settings::get_or(
+        state.db().pool(),
+        crate::dictation::KEEP_RAW_TEXT_KEY,
+        false,
+    )
+    .await
+    .unwrap_or(false))
+}
+
+/// Keep, or stop keeping, the pre-cleanup transcript.
+///
+/// Takes effect on the next dictation, not after a relaunch: the sink reads the
+/// setting each time it writes a row.
+#[tauri::command]
+pub async fn history_set_keep_raw_text(state: State<'_, AppState>, enabled: bool) -> CmdResult<()> {
+    kw_storage::settings::set(
+        state.db().pool(),
+        crate::dictation::KEEP_RAW_TEXT_KEY,
+        &enabled,
+    )
+    .await
+    .map_err(|e| fail("could not save the setting", e))
 }
 
 /* ------------------------------------------------------------------ providers */
@@ -487,20 +662,172 @@ pub async fn probe_providers(state: State<'_, AppState>) -> CmdResult<ProbeRepor
 
 /* --------------------------------------------------------------------- import */
 
+/// How many dialog-returned paths [`DialogGrants`] remembers at once.
+///
+/// `Notes > Upload` holds one picked path at a time, so 32 is ample for any
+/// amount of re-picking a person does. The bound is here so a renderer calling
+/// `pick_import_file` in a loop cannot grow the set without limit.
+pub(crate) const MAX_DIALOG_GRANTS: usize = 32;
+
+/// Every command that takes a filesystem path from the renderer, with the
+/// dotted path to that argument inside the command's JSON body.
+///
+/// **One list, so the boundary test cannot fall behind the application.** The
+/// doc on [`DialogGrants`] below says these are "the only three commands that
+/// take a path, so the surface is closed". Until this list existed that was
+/// prose with nothing behind it: `media.rs`'s IPC test named the three in its
+/// own `generate_handler!` and again in its own loop, so a fourth path-taking
+/// command was covered by neither, and removing one from the application left
+/// the test green (KNEG-151).
+///
+/// Three things read this, which is what turns that sentence into a check:
+///
+///   * `media.rs`'s `every_import_command_enforces_the_dialog_grant_at_the_ipc_boundary`
+///     drives **every entry** over real IPC, so a new one is asserted by being added.
+///   * [`tests::every_path_taking_command_is_registered`] ties the list to
+///     `lib.rs`'s `generate_handler!`, so dropping one from the application fails.
+///   * `tools/command-audit/scan.mjs` fails when a registered command takes a
+///     renderer-supplied path and is **not** listed here, which is the direction
+///     neither test can see.
+///
+/// The second element is dotted because the body shapes differ:
+/// `import_openwhispr` takes an `ImportRequest` struct, the other two take the
+/// string directly. It is the JSON shape, not the Rust one.
+#[cfg(test)]
+pub(crate) const PATH_TAKING_COMMANDS: [(&str, &str); 3] = [
+    ("media_import_audio", "path"),
+    ("media_import_video", "path"),
+    ("import_openwhispr", "request.path"),
+];
+
+/// What an import command says when it was handed a path no dialog produced.
+///
+/// One sentence for two cases on purpose — see [`DialogGrants::authorise`].
+const UNGRANTED_PATH: &str = "this file was not chosen through the import dialog, or is no \
+                              longer where it was. Choose it again.";
+
+/// The paths a real OS file dialog has returned this session.
+///
+/// **An import command reads a path only if this set holds it.** The renderer
+/// has no independent way to *obtain* a path — `capabilities/default.json`
+/// grants exactly `["core:default"]`, so there is no filesystem, dialog, shell
+/// or HTTP capability to get one from — but nothing used to *check* that, and
+/// a compromised renderer (which `docs/SECURITY.md`'s threat model includes)
+/// could call `media_import_audio` with any local path at all. With a cloud
+/// transcription provider configured, that file's contents then left the
+/// machine. This set is what closes that: [`pick_import_file`] is the only
+/// thing that puts a path in it, and [`media::media_import_audio`],
+/// [`media::media_import_video`] and [`import_openwhispr`] are the only three
+/// commands that take a path, so the surface is closed.
+///
+/// [`media::media_import_audio`]: crate::media::media_import_audio
+/// [`media::media_import_video`]: crate::media::media_import_video
+///
+/// **Session-lifetime, and bounded by count rather than by time.** A grant
+/// lasts until the application exits. Single-use would break
+/// retry-after-failure, which exists today — `NotesUpload.tsx`'s `catch`
+/// leaves the picked path in state, so the same file can be tried again after
+/// a failed conversion. A time bound would refuse a file the user really did
+/// pick if they left the review step open, and they realistically will: that
+/// screen can sit on a picked path across an ffmpeg install of tens of
+/// megabytes. This is the same argument `meeting::Watcher::offered` makes for
+/// keying on the provider rather than on a timestamp — read that field's doc
+/// comment; a time-tuned rule gets one of its two cases wrong whichever way it
+/// is set, and identity gets both right.
+///
+/// **The key is a canonicalised [`PathBuf`], never the string that crossed the
+/// boundary.** [`pick_import_file`] hands back `path.display().to_string()`,
+/// which is lossy. The consequence, stated plainly: a path whose name does not
+/// survive `display()` cannot be imported. That is not a regression — today
+/// `media::check_importable_file`'s `is_file()` already fails on such a string
+/// — but it becomes a deliberate refusal rather than an accident.
+#[derive(Debug, Default)]
+pub struct DialogGrants(std::sync::Mutex<VecDeque<PathBuf>>);
+
+impl DialogGrants {
+    /// The one canonical form both the grant and the check go through.
+    ///
+    /// `std::fs::canonicalize` on Windows returns a verbatim `\\?\C:\...`
+    /// path. Both sides must come through here, or a canonical path would be
+    /// compared against a raw one and never match.
+    fn key(path: &Path) -> std::io::Result<PathBuf> {
+        std::fs::canonicalize(path)
+    }
+
+    /// Remember `path` as dialog-returned, and answer with its canonical form.
+    pub(crate) fn grant(&self, path: &Path) -> std::io::Result<PathBuf> {
+        let key = Self::key(path)?;
+
+        let mut held = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        // Re-picking a path moves it to the newest end rather than leaving it
+        // where it was. The file just chosen is the one about to be imported,
+        // so it must not be the one the bound evicts.
+        held.retain(|existing| existing != &key);
+        held.push_back(key.clone());
+        while held.len() > MAX_DIALOG_GRANTS {
+            held.pop_front();
+        }
+
+        Ok(key)
+    }
+
+    /// The canonical path to import, or a refusal.
+    ///
+    /// The whole decision, and pure apart from the filesystem lookup
+    /// `canonicalize` needs: it takes no `AppHandle`, so it is unit-testable on
+    /// its own. That is the same reason `media::check_importable_file` and
+    /// [`import_pick_dialog`] are separate functions rather than inline
+    /// branches. The exported command boundary is covered separately with
+    /// Tauri's mock webview runtime.
+    ///
+    /// A path that cannot be canonicalised and a path nobody granted get the
+    /// *same* refusal, deliberately. Telling them apart would answer "does this
+    /// file exist" for any path a compromised renderer cared to name, and a
+    /// path that will not canonicalise cannot be in the set in any case, since
+    /// every member of it came out of `canonicalize`.
+    pub fn authorise(&self, path: &str) -> CmdResult<PathBuf> {
+        let Ok(key) = Self::key(Path::new(path)) else {
+            return Err(UNGRANTED_PATH.to_owned());
+        };
+
+        if self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains(&key)
+        {
+            Ok(key)
+        } else {
+            Err(UNGRANTED_PATH.to_owned())
+        }
+    }
+}
+
 /// Import an existing OpenWhispr database.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ImportRequest {
-    /// Absolute path to the source `transcriptions.db`.
+    /// Absolute path to the source `transcriptions.db`, as
+    /// [`pick_import_file`] returned it.
     pub path: String,
 }
 
 /// Import an OpenWhispr database, read-only, into this one.
+///
+/// **The path must be one a real dialog returned** — see [`DialogGrants`].
+/// `kw_storage::import::from_openwhispr` checks `exists()` rather than
+/// `is_file()`, so the grant is the only thing standing between this command
+/// and any readable path the caller names.
 #[tauri::command]
 pub async fn import_openwhispr(
     state: State<'_, AppState>,
+    grants: State<'_, DialogGrants>,
     request: ImportRequest,
 ) -> CmdResult<kw_storage::import::ImportReport> {
-    let path = std::path::PathBuf::from(&request.path);
+    let path = grants.authorise(&request.path)?;
     kw_storage::import::from_openwhispr(state.db(), &path, state.credentials())
         .await
         .map_err(|e| fail("import", e))
@@ -556,20 +883,29 @@ fn import_pick_dialog(
 /// capability in `capabilities/default.json`, so the only path a caller can
 /// ever have seen is one a real OS dialog produced through this command.
 ///
-/// **It is not, though, the same guarantee `note_export_to_file` makes.**
-/// That command fuses picking and writing into one atomic call, so the
-/// frontend never sees or supplies a path at all — the property
-/// `docs/SECURITY.md` names as answering path traversal through export. This
-/// command instead hands the chosen path *back* to the renderer, which holds
-/// it in state and passes it as a plain string to a separate command
-/// (`media_import_audio`, `media_import_video`, `import_openwhispr`) on a
-/// later click. Those commands read whatever path they are called with;
-/// nothing confirms it is the one this command returned rather than one a
-/// compromised renderer invented outright. See `docs/SECURITY.md`'s Webview
-/// section and `docs/BENCH_CHECK.md`'s Task 12 entry for the gap this leaves
-/// open and the hardening options being weighed.
+/// **It is not the shape `note_export_to_file` uses, and it is confirmed
+/// rather than assumed.** That command fuses picking and writing into one
+/// atomic call, so the frontend never sees or supplies a path at all. Fusing
+/// pick and import the same way would fight `Notes > Upload`'s
+/// pick-then-review-then-confirm flow, which a single-click save does not
+/// need, so this command still hands the chosen path *back* to the renderer,
+/// which holds it in state and passes it as a plain string to a separate
+/// command (`media_import_audio`, `media_import_video`, `import_openwhispr`)
+/// on a later click. What makes that safe is [`DialogGrants`]: the canonical
+/// form of every path this command returns is recorded, and those three
+/// commands authorise against that set before reading anything. A path no
+/// dialog produced is refused.
+///
+/// The pure policy tests are backed by a mock-webview IPC test which invokes
+/// all three import commands by their exported names. A real picker check still
+/// belongs in the bench sequence because only the OS dialog can prove the
+/// person-facing flow; see `docs/BENCH_CHECK.md`'s Task 12 entry.
 #[tauri::command]
-pub async fn pick_import_file(app: AppHandle, kind: ImportPickKind) -> CmdResult<Option<String>> {
+pub async fn pick_import_file(
+    app: AppHandle,
+    grants: State<'_, DialogGrants>,
+    kind: ImportPickKind,
+) -> CmdResult<Option<String>> {
     use tauri_plugin_dialog::DialogExt as _;
 
     let (title, filter_name, extensions) = import_pick_dialog(kind);
@@ -596,6 +932,17 @@ pub async fn pick_import_file(app: AppHandle, kind: ImportPickKind) -> CmdResult
         .into_path()
         .map_err(|e| fail("could not resolve the chosen path", e))?;
 
+    // Granted before the path is handed over, so the renderer never holds a
+    // string no import command will accept.
+    grants
+        .grant(&path)
+        .map_err(|e| fail("could not resolve the chosen path", e))?;
+
+    // The *display* string, not the canonical one the grant is keyed on: the
+    // screen shows this path to the person who picked it and derives the note
+    // title from its file name, and Windows' verbatim `\\?\C:\...` form is not
+    // something to put in front of anyone. `authorise` canonicalises again on
+    // the way back in, so the two still meet.
     Ok(Some(path.display().to_string()))
 }
 
@@ -783,12 +1130,39 @@ pub async fn notes_update(
         .map_err(|e| fail("could not save the note", e))
 }
 
-/// Delete a note. Returns whether it existed.
+/// Delete a note and its application-owned recording. Returns whether the note
+/// existed.
+///
+/// The renderer tells the user the file goes with the note before asking for
+/// confirmation. The local API's DELETE in `crates/local-api/src/server.rs:320`
+/// does not remove the file; that known gap is tracked by the orchestrator.
 #[tauri::command]
 pub async fn notes_delete(state: State<'_, AppState>, id: i64) -> CmdResult<bool> {
-    notes::delete(state.db().pool(), id)
+    let recording = note_recordings::get(state.db().pool(), id)
         .await
-        .map_err(|e| fail("could not delete the note", e))
+        .map_err(|e| fail("could not read the note's recording", e))?;
+    let deleted = notes::delete(state.db().pool(), id)
+        .await
+        .map_err(|e| fail("could not delete the note", e))?;
+
+    if deleted {
+        if let Some(recording) = recording {
+            crate::recordings::remove_file_for(&recording).await;
+        }
+    }
+
+    Ok(deleted)
+}
+
+/// The recording attached to a note, if it has one.
+#[tauri::command]
+pub async fn note_recording_get(
+    state: State<'_, AppState>,
+    id: i64,
+) -> CmdResult<Option<NoteRecording>> {
+    note_recordings::get(state.db().pool(), id)
+        .await
+        .map_err(|e| fail("could not read the note's recording", e))
 }
 
 /// Folders in display order.
@@ -864,6 +1238,56 @@ fn export_filename(title: &str, format: transcript::Format) -> String {
     format!("{stem}.{}", format.extension())
 }
 
+/// Parse the single stored transcript representation shared by export and
+/// playback rows.
+fn transcript_segments(note: &notes::Note) -> CmdResult<Vec<transcript::Segment>> {
+    // A note with no transcript is legitimate: typed notes export and render as
+    // an empty transcript rather than failing.
+    match note.transcript.as_deref() {
+        Some(raw) if !raw.trim().is_empty() => serde_json::from_str(raw)
+            .map_err(|e| fail("the note's transcript is not a list of segments", e)),
+        _ => Ok(Vec::new()),
+    }
+}
+
+fn transcript_meta(note: &notes::Note) -> transcript::NoteMeta {
+    transcript::NoteMeta {
+        title: note.title.clone(),
+        created_at: note.created_at.clone(),
+        participants: note.participants.clone(),
+    }
+}
+
+/// Speaker names live in `speaker_mappings`, and this is empty because nothing
+/// renames a speaker yet -- not because nothing diarises. There is diarisation
+/// as of 2026-09-01: `meeting::notes` writes `speaker_0` with the placeholder
+/// `Speaker 1` beside it, and `transcript::speaker_name` renders that segment
+/// from its own label. The table would add a name a person typed, and no screen
+/// offers that, so falling through to the segment label or source is honest.
+fn transcript_mappings() -> std::collections::BTreeMap<String, String> {
+    std::collections::BTreeMap::new()
+}
+
+/// Load one note's transcript as playable, unmerged rows.
+#[tauri::command]
+pub async fn note_transcript_rows(
+    state: State<'_, AppState>,
+    id: i64,
+) -> CmdResult<Vec<TranscriptRow>> {
+    let note = notes::get(state.db().pool(), id)
+        .await
+        .map_err(|e| fail("could not read the note", e))?
+        .ok_or_else(|| "there is no note with that id".to_owned())?;
+    let segments = transcript_segments(&note)?;
+
+    Ok(transcript::rows(
+        &segments,
+        &transcript_meta(&note),
+        &transcript_mappings(),
+        &transcript::SpeakerLabels::default(),
+    ))
+}
+
 /// Load a note and render its transcript.
 async fn render_export(
     state: &AppState,
@@ -875,32 +1299,13 @@ async fn render_export(
         .map_err(|e| fail("could not read the note", e))?
         .ok_or_else(|| "there is no note with that id".to_owned())?;
 
-    // A note with no transcript exports as an empty one rather than failing:
-    // a typed note is a legitimate thing to export, and `segment_count` tells
-    // the caller which case it got.
-    let segments: Vec<transcript::Segment> = match note.transcript.as_deref() {
-        Some(raw) if !raw.trim().is_empty() => serde_json::from_str(raw)
-            .map_err(|e| fail("the note's transcript is not a list of segments", e))?,
-        _ => Vec::new(),
-    };
-
-    let meta = transcript::NoteMeta {
-        title: note.title.clone(),
-        created_at: note.created_at.clone(),
-        participants: note.participants.clone(),
-    };
-
-    // Speaker names live in `speaker_mappings`, which nothing writes yet because
-    // there is no diarisation. An empty map is the honest input rather than a
-    // missing one: `transcript::speaker_name` then falls back to the segment's
-    // label or capture source, which is exactly what it should do.
-    let mappings = std::collections::BTreeMap::new();
+    let segments = transcript_segments(&note)?;
 
     let content = transcript::export(
         format,
-        &meta,
+        &transcript_meta(&note),
         &segments,
-        &mappings,
+        &transcript_mappings(),
         &transcript::SpeakerLabels::default(),
     );
 
@@ -986,6 +1391,47 @@ pub async fn note_export_to_file(
 mod tests {
     use super::*;
 
+    /// Every entry in [`PATH_TAKING_COMMANDS`] is registered by the application.
+    ///
+    /// **The mutation this exists for:** delete `media::media_import_video` from
+    /// `lib.rs`'s `generate_handler!`. Before this test that was invisible — the
+    /// IPC boundary test invokes a handler list it builds itself, so the
+    /// application could stop exposing a command while every assertion about
+    /// that command stayed green (KNEG-151).
+    ///
+    /// Reading `lib.rs` as text is the only way in: Rust has no reflection over
+    /// `#[tauri::command]` registration, and `generate_handler!` needs literal
+    /// paths, so the list cannot be generated from a const. The same parse is
+    /// already done one language over by `tools/settings-audit/scan.mjs`.
+    #[test]
+    fn every_path_taking_command_is_registered() {
+        const OPEN: &str = "generate_handler![";
+        let lib = include_str!("lib.rs");
+        let at = lib
+            .find(OPEN)
+            .expect("lib.rs registers with generate_handler!");
+        let open = at + OPEN.len();
+        let close = open + lib[open..].find("])").expect("the handler list is closed");
+        let registered = &lib[open..close];
+
+        // Controls, and the reason they are not obvious: the assertions below are
+        // `contains` over a slice, so a parse that returned the *whole file* would
+        // satisfy every one of them while proving nothing at all. These pin both
+        // ends of the slice to the handler list itself.
+        assert!(
+            registered.contains("diagnostics::diagnostics"),
+            "the parse did not reach the first registered command"
+        );
+        assert!(
+            !registered.contains("prevent_close"),
+            "the parse ran past the handler list into the window handlers"
+        );
+
+        for (command, _) in PATH_TAKING_COMMANDS {
+            assert!(registered.contains(command), "{command} takes a renderer path and is not registered in lib.rs; register it, or drop it from PATH_TAKING_COMMANDS");
+        }
+    }
+
     async fn state() -> AppState {
         AppState::in_memory().await.unwrap()
     }
@@ -1002,10 +1448,10 @@ mod tests {
             .unwrap();
 
         // Upstream's default is Control+Super, which is modifier-only. The
-        // cross-platform shortcut register still cannot take it — `is_usable`
-        // is about that register — so it comes back with an explanation rather
-        // than looking fine.
-        assert!(!dictation.is_usable());
+        // cross-platform shortcut register still cannot take it —
+        // `has_registrable` is about that register and only that — so it comes
+        // back with an explanation rather than looking fine.
+        assert!(!dictation.has_registrable());
         assert_eq!(dictation.problems().len(), 1);
 
         // What the explanation *says* now depends on the platform, because the
@@ -1046,7 +1492,7 @@ mod tests {
             .unwrap();
         // The accelerator itself is still fine, and the report still says so.
         // The two facts are separate and both are reported.
-        assert!(chat.is_usable(), "the accelerator is not the problem");
+        assert!(chat.has_registrable(), "the accelerator is not the problem");
         assert!(chat.problems().is_empty());
 
         let reason = report
@@ -1056,9 +1502,81 @@ mod tests {
             .map(|u| u.reason.clone())
             .expect("chat agent has no handler, so it must appear here");
         assert!(reason.contains("not built yet"), "{reason}");
+    }
 
-        // And it counts as unusable, which is the question the interface asks.
-        assert!(report.unusable.contains(&HotkeyAction::ChatAgent));
+    /// The report carries the AltGr caution, and does it without asking the
+    /// machine it happens to be running on.
+    ///
+    /// The layout is injected rather than read, which is the point: CI is Linux
+    /// and would answer `Unknown`, and a developer on a US layout would get
+    /// `Absent`. A test whose result depends on the tester's keyboard is a test
+    /// that will be quietly wrong for someone.
+    #[tokio::test]
+    async fn a_hotkey_that_altgr_also_fires_is_reported_as_a_caution() {
+        let s = state().await;
+        settings::set(
+            s.db().pool(),
+            &HotkeyAction::Dictation.settings_key(),
+            &"Control+Alt",
+        )
+        .await
+        .unwrap();
+
+        let bindings = load_bindings(&s).await.unwrap();
+        let swedish = kw_platform::keyboard_layout::AltGr::Present { example: '@' };
+        let report = report_with_layout(bindings.clone(), &swedish);
+
+        // Two, and they are different facts about the same chord: AltGr depends
+        // on the layout, being a prefix of a longer shortcut depends only on
+        // the chord having two keys. Either can hold without the other, so they
+        // are separate sentences rather than one merged one -- and asserting
+        // "exactly one caution" was what this used to do, which would have
+        // hidden the second the moment it arrived (KNEG-115).
+        assert_eq!(report.cautions.len(), 2, "{:?}", report.cautions);
+        assert!(report
+            .cautions
+            .iter()
+            .all(|c| c.action == HotkeyAction::Dictation));
+        assert!(
+            report.cautions.iter().any(|c| c.reason.contains("AltGr")),
+            "{:?}",
+            report.cautions
+        );
+        assert!(
+            report
+                .cautions
+                .iter()
+                .any(|c| c.reason.contains("Ctrl+Alt+Delete")),
+            "{:?}",
+            report.cautions
+        );
+
+        // And it is a caution rather than a problem: the hotkey is fine. Saying
+        // otherwise would send someone looking for a typo in an accelerator
+        // that is spelled perfectly and works exactly as written.
+        let dictation = report
+            .bindings
+            .iter()
+            .find(|b| b.action == HotkeyAction::Dictation)
+            .unwrap();
+        assert!(report.conflicts.is_empty());
+        assert!(
+            dictation.problems().iter().all(|p| !p.contains("AltGr")),
+            "the caution must not also be reported as a problem: {:?}",
+            dictation.problems()
+        );
+        // The same bindings on a layout with no AltGr lose the AltGr caution and
+        // keep the other one. That is the separation earning its place: a US
+        // keyboard cannot press AltGr, and it can press Ctrl+Alt+Delete.
+        let us = kw_platform::keyboard_layout::AltGr::Absent;
+        let on_us = report_with_layout(bindings, &us).cautions;
+        assert_eq!(on_us.len(), 1, "{on_us:?}");
+        assert!(!on_us[0].reason.contains("AltGr"), "{:?}", on_us[0]);
+        assert!(
+            on_us[0].reason.contains("Ctrl+Alt+Delete"),
+            "{:?}",
+            on_us[0]
+        );
     }
 
     #[tokio::test]
@@ -1087,7 +1605,7 @@ mod tests {
             .iter()
             .find(|b| b.action == HotkeyAction::Dictation)
             .unwrap();
-        assert!(dictation.is_usable());
+        assert!(dictation.has_registrable());
         assert_eq!(dictation.registrable(), vec!["Control+Shift+D"]);
     }
 

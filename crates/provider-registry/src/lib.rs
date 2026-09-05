@@ -124,8 +124,18 @@ pub struct EnterpriseProvider {
 #[serde(rename_all = "camelCase")]
 pub struct DraftModel {
     pub hf_repo: String,
+    /// On the same terms as [`LocalLlmModel::revision`], and from a different
+    /// repository: a drafter lives beside the model it speeds up, not inside it,
+    /// so it carries its own commit and its own digest.
+    pub revision: String,
     pub file_name: String,
     pub size_bytes: Option<u64>,
+    /// Whether [`Self::size_bytes`] was measured, on the same terms as
+    /// [`LocalLlmModel::size_measured`].
+    pub size_measured: bool,
+    /// On the same terms as [`LocalLlmModel::sha256`].
+    pub sha256: Option<String>,
+    pub sha256_measured: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -135,7 +145,48 @@ pub struct LocalLlmModel {
     pub name: String,
     pub file_name: String,
     pub hf_repo: String,
+    /// The commit the GGUF is downloaded from: a 40-character sha, never a
+    /// branch name.
+    ///
+    /// Not an `Option`, unlike [`Self::sha256`], and the difference is
+    /// deliberate. A missing digest degrades to a weaker check that is still a
+    /// check; a missing revision would degrade to `main`, which is the defect
+    /// KNEG-103 exists to remove -- the bytes would move whenever the publisher
+    /// pushed, and the digest committed beside them would then fail an install
+    /// for a reason that has nothing to do with the user. The generator refuses
+    /// to emit a model without one, so a registry that reaches here without it
+    /// was hand-edited and fails to load rather than quietly floating.
+    pub revision: String,
     pub size_bytes: Option<u64>,
+    /// Whether [`Self::size_bytes`] is a measurement of the published file or
+    /// upstream's declaration of it.
+    ///
+    /// The two are not interchangeable, which is why this is a field rather than
+    /// something inferred from the size being present. Upstream declared a size
+    /// for every model and was wrong about eighteen of the thirty-five -- it
+    /// multiplied a base-10 "GB" label by 2^30 -- so a non-null size proves
+    /// nothing on its own. A measured size is checked for exact equality after a
+    /// download; a declared one only within 5%.
+    pub size_measured: bool,
+    /// The object's SHA-256, non-null for all thirty-nine published objects.
+    ///
+    /// Read it through `local_llm.rs`'s `DigestCheck::of`, which takes this and
+    /// [`Self::sha256_measured`] together, rather than reaching for the string:
+    /// the two fields are one fact and the flag is not decoration.
+    pub sha256: Option<String>,
+    /// Whether [`Self::sha256`] is bytes this project hashed or the publisher's
+    /// stated `lfs.oid`.
+    ///
+    /// Both are held to exact equality after a download, so this does not change
+    /// what the installer *does*. It changes what may honestly be said about a
+    /// model that passed. A stated oid is a real SHA-256 of the object -- git-lfs
+    /// is content-addressed on it -- and it catches a corrupted transfer, a
+    /// truncation the length survived, and an accidental re-upload. It does not
+    /// catch a compromised huggingface.co, because that one host would serve
+    /// both the bytes and the digest they are checked against. Seven of the
+    /// thirty-nine objects are measured, one per publishing organisation; see
+    /// `LOCAL_LLM_PINS` in `tools/integration-audit/generate-provider-registry.mjs`.
+    pub sha256_measured: bool,
     pub quantization: Option<String>,
     pub context_length: Option<u32>,
     pub recommended: bool,
@@ -159,7 +210,22 @@ pub struct WhisperModel {
     pub name: String,
     pub file_name: String,
     pub download_url: String,
+    /// A display estimate, rounded. What the settings screen shows.
     pub size_mb: Option<f64>,
+    /// SHA-256 of the model file, measured from a real download.
+    ///
+    /// Non-null for all six shipped models. `Option` because a model added to
+    /// the registry before anybody downloads it has no digest, and
+    /// `models::integrity_for` degrades to a size check rather than pretending
+    /// otherwise.
+    pub sha256: Option<String>,
+    /// The model file's expected length.
+    ///
+    /// Where `sha256` is set, this is the exact count measured in the same
+    /// download — the number `kw_sidecar::integrity` is handed, so it has to be
+    /// bytes that were actually there. Where `sha256` is `None` it is upstream's
+    /// rounded declaration, and `models::integrity_for` holds it to a tolerance
+    /// instead. Never the rounded `size_mb` scaled.
     pub expected_size_bytes: Option<u64>,
     pub recommended: bool,
 }
@@ -172,16 +238,67 @@ pub struct SherpaModel {
     pub download_url: String,
     pub extract_dir: String,
     pub size_mb: Option<f64>,
+    /// SHA-256 of the compressed archive, required before installation.
+    pub sha256: Option<String>,
+    /// Exact byte count of the compressed archive.
+    pub expected_size_bytes: Option<u64>,
+    /// Hard ceiling for bytes written while extracting the archive.
+    pub max_extracted_size_bytes: Option<u64>,
     pub language: Option<String>,
     pub supported_languages: Option<Vec<String>>,
     /// True for the Nemotron streaming runtimes; the Parakeet models are batch.
     pub streaming: bool,
 }
 
+/// Which half of a diarization run a model does.
+///
+/// Two files, two jobs, and neither works alone: the segmentation model finds
+/// where speech is and where it changes, the embedding model turns each stretch
+/// into a voice fingerprint to cluster. The CLI takes one of each and refuses
+/// without both.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, TS)]
+#[serde(rename_all = "kebab-case")]
+pub enum DiarizationRole {
+    Segmentation,
+    Embedding,
+}
+
+/// One of the two models a speaker-diarization run needs.
+///
+/// Not a [`SherpaModel`] despite coming from the same publisher: only one of
+/// the two is an archive, neither declares a language the way an ASR model
+/// does, and neither is `streaming`. Sharing the struct would mean three fields
+/// that are always meaningless for one of them.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiarizationModel {
+    pub id: String,
+    pub name: String,
+    pub download_url: String,
+    /// `None` for the embedding model, which is a single `.onnx` file with
+    /// nothing to extract.
+    pub extract_dir: Option<String>,
+    /// `None` for the segmentation model, which is an archive. Exactly one of
+    /// this and `extract_dir` is set, which is what decides the install path;
+    /// the generator refuses to emit a model declaring both or neither.
+    pub file_name: Option<String>,
+    pub size_mb: Option<f64>,
+    pub role: Option<DiarizationRole>,
+    /// SHA-256 of the download, required before installation.
+    pub sha256: Option<String>,
+    pub expected_size_bytes: Option<u64>,
+    /// `None` for the embedding model: a ceiling on extraction would describe a
+    /// step that does not happen to it.
+    pub max_extracted_size_bytes: Option<u64>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct LocalAsr {
     pub whisper: Vec<WhisperModel>,
     pub sherpa: Vec<SherpaModel>,
+    /// The two speaker-diarization models. Empty until 2026-09-01, when both
+    /// were pinned -- see `kw_meeting_core::diarization`.
+    pub diarization: Vec<DiarizationModel>,
 }
 
 /// What a credential slot is for.

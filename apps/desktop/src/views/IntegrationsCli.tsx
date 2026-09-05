@@ -5,13 +5,14 @@
  * The one thing this screen exists to get right after `Integrations > API`
  * got it wrong: the discovery file's permissions are shown as the actual
  * state and its evidence, never as a boolean. A bench check found that the
- * backend's own `Permissions::is_as_expected()` returns `true` for
+ * backend's own `Permissions::is_as_expected()` returned `true` for
  * `InheritedFromProfile` — correct as "the best this build currently
  * achieves", and wrong read as "verified restricted", since nothing checked
- * what that inherited ACL actually grants. This screen switches on the real
- * state (`discoveryPermissionsLabel` in `lib/labels.ts`) and gives
- * `InheritedFromProfile` its own honest sentence rather than a green tick
- * borrowed from a boolean that cannot tell the difference.
+ * what that inherited ACL actually grants. That helper has since been
+ * deleted. This screen switches on the real state
+ * (`discoveryPermissionsLabel` in `lib/labels.ts`), which now has a sentence
+ * for each of the ten states a read-back can produce rather than a green tick
+ * borrowed from a boolean that could not tell them apart.
  *
  * The binary's location is a real filesystem check too, next to this running
  * application and then on `PATH` — never assumed present because the CLI is
@@ -20,9 +21,10 @@
 
 import { useCallback } from "react";
 
+import { DiscoveryFileRows } from "../components/DiscoveryFileRows";
 import { Row } from "../components/Row";
 import { getCliStatus } from "../lib/ipc";
-import { binaryLocationLabel, discoveryPermissionsLabel } from "../lib/labels";
+import { binaryLocationLabel } from "../lib/labels";
 import { useRefresh } from "../lib/useRefresh";
 
 export function IntegrationsCli() {
@@ -38,10 +40,6 @@ export function IntegrationsCli() {
   }
 
   const location = binaryLocationLabel(status.binaryLocation);
-  const permissions = status.discoveryPermissions
-    ? discoveryPermissionsLabel(status.discoveryPermissions)
-    : null;
-
   return (
     <div className="view">
       {error ? <p className="error">{error}</p> : null}
@@ -57,7 +55,10 @@ export function IntegrationsCli() {
         </p>
 
         <Row label="Binary" value={location.text} detail={location.detail} />
-        <Row label="Discovery file" value={status.discoveryPath} />
+        <DiscoveryFileRows
+          discoveryPath={status.discoveryPath}
+          permissions={status.discoveryPermissions}
+        />
         <Row
           label="Local API"
           value={status.localApiRunning ? "Running" : "Not running"}
@@ -67,21 +68,6 @@ export function IntegrationsCli() {
               : "the discovery file above does not exist while this is off — see Integrations > API"
           }
         />
-        {permissions ? (
-          <Row
-            label="Discovery file permissions"
-            value={permissions.text}
-            detail={permissions.detail}
-          />
-        ) : (
-          <p className="muted">
-            Nothing to report about the discovery file's permissions: it does
-            not exist while the local API is not running.
-          </p>
-        )}
-        {permissions?.caveat ? (
-          <p className="caveat">{permissions.caveat}</p>
-        ) : null}
       </section>
     </div>
   );

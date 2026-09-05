@@ -2684,6 +2684,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "chrono",
+ "futures",
  "kw-app-core",
  "kw-audio-core",
  "kw-calendar-core",
@@ -2700,6 +2701,7 @@ dependencies = [
  "kw-sidecar",
  "kw-storage",
  "kw-transcription-core",
+ "reqwest 0.12.28",
  "semver",
  "serde",
  "serde_json",
@@ -2711,6 +2713,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
+ "tokio-tungstenite",
  "tracing",
  "tracing-subscriber",
  "ts-rs",
@@ -2836,6 +2839,7 @@ dependencies = [
  "kw-network-policy",
  "kw-provider-registry",
  "kw-security",
+ "kw-sidecar",
  "kw-transcription-core",
  "serde",
  "serde_json",
@@ -2892,6 +2896,7 @@ name = "kw-platform"
 version = "0.1.0"
 dependencies = [
  "arboard",
+ "kw-audio-core",
  "kw-overlay",
  "serde",
  "sysinfo",
@@ -2962,9 +2967,11 @@ dependencies = [
  "keyring",
  "serde",
  "subtle",
+ "tempfile",
  "thiserror 2.0.20",
  "tracing",
  "url",
+ "windows 0.58.0",
 ]
 
 [[package]]
@@ -2975,6 +2982,7 @@ dependencies = [
  "bzip2-rs",
  "flate2",
  "kw-network-policy",
+ "kw-security",
  "lzma-rs",
  "reqwest 0.12.28",
  "serde",
@@ -3011,7 +3019,9 @@ name = "kw-transcription-core"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "kw-audio-core",
  "kw-network-policy",
+ "kw-notes-core",
  "kw-provider-registry",
  "kw-security",
  "kw-sidecar",

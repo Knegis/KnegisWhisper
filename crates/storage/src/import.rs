@@ -225,6 +225,22 @@ const COPY_PLAN: &[(&str, &[&str])] = &[
 ///
 /// Row ids are preserved so foreign keys survive the copy, which is only safe
 /// into a fresh database. Refusing is better than silently remapping.
+///
+/// **The rule, which is exact in both directions.** This is every [`COPY_PLAN`]
+/// table whose ids SQLite hands out — every one declared
+/// `INTEGER PRIMARY KEY AUTOINCREMENT` — and no others. A table with a natural
+/// or composite key has no surrogate id to collide and is deliberately absent:
+/// `contacts` is keyed by `email`, `speaker_mappings` and
+/// `note_speaker_embeddings` by `(note_id, speaker_id)`, and the four calendar
+/// tables by a provider-supplied `TEXT` id. The two token tables are here and
+/// not in `COPY_PLAN` because [`relocate_calendar_tokens`] handles them
+/// separately; they are autoincrement all the same.
+///
+/// The correspondence held exactly and was written down nowhere until
+/// 2026-09-01, which made it a coincidence waiting to be broken by whoever
+/// added the next table to either list.
+/// `must_be_empty_is_exactly_the_autoincrement_tables` now fails if one list
+/// gains a table and the other does not.
 const MUST_BE_EMPTY: &[&str] = &[
     "folders",
     "notes",
@@ -1009,6 +1025,72 @@ mod tests {
         assert_eq!(token_ref, "calendar-google-1");
     }
 
+    /// Every file the database is made of, as one searchable string.
+    ///
+    /// **SQLite in WAL mode is three files, and a committed row can be in any
+    /// of them.** Reading only `kw.db` is how the assertion below came to pass
+    /// for the wrong reason: on two runs in four hundred under load, the
+    /// checkpoint `Db::close` relies on had not landed by the time the file was
+    /// read, so the main file held neither the token nor the slot. Both "must
+    /// not appear" assertions passed against a file with nothing in it, and the
+    /// only thing that noticed was the positive control (KNEG-88).
+    ///
+    /// Reading all three is the fix and the stronger claim at once: a refresh
+    /// token sitting in `kw.db-wal` is exactly as leaked as one in `kw.db`, and
+    /// the old test would not have seen it.
+    ///
+    /// Built from the `OsStr` rather than from `display()`, which is lossy and
+    /// would look for the wrong file under a path that does not survive it.
+    fn every_database_file(path: &Path) -> String {
+        let mut text = String::new();
+        for suffix in ["", "-wal", "-shm"] {
+            let mut name = path.as_os_str().to_owned();
+            name.push(suffix);
+            if let Ok(bytes) = std::fs::read(PathBuf::from(name)) {
+                text.push_str(&String::from_utf8_lossy(&bytes));
+            }
+        }
+        text
+    }
+
+    /// Reading only the main file is not enough, and this does not wait for luck
+    /// to prove it.
+    ///
+    /// The real intermittent failure needed a loaded machine and appeared twice
+    /// in four hundred runs — which is a poor thing to hang a regression test on.
+    /// Holding the database open forces exactly the same state every time:
+    /// nothing has closed, so nothing has checkpointed, and a committed row is
+    /// in `-wal` and not in `kw.db`.
+    ///
+    /// The first assertion is the premise, not decoration. If SQLite ever
+    /// checkpoints eagerly enough to put the row in the main file, this test
+    /// stops testing anything — and it should say so rather than pass.
+    #[tokio::test]
+    async fn a_row_that_is_only_in_the_wal_is_still_found() {
+        const MARKER: &str = "a-marker-no-schema-would-contain";
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("kw.db");
+        let db = Db::open(&path).await.unwrap();
+        crate::settings::set(db.pool(), "meetings.language", &MARKER)
+            .await
+            .unwrap();
+
+        let main_only = std::fs::read(&path).unwrap();
+        assert!(
+            !String::from_utf8_lossy(&main_only).contains(MARKER),
+            "premise failed: an open WAL database checkpointed on its own, so this test is no \
+             longer exercising the case it was written for"
+        );
+
+        assert!(
+            every_database_file(&path).contains(MARKER),
+            "a committed row was missed because it was still in the write-ahead log"
+        );
+
+        db.close().await;
+    }
+
     #[tokio::test]
     async fn no_plaintext_token_appears_anywhere_in_the_target_file() {
         let dir = tempfile::tempdir().unwrap();
@@ -1021,9 +1103,10 @@ mod tests {
         from_openwhispr(&target, &src_path, &creds).await.unwrap();
         target.close().await;
 
-        // The strongest form of the assertion: grep the bytes on disk.
-        let bytes = std::fs::read(&target_path).unwrap();
-        let haystack = String::from_utf8_lossy(&bytes);
+        // The strongest form of the assertion: grep the bytes on disk -- all of
+        // them. See `every_database_file` for why "all of them" is load-bearing
+        // rather than thorough.
+        let haystack = every_database_file(&target_path);
         assert!(
             !haystack.contains("1//refresh-secret"),
             "refresh token reached the database file"
@@ -1032,9 +1115,14 @@ mod tests {
             !haystack.contains("ya29.access"),
             "access token reached the database file"
         );
+        // The control, and it earns its place: without it the two assertions
+        // above would certify a file that contains nothing at all. It is the
+        // assertion that actually fired, twice in four hundred runs, and it is
+        // how this was found.
         assert!(
             haystack.contains("calendar-google-1"),
-            "the slot reference should be there"
+            "the slot reference should be there, so the two assertions above were reading \
+             a database whose contents had not landed yet"
         );
     }
 
@@ -1212,5 +1300,84 @@ mod tests {
         .await
         .unwrap_err();
         assert!(err.to_string().contains("no database at"));
+    }
+
+    /// `MUST_BE_EMPTY` is exactly the autoincrement half of `COPY_PLAN`, in
+    /// both directions.
+    ///
+    /// The rule is stated on `MUST_BE_EMPTY` and held exactly when this was
+    /// written, having been written down nowhere for the whole life of the
+    /// importer. It is checked against the *live schema* rather than a second
+    /// hand-written list, because a test that restates the nine names proves
+    /// only that somebody typed them twice.
+    ///
+    /// Mutation that turns it red: add an `INTEGER PRIMARY KEY AUTOINCREMENT`
+    /// table to `COPY_PLAN` and leave it out of `MUST_BE_EMPTY`, or add
+    /// `contacts` -- keyed by `email` -- to `MUST_BE_EMPTY`.
+    #[tokio::test]
+    async fn must_be_empty_is_exactly_the_autoincrement_tables() {
+        let db = Db::open_in_memory().await.unwrap();
+
+        let mut autoincrement = 0_usize;
+        let mut natural_key = 0_usize;
+
+        for (table, _) in COPY_PLAN {
+            let sql: Option<String> = sqlx::query_scalar(
+                "SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = ?",
+            )
+            .bind(table)
+            .fetch_optional(db.pool())
+            .await
+            .unwrap();
+
+            // The control. Without it a table renamed in the migration and not
+            // here yields `None`, every comparison below reads it as "not
+            // autoincrement", and the test passes having measured nothing.
+            let sql =
+                sql.unwrap_or_else(|| panic!("{table} is in COPY_PLAN but not in the schema"));
+            assert!(
+                sql.contains("CREATE TABLE"),
+                "{table}: schema row is not a table definition: {sql}"
+            );
+
+            let ids_are_ours = sql.contains("AUTOINCREMENT");
+            if ids_are_ours {
+                autoincrement = autoincrement.saturating_add(1);
+            } else {
+                natural_key = natural_key.saturating_add(1);
+            }
+
+            assert_eq!(
+                ids_are_ours,
+                MUST_BE_EMPTY.contains(table),
+                "{table}: autoincrement is {ids_are_ours} but MUST_BE_EMPTY membership is {}. \
+                 Every COPY_PLAN table whose ids SQLite hands out has to be refused when the \
+                 target already holds rows, and no other table has an id to collide.",
+                MUST_BE_EMPTY.contains(table)
+            );
+        }
+
+        // The other direction, which also covers the two token tables that are
+        // in MUST_BE_EMPTY and deliberately not in COPY_PLAN.
+        for table in MUST_BE_EMPTY {
+            let sql: Option<String> = sqlx::query_scalar(
+                "SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = ?",
+            )
+            .bind(table)
+            .fetch_optional(db.pool())
+            .await
+            .unwrap();
+            let sql =
+                sql.unwrap_or_else(|| panic!("{table} is in MUST_BE_EMPTY but not in the schema"));
+            assert!(
+                sql.contains("AUTOINCREMENT"),
+                "{table} is refused when non-empty, but its ids are not SQLite's to collide: {sql}"
+            );
+        }
+
+        // Vacuity control: both buckets are populated, so the equivalence above
+        // cannot have been satisfied by every table falling on one side of it.
+        assert!(autoincrement > 0, "no autoincrement table was examined");
+        assert!(natural_key > 0, "no natural-key table was examined");
     }
 }

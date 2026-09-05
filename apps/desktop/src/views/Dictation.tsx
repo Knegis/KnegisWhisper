@@ -21,16 +21,22 @@ import {
   getDictationRoute,
   getDictationState,
   getHistory,
+  getHistoryEnabled,
   getHotkeys,
   getInputDevices,
+  getKeepRawText,
   isInsertionSupported,
   onDictationOutcome,
   onDictationState,
   onHotkey,
+  setHistoryEnabled,
   setHotkey,
+  setHotkeyMode,
   setInputDevice,
+  setKeepRawText,
   toggleDictation,
   type Binding,
+  type HotkeyMode,
   type ShortcutHookStatus,
   type UnhandledAction,
 } from "../lib/ipc";
@@ -38,6 +44,7 @@ import {
   acceleratorLabel,
   acceleratorText,
   changeLabel,
+  hotkeyModeLabel,
   outcomeLabel,
 } from "../lib/labels";
 import { useRefresh } from "../lib/useRefresh";
@@ -54,16 +61,35 @@ export function DictationView({
   hook: ShortcutHookStatus;
 }) {
   const load = useCallback(async () => {
-    const [hotkeys, session, devices, canInsert, route, history] =
-      await Promise.all([
-        getHotkeys(),
-        getDictationState(),
-        getInputDevices(),
-        isInsertionSupported(),
-        getDictationRoute(),
-        getHistory(20),
-      ]);
-    return { hotkeys, session, devices, canInsert, route, history };
+    const [
+      hotkeys,
+      session,
+      devices,
+      canInsert,
+      route,
+      history,
+      historyOn,
+      keepRaw,
+    ] = await Promise.all([
+      getHotkeys(),
+      getDictationState(),
+      getInputDevices(),
+      isInsertionSupported(),
+      getDictationRoute(),
+      getHistory(20),
+      getHistoryEnabled(),
+      getKeepRawText(),
+    ]);
+    return {
+      hotkeys,
+      session,
+      devices,
+      canInsert,
+      route,
+      history,
+      historyOn,
+      keepRaw,
+    };
   }, []);
 
   const { data, error, reload, guard } = useRefresh(load);
@@ -132,6 +158,22 @@ export function DictationView({
     });
   };
 
+  /**
+   * Switch one action between toggling and being held.
+   *
+   * Takes effect immediately, like the accelerator does, and reports through the
+   * same row: the backend re-registers everything and hands back the same
+   * `HotkeyChange`, so "saved but nothing was registered" cannot happen silently
+   * for a mode change any more than it can for a key.
+   */
+  const applyMode = (b: Binding, mode: HotkeyMode) => {
+    void guard(async () => {
+      const change = await setHotkeyMode(b.action, mode);
+      setHotkeyResult((prev) => ({ ...prev, [b.action]: changeLabel(change) }));
+      await reload();
+    });
+  };
+
   if (!data) {
     return (
       <div className="view">
@@ -140,7 +182,8 @@ export function DictationView({
     );
   }
 
-  const { hotkeys, devices, canInsert, route, history } = data;
+  const { hotkeys, devices, canInsert, route, history, historyOn, keepRaw } =
+    data;
   // Keyed by action, because that is the shape of the fact: nothing handles the
   // chat agent, whatever it happens to be bound to.
   const unhandled = new Map<string, string>(
@@ -153,7 +196,7 @@ export function DictationView({
     <div className="view">
       {error ? <p className="error">{error}</p> : null}
 
-      <section>
+      <section data-surface="dictation.shortcuts">
         <h2>Shortcuts</h2>
         {hotkeys.bindings.map((b) => (
           <div key={b.action} className="row">
@@ -209,6 +252,26 @@ export function DictationView({
               <button type="button" onClick={() => applyHotkey(b)}>
                 Set
               </button>
+              {/*
+                Toggle or hold, per action. The shipped default is Toggle for
+                every one of them and deliberately stays that way: holding is
+                one of the answers to the prefix problem the caution below
+                describes (KNEG-115), and making it the default would settle
+                that question by accident. The option exists; the decision does
+                not come from here.
+              */}
+              <select
+                aria-label={`mode for ${b.action}`}
+                value={b.mode}
+                onChange={(e) => applyMode(b, e.target.value as HotkeyMode)}
+              >
+                {(["toggle", "hold"] as const).map((m) => (
+                  <option key={m} value={m}>
+                    {hotkeyModeLabel(m).text}
+                  </option>
+                ))}
+              </select>
+              <em className="row-detail">{hotkeyModeLabel(b.mode).detail}</em>
               {hotkeyResult[b.action] ? (
                 <em className="row-detail">{hotkeyResult[b.action]}</em>
               ) : null}
@@ -225,6 +288,19 @@ export function DictationView({
             .
           </p>
         ) : null}
+        {/*
+          A third category, warn-coloured rather than filed under the caveats
+          below, because it is the only thing on this screen that says a hotkey
+          which *works* will also do something you did not ask for. Binding
+          `Control+Alt` on a Nordic or German layout starts a dictation every
+          time you type `@` — the keys Windows sends for AltGr are the chord,
+          and nothing downstream can tell the two apart. See KNEG-37.
+        */}
+        {hotkeys.cautions.map((c, i) => (
+          <p className="caveat warn" key={`caution-${i}`}>
+            <strong>{c.action}:</strong> {c.reason}
+          </p>
+        ))}
         {lastHotkey ? <Row label="Last fired" value={lastHotkey} /> : null}
         {hotkeys.unhandled.length > 0 ? (
           <p className="caveat">
@@ -241,6 +317,13 @@ export function DictationView({
           {hook.state === "available"
             ? `It works here anyway, through ${hook.mechanism} — and unlike a registered shortcut it does not take the keys away from anything else, so Windows still does whatever it does with them.`
             : "It therefore does nothing here and has to be changed. Try Control+Shift+D."}
+        </p>
+        <p className="caveat">
+          The same hooks watch the two side buttons on a mouse: type{" "}
+          <code>Mouse4</code> or <code>Mouse5</code> as the accelerator. Left,
+          right and middle are deliberately refused — the click is not
+          swallowed, so binding one would start this action on every click in
+          every application while the click still went through.
         </p>
       </section>
 
@@ -316,8 +399,83 @@ export function DictationView({
         ) : null}
       </section>
 
-      <section>
+      <section data-surface="dictation.history">
         <h2>History</h2>
+
+        {/* First, because it governs whether the other two controls in this
+            section have anything to act on. Until 2026-08-31 the backend
+            honoured `history.enabled` before every write and nothing in the
+            application could set it: the only way to stop the app writing down
+            everything dictated was to edit SQLite by hand. */}
+        <div className="row">
+          <span className="row-label">Save dictation history</span>
+          <span className="row-value controls">
+            <label>
+              <input
+                type="checkbox"
+                checked={historyOn}
+                onChange={(e) => {
+                  const enabled = e.target.checked;
+                  void guard(async () => {
+                    await setHistoryEnabled(enabled);
+                    await reload();
+                  });
+                }}
+              />
+              Add each dictation to the list below
+            </label>
+            {/* This and Clear history are a stop and a delete, and they sound
+                alike enough that the difference has to be said rather than
+                discovered. Both sentences name the other control, so whichever
+                state the switch is in the user is told where the other half is.
+                Neither counts anything: the list below is capped at twenty, so
+                a number here would be a number about the wrong set. */}
+            <em className="row-detail">
+              {historyOn
+                ? "Switching this off stops new entries and deletes nothing — Clear history is the control that removes what is already saved."
+                : "Nothing new is being saved. Switching this off never deletes anything — what was saved before is still in the list until Clear history removes it."}
+            </em>
+          </span>
+        </div>
+
+        {/* The same shape `Settings > Meetings` uses for "Offer to record":
+            `Row` takes a string value, and this needs a control. */}
+        <div className="row">
+          <span className="row-label">Keep the text before cleanup</span>
+          <span className="row-value controls">
+            <label>
+              <input
+                type="checkbox"
+                checked={keepRaw}
+                /* Disabled rather than hidden while history is off. It is a
+                   choice about what a row contains, and with history off there
+                   are no rows -- but the setting is still stored, so hiding it
+                   would leave a value the user set and can no longer see. */
+                disabled={!historyOn}
+                onChange={(e) => {
+                  const enabled = e.target.checked;
+                  void guard(async () => {
+                    await setKeepRawText(enabled);
+                    await reload();
+                  });
+                }}
+              />
+              Store both versions when cleanup changes the text
+            </label>
+            {/* Said plainly because this is a privacy choice, not a
+                preference: switching it on stores a second copy of what was
+                said. The reason to want it is that a row carrying both is the
+                only proof cleanup did anything on that dictation. */}
+            <em className="row-detail">
+              {!historyOn
+                ? "No entries are being saved, so there is nothing for a second version to go on."
+                : keepRaw
+                  ? "Two copies of what you said are stored on rows cleanup altered."
+                  : "Only the final text is stored. Switch this on to see what cleanup changed."}
+            </em>
+          </span>
+        </div>
+
         {history.length === 0 ? (
           <p className="muted">Nothing dictated yet.</p>
         ) : (
@@ -330,6 +488,13 @@ export function DictationView({
                   <code>{h.status}</code> {h.text || h.errorMessage || "(empty)"}
                   {h.provider ? (
                     <em className="row-detail">{h.provider}</em>
+                  ) : null}
+                  {/* Only ever present when cleanup changed the text and the
+                      user asked to keep it -- see `raw_for_history`. So its
+                      presence is the finding, and it is labelled rather than
+                      shown as a bare second line. */}
+                  {h.rawText ? (
+                    <em className="row-detail">before cleanup: {h.rawText}</em>
                   ) : null}
                 </li>
               ))}

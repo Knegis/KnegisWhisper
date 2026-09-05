@@ -116,13 +116,27 @@ async fn main() {
     println!("source: {}", model.download_url);
     println!("declared size: {:?} MB", model.size_mb);
 
+    // The probe uses the same three pins the shipped path does, rather than a
+    // weaker download: it is the thing that finds out what a real install
+    // meets, and an unbounded probe would find out about a different code path
+    // than the one users get. `MissingPin` here would mean the registry cannot
+    // install this model at all, which is worth failing loudly on.
+    let expected_size = model
+        .expected_size_bytes
+        .expect("the probed model carries a measured compressed size");
+    let extracted_limit = model
+        .max_extracted_size_bytes
+        .expect("the probed model carries an extracted-size ceiling");
+    println!("pinned size: {expected_size} bytes, extraction ceiling: {extracted_limit} bytes");
+
     let archive = root.path().join("model.tar.bz2");
     let mut last_reported = 0_u64;
     policy
-        .download_to_file(
+        .download_to_file_bounded(
             RequestPurpose::UserTriggeredModelDownload,
             &model.download_url,
             &archive,
+            expected_size,
             &mut |written, total| {
                 if written.saturating_sub(last_reported) >= 32 * 1024 * 1024 {
                     println!(
@@ -149,8 +163,15 @@ async fn main() {
     // directory to flatten sibling libraries beside the executable), the
     // *whole* internal structure of a model archive is the measurement, so
     // nothing here is stripped.
-    let files = kw_sidecar::extract(&archive, ArchiveKind::TarBz2, "", "", &models_dir)
-        .expect("the model archive should extract as tar.bz2");
+    let files = kw_sidecar::extract_with_limit(
+        &archive,
+        ArchiveKind::TarBz2,
+        "",
+        "",
+        &models_dir,
+        extracted_limit,
+    )
+    .expect("the model archive should extract as tar.bz2 within its pinned ceiling");
     println!("extracted {files} file(s)");
 
     let model_dir = models_dir.join(&model.extract_dir);

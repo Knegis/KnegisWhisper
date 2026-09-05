@@ -91,12 +91,13 @@ use std::sync::{Arc, RwLock};
 
 use kw_network_policy::{NetworkPolicy, RequestPurpose};
 use kw_security::CredentialStore;
+use kw_sidecar::process::Health as _;
 use kw_sidecar::{Catalog, RealFs, SearchPath};
 use kw_storage::Db;
 use kw_transcription_core::local::WhisperServer;
 use kw_transcription_core::{Executor, Transport};
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter as _, State};
+use tauri::{AppHandle, Emitter as _, Runtime, State};
 use ts_rs::TS;
 
 /// The event import and sidecar-install progress is reported on.
@@ -168,10 +169,43 @@ pub struct MediaImportResult {
     pub text: String,
     pub provider: String,
     pub model: Option<String>,
+    /// The transcript divided into timed utterances, when the engine timed it.
+    ///
+    /// **Empty means no timings were reported**, not "the recording was one
+    /// utterance". Only the local whisper server reports them, and only because
+    /// this path asks (`WhisperServer::timed`); a cloud provider answers with
+    /// prose, so an import routed to one still has no cues. The screen writes
+    /// one segment spanning the recording in that case and says as much.
+    pub segments: Vec<ImportedSegment>,
     /// Computed from the converted WAV, not asked of the source file, so it
     /// reflects what was actually transcribed.
     pub duration_ms: u64,
     pub source: MediaImportSource,
+}
+
+/// One timed utterance of an imported transcript.
+///
+/// A local mirror of `kw_transcription_core::local::TimedSegment` because that
+/// crate has no `ts-rs` dependency and should not gain one to cross an IPC
+/// boundary it knows nothing about. The field names match
+/// `kw_notes_core::transcript::Segment`, which is what the screen writes into.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportedSegment {
+    pub text: String,
+    /// Seconds from the start of the recording.
+    pub timestamp: f64,
+    pub end_timestamp: f64,
+}
+
+impl From<&kw_transcription_core::local::TimedSegment> for ImportedSegment {
+    fn from(segment: &kw_transcription_core::local::TimedSegment) -> Self {
+        Self {
+            text: segment.text.clone(),
+            timestamp: segment.start,
+            end_timestamp: segment.end,
+        }
+    }
 }
 
 /// Progress of installing a media-import sidecar, or of running an import
@@ -422,20 +456,26 @@ fn tail_bytes(bytes: &[u8], max: usize) -> &[u8] {
 
 /// Whether `path` names a file that can be imported.
 ///
+/// `path` is the canonical path [`crate::commands::DialogGrants::authorise`]
+/// returned, not a string the renderer supplied -- *whether this path may be
+/// read at all* is decided in the command, before this. What is left here is
+/// whether the granted path still names a file: a directory canonicalises
+/// perfectly well, and a file picked and then deleted keeps its grant for the
+/// rest of the session.
+///
 /// Extracted so this check is unit-testable on its own: nothing outside a
 /// running application can construct a real `tauri::AppHandle`, so any
 /// function that needs one -- as [`MediaImportRuntime::import_local_file`]
 /// does, to report progress -- cannot be called from a plain unit test at
 /// all, not even to reach a branch that never uses it.
-fn check_importable_file(path: &str) -> Result<PathBuf, MediaImportError> {
-    let input = PathBuf::from(path);
-    if !input.is_file() {
+fn check_importable_file(path: &Path) -> Result<PathBuf, MediaImportError> {
+    if !path.is_file() {
         return Err(MediaImportError::io(
-            &input,
+            path,
             std::io::Error::new(std::io::ErrorKind::NotFound, "not a file"),
         ));
     }
-    Ok(input)
+    Ok(path.to_path_buf())
 }
 
 /// yt-dlp's own markers for a download that has not finished yet. A file
@@ -563,6 +603,12 @@ pub struct MediaImportRuntime {
     /// reach the same local engine. Resolving one of them to whisper and the
     /// other to sherpa would make `Transport::Local` mean two things.
     local_sherpa: crate::local_asr::Selection,
+    /// How to start the whisper server again if it has gone.
+    ///
+    /// Held for the same reason `local_port` is, and it matters more here than
+    /// in dictation: a dictation whose server has died can be spoken again, and
+    /// an imported recording generally cannot.
+    local_revive: Arc<dyn crate::local_model::Revive>,
     /// Where downloaded sidecars live. Held rather than read from
     /// `kw_storage::paths` at each use, so a test can point it at an empty
     /// directory -- see [`MediaImportRuntime::rooted`].
@@ -585,6 +631,7 @@ impl MediaImportRuntime {
         local_port: LocalPort,
         local_model: Arc<RwLock<Option<String>>>,
         local_sherpa: crate::local_asr::Selection,
+        local_revive: Arc<dyn crate::local_model::Revive>,
         db: Db,
     ) -> Result<Self, String> {
         Self::rooted(
@@ -593,6 +640,7 @@ impl MediaImportRuntime {
             local_port,
             local_model,
             local_sherpa,
+            local_revive,
             db,
             kw_storage::paths::sidecar_dir().path,
         )
@@ -615,6 +663,7 @@ impl MediaImportRuntime {
         local_port: LocalPort,
         local_model: Arc<RwLock<Option<String>>>,
         local_sherpa: crate::local_asr::Selection,
+        local_revive: Arc<dyn crate::local_model::Revive>,
         db: Db,
         sidecar_root: PathBuf,
     ) -> Result<Self, String> {
@@ -626,6 +675,7 @@ impl MediaImportRuntime {
             local_port,
             local_model,
             local_sherpa,
+            local_revive,
             db,
             sidecar_root,
         })
@@ -678,9 +728,9 @@ impl MediaImportRuntime {
 
     /// Download, verify and unpack a media-import sidecar, reporting progress
     /// on [`PROGRESS_EVENT`].
-    pub async fn install_sidecar(
+    pub async fn install_sidecar<R: Runtime>(
         &self,
-        app: &AppHandle,
+        app: &AppHandle<R>,
         sidecar: MediaSidecar,
     ) -> Result<(), MediaImportError> {
         let name = sidecar.catalog_name();
@@ -717,14 +767,57 @@ impl MediaImportRuntime {
         Ok(())
     }
 
-    fn local_server(&self) -> Option<WhisperServer> {
-        let port = self.local_port.read().ok().and_then(|held| *held)?;
+    /// The whisper server to send an import to, starting a new one if the
+    /// recorded server has gone.
+    ///
+    /// The same rule dictation follows, and for a stronger reason: an import is
+    /// often the only copy of a recording, so failing it against a dead port
+    /// spends something that cannot be spent twice.
+    async fn whisper_server(&self) -> Result<Option<WhisperServer>, MediaImportError> {
+        let recorded = self.local_port.read().ok().and_then(|held| *held);
+        let Some(port) = recorded else {
+            return Ok(None);
+        };
+
+        let answering = kw_sidecar::HttpHealth::new(
+            self.policy.clone(),
+            kw_transcription_core::local::HEALTH_PATH,
+        )
+        .is_ready(port)
+        .await;
+
+        let port = if answering {
+            port
+        } else {
+            tracing::warn!(
+                port,
+                "the local model server has gone; starting it again for this import"
+            );
+            let started = self.local_revive.revive().await.map_err(|err| {
+                MediaImportError::Transcription {
+                    detail: format!(
+                        "the local model server on 127.0.0.1:{port} has gone and could not be \
+                         started again: {err}"
+                    ),
+                }
+            })?;
+            tracing::info!(port = started, "the local model server was started again");
+            started
+        };
+
         let model = self.local_model.read().ok().and_then(|held| held.clone());
-        Some(WhisperServer::new(self.policy.clone(), port, model))
+        // `.timed()`: an import becomes a note that can be exported as SRT or
+        // WebVTT, and without timings that export is one cue spanning the whole
+        // recording. Dictation does not ask, because it wants a line of text and
+        // the timings cost about 45% more wall clock -- measured, see
+        // `kw_transcription_core::local`'s module doc.
+        Ok(Some(
+            WhisperServer::new(self.policy.clone(), port, model).timed(),
+        ))
     }
 
     /// The local engine for an import: the same one dictation would use.
-    fn local_engine(
+    async fn local_engine(
         &self,
     ) -> Result<Option<Box<dyn kw_transcription_core::local::LocalTranscriber>>, MediaImportError>
     {
@@ -732,7 +825,8 @@ impl MediaImportRuntime {
             Some(Ok(offline)) => Ok(Some(Box::new(offline))),
             Some(Err(detail)) => Err(MediaImportError::RouteUnresolved { detail }),
             None => Ok(self
-                .local_server()
+                .whisper_server()
+                .await?
                 .map(|w| Box::new(w) as Box<dyn kw_transcription_core::local::LocalTranscriber>)),
         }
     }
@@ -773,7 +867,15 @@ impl MediaImportRuntime {
         let transport = self.route_transport().await?;
 
         let executor = Executor::new(&self.policy, self.credentials.as_ref());
-        let local = self.local_engine()?;
+        // Resolved only for a local route, for the reason `dictation.rs` gives
+        // at the same fork: the executor reads the local engine in its
+        // `Transport::Local` arm and nowhere else, and building one anyway made
+        // an unbuildable sherpa selection fail an import bound for a provider.
+        let local = if matches!(transport, Transport::Local) {
+            self.local_engine().await?
+        } else {
+            None
+        };
         let executor = match &local {
             Some(engine) => executor.with_local(engine.as_ref()),
             None => executor,
@@ -798,9 +900,9 @@ impl MediaImportRuntime {
     /// provider never leaves a converted file on disk longer than it has to,
     /// and a failure here or later leaves nothing behind to be mistaken for a
     /// finished import.
-    async fn convert_and_transcribe(
+    async fn convert_and_transcribe<R: Runtime>(
         &self,
-        app: &AppHandle,
+        app: &AppHandle<R>,
         ffmpeg: &Path,
         input: &Path,
         scratch: &Path,
@@ -841,10 +943,16 @@ impl MediaImportRuntime {
     }
 
     /// Import an already-local audio or video file.
-    pub async fn import_local_file(
+    ///
+    /// `path` is a path a real OS dialog returned, authorised by
+    /// [`crate::commands::DialogGrants`] in the command above this. Nothing
+    /// here re-derives that: this function is reachable only through
+    /// [`media_import_audio`] and [`media_import_video`], both of which
+    /// authorise first.
+    pub async fn import_local_file<R: Runtime>(
         &self,
-        app: &AppHandle,
-        path: &str,
+        app: &AppHandle<R>,
+        path: &Path,
         source: MediaImportSource,
     ) -> Result<MediaImportResult, MediaImportError> {
         let input = check_importable_file(path)?;
@@ -860,6 +968,7 @@ impl MediaImportRuntime {
         let (transcript, duration_ms) = outcome?;
         emit_progress(app, MediaImportProgress::Done);
         Ok(MediaImportResult {
+            segments: transcript.segments.iter().map(Into::into).collect(),
             text: transcript.text,
             provider: transcript.provider,
             model: transcript.model,
@@ -872,9 +981,9 @@ impl MediaImportRuntime {
     /// doc for exactly what protection applies to the fetch and what does
     /// not.
     #[allow(dead_code)] // dormant: see URL IMPORT, DORMANT in the module doc.
-    pub async fn import_url(
+    pub async fn import_url<R: Runtime>(
         &self,
-        app: &AppHandle,
+        app: &AppHandle<R>,
         url: &str,
     ) -> Result<MediaImportResult, MediaImportError> {
         let validated = validate_import_url(url)?;
@@ -893,6 +1002,7 @@ impl MediaImportRuntime {
         let (transcript, duration_ms) = outcome?;
         emit_progress(app, MediaImportProgress::Done);
         Ok(MediaImportResult {
+            segments: transcript.segments.iter().map(Into::into).collect(),
             text: transcript.text,
             provider: transcript.provider,
             model: transcript.model,
@@ -902,9 +1012,9 @@ impl MediaImportRuntime {
     }
 
     #[allow(dead_code)] // dormant: see URL IMPORT, DORMANT in the module doc.
-    async fn fetch_and_transcribe(
+    async fn fetch_and_transcribe<R: Runtime>(
         &self,
-        app: &AppHandle,
+        app: &AppHandle<R>,
         ytdlp: &Path,
         ffmpeg: &Path,
         url: &str,
@@ -934,7 +1044,7 @@ impl MediaImportRuntime {
     }
 }
 
-fn emit_progress(app: &AppHandle, progress: MediaImportProgress) {
+fn emit_progress<R: Runtime>(app: &AppHandle<R>, progress: MediaImportProgress) {
     if let Err(err) = app.emit(PROGRESS_EVENT, progress) {
         tracing::debug!(error = %err, "could not report media import progress");
     }
@@ -955,8 +1065,8 @@ pub async fn media_import_status(
 
 /// Install one media-import sidecar. Explicit: nothing downloads on its own.
 #[tauri::command]
-pub async fn media_import_install_sidecar(
-    app: AppHandle,
+pub async fn media_import_install_sidecar<R: Runtime>(
+    app: AppHandle<R>,
     runtime: State<'_, Arc<MediaImportRuntime>>,
     sidecar: MediaSidecar,
 ) -> Result<(), String> {
@@ -967,28 +1077,41 @@ pub async fn media_import_install_sidecar(
 }
 
 /// Import a local audio file.
+///
+/// **`path` is refused unless a real OS dialog returned it.** The renderer
+/// supplies a plain string here, so the string alone proves nothing; the
+/// canonical form of it must be one [`crate::commands::pick_import_file`]
+/// recorded. Without that check a compromised renderer could name any local
+/// file and, with a cloud transcription provider configured, watch its
+/// contents leave the machine. See [`crate::commands::DialogGrants`] and
+/// `docs/SECURITY.md`'s Webview section.
 #[tauri::command]
-pub async fn media_import_audio(
-    app: AppHandle,
+pub async fn media_import_audio<R: Runtime>(
+    app: AppHandle<R>,
     runtime: State<'_, Arc<MediaImportRuntime>>,
+    grants: State<'_, crate::commands::DialogGrants>,
     path: String,
 ) -> Result<MediaImportResult, String> {
+    let granted = grants.authorise(&path)?;
     runtime
-        .import_local_file(&app, &path, MediaImportSource::Audio)
+        .import_local_file(&app, &granted, MediaImportSource::Audio)
         .await
         .map_err(|err| err.to_string())
 }
 
 /// Import a local video file. Only the label differs from audio import --
-/// ffmpeg strips any video track either way.
+/// ffmpeg strips any video track either way, and the same dialog grant is
+/// required.
 #[tauri::command]
-pub async fn media_import_video(
-    app: AppHandle,
+pub async fn media_import_video<R: Runtime>(
+    app: AppHandle<R>,
     runtime: State<'_, Arc<MediaImportRuntime>>,
+    grants: State<'_, crate::commands::DialogGrants>,
     path: String,
 ) -> Result<MediaImportResult, String> {
+    let granted = grants.authorise(&path)?;
     runtime
-        .import_local_file(&app, &path, MediaImportSource::Video)
+        .import_local_file(&app, &granted, MediaImportSource::Video)
         .await
         .map_err(|err| err.to_string())
 }
@@ -1018,6 +1141,9 @@ mod tests {
             // No sherpa model selected: these tests are about import, not about
             // which local engine an import lands on.
             Arc::new(RwLock::new(None)),
+            // Nor about reviving one. No port is recorded above, so nothing
+            // here should ever ask.
+            Arc::new(crate::local_model::RefusesToRevive),
             Db::open_in_memory().await.unwrap(),
             root.path().to_path_buf(),
         )
@@ -1232,30 +1358,249 @@ mod tests {
 
     /* ------------------------------------------------------ local file guard */
     //
-    // `import_local_file` itself takes a `&AppHandle`, which nothing outside a
-    // running application can construct -- so it is untestable directly, on
-    // purpose. `check_importable_file` is the pure extraction of its one
-    // decision that does not need one, following the same pattern
-    // `meeting.rs`, `updater.rs` and `calendar.rs` use.
+    // `check_importable_file` and `DialogGrants::authorise` are the pure
+    // extractions of the two decisions around an import. The IPC test below
+    // additionally runs the exported commands through a mock Tauri webview.
+    //
+    // The two are deliberately separate questions. `authorise` answers "may
+    // this path be read at all", and is the guard a compromised renderer meets;
+    // `check_importable_file` answers "is what it names still a file", and only
+    // ever sees a path that already passed the first.
+
+    use crate::commands::DialogGrants;
+
+    #[cfg(feature = "tauri-test")]
+    fn invoke_import(
+        webview: &tauri::WebviewWindow<tauri::test::MockRuntime>,
+        command: &str,
+        body: serde_json::Value,
+    ) -> Result<serde_json::Value, serde_json::Value> {
+        tauri::test::get_ipc_response(
+            webview,
+            tauri::webview::InvokeRequest {
+                cmd: command.to_owned(),
+                callback: tauri::ipc::CallbackFn(0),
+                error: tauri::ipc::CallbackFn(1),
+                url: "http://tauri.localhost".parse().unwrap(),
+                body: tauri::ipc::InvokeBody::Json(body),
+                headers: Default::default(),
+                invoke_key: tauri::test::INVOKE_KEY.to_owned(),
+            },
+        )
+        .map(|response| response.deserialize::<serde_json::Value>().unwrap())
+    }
+
+    /// The JSON body for a command, with `path` at the dotted position
+    /// `PATH_TAKING_COMMANDS` records for it.
+    ///
+    /// Built rather than written out because the shapes differ:
+    /// `import_openwhispr` wraps the path in an `ImportRequest`, the other two
+    /// take the string directly. Writing them out is what made the old loop a
+    /// second copy of the list.
+    #[cfg(feature = "tauri-test")]
+    fn body_with_path(shape: &str, path: &str) -> serde_json::Value {
+        let mut value = serde_json::Value::String(path.to_owned());
+        for key in shape.split('.').rev() {
+            let mut map = serde_json::Map::new();
+            map.insert(key.to_owned(), value);
+            value = serde_json::Value::Object(map);
+        }
+        value
+    }
+
+    /// A file that exists, so `canonicalize` has something to resolve.
+    fn touch(dir: &std::path::Path, name: &str) -> PathBuf {
+        let path = dir.join(name);
+        std::fs::write(&path, b"not really audio, just a file").unwrap();
+        path
+    }
 
     #[test]
     fn a_directory_is_not_an_importable_file() {
         let dir = tempfile::tempdir().unwrap();
-        let err = check_importable_file(dir.path().to_str().unwrap()).unwrap_err();
+        let err = check_importable_file(dir.path()).unwrap_err();
         assert!(matches!(err, MediaImportError::Io { .. }));
     }
 
     #[test]
     fn a_path_that_does_not_exist_is_not_an_importable_file() {
-        let err = check_importable_file("Z:/definitely/not/a/real/path.mp3").unwrap_err();
+        let err = check_importable_file(std::path::Path::new("Z:/definitely/not/a/real/path.mp3"))
+            .unwrap_err();
         assert!(matches!(err, MediaImportError::Io { .. }));
     }
 
     #[test]
-    fn an_ordinary_file_is_importable() {
+    fn an_ordinary_file_is_importable_only_when_the_dialog_returned_it() {
         let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("clip.mp3");
-        std::fs::write(&file, b"not really audio, just a file").unwrap();
-        assert_eq!(check_importable_file(file.to_str().unwrap()).unwrap(), file);
+        let file = touch(dir.path(), "clip.mp3");
+        let grants = DialogGrants::default();
+
+        // Before the dialog: existing, readable, ordinary -- and refused. This
+        // test used to assert the first three alone, which made it a false
+        // negative once the grant became the thing that decides.
+        assert!(grants.authorise(file.to_str().unwrap()).is_err());
+
+        let granted = grants.grant(&file).unwrap();
+        let authorised = grants.authorise(file.to_str().unwrap()).unwrap();
+        assert_eq!(authorised, granted);
+        assert_eq!(check_importable_file(&authorised).unwrap(), granted);
+    }
+
+    #[test]
+    fn a_path_the_dialog_never_returned_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let picked = touch(dir.path(), "picked.mp3");
+        let never_picked = touch(dir.path(), "never-picked.mp3");
+
+        let grants = DialogGrants::default();
+        grants.grant(&picked).unwrap();
+
+        // A sibling in the very directory the user did pick from is still not
+        // the file they picked.
+        assert!(grants.authorise(never_picked.to_str().unwrap()).is_err());
+        assert!(grants.authorise(picked.to_str().unwrap()).is_ok());
+    }
+
+    #[test]
+    fn a_granted_path_survives_two_imports() {
+        // Retry-after-failure exists today: `NotesUpload.tsx`'s `catch` leaves
+        // the picked path in state, so the same file can be tried again any
+        // number of times after a failed conversion. A single-use grant would
+        // break that, which is why the grant lasts the session.
+        let dir = tempfile::tempdir().unwrap();
+        let file = touch(dir.path(), "retry.mp3");
+
+        let grants = DialogGrants::default();
+        grants.grant(&file).unwrap();
+
+        let first = grants.authorise(file.to_str().unwrap()).unwrap();
+        let second = grants.authorise(file.to_str().unwrap()).unwrap();
+        assert_eq!(first, second);
+    }
+
+    #[cfg(feature = "tauri-test")]
+    #[tokio::test]
+    async fn every_import_command_enforces_the_dialog_grant_at_the_ipc_boundary() {
+        let dir = tempfile::tempdir().unwrap();
+        let never_picked = touch(dir.path(), "credentials");
+        let retry = touch(dir.path(), "retry.mp3");
+
+        let grants = DialogGrants::default();
+        grants.grant(&retry).unwrap();
+        let (runtime, _sidecar_root) = runtime().await;
+
+        let app = tauri::test::mock_builder()
+            .manage(crate::state::AppState::in_memory().await.unwrap())
+            .manage(std::sync::Arc::new(runtime))
+            .manage(grants)
+            // Still this test's own list, and it has to be: `generate_handler!`
+            // needs literal paths at expansion time, so it cannot be driven from
+            // a const. What ties it to the application is
+            // `commands::tests::every_path_taking_command_is_registered`, and what
+            // ties it to the loop below is `PATH_TAKING_COMMANDS`. An entry added
+            // there and not here fails on the assertion, carrying the real error.
+            .invoke_handler(tauri::generate_handler![
+                media_import_audio,
+                media_import_video,
+                crate::commands::import_openwhispr,
+            ])
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .unwrap();
+
+        // Driven by the shared list rather than by a copy of it. A fourth
+        // path-taking command is asserted by being added to
+        // `PATH_TAKING_COMMANDS`, which is the whole point (KNEG-151); the array
+        // is a fixed-length const, so this loop cannot silently become empty.
+        let path = never_picked.display().to_string();
+        for (command, shape) in crate::commands::PATH_TAKING_COMMANDS {
+            let body = body_with_path(shape, &path);
+            let error = invoke_import(&webview, command, body).unwrap_err();
+            let message = error.as_str().unwrap();
+            assert!(
+                message.contains("not chosen through the import dialog"),
+                "{command} did not enforce DialogGrants: {message}"
+            );
+        }
+
+        // A failed conversion leaves NotesUpload's chosen path in renderer
+        // state. The command must therefore accept the same dialog grant on a
+        // retry; the empty sidecar root makes both attempts fail safely after
+        // authorisation, without reading or uploading anything useful.
+        let retry_body = serde_json::json!({ "path": retry.display().to_string() });
+        let first = invoke_import(&webview, "media_import_audio", retry_body.clone()).unwrap_err();
+        let second = invoke_import(&webview, "media_import_audio", retry_body).unwrap_err();
+        assert_eq!(first, second);
+        assert!(
+            !first
+                .as_str()
+                .unwrap()
+                .contains("not chosen through the import dialog"),
+            "the grant was consumed by the first attempt: {first}"
+        );
+    }
+
+    #[test]
+    fn the_oldest_grant_is_evicted_past_the_bound() {
+        let dir = tempfile::tempdir().unwrap();
+        let grants = DialogGrants::default();
+
+        let oldest = touch(dir.path(), "oldest.mp3");
+        grants.grant(&oldest).unwrap();
+
+        // One more than the bound allows, counting the one above.
+        for n in 0..crate::commands::MAX_DIALOG_GRANTS {
+            let path = touch(dir.path(), &format!("later-{n}.mp3"));
+            grants.grant(&path).unwrap();
+        }
+
+        assert!(
+            grants.authorise(oldest.to_str().unwrap()).is_err(),
+            "the oldest grant should have been evicted"
+        );
+        let newest = dir.path().join(format!(
+            "later-{}.mp3",
+            crate::commands::MAX_DIALOG_GRANTS - 1
+        ));
+        assert!(grants.authorise(newest.to_str().unwrap()).is_ok());
+    }
+
+    #[test]
+    fn an_ungranted_credential_file_is_refused_rather_than_read() {
+        // The compromised-renderer case, in the shape
+        // `an_export_filename_survives_a_hostile_title` uses for export: the
+        // caller names a file it was never given and that it has no business
+        // reading. Real files in a temp directory rather than `~/.aws`, so the
+        // test asserts the refusal and not merely that the path is absent.
+        let dir = tempfile::tempdir().unwrap();
+        let credentials = touch(dir.path(), "credentials");
+        let ssh_key = touch(dir.path(), "id_rsa");
+        let innocuous = touch(dir.path(), "meeting.m4a");
+
+        let grants = DialogGrants::default();
+        grants.grant(&innocuous).unwrap();
+
+        for hostile in [&credentials, &ssh_key] {
+            let err = grants.authorise(hostile.to_str().unwrap()).unwrap_err();
+            assert!(
+                err.contains("not chosen through the import dialog"),
+                "expected a refusal naming the dialog, got {err}"
+            );
+        }
+
+        // Traversal does not launder an ungranted path either. This one
+        // canonicalises perfectly well -- `subdir` exists, so it resolves to
+        // the very `credentials` above -- and is refused on identity, because
+        // the set holds resolved paths and not prefixes.
+        std::fs::create_dir(dir.path().join("subdir")).unwrap();
+        let traversal = dir.path().join("subdir").join("..").join("credentials");
+        assert_eq!(
+            std::fs::canonicalize(&traversal).unwrap(),
+            std::fs::canonicalize(&credentials).unwrap(),
+            "the traversal should reach the same file, or this asserts nothing"
+        );
+        assert!(grants.authorise(traversal.to_str().unwrap()).is_err());
     }
 }

@@ -158,8 +158,18 @@ impl Db {
         &self.pool
     }
 
-    /// Flush and close. Called on shutdown so the WAL is checkpointed rather
-    /// than left for the next launch to recover.
+    /// Flush and close, called on shutdown.
+    ///
+    /// **This does not guarantee the WAL has been checkpointed**, and the
+    /// comment here used to say it did. Measured on 2026-08-31: on two runs in
+    /// four hundred, under load, a committed row was still only in `-wal` after
+    /// this returned. SQLite checkpoints when the last connection closes and
+    /// skips it if it cannot take the lock, so this is best effort.
+    ///
+    /// Nothing in the application depends on it, because SQLite recovers the
+    /// WAL on the next open. What did depend on it was a *test* that read the
+    /// main file directly and drew a conclusion from what it did not find —
+    /// see `import::tests::every_database_file` (KNEG-88).
     pub async fn close(&self) {
         self.pool.close().await;
     }
@@ -244,13 +254,16 @@ mod tests {
         let first = Db::open(&path).await.unwrap();
         first.close().await;
 
-        // The second open must not try to re-apply 0001.
+        // The second open must not try to re-apply either migration.
         let second = Db::open(&path).await.unwrap();
         let applied: i64 = sqlx::query_scalar("SELECT count(*) FROM _sqlx_migrations")
             .fetch_one(second.pool())
             .await
             .unwrap();
-        assert_eq!(applied, 1);
+        assert_eq!(
+            applied, 2,
+            "0001_initial and 0002_note_recordings, each recorded exactly once"
+        );
         second.close().await;
     }
 
@@ -282,6 +295,7 @@ mod tests {
             "speaker_profiles",
             "speaker_mappings",
             "note_speaker_embeddings",
+            "note_recordings",
             "settings",
         ] {
             assert!(

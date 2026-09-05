@@ -80,10 +80,13 @@ export type CredentialStoreStatus = { "state": "available", backend: string, } |
  */
 export type ModelCacheStatus = { path: string,
 /**
- * True when the per-user path contained a space or a non-ASCII character,
- * which makes the native whisper and sherpa binaries fail in ways that do
- * not point at the path. Worth surfacing: it means models are shared
- * machine-wide.
+ * True when the per-user path contained a non-ASCII character, which stops
+ * the native whisper and sherpa binaries opening the model at all -- and
+ * does so without saying why, which is what makes it worth relocating for.
+ * Worth surfacing here too: it means models are shared machine-wide.
+ *
+ * A space no longer counts. It never did; see
+ * `kw_storage::paths`'s module documentation for the measurement.
  */
 fellBack: boolean, };
 
@@ -158,14 +161,48 @@ systemAudio: SystemAudioSupport, };
 export type HotkeyAction = "dictation" | "chat-agent" | "voice-agent" | "translation" | "meeting";
 
 /**
+ * Whether a hotkey toggles on each press or acts for as long as it is held.
+ *
+ * # The default is `Toggle`, and that is deliberate, not inertia
+ *
+ * Push-to-talk is one of the answers to **KNEG-115** — a two-modifier chord
+ * fires on the way into any longer shortcut, and a chord that acts on release
+ * cannot fire as a prefix in the damaging way, because the accidental press
+ * and the accidental release bracket almost no audio instead of bracketing
+ * everything the user did in between. That makes `Hold` a candidate for the
+ * shipped default, and **shipping it as the default here would settle KNEG-115
+ * in passing**, which is exactly the failure that issue is about. The mode
+ * exists; the default is unchanged; the choice stays with the repo owner.
+ *
+ * # What holding costs, said here rather than found out
+ *
+ * A hold shorter than a syllable produces a recording shorter than a syllable.
+ * The audio gate then reports `InsufficientSpeech` and nothing is transcribed
+ * — which is correct behaviour and is also, under push-to-talk, a **routine**
+ * outcome rather than the rare one it is under a toggle. Every mistimed tap,
+ * every accidental prefix, every "I let go too early" ends that way. A user
+ * who reads `InsufficientSpeech` as a fault will go looking for one.
+ */
+export type HotkeyMode = "toggle" | "hold";
+
+/**
  * What an accelerator string can be registered as.
  */
-export type Accelerator = { "kind": "standard", accelerator: string, } | { "kind": "modifier-only", accelerator: string, modifiers: Array<string>, } | { "kind": "invalid", input: string, reason: string, };
+export type Accelerator = { "kind": "standard", accelerator: string, } | { "kind": "modifier-only", accelerator: string, modifiers: Array<string>, } | { "kind": "mouse-button", accelerator: string,
+/**
+ * What the click still does elsewhere, because the hook does not
+ * consume it. `Back` or `Forward`.
+ */
+alsoDoes: string, } | { "kind": "invalid", input: string, reason: string, };
 
 /**
  * One action's configured hotkeys, classified.
  */
-export type Binding = { action: HotkeyAction, accelerators: Array<Accelerator>, };
+export type Binding = { action: HotkeyAction, accelerators: Array<Accelerator>,
+/**
+ * Whether these accelerators toggle or are held. See [`HotkeyMode`].
+ */
+mode: HotkeyMode, };
 
 /**
  * An action nothing in the application handles, and the sentence saying so.
@@ -182,6 +219,17 @@ export type UnhandledAction = { action: HotkeyAction, reason: string, };
 export type Conflict = { accelerator: string, actions: Array<HotkeyAction>, };
 
 /**
+ * A hotkey that works, and also does something the user did not ask for.
+ *
+ * Deliberately not a [`Conflict`] and not a `problem`. Both of those mean the
+ * hotkey will not do its job; this one will, and will *additionally* fire when
+ * the user is doing something else entirely. Folding it into either would put
+ * "this does not work" and "this works too often" under one word, and the
+ * remedies are opposite.
+ */
+export type Caution = { action: HotkeyAction, accelerator: string, reason: string, };
+
+/**
  * One action's hotkeys, classified, with any problems spelled out.
  */
 export type HotkeyReport = { bindings: Array<Binding>,
@@ -190,17 +238,18 @@ export type HotkeyReport = { bindings: Array<Binding>,
  */
 conflicts: Array<Conflict>,
 /**
- * Actions with no working hotkey at all, for any reason — a bad accelerator
- * or a missing handler. The union, so a caller asking "is this action
- * dead?" gets one answer.
+ * Actions that are dead because nothing handles them, with the reason.
+ * Registration outcome is reported separately by
+ * [`crate::shortcuts::RegistrationReport::is_live`].
  */
-unusable: Array<HotkeyAction>,
+unhandled: Array<UnhandledAction>,
 /**
- * The subset of `unusable` that is dead because nothing handles it, with
- * the reason. Separate because the two need different words: one is the
- * user's to fix and the other is not.
+ * Hotkeys that work and also fire when the user meant something else.
+ *
+ * A caution means the hotkey works and also fires at times nobody asked
+ * for. Today the sources are AltGr and modifier-only prefix chords.
  */
-unhandled: Array<UnhandledAction>, };
+cautions: Array<Caution>, };
 
 /**
  * What happened when we tried to register one accelerator.
@@ -220,7 +269,13 @@ export type HotkeyChange = { binding: Binding, registrations: Array<Registration
 /**
  * True when at least one accelerator for this action is now live.
  */
-live: boolean, };
+live: boolean,
+/**
+ * What this hotkey will *also* do. Returned here as well as from
+ * [`hotkeys`] because the moment to learn that `Control+Alt` is AltGr is
+ * when you press Set, not the next time the screen is opened.
+ */
+cautions: Array<Caution>, };
 
 /* -------------------------------------------------------------- providers */
 /**
@@ -583,14 +638,20 @@ languageRequired: boolean, sessionLimitSeconds: number | null, };
 /**
  * What a meeting session is doing.
  */
-export type MeetingState = "idle" | "recording" | "finishing";
+export type MeetingState = "idle" | "recording" | "recording-without-transcript" | "stalled" | "finishing";
 
 /**
  * Which captures are actually running.
  *
  * Reported rather than assumed, because a meeting works microphone-only and the
- * user should know which one they got. Zero system-audio samples means nobody
- * else spoke; *no system capture at all* is a different fact.
+ * user should know which one they got. *No system capture at all* is a
+ * different fact from a capture that produced nothing.
+ *
+ * It used to say here that zero system-audio samples means nobody else spoke.
+ * It does not, and that was KNEG-38: an output device with nothing playing
+ * delivers no callback at all, so zero samples is equally what a capture that
+ * never worked produces. [`Delivered`] carries which of the possible answers
+ * applies, and says plainly that two of them cannot be told apart.
  */
 export type Sources = { microphone: boolean, systemAudio: boolean,
 /**
@@ -599,9 +660,43 @@ export type Sources = { microphone: boolean, systemAudio: boolean,
 systemAudioReason: string | null, };
 
 /**
+ * What a capture actually delivered over a meeting, as opposed to whether it
+ * opened.
+ *
+ * **The distinction KNEG-38 is about.** WASAPI loopback from an output device
+ * with nothing playing delivers **no callback at all**, not a stream of zeros.
+ * So at the API a capture that never worked and a call where nobody else spoke
+ * are the same thing, and for a meeting recording that difference is the whole
+ * point. `MeetingOutcome::NothingTranscribed` was where both landed, together
+ * with a third case that is neither.
+ *
+ * This does not make the first two distinguishable — nothing this side can,
+ * and claiming otherwise would be the invention the rest of this file refuses.
+ * What it does is *name* which of them happened, separate the third, and say
+ * on screen why the first two look alike.
+ */
+export type Delivered = "not-captured" | "nothing" | "silence" | "audio";
+
+/**
  * What can be said about the meeting session.
  */
 export type MeetingStatus = { state: MeetingState,
+/**
+ * Why the live transcription stopped, when it has.
+ *
+ * The provider's own sentence, naming which of the two sockets died --
+ * [`kw_meeting_core::MeetingError::ProviderFault`] renders it and
+ * [`live_transcript_ended`] formats it, so this is the same sentence the
+ * outcome at Stop will carry rather than a second wording of it.
+ *
+ * `None` while the transcription is running, and also for the one ending
+ * that has no sentence: a pump task that panicked or was aborted, which
+ * [`live_state`] still reports as
+ * [`MeetingState::RecordingWithoutTranscript`] because a state with no
+ * explanation is closer to the truth than a claim that the transcript is
+ * running.
+ */
+transcriptFailure: string | null,
 /**
  * The provider in use, while there is one.
  */
@@ -612,6 +707,15 @@ provider: string | null, elapsedSeconds: number, sources: Sources | null,
  */
 systemAudio: SystemAudioSupport,
 /**
+ * Whether microphone activity can be read, from the last poll.
+ *
+ * `None` until the first poll has run. Reported rather than folded into
+ * `detected`, because "Teams is open and not in a call" and "Teams is open
+ * and nobody looked" are the same sentence with opposite meanings, and on
+ * Linux and macOS it is always the second one.
+ */
+microphone: MicrophoneSupport | null,
+/**
  * Meeting applications seen running at the last poll.
  *
  * Everything found, not only what would prompt: the screen shows "Teams is
@@ -619,6 +723,15 @@ systemAudio: SystemAudioSupport,
  * useful than silence and it is where the reason lives.
  */
 detected: Array<Detected>,
+/**
+ * The offer waiting in the notification window, if one exists.
+ *
+ * A broadcast event is not recoverable: a window created hidden may mount
+ * before or after it was sent. This is the read-back path the update
+ * notification already has through `get_last_update_check`, so either
+ * mounting order reaches the same outstanding offer.
+ */
+offer: Offer | null,
 /**
  * Whether a detected meeting offers to record.
  */
@@ -647,10 +760,22 @@ recordingPath: string,
  */
 gaps: number,
 /**
+ * How many scheduled live-session reconnects completed. Kept separate
+ * from gaps: reconnecting is expected for providers with a session
+ * limit, while missing audio is not.
+ */
+reconnects: number,
+/**
  * True when the whole-file pass failed and the overlapping live
  * partials were saved instead.
  */
-transcriptIsPartials: boolean, } | { "outcome": "nothing-transcribed", recordingPath: string, } | { "outcome": "cancelled" } | { "outcome": "failed", message: string, };
+transcriptIsPartials: boolean, } | { "outcome": "nothing-transcribed", recordingPath: string, mic: Delivered, system: Delivered,
+/**
+ * Scheduled live-session reconnects still happened even when no words
+ * were produced. Keeping the count makes this successful provider work
+ * visible instead of discarding it on the empty-transcript branch.
+ */
+reconnects: number, } | { "outcome": "cancelled" } | { "outcome": "failed", message: string, };
 
 /**
  * An offer to record a meeting that appears to be happening.
@@ -667,7 +792,35 @@ name: string,
 /**
  * The process that gave it away, so the offer can say why it appeared.
  */
-evidence: string, };
+evidence: string,
+/**
+ * Which signal fired, so the offer can say how sure it is.
+ *
+ * Never [`CallSignal::None`]: `consider` only offers on a call. Carried as
+ * the enum rather than as a sentence because the wording belongs on the
+ * screen, and because a microphone is the weaker of the two -- an offer
+ * that appeared because Teams was running its own audio test should say
+ * that is what it saw.
+ */
+signal: CallSignal, };
+
+/**
+ * What says a call is in progress, when anything does.
+ *
+ * Two signals, and they are **not** equally strong, which is the whole reason
+ * this is an enum rather than the boolean it replaces the inside of:
+ *
+ * - [`Self::CallProcess`] is a process that cannot exist unless a call is
+ *   running. Zoom's `CptHost.exe` is not started by opening Zoom.
+ * - [`Self::Microphone`] is the application holding a capture device. Real
+ *   evidence, and weaker: Teams holds the microphone for its own audio test
+ *   too, and so does a call the user placed and nobody joined.
+ *
+ * A caller that offers to record is entitled to know which one fired, because
+ * the two deserve different words on screen and a user told the wrong one has
+ * no way to work out which signal was wrong.
+ */
+export type CallSignal = "none" | "call-process" | "microphone";
 
 /**
  * A meeting application that appears to be running.
@@ -689,23 +842,34 @@ name: string,
  */
 evidence: string,
 /**
- * True when the matched process only exists during a call, rather than
- * whenever the application is open.
+ * True when something says a call is in progress, rather than only that the
+ * application is open.
  *
  * The difference between "in a meeting" and "has Zoom installed", and the
  * reason a caller can choose to prompt only on the stronger signal.
+ *
+ * **Private, unlike every other field here**, and serialised all the same
+ * so a screen can read `inCall` without knowing about signals. It is
+ * [`CallSignal::means_call`] of [`Self::signal`] and nothing else, and the
+ * only way to keep two serialised fields carrying one fact from drifting is
+ * to make the second one impossible to set. Read it with [`Self::in_call`].
  */
-inCall: boolean, };
+inCall: boolean,
+/**
+ * Which signal made [`Self::in_call`] true, and how strong it is.
+ */
+signal: CallSignal, };
 
 /**
  * The user's own process names.
  *
  * `meeting-detect:generic` upstream also covered calendar events, microphone
- * activity and system-audio activity. Only the lists are built: calendars are
- * chunk F, and microphone activity needs the `IAudioSessionManager2` listener
- * that is still unwritten. Named here rather than left implied, because a
- * half-built detector that looks whole is how a user comes to trust one that
- * misses half the meetings.
+ * activity and system-audio activity. Microphone activity is now built and
+ * measured -- it reaches [`detect`] as its `capturing` argument, and a name on
+ * this list holding a capture device counts as being in a call. **Calendar
+ * events are still chunk F and system-audio activity is still unbuilt.** Named
+ * here rather than left implied, because a half-built detector that looks whole
+ * is how a user comes to trust one that misses half the meetings.
  */
 export type Lists = {
 /**
@@ -720,6 +884,31 @@ allow: Array<string>,
  * release.
  */
 block: Array<string>, };
+
+/**
+ * Whether this platform can say which applications are capturing.
+ *
+ * Three states rather than a boolean, for the reason
+ * `kw_audio_core::system_audio::SystemAudioSupport` has four: "this platform
+ * cannot" and "this platform can and the call failed" are different problems
+ * with different fixes, and neither of them is "nothing is capturing".
+ *
+ * That distinction is the whole point here. An empty list of capturing
+ * processes and an enumeration that did not run look identical to a caller, and
+ * one of them means "nobody is in a call" while the other means nothing at all.
+ */
+export type MicrophoneSupport = { "state": "available",
+/**
+ * The mechanism, named so a reader can recognise it.
+ */
+mechanism: string,
+/**
+ * How many capture endpoints were examined.
+ *
+ * Zero is not a failure — a machine with no microphone has none — but
+ * it does mean an empty answer says nothing about who is in a call.
+ */
+endpoints: number, } | { "state": "failed", mechanism: string, reason: string, } | { "state": "unsupported", reason: string, };
 
 /* ------------------------------------------------------------------ notes */
 /**
@@ -786,6 +975,53 @@ filename: string, content: string,
  * say so rather than showing an export that looks empty for no reason.
  */
 segmentCount: number, };
+
+/**
+ * One transcript segment as a playable row: normalised to seconds from the
+ * start of the recording, with its speaker resolved the way export resolves
+ * it, so the screen and the export files never disagree about who said what.
+ *
+ * Rows rather than merged paragraphs: [`merge`] joins consecutive utterances
+ * for readable export, but a row that is played back has to keep the
+ * segment's own boundaries or it plays the wrong stretch of audio.
+ */
+export type TranscriptRow = {
+/**
+ * Position in the stored segment list, so a selection can be stable.
+ */
+index: number,
+/**
+ * Seconds from the start of the recording. `None` when the segment carried
+ * no timestamp at all, in which case the row cannot be played.
+ */
+startSeconds: number | null,
+/**
+ * Seconds from the start of the recording. When the segment carried no end
+ * of its own -- a live partial does not -- this is the next segment's
+ * start, and `None` for the last such segment, meaning "to the end".
+ */
+endSeconds: number | null,
+/**
+ * The display name, resolved as [`speaker_name`] does, or `None` for an
+ * anonymous segment -- one carrying no name, label or capture source --
+ * which export leaves unlabelled for the same reason.
+ */
+speaker: string | null, text: string, };
+
+/**
+ * A recording attached to a note, as stored.
+ */
+export type NoteRecording = { noteId: number,
+/**
+ * The file name inside the application's recordings directory. Never a
+ * path, and never resolved anywhere but inside that directory.
+ */
+storageKey: string, durationSeconds: number | null,
+/**
+ * What the file was called before it became application-owned, where
+ * there was such a name. A meeting recording has none.
+ */
+originalFilename: string | null, createdAt: string | null, };
 
 /* ----------------------------------------------------------------- import */
 /**
@@ -919,12 +1155,36 @@ export type Availability = { "state": "installable" } | { "state": "not-publishe
 /**
  * How firmly a model's identity can be established.
  *
- * Three states rather than a boolean, and an enum rather than a string. It was
+ * Four states rather than a boolean, and an enum rather than a string. It was
  * a `&'static str` whose three values the frontend re-declared by hand as a
  * union; nothing held the two in step, so a fourth state added here would have
- * reached a UI that did not know about it. Now it cannot.
+ * reached a UI that did not know about it. Now it cannot -- and the fourth
+ * state duly arrived, as [`Self::StatedDigest`].
+ *
+ * Shared between the whisper models and the local-LLM GGUFs, which need
+ * different subsets of it: whisper reaches [`Self::Digest`] on all six and
+ * [`Self::StatedDigest`] on none, and the GGUFs are the other way round for
+ * thirty-two of thirty-nine objects. A variant unreachable on one path is kept
+ * rather than split into two enums, for the reason
+ * `models::Verification::SizeOnly` is kept: it is still the honest answer for a
+ * model somebody adds tomorrow.
  */
-export type VerifiedBy = "digest" | "size" | "nothing";
+export type VerifiedBy = "digest" | "stated-digest" | "size" | "nothing";
+
+/**
+ * Whether the installed server binary is the build this version pins.
+ *
+ * The wire form of [`kw_sidecar::Freshness`]. A separate type for the reason
+ * [`Availability`] is one: the crate's enum carries `Sha256Digest` and a
+ * structured reason, neither of which should become a TypeScript shape that
+ * then has to be kept in step across the boundary.
+ *
+ * **`Unknown` is not a rounded-down `Stale`.** An install this application did
+ * not record cannot be compared with anything, and the screen says exactly
+ * that rather than picking whichever of the other two answers reads better.
+ * The machine this was written on is in that state right now.
+ */
+export type SidecarFreshness = { "state": "not-installed" } | { "state": "current" } | { "state": "stale", installed: string, expected: string, } | { "state": "unknown", why: string, };
 
 /**
  * One model on offer.
@@ -949,6 +1209,16 @@ availability: Availability,
  */
 serverInstalled: boolean,
 /**
+ * Whether the installed one is the build this version pins.
+ *
+ * Separate from `server_installed`, and it has to be: "a `whisper-server.exe`
+ * is there" and "it is *our* `whisper-server.exe`" are different claims,
+ * and until KNEG-113 only the first was ever made. The screen showed
+ * *Installed* for a binary two releases behind the manifest and nothing
+ * anywhere would have said so.
+ */
+serverFreshness: SidecarFreshness,
+/**
  * The models on offer, and what is known about each.
  */
 models: Array<ModelStatus>,
@@ -972,6 +1242,35 @@ runningModel: string | null,
 installDir: string, installDirFellBack: boolean, };
 
 /**
+ * What a refresh of a local server binary did.
+ *
+ * **One type for both runtimes**, `whisper-server` and `llama-server`. Not
+ * politeness: `ipc_types` asserts that no two Rust types render to the same
+ * TypeScript name, so a second `RefreshOutcome` for the llama.cpp refresh
+ * added in KNEG-128 would have been a failing test rather than a duplicate
+ * nobody noticed. The two refreshes answer the same three questions -- what
+ * was unpacked, what came back, and what did not -- so sharing the answer was
+ * the right resolution rather than renaming one of them.
+ */
+export type RefreshOutcome = {
+/**
+ * How many files the replacement unpacked. Reported for the reason
+ * [`kw_sidecar::Installed::files`] is: one would mean the sibling `ggml`
+ * libraries were missed and the server will not start.
+ */
+files: number,
+/**
+ * The model the server was running before, now running again. A whisper
+ * model id or a GGUF id, depending on which screen asked.
+ */
+restarted: string | null,
+/**
+ * Why it could not be started again, when it could not. Not an error —
+ * the replacement succeeded — but not something to leave unsaid either.
+ */
+restartError: string | null, };
+
+/**
  * Progress of an install, as reported to the frontend.
  */
 export type InstallProgress = { "stage": "server", written: number, total: number | null, } | { "stage": "model", id: string, written: number, total: number | null, } | { "stage": "verifying" } | { "stage": "extracting" } | { "stage": "done",
@@ -979,6 +1278,15 @@ export type InstallProgress = { "stage": "server", written: number, total: numbe
  * What the model on disk was actually checked against.
  */
 verifiedBy: VerifiedBy, };
+
+/**
+ * What a model can be used for.
+ *
+ * Two engines, and a model runs on exactly one of them. Not a boolean, for the
+ * reason every other three-state answer in this codebase is not a boolean: the
+ * screen needs to name the use, not just permit it.
+ */
+export type UsedFor = "dictation" | "meetings";
 
 /**
  * Why a model this build knows about is not on offer.
@@ -997,9 +1305,9 @@ export type SherpaModelStatus = { id: string, name: string, sizeMb: number | nul
  */
 installed: boolean,
 /**
- * `None` when the model can be installed and used.
+ * Which engine it runs on, and therefore which button it gets.
  */
-notOffered: string | null, };
+usedFor: UsedFor, };
 
 /**
  * Everything the sherpa half of the screen needs, with no network access.
@@ -1015,23 +1323,113 @@ availability: Availability,
 /**
  * Whether the offline CLI itself is installed.
  */
-cliInstalled: boolean, models: Array<SherpaModelStatus>,
+cliInstalled: boolean,
+/**
+ * Whether what is installed is the build this version pins.
+ *
+ * `install` has written a record beside the extracted files since
+ * KNEG-113 and nothing here read it, so `cli_installed` stayed true while
+ * the runtime fell behind the manifest. KNEG-128.
+ *
+ * Derived from the same call as `cli_installed`, which is the point --
+ * see [`sherpa_status`].
+ *
+ * **One archive, three consumers.** The same install directory serves
+ * dictation here, `sherpa_stream`'s meeting server and `diarization`'s
+ * speaker CLI, under one record, so this answer is about all three at once
+ * and the screen says so.
+ */
+cliFreshness: SidecarFreshness, models: Array<SherpaModelStatus>,
 /**
  * Which model dictation is set to use, if any.
  */
 selected: string | null,
 /**
- * Where models are kept. Shown because the native binaries cannot load
- * from a path with a space or a non-ASCII character in it, so this is
- * sometimes not where a person would expect.
+ * Which streaming model meetings are set to use, if any.
+ *
+ * A separate setting from `selected`, not a second reading of it: the two
+ * engines run different models and choosing one for dictation must not
+ * silently change what a meeting records with.
+ */
+selectedStream: string | null,
+/**
+ * Where models are kept. Shown because the native binaries cannot open a
+ * file whose path holds a non-ASCII character, so this is sometimes not
+ * where a person would expect.
+ *
+ * A space is fine, despite what this comment said until 2026-08-31 — see
+ * `kw_storage::paths` for the measurement.
  */
 modelsDir: string, };
 
+/**
+ * Which half of a diarization run a model does.
+ *
+ * Two files, two jobs, and neither works alone: the segmentation model finds
+ * where speech is and where it changes, the embedding model turns each stretch
+ * into a voice fingerprint to cluster. The CLI takes one of each and refuses
+ * without both.
+ */
+export type DiarizationRole = "segmentation" | "embedding";
+
+export type DiarizationModelStatus = { id: string, name: string, role: DiarizationRole | null, sizeMb: number | null, installed: boolean, };
+
+export type DiarizationStatus = {
+/**
+ * Whether the sherpa sidecar can be installed on this platform at all.
+ */
+availability: Availability, cliInstalled: boolean, models: Array<DiarizationModelStatus>,
+/**
+ * The setting, which is a different fact from whether it can run.
+ */
+enabled: boolean,
+/**
+ * Both models present **and** the CLI installed. `enabled` without this is
+ * a setting that will be skipped, and the screen has to be able to say
+ * which of the two is missing rather than showing one green tick.
+ */
+ready: boolean, modelsDir: string, };
+
 /* -------------------------------------------------- local text generation */
+/**
+ * What the Intelligence > Local screen may say about one GGUF.
+ *
+ * Five answers, and the third is the reason this is not a boolean. See the
+ * module documentation for what each one is worth.
+ *
+ * **Not `Copy` since KNEG-130.** [`Self::FailedRecheck`] carries two 64-character
+ * digests, and a state that can be duplicated by accident is one a caller can
+ * report twice about a file it read once.
+ */
+export type GgufIntegrity = { "state": "not-installed" } | { "state": "unchanged-since-install", verifiedBy: VerifiedBy, } | { "state": "unrecorded" } | { "state": "changed", recordedBytes: number, bytes: number, } | { "state": "failed-recheck", expected: string, actual: string, };
+
+/**
+ * What a re-hash of an installed model found.
+ *
+ * Its own type rather than a `Result<(), String>` because **a file that does
+ * not match its digest is a finding, not a failure**. Returning it as an error
+ * would put it through the same red line a dropped connection uses, and the two
+ * deserve entirely different sentences: one says try again, the other says the
+ * bytes on this disk are not the bytes that were downloaded.
+ */
+export type RecheckOutcome = { "outcome": "matched", verifiedBy: VerifiedBy, } | { "outcome": "mismatched", fileName: string, expected: string, actual: string, } | { "outcome": "nothing-pinned" } | { "outcome": "not-installed" };
+
 /**
  * A drafter alongside the main model.
  */
-export type DraftStatus = { fileName: string, sizeBytes: number | null, installed: boolean, };
+export type DraftStatus = { fileName: string, sizeBytes: number | null,
+/**
+ * On the same terms as [`LocalLlmModelStatus::integrity`], and tracked
+ * apart from it because a drafter is a separate file that can rot on its
+ * own.
+ */
+integrity: GgufIntegrity,
+/**
+ * On the same terms as [`LocalLlmModelStatus::verified_by`]. Reported
+ * separately because a drafter is a different object in a different
+ * repository, and one of the two can be the weaker of the pair.
+ */
+verifiedBy: VerifiedBy, };
 
 /**
  * One local model on offer.
@@ -1045,10 +1443,30 @@ provider: string,
  * `None` when the registry does not say. Shown before anyone commits to a
  * download that can be six gigabytes.
  */
-sizeBytes: number | null, quantization: string | null, contextLength: number | null, recommended: boolean, supportsThinking: boolean, installed: boolean,
+sizeBytes: number | null, quantization: string | null, contextLength: number | null, recommended: boolean, supportsThinking: boolean,
 /**
- * Whether this model has a speculative-decoding drafter, and whether that
- * drafter is installed. Absent for the models without one.
+ * Whether the file is on disk and, if it is, what is still known about it.
+ *
+ * This replaced an `installed: bool`, and the replacement is the whole of
+ * KNEG-107. A boolean over `path.exists()` cannot tell a file that was
+ * hashed at install and has not moved since from one nothing has ever
+ * looked at, and it rendered both as "installed" — so a GGUF corrupted
+ * months after a successful install was loaded without complaint. The
+ * states, and exactly what each is worth, are [`GgufIntegrity`].
+ */
+integrity: GgufIntegrity,
+/**
+ * What integrity check this model can be held to, on the same terms the
+ * whisper screen already states. Shown before the button, for the reason
+ * the size is: a guarantee nobody was told about is a guarantee nobody can
+ * weigh. All thirty-five carry a digest; seven of the thirty-nine objects
+ * carry one this project measured, and the rest are the publisher's stated
+ * `lfs.oid`, which is a different claim.
+ */
+verifiedBy: VerifiedBy,
+/**
+ * This model's speculative-decoding drafter, and what is known about it.
+ * `None` for the models without one.
  */
 draft: DraftStatus | null, };
 
@@ -1059,7 +1477,21 @@ export type LocalLlmStatus = {
 /**
  * Whether a server binary is published for this platform.
  */
-availability: Availability, serverInstalled: boolean, models: Array<LocalLlmModelStatus>,
+availability: Availability, serverInstalled: boolean,
+/**
+ * Whether the binary on disk is the build this version pins.
+ *
+ * `server_installed` was the only claim this screen made about the server
+ * binary, and it stays true while the binary falls releases behind the
+ * manifest -- the state `local_model` reported for `whisper-server` in
+ * KNEG-113 and the state this one has been in, unreported, ever since.
+ * `install` has written the record since KNEG-113; nothing here read it.
+ * KNEG-128.
+ *
+ * Derived from the same call as `server_installed`, so the two cannot
+ * disagree. See [`server_state`].
+ */
+serverFreshness: SidecarFreshness, models: Array<LocalLlmModelStatus>,
 /**
  * The port the server is on, if it is running.
  */
@@ -1080,7 +1512,15 @@ idleStopMinutes: number, };
  * `local_model` already has one of those and a TypeScript file cannot hold
  * two declarations of the same name. `ipc_types` refuses the collision.
  */
-export type LocalLlmProgress = { "stage": "server", written: number, total: number | null, } | { "stage": "model", id: string, written: number, total: number | null, } | { "stage": "draft", id: string, written: number, total: number | null, } | { "stage": "extracting" } | { "stage": "done", id: string, } | { "stage": "stopped-when-idle" };
+export type LocalLlmProgress = { "stage": "server", written: number, total: number | null, } | { "stage": "model", id: string, written: number, total: number | null, } | { "stage": "draft", id: string, written: number, total: number | null, } | { "stage": "extracting" } | { "stage": "verifying", id: string, } | { "stage": "done", id: string,
+/**
+ * What was actually checked, or `None` when the files were already on
+ * disk and this install re-checked nothing.
+ *
+ * The weaker of the model's verdict and its drafter's, where there is a
+ * drafter; see [`crate::local_model::VerifiedBy::weaker`].
+ */
+verifiedBy: VerifiedBy | null, } | { "stage": "stopped-when-idle" };
 
 /* -------------------------------------------------------------- local api */
 /**
@@ -1093,20 +1533,27 @@ export type LocalLlmProgress = { "stage": "server", written: number, total: numb
  * `local_model.rs`'s `VerifiedBy` already follow for their own core types.
  *
  * This type exists because of one specific defect.
- * `Permissions::is_as_expected()` returns `true` for `InheritedFromProfile`
+ * `Permissions::is_as_expected()` returned `true` for `InheritedFromProfile`
  * — correct as "the best this build currently achieves on this platform",
- * read by a screen that only has the boolean as "verified restricted", which
- * it is not: nothing was checked, it is simply what a file under
+ * read by a screen that only had the boolean as "verified restricted", which
+ * it was not: nothing was checked, it was simply what a file under
  * `%USERPROFILE%` gets by default, and two other trustees turned up in that
  * default on a real machine. See `docs/BENCH_CHECK.md`, 2026-08-26 finding 2.
- * `Integrations > CLI` switches on `state` and gives `InheritedFromProfile`
- * its own honest sentence rather than a green tick that reuses the boolean.
+ * That helper has since been deleted; this type and its
+ * [`Self::is_confirmed`] are what replaced it.
  */
-export type DiscoveryPermissions = { "state": "owner-only" } | { "state": "inherited-from-profile" } | { "state": "wider",
+export type DiscoveryPermissions = { "state": "owner-only" } | { "state": "owner-and-administrators" } | { "state": "inherited-from-profile" } | { "state": "wider",
 /**
  * Octal, e.g. `"644"`, matching how a person would type it to `chmod`.
  */
-mode: string, } | { "state": "unknown", reason: string, };
+mode: string, } | { "state": "extra-trustees",
+/**
+ * How many, not which. A trustee name is one of this machine's
+ * account or group names, and this value is rendered on a screen that
+ * ends up in screenshots and bug reports. The names go to the
+ * application log instead.
+ */
+count: number, } | { "state": "still-inheriting" } | { "state": "grants-everyone" } | { "state": "incomplete" } | { "state": "directory-not-restricted" } | { "state": "unknown", reason: string, };
 
 /**
  * What the settings screen shows about the local API.
@@ -1133,7 +1580,7 @@ discoveryPath: string | null,
  *
  * This used to carry a second field, `discovery_permissions_as_expected:
  * Option<bool>`, derived from `Permissions::is_as_expected()`. That
- * boolean is `true` for `InheritedFromProfile`, so the settings screen
+ * boolean was `true` for `InheritedFromProfile`, so the settings screen
  * warned only when it was `false` and stayed silent on an inherited ACL
  * -- reassuring where nothing had been verified. Removed rather than
  * redefined: a screen that reads the real state has no use for a second,
@@ -1203,11 +1650,21 @@ binaryLocation: BinaryLocation,
  */
 command: string,
 /**
+ * Where the MCP server reads the same port and token as the CLI.
+ */
+discoveryPath: string,
+/**
  * Whether the local API is running right now. The server is a second
  * front end over it and does nothing on its own, so a client configured
  * with `command` will fail every call until this is `true`.
  */
-localApiRunning: boolean, };
+localApiRunning: boolean,
+/**
+ * The same live permission read-back shown on the CLI screen. The two
+ * clients consume one file, so they must never make different claims
+ * about who can read it.
+ */
+discoveryPermissions: DiscoveryPermissions | null, };
 
 /* ----------------------------------------------------------- media import */
 /**
@@ -1241,10 +1698,34 @@ availability: Availability, installed: boolean, };
 export type MediaImportSource = { "kind": "audio" } | { "kind": "video" } | { "kind": "url", host: string, };
 
 /**
+ * One timed utterance of an imported transcript.
+ *
+ * A local mirror of `kw_transcription_core::local::TimedSegment` because that
+ * crate has no `ts-rs` dependency and should not gain one to cross an IPC
+ * boundary it knows nothing about. The field names match
+ * `kw_notes_core::transcript::Segment`, which is what the screen writes into.
+ */
+export type ImportedSegment = { text: string,
+/**
+ * Seconds from the start of the recording.
+ */
+timestamp: number, endTimestamp: number, };
+
+/**
  * What a finished import produced. The frontend turns this into a note; this
  * module does not write one itself.
  */
 export type MediaImportResult = { text: string, provider: string, model: string | null,
+/**
+ * The transcript divided into timed utterances, when the engine timed it.
+ *
+ * **Empty means no timings were reported**, not "the recording was one
+ * utterance". Only the local whisper server reports them, and only because
+ * this path asks (`WhisperServer::timed`); a cloud provider answers with
+ * prose, so an import routed to one still has no cues. The screen writes
+ * one segment spanning the recording in that case and says as much.
+ */
+segments: Array<ImportedSegment>,
 /**
  * Computed from the converted WAV, not asked of the source file, so it
  * reflects what was actually transcribed.

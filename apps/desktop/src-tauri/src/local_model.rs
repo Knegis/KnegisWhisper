@@ -163,6 +163,14 @@ pub struct LocalStatus {
     pub availability: Availability,
     /// Whether the server binary is installed.
     pub server_installed: bool,
+    /// Whether the installed one is the build this version pins.
+    ///
+    /// Separate from `server_installed`, and it has to be: "a `whisper-server.exe`
+    /// is there" and "it is *our* `whisper-server.exe`" are different claims,
+    /// and until KNEG-113 only the first was ever made. The screen showed
+    /// *Installed* for a binary two releases behind the manifest and nothing
+    /// anywhere would have said so.
+    pub server_freshness: SidecarFreshness,
     /// The models on offer, and what is known about each.
     pub models: Vec<ModelStatus>,
     /// The port the server is listening on, if it is running.
@@ -221,19 +229,125 @@ impl Availability {
     }
 }
 
+/// Whether the installed server binary is the build this version pins.
+///
+/// The wire form of [`kw_sidecar::Freshness`]. A separate type for the reason
+/// [`Availability`] is one: the crate's enum carries `Sha256Digest` and a
+/// structured reason, neither of which should become a TypeScript shape that
+/// then has to be kept in step across the boundary.
+///
+/// **`Unknown` is not a rounded-down `Stale`.** An install this application did
+/// not record cannot be compared with anything, and the screen says exactly
+/// that rather than picking whichever of the other two answers reads better.
+/// The machine this was written on is in that state right now.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(
+    tag = "state",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
+pub enum SidecarFreshness {
+    /// Nothing is installed, so there is nothing to be out of date.
+    NotInstalled,
+    /// What is installed came from the archive this build pins.
+    Current,
+    /// It came from a different archive. Both digests, so a bug report can be
+    /// checked rather than believed.
+    Stale { installed: String, expected: String },
+    /// Something is installed and this build cannot say what it is.
+    Unknown { why: String },
+}
+
+impl SidecarFreshness {
+    /// The wire form of a verdict.
+    #[must_use]
+    pub fn of(freshness: &kw_sidecar::Freshness) -> Self {
+        match freshness {
+            kw_sidecar::Freshness::NotInstalled => Self::NotInstalled,
+            kw_sidecar::Freshness::Current => Self::Current,
+            kw_sidecar::Freshness::Stale {
+                installed,
+                expected,
+            } => Self::Stale {
+                installed: installed.to_string(),
+                expected: expected.to_string(),
+            },
+            kw_sidecar::Freshness::Unknown(why) => Self::Unknown { why: why.explain() },
+        }
+    }
+}
+
+/// What this build knows about the sidecar on disk.
+///
+/// The filesystem half of the question, kept in one place because several
+/// callers want it and each of them getting the search path slightly wrong is
+/// exactly how `server_installed` and the start path would come to disagree.
+///
+/// `pub(crate)` since KNEG-128, for [`crate::local_llm`] and
+/// [`crate::local_asr`], which install sidecars through the same
+/// `kw_sidecar::install` and so have had the record on disk since KNEG-113
+/// without ever reading it. A second copy of this function was the alternative
+/// and would have been two things to keep in step -- and the one that drifted
+/// would report a different answer about the same directory.
+pub(crate) fn sidecar_freshness(
+    catalog: &Catalog,
+    sidecar: &str,
+    root: &std::path::Path,
+) -> kw_sidecar::Freshness {
+    let Ok((_, asset)) = catalog.resolve(sidecar) else {
+        // No published asset for this platform. Nothing is pinned, so nothing
+        // can be behind it.
+        return kw_sidecar::Freshness::NotInstalled;
+    };
+    let installation = kw_sidecar::locate(
+        sidecar,
+        asset,
+        &kw_sidecar::SearchPath {
+            bundled: None,
+            downloaded: root.to_path_buf(),
+        },
+        &kw_sidecar::RealFs,
+    );
+    let record = kw_sidecar::record::read(&root.join(sidecar));
+    kw_sidecar::freshness(&installation, &record, sidecar, &asset.sha256)
+}
+
 /// How firmly a model's identity can be established.
 ///
-/// Three states rather than a boolean, and an enum rather than a string. It was
+/// Four states rather than a boolean, and an enum rather than a string. It was
 /// a `&'static str` whose three values the frontend re-declared by hand as a
 /// union; nothing held the two in step, so a fourth state added here would have
-/// reached a UI that did not know about it. Now it cannot.
+/// reached a UI that did not know about it. Now it cannot -- and the fourth
+/// state duly arrived, as [`Self::StatedDigest`].
+///
+/// Shared between the whisper models and the local-LLM GGUFs, which need
+/// different subsets of it: whisper reaches [`Self::Digest`] on all six and
+/// [`Self::StatedDigest`] on none, and the GGUFs are the other way round for
+/// thirty-two of thirty-nine objects. A variant unreachable on one path is kept
+/// rather than split into two enums, for the reason
+/// `models::Verification::SizeOnly` is kept: it is still the honest answer for a
+/// model somebody adds tomorrow.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "kebab-case")]
 pub enum VerifiedBy {
-    /// A measured SHA-256 is pinned for this model and the file matched it.
+    /// A SHA-256 **this project measured** is pinned for this model, and the file
+    /// matched it. The strongest of the four: the digest was taken from bytes
+    /// that were downloaded once and hashed here, and committed to this
+    /// repository, so it is not delivered by whoever serves the download.
     Digest,
-    /// Only a declared size is known. The file is the right length; it has not
-    /// been proven to be the file the publisher built.
+    /// The **publisher's stated** SHA-256 is pinned for this model, and the file
+    /// matched it.
+    ///
+    /// Weaker than [`Self::Digest`] in one specific way that must not be blurred:
+    /// the digest came from the same host as the bytes -- Hugging Face's
+    /// `lfs.oid`, which is a true SHA-256 of the object because git-lfs is
+    /// content-addressed on it. So this catches a corrupted transfer, a
+    /// truncation that happened to keep the length, and an accidental re-upload;
+    /// it does not catch a huggingface.co that has been compromised, since one
+    /// host would serve both halves of the comparison.
+    StatedDigest,
+    /// Only a size is known. The file is the right length; it has not been proven
+    /// to be the file the publisher built.
     Size,
     /// Neither is known. Reported, never silent.
     Nothing,
@@ -263,8 +377,35 @@ impl VerifiedBy {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Digest => "digest",
+            Self::StatedDigest => "stated-digest",
             Self::Size => "size",
             Self::Nothing => "nothing",
+        }
+    }
+
+    /// The weaker of two verdicts.
+    ///
+    /// An install that downloads two files -- a GGUF and its speculative-decoding
+    /// drafter -- is only as verified as its weakest half, and reporting the
+    /// model's verdict while a drafter rode in on a weaker one would be the kind
+    /// of rounding-up this enum exists to prevent.
+    #[must_use]
+    pub const fn weaker(self, other: Self) -> Self {
+        // Ordinals rather than `PartialOrd`, so the ordering is stated here and
+        // not implied by the declaration order of the variants -- reordering the
+        // variants for readability must not silently reorder the strengths.
+        const fn rank(v: VerifiedBy) -> u8 {
+            match v {
+                VerifiedBy::Digest => 3,
+                VerifiedBy::StatedDigest => 2,
+                VerifiedBy::Size => 1,
+                VerifiedBy::Nothing => 0,
+            }
+        }
+        if rank(other) < rank(self) {
+            other
+        } else {
+            self
         }
     }
 }
@@ -293,22 +434,10 @@ pub async fn local_model_status(
 
     let availability = Availability::of(&local.catalog, SIDECAR);
 
-    let server_installed = local
-        .catalog
-        .resolve(SIDECAR)
-        .ok()
-        .is_some_and(|(_, asset)| {
-            kw_sidecar::locate(
-                SIDECAR,
-                asset,
-                &kw_sidecar::SearchPath {
-                    bundled: None,
-                    downloaded: cache.path.clone(),
-                },
-                &kw_sidecar::RealFs,
-            )
-            .is_installed()
-        });
+    // One call for both, so they cannot disagree: `Freshness::NotInstalled` is
+    // exactly the case `locate` reports as absent or incomplete.
+    let freshness = sidecar_freshness(&local.catalog, SIDECAR, &cache.path);
+    let server_installed = !matches!(freshness, kw_sidecar::Freshness::NotInstalled);
 
     let registry = kw_provider_registry::registry().map_err(|err| err.to_string())?;
     let models = registry
@@ -328,6 +457,7 @@ pub async fn local_model_status(
     Ok(LocalStatus {
         availability,
         server_installed,
+        server_freshness: SidecarFreshness::of(&freshness),
         models,
         port: local.port.read().ok().and_then(|p| *p),
         running_model: local.model.read().ok().and_then(|m| m.clone()),
@@ -359,6 +489,27 @@ pub enum InstallProgress {
         /// What the model on disk was actually checked against.
         verified_by: VerifiedBy,
     },
+}
+
+/// Whether a model install has to fetch the server binary first.
+///
+/// A pure decision with one caller, extracted for the reason
+/// `check_importable_file` and `import_pick_dialog` were: nothing outside a
+/// running application can construct a `tauri::AppHandle`, so the command below
+/// is untestable by construction and the judgement in it would be untested with
+/// it.
+///
+/// The judgement is which states count as "already there".
+/// [`kw_sidecar::Installation::Incomplete`] -- a directory that exists with no
+/// executable in it, from an interrupted extraction -- must reinstall, and does,
+/// because it has no executable. Only `Installed` skips.
+///
+/// Reinstalling when there is nothing to reinstall is not a wasted download; it
+/// is a failed install. `install` finishes by replacing the sidecar directory,
+/// and on Windows a directory holding a running executable cannot be removed --
+/// measured on 2026-08-31 as `WinError 5`, on the `.exe` itself. See KNEG-113.
+fn sidecar_needed(installation: &kw_sidecar::Installation) -> bool {
+    installation.executable().is_none()
 }
 
 /// Install the server binary and one model.
@@ -395,17 +546,51 @@ pub async fn local_model_install(
 
     // The server first: a model with no server to load it is not usable, and the
     // server is the smaller download of the two.
-    kw_sidecar::install(&local.policy, spec, asset, &sidecars.path, &mut |p| {
-        emit(match p {
-            kw_sidecar::Progress::Downloading { written, total } => {
-                InstallProgress::Server { written, total }
-            }
-            kw_sidecar::Progress::Verifying => InstallProgress::Verifying,
-            kw_sidecar::Progress::Extracting => InstallProgress::Extracting,
-        });
-    })
-    .await
-    .map_err(|err| err.to_string())?;
+    //
+    // **Only if it is not already there.** This used to reinstall
+    // unconditionally, which made every whisper model after the first
+    // uninstallable. `install` finishes by replacing the sidecar directory, and
+    // `resume_last_used` has started `whisper-server.exe` out of that same
+    // directory by the time any of this runs -- so `remove_dir_all` fails with
+    // `WinError 5` on the running executable, the `?` here returns, and the
+    // model is never downloaded at all. Reported from the bench on 2026-08-31,
+    // pressing *Install* on `base` with `tiny` already resumed: no
+    // `ggml-base.bin`, no `.partial`, and a `whisper.incoming` staging
+    // directory left behind at the promote step.
+    //
+    // `local_llm_install` in `local_llm.rs` has always guarded it exactly this
+    // way, for the same reason, which is why installing a GGUF worked on the
+    // same run that this failed.
+    //
+    // **Nothing is lost by skipping.** The unconditional call looked like a way
+    // to refresh a sidecar to the pinned version, and it never was: it can only
+    // succeed when no server is running, which is only ever the first install,
+    // when there is nothing to refresh. Every later call failed outright rather
+    // than updating anything. Keeping a sidecar current after the first install
+    // is KNEG-113, filed with the measurement.
+    let installation = kw_sidecar::locate(
+        SIDECAR,
+        asset,
+        &kw_sidecar::SearchPath {
+            bundled: None,
+            downloaded: sidecars.path.clone(),
+        },
+        &kw_sidecar::RealFs,
+    );
+
+    if sidecar_needed(&installation) {
+        kw_sidecar::install(&local.policy, spec, asset, &sidecars.path, &mut |p| {
+            emit(match p {
+                kw_sidecar::Progress::Downloading { written, total } => {
+                    InstallProgress::Server { written, total }
+                }
+                kw_sidecar::Progress::Verifying => InstallProgress::Verifying,
+                kw_sidecar::Progress::Extracting => InstallProgress::Extracting,
+            });
+        })
+        .await
+        .map_err(|err| err.to_string())?;
+    }
 
     let installed = models::install(&local.policy, model, &models_dir.path, &mut |p| {
         emit(match p {
@@ -424,6 +609,172 @@ pub async fn local_model_install(
     emit(InstallProgress::Done { verified_by });
 
     Ok(verified_by.as_str().to_owned())
+}
+
+/* ------------------------------------------------------------------ refresh */
+
+/// What became of the server a refresh had to stop.
+///
+/// Three states rather than an `Option<String>`, because "nothing was running"
+/// and "something was running and could not be started again" are opposite
+/// news and the second one is the whole risk of doing this at all.
+///
+/// `pub(crate)` since KNEG-128: the llama.cpp refresh in [`crate::local_llm`]
+/// stops and restarts its own server for the same reason and needs the same
+/// three answers about it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Restart {
+    NothingWasRunning,
+    Restarted(String),
+    Failed { model: String, error: String },
+}
+
+impl Restart {
+    pub(crate) const fn restarted(&self) -> Option<&String> {
+        match self {
+            Self::Restarted(model) => Some(model),
+            _ => None,
+        }
+    }
+
+    pub(crate) const fn error(&self) -> Option<&String> {
+        match self {
+            Self::Failed { error, .. } => Some(error),
+            _ => None,
+        }
+    }
+}
+
+/// The sentence a failed refresh leaves the user with.
+///
+/// A refresh **stops the server before it replaces it**, so a refused download
+/// ends with the old binary still on disk and nothing serving it unless it was
+/// started again. The install error on its own would not say that, and the
+/// difference between "your download failed" and "your download failed and
+/// dictation is now down" is the whole of what the user needs to know.
+///
+/// Pure, and separated from the command for the reason `media.rs:1334-1340`
+/// records: a judgement reachable only through an `AppHandle` is a judgement
+/// nothing can test.
+///
+/// `pub(crate)` since KNEG-128; the llama.cpp refresh leaves the user in exactly
+/// the same position and owes them the same sentence.
+pub(crate) fn refresh_failure(install_error: &str, restart: &Restart) -> String {
+    match restart {
+        Restart::NothingWasRunning => install_error.to_owned(),
+        Restart::Restarted(model) => format!(
+            "{install_error} The server was not replaced, and the one that was running \
+             ({model}) has been started again."
+        ),
+        Restart::Failed { model, error } => format!(
+            "{install_error} The server was not replaced, and the one that was running \
+             ({model}) could not be started again: {error}"
+        ),
+    }
+}
+
+/// What a refresh of a local server binary did.
+///
+/// **One type for both runtimes**, `whisper-server` and `llama-server`. Not
+/// politeness: `ipc_types` asserts that no two Rust types render to the same
+/// TypeScript name, so a second `RefreshOutcome` for the llama.cpp refresh
+/// added in KNEG-128 would have been a failing test rather than a duplicate
+/// nobody noticed. The two refreshes answer the same three questions -- what
+/// was unpacked, what came back, and what did not -- so sharing the answer was
+/// the right resolution rather than renaming one of them.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RefreshOutcome {
+    /// How many files the replacement unpacked. Reported for the reason
+    /// [`kw_sidecar::Installed::files`] is: one would mean the sibling `ggml`
+    /// libraries were missed and the server will not start.
+    pub files: usize,
+    /// The model the server was running before, now running again. A whisper
+    /// model id or a GGUF id, depending on which screen asked.
+    pub restarted: Option<String>,
+    /// Why it could not be started again, when it could not. Not an error —
+    /// the replacement succeeded — but not something to leave unsaid either.
+    pub restart_error: Option<String>,
+}
+
+/// Replace the installed server binary with the one this build pins.
+///
+/// **Stop, replace, restart.** The application owns the process, so it can put
+/// it down for the length of the install and bring it back afterwards; that is
+/// the whole reason this is a few lines rather than a mechanism.
+///
+/// The alternative considered and rejected was renaming the running install
+/// aside and unpacking over the vacated name. Measured on 2026-09-01 with
+/// `cargo run -p kw-sidecar --example running_exe_lock_probe`, that does work
+/// as far as it goes — on Windows, `rename` of a directory holding a running
+/// executable succeeds where `remove_dir_all` fails with `os error 5`, and the
+/// vacated name can be created immediately. It was rejected because of the
+/// probe's third line: **the renamed-aside directory is still undeletable.**
+/// The lock is on the mapped image file, not on the path. So rename-aside buys
+/// a shorter outage and inherits a directory that cannot be removed until the
+/// process ends, which needs a cleanup pass at some later moment and an
+/// `install` that tolerates finding one. More machinery, for the case where the
+/// user has explicitly asked to replace the thing they are using.
+///
+/// Nothing calls this on its own. Like every other download in this
+/// application, it happens because somebody pressed a button.
+#[tauri::command]
+pub async fn local_server_refresh(
+    app: AppHandle,
+    local: State<'_, Arc<LocalTranscription>>,
+) -> Result<RefreshOutcome, String> {
+    let (spec, asset) = local
+        .catalog
+        .resolve(SIDECAR)
+        .map_err(|err| err.to_string())?;
+    let sidecars = paths::sidecar_dir();
+
+    let emit = |progress: InstallProgress| {
+        if let Err(err) = app.emit(PROGRESS_EVENT, progress) {
+            tracing::debug!(error = %err, "could not report refresh progress");
+        }
+    };
+
+    // Read before the stop: `stop` clears it, and this is the only record of
+    // what has to be put back.
+    let was_running = local.model.read().ok().and_then(|held| held.clone());
+    local.stop().await;
+
+    let installed = kw_sidecar::install(&local.policy, spec, asset, &sidecars.path, &mut |p| {
+        emit(match p {
+            kw_sidecar::Progress::Downloading { written, total } => {
+                InstallProgress::Server { written, total }
+            }
+            kw_sidecar::Progress::Verifying => InstallProgress::Verifying,
+            kw_sidecar::Progress::Extracting => InstallProgress::Extracting,
+        });
+    })
+    .await;
+
+    // Whichever way the install went. A refused download must not leave the
+    // user with a server that was working a moment ago and is now simply gone.
+    let restart = match &was_running {
+        None => Restart::NothingWasRunning,
+        Some(model) => match local.start_model(model).await {
+            Ok(port) => {
+                tracing::info!(port, model = %model, "restarted the local model server after a refresh");
+                Restart::Restarted(model.clone())
+            }
+            Err(error) => Restart::Failed {
+                model: model.clone(),
+                error,
+            },
+        },
+    };
+
+    match installed {
+        Ok(installed) => Ok(RefreshOutcome {
+            files: installed.files,
+            restarted: restart.restarted().cloned(),
+            restart_error: restart.error().cloned(),
+        }),
+        Err(err) => Err(refresh_failure(&err.to_string(), &restart)),
+    }
 }
 
 /// Start the local server with an installed model.
@@ -451,6 +802,91 @@ pub async fn local_server_start(
     }
 
     Ok(port)
+}
+
+/* ------------------------------------------------------------------- revive */
+
+/// Something that can bring the local model server back after it has gone.
+///
+/// A trait rather than an `Arc<LocalTranscription>` because the two callers --
+/// dictation and media import -- want one sentence's worth of capability
+/// ("start the remembered model, tell me the port"), and neither should be able
+/// to reach the installer, the reaper or the catalogue through it.
+///
+/// This exists because `d489471` taught [`LocalTranscription::start_model`] to
+/// notice a server that had gone and start a new one, and taught nothing else.
+/// Pressing "Use for dictation" recovered; *dictating* did not, and neither did
+/// a media import -- the path where it matters most, because a recording being
+/// imported is usually one that cannot be made again. Recorded as KNEG-96.
+#[async_trait::async_trait]
+pub trait Revive: Send + Sync + std::fmt::Debug {
+    /// Start the model the user last chose, and answer with its port.
+    async fn revive(&self) -> Result<u16, String>;
+}
+
+/// The real [`Revive`]: whatever the user last dictated with.
+///
+/// Deliberately the *persisted* choice rather than the one held in memory. By
+/// the time anyone asks, [`LocalTranscription::forget_port`] has cleared the
+/// in-memory model alongside the port -- they go together on purpose, since a
+/// model name without a server is the claim that caused this defect. The
+/// persisted choice is the only durable answer to *which* model, and it is the
+/// same one [`resume_last_used`] reads, so reviving mid-dictation cannot bring
+/// back a different model than a relaunch would.
+struct ReviveRemembered {
+    local: Arc<LocalTranscription>,
+    db: kw_storage::Db,
+}
+
+impl std::fmt::Debug for ReviveRemembered {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ReviveRemembered").finish_non_exhaustive()
+    }
+}
+
+#[async_trait::async_trait]
+impl Revive for ReviveRemembered {
+    async fn revive(&self) -> Result<u16, String> {
+        match model_to_resume(&self.db).await {
+            Resume::Model(model_id) => self.local.start_model(&model_id).await,
+            // Neither of these is an ordinary failure: something asked to
+            // revive a server for a route that should not have been reaching
+            // one. Say which contradiction it was rather than reporting a
+            // missing server, which is the true-but-useless answer.
+            Resume::NotRouted => Err(
+                "dictation is not routed to a local model, so there is nothing to start".to_owned(),
+            ),
+            Resume::NoneRemembered => Err(
+                "no local model is remembered. Choose one under Settings > Transcription > Local."
+                    .to_owned(),
+            ),
+        }
+    }
+}
+
+/// The handle dictation and media import revive the server through.
+#[must_use]
+pub fn revive_handle(local: &Arc<LocalTranscription>, db: &kw_storage::Db) -> Arc<dyn Revive> {
+    Arc::new(ReviveRemembered {
+        local: Arc::clone(local),
+        db: db.clone(),
+    })
+}
+
+/// A [`Revive`] that never does, for tests about something else.
+///
+/// Named for what it does rather than `Stub`, so a test that revives by
+/// accident reads as wrong at the call site.
+#[cfg(test)]
+#[derive(Debug)]
+pub struct RefusesToRevive;
+
+#[cfg(test)]
+#[async_trait::async_trait]
+impl Revive for RefusesToRevive {
+    async fn revive(&self) -> Result<u16, String> {
+        Err("this test does not start a local model server".to_owned())
+    }
 }
 
 /// Bring back the local server the user was last dictating with.
@@ -652,6 +1088,401 @@ mod tests {
         kw_storage::Db::open_in_memory().await.unwrap()
     }
 
+    /* ------------------------------------------------ the sidecar guard */
+
+    fn installed() -> kw_sidecar::Installation {
+        kw_sidecar::Installation::Installed {
+            executable: std::path::PathBuf::from("sidecars/whisper/whisper-server.exe"),
+            origin: "downloaded",
+        }
+    }
+
+    /// The regression that made every whisper model after the first
+    /// uninstallable.
+    ///
+    /// `install` ends by replacing the sidecar directory, and by the time a
+    /// user presses *Install* `resume_last_used` has started
+    /// `whisper-server.exe` out of it. On Windows that directory cannot be
+    /// removed while the executable inside it is running, so an unconditional
+    /// reinstall returned an error before the model was ever downloaded.
+    #[test]
+    fn an_installed_sidecar_is_not_reinstalled() {
+        assert!(!sidecar_needed(&installed()));
+    }
+
+    #[test]
+    fn a_missing_sidecar_is_installed() {
+        assert!(sidecar_needed(&kw_sidecar::Installation::NotInstalled {
+            looked_in: vec![std::path::PathBuf::from("sidecars")],
+        }));
+    }
+
+    /// A directory with no executable in it is an interrupted extraction, not
+    /// an install. Nothing is running out of it, so replacing it is safe --
+    /// which is why this is the one existing-directory case that still
+    /// reinstalls.
+    #[test]
+    fn a_half_extracted_sidecar_is_installed_again() {
+        assert!(sidecar_needed(&kw_sidecar::Installation::Incomplete {
+            dir: std::path::PathBuf::from("sidecars/whisper"),
+            expected: std::path::PathBuf::from("sidecars/whisper/whisper-server.exe"),
+        }));
+    }
+
+    /* ---------------------------------------------- freshness on the wire */
+
+    fn digest(hex: &str) -> kw_sidecar::Sha256Digest {
+        kw_sidecar::Sha256Digest::parse(hex).unwrap()
+    }
+
+    const PINNED: &str = "c2a4b60edb11f7e11a9191ffb50929535527d4d91c9903dbe3e554583bbbc63d";
+    const OTHER: &str = "1111111111111111111111111111111111111111111111111111111111111111";
+
+    fn wire(freshness: &kw_sidecar::Freshness) -> serde_json::Value {
+        serde_json::to_value(SidecarFreshness::of(freshness)).unwrap()
+    }
+
+    #[test]
+    fn a_stale_sidecar_sends_both_digests_so_a_report_can_be_checked() {
+        let json = wire(&kw_sidecar::Freshness::Stale {
+            installed: digest(OTHER),
+            expected: digest(PINNED),
+        });
+        assert_eq!(json["state"], "stale");
+        assert_eq!(json["installed"], OTHER);
+        assert_eq!(json["expected"], PINNED);
+    }
+
+    /// The state the machine this was written on is in, carried all the way to
+    /// the wire.
+    ///
+    /// `unknown` must not arrive at the screen as either of the other two.
+    /// Rounding it to `current` would excuse a binary the manifest has moved
+    /// past; rounding it to `stale` would claim a comparison nobody made.
+    #[test]
+    fn an_unrecorded_sidecar_is_unknown_on_the_wire_and_says_why() {
+        let json = wire(&kw_sidecar::Freshness::Unknown(
+            kw_sidecar::Unrecorded::NoRecord,
+        ));
+        assert_eq!(json["state"], "unknown");
+        assert_ne!(json["state"], "stale");
+        assert_ne!(json["state"], "current");
+        assert!(
+            json["why"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("before this application started recording"),
+            "{json}"
+        );
+    }
+
+    #[test]
+    fn a_current_sidecar_and_a_missing_one_are_different_wire_states() {
+        assert_eq!(wire(&kw_sidecar::Freshness::Current)["state"], "current");
+        assert_eq!(
+            wire(&kw_sidecar::Freshness::NotInstalled)["state"],
+            "not-installed"
+        );
+    }
+
+    #[test]
+    fn a_sidecar_nothing_is_published_for_is_reported_as_not_installed() {
+        // `Catalog::resolve` fails on a name the manifest does not carry.
+        // Answering anything but `NotInstalled` there would be a staleness
+        // claim about a binary that does not exist for this platform.
+        let dir = tempfile::tempdir().unwrap();
+        let catalog = kw_sidecar::Catalog::shipped().unwrap();
+        assert_eq!(
+            sidecar_freshness(&catalog, "no-such-sidecar", dir.path()),
+            kw_sidecar::Freshness::NotInstalled
+        );
+    }
+
+    /// A catalogue with a published asset for every target the application
+    /// supports.
+    ///
+    /// Product availability is not a testing invariant: whisper is deliberately
+    /// not published on macOS today, which made the old positive controls return
+    /// before testing anything on that CI job. This fixture pins synthetic
+    /// assets for all five targets, so `Catalog::resolve`, `locate`, record I/O,
+    /// and the freshness decision execute on every supported host.
+    fn freshness_catalog() -> Catalog {
+        fn asset(executable: &str) -> serde_json::Value {
+            serde_json::json!({
+                "availability": "published",
+                "url": "https://example.invalid/fake-sidecar",
+                "archive": "bare",
+                "sha256": PINNED,
+                "sizeBytes": 2,
+                "maxExtractedSizeBytes": 2,
+                "executableInArchive": executable,
+            })
+        }
+
+        let document = serde_json::json!({
+            "schemaVersion": kw_sidecar::catalog::SCHEMA_VERSION,
+            "sidecars": [{
+                "name": SIDECAR,
+                "description": "Synthetic freshness fixture",
+                "source": {
+                    "repo": "example.invalid/fake",
+                    "release": "test",
+                    "pinnedBecause": "Deterministic cross-platform freshness coverage",
+                },
+                "transport": { "kind": "stdio" },
+                "commandFragments": ["fake-sidecar"],
+                "targets": {
+                    "windows-x86_64": asset("fake-sidecar.exe"),
+                    "linux-x86_64": asset("fake-sidecar"),
+                    "linux-aarch64": asset("fake-sidecar"),
+                    "macos-x86_64": asset("fake-sidecar"),
+                    "macos-aarch64": asset("fake-sidecar"),
+                },
+            }],
+        });
+        Catalog::parse(&document.to_string()).unwrap()
+    }
+
+    struct FreshnessFixture {
+        root: tempfile::TempDir,
+        catalog: Catalog,
+    }
+
+    impl FreshnessFixture {
+        fn new() -> Self {
+            Self {
+                root: tempfile::tempdir().unwrap(),
+                catalog: freshness_catalog(),
+            }
+        }
+
+        fn install_dir(&self) -> std::path::PathBuf {
+            self.root.path().join(SIDECAR)
+        }
+
+        fn resolved(&self) -> (&kw_sidecar::SidecarSpec, &kw_sidecar::Asset) {
+            self.catalog.resolve(SIDECAR).unwrap()
+        }
+
+        fn install_executable(&self) {
+            let install = self.install_dir();
+            let executable = self.resolved().1.executable_name();
+            std::fs::create_dir_all(&install).unwrap();
+            std::fs::write(install.join(executable), b"MZ").unwrap();
+        }
+
+        fn record(&self) -> kw_sidecar::InstallRecord {
+            let (spec, asset) = self.resolved();
+            kw_sidecar::InstallRecord::at(spec, asset, 1)
+        }
+
+        fn write_record(&self, record: &kw_sidecar::InstallRecord) {
+            kw_sidecar::record::write(&self.install_dir(), record).unwrap();
+        }
+
+        fn freshness(&self) -> kw_sidecar::Freshness {
+            sidecar_freshness(&self.catalog, SIDECAR, self.root.path())
+        }
+    }
+
+    #[test]
+    fn sidecar_freshness_reports_a_fake_missing_install_as_not_installed() {
+        let fixture = FreshnessFixture::new();
+        assert_eq!(fixture.freshness(), kw_sidecar::Freshness::NotInstalled);
+    }
+
+    #[test]
+    fn sidecar_freshness_reports_a_fake_pinned_install_as_current() {
+        let fixture = FreshnessFixture::new();
+        fixture.install_executable();
+        fixture.write_record(&fixture.record());
+        assert_eq!(fixture.freshness(), kw_sidecar::Freshness::Current);
+    }
+
+    #[test]
+    fn sidecar_freshness_reports_a_fake_older_install_as_stale() {
+        let fixture = FreshnessFixture::new();
+        fixture.install_executable();
+        let mut record = fixture.record();
+        record.asset_sha256 = digest(OTHER);
+        fixture.write_record(&record);
+
+        assert_eq!(
+            fixture.freshness(),
+            kw_sidecar::Freshness::Stale {
+                installed: digest(OTHER),
+                expected: digest(PINNED),
+            }
+        );
+    }
+
+    #[test]
+    fn sidecar_freshness_reports_a_fake_install_without_a_record_as_unknown() {
+        let fixture = FreshnessFixture::new();
+        fixture.install_executable();
+        assert_eq!(
+            fixture.freshness(),
+            kw_sidecar::Freshness::Unknown(kw_sidecar::Unrecorded::NoRecord)
+        );
+    }
+
+    #[test]
+    fn sidecar_freshness_reports_a_fake_unreadable_record_as_unknown() {
+        let fixture = FreshnessFixture::new();
+        fixture.install_executable();
+        std::fs::write(
+            fixture.install_dir().join(kw_sidecar::record::RECORD_FILE),
+            b"not json",
+        )
+        .unwrap();
+
+        match fixture.freshness() {
+            kw_sidecar::Freshness::Unknown(kw_sidecar::Unrecorded::Unreadable { detail }) => {
+                assert!(
+                    !detail.is_empty(),
+                    "the parse failure must remain actionable"
+                );
+            }
+            other => panic!("expected an unreadable record, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn sidecar_freshness_reports_a_fake_newer_record_schema_as_unknown() {
+        let fixture = FreshnessFixture::new();
+        fixture.install_executable();
+        let mut record = fixture.record();
+        record.schema = kw_sidecar::record::SCHEMA + 1;
+        fixture.write_record(&record);
+
+        assert_eq!(
+            fixture.freshness(),
+            kw_sidecar::Freshness::Unknown(kw_sidecar::Unrecorded::UnsupportedSchema {
+                found: kw_sidecar::record::SCHEMA + 1,
+            })
+        );
+    }
+
+    #[test]
+    fn sidecar_freshness_reports_a_fake_wrong_sidecar_record_as_unknown() {
+        let fixture = FreshnessFixture::new();
+        fixture.install_executable();
+        let mut record = fixture.record();
+        record.sidecar = "some-other-sidecar".to_owned();
+        fixture.write_record(&record);
+
+        assert_eq!(
+            fixture.freshness(),
+            kw_sidecar::Freshness::Unknown(kw_sidecar::Unrecorded::DifferentSidecar {
+                recorded: "some-other-sidecar".to_owned(),
+            })
+        );
+    }
+
+    /* --------------------------------------------------------- refreshing */
+
+    #[test]
+    fn a_refresh_that_failed_with_nothing_running_reports_only_the_failure() {
+        // No server was stopped, so there is no second fact to report and
+        // adding one would be noise.
+        assert_eq!(
+            refresh_failure("the download was refused.", &Restart::NothingWasRunning),
+            "the download was refused."
+        );
+    }
+
+    /// The reason a refresh reports two things rather than one.
+    ///
+    /// A refresh stops the server before replacing it. If the download then
+    /// fails, the user is left with the old binary and — unless it was started
+    /// again — nothing serving it. An install error on its own does not say
+    /// which of those two states they are in.
+    #[test]
+    fn a_refresh_that_failed_says_the_old_server_came_back() {
+        let message = refresh_failure(
+            "the download was refused.",
+            &Restart::Restarted("tiny".to_owned()),
+        );
+        assert!(message.contains("the download was refused."), "{message}");
+        assert!(message.contains("started again"), "{message}");
+        assert!(message.contains("tiny"), "{message}");
+    }
+
+    #[test]
+    fn a_refresh_that_failed_twice_says_dictation_is_down() {
+        // The worst outcome, and the one that must never be summarised as
+        // "install failed": the server that was working when the button was
+        // pressed is now gone.
+        let message = refresh_failure(
+            "the download was refused.",
+            &Restart::Failed {
+                model: "tiny".to_owned(),
+                error: "port 8178 is taken".to_owned(),
+            },
+        );
+        assert!(message.contains("could not be started again"), "{message}");
+        assert!(message.contains("port 8178 is taken"), "{message}");
+    }
+
+    #[test]
+    fn the_outcome_of_a_restart_is_reported_as_one_thing_or_the_other() {
+        // `restarted` and `restart_error` are never both set, and never both
+        // clear when something was running. A caller reading one without the
+        // other must not be able to see a half-truth.
+        let restarted = Restart::Restarted("tiny".to_owned());
+        assert_eq!(restarted.restarted().map(String::as_str), Some("tiny"));
+        assert_eq!(restarted.error(), None);
+
+        let failed = Restart::Failed {
+            model: "tiny".to_owned(),
+            error: "no".to_owned(),
+        };
+        assert_eq!(failed.restarted(), None);
+        assert_eq!(failed.error().map(String::as_str), Some("no"));
+
+        assert_eq!(Restart::NothingWasRunning.restarted(), None);
+        assert_eq!(Restart::NothingWasRunning.error(), None);
+    }
+
+    /* -------------------------------------------------------- reviving */
+
+    #[tokio::test]
+    async fn reviving_a_route_that_is_not_local_says_so() {
+        // Reached only through a contradiction: a whisper port was recorded, so
+        // a server ran, but the route no longer sends anything to it. Reporting
+        // a missing server here would be true and useless -- the cure is not to
+        // start one.
+        let db = db().await;
+        let revive = revive_handle(&Arc::new(local()), &db);
+
+        let err = revive.revive().await.unwrap_err();
+        assert!(err.contains("not routed"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn reviving_with_no_remembered_model_names_the_screen() {
+        // The route is local and nothing says which model. There is no safe
+        // guess: starting the smallest, or the first in the catalogue, would
+        // transcribe with a model the user did not choose and report it as
+        // though they had.
+        let db = db().await;
+        kw_storage::settings::set(
+            db.pool(),
+            crate::dictation::ROUTE_SETTINGS_KEY,
+            &kw_transcription_core::RouteSettings {
+                use_local_whisper: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        let revive = revive_handle(&Arc::new(local()), &db);
+
+        let err = revive.revive().await.unwrap_err();
+        assert!(err.contains("Settings > Transcription > Local"), "{err}");
+    }
+
     #[tokio::test]
     async fn nothing_is_resumed_when_dictation_does_not_use_a_local_model() {
         // The default. Starting a model server for someone who dictates to a
@@ -745,29 +1576,38 @@ mod tests {
     #[test]
     fn a_model_reports_which_check_it_can_be_held_to() {
         // "installed" alone would let the UI imply a digest match for a model
-        // that was only size-checked.
+        // that was only size-checked. Every shipped model is pinned now, so the
+        // screen says `digest` for all six -- and the mapping for the weaker
+        // answer is still asserted below, against a model built here, because a
+        // branch nothing exercises is a branch that rots.
         let registry = kw_provider_registry::registry().unwrap();
-        let tiny = registry
-            .local_asr
-            .whisper
-            .iter()
-            .find(|m| m.id == "tiny")
-            .unwrap();
-        let base = registry
-            .local_asr
-            .whisper
-            .iter()
-            .find(|m| m.id == "base")
-            .unwrap();
+        for model in &registry.local_asr.whisper {
+            assert_eq!(
+                VerifiedBy::declared_for(model),
+                VerifiedBy::Digest,
+                "{} is not pinned; see WHISPER_PINS in the registry generator",
+                model.id
+            );
+        }
 
-        assert!(matches!(
-            models::integrity_for(tiny),
-            models::Integrity::Pinned { .. }
-        ));
-        assert!(matches!(
-            models::integrity_for(base),
-            models::Integrity::Size { .. }
-        ));
+        let unmeasured = kw_provider_registry::WhisperModel {
+            id: "not-yet-measured".to_owned(),
+            name: "Not yet measured".to_owned(),
+            file_name: "ggml-not-yet-measured.bin".to_owned(),
+            download_url: "https://huggingface.co/example/resolve/main/x.bin".to_owned(),
+            size_mb: Some(142.0),
+            sha256: None,
+            expected_size_bytes: Some(148_000_000),
+            recommended: false,
+        };
+        assert_eq!(VerifiedBy::declared_for(&unmeasured), VerifiedBy::Size);
+
+        let mut nothing_known = unmeasured;
+        nothing_known.expected_size_bytes = None;
+        assert_eq!(
+            VerifiedBy::declared_for(&nothing_known),
+            VerifiedBy::Nothing
+        );
     }
 
     #[tokio::test]
@@ -784,12 +1624,22 @@ mod tests {
     }
 
     #[test]
-    fn the_install_directory_follows_the_native_binary_rule() {
-        // whisper-server loads its sibling ggml libraries relative to its own
-        // directory and chokes on a path with a space or non-ASCII character.
+    fn the_install_directory_no_longer_follows_the_model_path_rule() {
+        // It used to, on the stated grounds that whisper-server loads its
+        // sibling ggml libraries relative to its own directory and would choke
+        // on a space or a non-ASCII character. Measured 2026-08-31: it does
+        // not, and neither do sherpa-onnx-offline, llama-server or ffmpeg. So
+        // sidecars stay where the user's data is, whatever the account is
+        // called -- which also means they are not written to %ProgramData%,
+        // where an unprivileged account may not be able to write at all.
         let dir = paths::sidecar_dir();
-        if !dir.fell_back {
-            assert!(kw_storage::paths::is_native_binary_safe(&dir.path));
+        assert!(!dir.fell_back);
+
+        // The model directory is a different question and keeps the rule: a
+        // path reported as usable has to actually be one.
+        let models = paths::model_cache_dir();
+        if !models.fell_back {
+            assert!(kw_storage::paths::is_native_readable(&models.path));
         }
     }
 }

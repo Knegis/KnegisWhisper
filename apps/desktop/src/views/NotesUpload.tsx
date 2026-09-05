@@ -67,10 +67,18 @@ function baseName(path: string): string {
 /**
  * Turn a finished import into the note the screen shows.
  *
- * A single-segment transcript rather than leaving `transcript` empty: this
- * note genuinely was recorded, just with no per-utterance timestamps, and an
- * SRT or VTT export of it should say so with the real duration rather than
- * reading as a note that was only ever typed.
+ * The transcript is whatever timed utterances the engine reported. The local
+ * whisper server reports them; a cloud provider answers with prose and reports
+ * none, and in that case this writes the one segment it can honestly write —
+ * the whole text, spanning the real duration. That fallback is deliberate
+ * rather than an empty `transcript`: the note genuinely was recorded, and an
+ * SRT export of it should say so with the real duration instead of reading as
+ * a note that was only ever typed.
+ *
+ * What it must not do is dress the fallback up as timing. One cue spanning 57
+ * minutes is what a Swedish import produced on 2026-08-28, and it looked like
+ * a subtitle track until you opened it — the reason `segments` is now carried
+ * all the way from the server rather than synthesised here.
  */
 async function saveImportedNote(
   result: MediaImportResult,
@@ -82,14 +90,17 @@ async function saveImportedNote(
       ? `Imported from ${result.source.host}`
       : fallbackTitle;
 
+  const transcript =
+    result.segments.length > 0
+      ? result.segments
+      : [{ text: result.text, timestamp: 0, endTimestamp: durationSeconds }];
+
   return createNote({
     title,
     content: result.text,
     noteType: "import",
     folderId: null,
-    transcript: JSON.stringify([
-      { text: result.text, timestamp: 0, endTimestamp: durationSeconds },
-    ]),
+    transcript: JSON.stringify(transcript),
     participants: null,
     audioDurationSeconds: durationSeconds,
   });

@@ -35,11 +35,24 @@ jobs:
       - name: Integration parity
         run: node tools/integration-audit/verify-parity.mjs
 
+      # Enumerates the settings keys the Rust side reads and fails when one of
+      # them cannot be changed by anything shipped. Three defects had that
+      # shape and all three had passing unit tests -- a test sets the value
+      # directly, so it never asks whether a user can reach it.
+      - name: Settings keys are reachable
+        run: node tools/settings-audit/scan.mjs
+
       # A source-level check, not `cargo metadata`: it runs with no toolchain,
       # so it belongs here rather than in the rust job. Catches two crates
       # producing a same-named binary, which cargo lets silently overwrite.
       - name: Binary name collisions
         run: node tools/integration-audit/verify-binaries.mjs
+
+      # DialogGrants closed KNEG-80 and its doc comment states the closure as a
+      # fact -- "the only three commands that take a path". KNEG-151 is what
+      # happens when that stops being true quietly.
+      - name: Import commands check their dialog grant
+        run: node tools/command-audit/scan.mjs
 
       - name: Forbidden domains
         run: node tools/domain-scanner/scan.mjs
@@ -53,6 +66,17 @@ jobs:
       - name: Generated TypeScript types are current
         run: node tools/integration-audit/generate-ts-types.mjs --check
 
+      # A Cargo feature nothing enables is a test nothing runs. KNEG-147 was
+      # exactly that: a mock-webview IPC test behind a feature declared in one
+      # Cargo.toml and named by no invocation anywhere.
+      - name: Cargo features are enabled somewhere
+        run: node tools/feature-audit/scan.mjs
+
+      # KNEG-168: a window in no capability can receive no event, and nothing
+      # else notices because denied listen() rejects a promise the frontend discards.
+      - name: Created windows have capabilities
+        run: node tools/capability-audit/scan.mjs
+
       - name: Domain scanner self-tests
         run: node --test tools/domain-scanner/scan.test.mjs
 
@@ -60,6 +84,32 @@ jobs:
       # still reports green. These assert the UI-surface rules actually fire.
       - name: Parity gate self-tests
         run: node --test tools/integration-audit/verify-parity.test.mjs
+
+      # Same again, and the argument is sharpest here: this gate exists because
+      # three settings had passing tests and no way in, so a gate against that
+      # which was itself only ever run green would be the same mistake a third
+      # time. Each rule was also neutered in turn to confirm a test breaks.
+      - name: Settings gate self-tests
+        run: node --test tools/settings-audit/scan.test.mjs
+
+      # Six of these cover the pin reader refusing to parse a table whose shape
+      # has changed. That is the case worth guarding: a verifier that silently
+      # checks nothing does not fail, it reports success.
+      - name: Model pin self-tests
+        run: node --test tools/model-pin/pin.test.mjs
+
+
+      - name: Feature audit self-tests
+        run: node --test tools/feature-audit/scan.test.mjs
+
+      - name: Capability audit self-tests
+        run: node --test tools/capability-audit/scan.test.mjs
+
+      - name: Command audit self-tests
+        run: node --test tools/command-audit/scan.test.mjs
+
+      - name: Dev-bundle audit self-tests
+        run: node --test tools/dev-bundle-audit/scan.test.mjs
 
       # The baseline is generated from an OpenWhispr checkout that CI does not
       # have, so --check cannot run here. Assert instead that it is valid JSON
@@ -102,6 +152,14 @@ jobs:
       # scan the built output too. This is why builtAssetPaths exists.
       - name: Forbidden domains in built assets
         run: node tools/domain-scanner/scan.mjs
+
+      # The dev pre-bundle is a different artifact from the production bundle:
+      # esbuild keeps modules Rollup drops. One of them threw under the
+      # webview's frozen Object.prototype and `npm run tauri:dev` opened blank
+      # while every other gate was green (2026-09-03, KNEG-152). This runs
+      # Vite's optimizer the way the dev server does and scans what it emits.
+      - name: Dev pre-bundle has no prototype-writing module
+        run: node tools/dev-bundle-audit/scan.mjs
 
   rust:
     name: Rust (${{ matrix.os }})
@@ -157,3 +215,15 @@ jobs:
 
       - name: Build
         run: cargo build --workspace
+
+      # Last on purpose. This is the only step that resolves `tauri` with a
+      # different feature set, so it rebuilds tauri and everything downstream;
+      # earlier in the sequence it would invalidate the cache for every step
+      # after it. `--lib` keeps the application binary out of this build, which
+      # matters because build.rs swaps the Windows manifest under this feature.
+      #
+      # Without this step the mock-webview IPC test compiles nowhere and runs
+      # nowhere, which is what KNEG-147 recorded. `tools/feature-audit/scan.mjs`
+      # in the Contracts job is what keeps it from silently going away again.
+      - name: Test (Tauri IPC boundary)
+        run: cargo test -p knegiswhisper --lib --features tauri-test

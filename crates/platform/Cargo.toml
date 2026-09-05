@@ -24,15 +24,33 @@ arboard.workspace = true
 
 kw-overlay.workspace = true
 
+# Every module this crate names is listed. Cargo unifies features across a
+# build, so relying on another crate happening to enable one would be a
+# dependency on nothing declared anywhere -- the reasoning `crates/security`
+# already writes out at length.
 [target.'cfg(windows)'.dependencies.windows]
 workspace = true
 features = [
     "Win32_Foundation",
+    # MonitorFromWindow and GetMonitorInfoW. rcWork is the usable desktop area
+    # after taskbars and docked app bars, unlike the full monitor rectangle.
+    "Win32_Graphics_Gdi",
     "Win32_System_Threading",
     "Win32_System_Registry",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_WindowsAndMessaging",
+    # IMMDeviceEnumerator, IAudioSessionManager2, IAudioSessionControl2 and the
+    # eCapture / AudioSessionState* constants, for `microphone`.
+    "Win32_Media_Audio",
+    # CoInitializeEx, CoCreateInstance, CLSCTX_ALL. The first COM in this
+    # workspace: `kw-audio-core` reaches WASAPI through `cpal` instead.
+    "Win32_System_Com",
 ]
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
+# `mic_users_probe` only, and only so it can open the microphone itself and
+# prove the session enumeration sees something. A probe that has never found
+# anything is not evidence of absence -- see the example's own doc comment.
+# No cycle: `kw-audio-core` does not depend on this crate.
+kw-audio-core.workspace = true

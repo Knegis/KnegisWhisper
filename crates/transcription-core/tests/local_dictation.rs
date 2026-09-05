@@ -24,6 +24,7 @@
 use std::time::Duration;
 
 use kw_network_policy::NetworkPolicy;
+use kw_sidecar::process::Health as _;
 use kw_sidecar::{pid::PidStore, port, process, Catalog, HttpHealth, Launch, StartTimings};
 use kw_transcription_core::local::{
     build_args, Inference, LocalTranscriber, ServerOptions, WhisperServer, HEALTH_PATH,
@@ -105,6 +106,8 @@ async fn speech_goes_in_and_the_right_words_come_out() {
         StartTimings {
             timeout: Duration::from_secs(90),
             poll_interval: Duration::from_millis(100),
+            // The death watcher's interval is not what these tests are about.
+            ..StartTimings::default()
         },
     )
     .await
@@ -153,4 +156,127 @@ async fn speech_goes_in_and_the_right_words_come_out() {
     // 7. Stop it and check the record goes with it.
     running.stop(&store).await.unwrap();
     assert_eq!(store.read("whisper").unwrap(), None);
+
+    /* ------------------------------------- the server going, and coming back */
+
+    // Everything below verifies the mechanism `2fe5825` rests on. That commit
+    // taught dictation and media import to notice a recorded port with nothing
+    // behind it and start the remembered model again -- because `d489471` had
+    // taught only the *button* to do it, and four dictations were lost to a
+    // port the application still held for a process that had gone.
+    //
+    // The decision is covered by unit tests (`classify`, and `Revive`'s two
+    // refusals). What no unit test can answer is whether the health check
+    // actually reports a dead server as dead, and whether a second start on the
+    // same machine works -- so those are here, against the real binary.
+
+    // 8. The health check must say no. How *long* it takes to say so is
+    //    measured rather than asserted, because the first run of this test
+    //    found it is not what anyone would guess: see the note below.
+    let began = std::time::Instant::now();
+    assert!(
+        !health.is_ready(chosen).await,
+        "the server was stopped, so the health check must not report it ready"
+    );
+    let just_vacated = began.elapsed();
+
+    // The same question against a port that never had a server on it, to tell
+    // "this port was in use a moment ago" apart from "loopback refusals are
+    // slow here".
+    let never_used = port::allocate(spec.port_range().unwrap(), &port::BindProbe).unwrap();
+    let began = std::time::Instant::now();
+    assert!(!health.is_ready(never_used).await);
+    let cold = began.elapsed();
+
+    println!("health check on a just-stopped port: {just_vacated:?}");
+    println!("health check on a never-used port:   {cold:?}");
+
+    // Neither may hang: the revive path in `dictation.rs` runs this before
+    // every local dictation, and an unbounded wait there would be worse than
+    // the failure it replaced.
+    assert!(just_vacated < Duration::from_secs(3), "{just_vacated:?}");
+    assert!(cold < Duration::from_secs(3), "{cold:?}");
+
+    // 9. Starting again works. This is the whole of what `Revive` does once it
+    //    has read the remembered model, and it has to survive the first server
+    //    having held the same port a moment ago.
+    let again = process::start(
+        spec,
+        &Launch {
+            executable: installed.executable.clone(),
+            args: build_args(&options),
+            port: chosen,
+        },
+        &store,
+        &health,
+        StartTimings {
+            timeout: Duration::from_secs(90),
+            poll_interval: Duration::from_millis(100),
+            // The death watcher's interval is not what these tests are about.
+            ..StartTimings::default()
+        },
+    )
+    .await
+    .expect("a second start on the same port should work after the first has gone");
+
+    assert!(health.is_ready(chosen).await);
+
+    // 10. And it transcribes, which is the point. A restart that answers the
+    //     health check and cannot transcribe would look like recovery and lose
+    //     the recording anyway.
+    let after = WhisperServer::new(policy.clone(), chosen, Some("tiny".to_owned()))
+        .transcribe(SPEECH.to_vec(), None, None)
+        .await
+        .expect("the revived server should transcribe");
+    match &after {
+        Inference::Text(text) => {
+            println!("after the restart: {text}");
+            assert!(
+                text.to_lowercase().contains("quick brown fox"),
+                "expected the fixture's words, got {text:?}"
+            );
+        }
+        other => panic!("expected a transcript from the revived server, got {other:?}"),
+    }
+
+    // 11. The dangerous case. `RouteTranscriber::whisper_server` probes before
+    //     every local dictation, and if a *busy* server fails to answer, it
+    //     would be judged gone and a second one started on top of a working
+    //     one. So: hold the server with a real transcription and probe it
+    //     mid-flight.
+    let busy = WhisperServer::new(policy.clone(), chosen, Some("tiny".to_owned()));
+    let long = std::iter::repeat_n(SPEECH.to_vec(), 6)
+        .flatten()
+        .collect::<Vec<u8>>();
+    let inference = tokio::spawn(async move { busy.transcribe(long, None, None).await });
+
+    // Probe repeatedly while it works, and record the worst answer.
+    let mut probes = 0_u32;
+    let mut unready = 0_u32;
+    let mut slowest = Duration::ZERO;
+    while !inference.is_finished() {
+        let began = std::time::Instant::now();
+        let ready = health.is_ready(chosen).await;
+        slowest = slowest.max(began.elapsed());
+        probes += 1;
+        if !ready {
+            unready += 1;
+        }
+    }
+    println!("probed a busy server {probes} times, {unready} said not ready, slowest {slowest:?}");
+    inference
+        .await
+        .unwrap()
+        .expect("the long transcription finishes");
+
+    assert!(
+        probes > 0,
+        "the transcription finished before a single probe"
+    );
+    assert_eq!(
+        unready, 0,
+        "a busy server was reported gone {unready} of {probes} times -- the revive path would          start a second server on top of a working one"
+    );
+
+    again.stop(&store).await.unwrap();
 }

@@ -15,21 +15,31 @@
  *
  * Like the overlay, it renders Rust's state and keeps none of its own. Recording
  * is a fact the runtime owns; this window asks and listens.
+ *
+ * Two states put the panel in its recording form, not one. A meeting whose
+ * provider has died is still a meeting recording a room, so the indicator stays
+ * up and the timer keeps counting -- what changes is the second line, because
+ * the transcript is the half that stopped. Falling through to the empty panel
+ * would take the indicator off screen at the exact moment there is more to say,
+ * which is the thing the brief forbids.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   dismissMeetingOffer,
   getMeetingStatus,
   onMeetingOffer,
+  onMeetingOutcome,
   onMeetingState,
+  onMeetingTranscript,
   startMeeting,
   stopMeeting,
   type MeetingState,
   type Offer,
   type Sources,
 } from "./lib/ipc";
+import { meetingIsLive, offerReason } from "./lib/labels";
 
 /** Which provider a detected application should be recorded with. */
 const RECORD_WITH = "local";
@@ -39,25 +49,75 @@ export function MeetingNotification() {
   const [offer, setOffer] = useState<Offer | null>(null);
   const [sources, setSources] = useState<Sources | null>(null);
   const [elapsed, setElapsed] = useState(0);
+  const [liveTranscript, setLiveTranscript] = useState<string | null>(null);
+  const [notificationCaptureExcluded, setNotificationCaptureExcluded] =
+    useState(false);
   const [problem, setProblem] = useState<string | null>(null);
+  const [stateReadProblem, setStateReadProblem] = useState<string | null>(null);
+  const offerFromEvent = useRef(false);
+  const stateFromEvent = useRef(false);
+  const notificationCaptureExcludedRef = useRef(false);
 
   useEffect(() => {
     // Read once as well as subscribing: the window is hidden until there is
     // something to say, so by the time it is shown the event that caused it may
     // already have been delivered.
-    void getMeetingStatus().then((status) => {
-      setState(status.state);
-      setSources(status.sources);
-      setElapsed(status.elapsedSeconds);
-    });
+    void getMeetingStatus()
+      .then((status) => {
+        // Events win over the asynchronous read. In particular, an offer event
+        // carrying `null` is a withdrawal; applying this older status afterward
+        // would resurrect the offer the user just dismissed.
+        if (!stateFromEvent.current) setState(status.state);
+        if (!offerFromEvent.current) setOffer(status.offer);
+        setSources(status.sources);
+        setElapsed(status.elapsedSeconds);
+        const excluded = status.notificationExcluded?.state === "active";
+        notificationCaptureExcludedRef.current = excluded;
+        setNotificationCaptureExcluded(excluded);
+        if (!excluded) setLiveTranscript(null);
+      })
+      .catch((err: unknown) => setStateReadProblem(String(err)));
 
     const unlisteners: Array<() => void> = [];
-    void onMeetingState(setState).then((fn) => unlisteners.push(fn));
-    void onMeetingOffer(setOffer).then((fn) => unlisteners.push(fn));
+    void onMeetingState((next) => {
+      stateFromEvent.current = true;
+      setState(next);
+      // A caption is a claim that words are still arriving. Failure states keep
+      // recording visible, but must not leave its last partial looking live.
+      if (
+        !meetingIsLive(next) ||
+        next === "recording-without-transcript" ||
+        next === "stalled"
+      ) {
+        setLiveTranscript(null);
+      }
+    }).then((fn) => unlisteners.push(fn));
+    void onMeetingOffer((next) => {
+      offerFromEvent.current = true;
+      setOffer(next);
+    }).then((fn) => unlisteners.push(fn));
+    // Replaced rather than appended: every event is a partial, and overlapping
+    // provider windows would repeat words if their text were accumulated.
+    void onMeetingTranscript((event) => {
+      if (
+        notificationCaptureExcludedRef.current &&
+        event.text.trim().length > 0
+      ) {
+        setLiveTranscript(event.text);
+      }
+    }).then((fn) => unlisteners.push(fn));
+    void onMeetingOutcome(() => {
+      setLiveTranscript(null);
+    }).then((fn) => unlisteners.push(fn));
     return () => unlisteners.forEach((fn) => fn());
   }, []);
 
-  const recording = state === "recording";
+  const transcriptEnded = state === "recording-without-transcript";
+  const stalled = state === "stalled";
+  // Asked of `meetingIsLive` rather than compared here: a state added to the
+  // union does not break a `===`, so this window would have gone on compiling
+  // and stopped offering Stop. See the note on that function.
+  const recording = state !== null && meetingIsLive(state);
 
   // Counted here rather than asked for every second: the runtime owns the
   // session and the clock, and one command a second to render a timer would be
@@ -75,7 +135,28 @@ export function MeetingNotification() {
         <span className="indicator indicator-recording" aria-hidden="true" />
         <span className="notify-body">
           <strong>Recording {clock(elapsed)}</strong>
-          <span className="notify-detail">{whoIsRecorded(sources)}</span>
+          {/*
+           * The provider's own sentence is too long for 392x92 and lives on
+           * Settings > Meetings, which has room for it. What belongs here is
+           * the fact, in the fewest words that stay true: the recording is
+           * fine, the live transcript is not.
+           */}
+          <span
+            className={
+              transcriptEnded || stalled
+                ? "notify-detail notify-alert"
+                : "notify-detail"
+            }
+          >
+            {stalled
+              ? "recording stopped — press Stop to keep what was captured"
+              : transcriptEnded
+                ? "live transcript stopped — still recording"
+                : whoIsRecorded(sources)}
+          </span>
+          {notificationCaptureExcluded && liveTranscript ? (
+            <span className="notify-live">{liveTranscript}</span>
+          ) : null}
         </span>
         <button
           type="button"
@@ -109,9 +190,7 @@ export function MeetingNotification() {
         <span className="indicator" aria-hidden="true" />
         <span className="notify-body">
           <strong>{offer.name} meeting in progress</strong>
-          <span className="notify-detail">
-            {problem ?? `detected as ${offer.evidence}`}
-          </span>
+          <span className="notify-detail">{problem ?? offerReason(offer)}</span>
         </span>
         <button
           type="button"
@@ -135,6 +214,18 @@ export function MeetingNotification() {
         >
           Not now
         </button>
+      </div>
+    );
+  }
+
+  if (stateReadProblem && state === null) {
+    return (
+      <div className="notify">
+        <span className="indicator" aria-hidden="true" />
+        <span className="notify-body">
+          <strong>State unknown</strong>
+          <span className="notify-detail notify-alert">{stateReadProblem}</span>
+        </span>
       </div>
     );
   }

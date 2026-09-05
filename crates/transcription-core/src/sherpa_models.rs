@@ -9,25 +9,12 @@
 //! survives extraction untouched -- which is the layout `sherpa::
 //! discover_transducer_files` was measured against.
 //!
-//! `config/provider-registry.json`'s sherpa entries carry no SHA-256, and
-//! **`sizeMb` turned out not to be checkable against the download at all**:
-//! installing both pinned Parakeet archives for real (`tests/
-//! sherpa_dictation.rs`) showed `sizeMb` is the model's *extracted* footprint
-//! on disk, not the compressed `.tar.bz2` this downloads. Parakeet Unified EN
-//! 0.6B declares 631 MB; the real download was ~478 MB (501,350,460 bytes)
-//! and the real extracted total is ~663 MB -- the declared figure matches the
-//! second, not the first, and the two differ by roughly 25-30%. A tolerance
-//! check against the download would either reject every legitimate install
-//! or (if loosened enough to pass) stop meaning anything.
-//!
-//! So this does not size-check the download at all. What it checks instead is
-//! stronger anyway: after extraction, [`crate::sherpa::discover_transducer_files`]
-//! has to find exactly the encoder/decoder/joiner/tokens files the CLI needs.
-//! A truncated or corrupted archive fails to extract at all (`tar`/`bzip2-rs`
-//! notice a malformed stream) or extracts without a complete file set, and
-//! either way this refuses before the model is treated as installed --
-//! catching the failures a byte-count guess exists to catch, by checking the
-//! thing that actually matters instead of a proxy for it.
+//! `sizeMb` is only a display estimate; installation instead checks an exact
+//! compressed byte count and SHA-256 pinned in the registry.
+//! The download is bounded by that compressed size before it reaches disk,
+//! verified before extraction, and extraction has a separate output ceiling.
+//! The final layout check remains useful for diagnosing a valid archive whose
+//! contents no longer match the runtime's argument contract.
 
 use std::path::{Path, PathBuf};
 
@@ -42,6 +29,12 @@ pub enum SherpaModelError {
 
     #[error(transparent)]
     Extract(#[from] kw_sidecar::InstallError),
+
+    #[error(transparent)]
+    Integrity(#[from] kw_sidecar::IntegrityError),
+
+    #[error("{model} has no pinned {field}; refusing an unauthenticated install")]
+    MissingPin { model: String, field: &'static str },
 
     #[error(
         "{model} downloaded and extracted, but not into the layout this build knows how to \
@@ -75,8 +68,7 @@ pub struct InstalledSherpaModel {
     pub id: String,
     /// The model's own directory: `dir.join(&model.extract_dir)`.
     pub dir: PathBuf,
-    /// Bytes downloaded, reported for diagnostics only -- see the module
-    /// comment for why this is not checked against the registry's `sizeMb`.
+    /// Bytes downloaded, after exact size and digest verification.
     pub bytes: u64,
     /// Resolved by the same discovery `transcribe` will use, so a caller
     /// that just installed a model does not have to call
@@ -127,14 +119,43 @@ pub async fn install(
     // looks like a partial model directory.
     let archive = dir.join(format!("{}.tar.bz2.partial", model.id));
 
+    let expected_size = model
+        .expected_size_bytes
+        .ok_or_else(|| SherpaModelError::MissingPin {
+            model: model.id.clone(),
+            field: "compressed size",
+        })?;
+    let digest = model
+        .sha256
+        .as_deref()
+        .ok_or_else(|| SherpaModelError::MissingPin {
+            model: model.id.clone(),
+            field: "SHA-256 digest",
+        })?;
+    let digest =
+        kw_sidecar::Sha256Digest::parse(digest).map_err(|_| SherpaModelError::MissingPin {
+            model: model.id.clone(),
+            field: "valid SHA-256 digest",
+        })?;
+    let extracted_limit =
+        model
+            .max_extracted_size_bytes
+            .ok_or_else(|| SherpaModelError::MissingPin {
+                model: model.id.clone(),
+                field: "extracted-size limit",
+            })?;
+
     policy
-        .download_to_file(
+        .download_to_file_bounded(
             RequestPurpose::UserTriggeredModelDownload,
             &model.download_url,
             &archive,
+            expected_size,
             &mut |written, total| progress(Progress::Downloading { written, total }),
         )
         .await?;
+
+    kw_sidecar::integrity::verify(&archive, expected_size, &digest)?;
 
     let bytes = std::fs::metadata(&archive)
         .map_err(|source| SherpaModelError::Io {
@@ -154,7 +175,14 @@ pub async fn install(
     // beside the executable are wanted, the model's *whole* internal
     // structure is what `sherpa::discover_transducer_files` was measured
     // against, so nothing here is stripped.
-    kw_sidecar::extract(&archive, kw_sidecar::ArchiveKind::TarBz2, "", "", dir)?;
+    kw_sidecar::extract_with_limit(
+        &archive,
+        kw_sidecar::ArchiveKind::TarBz2,
+        "",
+        "",
+        dir,
+        extracted_limit,
+    )?;
 
     let _ = std::fs::remove_file(&archive);
 
@@ -218,6 +246,27 @@ mod tests {
         // `sizeMb` for one and a settings screen would have nothing to show.
         for model in &registry().local_asr.sherpa {
             assert!(model.size_mb.is_some(), "{} has no declared size", model.id);
+        }
+    }
+
+    #[test]
+    fn every_installable_sherpa_model_has_integrity_and_size_limits() {
+        for model in registry()
+            .local_asr
+            .sherpa
+            .iter()
+            .filter(|model| !model.streaming)
+        {
+            assert!(
+                model
+                    .sha256
+                    .as_deref()
+                    .is_some_and(|digest| { kw_sidecar::Sha256Digest::parse(digest).is_ok() }),
+                "{} has no valid digest",
+                model.id
+            );
+            assert!(model.expected_size_bytes.is_some_and(|size| size > 0));
+            assert!(model.max_extracted_size_bytes.is_some_and(|size| size > 0));
         }
     }
 

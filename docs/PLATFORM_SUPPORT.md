@@ -170,10 +170,20 @@ epistemic states sit inside the "unverified" claims below, and they are not inte
    and the table and prose below keep it separate rather than folding it into the same "unverified"
    word.
 
+**What a provider failure now does, for all five clients.** As of 2026-08-31 a provider that
+reports a fault -- an error frame, a close frame with a code and a reason, a dead transport, or a
+first frame this client cannot parse -- ends the session, and Stop reports the provider's own
+sentence rather than an empty transcript. That is a claim about *this application's* wiring only.
+It is covered by tests in each socket module that record a fault the way the reader task would; it
+is **not** evidence about any provider's behaviour, and for the three clients below with no key it
+has never been exercised by a real refusal. A provider that reports nothing and simply produces no
+transcript is still indistinguishable from a quiet room, and the failure is still invisible *while*
+the meeting runs.
+
 | Provider | Client | Verified |
 | --- | --- | --- |
 | Local windowed model | repeated `/inference` passes over the local `whisper-server` | ⚠️ built, never run by a person |
-| OpenAI Realtime | two WebSockets, one per capture | ⚠️ request shaping and the event grammar against fixtures. **No live call.** A key exists on this machine and has not been used |
+| OpenAI Realtime | two WebSockets, one per capture | ✅ **Verified live, 2026-08-28.** A real meeting transcribed, microphone and system audio, against the GA API. Five live attempts were needed first: the client had been written against the beta shape, which OpenAI has retired — see `docs/BENCH_CHECK.md` |
 | AssemblyAI Realtime | two WebSockets, one per capture | ⚠️ request shaping and the event grammar against fixtures, and most of the wire shape **believed rather than confirmed** -- see below. **No live call and no key for this provider exists on any machine this project has touched.** |
 | Deepgram Realtime | two WebSockets, one per capture | ⚠️ request shaping and the event grammar against fixtures, and most of the wire shape **believed rather than confirmed** -- see below. **No live call and no Deepgram key exists on any machine this project has touched.** |
 | Corti Realtime | two WebSockets, one per capture, authenticated by an OAuth2 client-credentials exchange first | ⚠️ request shaping and the event grammar against fixtures. Two different epistemic states, not one: the **token exchange is reused from working, tested code**, not believed -- `kw_transcription_core::clients::corti_token_endpoint`/`corti_token_request`/`interpret_token` already exist and are already tested for batch Corti transcription. The **socket wire, by contrast, was invented with no vendor source at all** -- weaker than "believed," see below. **No live call and no Corti credential exists on any machine this project has touched.** |
@@ -343,19 +353,47 @@ below says whether it has actually been seen to match. `cargo run -p kw-platform
 
 | Application | Open | In a call | State |
 | --- | --- | --- | --- |
-| Microsoft Teams | `ms-teams.exe`, `teams.exe`, `msteams`, `teams` | — | **`ms-teams.exe` seen to match** (2026-08-26, 628 processes). New Teams runs the call inside its own process, so there is no in-call signal |
+| Microsoft Teams | `ms-teams.exe`, `teams.exe`, `msteams`, `teams` | *the microphone* | **both states seen** (2026-09-01). New Teams runs the call inside its own process, so there is no in-call process — it is detected by the capture session it holds |
 | Zoom | `zoom.exe`, `zoom`, `zoom.us` | `cpthost.exe`, `caphost` | ⚠️ written, not seen to match |
 | Webex | `webex.exe`, `webexhost.exe`, `ciscocollabhost.exe` | `webexmta.exe` | ⚠️ written, not seen to match |
-| FaceTime | `facetime` | — | ⚠️ macOS only, compiled out elsewhere, unverified |
-| Anything else | the user's own allowlist | — | works by construction |
+| FaceTime | `facetime` | — | ⚠️ macOS only, compiled out elsewhere, unverified. Microphone activity cannot be read there, so it has no second signal either |
+| Anything else | the user's own allowlist | *the microphone* | works by construction |
 
-**Only an in-call process offers to record**, and that is a measurement rather
-than a preference. Teams was found running with no call in progress, and Teams
-starts with Windows on most corporate machines — so offering on "the client is
-open" would put a window on screen at every launch, and the feature would be
-switched off the same day. Teams and FaceTime are therefore reported on
-`Settings > Meetings` and never prompted for, which is a limit worth stating
-rather than leaving somebody to discover.
+**Only a call in progress offers to record**, and which signal says so is
+reported rather than flattened. There are two, and they are not equally strong:
+
+- **A call-only process.** `CptHost.exe` is not started by opening Zoom.
+- **A held microphone.** Real evidence, and weaker — Teams holds the device for
+  its own audio test, and for a call the user placed that nobody joined.
+
+The second exists because of a measurement taken on 2026-09-01 with
+`cargo run -p kw-platform --example mic_users_probe`, on Windows, against one
+Teams install:
+
+| run | active capture endpoints | `ms-teams.exe` capturing |
+| --- | --- | --- |
+| Teams not running | 1 | — |
+| Teams open, idle | 1 | **no** |
+| Teams in a real call | 2 | **yes** |
+
+Every run carried its own control — a second process opened a capture stream and
+had to appear in the list — so the middle row is a measured absence rather than a
+broken enumeration. The two middle rows differing is the whole basis for the
+signal, and until they were taken Teams was permanently unofferable: the only
+thing available was "the client is open", true from login on any machine where
+Teams starts with Windows.
+
+**The microphone can only strengthen a match, never create one.** A process
+holding a capture device that is not a known client and is not on the user's own
+list is not reported at all. Otherwise this application's own dictation would
+offer to record itself.
+
+**It is Windows-only.** `IAudioSessionManager2` is the mechanism and nothing
+equivalent is read on Linux or macOS, so there the capture list is always empty
+and Teams and FaceTime stay reported-but-never-prompted, exactly as before.
+`Settings > Meetings` says which state this machine is in, because "Teams is
+open and not in a call" and "Teams is open and nobody looked" are the same
+sentence with opposite meanings.
 
 Matching is on the **image name and exact**, not the command line and not by
 substring. `kw_sidecar::reap` matches command lines because it must prove a
@@ -370,24 +408,45 @@ listener that is still unwritten.
 
 | Capability | Windows | macOS | Linux X11 | GNOME Wayland | KDE Wayland | Hyprland |
 | --- | --- | --- | --- | --- | --- | --- |
-| Standard accelerators | yes | yes | yes | gsettings + D-Bus | KGlobalAccel | `hyprctl` |
-| Modifier-only (`Control+Super`) | native hook | native hook | limited | native slot | native slot | native slot |
-| Right-side modifiers | native hook | native hook | limited | limited | limited | limited |
-| Globe / `Fn` | not applicable | native hook | not applicable | not applicable | not applicable | not applicable |
-| Mouse buttons 4/5 | native hook | native hook | limited | limited | limited | limited |
-| Push-to-talk | native hook per key | native hook | `/dev/input` access required | portal-dependent | portal-dependent | portal-dependent |
+| Standard accelerators | **verified** | plugin, unverified | plugin, unverified | plugin, unverified | plugin, unverified | plugin, unverified |
+| Modifier-only (`Control+Super`) | **verified** — `WH_KEYBOARD_LL` | not built | not built | not built | not built | not built |
+| Right-side modifiers | built — same hook | not built | not built | not built | not built | not built |
+| Globe / `Fn` | not built | not built | not built | not built | not built | not built |
+| Mouse buttons 4/5 | **measured** — `WH_MOUSE_LL` | not built | not built | not built | not built | not built |
+| Push-to-talk, hooked accelerators | **measured** — one hook, both edges | not built | not built | not built | not built | not built |
+| Push-to-talk, standard accelerators | believed, never run | believed, never run | believed, never run | believed, never run | believed, never run | believed, never run |
 
-The default hotkey is `Control+Super`, which is modifier-only and therefore invisible to the
-cross-platform API — hence the native hooks. On X11 and GNOME the effective default is adjusted
-because modifier-only combinations do not work there.
+**"not built" and "unverified" are different answers and the distinction is the point.** *Not built*
+means there is no code for it anywhere, on any platform: `keyhook::support()` returns `Unsupported`
+for every target that is not Windows, so no hook-dependent capability exists off Windows at all.
+*Unverified* means the code is cross-platform, compiles in CI, and **has never been run there** — see
+the verification table at the top of this document, which records macOS and Linux as compile-only.
+
+**There is one registration mechanism and it is the same on every platform.** Everything in the
+Standard-accelerators row goes through `tauri_plugin_global_shortcut` (`shortcuts.rs:19`), and there
+is no second path beside it — no `gsettings`, no `KGlobalAccel`, no `hyprctl`, and no
+desktop-portal client anywhere in this repository. A compositor-native shortcut slot is therefore
+not something this application can reach for on Wayland, whatever the compositor offers; the
+portal's own limit — it takes only chords the compositor can register — is described in the next
+section and would apply on top.
+
+The default dictation hotkey is `Control+Super`, which is modifier-only and therefore invisible to
+the cross-platform API — hence the native hook. **The default is not adjusted per platform.**
+`HotkeyAction::default_accelerator` is a bare `match` on the action with no conditional compilation
+in it: `grep -n "cfg(target_os" crates/platform/src/hotkey.rs apps/desktop/src-tauri/src/shortcuts.rs`
+returns nothing, and `nothing_ships_holding_by_default` pins the value. Every platform ships
+`Control+Super`. Where there is no hook it classifies as `ModifierOnly`, is not registered, and
+`Settings > Dictation` says it does nothing and to add an ordinary key — rather than the shipped
+default silently becoming something else.
 
 **What is built, as against what the table says is possible:**
 
 | | State |
 | --- | --- |
 | Windows modifier-only | **verified.** One `WH_KEYBOARD_LL` hook on one thread, in-process, not one child per key. `cargo run -p kw-platform --example keyhook_probe` installs it, injects two presses, and asserts it fires exactly twice. |
-| Windows right-side modifiers | **Built and unreachable.** `keys.rs` expresses `RightControl+Super`, because a low-level hook reports the sided virtual keys and the cross-platform API does not — but no accelerator a user can type gets there. `hotkey::MODIFIERS` has no sided spellings, so `classify` reads `RightControl` as *the key* and hands `RightControl+Super` to the system register, the one mechanism that cannot tell the sides apart; and `RightControl+RightShift` comes back `Invalid` — "it names 2 non-modifier keys" — which blames the user's spelling for a missing alias. See [BENCH_CHECK.md](BENCH_CHECK.md). |
-| Windows mouse buttons, push-to-talk | Not built. Both need a second hook (`WH_MOUSE_LL`) or key-up routing, and neither has a consumer yet. |
+| Windows right-side modifiers | **Built and reachable** since 2026-08-31 (KNEG-35). `RightControl+Super` and `RightControl+RightShift` both classify as `ModifierOnly` and go to the keyboard hook, which is the only mechanism that can see a side at all. The spellings come from one table, `keys::SIDED_MODIFIERS`, read by `Chord::parse` and by `hotkey::classify`, so the set each accepts cannot drift from the other. A side combined with an *ordinary* key (`RightControl+D`) is refused, because neither mechanism can take it — the register cannot see the side and the hook only matches modifiers — and the refusal names both ways out. **Never driven from the screen:** the hook path is measured by `keyhook_probe` and the classifier by unit tests, and nobody has typed one into `Dictation > Shortcuts` (KNEG-47). |
+| Windows mouse buttons 4/5 | **Built and measured** since 2026-09-01 (KNEG-64). A second hook, `WH_MOUSE_LL`, on the same thread as the keyboard one, installed only when a button is actually bound — that hook sits in the path of every mouse *move* on the machine, so it is not carried for nothing. `Mouse4` and `Mouse5` classify as `Accelerator::MouseButton`, a third classification rather than a modifier-only chord with an odd spelling. `cargo run -p kw-platform --example mousehook_probe` measures both halves: the raw encoding (the button number is in `mouseData`'s **high** word — 1 for `XBUTTON1`, 2 for `XBUTTON2` — while `SendInput` takes the same numbers in the *low* word) and the shipped hook firing once per press and once per release for the right index, with mouse movement and a wheel notch as the control. **Never driven from a real mouse:** every press in the probe is injected, and nobody has pressed a physical side button (KNEG-47's mouse twin). |
+| Windows push-to-talk | **Built** since 2026-09-01 (KNEG-64), per action, and **off by default**. `hotkey.<action>.mode` is `toggle` or `hold`; the shipped value is `toggle` for all five and deliberately stays that way — holding is one of the candidate answers to KNEG-115, and shipping it as the default would settle that open question in passing. The hook path is measured (`keyhook_probe` reports two presses **and two releases** for two injected chords); the plugin path — push-to-talk on an ordinary accelerator like `Control+Shift+D` — routes `ShortcutState::Released` through the same decision and is **believed, not run**. |
 | macOS, Linux | Not built, and the reason is reported rather than the capability being silently absent: macOS needs a `CGEventTap` and the Accessibility permission that goes with it, and Wayland's global-shortcuts portal takes only chords the compositor can register. |
 
 **An accelerator being live is only half of a working hotkey.** Of the five actions
@@ -415,26 +474,129 @@ logged.** What leaves the module is the index of a chord that matched, never a k
 **A modifier-only chord fires on the second modifier going down**, which is what makes it feel
 immediate and also means a key pressed *afterwards* cannot call it back. The documented rule that an
 ordinary key disqualifies a modifier-only chord catches a key already held — somebody mid-word — not
-one pressed a moment later. The consequence measured on 2026-08-26: on a layout where AltGr is
-left-Control plus right-Alt (Nordic, German, and others), binding `Control+Alt` starts a dictation
-every time the user types `@`. The shipped default, `Control+Super`, is unaffected, and nothing
-warns anyone who chooses `Control+Alt`.
+one pressed a moment later.
 
-Push-to-talk on Linux needs read access to `/dev/input`; without it the app reports the
-limitation and falls back to toggle mode rather than silently failing.
+**The AltGr consequence, measured 2026-08-26 and warned about since 2026-08-31 (KNEG-37).** Windows
+has no AltGr virtual key: the keyboard layout synthesises **left Control plus right Alt**, so on a
+Nordic, German, Polish or most other non-US layout, binding `Control+Alt` starts a dictation every
+time the user types `@ $ € { [`. Nothing downstream can tell that apart from the chord being pressed
+deliberately, so it is not fixable at the hook — what was missing was anyone saying so.
+
+`Settings > Dictation`'s Shortcuts section now carries a caution per colliding binding, and
+`hotkey_set` returns the same sentence the moment the hotkey is saved. Two measurements feed it,
+both re-runnable with `cargo run -p kw-platform --example altgr_probe`:
+
+- **Does this layout have AltGr?** `kw_platform::keyboard_layout` asks `VkKeyScanExW` whether any
+  character needs Control and Alt together, and names the character it found rather than the locale.
+  On the development machine: *"AltGr is present: `'@'` is typed with Control and Alt together."* A
+  layout with none is left alone; a platform that cannot be asked warns anyway and says it could not
+  ask, because silence on a layout that does have AltGr is the defect and a spare sentence is not.
+- **Which chords collide?** `kw_platform::keys::altgr_collision` answers by driving the **real chord
+  matcher** with the keys a real AltGr press sends. That is not a stylistic choice: a predicate
+  reasoning about modifier names would have missed `Control+Shift`, which also fires — AltGr's left
+  Control arrives while Shift is already held, completing the chord before the Alt is pressed.
+
+A **sided** chord avoids it entirely, because AltGr is left Control and right Alt specifically:
+`LeftControl+LeftAlt` and `RightControl+Alt` are both unaffected. Until KNEG-35 closed on
+2026-08-31 no settings field accepted a sided spelling, so the caution stated the problem and
+deliberately suggested nothing. It now names an escape — built from the chord that collided by
+`keys::sided_escape`, and passed back through `altgr_collision` before it is offered, so a
+suggestion that still fires on AltGr is never made.
+
+**Standard accelerators are not warned about**, and that is a decision rather than an oversight.
+`Control+Alt+D` goes to the system shortcut register rather than to the hook, and whether *that*
+also sees AltGr as Control+Alt has never been measured by this project. Believed, widely, and
+unverified — so not claimed on a screen.
+
+**The shipped default is unaffected by AltGr and not by everything.** `Control+Super` survives every
+AltGr keystroke, and it does fire while reaching for `Ctrl+Win+Left`, because a two-modifier chord
+completes on the way to any longer chord that starts with the same two. That is general, affects the
+default, and is tracked separately (KNEG-115) rather than folded in here.
+
+### Mouse buttons: three of the five are refused, and that is the feature
+
+Only `Mouse4` and `Mouse5` — the two side buttons — can be bound. Left, right and middle are refused
+by name, with the reason on screen. The hook does not swallow the event, exactly as the keyboard
+hook does not, so binding the left button would start the action on **every click in every
+application** while the click still went through; an application that does that is indistinguishable
+from a broken mouse. The two side buttons are the only ones with no universal meaning to destroy.
+
+They are not *free*, either, and the settings screen says so rather than leaving it to be found:
+because the click is not consumed, `Mouse4` still means Back and `Mouse5` still means Forward in
+every browser on the machine. That sentence is why `Accelerator::MouseButton` is its own variant
+rather than being folded into `ModifierOnly` — a hooked chord costs nothing elsewhere, and a hooked
+mouse button costs whatever that button already did.
+
+A mouse button cannot be combined with a modifier. `Control+Mouse4` is refused, and the refusal says
+that no mechanism could hold it rather than implying a different spelling would: the shortcut
+register cannot see a mouse button at all, and the hook's chord matcher only ever matches modifier
+keys.
+
+### Push-to-talk makes "insufficient speech" a routine outcome, not a rare one
+
+This is the honest consequence and it belongs here rather than in a user's discovery. Under a
+toggle, a recording ends when the user presses again, so it is almost always long enough to hold
+speech. Under a hold it ends when the key comes up — and **a hold shorter than a syllable produces a
+recording shorter than a syllable.** The audio gate then refuses to send it, correctly, and the
+outcome reads *"Nothing was sent: insufficient speech."* Every mistimed tap, every accidental
+prefix, every "I let go too early" ends that way. Someone who reads that line as a fault will go
+looking for a fault that is not there.
+
+It is also, for the same reason, part of why push-to-talk is a candidate answer to KNEG-115: an
+accidental `Control+Super` on the way into `Ctrl+Win+Left` brackets a few hundred milliseconds
+rather than bracketing everything the user does before the next accidental press. A toggle turns
+that keystroke into a recording of the interval, transcribed and pasted; a hold turns it into an
+empty recording that is discarded. **That trade is not made for anyone here.** The mode exists, its
+default is unchanged, and KNEG-115 stays open.
+
+The release edge is the whole of the mechanism: `keys::ChordWatcher::key_up` returns a `Fired` now
+instead of `()`, and `shortcuts::act` is the single pure function that decides what a press or a
+release means given the mode. `DictationRuntime::toggle` is unchanged — in `Hold` a press finds the
+session idle and starts it, and a release finds it recording and finishes it, which is what `toggle`
+already did.
+
+One thing worth knowing about the implementation, because it is the kind of bug that only shows up
+under a short hold: the press and the release are handled by **one spawned task**, not two. `toggle`
+decides by reading the session state, and a press only sets `Recording` after the microphone is
+actually open; two independently spawned tasks have no order between them, so a release arriving
+during that window would find `Idle` and either leave the microphone open with nothing to close it
+or start a second recording. The press therefore starts, waits on a per-press channel for the key to
+come up, and finishes. That is reasoned rather than measured — the window exists and the design
+removes it.
+
+Two ways the release can fail to arrive, and they are handled differently. **Re-registering the
+hotkeys** — which happens on every settings change — tears down the hook that was watching the key,
+so `Hooks::install` ends any hold in progress before dropping it; the alternative is somebody who
+changed a setting mid-hold being left recording with nothing to stop them. A **lost key-up** (a
+locked session) is not detectable, so the recording runs to the maximum-length cap rather than for
+ever, and `ChordWatcher::reset` deliberately does **not** synthesise a release: a watcher that has
+lost track of the keyboard cannot also claim the key came up, and inventing one would stop a
+dictation on a key the user is still holding.
+
+**Push-to-talk off Windows is the plugin path only, and it has never been run.** On a hooked
+accelerator — a modifier-only chord or a mouse button — push-to-talk needs the low-level hook, which
+exists on Windows and nowhere else. On an ordinary accelerator it rides
+`tauri-plugin-global-shortcut`'s release event through the same `shortcuts::act`, so it is
+cross-platform code by construction; nothing in this repository has run it, on any platform
+including Windows, and `register_one`'s own doc says so.
+
+There is no `/dev/input` reader here and nothing falls back to toggle mode. `hotkey.<action>.mode`
+is a stored per-action setting and no code consults the platform when reading it, so a `hold` on a
+platform with no hook does not degrade to a toggle — the accelerator it applies to simply never
+registers, and the screen says why.
 
 ## Text insertion
 
-| Capability | Windows | macOS | Linux X11 | Linux Wayland |
-| --- | --- | --- | --- | --- |
-| Insert at cursor | SendInput | CGEvent ⌘V | XTEST / `xdotool` | portal RemoteDesktop, `ydotool`, `wtype` |
-| Restore foreground app | by HWND | by PID | by window id | compositor-dependent |
-| Preserve clipboard | yes | yes | yes + PRIMARY selection | yes + PRIMARY selection |
-| Permission required | none | **Accessibility** | `/dev/uinput` for `ydotool` | portal grant |
+| Platform | Implementation state | What the application does |
+| --- | --- | --- |
+| Windows | **Built and verified** | Borrows the clipboard, sends `Ctrl+V` with `SendInput`, then restores the previous clipboard value only if the user has not replaced it in the meantime. The non-activating overlay leaves the target application focused; there is no separate foreground-window restore step. |
+| macOS | **Not implemented** | `kw_platform::paste_keystroke()` returns `None`, so the application reports text insertion as unsupported. No `CGEvent` or Accessibility path is written. |
+| Linux X11 | **Not implemented** | `kw_platform::paste_keystroke()` returns `None`. No XTEST or `xdotool` path is written. |
+| Linux Wayland | **Not implemented** | `kw_platform::paste_keystroke()` returns `None`. No RemoteDesktop portal, `ydotool`, or `wtype` path is written. |
 
-Without macOS Accessibility permission, dictated text is copied to the clipboard but not
-inserted, and the user is told so. On Wayland, insertion depends on a portal implementation being
-present; where it is not, the app reports `unsupported` rather than appearing to work.
+The clipboard-preservation algorithm is platform-neutral and unit-tested, but it is unreachable
+off Windows until that platform has a real paste-keystroke backend. Candidate upstream mechanisms
+remain recorded in `PORTING_MATRIX.md`; they are porting inputs, not claims about this build.
 
 ## Calendars
 
@@ -516,16 +678,61 @@ sherpa-onnx-offline \
 which is what both probe runs actually invoked (`--num-threads` only, since
 `kw_transcription_core::sherpa::build_args` omits it -- like whisper's own
 `threads` field -- unless a caller chooses a value). A clean run prints one
-line of JSON to stdout per input file, `{"text": "...", ...}` among fields
-this build does not read (`timestamps`, `tokens`, `ys_log_probs`, `words`);
+line of JSON to stdout per input file, `{"text": "...", ...}`.
 `sherpa::interpret` parses that shape the same way `local::interpret` parses
-whisper-server's JSON.
+whisper-server's JSON. `timestamps` and `tokens` are read as of 2026-08-31 --
+see **What the transducer reports** below. `ys_log_probs` is still unread
+(nothing here reports confidence, and a threshold nobody measured would be
+worse than silence) and `durations` and `words` come back empty.
 
-There is **no persistent server**: `sherpa-onnx-offline` is a one-shot CLI
-that reads one WAV path and exits, unlike `whisper-server`'s HTTP endpoint on
-a port. `SherpaOffline::transcribe` writes the audio to a temp file and spawns
+There is **no persistent server for the offline CLI**: `sherpa-onnx-offline`
+reads one WAV path and exits, unlike `whisper-server`'s HTTP endpoint on a
+port. `SherpaOffline::transcribe` writes the audio to a temp file and spawns
 a fresh child per request rather than holding a `port` the way `WhisperServer`
 does.
+
+### The streaming server, and a protocol that had to be measured
+
+`sherpa-onnx-online-websocket-server` — a different binary out of the same
+archive, already extracted beside the CLI — *is* a persistent server, and since
+2026-09-01 it is the runtime behind the `local-streaming` meeting provider.
+It is not an HTTP endpoint, so there is no `/health` to probe: readiness is a
+real WebSocket handshake, because a bare TCP connect answers "something is
+listening" and a half-initialised server answers that too.
+
+**The wire format is undocumented and one documented fact about it is wrong.**
+`crates/meeting-core/examples/sherpa_ws_probe.rs` measured both directions
+against the real binaries, with the reference client reproducing the model's
+own `test_wavs/trans.txt` first as the control:
+
+| | measured |
+| --- | --- |
+| sample format | **`f32` little-endian** |
+| frame | BINARY, 8000 samples, then a short tail |
+| client end marker | TEXT `Done` |
+| server end marker | TEXT `Done!`, and it never closes the socket |
+| transcript `text` | **cumulative** within a segment — replace, never append |
+| a malformed frame | **no reply at all** |
+
+`sherpa-onnx-online-websocket-client --help` says *"16-bit samples"*. As `f32`
+the values are speech inside ±1; as `i16` they are noise. A client written
+from the documentation would connect, send, and transcribe nothing.
+
+The last row decides how faults are reported. There is **no error frame**, so
+`kw_meeting_core::fault::FaultKind::Reported` is unreachable for this provider
+and a client claiming to surface "what the provider said was wrong" would be
+describing a channel that does not exist. That is the inverse of the four
+cloud clients, which is why it was measured rather than assumed.
+
+**Verified on 2026-09-01:** a real meeting was recorded through it in the
+application window and the words arrived **as they were spoken** — which is the
+whole difference from the windowed provider beside it, and the reason this one
+is allowed to use the word "streaming".
+
+**What that run did not cover:** *Stop and transcribe*, and the note it saves.
+`meeting.rs`'s `keep` runs a whole-file pass rather than keeping the live
+partials, so words appearing on screen says nothing about what ends up in the
+note.
 
 **A real bug this measurement caught.** `config/provider-registry.json`'s
 `sizeMb` for a sherpa model (631 for Parakeet Unified EN 0.6B) is **the
@@ -607,6 +814,206 @@ statically links `onnxruntime` into every one of those ~23 executables rather
 than sharing one `onnxruntime.dll` beside them the way the Windows "shared"
 build does.
 
+### What the transducer reports
+
+Measured 2026-08-31, `parakeet-unified-en-0.6b-int8`, the same 13.5 s of speech
+the whisper timing measurement below used. Verbatim, with the three long arrays
+elided:
+
+```text
+{"lang": "", "emotion": "", "event": "",
+ "text": "The quick brown fox jumps over the lazy dog. Second sentence, ...",
+ "timestamps": [0.64, 0.72, 0.72, 0.88, ...],            // 64 entries
+ "durations": [],
+ "tokens": [" The", " qu", "ick", " br", "own", ...],    // 64 entries
+ "ys_log_probs": [...],                                  // 64 entries
+ "words": []}
+```
+
+Three things the field names alone did not say, and each one changed the design:
+
+1. **`timestamps` is per token, not per segment** — 64 for 64 tokens, and the
+   tokens are subword pieces (`" qu"`, `"ick"`). There is **no segmentation in
+   this output at all**, so `sherpa::cues` builds it. That is the same job
+   whisper.cpp's *server* does for us from its own decoded timestamp tokens.
+2. **`words` and `durations` are empty** for a transducer model.
+   `--whisper-enable-segment-timestamps` and `--whisper-enable-token-timestamps`
+   exist on this CLI but are Whisper-family options; Parakeet is a transducer and
+   neither applies. So there is no flag that fills them in, and **only onsets are
+   available — never offsets**.
+3. **A sentence-final `"."` is timestamped at the end of the pause that follows
+   it**, not where the speech stopped:
+
+   ```text
+   token   'y'   ' do'  'g'    '.'    ' Se'  'cond'
+   onset   2.32  2.64   2.72   4.08   4.24   4.32
+   ```
+
+   The `"."` sits 1.36 s after `"g"` and 0.16 s before the next word, because the
+   decoder emits it only once it has seen the silence. Ending a cue on it would
+   hold every cue on screen through the whole pause — 1.2 s of dead air per cue.
+   So a cue ends at its last token carrying a letter or digit.
+
+Against the same audio, whisper's own segmenter reported
+`0.00-3.00 / 3.68-9.44 / 10.08-12.88` and this rule gives
+`0.64-2.72 / 4.24-9.12 / 10.56-12.40` — the same three utterances, each a
+fraction of a second tighter, because an onset is not an offset.
+
+**Every boundary is a reported onset.** Nothing is interpolated or derived from
+the audio length, and a test asserts each cue's start and end appear verbatim in
+`timestamps`. Cues split after sentence-final punctuation, or at a 200-character
+backstop that exists because a transducer has no decode window the way whisper
+does — and only ever at a word start, which is the protection `--split-on-word`
+gives whisper, unconditional here.
+
+## Local ASR: the health check, and a busy server
+
+Measured 2026-08-31 by `crates/transcription-core/tests/local_dictation.rs`, which
+now stops the real `whisper-server` and starts it again. The numbers matter
+because `2fe5825` put this probe in front of **every** local dictation and media
+import.
+
+| what is probed | `HttpHealth::is_ready` |
+| --- | --- |
+| a live, idle server | ~1 ms |
+| a live server **mid-transcription** | 5,235 probes, **0** reported not-ready, slowest **1.09 ms** |
+| a port whose server was just stopped | **2.004 s** |
+| a port that never had a server | **2.004 s** |
+
+**A busy server answers.** This was the risk worth checking before trusting the
+recovery path: `whisper-server` serves `GET /` concurrently with inference, so a
+server that is working cannot be judged gone and have a second one started on top
+of it. Probed 5,235 times during a real transcription without a single false
+negative.
+
+**A dead port costs the full two-second timeout, not a connection refused.** Both
+the just-vacated and the never-used port took 2.004 s, so this is not a lingering
+socket — a loopback connect to a closed port simply does not fail fast through
+`NetworkPolicy::loopback` here. What that means in practice:
+
+* A healthy dictation pays about a millisecond. Nothing to notice.
+* A dictation or import that has to recover waits two seconds before the restart
+  even begins, then waits for the model to load. That replaced *failing
+  outright*, so it is still the better outcome — but "the health check is a
+  loopback round trip" understates it on the path that matters.
+
+The evidence would support a shorter timeout for a liveness probe specifically —
+a busy server answers in about a millisecond, so 500 ms would be safe and would
+make recovery four times snappier. Not changed: `HttpHealth`'s two seconds is
+shared with `process::start`'s startup polling, where a model still loading needs
+the patience, and splitting the two is a change nobody has needed yet.
+
+## Local ASR: whisper-server timings
+
+Measured on 2026-08-31, Windows 11 Pro 26200, against `ggml-tiny` and 13.5 s of
+synthesised speech, by starting the pinned `whisper-server.exe` by hand on a
+spare port and posting the same WAV to `/inference` under each configuration.
+
+**The question.** A 3,401-second Swedish import exported as a single subtitle
+cue at `00:00:00`, and the recorded suspicion was that `media.rs` failed to
+divide it. That was wrong. The server had not been asked for any timings, so
+there was nothing to divide.
+
+| server flags | `response_format=json` | `response_format=verbose_json` |
+| --- | --- | --- |
+| `--no-timestamps` (as shipped until 2026-08-31) | 0.63 / 0.65 / 0.65 s | **one** segment for the whole recording, carrying neither `start` nor `end` |
+| `--max-len 1000` | 0.66 / 0.66 / 0.70 s | 0.95 / 0.95 / 1.01 s, **one segment per utterance** with real `start` and `end` |
+
+Three runs each, `curl -w %{time_total}`.
+
+**What was ruled out.** Neither `split_on_word` nor `max_len` is honoured as a
+request field: sending `max_len=0` and `split_on_word=true` as form fields
+returned byte-identical responses to sending neither. They are start-time flags.
+`--max-len 0` at start time also changes nothing, because whisper.cpp's server
+reads `0` as `60` — which is where the sixty-character mid-utterance wrap that
+`--no-timestamps` was ported to remove actually comes from. An explicit cap far
+above what a 30-second decode window can hold removes the wrap by never
+reaching it.
+
+**What this fixed and what it did not.**
+
+- Media import now asks for `verbose_json` (`WhisperServer::timed`) and gets one
+  cue per utterance. Dictation and meetings still ask for `json`.
+- Dictation's output is **unchanged**, which was checked rather than assumed: the
+  `\n` that now separates utterances in `text` is collapsed by
+  `local::interpret`, and the result is byte-identical to what `--no-timestamps`
+  returned for the same audio.
+- **A cloud provider still reports no timings**, so an import routed to one gets
+  the single honest fallback cue the screen writes. Only the local whisper server
+  is fixed.
+- **`sherpa-onnx-offline` already prints `timestamps` and `words` on stdout** and
+  `sherpa::interpret` does not read them — see the sherpa section above, which
+  has listed those as unread fields since the probe. That is now a gap with a
+  known cure rather than an unexamined one.
+
+## Local ASR: the model pins, measured
+
+Measured on 2026-08-31, Windows 11 Pro 26200, by `node tools/model-pin/pin.mjs
+--url <downloadUrl> --id <id>` for each model in turn: the bytes were downloaded
+in full, hashed on the way through to a file, and the length read from `stat`
+after the stream closed. Never `content-length` — a truncated body agrees with
+its own header and disagrees with itself. 6,966,596,962 bytes total, 6.49 GiB,
+14 min 33 s of transfer.
+
+| model | file | SHA-256 | measured bytes |
+| --- | --- | --- | --- |
+| `tiny` | `ggml-tiny.bin` | `be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21` | 77,691,713 |
+| `base` | `ggml-base.bin` | `60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe` | 147,951,465 |
+| `small` | `ggml-small.bin` | `1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b` | 487,601,967 |
+| `medium` | `ggml-medium.bin` | `6c14d5adee5f86394037b4e4e8b59f1673b6cee10e3cf0b11bbdbee79c156208` | 1,533,763,059 |
+| `turbo` | `ggml-large-v3-turbo.bin` | `1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69` | 1,624,555,275 |
+| `large` | `ggml-large-v3.bin` | `64d182b440b98d5203c4f9bd541544d84c605196c4f7b845dfa11fb23594d1e2` | 3,095,033,483 |
+
+All served by `us.aws.cdn.hf.co`, which is where a `huggingface.co/.../resolve/…`
+request redirects. The pins live in `WHISPER_PINS` in
+`tools/integration-audit/generate-provider-registry.mjs` and reach the
+application as `WhisperModel::sha256` / `expected_size_bytes`.
+
+**`tiny` reproduced the pin that was already committed**, byte count and digest
+both, from a tool that had not seen it. That is what makes the other five
+trustworthy: the same run validated the instrument.
+
+Both Parakeet archives were re-measured the same way and the same day —
+487,170,055 bytes (464.6 MiB) and 501,350,460 bytes (478.1 MiB), digests
+unchanged. Before this, only their lengths had been checked, against
+`content-length`.
+
+**What this proves and what it does not.** Every one of these eight digests
+matches the bytes the host serves today. That is the check, run once, and it says
+nothing about who built those bytes.
+
+About tomorrow the two families now differ, and the difference is the whole of
+KNEG-103. **The six whisper URLs name a commit** — `5359861c739e955e79d9a303bcbc70fb988958b1`,
+measured into `HF_REVISIONS` on 2026-08-31 — so a push to `ggerganov/whisper.cpp`
+cannot move the bytes these digests describe. **The two Parakeet archives sit in
+k2-fsa's rolling `asr-models` release**, where an asset can be replaced under the
+same name, and **no immutable URL exists for them** — that was measured rather
+than assumed, and the measurements are in `ENGINEERING_LOG.md` under 2026-08-31
+(KNEG-112). What they have instead is a digest stated by the host:
+
+**GitHub's release API returns a **`digest`** and a **`size`** per asset**, one
+request for all 498 in the release. On 2026-08-31 both stated digests and both
+stated sizes matched the committed pins to the character — independent
+corroboration of a measurement, from the publisher's own metadata, at no
+bandwidth cost. `node tools/model-pin/pin.mjs --verify-stated` re-reads them
+weekly beside the Hugging Face trees.
+
+That is the same standard the thirty-two stated GGUF pins meet and it is
+*weaker* than how these two were pinned, since their bytes were hashed here. So
+agreement there means the asset has not been swapped, not that the bytes are
+still what we hashed; only the weekly `--verify`, which re-downloads about a
+gigabyte, proves the second thing. Having both is what separates "the pin is
+stale" from "the download was damaged" in seconds rather than after a
+gigabyte.
+
+**Consequence for an install.** All six models are now held to
+`kw_sidecar::integrity::verify`, so the *Verified by* column reads `digest` for
+every row rather than `size` for five of them. `tiny` is the only one whose whole
+round trip has been driven — `cargo test -p kw-transcription-core --test
+local_dictation -- --ignored` downloads it, asserts `DigestMatched`, starts the
+server and transcribes. The other five have never been installed by any route;
+that is a by-hand item in [BENCH_CHECK.md](BENCH_CHECK.md) and KNEG-105.
+
 ## GPU acceleration
 
 | Backend | Windows | macOS | Linux |
@@ -659,8 +1066,29 @@ the keypair procedure and `docs/COMPLETION_PLAN.md` phase 9 for what remains.
 
 ## Known environment constraints
 
-- **Non-ASCII or space characters in the user data path** crash the native whisper and parakeet
-  binaries. Upstream works around this by relocating the model cache to `%ProgramData%`; we keep
-  that fallback. It will bite on any Windows account with a non-ASCII username.
+- **A non-ASCII character in the path of a file the native ASR binaries open** stops them opening
+  it. Both `whisper-server` and `sherpa-onnx-offline` exit 127; whisper says nothing at all past
+  `loading model from ...`, sherpa says `Errors in config!` for a model and `Failed to read '...'`
+  for audio. The model cache and the audio scratch directory relocate to `%ProgramData%` when the
+  user data path is affected, which any Windows account with a non-ASCII username will be.
+
+  **Measured 2026-08-31, and it is narrower than this section claimed until then.** The rule was
+  carried from upstream as "non-ASCII **or space**", applied to the binaries' own directory as well
+  as to the files they read. Three quarters of that was not true:
+
+  | | a space in the path | a non-ASCII character |
+  | --- | --- | --- |
+  | the model file | loads, transcribes | **fails** |
+  | the audio file | transcribes | **fails** |
+  | the binary's own directory | runs | runs |
+
+  `whisper-server` loads its sibling `ggml-cpu-*.dll` out of a directory named `Håkan Test`
+  without complaint, and so do `sherpa-onnx-offline`, `llama-server` and `ffmpeg` — four out of
+  four, so `sidecar_dir` no longer relocates at all. `ffmpeg` handles every case, including a
+  non-ASCII input path, which is the media-import half of the same question.
+
+  Re-runnable: `cargo run -p kw-storage --example native_path_probe`. **Still unmeasured:** a real
+  Windows account whose *own name* is non-ASCII, as opposed to a directory underneath an ASCII one.
+  The relocation is what that would exercise, and nobody has an account like it.
 - **`tauri-nspanel` is an unpinned git branch dependency** upstream. We pin it to a revision;
   a branch move would otherwise break macOS builds with no version change.

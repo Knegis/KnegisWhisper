@@ -10,21 +10,45 @@
  * So every model shows its size before the button, progress shows bytes while
  * it runs, and the server's five-minute idle stop is stated rather than being a
  * surprise when a chat is slow after lunch.
+ *
+ * The same rule now covers the other thing that is easy to leave implied: **how
+ * the bytes will be checked.** Every row says so before the button, and *checksum
+ * verified* and *checksum verified against the publisher's own* are different
+ * sentences because they are different guarantees. See `LOCAL_LLM_PINS` in
+ * `tools/integration-audit/generate-provider-registry.mjs`.
+ *
+ * And it covers the third thing, which is *when*. A row used to say "Installed"
+ * and mean only that a path existed — so a model corrupted months after a clean
+ * install looked exactly like one checked five minutes ago. `ggufIntegrityLabel`
+ * now says which of those it is, with a fourth answer for the models installed
+ * before any of this existed: nothing is recorded about them, and that is
+ * rendered as nothing rather than as either good news or bad. The **Check the
+ * bytes** button is the only thing on this screen that actually hashes a file,
+ * and it says how long that will take before it starts. KNEG-107.
  */
 
 import { useCallback, useEffect, useState } from "react";
 
 import { Row } from "../components/Row";
 import {
+  freshnessLabel,
+  ggufIntegrityLabel,
+  recheckOutcomeLabel,
+  refreshOutcomeLabel,
+  verificationLabel,
+} from "../lib/labels";
+import {
   getLocalLlmStatus,
   installLocalLlm,
   onLocalLlmProgress,
+  recheckLocalLlmModel,
+  refreshLocalLlmServer,
   startLocalLlm,
   stopLocalLlm,
   type LocalLlmModelStatus,
   type LocalLlmProgress,
 } from "../lib/ipc";
-import { useRefresh } from "../lib/useRefresh";
+import { message, useRefresh } from "../lib/useRefresh";
 
 /** Bytes, at a scale a person reads. */
 function size(bytes: number | null): string {
@@ -49,8 +73,16 @@ function progressLabel(p: LocalLlmProgress): string {
       return `Downloading the drafter for ${p.id} — ${of(p.written, p.total)}`;
     case "extracting":
       return "Unpacking the server…";
+    case "verifying":
+      // Named because it is not instant: the check reads the whole file back,
+      // and the largest model here is 20 GB.
+      return `Checking ${p.id} against its checksum…`;
     case "done":
-      return `${p.id} is installed.`;
+      // `null` means the files were already on disk, so this install checked
+      // nothing and must not borrow the previous one's claim.
+      return p.verifiedBy === null
+        ? `${p.id} was already installed.`
+        : `${p.id} is installed — ${verificationLabel(p.verifiedBy)}.`;
     case "stopped-when-idle":
       return "The server stopped itself after being idle. The next request will reload it.";
   }
@@ -60,6 +92,24 @@ export function SettingsIntelligenceLocal() {
   const load = useCallback(() => getLocalLlmStatus(), []);
   const { data, error, reload, guard } = useRefresh(load);
   const [progress, setProgress] = useState<string | null>(null);
+  /**
+   * What the last re-hash found, and the caveat that came with it.
+   *
+   * Kept beside the row rather than folded into `progress`, because a mismatch
+   * is a finding somebody has to read and decide about — putting it in the line
+   * that install progress overwrites would let the most important sentence on
+   * this screen be replaced by "Downloading…".
+   */
+  const [checked, setChecked] = useState<{
+    id: string;
+    text: string;
+    detail: string;
+    caveat?: string | undefined;
+  } | null>(null);
+  /** Which model is being hashed, so its button can say so and not restart. */
+  const [checking, setChecking] = useState<string | null>(null);
+  /** What the last press of the server-binary button did. */
+  const [refreshed, setRefreshed] = useState<string | null>(null);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -82,45 +132,121 @@ export function SettingsIntelligenceLocal() {
 
   const running = data.port !== null;
 
-  const modelRow = (m: LocalLlmModelStatus) => (
-    <li key={m.id}>
-      <code>{m.id}</code> {m.name}
-      <em className="row-detail">
-        {m.provider} · {size(m.sizeBytes)}
-        {m.quantization ? ` · ${m.quantization}` : ""}
-        {m.contextLength ? ` · ${(m.contextLength / 1024).toFixed(0)}k context` : ""}
-        {m.supportsThinking ? " · thinking" : ""}
-        {m.recommended ? " · recommended" : ""}
-      </em>
-      {m.draft ? (
+  /**
+   * Hash one model's files, on request.
+   *
+   * Not routed through `guard`, which is for mutations whose only interesting
+   * outcome is "it worked or it threw". A re-check has a third outcome that is
+   * neither — the file does not match — and that one has to reach the screen as
+   * a finding rather than as a red error line.
+   */
+  const recheck = async (id: string) => {
+    setChecking(id);
+    setChecked(null);
+    try {
+      const outcome = await recheckLocalLlmModel(id);
+      setChecked({ id, ...recheckOutcomeLabel(outcome) });
+      // The record beside the file has just been rewritten or removed, so the
+      // row's own state is now stale.
+      await reload();
+    } catch (e) {
+      setChecked({
+        id,
+        text: "The check could not be made",
+        detail: message(e),
+      });
+    } finally {
+      setChecking(null);
+    }
+  };
+
+  const modelRow = (m: LocalLlmModelStatus) => {
+    const installed = m.integrity.state !== "not-installed";
+    const state = ggufIntegrityLabel(m.integrity);
+    const draftState = m.draft ? ggufIntegrityLabel(m.draft.integrity) : null;
+
+    return (
+      <li key={m.id}>
+        <code>{m.id}</code> {m.name}
         <em className="row-detail">
-          has a speculative-decoding drafter, {size(m.draft.sizeBytes)}
-          {m.draft.installed ? " (installed)" : " — downloaded with the model"}
+          {m.provider} · {size(m.sizeBytes)}
+          {m.quantization ? ` · ${m.quantization}` : ""}
+          {m.contextLength ? ` · ${(m.contextLength / 1024).toFixed(0)}k context` : ""}
+          {m.supportsThinking ? " · thinking" : ""}
+          {m.recommended ? " · recommended" : ""}
         </em>
-      ) : null}
-      {m.installed ? (
-        <button
-          type="button"
-          onClick={() => {
-            void guard(() => startLocalLlm(m.id));
-          }}
-        >
-          {data.runningModel === m.id ? "Restart" : "Use this model"}
-        </button>
-      ) : (
-        <button
-          type="button"
-          onClick={() => {
-            // Said before it starts, because the number is the decision.
-            setProgress(`Starting a ${size(m.sizeBytes)} download…`);
-            void guard(() => installLocalLlm(m.id));
-          }}
-        >
-          Install ({size(m.sizeBytes)})
-        </button>
-      )}
-    </li>
-  );
+        <em className="row-detail">
+          {/* Before the button, for the same reason the size is: a guarantee
+              nobody was told about is a guarantee nobody can weigh. */}
+          {verificationLabel(m.verifiedBy)}
+        </em>
+        {installed ? (
+          <em className="row-detail">
+            {state.text} — {state.detail}
+          </em>
+        ) : null}
+        {m.draft ? (
+          <em className="row-detail">
+            has a speculative-decoding drafter, {size(m.draft.sizeBytes)}
+            {m.draft.integrity.state === "not-installed"
+              ? " — downloaded with the model"
+              : ` (${draftState?.text.toLowerCase() ?? ""})`}
+            {m.draft.verifiedBy === m.verifiedBy
+              ? ""
+              : ` — ${verificationLabel(m.draft.verifiedBy)}`}
+          </em>
+        ) : null}
+        {installed ? (
+          <>
+            <button
+              type="button"
+              onClick={() => {
+                void guard(() => startLocalLlm(m.id));
+              }}
+            >
+              {data.runningModel === m.id ? "Restart" : "Use this model"}
+            </button>
+            <button
+              type="button"
+              disabled={checking !== null}
+              onClick={() => {
+                void recheck(m.id);
+              }}
+            >
+              {/* The cost is in the label, exactly as the download size is: this
+                  reads the whole file back, and a button that looks free but
+                  takes a minute on a 20 GB model reads as a hang. */}
+              {checking === m.id
+                ? "Reading the whole file…"
+                : `Check the bytes (reads ${size(m.sizeBytes)})`}
+            </button>
+          </>
+        ) : (
+          <button
+            type="button"
+            onClick={() => {
+              // Said before it starts, because the number is the decision.
+              setProgress(`Starting a ${size(m.sizeBytes)} download…`);
+              void guard(() => installLocalLlm(m.id));
+            }}
+          >
+            Install ({size(m.sizeBytes)})
+          </button>
+        )}
+        {checked?.id === m.id ? (
+          <>
+            <em className="row-detail">
+              {checked.text} — {checked.detail}
+            </em>
+            {checked.caveat ? <p className="caveat">{checked.caveat}</p> : null}
+          </>
+        ) : null}
+        {installed && state.caveat ? (
+          <p className="caveat">{state.caveat}</p>
+        ) : null}
+      </li>
+    );
+  };
 
   return (
     <div className="view">
@@ -164,6 +290,61 @@ export function SettingsIntelligenceLocal() {
                     : "installing a model installs the server with it"
               }
             />
+            {/*
+              Which build is installed, said out loud. "Installed" was the only
+              thing this screen ever claimed about the server binary, and it
+              stays true while the binary falls releases behind the manifest
+              this application ships. `install` has written the record since
+              KNEG-113 and nothing here read it. The three answers are kept
+              apart — `unknown` is not a polite `stale` — and the button is
+              offered for both, because pressing it is how either is settled.
+            */}
+            {freshnessLabel(data.serverFreshness) ? (
+              <p
+                className={
+                  data.serverFreshness.state === "current"
+                    ? "muted"
+                    : "muted warn"
+                }
+              >
+                {freshnessLabel(data.serverFreshness)}
+              </p>
+            ) : null}
+            {data.serverFreshness.state !== "not-installed" ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => {
+                    void guard(async () => {
+                      // Said before it starts: this stops the server, and a
+                      // loaded model is several gigabytes to reload.
+                      setProgress("Replacing the server binary…");
+                      const outcome = await refreshLocalLlmServer();
+                      setRefreshed(refreshOutcomeLabel(outcome));
+                      setProgress(null);
+                    });
+                  }}
+                >
+                  {data.serverFreshness.state === "current"
+                    ? "Reinstall the server binary"
+                    : "Update the server binary"}
+                </button>
+                {running ? (
+                  <p className="caveat">
+                    The server is running. It will be stopped for the
+                    replacement and started again with the same model, which
+                    means reloading it.
+                  </p>
+                ) : null}
+              </>
+            ) : null}
+            {/*
+              Always rendered, so a press fills a slot rather than growing the
+              section under the pointer.
+            */}
+            <p className="status-slot row-detail" role="status">
+              {refreshed}
+            </p>
             <Row label="Models are kept in" value={data.installDir} />
             <Row
               label="Idle shutdown"

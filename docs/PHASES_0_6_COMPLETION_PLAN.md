@@ -177,8 +177,10 @@ WASAPI loopback on Windows behind a trait; macOS (`cidre` process taps, 14.4+) a
 helper, is what blocks meetings.**
 
 It now also carries the three small Windows capabilities that were going to be inherited as
-binaries — key listener, text monitor, mic listener. See `PORTING_MATRIX.md`; the decision is
-recorded, the code is not written. The key listener is the one with reach beyond meetings: it is
+binaries — key listener, text monitor, mic listener. See `PORTING_MATRIX.md`. **Two of the three
+are now written and one is declined:** the key listener (chunk D) and the mic listener
+(`IAudioSessionManager2`, 2026-09-01, KNEG-94 — it is what makes a Teams call detectable at all);
+the text monitor is closed as declined rather than deferred, KNEG-63. The key listener is the one with reach beyond meetings: it is
 what modifier-only, right-side-modifier, Globe/`Fn`, mouse-button and push-to-talk hotkeys need,
 and `platform/src/hotkey.rs:149` currently tells the user their shortcut does nothing.
 

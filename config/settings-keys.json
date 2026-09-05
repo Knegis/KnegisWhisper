@@ -1,0 +1,270 @@
+{
+  "$comment": "Every settings key the desktop backend reads or writes, and how a user changes it. tools/settings-audit/scan.mjs enumerates the keys from Rust source and fails the build when one of them is not declared here, when a declared key names no #[tauri::command] that writes it, when that command is not registered in generate_handler!, or when a key claiming to be reachable resolves to a screen whose component never calls the writer's IPC wrapper. Three defects in this repository had the same shape -- a setting the backend honoured and nothing shipped could change -- and each was found by a person reading a screen. See KNEG-98, KNEG-99 and KNEG-104. `settings_set(key, value)` is deliberately not a writer: it writes whatever key the renderer names, so counting it would make this file pass for every key ever added. The scanner computes that set from source rather than hardcoding it.",
+  "schemaVersion": 1,
+  "expressions": {
+    ".settings_key()": {
+      "kind": "derived",
+      "why": "One key per hotkey action, built by format!(\"hotkey.{}\", self.id()) rather than written out as a constant, so adding an action cannot leave its key behind. The scanner cannot follow that through two functions in another crate, so the family is listed here and the derivation is checked by resolving the file, the function and the test that pins it.",
+      "keys": [
+        "hotkey.dictation",
+        "hotkey.chat-agent",
+        "hotkey.voice-agent",
+        "hotkey.translation",
+        "hotkey.meeting"
+      ],
+      "derivedFrom": {
+        "file": "crates/platform/src/hotkey.rs",
+        "fn": "settings_key",
+        "test": "settings_keys_are_namespaced_and_distinct"
+      }
+    },
+    ".mode_settings_key()": {
+      "kind": "derived",
+      "why": "One key per hotkey action holding toggle-versus-hold, built by format!(\"hotkey.{}.mode\", self.id()) beside the accelerator key and for the same reason -- adding an action must not leave its mode behind. Separate from .settings_key() because the two are written by different commands and change for different reasons: rebinding a key is not choosing push-to-talk. The scanner cannot follow the derivation through two functions in another crate, so the family is listed here and pinned by a test.",
+      "keys": [
+        "hotkey.dictation.mode",
+        "hotkey.chat-agent.mode",
+        "hotkey.voice-agent.mode",
+        "hotkey.translation.mode",
+        "hotkey.meeting.mode"
+      ],
+      "derivedFrom": {
+        "file": "crates/platform/src/hotkey.rs",
+        "fn": "mode_settings_key",
+        "test": "mode_settings_keys_are_namespaced_and_distinct"
+      }
+    },
+    "key": {
+      "kind": "renderer-supplied",
+      "why": "commands::settings_get, settings_set and settings_keys take the key from the renderer, so no fixed key can be attributed to them. They are also why a command that writes an arbitrary key is refused as a writer below: one that writes every key is evidence for none of them."
+    }
+  },
+  "keys": {
+    "history.enabled": {
+      "what": "Whether a finished dictation is written to history at all. Honoured before every history row.",
+      "writtenBy": [
+        "history_set_enabled"
+      ],
+      "ui": "Dictation > History",
+      "reachable": true
+    },
+    "history.keepRawText": {
+      "what": "Whether the pre-cleanup transcript is kept beside the cleaned one.",
+      "writtenBy": [
+        "history_set_keep_raw_text"
+      ],
+      "ui": "Dictation > History",
+      "reachable": true
+    },
+    "hotkey.dictation": {
+      "what": "The accelerator list bound to the dictation action.",
+      "writtenBy": [
+        "hotkey_set"
+      ],
+      "ui": "Dictation > Shortcuts",
+      "reachable": true
+    },
+    "hotkey.chat-agent": {
+      "what": "The accelerator list bound to the chat-agent action. Settable; nothing handles the action, which commands::hotkeys reports separately as an UnhandledAction.",
+      "writtenBy": [
+        "hotkey_set"
+      ],
+      "ui": "Dictation > Shortcuts",
+      "reachable": true
+    },
+    "hotkey.voice-agent": {
+      "what": "The accelerator list bound to the voice-agent action. Settable; nothing handles the action.",
+      "writtenBy": [
+        "hotkey_set"
+      ],
+      "ui": "Dictation > Shortcuts",
+      "reachable": true
+    },
+    "hotkey.translation": {
+      "what": "The accelerator list bound to the translation action. Settable; nothing handles the action.",
+      "writtenBy": [
+        "hotkey_set"
+      ],
+      "ui": "Dictation > Shortcuts",
+      "reachable": true
+    },
+    "hotkey.meeting": {
+      "what": "The accelerator list bound to the meeting action. Settable; nothing handles the action.",
+      "writtenBy": [
+        "hotkey_set"
+      ],
+      "ui": "Dictation > Shortcuts",
+      "reachable": true
+    },
+    "hotkey.dictation.mode": {
+      "what": "Whether the dictation hotkey toggles on each press or records for as long as it is held (push-to-talk). Defaults to toggle, which is the shipped behaviour: holding is one of the answers to KNEG-115 and making it the default would settle that open question in passing.",
+      "writtenBy": [
+        "hotkey_set_mode"
+      ],
+      "ui": "Dictation > Shortcuts",
+      "reachable": true
+    },
+    "hotkey.chat-agent.mode": {
+      "what": "Whether the chat-agent hotkey toggles on each press or records for as long as it is held (push-to-talk). Settable; nothing handles the action, so the mode has nothing to change yet.",
+      "writtenBy": [
+        "hotkey_set_mode"
+      ],
+      "ui": "Dictation > Shortcuts",
+      "reachable": true
+    },
+    "hotkey.voice-agent.mode": {
+      "what": "Whether the voice-agent hotkey toggles on each press or records for as long as it is held (push-to-talk). Settable; nothing handles the action, so the mode has nothing to change yet.",
+      "writtenBy": [
+        "hotkey_set_mode"
+      ],
+      "ui": "Dictation > Shortcuts",
+      "reachable": true
+    },
+    "hotkey.translation.mode": {
+      "what": "Whether the translation hotkey toggles on each press or records for as long as it is held (push-to-talk). Settable; nothing handles the action, so the mode has nothing to change yet.",
+      "writtenBy": [
+        "hotkey_set_mode"
+      ],
+      "ui": "Dictation > Shortcuts",
+      "reachable": true
+    },
+    "hotkey.meeting.mode": {
+      "what": "Whether the meeting hotkey toggles on each press or records for as long as it is held (push-to-talk). Settable; nothing handles the action, so the mode has nothing to change yet.",
+      "writtenBy": [
+        "hotkey_set_mode"
+      ],
+      "ui": "Dictation > Shortcuts",
+      "reachable": true
+    },
+    "transcription.route": {
+      "what": "Where dictation audio goes: the local engine, or a named cloud provider and model.",
+      "writtenBy": [
+        "dictation_use_local",
+        "dictation_set_cloud_provider"
+      ],
+      "ui": "Settings > Transcription",
+      "reachable": true
+    },
+    "transcription.localModel": {
+      "what": "The whisper model the local server was last started with, so it can be resumed.",
+      "writtenBy": [
+        "local_server_start"
+      ],
+      "ui": "Settings > Transcription > Local",
+      "reachable": true
+    },
+    "transcription.sherpaModel": {
+      "what": "The selected sherpa-onnx (Parakeet) model, or empty for none. A selected sherpa model wins over a running whisper server.",
+      "writtenBy": [
+        "sherpa_use_model"
+      ],
+      "ui": "Settings > Transcription > Local",
+      "reachable": true
+    },
+    "meetings.streamModel": {
+      "what": "The sherpa-onnx streaming model the `local-streaming` meeting provider records with, or empty for none. Separate from transcription.sherpaModel because the two engines run different models: choosing one for dictation must not silently change what a meeting records with. Read by MeetingRuntime::provider when a meeting starts, which is also when the server is launched.",
+      "writtenBy": [
+        "sherpa_use_stream_model"
+      ],
+      "ui": "Settings > Transcription > Local",
+      "reachable": true
+    },
+    "reasoning.cleanup": {
+      "what": "Whether a dictation is tidied by a reasoning model afterwards, and which provider and model do it.",
+      "writtenBy": [
+        "reasoning_set_cleanup"
+      ],
+      "ui": "Settings > Intelligence",
+      "reachable": true
+    },
+    "reasoning.localModel": {
+      "what": "The GGUF model the local llama.cpp server was last started with.",
+      "writtenBy": [
+        "local_llm_start"
+      ],
+      "ui": "Settings > Intelligence > Local",
+      "reachable": true
+    },
+    "localApi.enabled": {
+      "what": "Whether the loopback local API starts with the application, so the CLI and the MCP server can reach it.",
+      "writtenBy": [
+        "local_api_start",
+        "local_api_stop"
+      ],
+      "ui": "Integrations > API",
+      "reachable": true
+    },
+    "meetings.promptOnDetect": {
+      "what": "Whether detecting a meeting offers to record it.",
+      "writtenBy": [
+        "meeting_set_prompt"
+      ],
+      "ui": "Settings > Meetings",
+      "reachable": true
+    },
+    "meetings.detect": {
+      "what": "The allow and deny lists deciding which running applications count as a meeting.",
+      "writtenBy": [
+        "meeting_set_detect_lists"
+      ],
+      "ui": "Settings > Meetings",
+      "reachable": true
+    },
+    "meetings.language": {
+      "what": "The language hint sent to the meeting transcription provider.",
+      "writtenBy": [
+        "meeting_set_language"
+      ],
+      "ui": "Settings > Meetings",
+      "reachable": true
+    },
+    "meetings.keyterms": {
+      "what": "Key terms sent to the meeting transcription provider to bias recognition.",
+      "writtenBy": [
+        "meeting_set_keyterms"
+      ],
+      "ui": "Settings > Meetings",
+      "reachable": true
+    },
+    "calendar.google.clientId": {
+      "what": "The OAuth client ID the user registers themselves. There is no embedded client; the screen says why.",
+      "writtenBy": [
+        "calendar_set_client_id"
+      ],
+      "ui": "Integrations > Calendar",
+      "reachable": true
+    },
+    "calendar.microsoft.clientId": {
+      "what": "The OAuth client ID the user registers themselves.",
+      "writtenBy": [
+        "calendar_set_client_id"
+      ],
+      "ui": "Integrations > Calendar",
+      "reachable": true
+    },
+    "calendar.google.account": {
+      "what": "The email of the one connected Google account.",
+      "internal": "Written by CalendarRuntime::connect from what the OAuth exchange returned, and removed by disconnect. Not something a user types: an address typed here would not match the token in the credential store, and the screen offers connect and disconnect rather than a field."
+    },
+    "calendar.microsoft.account": {
+      "what": "The email of the one connected Microsoft account.",
+      "internal": "Written by CalendarRuntime::connect from what the OAuth exchange returned, and removed by disconnect. Not something a user types."
+    },
+    "calendar.google.lastSync": {
+      "what": "The outcome of the most recent sync, so a status read never needs the network.",
+      "internal": "Bookkeeping written by CalendarRuntime::record_sync after each sync. A user changing what the last sync found would be recording a fact that did not happen."
+    },
+    "calendar.microsoft.lastSync": {
+      "what": "The outcome of the most recent sync, so a status read never needs the network.",
+      "internal": "Bookkeeping written by CalendarRuntime::record_sync after each sync."
+    },
+    "meetings.diarize": {
+      "what": "Whether a saved meeting note gets speaker labels. Off by default: the diarization pass costs about 8% of the meeting's length on top of the transcription pass, measured. Refused when it cannot run rather than accepted and skipped silently.",
+      "writtenBy": [
+        "diarization_set_enabled"
+      ],
+      "ui": "Settings > Meetings",
+      "reachable": true
+    }
+  }
+}

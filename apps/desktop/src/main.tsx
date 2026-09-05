@@ -1,7 +1,16 @@
+// First on purpose: it must evaluate before anything that follows it. See
+// the module for why a browser dev session freezes Object.prototype.
+import "./lib/devPrototypeFreeze";
+
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
+import { currentSurface } from "./lib/surface";
 import "./styles.css";
+
+// This has to precede the first render: an attribute-less frame would let the
+// shell's `var(--bg)` paint a transparent panel window before its panel does.
+document.documentElement.dataset.window = currentSurface();
 
 // Outside a Tauri webview there is no `invoke`, so `Shell` never gets past its
 // first read and every screen renders an error instead of itself. In dev only,

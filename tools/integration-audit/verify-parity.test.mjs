@@ -20,11 +20,12 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { violations } from "./verify-parity.mjs";
+import { violations, hasTargetOnDisk } from "./verify-parity.mjs";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const read = (p) => JSON.parse(readFileSync(join(REPO_ROOT, p), "utf8"));
@@ -41,7 +42,21 @@ function inputs() {
     manifest: read("config/integration-manifest.json"),
     surfaces: read("config/ui-surfaces.json"),
     readComponent,
+    readEvidence: readComponent,
+    // The same predicate the CLI passes. Without it every test below would run
+    // with the `() => false` default, and the documentation rule would be
+    // measured against something the gate never does.
+    hasTarget: (target) => hasTargetOnDisk(target),
   };
+}
+
+/** The manifest's one `kind: "documentation"` entry. */
+function aDocumentationKey(manifest) {
+  const key = Object.keys(manifest.entries).find(
+    (k) => manifest.entries[k].kind === "documentation"
+  );
+  assert.ok(key, "the manifest should hold at least one documentation entry");
+  return key;
 }
 
 const rulesOf = (found) => new Set(found.map((v) => v.rule));
@@ -205,4 +220,178 @@ test("the rules that were already there still bite", () => {
     input.manifest.baseline.commit = "0000000000000000000000000000000000000000";
   });
   assert.ok(rulesOf(drifted).has("baseline-drift"));
+});
+
+/* ------------------------------------------------- deferred interfaces */
+
+function aDeferredKey(manifest) {
+  const key = Object.keys(manifest.entries).find(
+    (k) => manifest.entries[k].status === "temporarily-deferred"
+  );
+  assert.ok(key, "the manifest should hold at least one deferred entry");
+  return key;
+}
+
+test("a deferred entry without interface evidence is caught", () => {
+  const found = newViolations((input) => {
+    const key = aDeferredKey(input.manifest);
+    delete input.manifest.entries[key].deferral.interfaceEvidence;
+  });
+
+  assert.deepEqual(rulesOf(found), new Set(["incomplete-deferral"]));
+});
+
+test("empty interface evidence is caught", () => {
+  const found = newViolations((input) => {
+    const key = aDeferredKey(input.manifest);
+    input.manifest.entries[key].deferral.interfaceEvidence = [];
+  });
+
+  assert.deepEqual(rulesOf(found), new Set(["incomplete-deferral"]));
+});
+
+test("interface evidence needs a non-empty literal", () => {
+  const found = newViolations((input) => {
+    const key = aDeferredKey(input.manifest);
+    input.manifest.entries[key].deferral.interfaceEvidence[0].contains = "";
+  });
+
+  assert.deepEqual(rulesOf(found), new Set(["stale-deferral-interface"]));
+});
+
+test("interface evidence cannot escape the repository", () => {
+  const found = newViolations((input) => {
+    const key = aDeferredKey(input.manifest);
+    input.manifest.entries[key].deferral.interfaceEvidence = [
+      { path: "../outside.rs", contains: "anything" },
+    ];
+  });
+
+  assert.deepEqual(rulesOf(found), new Set(["stale-deferral-interface"]));
+});
+
+test("a missing interface evidence path is caught", () => {
+  const found = newViolations((input) => {
+    const key = aDeferredKey(input.manifest);
+    input.manifest.entries[key].deferral.interfaceEvidence = [
+      { path: "crates/no-such-interface.rs", contains: "anything" },
+    ];
+  });
+
+  assert.deepEqual(rulesOf(found), new Set(["stale-deferral-interface"]));
+});
+
+test("an interface symbol that disappeared is caught", () => {
+  const found = newViolations((input) => {
+    const key = aDeferredKey(input.manifest);
+    const evidence = input.manifest.entries[key].deferral.interfaceEvidence[0];
+    evidence.contains = "SymbolThatDoesNotExistAnywhere";
+  });
+
+  assert.deepEqual(rulesOf(found), new Set(["stale-deferral-interface"]));
+});
+
+test("violations refuses deferred interface evidence when nobody injects a reader", () => {
+  const input = inputs();
+  delete input.readEvidence;
+
+  const found = violations(input).filter((v) => v.rule === "stale-deferral-interface");
+  assert.ok(found.length > 0, "the default must not wave interface evidence through");
+});
+
+/* ------------------------------------------------- documentation targets */
+
+test("a documentation entry claiming ported docs that are not there is caught", () => {
+  // The hole KNEG-86 was opened for. `developer:agent-skills` carried
+  // `status: "ported"` against `docs/agent-skills/` for a twenty-task run, and
+  // that directory has never existed. Naming a target was the whole check.
+  const found = newViolations((input) => {
+    const key = aDocumentationKey(input.manifest);
+    input.manifest.entries[key].status = "ported";
+    input.manifest.entries[key].target = "docs/a-directory-nobody-wrote/";
+  });
+
+  assert.deepEqual(rulesOf(found), new Set(["documentation-target-missing"]));
+});
+
+test("a documentation entry whose docs really are there passes", () => {
+  // The other half: the rule must not fire on a claim that is true, or it is a
+  // rule people route around. `docs/` exists and is not empty.
+  const found = newViolations((input) => {
+    const key = aDocumentationKey(input.manifest);
+    input.manifest.entries[key].status = "ported";
+    input.manifest.entries[key].target = "docs/";
+  });
+
+  assert.deepEqual(found, []);
+});
+
+test("a documentation entry that does not claim the docs exist is left alone", () => {
+  // `temporarily-deferred` says the work has not been done, which is an honest
+  // thing to say and not a violation. This is the state the entry was in
+  // between 2026-08-27 and 2026-08-31, and the reason the committed tree passed
+  // throughout: the rule fires on the *claim*, not on the absence.
+  //
+  // The deferral block goes in with it. Without one a different rule fires --
+  // `incomplete-deferral` -- and this test would pass or fail for the wrong
+  // reason.
+  const found = newViolations((input) => {
+    const key = aDocumentationKey(input.manifest);
+    const entry = input.manifest.entries[key];
+    entry.status = "temporarily-deferred";
+    entry.target = "docs/a-directory-nobody-wrote/";
+    entry.deferral = {
+      why: "nobody has written it",
+      dependencies: ["somebody to write it"],
+      interface: "none -- documentation only",
+      interfaceEvidence: [{ path: "README.md", contains: "Development" }],
+      expectedPhase: 7,
+    };
+  });
+
+  assert.deepEqual(found, []);
+});
+
+test("a documentation entry still has to name a target at all", () => {
+  // The rule that was already there, kept: an entry with no target names
+  // nowhere for the docs to be, which no status check can rescue.
+  const found = newViolations((input) => {
+    const key = aDocumentationKey(input.manifest);
+    delete input.manifest.entries[key].target;
+  });
+
+  assert.deepEqual(rulesOf(found), new Set(["incomplete-documentation"]));
+});
+
+test("hasTargetOnDisk refuses a missing path and an empty directory", () => {
+  // An empty `docs/agent-skills/` satisfies "the rewritten documentation lives
+  // here" no better than a missing one, and is the same hole one commit later.
+  const root = mkdtempSync(join(tmpdir(), "parity-target-"));
+  try {
+    mkdirSync(join(root, "empty"));
+    mkdirSync(join(root, "full"));
+    writeFileSync(join(root, "full", "SKILL.md"), "# something\n");
+    writeFileSync(join(root, "a-file.md"), "# something\n");
+
+    assert.equal(hasTargetOnDisk("missing/", root), false, "a path that is not there");
+    assert.equal(hasTargetOnDisk("empty/", root), false, "a directory with nothing in it");
+    assert.equal(hasTargetOnDisk("full/", root), true, "a directory with a file in it");
+    assert.equal(hasTargetOnDisk("a-file.md", root), true, "a file that exists");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("violations refuses every documentation target when nobody injects a reader", () => {
+  // The default fails closed. A caller that forgets `hasTarget` gets a loud
+  // failure rather than a silent pass, which is the direction that matters for
+  // a check whose whole job is catching a claim about something absent.
+  const input = inputs();
+  const key = aDocumentationKey(input.manifest);
+  input.manifest.entries[key].status = "ported";
+  input.manifest.entries[key].target = "docs/";
+  delete input.hasTarget;
+
+  const found = violations(input).filter((v) => v.rule === "documentation-target-missing");
+  assert.equal(found.length, 1, "the default must not wave a target through");
 });

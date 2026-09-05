@@ -40,3 +40,51 @@ jobs:
       # needs an install step to run it.
       - name: Verify pinned sidecar targets
         run: node tools/sidecar-pin/pin.mjs --verify
+
+      # The same job for model files. Roughly 8 GB a week: two Parakeet
+      # archives at about 500 MB each and, since 2026-08-31, all six whisper
+      # models (6.49 GiB) rather than `tiny` alone. It was 1 GB before that.
+      #
+      # The price is worth paying here more than anywhere else in this
+      # workflow, though less than it was. Since KNEG-103 the six whisper URLs
+      # name a commit rather than `resolve/main`, so a publisher pushing can no
+      # longer move those bytes -- what this catches for them now is a commit
+      # that has stopped resolving, and bytes that disagree with a digest
+      # nothing else re-hashes. The two Parakeet archives are the ones still
+      # hanging off a moving reference: k2-fsa's rolling `asr-models` release,
+      # where an asset can be replaced under the same name. For those, this job
+      # is the only thing between a swap and a user's failed download.
+      #
+      # If the runtime becomes a problem, `--only <id>` narrows it; rotating
+      # subsets would be the cheap fix, at the cost of the seven-day bound.
+      - name: Verify pinned model files
+        run: node tools/model-pin/pin.mjs --verify
+
+      # The 39 local-LLM GGUFs, which are pinned to a digest but cannot be
+      # re-downloaded: they total 202 GB. This reads each repository's tree at
+      # the commit the installer fetches from -- 36 requests, no bodies, a few
+      # seconds -- and fails if any object's digest or length disagrees with
+      # what is committed beside it.
+      #
+      # Since KNEG-103 that is a different question from the one it used to
+      # ask, and a better one. Reading `main` asked "has the publisher
+      # re-uploaded"; the URLs name commits now, so they cannot. This asks
+      # whether the digest and the revision committed beside each other still
+      # describe the same object, which nothing else in the repository checks,
+      # and whether a pinned commit has stopped resolving -- a repository going
+      # private or being force-pushed would break every install of its models.
+      #
+      # It also reports, without failing, which repositories have published
+      # past their pinned commit. That is news rather than a defect: pinning a
+      # commit is what makes upstream's routine publishing cost us nothing, and
+      # a job that went red for it every week would stop being read.
+      #
+      # The same step covers the two Parakeet archives, from the other host:
+      # GitHub's release API states a digest and a size per asset, one request
+      # for all 498 in `asr-models`. Those two are downloaded and re-hashed by
+      # the step above as well, so this is not how they are checked -- it is
+      # what tells a swapped asset from a damaged download before the gigabyte
+      # runs, and it is the only cheap signal available for a URL that cannot
+      # be pinned to anything immutable (KNEG-112).
+      - name: Re-read the stated digests, at Hugging Face and at GitHub
+        run: node tools/model-pin/pin.mjs --verify-stated

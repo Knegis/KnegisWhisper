@@ -28,8 +28,8 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: asset: http://asset.localhost; font-src 'self'; connect-src 'self' ipc: http://ipc.localhost; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
-      "devCsp": "default-src 'self'; script-src 'self' 'unsafe-inline' http://127.0.0.1:5183; style-src 'self' 'unsafe-inline' http://127.0.0.1:5183; img-src 'self' data: asset: http://asset.localhost; font-src 'self' http://127.0.0.1:5183; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:5183 ws://127.0.0.1:5183; object-src 'none'; base-uri 'none'",
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: asset: http://asset.localhost; media-src 'self' recording: http://recording.localhost; font-src 'self'; connect-src 'self' ipc: http://ipc.localhost; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+      "devCsp": "default-src 'self'; script-src 'self' 'unsafe-inline' http://127.0.0.1:5183; style-src 'self' 'unsafe-inline' http://127.0.0.1:5183; img-src 'self' data: asset: http://asset.localhost; media-src 'self' recording: http://recording.localhost; font-src 'self' http://127.0.0.1:5183; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:5183 ws://127.0.0.1:5183; object-src 'none'; base-uri 'none'",
       "freezePrototype": true,
       "capabilities": [
         "default"
@@ -54,8 +54,11 @@
     ],
     "icon": [
       "icons/32x32.png",
+      "icons/64x64.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
+      "icons/icon.png",
+      "icons/icon.icns",
       "icons/icon.ico"
     ],
     "createUpdaterArtifacts": true,

@@ -12,17 +12,44 @@
 //! directory. So [`write`] returns [`Permissions`], which says what was actually
 //! achieved, and the caller can tell the user the truth.
 //!
-//! On Windows there is no `chmod`. A file created under `%USERPROFILE%` inherits
-//! that directory's ACL, which normally grants the user and the administrators
-//! group and nobody else. That is weaker than `0600` — an administrator can read
-//! it — and it is reported as what it is rather than described as owner-only.
+//! The mechanism is `kw_security::file_acl`, shared with `kw_sidecar::pid`:
+//! `0600` on Unix, and on Windows an explicit protected DACL granting this
+//! process's user, `NT AUTHORITY\SYSTEM` and `BUILTIN\Administrators` and
+//! nobody else. Not owner-only — an administrator can take ownership and
+//! re-grant themselves regardless — so what a confirmed Windows result says is
+//! that the *unexpected* trustees are gone and the inheritance that handed them
+//! down is off, both read back.
+//!
+//! Two orderings in [`write`] are load-bearing and easy to lose:
+//!
+//! 1. **The directory is restricted before the temporary is created**, so the
+//!    temporary inherits a protected access list and the token's bytes never
+//!    touch disk under the loose one. The empty temporary is then restricted in
+//!    its own right before the token is written into it, which closes the same
+//!    window on Unix, where the directory's mode does not stop a `0644` file.
+//! 2. **The read-back happens after the rename**, against the path the caller
+//!    is told about. Verifying the temporary would describe a path that no
+//!    longer exists by the time the verdict is returned — true of the final file
+//!    only by an argument the code never made. Measured on Windows: a rename
+//!    within one directory keeps the file object and its whole security
+//!    descriptor, explicit entries and `SE_DACL_PROTECTED` included.
 
 use std::fs;
+use std::fs::File;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use kw_security::file_acl::{self, PathKind};
 use kw_security::LocalApiToken;
 use serde::{Deserialize, Serialize};
+
+/// What the filesystem actually granted.
+///
+/// Defined in `kw-security` next to the mechanism that produces it and
+/// re-exported here, so `kw_sidecar::pid` — which protects a PID record for
+/// integrity rather than a token for confidentiality — reports through the same
+/// vocabulary instead of a second one that could drift from this.
+pub use kw_security::Permissions;
 
 /// Directory under the user's home that holds the file.
 pub const DIRECTORY_NAME: &str = ".knegiswhisper";
@@ -39,54 +66,9 @@ pub const DISCOVERY_VERSION: u32 = 1;
 pub struct Discovery {
     pub version: u32,
     pub port: u16,
-    /// The bearer token. This is why the file is 0600.
+    /// The bearer token. This is why the file's permissions are narrowed and
+    /// read back at all.
     pub token: String,
-}
-
-/// What the filesystem actually granted.
-///
-/// Never a boolean: "restricted" and "we asked for it to be restricted" are
-/// different claims, and only the first is worth telling a user.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Permissions {
-    /// Verified by reading the mode back: owner read/write only.
-    OwnerOnly,
-    /// Windows. Inherits the profile directory's ACL — normally the user and
-    /// administrators.
-    InheritedFromProfile,
-    /// The mode was set and read back as something wider than expected.
-    Wider { mode: u32 },
-    /// The mode could not be set or could not be read back.
-    Unknown { reason: String },
-}
-
-impl Permissions {
-    /// A sentence for the settings screen.
-    #[must_use]
-    pub fn explain(&self) -> String {
-        match self {
-            Self::OwnerOnly => {
-                "readable only by your user account (mode 0600, verified)".to_owned()
-            }
-            Self::InheritedFromProfile => "readable by your user account and by administrators, \
-                 which is what your profile directory allows"
-                .to_owned(),
-            Self::Wider { mode } => format!(
-                "readable more widely than intended (mode {mode:o}). Anything that can read it \
-                 can use the local API."
-            ),
-            Self::Unknown { reason } => format!(
-                "of unknown permissions: {reason}. Treat the local API as reachable by anything \
-                 running as you."
-            ),
-        }
-    }
-
-    /// Whether this is as restrictive as the platform allows.
-    #[must_use]
-    pub const fn is_as_expected(&self) -> bool {
-        matches!(self, Self::OwnerOnly | Self::InheritedFromProfile)
-    }
 }
 
 /// Why the discovery file could not be written or read.
@@ -129,13 +111,26 @@ pub fn default_path() -> Result<PathBuf, DiscoveryError> {
 
 /// Write the discovery file, and report what permissions it ended up with.
 pub fn write(path: &Path, port: u16, token: &LocalApiToken) -> Result<Permissions, DiscoveryError> {
-    if let Some(parent) = path.parent() {
+    let parent = path.parent();
+    if let Some(parent) = parent {
         fs::create_dir_all(parent).map_err(|source| DiscoveryError::Io {
             action: "create",
             path: parent.to_path_buf(),
             source,
         })?;
-        restrict_directory(parent);
+        // Before the temporary exists, not after -- see this module's doc. A
+        // failure here is logged rather than returned: what the caller is told
+        // is the read-back at the end, and a directory that refused will show
+        // up there as the file refusing too, or as `DirectoryNotRestricted`.
+        // Returning an error instead would stop the local API starting over a
+        // permission problem the caller is about to be told about anyway.
+        if let Err(error) = file_acl::apply(parent, PathKind::Directory) {
+            tracing::warn!(
+                path = %parent.display(),
+                %error,
+                "could not restrict the directory holding the discovery file"
+            );
+        }
     }
 
     let body = serde_json::to_string_pretty(&Discovery {
@@ -153,19 +148,75 @@ pub fn write(path: &Path, port: u16, token: &LocalApiToken) -> Result<Permission
     // reading during a rewrite should see the old file or the new one, not half
     // a token.
     let temporary = path.with_extension("json.new");
+
+    // Created empty and restricted before the token goes into it. `fs::write`
+    // on its own would put the bytes on disk first; the window is short, but it
+    // is real, and on Unix the directory's `0700` does not close it because a
+    // process already inside the directory would still get a `0644` file.
+    drop(
+        File::create(&temporary).map_err(|source| DiscoveryError::Io {
+            action: "create",
+            path: temporary.clone(),
+            source,
+        })?,
+    );
+    if let Err(error) = file_acl::apply(&temporary, PathKind::File) {
+        tracing::warn!(
+            path = %temporary.display(),
+            %error,
+            "could not restrict the discovery file"
+        );
+    }
+
     fs::write(&temporary, &body).map_err(|source| DiscoveryError::Io {
         action: "write",
         path: temporary.clone(),
         source,
     })?;
-    let permissions = restrict_file(&temporary);
     fs::rename(&temporary, path).map_err(|source| DiscoveryError::Io {
         action: "move into place",
         path: path.to_path_buf(),
         source,
     })?;
 
-    Ok(permissions)
+    // After the rename, against the path the caller is told about.
+    Ok(inspect(path))
+}
+
+/// What the discovery file and the directory holding it grant, right now.
+///
+/// Reads; never writes. Two `stat` calls on Unix, two `GetNamedSecurityInfoW`
+/// calls on Windows, and nothing is applied -- so this is safe to call on a
+/// path this process did not create and safe to call repeatedly.
+///
+/// **The directory's verdict gates the file's**, through
+/// [`file_acl::combine`]. A perfectly restricted file in a directory another
+/// user may delete children of can be replaced, and a client then reads an
+/// attacker's port and token rather than ours. For a file whose contents *are*
+/// the access control, being replaceable is worse than being readable.
+///
+/// Extracted from the tail of [`write`], which now ends by calling it, so the
+/// verdict a caller is handed after a write and the verdict it gets from a
+/// later re-read are produced by the same expression rather than by two that
+/// have to be kept in step. That mattered as soon as there was a second
+/// caller: `LocalApiRuntime` used to store this value at start and show it
+/// forever, so anything that widened the access list afterwards went
+/// unreported until the next launch (KNEG-110).
+///
+/// Deliberately **not** a re-apply. Silently repairing an access list somebody
+/// changed on purpose is its own kind of surprise, and it would make this
+/// function unusable for the thing it exists for -- a status screen must be
+/// able to describe a bad state without altering it.
+#[must_use]
+pub fn inspect(path: &Path) -> Permissions {
+    let file = file_acl::verify(path, PathKind::File);
+    match path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        Some(parent) => file_acl::combine(&file_acl::verify(parent, PathKind::Directory), &file),
+        None => file,
+    }
 }
 
 /// Read the discovery file, validating the token on the way in.
@@ -213,55 +264,6 @@ pub fn remove(path: &Path) -> Result<(), DiscoveryError> {
     }
 }
 
-#[cfg(unix)]
-fn restrict_file(path: &Path) -> Permissions {
-    use std::os::unix::fs::PermissionsExt;
-
-    if let Err(err) = fs::set_permissions(path, fs::Permissions::from_mode(0o600)) {
-        return Permissions::Unknown {
-            reason: err.to_string(),
-        };
-    }
-
-    // Read back rather than trusting the call. Some filesystems ignore mode
-    // bits entirely, and a token in a world-readable file is worth knowing about
-    // before it is used.
-    match fs::metadata(path) {
-        Ok(metadata) => {
-            let mode = metadata.permissions().mode() & 0o777;
-            if mode == 0o600 {
-                Permissions::OwnerOnly
-            } else {
-                Permissions::Wider { mode }
-            }
-        }
-        Err(err) => Permissions::Unknown {
-            reason: err.to_string(),
-        },
-    }
-}
-
-#[cfg(not(unix))]
-fn restrict_file(path: &Path) -> Permissions {
-    // No chmod. The file inherits the profile directory's ACL, which normally
-    // grants this user and the administrators group. Reported as that rather
-    // than as owner-only, because an administrator can read it.
-    let _ = path;
-    Permissions::InheritedFromProfile
-}
-
-fn restrict_directory(path: &Path) {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o700));
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = path;
-    }
-}
-
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,
@@ -299,39 +301,52 @@ mod tests {
 
     #[test]
     fn permissions_are_reported_as_what_the_platform_actually_gave() {
+        // Re-scoped when the Windows branch stopped being a no-op. It used to
+        // assert the non-Unix answer was `InheritedFromProfile` -- the honest
+        // report of a gap. There is now a mechanism on Windows, and this
+        // asserts what it achieved, still per-platform and still read back.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(FILE_NAME);
         let permissions = write(&path, 8200, &token()).unwrap();
 
         assert!(
-            permissions.is_as_expected(),
-            "on a normal filesystem this should be the platform's best: {permissions:?}"
+            permissions.is_confirmed(),
+            "the platform's restriction was applied and read back: {permissions:?}"
         );
 
         if cfg!(unix) {
             assert_eq!(permissions, Permissions::OwnerOnly);
             assert!(permissions.explain().contains("verified"));
-        } else {
-            // Not described as owner-only: an administrator can read it.
-            assert_eq!(permissions, Permissions::InheritedFromProfile);
+        } else if cfg!(windows) {
+            assert_eq!(permissions, Permissions::OwnerAndAdministrators);
+            // Still not described as owner-only: an administrator can read it.
             assert!(permissions.explain().contains("administrators"));
+            assert!(!permissions.explain().contains("only by your user"));
         }
     }
 
     #[test]
     fn the_windows_explanation_does_not_claim_owner_only() {
         // The specific thing this must never do is overstate the protection.
-        let explanation = Permissions::InheritedFromProfile.explain();
+        // Re-pointed at the state Windows now reaches: `InheritedFromProfile`
+        // is no longer what a Windows machine gets, and its sentence is now
+        // platform-neutral because the only target left that can produce it is
+        // one that is neither Unix nor Windows.
+        let explanation = Permissions::OwnerAndAdministrators.explain();
         assert!(!explanation.contains("only by your user"));
         assert!(explanation.contains("administrators"));
+
+        let inherited = Permissions::InheritedFromProfile.explain();
+        assert!(!inherited.contains("only by your user"));
+        assert!(!Permissions::InheritedFromProfile.is_confirmed());
     }
 
     #[test]
     fn a_wider_mode_is_reported_and_says_what_it_means() {
         let permissions = Permissions::Wider { mode: 0o644 };
-        assert!(!permissions.is_as_expected());
+        assert!(!permissions.is_confirmed());
         assert!(permissions.explain().contains("644"));
-        assert!(permissions.explain().contains("can read it"));
+        assert!(permissions.explain().contains("more widely"));
     }
 
     #[test]
@@ -339,8 +354,88 @@ mod tests {
         let permissions = Permissions::Unknown {
             reason: "operation not supported".to_owned(),
         };
-        assert!(!permissions.is_as_expected());
-        assert!(permissions.explain().contains("reachable by anything"));
+        assert!(!permissions.is_confirmed());
+        assert!(permissions.explain().contains("operation not supported"));
+        assert!(permissions
+            .explain()
+            .contains("Assume anything running as you"));
+    }
+
+    #[test]
+    fn the_directory_is_restricted_before_the_temporary_is_created() {
+        // The ordering property. Written as an assertion about the directory
+        // rather than about the write, because the window it closes -- the
+        // token's bytes on disk under a loose access list -- cannot be observed
+        // after the fact.
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join(DIRECTORY_NAME);
+        let path = home.join(FILE_NAME);
+        write(&path, 8200, &token()).unwrap();
+
+        let directory = kw_security::file_acl::verify(&home, PathKind::Directory);
+        assert!(
+            directory.is_confirmed(),
+            "the directory holding the token must be restricted too: {directory:?}"
+        );
+    }
+
+    #[test]
+    fn the_read_back_describes_the_file_the_caller_is_told_about() {
+        // Not the temporary, which no longer exists by the time `write`
+        // returns. Asserted by pointing `verify` at the final path
+        // independently and requiring the same answer.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(FILE_NAME);
+        let reported = write(&path, 8200, &token()).unwrap();
+
+        let file = kw_security::file_acl::verify(&path, PathKind::File);
+        let directory = kw_security::file_acl::verify(dir.path(), PathKind::Directory);
+        assert_eq!(reported, kw_security::file_acl::combine(&directory, &file));
+
+        // And that `write` produces it by calling `inspect`, rather than by a
+        // second copy of the same expression that could drift from it.
+        assert_eq!(reported, inspect(&path));
+    }
+
+    #[test]
+    fn inspect_reads_and_never_writes() {
+        // It is called from a status screen, on a path this process may not
+        // have created. A function that repaired what it found would make a
+        // bad state impossible to describe without changing it.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(FILE_NAME);
+
+        let verdict = inspect(&path);
+
+        assert!(!path.exists(), "inspect created a file");
+        assert_eq!(
+            std::fs::read_dir(dir.path()).unwrap().count(),
+            0,
+            "inspect wrote something into the directory"
+        );
+        assert!(
+            !verdict.is_confirmed(),
+            "a file that is not there is not a verified restriction: {}",
+            verdict.explain()
+        );
+    }
+
+    #[test]
+    fn inspect_sees_a_change_write_could_not_have_known_about() {
+        // The whole of KNEG-110: the verdict `write` returns describes the
+        // moment it ran, and anything with write access to the directory can
+        // change the answer afterwards.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(FILE_NAME);
+        let at_write = write(&path, 8200, &token()).unwrap();
+
+        std::fs::remove_file(&path).unwrap();
+
+        assert_ne!(
+            at_write,
+            inspect(&path),
+            "inspect returned the same verdict for a file that is no longer there"
+        );
     }
 
     #[test]
@@ -414,6 +509,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(FILE_NAME);
         write(&path, 8200, &token()).unwrap();
+
+        // The control. "Nothing else is in the directory" is also true of a
+        // directory with nothing in it, so the discovery file being there is
+        // what makes the rest of this an observation rather than a tautology.
+        assert!(path.is_file(), "the discovery file itself is missing");
 
         let leftovers: Vec<_> = fs::read_dir(dir.path())
             .unwrap()

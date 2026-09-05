@@ -2,8 +2,9 @@
 //!
 //! Pure core, thin platform edge — the shape [`crate::keys`]/[`crate::keyhook`]
 //! and `audio-core`'s `mix`/`system_audio` already use. [`detect`] takes a list
-//! of process names, so every rule is testable with no processes at all, and
-//! [`running`] is the twelve lines that ask the operating system.
+//! of process names and a list of the ones holding a microphone, so every rule
+//! is testable with no processes and no audio hardware at all; [`survey`] is the
+//! twenty lines that ask the operating system for both.
 //!
 //! # Detection suggests. It never records.
 //!
@@ -36,11 +37,76 @@
 //! Zoom installed. Both are listed and `in_call` says which is which, so the
 //! caller can prefer the stronger evidence — and only a real call settles
 //! whether the split is right.
+//!
+//! # Teams has no such process, so it is detected by the microphone instead
+//!
+//! New Teams runs the call inside `ms-teams.exe` and spawns nothing, measured on
+//! real hardware on 2026-08-26, 2026-08-28 and 2026-08-31. For three weeks that
+//! made Teams permanently unofferable: the only signal available was "the client
+//! is open", which for anyone whose Teams starts with Windows is true from
+//! login.
+//!
+//! `mic_users_probe` settled it on **2026-09-01**, on this machine, in three
+//! runs against one Teams install:
+//!
+//! | run | endpoints | `ms-teams.exe` capturing |
+//! | --- | --- | --- |
+//! | Teams not running | 1 | — |
+//! | Teams open, idle | 1 | **no** |
+//! | Teams in a real call | 2 | **yes** |
+//!
+//! Each run carried its own control: a second process opened a capture stream
+//! and had to appear, so an empty list was a measured absence and not a broken
+//! enumeration. That is the difference between the two middle rows and it is the
+//! entire basis for [`CallSignal::Microphone`].
+//!
+//! **It is the weaker of the two signals and is reported as such.** Teams holds
+//! the device for its own audio test, and for a call the user placed that nobody
+//! joined. Neither is a meeting worth recording, and a user who is offered one
+//! of them can only work out why if the offer says which signal fired.
 
 use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
+
+/// What says a call is in progress, when anything does.
+///
+/// Two signals, and they are **not** equally strong, which is the whole reason
+/// this is an enum rather than the boolean it replaces the inside of:
+///
+/// - [`Self::CallProcess`] is a process that cannot exist unless a call is
+///   running. Zoom's `CptHost.exe` is not started by opening Zoom.
+/// - [`Self::Microphone`] is the application holding a capture device. Real
+///   evidence, and weaker: Teams holds the microphone for its own audio test
+///   too, and so does a call the user placed and nobody joined.
+///
+/// A caller that offers to record is entitled to know which one fired, because
+/// the two deserve different words on screen and a user told the wrong one has
+/// no way to work out which signal was wrong.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "kebab-case")]
+pub enum CallSignal {
+    /// Nothing here says a call is live. The application is merely open.
+    None,
+    /// A process that only exists during a call was running.
+    CallProcess,
+    /// The application is holding an active capture session.
+    Microphone,
+}
+
+impl CallSignal {
+    /// Whether this signal means a call is in progress.
+    ///
+    /// The only place [`Detected::in_call`] comes from, so the flag and the
+    /// signal cannot disagree -- the same argument `MeetingRuntime::live` makes
+    /// for deriving "stopping has not begun" from the lock rather than keeping a
+    /// second flag beside it.
+    #[must_use]
+    pub const fn means_call(self) -> bool {
+        !matches!(self, Self::None)
+    }
+}
 
 /// A meeting application that appears to be running.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
@@ -55,12 +121,45 @@ pub struct Detected {
     /// Carried so a false positive can be diagnosed rather than argued about: a
     /// prompt that says *why* it appeared can be told it is wrong.
     pub evidence: String,
-    /// True when the matched process only exists during a call, rather than
-    /// whenever the application is open.
+    /// True when something says a call is in progress, rather than only that the
+    /// application is open.
     ///
     /// The difference between "in a meeting" and "has Zoom installed", and the
     /// reason a caller can choose to prompt only on the stronger signal.
-    pub in_call: bool,
+    ///
+    /// **Private, unlike every other field here**, and serialised all the same
+    /// so a screen can read `inCall` without knowing about signals. It is
+    /// [`CallSignal::means_call`] of [`Self::signal`] and nothing else, and the
+    /// only way to keep two serialised fields carrying one fact from drifting is
+    /// to make the second one impossible to set. Read it with [`Self::in_call`].
+    in_call: bool,
+    /// Which signal made [`Self::in_call`] true, and how strong it is.
+    pub signal: CallSignal,
+}
+
+impl Detected {
+    /// The only constructor, so `in_call` is always the signal's own answer.
+    #[must_use]
+    pub fn new(
+        provider: &'static str,
+        name: &'static str,
+        evidence: String,
+        signal: CallSignal,
+    ) -> Self {
+        Self {
+            provider,
+            name,
+            evidence,
+            in_call: signal.means_call(),
+            signal,
+        }
+    }
+
+    /// Whether something says a call is in progress.
+    #[must_use]
+    pub const fn in_call(&self) -> bool {
+        self.in_call
+    }
 }
 
 /// One application's process names.
@@ -116,11 +215,12 @@ pub const GENERIC: &str = "generic";
 /// The user's own process names.
 ///
 /// `meeting-detect:generic` upstream also covered calendar events, microphone
-/// activity and system-audio activity. Only the lists are built: calendars are
-/// chunk F, and microphone activity needs the `IAudioSessionManager2` listener
-/// that is still unwritten. Named here rather than left implied, because a
-/// half-built detector that looks whole is how a user comes to trust one that
-/// misses half the meetings.
+/// activity and system-audio activity. Microphone activity is now built and
+/// measured -- it reaches [`detect`] as its `capturing` argument, and a name on
+/// this list holding a capture device counts as being in a call. **Calendar
+/// events are still chunk F and system-audio activity is still unbuilt.** Named
+/// here rather than left implied, because a half-built detector that looks whole
+/// is how a user comes to trust one that misses half the meetings.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Lists {
@@ -143,47 +243,84 @@ impl Lists {
     }
 }
 
-/// Which meeting applications `running` contains.
+/// Lower-cased, trimmed, and with the blanks dropped.
+///
+/// Both lists get the same treatment, so a name that matches in one matches in
+/// the other. Windows reports `Zoom.exe` from the process table and the audio
+/// session API resolves the same process to the same string, but relying on that
+/// would be relying on two APIs agreeing about capitalisation.
+fn tidy(names: &[String]) -> Vec<String> {
+    names
+        .iter()
+        .map(|n| n.trim().to_lowercase())
+        .filter(|n| !n.is_empty())
+        .collect()
+}
+
+/// Which meeting applications `running` contains, and which are in a call.
 ///
 /// One entry per provider even when several of its names match, and the stronger
 /// evidence wins: a caller offering to record should be told "in a call", not
 /// "Zoom is open", when both are true.
+///
+/// `capturing` is the image names currently holding an active capture session --
+/// [`crate::microphone::capturing`] on Windows, empty everywhere else. **It can
+/// only ever strengthen a match, never create one.** A process holding the
+/// microphone that is not a known client and not on the user's own list is not
+/// reported at all, because "something is recording you" is a claim this
+/// function has no business making about a browser or a headset utility.
+///
+/// Passing an empty slice is the honest input on a platform where the
+/// enumeration does not run, and gives exactly the behaviour this function had
+/// before microphone activity was readable.
 #[must_use]
-pub fn detect(running: &[String], lists: &Lists) -> Vec<Detected> {
-    let names: Vec<String> = running
-        .iter()
-        .map(|n| n.trim().to_lowercase())
-        .filter(|n| !n.is_empty())
-        .collect();
+pub fn detect(running: &[String], capturing: &[String], lists: &Lists) -> Vec<Detected> {
+    let names = tidy(running);
+    let capturing = tidy(capturing);
 
     let mut found: Vec<Detected> = Vec::new();
 
     for signature in SIGNATURES {
-        // In-call first, so it wins for a provider whose client is also open.
+        // In-call first, so it wins for a provider whose client is also open,
+        // and so the stronger of the two signals is the one reported when both
+        // are true.
         let matched = signature
             .in_call
             .iter()
-            .find_map(|wanted| names.iter().find(|n| n == wanted).map(|n| (n, true)))
+            .find_map(|wanted| names.iter().find(|n| n == wanted))
+            .map(|name| (name, CallSignal::CallProcess))
             .or_else(|| {
+                // A capturing spelling beats a non-capturing one. Teams knows
+                // two names and a migrated machine can have both installed, so
+                // taking the first that matches could report the copy that is
+                // sitting in the tray and miss the one in the call.
                 signature
                     .open
                     .iter()
-                    .find_map(|wanted| names.iter().find(|n| n == wanted).map(|n| (n, false)))
+                    .find_map(|wanted| names.iter().find(|n| n == wanted && capturing.contains(n)))
+                    .map(|name| (name, CallSignal::Microphone))
+                    .or_else(|| {
+                        signature
+                            .open
+                            .iter()
+                            .find_map(|wanted| names.iter().find(|n| n == wanted))
+                            .map(|name| (name, CallSignal::None))
+                    })
             });
 
-        let Some((name, in_call)) = matched else {
+        let Some((name, signal)) = matched else {
             continue;
         };
         if lists.blocks(name) {
             continue;
         }
 
-        found.push(Detected {
-            provider: signature.provider,
-            name: signature.name,
-            evidence: name.clone(),
-            in_call,
-        });
+        found.push(Detected::new(
+            signature.provider,
+            signature.name,
+            name.clone(),
+            signal,
+        ));
     }
 
     // The user's own names, after the table, and deduplicated: two spellings of
@@ -195,15 +332,23 @@ pub fn detect(running: &[String], lists: &Lists) -> Vec<Detected> {
             continue;
         }
         if names.contains(&wanted) {
-            found.push(Detected {
-                provider: GENERIC,
-                name: "A program you listed",
-                evidence: wanted,
-                // A name the user chose says the program is running. Whether
-                // that means a call is in progress is something only they know,
-                // so claiming it would be inventing evidence.
-                in_call: false,
-            });
+            // A name the user chose says only that the program is running, and
+            // claiming a call from that alone would be inventing evidence. The
+            // microphone is not invented: if the program they named is holding a
+            // capture device, that is the same measurement Teams gets, and
+            // withholding it from their own entry would make the built-in table
+            // better informed than the list they wrote themselves.
+            let signal = if capturing.contains(&wanted) {
+                CallSignal::Microphone
+            } else {
+                CallSignal::None
+            };
+            found.push(Detected::new(
+                GENERIC,
+                "A program you listed",
+                wanted,
+                signal,
+            ));
         }
     }
 
@@ -247,6 +392,44 @@ pub fn running() -> Vec<String> {
         .collect()
 }
 
+/// One poll's worth of evidence: every process, and those holding a microphone.
+///
+/// Both halves of [`detect`]'s input, and the reason they are fetched together
+/// rather than separately.
+#[derive(Debug, Clone)]
+pub struct Survey {
+    /// Every running process's image name.
+    pub running: Vec<String>,
+    /// Those of them holding an active capture session.
+    pub capturing: Vec<String>,
+    /// Whether the capture enumeration ran at all, and how far.
+    ///
+    /// Carried rather than discarded because an empty `capturing` means two
+    /// opposite things. On Windows with the enumeration working it means nobody
+    /// is recording; on a platform without one it means nothing was looked at,
+    /// and a screen that shows "Teams is open, not in a call" in that case is
+    /// reporting a measurement it never took.
+    pub microphone: crate::microphone::MicrophoneSupport,
+}
+
+/// Take both readings from one process table.
+///
+/// The impure half of the whole module, in one call. Two separate refreshes
+/// would be two different instants: a process that started in between appears in
+/// one list and not the other, and the resulting `Detected` would name evidence
+/// that had already gone. One table also costs half as much, and the poll runs
+/// every five seconds for as long as the application is open.
+#[must_use]
+pub fn survey() -> Survey {
+    let names = crate::microphone::process_names();
+    let found = crate::microphone::capturing(&|pid| names.get(&pid).cloned());
+    Survey {
+        running: names.into_values().collect(),
+        capturing: found.processes,
+        microphone: found.support,
+    }
+}
+
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,
@@ -265,10 +448,20 @@ mod tests {
         Lists::default()
     }
 
+    /// Nothing is holding a microphone.
+    ///
+    /// What every test written before microphone activity existed was implicitly
+    /// asserting against, spelled out rather than left as an empty literal at
+    /// each call site.
+    fn quiet() -> Vec<String> {
+        Vec::new()
+    }
+
     #[test]
     fn an_idle_machine_detects_nothing() {
         let found = detect(
             &processes(&["explorer.exe", "code.exe", "knegiswhisper-desktop.exe"]),
+            &quiet(),
             &none(),
         );
         assert!(found.is_empty(), "{found:?}");
@@ -282,7 +475,7 @@ mod tests {
             ("Teams.exe", "teams"),
             ("Webex.exe", "webex"),
         ] {
-            let found = detect(&processes(&[process]), &none());
+            let found = detect(&processes(&[process]), &quiet(), &none());
             assert_eq!(found.len(), 1, "{process}: {found:?}");
             assert_eq!(found[0].provider, provider, "{process}");
         }
@@ -293,7 +486,7 @@ mod tests {
         // Windows reports `Zoom.exe`, Linux `zoom`, and a user typing an
         // allowlist entry types whatever they like.
         for spelling in ["Zoom.exe", "zoom.exe", "ZOOM.EXE", "  Zoom.exe  "] {
-            let found = detect(&processes(&[spelling]), &none());
+            let found = detect(&processes(&[spelling]), &quiet(), &none());
             assert_eq!(found.len(), 1, "{spelling}");
             assert_eq!(found[0].evidence, "zoom.exe", "{spelling}");
         }
@@ -311,7 +504,7 @@ mod tests {
             "webexplorer.exe",
             "steam.exe",
         ] {
-            let found = detect(&processes(&[innocent]), &none());
+            let found = detect(&processes(&[innocent]), &quiet(), &none());
             assert!(found.is_empty(), "{innocent} matched: {found:?}");
         }
     }
@@ -321,18 +514,18 @@ mod tests {
         // The distinction that decides whether this feature is useful. On
         // Windows `Zoom.exe` runs whenever the client is open; `CptHost.exe`
         // exists only during a call.
-        let open = detect(&processes(&["Zoom.exe"]), &none());
-        assert!(!open[0].in_call, "the client being open is not a call");
+        let open = detect(&processes(&["Zoom.exe"]), &quiet(), &none());
+        assert!(!open[0].in_call(), "the client being open is not a call");
 
-        let calling = detect(&processes(&["Zoom.exe", "CptHost.exe"]), &none());
+        let calling = detect(&processes(&["Zoom.exe", "CptHost.exe"]), &quiet(), &none());
         assert_eq!(calling.len(), 1, "one entry per provider: {calling:?}");
-        assert!(calling[0].in_call, "the stronger evidence wins");
+        assert!(calling[0].in_call(), "the stronger evidence wins");
         assert_eq!(calling[0].evidence, "cpthost.exe");
     }
 
     #[test]
     fn two_applications_running_are_two_detections() {
-        let found = detect(&processes(&["Zoom.exe", "ms-teams.exe"]), &none());
+        let found = detect(&processes(&["Zoom.exe", "ms-teams.exe"]), &quiet(), &none());
         let providers: Vec<&str> = found.iter().map(|d| d.provider).collect();
         assert_eq!(providers, vec!["zoom", "teams"]);
     }
@@ -343,12 +536,12 @@ mod tests {
             allow: vec!["mycompanyphone.exe".to_owned()],
             block: Vec::new(),
         };
-        let found = detect(&processes(&["mycompanyphone.exe"]), &lists);
+        let found = detect(&processes(&["mycompanyphone.exe"]), &quiet(), &lists);
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].provider, GENERIC);
         assert_eq!(found[0].evidence, "mycompanyphone.exe");
         assert!(
-            !found[0].in_call,
+            !found[0].in_call(),
             "a name the user chose says the program runs, not that a call is happening"
         );
     }
@@ -362,7 +555,7 @@ mod tests {
             allow: vec!["mything.exe".to_owned()],
             block: vec!["Zoom.exe".to_owned(), "mything.exe".to_owned()],
         };
-        let found = detect(&processes(&["Zoom.exe", "mything.exe"]), &lists);
+        let found = detect(&processes(&["Zoom.exe", "mything.exe"]), &quiet(), &lists);
         assert!(found.is_empty(), "{found:?}");
     }
 
@@ -374,7 +567,7 @@ mod tests {
             allow: Vec::new(),
             block: vec!["cpthost.exe".to_owned()],
         };
-        let found = detect(&processes(&["Zoom.exe", "CptHost.exe"]), &lists);
+        let found = detect(&processes(&["Zoom.exe", "CptHost.exe"]), &quiet(), &lists);
         assert!(
             found.is_empty(),
             "in-call is blocked, so nothing: {found:?}"
@@ -387,7 +580,7 @@ mod tests {
             allow: vec!["thing.exe".to_owned(), "THING.exe".to_owned()],
             block: Vec::new(),
         };
-        let found = detect(&processes(&["thing.exe"]), &lists);
+        let found = detect(&processes(&["thing.exe"]), &quiet(), &lists);
         assert_eq!(found.len(), 1, "two spellings, one prompt: {found:?}");
     }
 
@@ -397,7 +590,7 @@ mod tests {
             allow: vec![String::new(), "   ".to_owned()],
             block: Vec::new(),
         };
-        let found = detect(&processes(&["", "  ", "explorer.exe"]), &lists);
+        let found = detect(&processes(&["", "  ", "explorer.exe"]), &quiet(), &lists);
         assert!(found.is_empty(), "{found:?}");
     }
 
@@ -457,5 +650,174 @@ mod tests {
         assert!(supported());
         let names = running();
         assert!(!names.is_empty(), "no processes at all is not credible");
+    }
+
+    /* ------------------------------------------------- the microphone signal */
+
+    /// Both halves of the measurement `mic_users_probe` took on 2026-09-01, as
+    /// one test, because either alone is worthless.
+    ///
+    /// Teams open and quiet must not be a call, and Teams open and capturing
+    /// must be. A rule that says yes to both is a rule that offers to record
+    /// every time the client is launched, which is the reason Teams was
+    /// unofferable for the whole of the last three weeks.
+    #[test]
+    fn teams_is_in_a_call_when_it_holds_the_microphone_and_not_when_it_does_not() {
+        let idle = detect(&processes(&["ms-teams.exe"]), &quiet(), &none());
+        assert_eq!(idle.len(), 1);
+        assert!(!idle[0].in_call(), "an open client is not a call");
+        assert_eq!(idle[0].signal, CallSignal::None);
+
+        let calling = detect(
+            &processes(&["ms-teams.exe"]),
+            &processes(&["ms-teams.exe"]),
+            &none(),
+        );
+        assert_eq!(calling.len(), 1);
+        assert!(calling[0].in_call(), "holding the microphone is a call");
+        assert_eq!(calling[0].signal, CallSignal::Microphone);
+        assert_eq!(calling[0].evidence, "ms-teams.exe");
+    }
+
+    /// The microphone strengthens a match and never creates one.
+    ///
+    /// A browser in a video call, a headset utility, this application's own
+    /// dictation: all of them hold a capture device and none of them is a
+    /// meeting the user asked to be offered. Reporting them would make the
+    /// prompt fire on dictation, which is the one thing it must never do.
+    #[test]
+    fn capturing_alone_detects_nothing() {
+        let found = detect(
+            &processes(&["chrome.exe", "knegiswhisper-desktop.exe"]),
+            &processes(&["chrome.exe", "knegiswhisper-desktop.exe"]),
+            &none(),
+        );
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    /// A process that only exists during a call is better evidence than a
+    /// microphone, so it is the one reported when both are true.
+    #[test]
+    fn a_call_process_outranks_the_microphone() {
+        let found = detect(
+            &processes(&["Zoom.exe", "CptHost.exe"]),
+            &processes(&["zoom.exe"]),
+            &none(),
+        );
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].signal, CallSignal::CallProcess);
+        assert_eq!(found[0].evidence, "cpthost.exe");
+    }
+
+    /// Two spellings of one client, and the one in the call is the one reported.
+    ///
+    /// `ms-teams.exe` is listed before `teams.exe`, so taking the first name
+    /// that matches would name the copy sitting in the tray and report the call
+    /// as no call at all.
+    #[test]
+    fn the_capturing_spelling_is_the_one_reported() {
+        let found = detect(
+            &processes(&["ms-teams.exe", "teams.exe"]),
+            &processes(&["teams.exe"]),
+            &none(),
+        );
+        assert_eq!(found.len(), 1, "one client, one detection");
+        assert_eq!(found[0].evidence, "teams.exe");
+        assert_eq!(found[0].signal, CallSignal::Microphone);
+    }
+
+    /// The capture list is compared the way the process table is.
+    ///
+    /// Two different Windows APIs produce these two lists and neither promises
+    /// the other's capitalisation.
+    #[test]
+    fn the_capturing_list_is_matched_case_insensitively() {
+        let found = detect(
+            &processes(&["ms-teams.exe"]),
+            &processes(&["  MS-Teams.EXE  "]),
+            &none(),
+        );
+        assert_eq!(found[0].signal, CallSignal::Microphone);
+    }
+
+    /// Blocking a name silences it however loud the evidence is.
+    ///
+    /// The list exists so a user can overrule this crate without waiting for a
+    /// release, and a signal that outranked it would take that away exactly when
+    /// it was needed.
+    #[test]
+    fn a_blocked_name_stays_blocked_while_capturing() {
+        let lists = Lists {
+            allow: Vec::new(),
+            block: vec!["ms-teams.exe".to_owned()],
+        };
+        let found = detect(
+            &processes(&["ms-teams.exe"]),
+            &processes(&["ms-teams.exe"]),
+            &lists,
+        );
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    /// A program the user listed gets the same measurement the built-in table
+    /// gets, and only the measured half of it.
+    #[test]
+    fn a_listed_program_holding_the_microphone_is_in_a_call() {
+        let lists = Lists {
+            allow: vec!["mycompanyphone.exe".to_owned()],
+            block: Vec::new(),
+        };
+        let idle = detect(&processes(&["mycompanyphone.exe"]), &quiet(), &lists);
+        assert!(!idle[0].in_call(), "running is not calling");
+
+        let calling = detect(
+            &processes(&["mycompanyphone.exe"]),
+            &processes(&["mycompanyphone.exe"]),
+            &lists,
+        );
+        assert!(calling[0].in_call());
+        assert_eq!(calling[0].signal, CallSignal::Microphone);
+    }
+
+    /// `in_call` is never anything but the signal's own answer.
+    ///
+    /// The flag is serialised and the enum is serialised beside it, so a screen
+    /// can read either. Two fields carrying one fact is how they come to
+    /// disagree, and [`Detected::new`] is the only thing standing between this
+    /// codebase and that -- so the invariant is asserted rather than trusted to
+    /// the fact that there is currently one constructor.
+    #[test]
+    fn in_call_is_always_the_signals_own_answer() {
+        let lists = Lists {
+            allow: vec!["mycompanyphone.exe".to_owned()],
+            block: Vec::new(),
+        };
+        let every = [
+            "ms-teams.exe",
+            "teams.exe",
+            "Zoom.exe",
+            "CptHost.exe",
+            "Webex.exe",
+            "WebexMTA.exe",
+            "mycompanyphone.exe",
+            "explorer.exe",
+        ];
+        let mut checked = 0_usize;
+        // Every subset of the capture list that matters: none of them, each of
+        // them alone, and all of them.
+        for capturing in std::iter::once(quiet())
+            .chain(every.iter().map(|n| processes(&[n])))
+            .chain(std::iter::once(processes(&every)))
+        {
+            for found in detect(&processes(&every), &capturing, &lists) {
+                assert_eq!(
+                    found.in_call(),
+                    found.signal.means_call(),
+                    "{found:?} disagrees with itself"
+                );
+                checked += 1;
+            }
+        }
+        assert!(checked >= 40, "only {checked} detections were checked");
     }
 }

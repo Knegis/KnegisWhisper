@@ -28,6 +28,8 @@ use kw_app_core::dictation::{
 use kw_network_policy::NetworkPolicy;
 use kw_platform::insertion::{SystemClipboard, TextInserter};
 use kw_security::CredentialStore;
+use kw_sidecar::process::Health as _;
+use kw_sidecar::HttpHealth;
 use kw_storage::{transcriptions, Db};
 use kw_transcription_core::local::{LocalTranscriber, WhisperServer};
 use kw_transcription_core::{Executor, Transport};
@@ -197,6 +199,12 @@ pub struct RouteTranscriber {
     local_port: LocalPort,
     local_model: Arc<RwLock<Option<String>>>,
     local_sherpa: crate::local_asr::Selection,
+    /// How to start the whisper server again when the recorded one has gone.
+    ///
+    /// Not `Option`: a build that forgets to supply it is a build where a lost
+    /// server silently stays lost, which is the defect this field exists to fix.
+    /// Making it required means forgetting is a compile error instead.
+    revive: Arc<dyn crate::local_model::Revive>,
 }
 
 impl std::fmt::Debug for RouteTranscriber {
@@ -213,6 +221,7 @@ impl RouteTranscriber {
         local_port: LocalPort,
         local_model: Arc<RwLock<Option<String>>>,
         local_sherpa: crate::local_asr::Selection,
+        revive: Arc<dyn crate::local_model::Revive>,
     ) -> Self {
         Self {
             policy,
@@ -220,13 +229,79 @@ impl RouteTranscriber {
             local_port,
             local_model,
             local_sherpa,
+            revive,
         }
     }
 
-    fn local_server(&self) -> Option<WhisperServer> {
-        let port = self.local_port.read().ok().and_then(|held| *held)?;
+    /// The whisper server to send audio to, starting a new one if the
+    /// recorded server has gone.
+    ///
+    /// Called only for [`Transport::Local`]. The health check is a loopback
+    /// round trip and the recovery starts a process, and someone dictating to a
+    /// cloud provider should pay for neither.
+    async fn whisper_server(&self) -> Result<Option<WhisperServer>, String> {
+        let recorded = self.local_port.read().ok().and_then(|held| *held);
+        let answering = match recorded {
+            Some(port) => {
+                HttpHealth::new(
+                    self.policy.clone(),
+                    kw_transcription_core::local::HEALTH_PATH,
+                )
+                .is_ready(port)
+                .await
+            }
+            None => false,
+        };
+
+        let port = match classify(recorded, answering) {
+            Recorded::Absent => return Ok(None),
+            Recorded::Live(port) => port,
+            Recorded::Gone(dead) => {
+                tracing::warn!(
+                    port = dead,
+                    "the local model server has gone; starting it again"
+                );
+                let port = self.revive.revive().await.map_err(|err| {
+                    format!(
+                        "the local model server on 127.0.0.1:{dead} has gone and could not be \
+                         started again: {err}"
+                    )
+                })?;
+                tracing::info!(port, "the local model server was started again");
+                port
+            }
+        };
+
         let model = self.local_model.read().ok().and_then(|held| held.clone());
-        Some(WhisperServer::new(self.policy.clone(), port, model))
+        Ok(Some(WhisperServer::new(self.policy.clone(), port, model)))
+    }
+}
+
+/// What a recorded whisper port turned out to be.
+///
+/// Three states rather than `Option<u16>`, because "no server was ever started"
+/// and "a server was started and has since gone" call for different answers and
+/// used to get the same one: the recorded number, handed to a transcription that
+/// then failed against a port with nothing behind it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Recorded {
+    /// Nothing is recorded. No local server has run this session.
+    Absent,
+    /// Something answered on the recorded port.
+    Live(u16),
+    /// A port is recorded and nothing answers: the child has gone.
+    Gone(u16),
+}
+
+/// Read a recorded port and a health-check result as one of three states.
+///
+/// Separated from the round trip that produces `answering` so the reading can be
+/// tested without a server, which is the half that was wrong.
+const fn classify(recorded: Option<u16>, answering: bool) -> Recorded {
+    match recorded {
+        None => Recorded::Absent,
+        Some(port) if answering => Recorded::Live(port),
+        Some(port) => Recorded::Gone(port),
     }
 }
 
@@ -237,7 +312,15 @@ impl RouteTranscriber {
 /// selected but cannot be built is an error rather than a quiet fall through to
 /// whisper -- audio going somewhere the screen did not name is the failure this
 /// ordering exists to prevent.
-fn local_engine(
+///
+/// **`pub(crate)` since 2026-09-01, because a second caller needed the same
+/// rule and had been getting a different one.** `meeting.rs`'s whole-recording
+/// pass asked `WhisperServer` directly, so on a machine where a sherpa model was
+/// selected -- the documented "one local engine" state, and the one this
+/// project ships people into -- the pass failed with "the local model server is
+/// not running" and every meeting fell back to its live partials. Reusing this
+/// is the fix; a second copy of the rule would have been the bug again.
+pub(crate) fn local_engine(
     sherpa: &crate::local_asr::Selection,
     whisper: Option<WhisperServer>,
 ) -> Result<Option<Box<dyn LocalTranscriber>>, String> {
@@ -257,11 +340,27 @@ impl Transcriber for RouteTranscriber {
     ) -> Result<Transcribed, DictationError> {
         let executor = Executor::new(&self.policy, self.credentials.as_ref());
 
-        // Attached only when an engine is actually available. Without this the
+        // Resolved only for a local route. The executor consults the local
+        // engine in its `Transport::Local` arm and nowhere else, so building one
+        // for a dictation bound for a provider bought nothing and cost two
+        // things: a loopback health check on every cloud dictation, and — worse
+        // — a *cloud* dictation failing outright when a sherpa model was
+        // selected but could not be built, because that error was raised before
+        // anything looked at the transport.
+        //
+        // Attached only when an engine is actually available. Without that the
         // executor answers `LocalNotAvailable`, which is the honest state — a
         // local route with no server is not something to paper over.
-        let local = local_engine(&self.local_sherpa, self.local_server())
-            .map_err(DictationError::Transcription)?;
+        let local = match transport {
+            Transport::Local => {
+                let whisper = self
+                    .whisper_server()
+                    .await
+                    .map_err(DictationError::Transcription)?;
+                local_engine(&self.local_sherpa, whisper).map_err(DictationError::Transcription)?
+            }
+            _ => None,
+        };
         let executor = match &local {
             Some(engine) => executor.with_local(engine.as_ref()),
             None => executor,
@@ -420,7 +519,30 @@ pub struct DbHistory {
 }
 
 /// The settings key that switches history off.
+///
+/// On by default, and read per dictation by [`DbHistory::enabled`], so switching
+/// it off stops the next thing said from being written down rather than taking
+/// effect after a relaunch.
+///
+/// **Switching it off writes nothing new and removes nothing.** Rows already in
+/// the table stay until `history_clear` deletes them. The distinction matters
+/// because the two controls sit next to each other on the Dictation screen and
+/// sound alike; the screen says which is which, and so does this.
+///
+/// Until 2026-08-31 nothing could set this key. The gate was honoured on every
+/// write and the only way past it was to edit SQLite by hand -- the third
+/// instance of the same pattern in this repo, after the four hotkeys that
+/// registered and dispatched nowhere and `keep_raw_text` below.
 pub const HISTORY_ENABLED_KEY: &str = "history.enabled";
+
+/// The settings key that keeps the pre-cleanup transcript.
+///
+/// Off by default: it stores a second copy of what someone said, and the point
+/// of cleanup is that the tidy version is the one wanted. Switched on, a history
+/// row that carries a raw text is proof cleanup changed something -- which is
+/// the question a bench check on 2026-08-28 needed a second transcriber to
+/// answer, because this setting existed in `kw_app_core` and had no way in.
+pub const KEEP_RAW_TEXT_KEY: &str = "history.keepRawText";
 
 impl DbHistory {
     #[must_use]
@@ -438,6 +560,14 @@ impl History for DbHistory {
         kw_storage::settings::get_or(self.db.pool(), HISTORY_ENABLED_KEY, true)
             .await
             .unwrap_or(true)
+    }
+
+    async fn keep_raw_text(&self) -> bool {
+        // Read per dictation, like `enabled` above, so switching it on applies
+        // to the next thing said rather than after a relaunch.
+        kw_storage::settings::get_or(self.db.pool(), KEEP_RAW_TEXT_KEY, false)
+            .await
+            .unwrap_or(false)
     }
 
     async fn record(&self, entry: HistoryEntry) -> Option<i64> {
@@ -543,6 +673,9 @@ pub struct LocalTargets {
     /// Which sherpa model is selected, if any. Outranks the whisper server --
     /// see `local_asr`'s module doc on why there is only ever one local engine.
     pub transcription_sherpa: crate::local_asr::Selection,
+    /// How to start the whisper server again if it has gone. See
+    /// `local_model::Revive`.
+    pub transcription_revive: Arc<dyn crate::local_model::Revive>,
     /// Where the llama server is listening, if it is.
     pub generation: crate::local_llm::LocalEndpoint,
 }
@@ -585,6 +718,7 @@ impl DictationRuntime {
             transcription_port: local_port,
             transcription_model: local_model,
             transcription_sherpa: local_sherpa,
+            transcription_revive: local_revive,
             generation: local_llm,
         } = local;
 
@@ -599,6 +733,7 @@ impl DictationRuntime {
                 local_port,
                 local_model,
                 local_sherpa,
+                local_revive,
             )),
             Arc::new(ModelCleanup::new(
                 policy,
@@ -609,9 +744,6 @@ impl DictationRuntime {
             Arc::new(ClipboardInserter::new()),
             Arc::new(DbHistory::new(db.clone())),
             Arc::new(EventSink::new(app, state)),
-            // Keeping the pre-cleanup transcript is opt-in; the default is not
-            // to store two copies of what someone said.
-            false,
         );
 
         Self {
@@ -903,13 +1035,49 @@ pub fn insertion_supported() -> bool {
     ClipboardInserter::new().is_supported()
 }
 
+/// The key of a push-to-talk hold coming up.
+///
+/// **Why a channel rather than a second call to `toggle`.** The obvious
+/// implementation of push-to-talk is "the release calls `toggle` too, and
+/// `toggle` already finishes a recording". It has a race that only a short hold
+/// reaches, and push-to-talk is made of short holds: `toggle` decides by reading
+/// `state()`, and the press only sets `Recording` **after** the microphone is
+/// actually open. Two independently spawned tasks have no order between them, so
+/// a release arriving during that window finds `Idle` and either does nothing —
+/// leaving the microphone open with nobody to close it — or starts a second
+/// recording, depending on which of the two wrong things it does.
+///
+/// So the hold is **one task**, which starts, waits here for the key to come up,
+/// and finishes. There is no ordering left to get wrong, because there is only
+/// one order. A fresh channel per press rather than a long-lived flag, so a
+/// release belonging to an earlier hold cannot end a later one.
+///
+/// **Reasoned, not measured.** Nothing here has driven two spawned tasks into
+/// that window on purpose; the argument is that the window exists and the design
+/// removes it, which is cheaper than proving how often it is hit.
+static HOLD_RELEASE: std::sync::Mutex<Option<tokio::sync::watch::Sender<bool>>> =
+    std::sync::Mutex::new(None);
+
 /// Drive a dictation from the global hotkey.
 ///
 /// Spawned rather than awaited: this is called from the shortcut plugin's
-/// synchronous callback, which must return promptly or the whole hotkey system
-/// stalls. The outcome is emitted, not returned, because there is nobody here to
-/// return it to.
-pub fn on_hotkey(app: &AppHandle) {
+/// synchronous callback and from the hook thread, both of which must return
+/// promptly or every keystroke on the machine waits. The outcome is emitted, not
+/// returned, because there is nobody here to return it to.
+///
+/// `what` comes from `shortcuts::act`, which is where the toggle-versus-hold
+/// decision is made and tested. This function does not re-derive it.
+pub fn on_hotkey(app: &AppHandle, what: crate::shortcuts::Act) {
+    use crate::shortcuts::Act;
+
+    // The release half touches no state but the gate, so it is handled before
+    // the runtime is looked up: a release that arrives after the session has
+    // gone away still has to wake the task waiting on it.
+    if matches!(what, Act::EndHold) {
+        release_the_hold();
+        return;
+    }
+
     let Some(runtime) = app
         .try_state::<Arc<DictationRuntime>>()
         .map(|s| Arc::clone(&s))
@@ -918,28 +1086,87 @@ pub fn on_hotkey(app: &AppHandle) {
         return;
     };
 
+    let held = match what {
+        Act::BeginHold => Some(arm_the_hold()),
+        Act::Toggle => None,
+        // Decided by `shortcuts::act`, which never routes these here. Matched
+        // rather than caught by a wildcard so a fifth `Act` has to be thought
+        // about at this call site too.
+        Act::EndHold | Act::Nothing => return,
+    };
+
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        match runtime.toggle().await {
-            Ok(outcome) => {
-                if let Err(err) = app.emit(OUTCOME_EVENT, outcome) {
-                    tracing::warn!(error = %err, "could not report the dictation outcome");
-                }
-            }
-            Err(message) => {
-                tracing::warn!(%message, "the dictation could not proceed");
-                if let Err(err) = app.emit(
-                    OUTCOME_EVENT,
-                    kw_app_core::dictation::Outcome::Failed {
-                        message,
-                        history_id: None,
-                    },
-                ) {
-                    tracing::warn!(error = %err, "could not report the dictation failure");
-                }
-            }
+        report(&app, runtime.toggle().await);
+
+        // Push-to-talk's second half, in the same task as its first. By the time
+        // this is reached the microphone is either open or it failed, so the
+        // state `toggle` reads below is settled -- which is the whole point of
+        // not spawning the release separately.
+        if let Some(mut held) = held {
+            // `Err` means the sender was dropped, which happens when a later
+            // press replaced it. Treated as a release: a hold whose gate has
+            // gone is a hold nothing will ever end, and leaving the microphone
+            // open is the worse of the two mistakes.
+            let _ = held.wait_for(|released| *released).await;
+            report(&app, runtime.toggle().await);
         }
     });
+}
+
+/// Emit whatever a toggle came back with, success or failure.
+fn report(app: &AppHandle, outcome: Result<kw_app_core::dictation::Outcome, String>) {
+    match outcome {
+        Ok(outcome) => {
+            if let Err(err) = app.emit(OUTCOME_EVENT, outcome) {
+                tracing::warn!(error = %err, "could not report the dictation outcome");
+            }
+        }
+        Err(message) => {
+            tracing::warn!(%message, "the dictation could not proceed");
+            if let Err(err) = app.emit(
+                OUTCOME_EVENT,
+                kw_app_core::dictation::Outcome::Failed {
+                    message,
+                    history_id: None,
+                },
+            ) {
+                tracing::warn!(error = %err, "could not report the dictation failure");
+            }
+        }
+    }
+}
+
+/// Open a fresh gate for one hold and return the end the task waits on.
+fn arm_the_hold() -> tokio::sync::watch::Receiver<bool> {
+    let (tx, rx) = tokio::sync::watch::channel(false);
+    let mut held = HOLD_RELEASE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    *held = Some(tx);
+    rx
+}
+
+/// Tell whichever hold is in progress that its key came up.
+///
+/// Runs on the hook thread, so it does no work beyond a lock and a send. If
+/// nothing is holding, this is a release with no press — which the watcher
+/// should never produce, and doing nothing about it is the right answer if it
+/// somehow does.
+///
+/// Also called by `shortcuts::Hooks::install` when the hook is being torn down
+/// and replaced. That is not a courtesy: the key that would have ended the hold
+/// is watched by the hook that is about to stop existing, so the release will
+/// never arrive. Somebody changing a setting while holding the dictation key
+/// would otherwise be left recording with nothing to stop it until they pressed
+/// the new binding.
+pub(crate) fn release_the_hold() {
+    let held = HOLD_RELEASE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(sender) = held.as_ref() {
+        let _ = sender.send(true);
+    }
 }
 
 #[cfg(test)]
@@ -952,10 +1179,78 @@ pub fn on_hotkey(app: &AppHandle) {
 mod tests {
     use super::*;
 
+    /* --------------------------------------------- which local engine */
+
+    #[test]
+    fn a_selected_sherpa_model_never_falls_through_to_whisper() {
+        // The rule two callers now share, and the reason sharing it was worth
+        // doing: `meeting.rs`'s whole-recording pass had its own version that
+        // knew only about `WhisperServer`, so on a machine with a Parakeet
+        // model selected -- the documented one-local-engine state -- the pass
+        // failed and every meeting note silently became the live partials.
+        // Found by a person reading a saved note, not by anything here.
+        use std::sync::{Arc, RwLock};
+
+        let policy = || kw_network_policy::NetworkPolicy::new().expect("a policy");
+        let server = || WhisperServer::new(policy(), 1, None);
+
+        let nothing: crate::local_asr::Selection = Arc::new(RwLock::new(None));
+        assert!(local_engine(&nothing, None)
+            .expect("no engine at all is a state, not an error")
+            .is_none());
+        assert!(
+            local_engine(&nothing, Some(server()))
+                .expect("whisper alone is fine")
+                .is_some(),
+            "with no sherpa selection the whisper server is the engine"
+        );
+
+        // The assertion that matters. A selected model that cannot be built is
+        // an error **even when whisper is available**, because audio going
+        // somewhere the screen did not name is worse than a refusal.
+        let broken: crate::local_asr::Selection =
+            Arc::new(RwLock::new(Some("not-a-model".to_owned())));
+        let err = local_engine(&broken, None).expect_err("a broken selection is an error");
+        assert!(err.contains("not-a-model"), "{err}");
+        assert!(
+            local_engine(&broken, Some(server())).is_err(),
+            "a broken sherpa selection must not quietly become a whisper dictation"
+        );
+    }
+
+    /* ------------------------------------------- the recorded local port */
+
+    #[test]
+    fn no_recorded_port_means_no_local_engine() {
+        // The state a user who dictates to a cloud provider is in for the whole
+        // session. Nothing to check and nothing to start.
+        assert_eq!(classify(None, false), Recorded::Absent);
+        // `answering` cannot be true without a port, but if a future caller
+        // manages it the answer is still "there is no server".
+        assert_eq!(classify(None, true), Recorded::Absent);
+    }
+
+    #[test]
+    fn a_recorded_port_that_answers_is_used_as_it_stands() {
+        assert_eq!(classify(Some(8178), true), Recorded::Live(8178));
+    }
+
+    #[test]
+    fn a_recorded_port_that_answers_nothing_is_gone_not_live() {
+        // The defect this file's `whisper_server` exists to fix, in one line.
+        // On 2026-08-28 the application held 8178 with no listener and no
+        // process behind it, and every dictation was sent there anyway --
+        // `start_model` had learnt to notice this and the dictation path had
+        // not. The port travels with the state so the message can name it.
+        assert_eq!(classify(Some(8178), false), Recorded::Gone(8178));
+    }
+
     #[tokio::test]
     async fn history_is_on_unless_switched_off() {
         // A user who has never opened settings expects to find what they just
-        // dictated.
+        // dictated. The command layer defaults to `true` for the same key, and
+        // the two defaults have to stay equal or the screen reports the
+        // opposite of what the sink is doing.
         let db = Db::open_in_memory().await.unwrap();
         let history = DbHistory::new(db.clone());
         assert!(history.enabled().await);
@@ -963,7 +1258,68 @@ mod tests {
         kw_storage::settings::set(db.pool(), HISTORY_ENABLED_KEY, &false)
             .await
             .unwrap();
+        // Read per dictation, so the next one is not written down -- no
+        // relaunch. Until 2026-08-31 this was the only way to get here, because
+        // nothing in the application could write the key.
         assert!(!history.enabled().await);
+
+        kw_storage::settings::set(db.pool(), HISTORY_ENABLED_KEY, &true)
+            .await
+            .unwrap();
+        // Back on. A switch that only goes one way is not a switch, and the one
+        // this replaced went neither.
+        assert!(history.enabled().await);
+    }
+
+    #[tokio::test]
+    async fn switching_history_off_removes_nothing_already_written() {
+        // The claim the Dictation screen makes in words next to the toggle, and
+        // the whole difference between it and Clear history. Off stops new
+        // rows; it is not a delete.
+        let db = Db::open_in_memory().await.unwrap();
+        let history = DbHistory::new(db.clone());
+
+        let id = history
+            .record(HistoryEntry {
+                text: "said before it was switched off".to_owned(),
+                raw_text: None,
+                provider: None,
+                model: None,
+                duration_ms: None,
+                error: None,
+                failed: false,
+            })
+            .await
+            .expect("an id");
+
+        kw_storage::settings::set(db.pool(), HISTORY_ENABLED_KEY, &false)
+            .await
+            .unwrap();
+
+        assert!(!history.enabled().await);
+        let row = transcriptions::get(db.pool(), id).await.unwrap();
+        assert_eq!(
+            row.map(|r| r.text).as_deref(),
+            Some("said before it was switched off"),
+        );
+    }
+
+    #[tokio::test]
+    async fn the_pre_cleanup_transcript_is_not_kept_unless_asked_for() {
+        // The default, and the reason it is the default: switching it on stores
+        // a second copy of what someone said. Before this setting existed the
+        // answer was `false` with no way to change it, which is how a bench
+        // check ended up needing a second transcriber to find out whether
+        // cleanup had done anything.
+        let db = Db::open_in_memory().await.unwrap();
+        let history = DbHistory::new(db.clone());
+        assert!(!history.keep_raw_text().await);
+
+        kw_storage::settings::set(db.pool(), KEEP_RAW_TEXT_KEY, &true)
+            .await
+            .unwrap();
+        // Read per dictation, so the next one keeps it -- no relaunch.
+        assert!(history.keep_raw_text().await);
     }
 
     #[tokio::test]

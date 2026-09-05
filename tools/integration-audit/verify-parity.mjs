@@ -43,8 +43,8 @@
  * Exit:  0 = parity holds, 1 = one or more violations
  */
 
-import { readFileSync, existsSync } from "node:fs";
-import { join, dirname, resolve } from "node:path";
+import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
+import { join, dirname, resolve, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -70,6 +70,12 @@ export const USER_CONFIGURABLE = new Set([
   "enterprise",
   "local-llm",
   "local-asr",
+  // Added 2026-09-01 with KNEG-73a. A model somebody has to choose to download
+  // is as much a setting as an ASR model is, and it is neither of the two
+  // things this set excludes -- not a platform capability, not an automatic
+  // detector. While it was absent, the two diarization entries could move from
+  // deferred to built with no screen anywhere and no gate would have asked.
+  "diarization-model",
   "meeting-stream",
   "credential",
   "calendar",
@@ -91,9 +97,26 @@ export const USER_CONFIGURABLE = new Set([
  * @param {object} input.surfaces   config/ui-surfaces.json
  * @param {(componentPath: string) => string | null} input.readComponent
  *   Source of a component, or null when there is no such file.
+ * @param {(targetPath: string) => boolean} [input.hasTarget]
+ *   Whether a documentation target exists and holds something. Injected for
+ *   the same reason `readComponent` is: a rule that can only be run against
+ *   the committed tree is a rule nobody can prove bites. Defaults to refusing
+ *   every target, so a caller that forgets it gets a loud failure rather than
+ *   a silent pass -- the direction that matters for a check whose whole job is
+ *   catching a claim about something that is not there.
+ * @param {(sourcePath: string) => string | null} [input.readEvidence]
+ *   Source named by a deferred entry's interface evidence. Defaults to a
+ *   refusal so a caller cannot accidentally turn the check into a no-op.
  * @returns {{rule: string, key: string, detail: string}[]}
  */
-export function violations({ baseline, manifest, surfaces, readComponent }) {
+export function violations({
+  baseline,
+  manifest,
+  surfaces,
+  readComponent,
+  hasTarget = () => false,
+  readEvidence = () => null,
+}) {
   const found = [];
   const fail = (rule, key, detail) => found.push({ rule, key, detail });
 
@@ -246,6 +269,48 @@ export function violations({ baseline, manifest, surfaces, readComponent }) {
         if (!e.upstream) {
           fail("incomplete-deferral", key, "deferral must name the upstream files that implement it");
         }
+
+        const evidence = d.interfaceEvidence;
+        if (!Array.isArray(evidence) || evidence.length === 0) {
+          fail(
+            "incomplete-deferral",
+            key,
+            'deferral must name at least one checkable "interfaceEvidence" source'
+          );
+        } else {
+          for (const item of evidence) {
+            const path = item?.path;
+            const contains = item?.contains;
+            const safePath =
+              typeof path === "string" &&
+              path.length > 0 &&
+              !isAbsolute(path) &&
+              !path.split(/[\\/]+/u).includes("..");
+            if (!safePath || typeof contains !== "string" || contains.length === 0) {
+              fail(
+                "stale-deferral-interface",
+                key,
+                "interfaceEvidence needs a repository-relative path and a non-empty contains literal"
+              );
+              continue;
+            }
+
+            const source = readEvidence(path);
+            if (source === null) {
+              fail(
+                "stale-deferral-interface",
+                key,
+                `interface evidence path "${path}" does not exist`
+              );
+            } else if (!source.includes(contains)) {
+              fail(
+                "stale-deferral-interface",
+                key,
+                `interface evidence "${contains}" is absent from "${path}"`
+              );
+            }
+          }
+        }
       }
     }
 
@@ -253,11 +318,31 @@ export function violations({ baseline, manifest, surfaces, readComponent }) {
       fail("undeclared-removal", key, "removed-vendor-service requires a detail explaining what was removed");
     }
 
-    // Documentation entries carry no code, so backend/UI requirements do not apply.
-    // They must instead name where the rewritten docs live.
+    // Documentation entries carry no code, so the backend and UI requirements
+    // below do not apply to them. They must instead name where the rewritten
+    // docs live -- and, if their status claims those docs exist, actually have
+    // them there.
+    //
+    // The second half is KNEG-86. Naming a target was the whole of the check
+    // for twenty tasks, and `developer:agent-skills` spent all of them claiming
+    // `status: "ported"` against `docs/agent-skills/`, a directory that has
+    // never existed. The exemption from the backend/UI rules was right; the
+    // hole was that nothing took its place, so a documentation entry was the
+    // one kind that could assert work was done with nothing checking.
+    //
+    // Existence *and* content: an empty directory satisfies "the rewritten docs
+    // live here" no better than a missing one, and is the same hole one commit
+    // later.
     if (e.kind === "documentation") {
       if (!e.target) {
         fail("incomplete-documentation", key, 'kind "documentation" requires a target path');
+      } else if (ACTIVE.has(e.status) && !hasTarget(e.target)) {
+        fail(
+          "documentation-target-missing",
+          key,
+          `status "${e.status}" claims the rewritten documentation is at "${e.target}", ` +
+            "which does not exist or is empty"
+        );
       }
       continue;
     }
@@ -320,6 +405,26 @@ function readComponentFromDisk(relative) {
   return existsSync(path) ? readFileSync(path, "utf8") : null;
 }
 
+/** A source file named as evidence, or null for a missing/non-file target. */
+function readEvidenceFromDisk(relative) {
+  const path = join(REPO_ROOT, relative);
+  return existsSync(path) && statSync(path).isFile() ? readFileSync(path, "utf8") : null;
+}
+
+/**
+ * Whether a documentation target exists on disk and holds something.
+ *
+ * A directory has to be non-empty, because a manifest entry saying the
+ * rewritten documentation lives at `docs/agent-skills/` is not satisfied by an
+ * empty `docs/agent-skills/`. A file only has to exist -- an empty one is a
+ * different kind of wrong and not one this gate is placed to judge.
+ */
+export function hasTargetOnDisk(relative, root = REPO_ROOT) {
+  const path = join(root, relative);
+  if (!existsSync(path)) return false;
+  return statSync(path).isDirectory() ? readdirSync(path).length > 0 : true;
+}
+
 function main() {
   const manifest = read("config/integration-manifest.json");
   const surfaces = read("config/ui-surfaces.json");
@@ -328,6 +433,8 @@ function main() {
     manifest,
     surfaces,
     readComponent: readComponentFromDisk,
+    hasTarget: (target) => hasTargetOnDisk(target),
+    readEvidence: readEvidenceFromDisk,
   });
 
   const total = Object.keys(manifest.entries).length;

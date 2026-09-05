@@ -37,6 +37,7 @@ const enterpriseIds = registry.enterprise.map((p) => p.id);
 const localLlmIds = registry.localLlm.map((p) => p.id);
 const whisperIds = registry.localAsr.whisper.map((m) => m.id);
 const sherpaIds = registry.localAsr.sherpa.map((m) => m.id);
+const diarizationIds = registry.localAsr.diarization.map((m) => m.id);
 
 // Credential slots come from the registry's own list, not from the provider
 // lists. Deriving them from providers gave nine; there are fifteen, because
@@ -152,8 +153,14 @@ export interface EnterpriseProvider {
 /** A speculative-decoding drafter downloaded alongside the main GGUF. */
 export interface DraftModel {
   readonly hfRepo: string;
+  /** On the same terms as \`LocalLlmModel.revision\`. */
+  readonly revision: string;
   readonly fileName: string;
   readonly sizeBytes: number | null;
+  readonly sizeMeasured: boolean;
+  /** On the same terms as \`LocalLlmModel.sha256\`. */
+  readonly sha256: string | null;
+  readonly sha256Measured: boolean;
 }
 
 export interface LocalLlmModel {
@@ -161,7 +168,39 @@ export interface LocalLlmModel {
   readonly name: string;
   readonly fileName: string;
   readonly hfRepo: string;
+  /**
+   * The commit the GGUF is downloaded from — a 40-character sha, never
+   * \`main\`.
+   *
+   * A branch pointer moves when the publisher pushes, which would move the
+   * bytes out from under the digest committed beside them and fail an install
+   * for a reason that has nothing to do with the user. Measured into
+   * \`HF_REVISIONS\` by \`node tools/model-pin/pin.mjs --revisions\`.
+   */
+  readonly revision: string;
   readonly sizeBytes: number | null;
+  /**
+   * Whether \`sizeBytes\` was measured against the publisher or copied from
+   * upstream's declaration. Upstream declared a size for every model and was
+   * wrong about eighteen of them, so a non-null size is not on its own a
+   * trustworthy one; the installer holds a measured size to exact equality and
+   * a declared one to 5%.
+   */
+  readonly sizeMeasured: boolean;
+  /**
+   * The object's SHA-256, and whether this project measured it.
+   *
+   * Non-null on all thirty-nine published objects. \`sha256Measured\` is the
+   * part that matters: **true** means the bytes were downloaded and hashed
+   * here, **false** means this is the publisher's stated \`lfs.oid\` — a real
+   * digest of the object, but one delivered by the same host that serves the
+   * bytes, so it catches corruption and re-uploads and not a compromised
+   * huggingface.co. Seven of the thirty-nine are measured, one per publishing
+   * organisation. Anything shown to a person about how a model was verified
+   * must read this flag and not just the digest.
+   */
+  readonly sha256: string | null;
+  readonly sha256Measured: boolean;
   readonly quantization: string | null;
   readonly contextLength: number | null;
   readonly recommended: boolean;
@@ -181,7 +220,21 @@ export interface WhisperModel {
   readonly name: string;
   readonly fileName: string;
   readonly downloadUrl: string;
+  /** A display estimate, rounded. This is the figure the screen shows. */
   readonly sizeMb: number | null;
+  /**
+   * The model file's pinned digest and its expected byte count. Non-null on
+   * all six shipped models, both measured from a real download; a null
+   * \`sha256\` would mean a model added to the registry before anybody
+   * downloaded it, which \`models::integrity_for\` degrades to a size check
+   * rather than hiding.
+   *
+   * With a digest, \`expectedSizeBytes\` is the measured length — what the
+   * integrity check is handed, so it has to be bytes that were there. Without
+   * one it is upstream's rounded declaration, held to a 5% tolerance. It is
+   * never \`sizeMb\` scaled.
+   */
+  readonly sha256: string | null;
   readonly expectedSizeBytes: number | null;
   readonly recommended: boolean;
 }
@@ -191,11 +244,50 @@ export interface SherpaModel {
   readonly name: string;
   readonly downloadUrl: string;
   readonly extractDir: string;
+  /** A display estimate of the *extracted* footprint, not the download. */
   readonly sizeMb: number | null;
+  /**
+   * The archive's pinned digest and exact compressed size, and a ceiling on
+   * what it may extract to. Nullable in the type because sherpa_models::install
+   * refuses an unpinned model rather than downloading something
+   * unauthenticated -- but as of 2026-09-01 all four carry all three: the two
+   * Nemotron streaming models were the last unpinned pair and both were
+   * measured that day.
+   */
+  readonly sha256: string | null;
+  readonly expectedSizeBytes: number | null;
+  readonly maxExtractedSizeBytes: number | null;
   readonly language: string | null;
   readonly supportedLanguages: readonly string[] | null;
   /** True for the Nemotron streaming runtimes; Parakeet models are batch. */
   readonly streaming: boolean;
+}
+
+/** Which half of a speaker-diarization run a model does. */
+export type DiarizationRole = "segmentation" | "embedding";
+
+/**
+ * One of the two models a speaker-diarization run needs.
+ *
+ * Not a SherpaModel despite coming from the same publisher: only one of the two
+ * is an archive, neither declares a language the way an ASR model does, and
+ * neither is streaming.
+ */
+export interface DiarizationModel {
+  readonly id: DiarizationModelId;
+  readonly name: string;
+  readonly downloadUrl: string;
+  /** Null for the embedding model, a single .onnx with nothing to extract. */
+  readonly extractDir: string | null;
+  /** Null for the segmentation model, which is an archive. Exactly one of
+   *  this and extractDir is set. */
+  readonly fileName: string | null;
+  readonly sizeMb: number | null;
+  readonly role: DiarizationRole | null;
+  readonly sha256: string | null;
+  readonly expectedSizeBytes: number | null;
+  /** Null for the embedding model: nothing extracts it. */
+  readonly maxExtractedSizeBytes: number | null;
 }
 
 export interface ProviderRegistry {
@@ -207,6 +299,7 @@ export interface ProviderRegistry {
   readonly localAsr: {
     readonly whisper: readonly WhisperModel[];
     readonly sherpa: readonly SherpaModel[];
+    readonly diarization: readonly DiarizationModel[];
   };
 }
 `;
@@ -295,6 +388,12 @@ const rendered = [
     "Local sherpa-onnx models (Parakeet batch, Nemotron streaming).",
   ),
   idUnion(
+    "DiarizationModelId",
+    "DIARIZATION_MODEL_IDS",
+    diarizationIds,
+    "The two models a speaker-diarization run needs, one of each role.",
+  ),
+  idUnion(
     "CredentialSlot",
     "CREDENTIAL_SLOTS",
     credentialSlots,
@@ -334,4 +433,7 @@ mkdirSync(dirname(OUT), { recursive: true });
 writeFileSync(OUT, rendered, "utf8");
 console.log(`wrote ${OUT}`);
 console.log(`  ${transcriptionIds.length} transcription, ${reasoningIds.length} reasoning, ${enterpriseIds.length} enterprise, ${localLlmIds.length} local LLM providers`);
-console.log(`  ${whisperIds.length} whisper, ${sherpaIds.length} sherpa models, ${credentialSlots.length} credential slots`);
+console.log(
+  `  ${whisperIds.length} whisper, ${sherpaIds.length} sherpa, ` +
+    `${diarizationIds.length} diarization models, ${credentialSlots.length} credential slots`
+);

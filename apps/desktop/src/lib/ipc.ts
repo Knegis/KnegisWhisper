@@ -20,7 +20,7 @@
  * Rust method and are asserted against it by a Rust test.
  */
 
-import { invoke } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 import type {
@@ -45,8 +45,11 @@ import type {
   CredentialKind,
   CredentialSlotStatus,
   CredentialStoreStatus,
+  Delivered,
   Detected,
   Diagnostics,
+  DiarizationModelStatus,
+  DiarizationStatus,
   Dispatch,
   DiscoveryPermissions,
   DraftStatus,
@@ -58,8 +61,10 @@ import type {
   Folder,
   Format,
   GateReason,
+  GgufIntegrity,
   HotkeyAction,
   HotkeyChange,
+  HotkeyMode,
   HotkeyReport,
   ImportPickKind,
   ImportReport,
@@ -81,11 +86,13 @@ import type {
   MeetingProviderSummary,
   MeetingState,
   MeetingStatus,
+  MicrophoneSupport,
   ModelCacheStatus,
   ModelStatus,
   NewNoteRequest,
   NonActivating,
   Note,
+  NoteRecording,
   NoteUpdateRequest,
   Offer,
   Outcome,
@@ -100,7 +107,9 @@ import type {
   ReasoningModelSummary,
   ReasoningProviderSummary,
   ReasoningStatus,
+  RecheckOutcome,
   Registration,
+  RefreshOutcome,
   RelocatedCredential,
   RouteReport,
   SearchHit,
@@ -108,6 +117,7 @@ import type {
   ShortcutHookStatus,
   SherpaModelStatus,
   SherpaStatus,
+  SidecarFreshness,
   SidecarStatus,
   SkipReason,
   Sources,
@@ -116,8 +126,10 @@ import type {
   SystemAudioSupport,
   TableReport,
   TokenStatus,
+  UsedFor,
   TranscriptEvent,
   Transcription,
+  TranscriptRow,
   UnhandledAction,
   UpdateCheckResult,
   VerifiedBy,
@@ -149,8 +161,11 @@ export type {
   CredentialKind,
   CredentialSlotStatus,
   CredentialStoreStatus,
+  Delivered,
   Detected,
   Diagnostics,
+  DiarizationModelStatus,
+  DiarizationStatus,
   Dispatch,
   DiscoveryPermissions,
   DraftStatus,
@@ -161,8 +176,10 @@ export type {
   ExportedTranscript,
   Folder,
   GateReason,
+  GgufIntegrity,
   HotkeyAction,
   HotkeyChange,
+  HotkeyMode,
   HotkeyReport,
   ImportPickKind,
   ImportReport,
@@ -184,10 +201,12 @@ export type {
   MeetingProviderSummary,
   MeetingState,
   MeetingStatus,
+  MicrophoneSupport,
   ModelCacheStatus,
   ModelStatus,
   NonActivating,
   Note,
+  NoteRecording,
   Offer,
   OverlayStatus,
   ProbeKind,
@@ -200,7 +219,9 @@ export type {
   ReasoningModelSummary,
   ReasoningProviderSummary,
   ReasoningStatus,
+  RecheckOutcome,
   Registration,
+  RefreshOutcome,
   RelocatedCredential,
   RouteReport,
   SearchHit,
@@ -208,6 +229,7 @@ export type {
   ShortcutHookStatus,
   SherpaModelStatus,
   SherpaStatus,
+  SidecarFreshness,
   SidecarStatus,
   Sources,
   SyncOutcome,
@@ -215,8 +237,10 @@ export type {
   SystemAudioSupport,
   TableReport,
   TokenStatus,
+  UsedFor,
   TranscriptEvent,
   Transcription,
+  TranscriptRow,
   UnhandledAction,
   UpdateCheckResult,
   VerifiedBy,
@@ -257,6 +281,21 @@ export async function setHotkey(
   accelerators: string,
 ): Promise<HotkeyChange> {
   return invoke<HotkeyChange>("hotkey_set", { action, accelerators });
+}
+
+/**
+ * Choose whether an action toggles on each press or runs while the key is held.
+ *
+ * Its own command rather than a second argument to `setHotkey`, because the two
+ * are separate settings keys and separate controls: rebinding a key is not
+ * choosing push-to-talk. Returns the same `HotkeyChange` so the row can say what
+ * became of the binding either way.
+ */
+export async function setHotkeyMode(
+  action: HotkeyAction,
+  mode: HotkeyMode,
+): Promise<HotkeyChange> {
+  return invoke<HotkeyChange>("hotkey_set_mode", { action, mode });
 }
 
 /** Fired when a registered hotkey is pressed. Mirrors `shortcuts::HotkeyFired`. */
@@ -348,6 +387,34 @@ export async function dismissMeetingOffer(): Promise<void> {
 
 export async function setMeetingPrompt(enabled: boolean): Promise<void> {
   return invoke("meeting_set_prompt", { enabled });
+}
+
+/** The two diarization models, and whether speaker labels can run. */
+export async function getDiarizationStatus(): Promise<DiarizationStatus> {
+  return invoke<DiarizationStatus>("diarization_status");
+}
+
+/**
+ * Install one of the two models, and the sherpa runtime with the first of
+ * them.
+ *
+ * Resolves when the install finishes. Progress arrives on the
+ * `diarization://install` event, which this wrapper does not subscribe to —
+ * the screen decides whether it wants the detail.
+ */
+export async function installDiarizationModel(modelId: string): Promise<void> {
+  return invoke("diarization_install_model", { modelId });
+}
+
+/**
+ * Turn speaker labels on or off.
+ *
+ * Rejects when turning on something that cannot run, with a message naming
+ * which half is missing. Accepting it and skipping silently at save time is
+ * how somebody comes to believe the feature is on for three meetings.
+ */
+export async function setDiarizationEnabled(enabled: boolean): Promise<void> {
+  return invoke("diarization_set_enabled", { enabled });
 }
 
 export async function getMeetingDetectLists(): Promise<DetectLists> {
@@ -539,6 +606,41 @@ export async function clearHistory(): Promise<number> {
   return invoke<number>("history_clear");
 }
 
+/**
+ * Whether each dictation is written down at all.
+ *
+ * On by default, and read by the sink before every row, so switching it off
+ * applies to the next thing said rather than after a relaunch.
+ *
+ * Off is not empty. It stops new rows and deletes none of the old ones --
+ * `clearHistory` above is the only thing that removes what is already stored.
+ */
+export async function getHistoryEnabled(): Promise<boolean> {
+  return invoke<boolean>("history_enabled");
+}
+
+export async function setHistoryEnabled(enabled: boolean): Promise<void> {
+  return invoke<void>("history_set_enabled", { enabled });
+}
+
+/**
+ * Whether the pre-cleanup transcript is kept beside the cleaned one.
+ *
+ * Off by default. Switched on, a history row that carries a `rawText` is proof
+ * cleanup changed something on that dictation -- which is otherwise only
+ * answerable by dictating the same sentence twice.
+ *
+ * Subordinate to `getHistoryEnabled`: with history off there are no rows for a
+ * second version to be kept on.
+ */
+export async function getKeepRawText(): Promise<boolean> {
+  return invoke<boolean>("history_keep_raw_text");
+}
+
+export async function setKeepRawText(enabled: boolean): Promise<void> {
+  return invoke<void>("history_set_keep_raw_text", { enabled });
+}
+
 /* --------------------------------------------------------------------- notes */
 
 /**
@@ -604,6 +706,50 @@ export async function deleteFolder(id: number): Promise<boolean> {
   return invoke<boolean>("folder_delete", { id });
 }
 
+/* --------------------------------------------------------------- recordings */
+
+/**
+ * The recording a note was made from, or `null` for a typed note and for any
+ * note saved before recordings were attached to notes (2026-09-02).
+ *
+ * Nothing here is a path. `storageKey` is the file's bare name inside the
+ * application's recordings directory, and playback goes through
+ * `recordingSrc`, so the renderer never names a file to Rust in either
+ * direction.
+ */
+export async function getNoteRecording(
+  id: number,
+): Promise<NoteRecording | null> {
+  return invoke<NoteRecording | null>("note_recording_get", { id });
+}
+
+/**
+ * The stored transcript as playable rows: seconds from the start of the
+ * recording, speaker resolved the way export resolves it. Empty for a note
+ * with no transcript. Rust does the normalising so this screen and the export
+ * files cannot disagree about a timestamp or a name.
+ */
+export async function getNoteTranscriptRows(
+  id: number,
+): Promise<TranscriptRow[]> {
+  return invoke<TranscriptRow[]>("note_transcript_rows", { id });
+}
+
+/**
+ * The URL an `<audio>` element plays a note's recording from.
+ *
+ * The `recording` scheme is served by Rust (`src-tauri/src/recordings.rs`),
+ * which looks the note up in `note_recordings` and streams the file from inside
+ * the recordings directory with HTTP range support. The only thing in the URL
+ * is the note id, so no path crosses the boundary in either direction.
+ * `convertFileSrc` spells the scheme the way the platform's webview needs:
+ * `http://recording.localhost/<id>` on Windows, `recording://localhost/<id>`
+ * elsewhere.
+ */
+export function recordingSrc(noteId: number): string {
+  return convertFileSrc(String(noteId), "recording");
+}
+
 /* --------------------------------------------------------- transcript export */
 
 /**
@@ -654,7 +800,20 @@ export async function setSetting(key: string, value: unknown): Promise<void> {
   return invoke("settings_set", { key, value });
 }
 
-/** Every settings key Rust will accept, so a screen cannot invent one. */
+/**
+ * Every settings key that currently has a stored value. Values are not returned.
+ *
+ * Not the set of keys Rust will accept, which this said until 2026-08-31: the
+ * command reads the `settings` table, so a key at its default has never been
+ * written and does not appear. The list of keys the application has, and which
+ * screen changes each one, is `config/settings-keys.json`, gated by
+ * `tools/settings-audit/scan.mjs`.
+ *
+ * This and the two wrappers above it have no caller. Every screen goes through
+ * a command named for the setting it changes instead, which is what lets that
+ * gate tell a key with a way in from one without -- a generic writer would make
+ * every key look reachable.
+ */
 export async function getSettingsKeys(): Promise<string[]> {
   return invoke<string[]>("settings_keys");
 }
@@ -671,15 +830,24 @@ export async function importOpenWhispr(path: string): Promise<ImportReport> {
  *
  * The renderer has no independent way to obtain a path here -- there is no
  * filesystem or dialog capability, so the only path this screen can ever
- * hold is one a real OS dialog returned from this call. **That is not the
- * same guarantee `exportNoteToFile` gets from its save dialog.** That command
- * fuses picking and writing into one atomic call on the Rust side, so the
- * frontend never sees or supplies a path at all. This one hands the chosen
- * path back, and the screen passes it on to a later, separate import call --
- * see `pick_import_file`'s doc comment in `commands.rs` for the gap that
- * leaves open and the hardening options being weighed (also
- * `docs/SECURITY.md`'s Webview section and `docs/BENCH_CHECK.md`'s Task 12
- * entry).
+ * hold is one a real OS dialog returned from this call. **And that is now
+ * checked rather than assumed.** Rust records the canonical form of every
+ * path it returns from here, for as long as the app runs, and the three
+ * commands that take a path -- `importAudioFile`, `importVideoFile` and
+ * `importOpenWhispr` -- refuse a path that is not in that set. So a path this
+ * screen holds can be imported, re-imported after a failure, and imported
+ * again; a path invented anywhere else cannot.
+ *
+ * Two consequences worth knowing on this side. The string returned is the
+ * display form, which is what to show the user and what to derive a note
+ * title from -- Rust canonicalises it again on the way back in, so do not
+ * rewrite or normalise it here or it will stop matching. And a path whose
+ * name does not survive lossy conversion cannot be imported at all; it is
+ * refused rather than silently read.
+ *
+ * See `pick_import_file`'s doc comment in `commands.rs`, `docs/SECURITY.md`'s
+ * Webview section, and `docs/BENCH_CHECK.md`'s Task 12 entry -- which still
+ * carries the by-hand check that the policy is consulted on the real path.
  */
 export async function pickImportFile(
   kind: ImportPickKind,
@@ -755,6 +923,17 @@ export async function stopLocalServer(): Promise<void> {
   return invoke<void>("local_server_stop");
 }
 
+/**
+ * Replace the installed server binary with the one this build pins.
+ *
+ * Stops the running server, installs, and starts it again. The outcome says
+ * whether it came back -- see `RefreshOutcome`, which reports that separately
+ * from the replacement because they can go different ways.
+ */
+export async function refreshLocalServer(): Promise<RefreshOutcome> {
+  return invoke<RefreshOutcome>("local_server_refresh");
+}
+
 /* ---------------------------------------------------- local ASR (sherpa) */
 
 /** The sherpa models, what is installed, and which one is selected. */
@@ -776,6 +955,22 @@ export async function installSherpaModel(modelId: string): Promise<void> {
 /** Send dictation to one installed sherpa model. */
 export async function useSherpaModel(modelId: string): Promise<void> {
   return invoke<void>("sherpa_use_model", { modelId });
+}
+
+/**
+ * Record meetings with one installed streaming model.
+ *
+ * A separate call writing a separate setting, not a second use of
+ * {@link useSherpaModel}: the two engines run different models, and one
+ * selection would mean choosing a Parakeet model for dictation silently
+ * changed what a meeting recorded with.
+ *
+ * Does not start the server. That happens when a meeting starts, because a
+ * 630 MB model loaded by a settings click is a cost the click did not
+ * advertise.
+ */
+export async function useSherpaStreamModel(modelId: string): Promise<void> {
+  return invoke<void>("sherpa_use_stream_model", { modelId });
 }
 
 export async function onInstallProgress(
@@ -808,6 +1003,43 @@ export async function startLocalLlm(modelId: string): Promise<number> {
 
 export async function stopLocalLlm(): Promise<void> {
   return invoke<void>("local_llm_stop");
+}
+
+/**
+ * Replace the installed llama.cpp server binary with the build this version
+ * pins.
+ *
+ * The same stop-replace-restart `refreshLocalServer` performs for
+ * `whisper-server`, and it resolves with the same `RefreshOutcome` -- one shape
+ * for both, because the two answer the same three questions and a second Rust
+ * type rendering to the same TypeScript name is a failing `ipc_types` test
+ * rather than a duplicate nobody notices.
+ *
+ * The llama server stops itself when idle, and a refresh that restarts it
+ * re-arms that timer. Without it the replaced server would hold several
+ * gigabytes until the application exits.
+ */
+export async function refreshLocalLlmServer(): Promise<RefreshOutcome> {
+  return invoke<RefreshOutcome>("local_llm_refresh_server");
+}
+
+/**
+ * Hash an installed model against its pinned digest.
+ *
+ * **Slow, on purpose, and only when asked.** Everything else the screen reports
+ * about an installed file compares two integers against a record written when it
+ * was downloaded; this reads the whole file back, which is a minute or more for
+ * the largest models. It is the only thing that proves the bytes.
+ *
+ * Resolves with the finding rather than rejecting on one: a file that does not
+ * match its digest is an answer, not a transport failure, and the two must not
+ * arrive through the same channel. It rejects only when the check could not be
+ * made at all.
+ */
+export async function recheckLocalLlmModel(
+  modelId: string,
+): Promise<RecheckOutcome> {
+  return invoke<RecheckOutcome>("local_llm_recheck_model", { modelId });
 }
 
 /**

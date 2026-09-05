@@ -16,9 +16,11 @@ mod calendar;
 mod commands;
 mod diagnostics;
 mod dictation;
+mod gguf_check;
 mod integrations;
 // Test-only: it renders `apps/desktop/src/generated/ipc-types.ts` and asserts
 // the committed copy still matches the Rust types. Nothing at runtime calls it.
+mod diarization;
 #[cfg(test)]
 mod ipc_types;
 mod local_api;
@@ -30,11 +32,14 @@ mod meeting;
 mod meeting_window;
 mod overlay;
 mod reasoning;
+mod recordings;
+mod sherpa_stream;
 mod shortcuts;
 mod state;
 mod tray;
 mod update_window;
 mod updater;
+mod window_placement;
 
 use anyhow::Context as _;
 use tauri::Manager as _;
@@ -111,6 +116,7 @@ pub fn run() -> anyhow::Result<()> {
     );
 
     tauri::Builder::default()
+        .register_asynchronous_uri_scheme_protocol(recordings::SCHEME, recordings::serve)
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         // Registered so `commands::note_export_to_file` can open a save dialog
         // from Rust. The renderer has no dialog permission and never sees a
@@ -161,11 +167,27 @@ pub fn run() -> anyhow::Result<()> {
                     .context("could not load config/sidecars.json")?,
             );
 
+            // The streaming model server behind the `local-streaming` meeting
+            // provider. Not started here -- a 630 MB model held from launch for
+            // a user who never records a meeting is a cost nobody asked for --
+            // but reaped here, beside the others, before any port is allocated.
+            let stream = std::sync::Arc::new(
+                sherpa_stream::SherpaStream::new()
+                    .map_err(|e| anyhow::anyhow!(e))
+                    .context("could not load config/sidecars.json")?,
+            );
+
             // Before anything asks for a port: a previous run that crashed may
             // have left a server holding one.
             tauri::async_runtime::block_on(local.reap_stale());
+            tauri::async_runtime::block_on(stream.reap_stale());
 
             let shared = local.shared();
+
+            // How dictation and media import start the server again when it has
+            // gone out from under them. Built here because it needs both the
+            // runtime and the database, and neither path holds the other.
+            let revive = local_model::revive_handle(&local, &db);
 
             // The other local engine. No process and no port -- a selection and
             // a one-shot CLI -- so there is nothing to reap and nothing to
@@ -190,6 +212,7 @@ pub fn run() -> anyhow::Result<()> {
                     std::sync::Arc::clone(&shared.port),
                     std::sync::Arc::clone(&shared.model),
                     asr.selection(),
+                    std::sync::Arc::clone(&revive),
                     db.clone(),
                 )
                 .map_err(|e| anyhow::anyhow!(e))
@@ -225,6 +248,7 @@ pub fn run() -> anyhow::Result<()> {
                     transcription_port: shared.port,
                     transcription_model: shared.model,
                     transcription_sherpa: sherpa_selection,
+                    transcription_revive: revive,
                     generation: llm_endpoint,
                 },
                 // Off until `reasoning::apply_at_startup` fills it, and off
@@ -284,17 +308,26 @@ pub fn run() -> anyhow::Result<()> {
             }
             app.manage(updater::LastCheck::default());
 
+            // Empty at startup, and only `pick_import_file` ever adds to it:
+            // the three commands that take a file path refuse anything this
+            // set does not hold. See `commands::DialogGrants`.
+            app.manage(commands::DialogGrants::default());
+
             let meetings = std::sync::Arc::new(meeting::MeetingRuntime::new(
                 handle.clone(),
                 db.clone(),
                 meeting_policy,
                 meeting_credentials,
                 local.shared(),
+                // So the whole-recording pass uses the engine dictation uses.
+                asr.selection(),
+                std::sync::Arc::clone(&stream),
             ));
             // Polls the process table while idle and offers to record a meeting
             // in progress. There is no path from it to `start` without a click.
             meetings.watch();
             app.manage(meetings);
+            app.manage(std::sync::Arc::clone(&stream));
 
             // Calendars. Nothing here reaches the network either: connecting an
             // account and syncing one are both explicit clicks on
@@ -361,9 +394,14 @@ pub fn run() -> anyhow::Result<()> {
             commands::settings_keys,
             commands::hotkeys,
             commands::hotkey_set,
+            commands::hotkey_set_mode,
             commands::history,
             commands::history_delete,
             commands::history_clear,
+            commands::history_enabled,
+            commands::history_set_enabled,
+            commands::history_keep_raw_text,
+            commands::history_set_keep_raw_text,
             commands::providers,
             commands::credential_slots,
             commands::provider_credential_set,
@@ -381,6 +419,8 @@ pub fn run() -> anyhow::Result<()> {
             commands::notes_create,
             commands::notes_update,
             commands::notes_delete,
+            commands::note_recording_get,
+            commands::note_transcript_rows,
             commands::folders_list,
             commands::folder_create,
             commands::folder_delete,
@@ -399,9 +439,14 @@ pub fn run() -> anyhow::Result<()> {
             local_model::local_model_install,
             local_model::local_server_start,
             local_model::local_server_stop,
+            local_model::local_server_refresh,
             local_asr::sherpa_status,
             local_asr::sherpa_install_model,
             local_asr::sherpa_use_model,
+            local_asr::sherpa_use_stream_model,
+            diarization::diarization_status,
+            diarization::diarization_install_model,
+            diarization::diarization_set_enabled,
             local_api::local_api_status,
             local_api::local_api_start,
             local_api::local_api_stop,
@@ -411,6 +456,8 @@ pub fn run() -> anyhow::Result<()> {
             local_llm::local_llm_install,
             local_llm::local_llm_start,
             local_llm::local_llm_stop,
+            local_llm::local_llm_recheck_model,
+            local_llm::local_llm_refresh_server,
             media::media_import_status,
             media::media_import_install_sidecar,
             media::media_import_audio,

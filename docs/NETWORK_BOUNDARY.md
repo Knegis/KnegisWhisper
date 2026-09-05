@@ -195,10 +195,27 @@ the seven-purpose count is a stated constraint.
 
 The executable half is more dangerous, and that is answered by a stronger requirement rather than
 a separate purpose: `kw_sidecar::Asset` cannot be constructed without a pinned SHA-256, so a
-binary only ever reaches this purpose when its exact bytes were decided at review time. Models
-are held to a weaker check — size, with a tolerance, unless a digest happens to be known — and
+binary only ever reaches this purpose when its exact bytes were decided at review time. A model is
+held to a *weaker rule* — a digest where one is known, a size within a tolerance otherwise — and
 which check applied is reported to the caller rather than implied, because wrong weights produce
 bad transcripts while wrong code produces a compromised machine.
+
+**As of 2026-08-31 every model this application can install is in fact digest-pinned** — all six
+whisper models, both installable Parakeet archives, and all 39 local-LLM GGUF objects. So the
+weaker rule is what the *type system* permits, not what the shipped registry contains. It stays
+weaker on purpose: a whisper model added to the baseline before somebody spends the bandwidth
+degrades to a size check rather than becoming uninstallable, which is the opposite of the sherpa
+rule (`MissingPin`, refuse) and deliberate.
+
+**Two digest standards, and the boundary is where the difference lives.** The whisper and Parakeet
+pins are bytes this project downloaded and hashed. Thirty-two of the thirty-nine GGUF pins are
+Hugging Face's stated `lfs.oid`, read from `/api/models/{repo}/tree/{commit}` — a true SHA-256 of the
+object, because git-lfs is content-addressed on it, but *delivered by the same host that serves the
+bytes*. It closes a corrupted transfer, a truncation that kept the length, and an accidental
+re-upload. It does not close a compromised huggingface.co, and it is never reported as though it
+did: `VerifiedBy::StatedDigest` is a distinct state on the wire and a distinct sentence on screen.
+Seven of the thirty-nine were downloaded and hashed here, one per publishing organisation, which is
+how the metadata itself was tested. See KNEG-45.
 
 ## Plaintext HTTP, and HTTPS to a private address
 
@@ -290,28 +307,59 @@ else in this crate. Closing that would need a check against the address actually
 connect time, which is a materially different and harder problem than the ones the corrections
 above address, and is not implemented here.
 
-### Known, accepted residue in `is_private_host`
+### The IPv4-embedding family, closed as a family
 
-Three narrower gaps were raised and deliberately left as they are, rather than fixed silently or
-forgotten. Recorded here so each is a decision, not an oversight:
+Three narrower gaps were raised during the SSRF review and deliberately left as they were. Two of
+them are closed as of 2026-08-31 (KNEG-93); the third is still a decision and is below.
 
-- **`::ffff:0:a.b.c.d` (the "IPv4-translated" form, RFC 8215) still classifies as public.**
-  `to_ipv4` unwraps `::ffff:a.b.c.d` and `::a.b.c.d`; it does not unwrap `::ffff:0:a.b.c.d`, which
-  embeds the IPv4 address one group further in. `::ffff:0:0/96` is the SIIT source prefix, is not
-  routed on an ordinary host, and a `connect()` to it fails rather than reaching loopback — unlike
-  `::ffff:a.b.c.d`, which a dual-stack kernel genuinely delivers to the embedded IPv4 address.
-  Accepted; the cost if this reasoning is wrong is that a host with an unusual SIIT configuration
-  could reach private space through it.
-- **NAT64 (`64:ff9b::/96`) and 6to4 (`2002::/16`) are not unwrapped either**, and are more common
-  in real networks than the IPv4-translated form above. Same reasoning, same acceptance, recorded
-  together deliberately: if this family of embeddings is ever closed, it should be closed as a
-  family — auditing every RFC-defined way to fold an IPv4 address into 128 bits — rather than one
-  prefix at a time as each is separately noticed.
-- **`blocked_hosts()` lowercases the vendor hosts read from `config/forbidden-domains.json` but
-  does not strip trailing dots from them.** The asymmetry with `is_blocked`'s now-normalised input
-  is real. It has no live consumer: every entry in that file is written by this project, without a
-  trailing dot, so there is nothing for the asymmetry to bite on today. It would matter only if a
-  future entry were added with one.
+**Why they were reopened.** Each had been accepted on the same reasoning — that the prefix is not
+routed on an ordinary host, so a `connect()` to it fails rather than arriving. That is a claim about
+the *host's* configuration, and it stops holding the moment a machine has 6to4 or a NAT64 resolver,
+which is not something this process can see. The accepted-residue note itself said that if the
+family were ever closed it should be closed **as a family**, by enumerating the RFCs rather than
+adding a prefix each time somebody notices one. That is what `embedded_ipv4s` now does:
+
+| form | prefix | RFC | was it handled before? |
+| --- | --- | --- | --- |
+| IPv4-mapped | `::ffff:0:0/96` | 4291 §2.5.5.2 | yes, by `to_ipv4` |
+| IPv4-compatible (deprecated) | `::/96` | 4291 §2.5.5.1 | yes, by `to_ipv4` |
+| IPv4-translated (SIIT) | `::ffff:0:0:0/96` | 2765 | **no** |
+| NAT64, well-known prefix | `64:ff9b::/96` | 6052 §2.1 | **no** |
+| NAT64, local-use prefix | `64:ff9b:1::/48` | 8215, laid out by 6052 §2.2 | **no** |
+| 6to4 | `2002::/16` | 3056 | **no** |
+| Teredo | `2001:0::/32` | 4380 | **no** |
+
+In every one of these the embedded address is where the packet ends up: a dual-stack kernel delivers
+an IPv4-mapped address directly, a NAT64 gateway translates and forwards, and a 6to4 or Teredo
+tunnel encapsulates and sends to the embedded IPv4. So unwrapping and re-checking against the IPv4
+rules is the only reading that describes where the bytes go.
+
+Teredo is the one form carrying **two** addresses — the server in the clear at bits 32..64 and the
+client at bits 96..128 XORed with all-ones — and either being private refuses the address, because a
+packet to it involves both hosts.
+
+Two layouts are easy to get wrong in a way that still parses, so the tests state the bits rather than
+trusting the implementation to state them: the NAT64 `/48` address is split around a reserved octet
+(sixteen bits at 48..64, sixteen more at 72..88), and Teredo's client half is obfuscated. Each layout
+was also deliberately broken to confirm the tests catch it.
+
+**What this still cannot enumerate.** RFC 6052 permits a *network-specific* NAT64 prefix of any value
+at `/32`, `/40`, `/48`, `/56` or `/64`. Only the well-known and local-use prefixes have fixed values,
+so a site running NAT64 on its own prefix is invisible here. Seeing it would mean reading the host's
+resolver configuration — the same class of problem as DNS rebinding, and out of scope for the same
+reason.
+
+`blocked_hosts()` now strips trailing dots from the configured vendor hosts as well, matching what
+`is_blocked` already did to its input. No entry in `config/forbidden-domains.json` has one, so that
+closed a footgun for whoever next edits the file rather than a live hole.
+
+### Still accepted: DNS rebinding
+
+**Out of scope, deliberately.** The check runs against the literal host in the URL at validation
+time and has no view of DNS, so a name that resolves to a public address when it is validated and a
+private one when it is dialled defeats it. Closing that means checking the address actually
+connected to, at connect time — materially harder, explicitly not attempted, and the same problem
+that caused URL import to be withdrawn (KNEG-87).
 
 ## Self-hosted and no-auth endpoints
 

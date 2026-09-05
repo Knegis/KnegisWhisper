@@ -6,6 +6,32 @@
 //! it to. What differs is that a meeting does not end: it produces transcript
 //! while it runs, and a recording longer than memory.
 //!
+//! # Where the pieces live
+//!
+//! Split on 2026-09-01 (KNEG-89), at 3,303 lines. The issue had been noted
+//! three times and filed at ~1,600; it had doubled while the issue sat, and
+//! every addition was reasonable on its own, which is the whole difficulty
+//! with a file like this — no single change is ever the one that justifies
+//! splitting it.
+//!
+//! What moved is what has no session state, so each piece is testable on its
+//! own terms:
+//!
+//! - [`recorder`] — the thread that owns both captures, and everything about
+//!   what it delivered and how it ended.
+//! - [`watcher`] — noticing a meeting and offering to record it. Detection
+//!   suggests; it never records.
+//! - [`config`] — deciding what to connect with, before anything connects.
+//!   Free functions over plain arguments, so "may this start, and with what" is
+//!   exercised with no `AppHandle` anywhere.
+//! - [`notes`] — turning a finished pass into the segments a note is made of,
+//!   speaker labels included.
+//!
+//! What stayed is the part that genuinely holds state: [`MeetingRuntime`], the
+//! session it runs, and the commands. Nothing changed in the move — same
+//! functions, same tests, same names — and the test count either side of it is
+//! the evidence, not a claim about care taken.
+//!
 //! # Three moving parts
 //!
 //! **A recorder thread** owns both captures, because `cpal::Stream` is not
@@ -23,10 +49,19 @@
 //!
 //! # Why the note is not made of the live events
 //!
-//! The live events are partials: windows overlap, so they repeat words, and
+//! The live events are partials, and what that costs depends on the provider:
+//! `local`'s five-second windows overlap by two and repeat words, and
 //! [`kw_meeting_core::local`] explains why deduplicating them properly is not
-//! possible with what `/inference` returns. So the note gets one pass over the
-//! finished file, which is exactly the path a dictation takes.
+//! possible with what `/inference` returns; `local-streaming` revises one event
+//! per utterance in place and does not repeat at all. Either way they are the
+//! running transcription rather than a considered pass, so the note gets one
+//! pass over the finished file, which is exactly the path a dictation takes.
+//!
+//! **Which engine that pass uses is [`crate::dictation::local_engine`]'s
+//! answer, not this module's.** It used to build a `WhisperServer` directly and
+//! so failed outright whenever a sherpa model was selected -- the documented
+//! one-local-engine state -- and every note silently fell back to the partials
+//! it exists to avoid. Found by a person reading a saved note on 2026-09-01.
 //!
 //! If that pass fails — an hour of audio is a large request — the partials are
 //! saved instead, with the note saying so. A meeting nobody can read because the
@@ -60,24 +95,38 @@
 //! be switched off within a day. Teams and FaceTime are reported on the screen
 //! instead, with the reason, so the limit is visible rather than felt as a bug.
 
+mod config;
+mod notes;
+mod recorder;
+mod watcher;
+
+use config::{
+    draft_config, resolve_client, resolve_corti_scope, resolve_key_ref, resolve_provider_config,
+};
+
+use notes::{labelled, pcm_bytes, segment, WholePass};
+pub use recorder::Delivered;
+use recorder::{spawn_recorder, Drained, Finished, RecorderCommand, RecorderEnd};
+use watcher::{Transition, WatchState};
+
 use std::sync::mpsc as sync_mpsc;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
-use kw_audio_core::meeting::MixFeed;
-use kw_audio_core::{wav, Capture, SystemAudioSupport, SystemCapture, WavWriter};
+use kw_audio_core::{wav, SystemAudioSupport};
 use kw_meeting_core::local::LocalWindowProvider;
 use kw_meeting_core::{
-    AudioChunk, AudioSource, Client, MeetingError, MeetingProviderConfig, MeetingTranscript,
-    MeetingTranscriptionProvider, TranscriptEvent,
+    AudioChunk, AudioSource, Client, MeetingError, MeetingTranscript, MeetingTranscriptionProvider,
+    TranscriptEvent,
 };
 use kw_network_policy::NetworkPolicy;
 use kw_overlay::CaptureExclusion;
-use kw_platform::meeting_detect::{self, Detected, Lists};
+use kw_platform::meeting_detect::{self, CallSignal, Detected, Lists};
+use kw_platform::microphone::MicrophoneSupport;
 use kw_storage::Db;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter as _, Manager as _, State};
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{mpsc, oneshot, Mutex};
 use ts_rs::TS;
 
 /// State changes.
@@ -128,6 +177,53 @@ const PROMPT_BY_DEFAULT: bool = true;
 pub enum MeetingState {
     Idle,
     Recording,
+    /// Still recording, and the live transcription has stopped.
+    ///
+    /// The state KNEG-95 was filed for. On 2026-08-28 both OpenAI Realtime
+    /// sockets closed within milliseconds of connecting; the application went
+    /// on saying **Recording**, kept the indicator up and captured both streams
+    /// for as long as it was left running. The only clue was an empty live
+    /// transcript, which is also what a quiet room looks like.
+    ///
+    /// **The recording continues, and that is the decision rather than an
+    /// omission.** The WAV is what saved that session: `record` keeps writing
+    /// when nothing is consuming the audio, on purpose and with a comment
+    /// saying why; the whole-file pass at Stop reads the complete audio; and
+    /// the saved note comes from that pass, with the live partials only ever
+    /// its fallback. Stopping the recording to report a dead provider would
+    /// destroy the valuable half in order to fix the misleading half.
+    ///
+    /// So the name leads with `Recording` -- in the enum, in the JSON and in a
+    /// log line, the first word is the one that is still true.
+    ///
+    /// The one case where it would not have been is now [`MeetingState::
+    /// Stalled`], which is KNEG-116. Until 2026-08-31 a recorder thread that
+    /// panicked also landed here, and the first word was false; the sentence
+    /// beside it said the true thing and the name did not.
+    RecordingWithoutTranscript,
+    /// Nothing is being recorded, and nothing asked for that.
+    ///
+    /// The recording thread ended with no Stop and no Discard behind it, which
+    /// in practice means it panicked: `record` returns on `Finish`, on `Cancel`
+    /// and on its command channel disconnecting, and all three of those run
+    /// only after the session has been taken.
+    ///
+    /// **A running session, deliberately.** [`MeetingState::is_running`] stays
+    /// true so Stop and Discard remain on screen: whatever was captured before
+    /// the thread went is on disk, and the whole-file pass can still read it.
+    /// A state that hid those buttons would throw the recording away to report
+    /// that the recording stopped.
+    ///
+    /// Named for what is true rather than for what failed. It is not a variant
+    /// of `Recording`, because the thing that word describes has stopped, and
+    /// that mattered enough to be filed separately (KNEG-116) rather than left
+    /// as a comment on the state above.
+    ///
+    /// **No recorder thread has ever been seen to panic in this project.** The
+    /// case is reached by reading `record`'s exits, and now by
+    /// [`RecorderEnd`], which is the thread saying so itself rather than the
+    /// caller inferring it.
+    Stalled,
     /// The recording has stopped and the whole-file pass is still running.
     ///
     /// A separate state because it can take minutes on a long meeting, and
@@ -136,11 +232,32 @@ pub enum MeetingState {
     Finishing,
 }
 
+impl MeetingState {
+    /// Whether a meeting session exists at all.
+    ///
+    /// What the tray asks, extracted so a new variant has one place to be
+    /// classified rather than an inequality to be noticed. Recording *and*
+    /// finishing keep it lit: the microphone is closed once finishing starts,
+    /// but a meeting that still has work to do has not finished, and an idle
+    /// tray would say it had. A dead live transcript changes nothing here --
+    /// the recording is still running, which is exactly what the tray is for.
+    #[must_use]
+    pub const fn is_running(self) -> bool {
+        !matches!(self, Self::Idle)
+    }
+}
+
 /// Which captures are actually running.
 ///
 /// Reported rather than assumed, because a meeting works microphone-only and the
-/// user should know which one they got. Zero system-audio samples means nobody
-/// else spoke; *no system capture at all* is a different fact.
+/// user should know which one they got. *No system capture at all* is a
+/// different fact from a capture that produced nothing.
+///
+/// It used to say here that zero system-audio samples means nobody else spoke.
+/// It does not, and that was KNEG-38: an output device with nothing playing
+/// delivers no callback at all, so zero samples is equally what a capture that
+/// never worked produces. [`Delivered`] carries which of the possible answers
+/// applies, and says plainly that two of them cannot be told apart.
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct Sources {
@@ -155,6 +272,20 @@ pub struct Sources {
 #[serde(rename_all = "camelCase")]
 pub struct MeetingStatus {
     pub state: MeetingState,
+    /// Why the live transcription stopped, when it has.
+    ///
+    /// The provider's own sentence, naming which of the two sockets died --
+    /// [`kw_meeting_core::MeetingError::ProviderFault`] renders it and
+    /// [`live_transcript_ended`] formats it, so this is the same sentence the
+    /// outcome at Stop will carry rather than a second wording of it.
+    ///
+    /// `None` while the transcription is running, and also for the one ending
+    /// that has no sentence: a pump task that panicked or was aborted, which
+    /// [`live_state`] still reports as
+    /// [`MeetingState::RecordingWithoutTranscript`] because a state with no
+    /// explanation is closer to the truth than a claim that the transcript is
+    /// running.
+    pub transcript_failure: Option<String>,
     /// The provider in use, while there is one.
     pub provider: Option<String>,
     pub elapsed_seconds: f64,
@@ -162,12 +293,26 @@ pub struct MeetingStatus {
     /// What this platform can do about system audio, whether or not a meeting is
     /// running.
     pub system_audio: SystemAudioSupport,
+    /// Whether microphone activity can be read, from the last poll.
+    ///
+    /// `None` until the first poll has run. Reported rather than folded into
+    /// `detected`, because "Teams is open and not in a call" and "Teams is open
+    /// and nobody looked" are the same sentence with opposite meanings, and on
+    /// Linux and macOS it is always the second one.
+    pub microphone: Option<MicrophoneSupport>,
     /// Meeting applications seen running at the last poll.
     ///
     /// Everything found, not only what would prompt: the screen shows "Teams is
     /// open" even though Teams cannot be prompted for, because that is more
     /// useful than silence and it is where the reason lives.
     pub detected: Vec<Detected>,
+    /// The offer waiting in the notification window, if one exists.
+    ///
+    /// A broadcast event is not recoverable: a window created hidden may mount
+    /// before or after it was sent. This is the read-back path the update
+    /// notification already has through `get_last_update_check`, so either
+    /// mounting order reaches the same outstanding offer.
+    pub offer: Option<Offer>,
     /// Whether a detected meeting offers to record.
     pub prompt_on_detect: bool,
     /// Whether the notification window is confirmed absent from screen shares.
@@ -189,6 +334,14 @@ pub struct Offer {
     pub name: String,
     /// The process that gave it away, so the offer can say why it appeared.
     pub evidence: String,
+    /// Which signal fired, so the offer can say how sure it is.
+    ///
+    /// Never [`CallSignal::None`]: `consider` only offers on a call. Carried as
+    /// the enum rather than as a sentence because the wording belongs on the
+    /// screen, and because a microphone is the weaker of the two -- an offer
+    /// that appeared because Teams was running its own audio test should say
+    /// that is what it saw.
+    pub signal: CallSignal,
 }
 
 impl From<&Detected> for Offer {
@@ -197,6 +350,7 @@ impl From<&Detected> for Offer {
             provider: detected.provider.to_owned(),
             name: detected.name.to_owned(),
             evidence: detected.evidence.clone(),
+            signal: detected.signal,
         }
     }
 }
@@ -217,296 +371,37 @@ pub enum MeetingOutcome {
         /// Non-zero when audio was never transcribed. A transcript with a hole in
         /// it must not look complete.
         gaps: u32,
+        /// How many scheduled live-session reconnects completed. Kept separate
+        /// from gaps: reconnecting is expected for providers with a session
+        /// limit, while missing audio is not.
+        reconnects: u32,
         /// True when the whole-file pass failed and the overlapping live
         /// partials were saved instead.
         transcript_is_partials: bool,
     },
-    /// Nothing was said, so there is nothing to keep.
+    /// Nothing was transcribed, and what the two captures delivered.
+    ///
+    /// The captures are here because "nothing was said" is only one of the
+    /// things that end up on this arm, and until KNEG-38 the screen could not
+    /// tell them apart. A microphone that delivered audible audio and produced
+    /// no transcript is not a quiet room; a system capture that delivered
+    /// nothing at all is the ordinary shape of a call where nobody else spoke,
+    /// *and* the shape of a loopback that never worked. Naming which happened
+    /// is possible; separating the last two is not, and
+    /// [`crate::meeting::Delivered`] says so rather than guessing.
     NothingTranscribed {
         recording_path: String,
+        mic: Delivered,
+        system: Delivered,
+        /// Scheduled live-session reconnects still happened even when no words
+        /// were produced. Keeping the count makes this successful provider work
+        /// visible instead of discarding it on the empty-transcript branch.
+        reconnects: u32,
     },
     Cancelled,
     Failed {
         message: String,
     },
-}
-
-/* ------------------------------------------------------------ the recorder */
-
-/// Audio drained from both captures at one moment, mono.
-///
-/// At a rate the *recorder* chose, not the provider's. The recorder cannot know
-/// what the session wants — OpenAI Realtime takes 24 kHz and whisper 16 — so it
-/// brings both devices to one rate, says which, and leaves the last conversion
-/// to the pump, which knows.
-#[derive(Debug)]
-struct Drained {
-    mic: Vec<f32>,
-    system: Vec<f32>,
-    /// The rate `mic` and `system` are at.
-    sample_rate: u32,
-}
-
-enum RecorderCommand {
-    /// Stop, patch the WAV header, and report the recording.
-    Finish {
-        reply: sync_mpsc::Sender<Result<Finished, String>>,
-    },
-    /// Stop and delete the recording.
-    Cancel,
-}
-
-/// What the recorder produced.
-#[derive(Debug)]
-struct Finished {
-    path: std::path::PathBuf,
-    duration_seconds: f64,
-    /// Samples that exceeded full scale and were clamped by the encoder. See
-    /// [`MixFeed`] on why this is counted rather than corrected.
-    clipped: u64,
-}
-
-/// Start the capture thread.
-///
-/// Returns the audio channel and the command channel. Both captures are started
-/// here, on the thread, because `cpal::Stream` is not `Send`.
-fn spawn_recorder(
-    path: std::path::PathBuf,
-    system: bool,
-) -> Result<
-    (
-        mpsc::UnboundedReceiver<Drained>,
-        sync_mpsc::Sender<RecorderCommand>,
-        Sources,
-    ),
-    String,
-> {
-    let (audio_tx, audio_rx) = mpsc::unbounded_channel::<Drained>();
-    let (command_tx, command_rx) = sync_mpsc::channel::<RecorderCommand>();
-    // The thread reports whether it got its devices before anything else
-    // happens, so a failure to open the microphone is a failure to start rather
-    // than a meeting that records nothing.
-    let (ready_tx, ready_rx) = sync_mpsc::channel::<Result<Sources, String>>();
-
-    std::thread::Builder::new()
-        .name("kw-meeting".to_owned())
-        .spawn(move || record(path, system, audio_tx, command_rx, ready_tx))
-        .map_err(|e| format!("could not start the recording thread: {e}"))?;
-
-    let sources = ready_rx
-        .recv()
-        .map_err(|_| "the recording thread stopped before it started".to_owned())??;
-
-    Ok((audio_rx, command_tx, sources))
-}
-
-/// The recorder thread.
-fn record(
-    path: std::path::PathBuf,
-    want_system: bool,
-    audio: mpsc::UnboundedSender<Drained>,
-    commands: sync_mpsc::Receiver<RecorderCommand>,
-    ready: sync_mpsc::Sender<Result<Sources, String>>,
-) {
-    let mic = match Capture::start(None) {
-        Ok(capture) => capture,
-        Err(err) => {
-            let _ = ready.send(Err(format!("the microphone could not be opened: {err}")));
-            return;
-        }
-    };
-
-    // System audio is optional. A meeting with only the microphone is a real
-    // meeting; one that refuses to start because the platform has no loopback
-    // device is not an improvement.
-    let (system, system_reason) = if want_system {
-        match SystemCapture::start() {
-            Ok(capture) => (Some(capture), None),
-            Err(err) => {
-                tracing::warn!(error = %err, "recording the microphone only");
-                (None, Some(err.to_string()))
-            }
-        }
-    } else {
-        (
-            None,
-            Some("system audio was switched off for this meeting".to_owned()),
-        )
-    };
-
-    let mut writer = match WavWriter::create(&path, wav::TARGET_SAMPLE_RATE) {
-        Ok(writer) => writer,
-        Err(err) => {
-            let _ = ready.send(Err(format!("could not open the recording file: {err}")));
-            return;
-        }
-    };
-
-    let _ = ready.send(Ok(Sources {
-        microphone: true,
-        system_audio: system.is_some(),
-        system_audio_reason: system_reason,
-    }));
-
-    let mut mixer = MixFeed::new();
-
-    // A closure so the tick and the final drain cannot diverge.
-    let drain_once = |writer: &mut WavWriter, mixer: &mut MixFeed| {
-        // Downmixed and brought to one rate here, because the two devices need
-        // not agree: a 44.1 kHz microphone and a 48 kHz output endpoint is an
-        // ordinary pairing, and mixing them without a common rate would drift.
-        // 16 kHz because that is what the file on disk is for -- the
-        // whole-recording pass at the end -- and a provider wanting something
-        // else gets it from the pump.
-        let mic_track = mic.drain();
-        let mic_mono = wav::resample_to_target(
-            &wav::to_mono(&mic_track.samples, mic_track.channels),
-            mic_track.sample_rate,
-        );
-
-        let system_mono = system.as_ref().map_or_else(Vec::new, |capture| {
-            let track = capture.drain();
-            wav::resample_to_target(
-                &wav::to_mono(&track.samples, track.channels),
-                track.sample_rate,
-            )
-        });
-
-        mixer.push_a(&mic_mono);
-        mixer.push_b(&system_mono);
-        // With no system capture there is nothing to wait for, so the microphone
-        // goes straight through rather than sitting in the mixer forever.
-        let mixed = if system.is_some() {
-            mixer.take()
-        } else {
-            mixer.flush()
-        };
-        if let Err(err) = writer.append(&mixed) {
-            tracing::error!(error = %err, "could not append to the meeting recording");
-        }
-
-        audio.send(Drained {
-            mic: mic_mono,
-            system: system_mono,
-            sample_rate: wav::TARGET_SAMPLE_RATE,
-        })
-    };
-
-    loop {
-        match commands.recv_timeout(DRAIN_INTERVAL) {
-            Ok(RecorderCommand::Finish { reply }) => {
-                let _ = drain_once(&mut writer, &mut mixer);
-                let tail = mixer.flush();
-                if let Err(err) = writer.append(&tail) {
-                    tracing::error!(error = %err, "could not append the last of the recording");
-                }
-
-                let clipped = mixer.clipped();
-                let result = writer
-                    .finish()
-                    .map_err(|e| format!("could not close the recording: {e}"))
-                    .map(|samples| Finished {
-                        path: path.clone(),
-                        duration_seconds: wav::duration_ms(
-                            usize::try_from(samples).unwrap_or(usize::MAX),
-                            wav::TARGET_SAMPLE_RATE,
-                        ) as f64
-                            / 1_000.0,
-                        clipped,
-                    });
-                let _ = reply.send(result);
-                return;
-            }
-            Ok(RecorderCommand::Cancel) => {
-                // The header still says zero samples, so even a file left behind
-                // by a failed delete reads as empty.
-                drop(writer);
-                if let Err(err) = std::fs::remove_file(&path) {
-                    tracing::warn!(error = %err, "could not delete the cancelled recording");
-                }
-                return;
-            }
-            Err(sync_mpsc::RecvTimeoutError::Timeout) => {
-                if drain_once(&mut writer, &mut mixer).is_err() {
-                    // Nothing is reading the audio, which means the pump has
-                    // gone. Keep writing the file: the recording is still worth
-                    // having even if the transcript is not coming.
-                    tracing::debug!("nothing is consuming the meeting audio");
-                }
-            }
-            Err(sync_mpsc::RecvTimeoutError::Disconnected) => {
-                tracing::warn!("the meeting was dropped without being stopped");
-                let _ = writer.finish();
-                return;
-            }
-        }
-    }
-}
-
-/* -------------------------------------------------------------- the watcher */
-
-/// Decides what to offer, and remembers what it has already offered.
-///
-/// Pure, and separate from the polling for that reason: "does this prompt, and
-/// has it prompted already" is the whole of the behaviour worth testing, and none
-/// of it needs a process table.
-#[derive(Debug, Default)]
-pub struct Watcher {
-    /// Providers already offered and not yet gone away.
-    ///
-    /// Keyed on the provider rather than on a timestamp: an offer dismissed
-    /// during a two-hour call must stay dismissed for that call, and must come
-    /// back for the next one. A time-based suppression would either re-prompt
-    /// mid-meeting or swallow the next meeting, depending which way it was tuned.
-    offered: std::collections::BTreeSet<String>,
-}
-
-impl Watcher {
-    /// What to offer for this poll, if anything.
-    ///
-    /// Returns at most one offer. Two meetings at once is possible and offering
-    /// both would stack windows; the first is the one to ask about.
-    pub fn consider(&mut self, detected: &[Detected]) -> Option<Offer> {
-        // Anything that has stopped running can be offered again next time.
-        let live: std::collections::BTreeSet<String> =
-            detected.iter().map(|d| d.provider.to_owned()).collect();
-        self.offered.retain(|provider| live.contains(provider));
-
-        // Only a meeting actually in progress. See the module documentation: new
-        // Teams has no in-call process, so prompting on "the client is open"
-        // would fire on every launch for most corporate machines.
-        //
-        // And the first one *not already offered*, not simply the first. Finding
-        // the first in-call provider and then discarding it for being a repeat
-        // meant a second meeting running alongside the first was never offered at
-        // all -- silently, which is the part that matters. A test caught it.
-        let candidate = detected
-            .iter()
-            .find(|d| d.in_call && !self.offered.contains(d.provider))?;
-
-        self.offered.insert(candidate.provider.to_owned());
-        Some(Offer::from(candidate))
-    }
-
-    /// Forget that a provider was offered, so it can be offered again.
-    ///
-    /// Used when a meeting *ends*: having recorded one Zoom call should not stop
-    /// the next one being offered, even if Zoom never quit in between.
-    pub fn forget(&mut self, provider: &str) {
-        self.offered.remove(provider);
-    }
-
-    /// Whether `provider` has an outstanding offer.
-    ///
-    /// Test-only. The runtime never asks — it acts on what `consider` returns —
-    /// and a `pub` method nothing in the binary calls is scaffolding. Kept
-    /// because asserting that a suppression was *released* reads better than
-    /// inferring it from a second call.
-    #[cfg(test)]
-    #[must_use]
-    pub fn has_offered(&self, provider: &str) -> bool {
-        self.offered.contains(provider)
-    }
 }
 
 /* -------------------------------------------------------------- the runtime */
@@ -521,9 +416,115 @@ pub struct MeetingRuntime {
     credentials: Arc<dyn kw_security::CredentialStore>,
     /// Where the local model server is listening, and what it loaded.
     local: crate::local_model::SharedLocal,
-    live: Mutex<Option<Live>>,
+    /// Which sherpa model is selected for dictation, if any.
+    ///
+    /// Read by the whole-recording pass so it uses the same engine dictation
+    /// would. Not for meetings -- a meeting's *live* provider is chosen on
+    /// `Settings > Meetings` and has nothing to do with this.
+    sherpa: crate::local_asr::Selection,
+    /// The streaming model server, started on demand for `local-streaming`.
+    ///
+    /// The whole supervisor rather than a `SharedStream`, unlike `local` above:
+    /// this one is *started* from here, because a 630 MB model held from launch
+    /// for a user who never records a meeting is a cost nobody asked for. The
+    /// windowed provider's server is started from its own settings screen and
+    /// only read from here.
+    stream: Arc<crate::sherpa_stream::SherpaStream>,
+    /// The externally visible lifetime of the current meeting.
+    ///
+    /// `live` is deliberately taken before the whole-file pass, because the
+    /// recorder and pump have ended by then. That made `None` an ambiguous
+    /// value: genuinely idle, or still finishing. Keeping this small state
+    /// machine beside it makes start, polling, and stale completions agree on
+    /// one answer.
+    lifecycle: Mutex<SessionLifecycle>,
+    /// The session in progress.
+    ///
+    /// Behind an `Arc` so the pump's own task can hold it too. This lock remains
+    /// the local arbiter of whether that pump may announce its own ending;
+    /// `lifecycle` owns the wider start/record/finish transition. See
+    /// [`announce_transcript_ended`].
+    live: Arc<Mutex<Option<Live>>>,
     /// Detection state: what was last seen, and what has been offered.
-    watch: Mutex<(Watcher, Vec<Detected>)>,
+    watch: Mutex<WatchState>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum SessionPhase {
+    #[default]
+    Idle,
+    Starting,
+    Recording,
+    Finishing,
+}
+
+/// Decide whether the notification window has state to render.
+///
+/// A pure decision over the lifecycle phase and outstanding-offer flag rather
+/// than over `AppHandle`, so a test can exercise the visibility invariant
+/// without touching Tauri -- the same reason as `updater::is_configured`.
+const fn window_has_something_to_say(phase: SessionPhase, offer_outstanding: bool) -> bool {
+    !matches!(phase, SessionPhase::Idle) || offer_outstanding
+}
+
+/// Serialises meeting transitions and identifies the session completing them.
+///
+/// The generation is not an allowance for concurrent meetings. Starts are
+/// refused while recording or finishing. It is the second line of defence: a
+/// completion carrying an older generation cannot publish Idle or hide a
+/// window belonging to a later session even if a future caller changes that
+/// policy.
+#[derive(Debug, Default)]
+struct SessionLifecycle {
+    phase: SessionPhase,
+    generation: u64,
+}
+
+impl SessionLifecycle {
+    fn begin_start(&mut self) -> Result<u64, &'static str> {
+        if self.phase != SessionPhase::Idle {
+            return Err("a meeting is already starting, recording, or finishing");
+        }
+        self.generation = self.generation.wrapping_add(1);
+        self.phase = SessionPhase::Starting;
+        Ok(self.generation)
+    }
+
+    fn started(&mut self, generation: u64) -> bool {
+        if self.generation != generation || self.phase != SessionPhase::Starting {
+            return false;
+        }
+        self.phase = SessionPhase::Recording;
+        true
+    }
+
+    fn start_failed(&mut self, generation: u64) -> bool {
+        if self.generation != generation || self.phase != SessionPhase::Starting {
+            return false;
+        }
+        self.phase = SessionPhase::Idle;
+        true
+    }
+
+    fn begin_finish(&mut self) -> Result<u64, &'static str> {
+        if self.phase != SessionPhase::Recording {
+            return Err("no meeting is being recorded");
+        }
+        self.phase = SessionPhase::Finishing;
+        Ok(self.generation)
+    }
+
+    fn finished(&mut self, generation: u64) -> bool {
+        if self.generation != generation || self.phase != SessionPhase::Finishing {
+            return false;
+        }
+        self.phase = SessionPhase::Idle;
+        true
+    }
+
+    const fn may_poll(&self) -> bool {
+        matches!(self.phase, SessionPhase::Idle)
+    }
 }
 
 /// A meeting in progress.
@@ -531,182 +532,67 @@ struct Live {
     provider_id: String,
     commands: sync_mpsc::Sender<RecorderCommand>,
     pump: tokio::task::JoinHandle<Result<MeetingTranscript, MeetingError>>,
+    cancel_pump: oneshot::Sender<()>,
+    /// Where the WAV is being written.
+    ///
+    /// Kept here as well as in `Finished` because the two paths that never
+    /// reach a `Finished` -- the recorder thread having stopped, and its not
+    /// answering -- still have to tell the user where the audio went. The
+    /// recording is the artefact that cannot be recreated.
+    recording_path: std::path::PathBuf,
     sources: Sources,
     started: std::time::Instant,
+    /// Present only for the local streaming provider. Released after the pump
+    /// is finished (or immediately on cancellation) so its loaded model can be
+    /// kept warm for five minutes, but never indefinitely.
+    stream_lease: Option<crate::sherpa_stream::StreamLease>,
+    /// How the recorder thread ended, once it has.
+    ///
+    /// Written by the thread itself rather than inferred from its audio channel
+    /// closing, which is KNEG-116: the two look identical from outside and mean
+    /// different things. Read beside `transcript_failure` by [`live_state`],
+    /// because "is anything still being recorded" and "is anything still being
+    /// transcribed" are separate questions and were being answered by one
+    /// signal.
+    recorder_end: Arc<OnceLock<RecorderEnd>>,
+
+    /// Why the live transcription stopped, once it has.
+    ///
+    /// Written by the pump's own task before that task returns, so `pump` above
+    /// cannot report `is_finished` before this is set. That ordering is what
+    /// makes "finished, and nothing here" mean exactly one thing -- see
+    /// [`live_state`].
+    ///
+    /// A `OnceLock` for the reason [`kw_meeting_core::fault::SessionFault`]
+    /// uses one: the first write wins by construction rather than by
+    /// convention, and there is no poisoned-mutex branch to write around this
+    /// workspace's `unwrap_used = "deny"`.
+    ///
+    /// It is also this session's identity. The lifecycle state now prevents a
+    /// second start while the first is finishing; the ending task still compares
+    /// the cell it was given with the one it found, so this local invariant does
+    /// not depend on that wider policy remaining unchanged.
+    transcript_failure: Arc<OnceLock<String>>,
+}
+
+struct ProviderBuild {
+    provider: Box<dyn MeetingTranscriptionProvider>,
+    stream_lease: Option<crate::sherpa_stream::StreamLease>,
+}
+
+impl ProviderBuild {
+    fn without_stream_lease(provider: Box<dyn MeetingTranscriptionProvider>) -> Self {
+        Self {
+            provider,
+            stream_lease: None,
+        }
+    }
 }
 
 impl std::fmt::Debug for MeetingRuntime {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MeetingRuntime").finish_non_exhaustive()
     }
-}
-
-/// Resolve the credential reference `client` should connect with, refusing
-/// with a message naming the settings screen when its slot has nothing
-/// stored.
-///
-/// A free function taking `&dyn CredentialStore` rather than a
-/// `MeetingRuntime` method, so it can be unit-tested against a
-/// `MemoryCredentialStore` with no `AppHandle` in sight. It only ever calls
-/// [`kw_security::CredentialStore::contains`], never `get`: this is the
-/// controller deciding whether to proceed, not the moment a secret is
-/// needed, so it must never hold one.
-///
-/// This is the fix for a real defect: `start` used to build its
-/// `MeetingProviderConfig` with `key_ref: None` unconditionally, so
-/// `openai::token` refused every OpenAI Realtime connection attempt no matter
-/// what was stored, and the failure only ever surfaced from inside `connect`
-/// -- a socket error, not this message.
-fn resolve_key_ref(
-    provider_id: &str,
-    client: Client,
-    credentials: &dyn kw_security::CredentialStore,
-) -> Result<Option<kw_security::KeyRef>, String> {
-    let Some(slot) = kw_meeting_core::credential_slot(client) else {
-        return Ok(None);
-    };
-
-    let key_ref = kw_security::KeyRef::new(slot)
-        .ok_or_else(|| format!("the credential slot {slot:?} for this provider is not valid"))?;
-
-    if !credentials.contains(&key_ref) {
-        let name = kw_meeting_core::capabilities(provider_id).map_or(provider_id, |c| c.name);
-        return Err(format!(
-            "no {name} key is stored. Add one under Settings > Providers."
-        ));
-    }
-
-    Ok(Some(key_ref))
-}
-
-/// Resolve `provider_id` to the [`Client`] that implements it, refusing with
-/// the declined reason or a generic "no client" message when there is none.
-///
-/// A free function for the same reason `resolve_key_ref` is: `start` needs
-/// the result before it can look up a credential slot, so pulling it out of
-/// `provider` keeps that lookup from happening twice.
-fn resolve_client(provider_id: &str) -> Result<Client, String> {
-    kw_meeting_core::client(provider_id).ok_or_else(|| {
-        match kw_meeting_core::declined(provider_id) {
-            Some(reason) => reason.to_owned(),
-            None => format!("there is no meeting client for {provider_id:?}"),
-        }
-    })
-}
-
-/// Corti's environment and tenant, from the same settings the batch
-/// transcription client reads -- reused rather than duplicated, because they
-/// are properties of the Corti tenancy, not of the meeting feature. Refuses
-/// by name when either is missing; see
-/// [`kw_meeting_core::corti::scope`]'s doc comment for why this mirrors
-/// `route.rs`'s `required` rather than defaulting.
-///
-/// A free function taking `&RouteSettings` rather than reading the database
-/// itself, for the same reason `resolve_key_ref` and `resolve_client` are
-/// free functions: the refusal can then be tested with no `AppHandle` and no
-/// database in sight.
-fn resolve_corti_scope(
-    settings: &kw_transcription_core::RouteSettings,
-) -> Result<(String, String), String> {
-    kw_meeting_core::corti::scope(
-        settings.corti_environment.as_deref().unwrap_or(""),
-        settings.corti_tenant.as_deref().unwrap_or(""),
-    )
-    .map_err(|e| e.to_string())
-}
-
-/// A language setting normalised to what [`MeetingProviderConfig`] wants: a
-/// blank field becomes `None` rather than the literal empty string, so
-/// [`kw_meeting_core::validate`] reads it the same way whether the setting was
-/// never written or was written and cleared.
-fn normalize_language(language: &str) -> Option<String> {
-    let trimmed = language.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_owned())
-    }
-}
-
-/// Keyterms normalised the same way: each one trimmed, and blanks dropped so a
-/// stray empty line from the editor does not count against a provider's cap.
-fn normalize_keyterms(keyterms: &[String]) -> Vec<String> {
-    keyterms
-        .iter()
-        .map(|k| k.trim().to_owned())
-        .filter(|k| !k.is_empty())
-        .collect()
-}
-
-/// Build the config a settings-screen preview should see for `provider_id`,
-/// from raw form values.
-///
-/// A free function, taking the draft values directly rather than reading them
-/// from settings, so the screen can preview a value before it is saved and so
-/// this can be tested with no database in sight. Whether the result needs a
-/// language is [`kw_meeting_core::validate`]'s answer to give, not this
-/// function's -- it only normalises and looks up the provider's declared
-/// sample rate, the same way [`MeetingRuntime::start`] does.
-fn draft_config(
-    provider_id: &str,
-    language: &str,
-    keyterms: &[String],
-) -> Result<MeetingProviderConfig, String> {
-    let caps = kw_meeting_core::capabilities(provider_id)
-        .ok_or_else(|| format!("{provider_id:?} is not a described meeting provider"))?;
-    let sample_rate = *caps.sample_rates.first().ok_or_else(|| {
-        format!(
-            "{} declares no sample rate, so nothing can be reviewed for it",
-            caps.name
-        )
-    })?;
-
-    Ok(MeetingProviderConfig {
-        provider: provider_id.to_owned(),
-        model: None,
-        language: normalize_language(language),
-        keyterms: normalize_keyterms(keyterms),
-        key_ref: None,
-        sample_rate,
-    })
-}
-
-/// Build the config [`MeetingTranscriptionProvider::connect`] will use,
-/// refusing first if `caps` needs a language and `language` gives it none.
-///
-/// A free function taking the provider's capabilities and the raw settings
-/// values rather than reading them itself, for the same reason
-/// `resolve_key_ref` is one: `start`'s refusal can then be tested with neither
-/// a database nor an `AppHandle` in sight. [`kw_meeting_core::validate`] is
-/// the one place the keyterm and language arithmetic lives; this only acts on
-/// what it reports, and never picks a language on its own -- a guessed
-/// language is a worse transcript that looks like a working one.
-fn resolve_provider_config(
-    provider_id: &str,
-    caps: &kw_meeting_core::MeetingProviderCapabilities,
-    key_ref: Option<kw_security::KeyRef>,
-    sample_rate: u32,
-    language: &str,
-    keyterms: &[String],
-) -> Result<MeetingProviderConfig, String> {
-    let config = MeetingProviderConfig {
-        provider: provider_id.to_owned(),
-        model: None,
-        language: normalize_language(language),
-        keyterms: normalize_keyterms(keyterms),
-        key_ref,
-        sample_rate,
-    };
-
-    let review = kw_meeting_core::validate(&config).map_err(|e| e.to_string())?;
-    if review.language_required {
-        return Err(format!(
-            "{} needs a concrete language, and none is set. Add one under Settings > Meetings.",
-            caps.name
-        ));
-    }
-
-    Ok(config)
 }
 
 impl MeetingRuntime {
@@ -717,15 +603,20 @@ impl MeetingRuntime {
         policy: NetworkPolicy,
         credentials: Arc<dyn kw_security::CredentialStore>,
         local: crate::local_model::SharedLocal,
+        sherpa: crate::local_asr::Selection,
+        stream: Arc<crate::sherpa_stream::SherpaStream>,
     ) -> Self {
         Self {
             app,
             db,
             policy,
             credentials,
-            live: Mutex::new(None),
+            live: Arc::new(Mutex::new(None)),
+            lifecycle: Mutex::new(SessionLifecycle::default()),
             local,
-            watch: Mutex::new((Watcher::default(), Vec::new())),
+            sherpa,
+            stream,
+            watch: Mutex::new(WatchState::default()),
         }
     }
 
@@ -735,8 +626,11 @@ impl MeetingRuntime {
     /// notification window, and there is deliberately no path from here to
     /// [`Self::start`].
     pub async fn poll_for_meetings(&self) {
-        // Nothing to detect while recording, and nothing to offer either.
-        if self.live.lock().await.is_some() {
+        // Hold the transition lock until the offer is delivered. A start cannot
+        // slip between `consider` and the window operation, and finishing is not
+        // mistaken for idle merely because it already took `Live` out.
+        let lifecycle = self.lifecycle.lock().await;
+        if !lifecycle.may_poll() {
             return;
         }
 
@@ -748,41 +642,62 @@ impl MeetingRuntime {
             .await
             .unwrap_or(PROMPT_BY_DEFAULT);
 
-        let detected = meeting_detect::detect(&meeting_detect::running(), &lists);
+        // Both readings from one process table, so the capture list and the
+        // process list are the same instant.
+        let survey = meeting_detect::survey();
+        let detected = meeting_detect::detect(&survey.running, &survey.capturing, &lists);
 
-        let offer = {
+        let transition = {
             let mut held = self.watch.lock().await;
-            held.1 = detected.clone();
+            held.detected = detected.clone();
+            held.microphone = Some(survey.microphone);
             // `consider` runs whether or not prompting is on, so its
             // already-offered bookkeeping stays correct if the setting is turned
             // on mid-call -- otherwise switching it on would immediately prompt
             // for a meeting that started an hour ago.
-            let offer = held.0.consider(&detected);
-            if prompt {
-                offer
-            } else {
-                None
-            }
+            held.watcher.consider(&detected, prompt)
         };
 
-        if let Some(offer) = offer {
-            tracing::info!(
-                provider = %offer.provider,
-                evidence = %offer.evidence,
-                "a meeting appears to be in progress; offering to record it"
-            );
-            if let Err(err) = self.app.emit(OFFER_EVENT, &offer) {
-                tracing::warn!(error = %err, "could not deliver the recording offer");
+        match transition {
+            Transition::Offer(offer) => {
+                tracing::info!(
+                    provider = %offer.provider,
+                    evidence = %offer.evidence,
+                    "a meeting appears to be in progress; offering to record it"
+                );
+                if let Err(err) = self.app.emit(OFFER_EVENT, &offer) {
+                    tracing::warn!(error = %err, "could not deliver the recording offer");
+                }
+                crate::meeting_window::set_visible(&self.app, true);
             }
-            crate::meeting_window::set_visible(&self.app, true);
+            Transition::Withdraw(provider) => {
+                tracing::info!(%provider, "the meeting behind the recording offer ended");
+                if let Err(err) = self.app.emit(OFFER_EVENT, Option::<Offer>::None) {
+                    tracing::warn!(error = %err, "could not withdraw the recording offer");
+                }
+                crate::meeting_window::set_visible(&self.app, false);
+            }
+            Transition::None => {}
         }
+
+        // This must run after every poll that reached the transition, including
+        // `None`: KNEG-167 is specifically the case where a missed hide edge
+        // leaves no transition to correct the empty visible window.
+        let offer_outstanding = {
+            let held = self.watch.lock().await;
+            held.watcher.outstanding_offer().is_some()
+        };
+        let has_something_to_say = window_has_something_to_say(lifecycle.phase, offer_outstanding);
+        crate::meeting_window::reconcile(&self.app, has_something_to_say);
     }
 
     /// Dismiss the outstanding offer without recording.
     ///
-    /// The provider stays suppressed until its process goes away, which is what
-    /// stops a dismissed offer coming back five seconds later.
+    /// The provider stays suppressed until its current call ends, which is what
+    /// stops a dismissed offer coming back five seconds later without swallowing
+    /// the next call in a client that remains open.
     pub async fn dismiss(&self) {
+        self.watch.lock().await.watcher.dismiss();
         crate::meeting_window::set_visible(&self.app, false);
         if let Err(err) = self.app.emit(OFFER_EVENT, Option::<Offer>::None) {
             tracing::warn!(error = %err, "could not clear the recording offer");
@@ -813,11 +728,6 @@ impl MeetingRuntime {
         });
     }
 
-    /// Where recordings are kept.
-    fn recording_dir() -> std::path::PathBuf {
-        kw_storage::paths::data_dir().join("meetings")
-    }
-
     /// Build the provider for an already-resolved `client`.
     ///
     /// An exhaustive match on [`Client`], which is the point of it being data: a
@@ -829,7 +739,7 @@ impl MeetingRuntime {
         &self,
         client: Client,
         events: mpsc::UnboundedSender<TranscriptEvent>,
-    ) -> Result<Box<dyn MeetingTranscriptionProvider>, String> {
+    ) -> Result<ProviderBuild, String> {
         match client {
             Client::LocalWindow => {
                 let port =
@@ -853,26 +763,57 @@ impl MeetingRuntime {
                     port,
                     model,
                 );
-                Ok(Box::new(
+                Ok(ProviderBuild::without_stream_lease(Box::new(
                     LocalWindowProvider::new(Arc::new(server)).with_live_events(events),
-                ))
+                )))
             }
-            Client::OpenAiRealtime => Ok(Box::new(
+            Client::LocalStreaming => {
+                // Started here rather than at launch: the model is 630 MB in
+                // memory and a user who never records a meeting should never
+                // pay for it. `start` is a no-op when the same model is
+                // already up, which is what makes calling it per meeting
+                // cheap.
+                let model_id = kw_storage::settings::get_or(
+                    self.db.pool(),
+                    crate::sherpa_stream::STREAM_MODEL_KEY,
+                    String::new(),
+                )
+                .await
+                .unwrap_or_default();
+                if model_id.is_empty() {
+                    return Err("no streaming model is chosen. Pick one under Settings > \
+                                Transcription > Local."
+                        .to_owned());
+                }
+
+                let (port, stream_lease) = self.stream.start(&model_id).await?;
+                Ok(ProviderBuild {
+                    provider: Box::new(
+                        kw_meeting_core::nemotron_socket::LocalStreaming::new(
+                            self.policy.clone(),
+                            port,
+                        )
+                        .with_live_events(events),
+                    ),
+                    stream_lease: Some(stream_lease),
+                })
+            }
+            Client::OpenAiRealtime => Ok(ProviderBuild::without_stream_lease(Box::new(
                 kw_meeting_core::openai_socket::OpenAiRealtime::new(Arc::clone(&self.credentials))
                     .with_live_events(events),
-            )),
-            Client::AssemblyAi => Ok(Box::new(
+            ))),
+            Client::AssemblyAi => Ok(ProviderBuild::without_stream_lease(Box::new(
                 kw_meeting_core::assemblyai_socket::AssemblyAiRealtime::new(Arc::clone(
                     &self.credentials,
                 ))
                 .with_live_events(events),
-            )),
-            Client::DeepgramRealtime => Ok(Box::new(
+            ))),
+            Client::DeepgramRealtime => Ok(ProviderBuild::without_stream_lease(Box::new(
                 kw_meeting_core::deepgram_socket::DeepgramRealtime::new(Arc::clone(
                     &self.credentials,
                 ))
                 .with_live_events(events),
-            )),
+            ))),
             Client::CortiRealtime => {
                 // Read from the same settings the batch Corti client uses,
                 // not a second pair of meeting-only ones -- see
@@ -888,7 +829,7 @@ impl MeetingRuntime {
                         .unwrap_or_default();
                 let (environment, tenant) = resolve_corti_scope(&settings)?;
 
-                Ok(Box::new(
+                Ok(ProviderBuild::without_stream_lease(Box::new(
                     kw_meeting_core::corti_socket::CortiRealtime::new(
                         Arc::clone(&self.credentials),
                         self.policy.clone(),
@@ -896,24 +837,53 @@ impl MeetingRuntime {
                         tenant,
                     )
                     .with_live_events(events),
-                ))
+                )))
             }
         }
     }
 
     fn emit_state(&self, state: MeetingState) {
-        // Recording *and* finishing keep the tray saying so: the microphone is
-        // closed once finishing starts, but a meeting that still has work to do
-        // has not finished, and an idle tray would say it had.
-        crate::tray::meeting(&self.app, state != MeetingState::Idle);
-
-        if let Err(err) = self.app.emit(STATE_EVENT, state) {
-            tracing::warn!(error = %err, "could not report the meeting state");
-        }
+        emit_state(&self.app, state);
     }
 
     /// Begin a meeting.
     pub async fn start(&self, provider_id: &str, system_audio: bool) -> Result<Sources, String> {
+        // Kept for the entire start, including provider connection. Polling and
+        // stop therefore see `Starting`, never a transient idle slot between
+        // reserving the session and publishing `Live`.
+        let mut lifecycle = self.lifecycle.lock().await;
+        let generation = lifecycle.begin_start().map_err(str::to_owned)?;
+
+        match self.start_live(provider_id, system_audio).await {
+            Ok(sources) => {
+                if !lifecycle.started(generation) {
+                    return Err("the meeting start was superseded".to_owned());
+                }
+                drop(lifecycle);
+
+                // The one notification window is now the recording indicator,
+                // whether this start came from its offer or from Settings. No
+                // invisible offer may remain outstanding behind it.
+                self.watch.lock().await.watcher.recording_started();
+
+                tracing::info!(
+                    provider = provider_id,
+                    system_audio = sources.system_audio,
+                    "meeting started"
+                );
+                self.emit_state(MeetingState::Recording);
+                crate::meeting_window::set_visible(&self.app, true);
+                Ok(sources)
+            }
+            Err(err) => {
+                let _ = lifecycle.start_failed(generation);
+                Err(err)
+            }
+        }
+    }
+
+    /// Build and publish the live resources after `start` reserves a generation.
+    async fn start_live(&self, provider_id: &str, system_audio: bool) -> Result<Sources, String> {
         let mut held = self.live.lock().await;
         if held.is_some() {
             return Err("a meeting is already being recorded".to_owned());
@@ -927,19 +897,26 @@ impl MeetingRuntime {
         let key_ref = resolve_key_ref(provider_id, client, self.credentials.as_ref())?;
 
         let (events_tx, events_rx) = mpsc::unbounded_channel();
-        let mut provider = self.provider(client, events_tx).await?;
+        let ProviderBuild {
+            mut provider,
+            stream_lease,
+        } = self.provider(client, events_tx).await?;
 
         let caps = provider.capabilities();
         // The provider's own first declared rate, and the pump converts to it.
         // This used to be hardcoded to 16 kHz, which meant OpenAI Realtime -- 24
         // kHz only -- could never have connected at all: `connect` would have
         // refused every time, correctly, and the client would have looked broken.
-        let session_rate = *caps.sample_rates.first().ok_or_else(|| {
-            format!(
-                "{} declares no sample rate, so nothing can be sent to it",
-                caps.name
-            )
-        })?;
+        let session_rate = match caps.sample_rates.first() {
+            Some(rate) => *rate,
+            None => {
+                self.release_stream(stream_lease).await;
+                return Err(format!(
+                    "{} declares no sample rate, so nothing can be sent to it",
+                    caps.name
+                ));
+            }
+        };
 
         let language: String =
             kw_storage::settings::get_or(self.db.pool(), LANGUAGE_KEY, String::new())
@@ -954,127 +931,253 @@ impl MeetingRuntime {
         // detect a language and none is set -- see `resolve_provider_config`'s
         // doc comment. A guessed language would be a worse transcript that
         // looks like a working one, so this never picks one on its own.
-        let config = resolve_provider_config(
+        let config = match resolve_provider_config(
             provider_id,
             caps,
             key_ref,
             session_rate,
             &language,
             &keyterms,
-        )?;
-        provider.connect(config).await.map_err(|e| e.to_string())?;
-
-        let path = Self::recording_dir().join(format!(
-            "{}.wav",
-            chrono::Utc::now().format("%Y%m%d-%H%M%S")
-        ));
-        let (audio, commands, sources) = match spawn_recorder(path, system_audio) {
-            Ok(recorder) => recorder,
+        ) {
+            Ok(config) => config,
             Err(err) => {
-                // `connect` has already opened any cloud sessions. Close them
-                // before returning the recorder error rather than relying on a
-                // remote timeout.
-                if let Err(cancel_err) = provider.cancel().await {
-                    tracing::warn!(error = %cancel_err, "could not cancel the provider after recorder startup failed");
-                }
+                self.release_stream(stream_lease).await;
                 return Err(err);
             }
         };
+        if let Err(err) = provider.connect(config).await {
+            cancel_provider(provider.as_mut()).await;
+            self.release_stream(stream_lease).await;
+            return Err(err.to_string());
+        }
 
-        let pump = tokio::spawn(pump(
-            provider,
-            session_rate,
-            audio,
-            events_rx,
-            self.app.clone(),
+        let path = crate::recordings::recording_dir().join(format!(
+            "{}.wav",
+            chrono::Utc::now().format("%Y%m%d-%H%M%S")
         ));
+        let (audio, commands, sources, recorder_end) =
+            match spawn_recorder(path.clone(), system_audio) {
+                Ok(parts) => parts,
+                Err(err) => {
+                    cancel_provider(provider.as_mut()).await;
+                    self.release_stream(stream_lease).await;
+                    return Err(err);
+                }
+            };
+
+        // The pump announces its own ending, which is the whole of KNEG-95's
+        // fix: until now the failure was detected at second zero and reported
+        // whenever the user happened to press Stop. What it must not announce
+        // is the ending Stop asked for -- and since a provider that faults on
+        // the final frame ends the pump *during* `finish_recording`, which can
+        // run for minutes, that is the common case rather than a rare race.
+        // `announce_transcript_ended` decides it under the `live` lock.
+        let transcript_failure = Arc::new(OnceLock::new());
+        let (cancel_pump, cancellation) = oneshot::channel();
+        let pump = tokio::spawn({
+            let app = self.app.clone();
+            let live = Arc::clone(&self.live);
+            let mine = Arc::clone(&transcript_failure);
+            let ended = Arc::clone(&recorder_end);
+            async move {
+                let result = pump(
+                    provider,
+                    session_rate,
+                    audio,
+                    events_rx,
+                    app.clone(),
+                    cancellation,
+                )
+                .await;
+                // On normal completion the audio channel has closed and the
+                // recorder guard has run. Explicit cancellation can end sooner;
+                // that path already took Live, so no failure is announced.
+                let reason =
+                    live_transcript_ended(result.as_ref().map(|_| ()), ended.get().copied());
+                announce_transcript_ended(&live, &app, &mine, reason).await;
+                result
+            }
+        });
 
         *held = Some(Live {
             provider_id: provider_id.to_owned(),
             commands,
             pump,
+            cancel_pump,
+            recorder_end,
+            recording_path: path,
             sources: sources.clone(),
             started: std::time::Instant::now(),
+            stream_lease,
+            transcript_failure,
         });
-
-        tracing::info!(
-            provider = provider_id,
-            system_audio = sources.system_audio,
-            "meeting started"
-        );
-        self.emit_state(MeetingState::Recording);
-        // The window changes from an offer to an indicator, and stays up. A
-        // recording with nothing on screen is what the brief forbids.
-        crate::meeting_window::set_visible(&self.app, true);
 
         Ok(sources)
     }
 
     /// Stop, transcribe the recording, and keep a note.
+    ///
+    /// **Everything below the `take` runs, whatever goes wrong.** This used to
+    /// `?` out of three places -- the recorder thread having stopped, the
+    /// recorder not answering, and the pump failing -- each of which left `Live`
+    /// already taken and skipped the whole tail: no `OUTCOME_EVENT`, no
+    /// `MeetingState::Idle`, no `meeting_window::set_visible(false)`, no
+    /// `watch.forget`. The runtime was idle and the screen still said
+    /// "Recording", with nothing left to press: `guard` in `useRefresh.ts` does
+    /// not reload when a mutation throws, so the frontend stayed on `finishing`,
+    /// where `SettingsMeetings.tsx` renders no Stop or Discard and disables
+    /// Start. Only restarting the application cleared it.
+    ///
+    /// A failure is an outcome now, not an early return -- `MeetingOutcome::
+    /// Failed`, naming the WAV, which is already on disk by the time any of this
+    /// can go wrong and is the one artefact that cannot be recreated.
     pub async fn stop(&self) -> Result<MeetingOutcome, String> {
+        let generation = {
+            let mut lifecycle = self.lifecycle.lock().await;
+            lifecycle.begin_finish().map_err(str::to_owned)?
+        };
         let Some(live) = self.live.lock().await.take() else {
+            let _ = self.lifecycle.lock().await.finished(generation);
             return Err("no meeting is being recorded".to_owned());
         };
+        let Live {
+            provider_id,
+            commands,
+            pump,
+            recording_path,
+            stream_lease,
+            ..
+        } = live;
 
         self.emit_state(MeetingState::Finishing);
 
-        let (reply_tx, reply_rx) = sync_mpsc::channel();
-        live.commands
-            .send(RecorderCommand::Finish { reply: reply_tx })
-            .map_err(|_| "the recording thread had already stopped".to_owned())?;
-        let finished = reply_rx
-            .recv()
-            .map_err(|_| "the recording thread did not answer".to_owned())??;
+        let outcome = self
+            .finish_recording(&provider_id, &commands, pump, &recording_path, stream_lease)
+            .await;
 
-        // The recorder has dropped its sender, so the pump sees the channel close
-        // and finishes the provider. No second signal to get out of step.
-        let transcript = live
-            .pump
-            .await
-            .map_err(|e| format!("the transcription task failed: {e}"))?
-            .map_err(|e| e.to_string())?;
+        if self.lifecycle.lock().await.finished(generation) {
+            self.emit_state(MeetingState::Idle);
+            crate::meeting_window::set_visible(&self.app, false);
+            // Recording one Zoom call must not stop the next being offered,
+            // even if Zoom never quit in between.
+            self.watch.lock().await.watcher.forget(&provider_id);
 
-        let outcome = self.keep(&live.provider_id, finished, transcript).await;
-        self.emit_state(MeetingState::Idle);
-        crate::meeting_window::set_visible(&self.app, false);
-        // Recording one Zoom call must not stop the next being offered, even if
-        // Zoom never quit in between.
-        self.watch.lock().await.0.forget(&live.provider_id);
-
-        if let Err(err) = self.app.emit(OUTCOME_EVENT, &outcome) {
-            tracing::warn!(error = %err, "could not report the meeting outcome");
+            if let Err(err) = self.app.emit(OUTCOME_EVENT, &outcome) {
+                tracing::warn!(error = %err, "could not report the meeting outcome");
+            }
         }
         Ok(outcome)
     }
 
+    /// Close the recorder, wait for the pump, and turn both into one outcome.
+    ///
+    /// Split out of [`MeetingRuntime::stop`] precisely so that `stop`'s tail
+    /// runs on every path through here. Nothing in this function returns an
+    /// `Err`: every failure it can meet becomes a `MeetingOutcome`.
+    async fn finish_recording(
+        &self,
+        provider_id: &str,
+        commands: &sync_mpsc::Sender<RecorderCommand>,
+        pump: tokio::task::JoinHandle<Result<MeetingTranscript, MeetingError>>,
+        recording_path: &std::path::Path,
+        stream_lease: Option<crate::sherpa_stream::StreamLease>,
+    ) -> MeetingOutcome {
+        let path = recording_path.display().to_string();
+        let closed = close_recorder(commands);
+
+        // Awaited on every path, including the two failures above it. The
+        // recorder thread has gone either way, so it has dropped its audio
+        // sender, the pump sees the channel close, finishes the provider and
+        // returns. Aborting instead would leave two sockets open until the
+        // process noticed.
+        let live_transcript = pump_result(pump.await);
+
+        // The live socket is gone now. The whole-file pass below uses the
+        // separate offline transcriber and may run for minutes, so retaining the
+        // streaming lease through it would turn "five minutes after the meeting"
+        // into "five minutes after all post-processing". Release on both the
+        // successful and failed pump paths before inspecting any later result.
+        self.release_stream(stream_lease).await;
+
+        let finished = match closed {
+            Ok(finished) => finished,
+            Err(reason) => {
+                tracing::error!(provider = provider_id, %reason, "the recording could not be closed");
+                return MeetingOutcome::Failed {
+                    message: failed_message(&path, &reason),
+                };
+            }
+        };
+
+        match live_transcript {
+            Ok(transcript) => self.keep(provider_id, finished, transcript, None).await,
+            Err(reason) => {
+                // Still `keep`, rather than returning here. The whole-file local
+                // pass has not run yet and it is what produces the saved note --
+                // the live transcript is only ever its fallback. A cloud
+                // provider that died at second zero costs the live transcript,
+                // not the meeting. Skipping the pass entirely, which is what the
+                // old `?` did, was a pure loss.
+                tracing::error!(provider = provider_id, %reason, "the live transcription failed");
+                self.keep(
+                    provider_id,
+                    finished,
+                    MeetingTranscript::default(),
+                    Some(&reason),
+                )
+                .await
+            }
+        }
+    }
+
     /// Abandon the meeting and delete the recording.
     pub async fn cancel(&self) -> Result<(), String> {
+        let generation = {
+            let mut lifecycle = self.lifecycle.lock().await;
+            lifecycle.begin_finish().map_err(str::to_owned)?
+        };
         let Some(live) = self.live.lock().await.take() else {
+            let _ = self.lifecycle.lock().await.finished(generation);
             return Err("no meeting is being recorded".to_owned());
         };
 
         let _ = live.commands.send(RecorderCommand::Cancel);
-        // The recorder drops the audio sender after processing Cancel. Let the
-        // pump observe that and await the provider's socket cleanup; aborting
-        // it would drop the provider in the middle of asynchronous cleanup.
+        let _ = live.cancel_pump.send(());
         if let Err(err) = live.pump.await {
             tracing::warn!(error = %err, "the transcription task failed while cancelling");
         }
-        self.emit_state(MeetingState::Idle);
-        crate::meeting_window::set_visible(&self.app, false);
-        self.watch.lock().await.0.forget(&live.provider_id);
+        self.release_stream(live.stream_lease).await;
+        if self.lifecycle.lock().await.finished(generation) {
+            self.emit_state(MeetingState::Idle);
+            crate::meeting_window::set_visible(&self.app, false);
+            self.watch.lock().await.watcher.forget(&live.provider_id);
 
-        if let Err(err) = self.app.emit(OUTCOME_EVENT, MeetingOutcome::Cancelled) {
-            tracing::warn!(error = %err, "could not report the cancellation");
+            if let Err(err) = self.app.emit(OUTCOME_EVENT, MeetingOutcome::Cancelled) {
+                tracing::warn!(error = %err, "could not report the cancellation");
+            }
         }
         Ok(())
     }
 
+    async fn release_stream(&self, lease: Option<crate::sherpa_stream::StreamLease>) {
+        if let Some(lease) = lease {
+            self.stream.release(lease).await;
+        }
+    }
+
     /// What is happening, for the screen.
     pub async fn status(&self) -> MeetingStatus {
+        let phase = self.lifecycle.lock().await.phase;
         let held = self.live.lock().await;
         let system_audio = kw_audio_core::system_audio::support();
-        let detected = self.watch.lock().await.1.clone();
+        let (detected, microphone, offer) = {
+            let held = self.watch.lock().await;
+            (
+                held.detected.clone(),
+                held.microphone.clone(),
+                held.watcher.outstanding_offer().cloned(),
+            )
+        };
         let prompt_on_detect =
             kw_storage::settings::get_or(self.db.pool(), PROMPT_KEY, PROMPT_BY_DEFAULT)
                 .await
@@ -1087,36 +1190,70 @@ impl MeetingRuntime {
             .get_webview_window(crate::meeting_window::LABEL)
             .map(|window| crate::meeting_window::apply_treatments(&window).capture_exclusion);
 
-        match held.as_ref() {
-            Some(live) => MeetingStatus {
-                state: MeetingState::Recording,
-                provider: Some(live.provider_id.clone()),
-                elapsed_seconds: live.started.elapsed().as_secs_f64(),
-                sources: Some(live.sources.clone()),
-                system_audio,
-                detected,
-                prompt_on_detect,
-                notification_excluded,
-            },
-            None => MeetingStatus {
-                state: MeetingState::Idle,
+        if phase == SessionPhase::Finishing {
+            MeetingStatus {
+                state: MeetingState::Finishing,
+                transcript_failure: None,
                 provider: None,
                 elapsed_seconds: 0.0,
                 sources: None,
                 system_audio,
+                microphone,
                 detected,
+                offer,
                 prompt_on_detect,
                 notification_excluded,
-            },
+            }
+        } else {
+            match held.as_ref() {
+                Some(live) => MeetingStatus {
+                    state: live_state(
+                        live.transcript_failure.get().is_some(),
+                        live.pump.is_finished(),
+                        live.recorder_end.get().copied(),
+                    ),
+                    transcript_failure: live.transcript_failure.get().cloned(),
+                    provider: Some(live.provider_id.clone()),
+                    elapsed_seconds: live.started.elapsed().as_secs_f64(),
+                    sources: Some(live.sources.clone()),
+                    system_audio,
+                    microphone,
+                    detected,
+                    offer,
+                    prompt_on_detect,
+                    notification_excluded,
+                },
+                None => MeetingStatus {
+                    state: MeetingState::Idle,
+                    transcript_failure: None,
+                    provider: None,
+                    elapsed_seconds: 0.0,
+                    sources: None,
+                    system_audio,
+                    microphone,
+                    detected,
+                    offer,
+                    prompt_on_detect,
+                    notification_excluded,
+                },
+            }
         }
     }
 
     /// Transcribe the recording properly and write the note.
+    ///
+    /// `live_failure` carries why the streaming transcription stopped, when it
+    /// did. It changes two things and nothing else: an empty result becomes
+    /// `Failed` naming the provider's own words rather than `NothingTranscribed`
+    /// -- which is the sentence a genuinely quiet room gets, and the confusion
+    /// KNEG-79 is about -- and a note that *was* produced says in its own text
+    /// that the live half failed.
     async fn keep(
         &self,
         provider_id: &str,
         finished: Finished,
         transcript: MeetingTranscript,
+        live_failure: Option<&str>,
     ) -> MeetingOutcome {
         let path = finished.path.display().to_string();
 
@@ -1131,8 +1268,13 @@ impl MeetingRuntime {
 
         // One pass over the whole file, which is the same path a dictation takes
         // and produces a transcript with no overlap to deduplicate.
+        let mut speaker_note: Option<String> = None;
         let (segments, from_partials) = match self.transcribe_whole(&finished.path).await {
-            Ok(Some(text)) => (vec![segment(&text, 0.0, None)], false),
+            Ok(Some(pass)) => {
+                let (segments, note) = self.with_speakers(pass, &finished.path).await;
+                speaker_note = note;
+                (segments, false)
+            }
             Ok(None) => (Vec::new(), false),
             Err(err) => {
                 // Not fatal, and not silent. The partials overlap and are worse,
@@ -1150,8 +1292,22 @@ impl MeetingRuntime {
         };
 
         if segments.is_empty() {
-            return MeetingOutcome::NothingTranscribed {
-                recording_path: path,
+            // The distinction this whole change exists for. An empty result used
+            // to become `NothingTranscribed` whatever caused it, and that is
+            // what a quiet room produces -- so a provider that rejected the
+            // session and a room with nobody talking arrived on screen as the
+            // same sentence. A provider that said something was wrong now says
+            // it here instead.
+            return match live_failure {
+                Some(reason) => MeetingOutcome::Failed {
+                    message: failed_message(&path, reason),
+                },
+                None => MeetingOutcome::NothingTranscribed {
+                    recording_path: path,
+                    mic: finished.mic_delivered,
+                    system: finished.system_delivered,
+                    reconnects: transcript.reconnects,
+                },
             };
         }
 
@@ -1164,17 +1320,47 @@ impl MeetingRuntime {
         let mut content = text.clone();
         if from_partials {
             content.push_str(
-                "\n\n(The whole-recording pass did not complete, so this is the live transcript. \
-                 Its windows overlap, so some phrases repeat.)",
+                "\n\n(The whole-recording pass did not complete, so this is the running \
+                 transcript from during the meeting rather than a single pass over the \
+                 finished audio.)",
             );
         }
-        if transcript.gaps > 0 {
+        if let Some(reason) = live_failure {
+            // Said in the note rather than only in a log, for the same reason
+            // `from_partials` is: a transcript that came about differently from
+            // how the reader expects should say so. This one is the good case --
+            // the whole-recording pass ran afterwards over the complete audio,
+            // so nothing is missing from what follows.
             content.push_str(&format!(
-                "\n\n({} stretch(es) of audio were never transcribed: the transcriber could not \
-                 keep up with the meeting.)",
+                "\n\n(The live transcription stopped early: {reason} This note is the \
+                 whole-recording pass, which ran afterwards over the complete audio.)"
+            ));
+        }
+        if let Some(note) = &speaker_note {
+            // Only ever says something went differently from what the setting
+            // asked for. A run that produced labels adds nothing here -- the
+            // labels are visible in the note itself, and a sentence announcing
+            // that a feature worked is noise.
+            content.push_str(&format!("\n\n({note})"));
+        }
+        if transcript.gaps > 0 {
+            // Two causes, and `MeetingTranscript::gaps` is one number that does
+            // not distinguish them: the local model falling behind the meeting,
+            // or a session past the limit on how much transcript is retained.
+            // Naming both is honest where naming one was accurate until
+            // KNEG-109 gave the count a second source.
+            content.push_str(&format!(
+                "\n\n({} stretch(es) of audio were never transcribed: either the transcriber \
+                 could not keep up with the meeting, or the meeting ran past the limit on how \
+                 much transcript one session keeps.)",
                 transcript.gaps
             ));
         }
+        append_delivery_facts(
+            &mut content,
+            finished.mic_delivered,
+            finished.system_delivered,
+        );
 
         let note = kw_notes_core::notes::NewNote {
             title: format!(
@@ -1190,13 +1376,39 @@ impl MeetingRuntime {
         };
 
         match kw_notes_core::notes::create(self.db.pool(), &note).await {
-            Ok(note_id) => MeetingOutcome::Saved {
-                note_id,
-                duration_seconds: finished.duration_seconds,
-                recording_path: path,
-                gaps: transcript.gaps,
-                transcript_is_partials: from_partials,
-            },
+            Ok(note_id) => {
+                match crate::recordings::storage_key_for(&finished.path) {
+                    Some(key) => {
+                        if let Err(error) = kw_notes_core::recordings::attach(
+                            self.db.pool(),
+                            note_id,
+                            &key,
+                            Some(finished.duration_seconds),
+                            None,
+                        )
+                        .await
+                        {
+                            // The note and WAV still exist, but this note loses
+                            // playback; attaching must not turn Saved into Failed.
+                            tracing::error!(note_id, path = %path, error = %error, "could not attach the meeting recording");
+                        }
+                    }
+                    None => {
+                        // The note and WAV still exist, but this note loses
+                        // playback; attaching must not turn Saved into Failed.
+                        tracing::error!(note_id, path = %path, error = "recording path has no valid storage key", "could not attach the meeting recording");
+                    }
+                }
+
+                MeetingOutcome::Saved {
+                    note_id,
+                    duration_seconds: finished.duration_seconds,
+                    recording_path: path,
+                    gaps: transcript.gaps,
+                    reconnects: transcript.reconnects,
+                    transcript_is_partials: from_partials,
+                }
+            }
             Err(err) => {
                 tracing::error!(error = %err, provider = provider_id, "could not save the meeting note");
                 MeetingOutcome::Failed {
@@ -1208,30 +1420,99 @@ impl MeetingRuntime {
         }
     }
 
-    /// Transcribe the finished recording in one request.
-    async fn transcribe_whole(&self, path: &std::path::Path) -> Result<Option<String>, String> {
-        use kw_transcription_core::local::{Inference, LocalTranscriber as _};
+    /// Run the diarizer if it was asked for, and label the pass.
+    ///
+    /// Failure here is never fatal: a note with no speaker labels is worth far
+    /// more than no note, so a diarization that could not run degrades to the
+    /// unlabelled transcript **and a sentence saying so**. Silence would be the
+    /// defect -- a user who turned the setting on would read an unlabelled note
+    /// and conclude the meeting had one speaker.
+    async fn with_speakers(
+        &self,
+        pass: WholePass,
+        recording: &std::path::Path,
+    ) -> (Vec<kw_notes_core::transcript::Segment>, Option<String>) {
+        let wanted = crate::diarization::is_enabled(&self.db).await;
+        if !wanted {
+            return labelled(&pass, None, false);
+        }
+        match crate::diarization::turns(recording).await {
+            Ok(Some(turns)) => labelled(&pass, Some(&turns), true),
+            Ok(None) => {
+                let (segments, _) = labelled(&pass, None, false);
+                (
+                    segments,
+                    Some(
+                        "Speaker labels are switched on but could not run: the diarization \
+                         models or runtime are not installed."
+                            .to_owned(),
+                    ),
+                )
+            }
+            Err(err) => {
+                tracing::warn!(error = %err, "the diarization pass failed; keeping the transcript");
+                let (segments, _) = labelled(&pass, None, false);
+                (
+                    segments,
+                    Some(format!("Speaker labels could not be produced: {err}")),
+                )
+            }
+        }
+    }
 
-        let port = *self
-            .local
-            .port
-            .read()
-            .map_err(|_| "the local model server's state could not be read".to_owned())?;
-        let port = port.ok_or_else(|| "the local model server is not running".to_owned())?;
-        let model = self
-            .local
-            .model
-            .read()
-            .map_err(|_| "the local model could not be read".to_owned())?
-            .clone();
+    /// Transcribe the finished recording in one request.
+    async fn transcribe_whole(&self, path: &std::path::Path) -> Result<Option<WholePass>, String> {
+        use kw_transcription_core::local::Inference;
+
+        // The same engine dictation would use, through the same function, and
+        // that is the whole of the 2026-09-01 fix. This used to build a
+        // `WhisperServer` directly and fail with "the local model server is not
+        // running" whenever a sherpa model was selected -- which is the
+        // documented one-local-engine state, so the whole-recording pass was
+        // failing for anybody who had chosen Parakeet, and every meeting note
+        // silently became the live partials. Found by a person reading a saved
+        // note, not by a test.
+        let whisper = {
+            let port = *self
+                .local
+                .port
+                .read()
+                .map_err(|_| "the local model server's state could not be read".to_owned())?;
+            let model = self
+                .local
+                .model
+                .read()
+                .map_err(|_| "the local model could not be read".to_owned())?
+                .clone();
+            port.map(|port| {
+                kw_transcription_core::local::WhisperServer::new(self.policy.clone(), port, model)
+            })
+        };
+
+        let engine = crate::dictation::local_engine(&self.sherpa, whisper)?.ok_or_else(|| {
+            "no local engine is available: start a model under Settings > Transcription > Local"
+                .to_owned()
+        })?;
 
         let wav = std::fs::read(path).map_err(|e| format!("could not read the recording: {e}"))?;
-        let server =
-            kw_transcription_core::local::WhisperServer::new(self.policy.clone(), port, model);
 
-        match server.transcribe(wav, None, None).await? {
-            Inference::Text(text) if !text.trim().is_empty() => Ok(Some(text)),
-            Inference::Text(_) | Inference::Empty => Ok(None),
+        match engine.transcribe(wav, None, None).await? {
+            // Timings are kept when the engine produced them and the note is
+            // no worse without them. Until 2026-09-01 both arms collapsed to
+            // one string, with a comment saying this pass "is not asked for
+            // timings" -- true then, and the reason speaker labels had nothing
+            // to attach to. `Text` still arrives from a server started with
+            // `--no-timestamps`, so an empty `timings` is an ordinary state
+            // rather than a fault, and `labelled` says so on the note.
+            Inference::Timed { text, segments } if !text.trim().is_empty() => Ok(Some(WholePass {
+                text,
+                timings: segments,
+            })),
+            Inference::Text(text) if !text.trim().is_empty() => Ok(Some(WholePass {
+                text,
+                timings: Vec::new(),
+            })),
+            Inference::Text(_) | Inference::Timed { .. } | Inference::Empty => Ok(None),
             Inference::Rejected { status, body } => {
                 Err(format!("the local server answered {status}: {body}"))
             }
@@ -1239,9 +1520,280 @@ impl MeetingRuntime {
     }
 }
 
-/// Feed the provider what the recorder forwards, emitting transcript as it comes.
+/// Preserve what each capture delivered in the note that outlives the session.
+///
+/// The whole-recording pass reads a mixed WAV, so its segments cannot recover
+/// which source contributed. The recorder has already measured the two facts;
+/// dropping them only on the successful path made a complete-looking note out
+/// of a meeting where one source may have contributed nothing.
+fn append_delivery_facts(content: &mut String, mic: Delivered, system: Delivered) {
+    content.push_str("\n\nRecording sources:\n- Microphone: ");
+    content.push_str(mic.note_fact());
+    content.push_str(".\n- System audio: ");
+    content.push_str(system.note_fact());
+    content.push('.');
+}
+
+/// Ask the recorder to stop, and wait for what it wrote.
+///
+/// A free function taking the command channel rather than a `MeetingRuntime`
+/// method, for the reason `resolve_key_ref` is one: it can then be reasoned
+/// about, and its three failures named, with no `AppHandle` in sight. Each of
+/// those three used to be a `?` in `stop`.
+fn close_recorder(commands: &sync_mpsc::Sender<RecorderCommand>) -> Result<Finished, String> {
+    let (reply_tx, reply_rx) = sync_mpsc::channel();
+    if commands
+        .send(RecorderCommand::Finish { reply: reply_tx })
+        .is_err()
+    {
+        return Err("the recording thread had already stopped".to_owned());
+    }
+    match reply_rx.recv() {
+        Ok(result) => result,
+        Err(_) => Err("the recording thread did not answer".to_owned()),
+    }
+}
+
+/// What awaiting the pump produced: the live transcript, or one sentence saying
+/// why there is not one.
+///
+/// A free function so the sentence can be checked with no `AppHandle`, no `Db`
+/// and no `NetworkPolicy` in sight -- the same reason `resolve_key_ref` is one,
+/// and the reason there is no fake `MeetingTranscriptionProvider` here. `pump`
+/// itself already propagates its `Err` correctly; what was wrong was what
+/// `stop` did with it.
+fn pump_result(
+    joined: Result<Result<MeetingTranscript, MeetingError>, tokio::task::JoinError>,
+) -> Result<MeetingTranscript, String> {
+    match joined {
+        Ok(Ok(transcript)) => Ok(transcript),
+        // The provider's own words. Since `MeetingError::ProviderFault` exists
+        // that includes what the provider said was wrong, rather than what our
+        // own send call complained about afterwards. Through
+        // `live_transcript_ended` so that the sentence the indicator showed
+        // mid-meeting and the sentence the outcome ends with are the same one.
+        // The recorder is irrelevant on this arm: the error came from the
+        // provider, and it is what the user needs to read.
+        Ok(Err(err)) => Err(live_transcript_ended(Err(&err), None)),
+        // A panic in the pump, or the task being aborted. Neither should happen;
+        // both used to leave the screen stuck on "Recording" for ever.
+        Err(err) => Err(format!("the transcription task failed: {err}.")),
+    }
+}
+
+/// The sentence a meeting that could not be transcribed ends with.
+///
+/// The recording leads, because it is the artefact that cannot be recreated and
+/// the note can be rebuilt from it by hand. Same shape as the one failure
+/// message that already existed, in `keep`, for a note that could not be saved.
+fn failed_message(recording_path: &str, reason: &str) -> String {
+    format!(
+        "The recording is at {recording_path} but the meeting could not be transcribed: {reason}"
+    )
+}
+
+/// Tell the screens and the tray what the session is doing.
+///
+/// A free function because the pump's own task has to emit one too, and it has
+/// an `AppHandle` and nothing else. [`MeetingRuntime::emit_state`] is the same
+/// call with `self.app` filled in.
+fn emit_state(app: &AppHandle, state: MeetingState) {
+    crate::tray::meeting(app, state.is_running());
+
+    if let Err(err) = app.emit(STATE_EVENT, state) {
+        tracing::warn!(error = %err, "could not report the meeting state");
+    }
+}
+
+/// Why the live transcription is no longer running, in the words a screen uses.
+///
+/// One formatter for the two places that need the sentence -- the announcement
+/// the moment it happens, and [`pump_result`] at Stop -- so the indicator and
+/// the outcome cannot describe one failure two ways. Pure, so the sentence can
+/// be checked with no `AppHandle` in sight.
+///
+/// **The `Ok` arm is the one worth reading twice.** The pump returns `Ok` when
+/// the audio channel closes, and at Stop that is exactly what is supposed to
+/// happen -- `close_recorder` drops the sender. Reaching here with `Ok` instead
+/// means the channel closed with no Stop behind it, and `record` has no path
+/// that ends by itself: it returns on `Finish`, on `Cancel`, and on the command
+/// channel disconnecting, all three of which run only after `stop` or `cancel`
+/// has taken the session. So this arm means the recording thread panicked, and
+/// the recording has stopped along with the transcription.
+///
+/// That is the one case where [`MeetingState::RecordingWithoutTranscript`] is
+/// wrong in its first word, and it is reported anyway, because the alternative
+/// is the silence this whole change exists to end -- and because the sentence,
+/// which is what a person actually reads, says the true thing. Filed as
+/// KNEG-116 rather than left here: a fifth state for a case reachable only by a
+/// panic was more machinery than the fact justified, and that is a judgement
+/// somebody should be able to revisit.
+fn live_transcript_ended(
+    outcome: Result<(), &MeetingError>,
+    recorder: Option<RecorderEnd>,
+) -> String {
+    match (outcome, recorder) {
+        // The thread's own account, which is the sentence this used to have to
+        // hedge. Before KNEG-116 every `Ok` arm read "the recording thread
+        // stopped" whether it had returned or unwound, because a closed audio
+        // channel looks the same either way.
+        (Ok(()), Some(RecorderEnd::Panicked)) => {
+            "the recording thread stopped unexpectedly, so nothing further is being recorded \
+             or transcribed. What was captured before it stopped is still on disk, and Stop \
+             will transcribe it."
+                .to_owned()
+        }
+        (Ok(()), Some(RecorderEnd::OnPurpose)) => {
+            "the recording finished, so nothing further is being recorded or transcribed."
+                .to_owned()
+        }
+        // The guard has not run yet. Reachable only in the instant between the
+        // sender dropping and the thread's frame unwinding past it, and the
+        // old wording is right for exactly that: something ended, and this does
+        // not yet know what.
+        (Ok(()), None) => {
+            "the recording thread stopped, so nothing further is being recorded or transcribed."
+                .to_owned()
+        }
+        (Err(err), _) => format!("{err}."),
+    }
+}
+
+/// What to say about a session that has not been stopped.
+///
+/// `announced` is whether the pump's ending has been recorded; `pump_finished`
+/// is whether the task has ended at all.
+///
+/// **The second is not redundant, and the ordering is why.** The announcement
+/// is written by the pump's own task *before* it returns, so the join handle
+/// cannot report `is_finished` first. "Finished, and nothing announced" therefore
+/// means exactly one thing: the task panicked, or it was aborted. There is no
+/// sentence for that -- a panic has no provider behind it -- and the screen
+/// should still not claim a transcript is being produced.
+///
+/// KNEG-95 named `status()` not consulting `pump.is_finished()` as part of the
+/// gap. This is that, narrowed to the case the fault cell cannot cover.
+const fn live_state(
+    announced: bool,
+    pump_finished: bool,
+    recorder: Option<RecorderEnd>,
+) -> MeetingState {
+    // First, because it is the strongest claim available: the thread said so
+    // itself. `announced` and `pump_finished` are both about the transcription,
+    // and neither can tell whether anything is still being recorded.
+    if matches!(recorder, Some(RecorderEnd::Panicked)) {
+        return MeetingState::Stalled;
+    }
+    if announced || pump_finished {
+        MeetingState::RecordingWithoutTranscript
+    } else {
+        MeetingState::Recording
+    }
+}
+
+/// Whether the session found under the lock is the one this ending belongs to.
+///
+/// Pure, and the whole of the local race it settles. The lifecycle state refuses
+/// a second meeting while the first is finishing, but this task should still
+/// identify its own session rather than relying on a separate lock's policy.
+///
+/// Identity is the cell itself rather than a counter, because the cell is
+/// already per-session and already shared with exactly the task that needs it.
+fn is_this_session(found: Option<&Arc<OnceLock<String>>>, mine: &Arc<OnceLock<String>>) -> bool {
+    found.is_some_and(|cell| Arc::ptr_eq(cell, mine))
+}
+
+/// Say that the live transcription has ended, if the meeting is still running.
+///
+/// **The lock is the arbiter.** `stop` and `cancel` take the session out under
+/// it, so holding it while both deciding and emitting is what keeps this from
+/// overwriting `Finishing` with a state the user would then be stuck looking at
+/// until the whole-file pass returned. Emitting after releasing the lock would
+/// reopen exactly that window.
+///
+/// No deadlock with `stop`: it takes the session in one statement and drops the
+/// guard before it awaits this task, so the lock is free by the time it does.
+///
+/// `start` holds the guard across its whole body, and that turns out to be the
+/// other half of the ordering. A provider that refuses on the first chunk ends
+/// the pump while `start` is still running, and this task then waits -- so
+/// `start`'s own `emit_state(Recording)` lands first and this one lands after
+/// it. Blocked on the lock is the correct place for it to be: the answer is the
+/// same one, delivered in an order the screen can follow.
+async fn announce_transcript_ended(
+    live: &Mutex<Option<Live>>,
+    app: &AppHandle,
+    mine: &Arc<OnceLock<String>>,
+    reason: String,
+) {
+    let held = live.lock().await;
+    if !is_this_session(held.as_ref().map(|live| &live.transcript_failure), mine) {
+        // Stop or Discard already took the session, so this ending is the one
+        // that was asked for. `pump_result` reports it from there.
+        return;
+    }
+
+    tracing::error!(
+        %reason,
+        "the live transcription ended while the meeting was still recording"
+    );
+    let _ = mine.set(reason);
+    emit_state(app, MeetingState::RecordingWithoutTranscript);
+}
+
+/// Interrupt even an in-flight provider operation. Dropping the sender (normal
+/// Stop) is not cancellation; only an explicit signal discards transcription.
+async fn until_cancelled<T>(
+    work: impl std::future::Future<Output = T>,
+    cancellation: oneshot::Receiver<()>,
+) -> Option<T> {
+    tokio::select! {
+        biased;
+        () = async {
+            if cancellation.await.is_err() {
+                std::future::pending::<()>().await;
+            }
+        } => None,
+        result = work => Some(result),
+    }
+}
+
+async fn cancel_provider(provider: &mut dyn MeetingTranscriptionProvider) {
+    match tokio::time::timeout(std::time::Duration::from_secs(5), provider.cancel()).await {
+        Ok(Ok(())) => {}
+        Ok(Err(err)) => tracing::warn!(error = %err, "provider cancellation failed"),
+        Err(_) => tracing::warn!("provider cancellation timed out; dropping its sockets"),
+    }
+}
+
 async fn pump(
     mut provider: Box<dyn MeetingTranscriptionProvider>,
+    session_rate: u32,
+    audio: mpsc::UnboundedReceiver<Drained>,
+    events: mpsc::UnboundedReceiver<TranscriptEvent>,
+    app: AppHandle,
+    cancellation: oneshot::Receiver<()>,
+) -> Result<MeetingTranscript, MeetingError> {
+    let result = until_cancelled(
+        pump_audio(provider.as_mut(), session_rate, audio, events, app),
+        cancellation,
+    )
+    .await;
+    let result = result.unwrap_or_else(|| {
+        Err(MeetingError::Disconnected {
+            provider: "meeting".to_owned(),
+            detail: "cancelled by the user".to_owned(),
+        })
+    });
+    if result.is_err() {
+        cancel_provider(provider.as_mut()).await;
+    }
+    result
+}
+
+/// Feed the provider what the recorder forwards, emitting transcript as it comes.
+async fn pump_audio(
+    provider: &mut dyn MeetingTranscriptionProvider,
     session_rate: u32,
     mut audio: mpsc::UnboundedReceiver<Drained>,
     mut events: mpsc::UnboundedReceiver<TranscriptEvent>,
@@ -1284,41 +1836,6 @@ async fn pump(
     }
 
     Ok(transcript)
-}
-
-/// Mono `f32` as the 16-bit PCM a provider takes.
-///
-/// The rate is only carried in the header this then strips, so it changes
-/// nothing about the bytes — but passing it means the call site says what rate
-/// the samples are, which is the thing that was wrong here before.
-fn pcm_bytes(samples: &[f32], sample_rate: u32) -> Vec<u8> {
-    // Through the encoder and back out, so there is one clamp-and-scale in the
-    // workspace rather than a second copy that could round differently.
-    let wav = wav::encode_wav(samples, sample_rate);
-    wav.get(44..).unwrap_or_default().to_vec()
-}
-
-/// One transcript segment in the shape `notes_core::transcript` already reads.
-///
-/// Reusing that shape means the existing export path — SRT, VTT, Markdown —
-/// works on a meeting note with no further work.
-fn segment(
-    text: &str,
-    timestamp: f64,
-    source: Option<AudioSource>,
-) -> kw_notes_core::transcript::Segment {
-    kw_notes_core::transcript::Segment {
-        text: text.trim().to_owned(),
-        timestamp: Some(timestamp),
-        end_timestamp: None,
-        speaker: None,
-        speaker_name: None,
-        speaker_is_placeholder: false,
-        source: source.map(|s| match s {
-            AudioSource::Mic => "mic".to_owned(),
-            AudioSource::System => "system".to_owned(),
-        }),
-    }
 }
 
 /* ------------------------------------------------------------------ commands */
@@ -1471,44 +1988,96 @@ pub async fn meeting_review_config(
 )]
 mod tests {
     use super::*;
-    // Only for `resolve_key_ref`'s tests, to call `set`/`contains` on a
-    // `MemoryCredentialStore` by trait method rather than a fully-qualified
-    // path.
-    use kw_security::CredentialStore as _;
+
+    /* ----------------------------------------------- session interleavings */
 
     #[test]
-    fn pcm_round_trips_through_the_one_encoder() {
-        // A second clamp-and-scale would be a second thing to get wrong, so this
-        // goes through `encode_wav` and strips the header. If that ever stops
-        // producing 44 bytes of header, this catches it.
-        let samples = vec![0.0_f32, 0.5, -0.5, 1.0, -1.0];
-        let pcm = pcm_bytes(&samples, wav::TARGET_SAMPLE_RATE);
-        assert_eq!(pcm.len(), samples.len() * 2);
-        assert_eq!(wav::from_pcm(&pcm).len(), samples.len());
+    fn notification_window_has_something_to_say_except_when_idle_without_an_offer() {
+        let cases = [
+            (SessionPhase::Idle, false, false),
+            (SessionPhase::Idle, true, true),
+            (SessionPhase::Starting, false, true),
+            (SessionPhase::Starting, true, true),
+            (SessionPhase::Recording, false, true),
+            (SessionPhase::Recording, true, true),
+            (SessionPhase::Finishing, false, true),
+            (SessionPhase::Finishing, true, true),
+        ];
 
-        let back = wav::from_pcm(&pcm);
-        for (before, after) in samples.iter().zip(back.iter()) {
-            assert!((before - after).abs() < 1e-3, "{before} became {after}");
+        for (phase, offer_outstanding, expected) in cases {
+            assert_eq!(
+                window_has_something_to_say(phase, offer_outstanding),
+                expected
+            );
+        }
+
+        // Idle with no offer is the sole state in which the window is empty.
+        assert!(!window_has_something_to_say(SessionPhase::Idle, false));
+        assert!(window_has_something_to_say(SessionPhase::Idle, true));
+        for phase in [
+            SessionPhase::Starting,
+            SessionPhase::Recording,
+            SessionPhase::Finishing,
+        ] {
+            assert!(window_has_something_to_say(phase, false));
+            assert!(window_has_something_to_say(phase, true));
         }
     }
 
     #[test]
-    fn a_segment_carries_the_source_the_export_path_expects() {
-        // `notes_core::transcript::Segment::source` is documented as `mic` or
-        // `system`, so a meeting note exports without any further work.
-        let mic = segment("hello", 1.5, Some(AudioSource::Mic));
-        assert_eq!(mic.source.as_deref(), Some("mic"));
-        assert_eq!(mic.timestamp, Some(1.5));
+    fn finishing_blocks_both_a_new_start_and_detection_polling() {
+        let mut lifecycle = SessionLifecycle::default();
+        let generation = lifecycle.begin_start().unwrap();
+        assert!(lifecycle.started(generation));
+        assert_eq!(lifecycle.begin_finish().unwrap(), generation);
 
-        let system = segment(" spaced  ", 0.0, Some(AudioSource::System));
-        assert_eq!(system.source.as_deref(), Some("system"));
-        assert_eq!(system.text, "spaced", "trimmed for the export");
-
-        assert!(segment("x", 0.0, None).source.is_none());
+        assert!(!lifecycle.may_poll());
+        assert_eq!(
+            lifecycle.begin_start(),
+            Err("a meeting is already starting, recording, or finishing")
+        );
+        assert_eq!(lifecycle.phase, SessionPhase::Finishing);
     }
 
     #[test]
+    fn an_old_completion_cannot_idle_or_hide_a_newer_session() {
+        let mut lifecycle = SessionLifecycle::default();
+        let first = lifecycle.begin_start().unwrap();
+        assert!(lifecycle.started(first));
+        assert_eq!(lifecycle.begin_finish().unwrap(), first);
+        assert!(lifecycle.finished(first));
+
+        let second = lifecycle.begin_start().unwrap();
+        assert!(lifecycle.started(second));
+        assert!(!lifecycle.finished(first));
+        assert_eq!(lifecycle.phase, SessionPhase::Recording);
+        assert!(!lifecycle.may_poll());
+    }
+
+    #[test]
+    fn a_failed_start_releases_only_its_own_reservation() {
+        let mut lifecycle = SessionLifecycle::default();
+        let first = lifecycle.begin_start().unwrap();
+        assert!(lifecycle.start_failed(first));
+        assert_eq!(lifecycle.phase, SessionPhase::Idle);
+        assert!(lifecycle.may_poll());
+
+        let second = lifecycle.begin_start().unwrap();
+        assert!(!lifecycle.start_failed(first));
+        assert_eq!(lifecycle.phase, SessionPhase::Starting);
+        assert!(lifecycle.start_failed(second));
+    }
+
+    /* --------------------------------------- the transcript ending mid-meeting */
+
+    /// The four strings the frontend compares against, asserted here because a
+    /// renamed variant is a silent no-match over there rather than a type error.
+    #[test]
     fn the_states_serialise_as_the_frontend_reads_them() {
+        assert_eq!(
+            serde_json::to_value(MeetingState::RecordingWithoutTranscript).unwrap(),
+            "recording-without-transcript"
+        );
         assert_eq!(
             serde_json::to_value(MeetingState::Finishing).unwrap(),
             "finishing"
@@ -1518,431 +2087,25 @@ mod tests {
             duration_seconds: 61.0,
             recording_path: "C:/x.wav".to_owned(),
             gaps: 2,
+            reconnects: 1,
             transcript_is_partials: true,
         };
         let json = serde_json::to_value(&outcome).unwrap();
         assert_eq!(json["outcome"], "saved");
         assert_eq!(json["noteId"], 7);
         assert_eq!(json["gaps"], 2);
+        assert_eq!(json["reconnects"], 1);
         assert_eq!(json["transcriptIsPartials"], true);
-    }
 
-    #[test]
-    fn every_client_can_be_built_by_the_dispatch() {
-        // The exhaustive match in `provider` is what makes a new client a compile
-        // error until it is wired. This asserts the other half: that every
-        // allowed provider has a `Client` the match covers.
-        for provider in kw_meeting_core::PROVIDERS {
-            let allowed = kw_meeting_core::is_allowed(provider.id);
-            let client = kw_meeting_core::client(provider.id);
-            assert_eq!(allowed, client.is_some(), "{}", provider.id);
-        }
-    }
-
-    #[test]
-    fn resolve_client_resolves_the_clients_that_exist() {
-        assert_eq!(resolve_client("local"), Ok(Client::LocalWindow));
-        assert_eq!(
-            resolve_client("openai-realtime"),
-            Ok(Client::OpenAiRealtime)
-        );
-        assert_eq!(
-            resolve_client("assemblyai-realtime"),
-            Ok(Client::AssemblyAi)
-        );
-        assert_eq!(
-            resolve_client("deepgram-realtime"),
-            Ok(Client::DeepgramRealtime)
-        );
-        assert_eq!(resolve_client("corti-realtime"), Ok(Client::CortiRealtime));
-    }
-
-    #[test]
-    fn resolve_client_names_the_declined_reason_rather_than_a_generic_message() {
-        let err = resolve_client("tinfoil-realtime").unwrap_err();
-        assert!(err.contains("attestation"), "{err}");
-    }
-
-    #[test]
-    fn resolve_client_refuses_an_unknown_provider_id() {
-        let err = resolve_client("not-a-real-provider").unwrap_err();
-        assert!(err.contains("no meeting client"), "{err}");
-    }
-
-    // `resolve_key_ref` is a free function taking `&dyn CredentialStore`
-    // precisely so these can run with no `AppHandle`, no Tauri runtime, and no
-    // real keychain -- see its doc comment for why holding a reference to
-    // Tauri-dependent code in a test is not an option here.
-
-    #[test]
-    fn local_needs_no_credential_even_when_the_store_is_empty() {
-        let store = kw_security::MemoryCredentialStore::new();
-        let key_ref = resolve_key_ref("local", Client::LocalWindow, &store).unwrap();
-        assert_eq!(key_ref, None);
-    }
-
-    #[test]
-    fn openai_realtime_refuses_to_start_naming_the_settings_screen_when_nothing_is_stored() {
-        // The tripwire for the defect this task fixes: `key_ref: None` used to
-        // reach `connect` regardless, so the failure a user saw was a socket
-        // error with no mention of where to fix it.
-        let store = kw_security::MemoryCredentialStore::new();
-        let err = resolve_key_ref("openai-realtime", Client::OpenAiRealtime, &store).unwrap_err();
-        assert!(err.contains("Settings > Providers"), "{err}");
-    }
-
-    #[test]
-    fn openai_realtime_gets_past_the_check_once_a_key_is_stored() {
-        let store = kw_security::MemoryCredentialStore::new();
-        store
-            .set(
-                &kw_security::KeyRef::new("openai").unwrap(),
-                &kw_security::Secret::new("sk-test".to_owned()),
-            )
-            .unwrap();
-
-        let key_ref = resolve_key_ref("openai-realtime", Client::OpenAiRealtime, &store).unwrap();
-        assert_eq!(key_ref, kw_security::KeyRef::new("openai"));
-    }
-
-    #[test]
-    fn a_blank_stored_credential_is_treated_as_absent() {
-        // `CredentialStore::contains` already treats whitespace-only as empty;
-        // this asserts the controller's refusal actually depends on that, not
-        // on some looser check of its own.
-        let store = kw_security::MemoryCredentialStore::new();
-        store
-            .set(
-                &kw_security::KeyRef::new("openai").unwrap(),
-                &kw_security::Secret::new("   ".to_owned()),
-            )
-            .unwrap();
-
-        let err = resolve_key_ref("openai-realtime", Client::OpenAiRealtime, &store).unwrap_err();
-        assert!(err.contains("Settings > Providers"), "{err}");
-    }
-
-    #[test]
-    fn assemblyai_realtime_refuses_to_start_naming_the_settings_screen_when_nothing_is_stored() {
-        let store = kw_security::MemoryCredentialStore::new();
-        let err = resolve_key_ref("assemblyai-realtime", Client::AssemblyAi, &store).unwrap_err();
-        assert!(err.contains("Settings > Providers"), "{err}");
-    }
-
-    #[test]
-    fn assemblyai_realtime_gets_past_the_check_once_a_key_is_stored() {
-        let store = kw_security::MemoryCredentialStore::new();
-        store
-            .set(
-                &kw_security::KeyRef::new("assemblyai").unwrap(),
-                &kw_security::Secret::new("aai-test".to_owned()),
-            )
-            .unwrap();
-
-        let key_ref = resolve_key_ref("assemblyai-realtime", Client::AssemblyAi, &store).unwrap();
-        assert_eq!(key_ref, kw_security::KeyRef::new("assemblyai"));
-    }
-
-    #[test]
-    fn deepgram_realtime_refuses_to_start_naming_the_settings_screen_when_nothing_is_stored() {
-        let store = kw_security::MemoryCredentialStore::new();
-        let err =
-            resolve_key_ref("deepgram-realtime", Client::DeepgramRealtime, &store).unwrap_err();
-        assert!(err.contains("Settings > Providers"), "{err}");
-    }
-
-    #[test]
-    fn deepgram_realtime_gets_past_the_check_once_a_key_is_stored() {
-        let store = kw_security::MemoryCredentialStore::new();
-        store
-            .set(
-                &kw_security::KeyRef::new("deepgram").unwrap(),
-                &kw_security::Secret::new("dg-test".to_owned()),
-            )
-            .unwrap();
-
-        let key_ref =
-            resolve_key_ref("deepgram-realtime", Client::DeepgramRealtime, &store).unwrap();
-        assert_eq!(key_ref, kw_security::KeyRef::new("deepgram"));
-    }
-
-    #[test]
-    fn corti_realtime_refuses_to_start_naming_the_settings_screen_when_nothing_is_stored() {
-        let store = kw_security::MemoryCredentialStore::new();
-        let err = resolve_key_ref("corti-realtime", Client::CortiRealtime, &store).unwrap_err();
-        assert!(err.contains("Settings > Providers"), "{err}");
-    }
-
-    #[test]
-    fn corti_realtime_gets_past_the_check_once_a_key_is_stored() {
-        let store = kw_security::MemoryCredentialStore::new();
-        store
-            .set(
-                &kw_security::KeyRef::new("corti").unwrap(),
-                &kw_security::Secret::new("corti-test".to_owned()),
-            )
-            .unwrap();
-
-        let key_ref = resolve_key_ref("corti-realtime", Client::CortiRealtime, &store).unwrap();
-        assert_eq!(key_ref, kw_security::KeyRef::new("corti"));
-    }
-
-    #[test]
-    fn corti_realtime_refuses_to_build_naming_which_of_environment_or_tenant_is_missing() {
-        // `resolve_corti_scope` is what `provider`'s `Client::CortiRealtime`
-        // arm calls before it ever constructs a socket -- this is the same
-        // refusal `route.rs::required` fires for batch transcription, reached
-        // from a second caller rather than duplicated.
-        let settings = kw_transcription_core::RouteSettings::default();
-        let err = resolve_corti_scope(&settings).unwrap_err();
-        assert!(err.contains("environment"), "{err}");
-
-        let settings = kw_transcription_core::RouteSettings {
-            corti_environment: Some("eu".to_owned()),
-            ..Default::default()
+        let quiet = MeetingOutcome::NothingTranscribed {
+            recording_path: "C:/quiet.wav".to_owned(),
+            mic: Delivered::Silence,
+            system: Delivered::Nothing,
+            reconnects: 2,
         };
-        let err = resolve_corti_scope(&settings).unwrap_err();
-        assert!(err.contains("tenant"), "{err}");
-    }
-
-    #[test]
-    fn corti_realtime_scope_resolves_once_both_are_set() {
-        let settings = kw_transcription_core::RouteSettings {
-            corti_environment: Some(" eu ".to_owned()),
-            corti_tenant: Some(" acme ".to_owned()),
-            ..Default::default()
-        };
-        let (environment, tenant) = resolve_corti_scope(&settings).unwrap();
-        assert_eq!(environment, "eu");
-        assert_eq!(tenant, "acme");
-    }
-
-    #[test]
-    fn every_clients_credential_slot_is_a_valid_key_ref() {
-        // `resolve_key_ref`'s `KeyRef::new(slot).ok_or_else(...)` branch stayed
-        // unreachable and untested while only two `Client` variants existed --
-        // both slots happened to be valid strings, so nothing ever exercised
-        // the refusal. A third arm is exactly where a typo producing an
-        // invalid slot name (stray punctuation, a capital letter) would first
-        // show up, so this checks every arm directly against the validation
-        // `resolve_key_ref` depends on, rather than trusting that the slots
-        // that happen to exist today stay well-formed by accident.
-        for client in [
-            Client::LocalWindow,
-            Client::OpenAiRealtime,
-            Client::AssemblyAi,
-            Client::DeepgramRealtime,
-            Client::CortiRealtime,
-        ] {
-            if let Some(slot) = kw_meeting_core::credential_slot(client) {
-                assert!(
-                    kw_security::KeyRef::new(slot).is_some(),
-                    "{slot:?} is not a valid credential slot name"
-                );
-            }
-        }
-    }
-
-    // `resolve_provider_config`, `draft_config` and the settings keys are all
-    // free functions and a database, precisely so the properties below can be
-    // asserted with no `AppHandle` in sight -- see their doc comments.
-
-    #[tokio::test]
-    async fn the_language_and_keyterms_settings_round_trip() {
-        let db = Db::open_in_memory().await.unwrap();
-        let pool = db.pool();
-
-        // Nothing stored yet: language is unset and there are no keyterms.
-        assert_eq!(
-            kw_storage::settings::get_or(pool, LANGUAGE_KEY, String::new())
-                .await
-                .unwrap(),
-            ""
-        );
-        assert!(
-            kw_storage::settings::get_or(pool, KEYTERMS_KEY, Vec::<String>::new())
-                .await
-                .unwrap()
-                .is_empty()
-        );
-
-        kw_storage::settings::set(pool, LANGUAGE_KEY, &"sv".to_owned())
-            .await
-            .unwrap();
-        let keyterms = vec!["Sprint".to_owned(), "Q3 roadmap".to_owned()];
-        kw_storage::settings::set(pool, KEYTERMS_KEY, &keyterms)
-            .await
-            .unwrap();
-
-        assert_eq!(
-            kw_storage::settings::get_or(pool, LANGUAGE_KEY, String::new())
-                .await
-                .unwrap(),
-            "sv"
-        );
-        assert_eq!(
-            kw_storage::settings::get_or(pool, KEYTERMS_KEY, Vec::<String>::new())
-                .await
-                .unwrap(),
-            keyterms
-        );
-    }
-
-    #[test]
-    fn corti_refuses_to_start_naming_the_provider_and_the_field_when_no_language_is_set() {
-        // The tripwire for the property this task exists to add: `start` used
-        // to build its config with `language: None` unconditionally and no
-        // check at all, so a provider that cannot detect a language would have
-        // failed three seconds later at `connect`, or worse, produced a
-        // transcript in the wrong language with nothing said about it.
-        let caps = kw_meeting_core::capabilities("corti-realtime").unwrap();
-        let err =
-            resolve_provider_config("corti-realtime", caps, None, 16_000, "", &[]).unwrap_err();
-        assert!(err.contains("Corti Realtime"), "{err}");
-        assert!(err.contains("language"), "{err}");
-        assert!(err.contains("Settings > Meetings"), "{err}");
-    }
-
-    #[test]
-    fn corti_proceeds_once_a_language_is_given() {
-        let caps = kw_meeting_core::capabilities("corti-realtime").unwrap();
-        let config =
-            resolve_provider_config("corti-realtime", caps, None, 16_000, "sv", &[]).unwrap();
-        assert_eq!(config.language, Some("sv".to_owned()));
-    }
-
-    #[test]
-    fn a_provider_that_detects_language_is_not_blocked_by_a_blank_field() {
-        let caps = kw_meeting_core::capabilities("openai-realtime").unwrap();
-        let config =
-            resolve_provider_config("openai-realtime", caps, None, 24_000, "", &[]).unwrap();
-        assert_eq!(config.language, None);
-    }
-
-    #[test]
-    fn the_local_provider_is_not_blocked_by_a_blank_field_either() {
-        // The regression this task's own change to `capabilities.rs` guards
-        // against: the one provider that needs no credentials and no network
-        // must keep working with nothing configured.
-        let caps = kw_meeting_core::capabilities("local").unwrap();
-        let config = resolve_provider_config("local", caps, None, 16_000, "", &[]).unwrap();
-        assert_eq!(config.language, None);
-    }
-
-    #[test]
-    fn a_blank_language_setting_is_not_sent_as_the_literal_empty_string() {
-        assert_eq!(normalize_language("   "), None);
-        assert_eq!(normalize_language("  sv  "), Some("sv".to_owned()));
-    }
-
-    #[test]
-    fn blank_keyterms_are_dropped_before_they_reach_a_providers_cap() {
-        let keyterms = vec!["  ".to_owned(), "Sprint".to_owned(), String::new()];
-        assert_eq!(normalize_keyterms(&keyterms), vec!["Sprint".to_owned()]);
-    }
-
-    #[test]
-    fn a_keyterm_count_over_the_cap_is_reported_rather_than_silently_truncated() {
-        // What the settings screen renders: AssemblyAI caps at 100 and
-        // truncates without complaint on the wire, so this is the data that
-        // makes the truncation visible instead.
-        let keyterms: Vec<String> = (0..150).map(|i| format!("term{i}")).collect();
-        let config = draft_config("assemblyai-realtime", "en", &keyterms).unwrap();
-        let review = kw_meeting_core::validate(&config).unwrap();
-        assert_eq!(review.keyterms_requested, 150);
-        assert_eq!(review.keyterms_used, 100);
-        assert_eq!(review.keyterms_dropped, 50);
-        assert!(review.has_warnings());
-    }
-
-    #[test]
-    fn draft_config_refuses_a_provider_nothing_describes() {
-        let err = draft_config("not-a-real-provider", "", &[]).unwrap_err();
-        assert!(err.contains("not-a-real-provider"), "{err}");
-    }
-
-    fn detected(provider: &'static str, in_call: bool) -> Detected {
-        Detected {
-            provider,
-            name: "Something",
-            evidence: format!("{provider}.exe"),
-            in_call,
-        }
-    }
-
-    #[test]
-    fn a_meeting_in_progress_is_offered_once_and_not_again() {
-        // The property that decides whether this feature is tolerable. Polling is
-        // every five seconds; a second offer would be twelve windows a minute.
-        let mut watcher = Watcher::default();
-        let running = vec![detected("zoom", true)];
-
-        let offer = watcher.consider(&running).expect("the first poll offers");
-        assert_eq!(offer.provider, "zoom");
-        assert_eq!(offer.evidence, "zoom.exe");
-
-        for _ in 0..10 {
-            assert!(watcher.consider(&running).is_none(), "offered twice");
-        }
-    }
-
-    #[test]
-    fn a_client_merely_being_open_is_not_offered() {
-        // Measured, not preferred: `meeting_detect_probe` found ms-teams.exe
-        // running with no call in progress, because new Teams runs the call
-        // inside its own process. Offering on "the client is open" would fire on
-        // every launch for anyone whose Teams starts with Windows.
-        let mut watcher = Watcher::default();
-        assert!(watcher.consider(&[detected("teams", false)]).is_none());
-        assert!(!watcher.has_offered("teams"));
-    }
-
-    #[test]
-    fn the_next_meeting_is_offered_after_the_application_quits() {
-        let mut watcher = Watcher::default();
-        let running = vec![detected("zoom", true)];
-
-        assert!(watcher.consider(&running).is_some());
-        // Zoom quits.
-        assert!(watcher.consider(&[]).is_none());
-        assert!(!watcher.has_offered("zoom"), "the suppression was released");
-        // And a new call is offered.
-        assert!(watcher.consider(&running).is_some());
-    }
-
-    #[test]
-    fn recording_one_call_does_not_suppress_the_next() {
-        // `forget` is what the end of a meeting calls. Without it, a second call
-        // in the same Zoom session would never be offered, because Zoom never
-        // quit in between.
-        let mut watcher = Watcher::default();
-        let running = vec![detected("zoom", true)];
-
-        assert!(watcher.consider(&running).is_some());
-        watcher.forget("zoom");
-        assert!(watcher.consider(&running).is_some());
-    }
-
-    #[test]
-    fn only_one_offer_is_made_when_two_meetings_are_running() {
-        // Two windows stacked on top of each other is worse than one question.
-        let mut watcher = Watcher::default();
-        let running = vec![detected("zoom", true), detected("webex", true)];
-
-        assert!(watcher.consider(&running).is_some());
-        // The second is offered on the next poll, not simultaneously.
-        let second = watcher.consider(&running).expect("the other one follows");
-        assert_eq!(second.provider, "webex");
-        assert!(watcher.consider(&running).is_none());
-    }
-
-    #[test]
-    fn a_call_starting_inside_an_already_open_client_is_offered() {
-        // The sequence a real Zoom meeting produces: the client is open first and
-        // must not be offered, then the call starts and must be.
-        let mut watcher = Watcher::default();
-        assert!(watcher.consider(&[detected("zoom", false)]).is_none());
-        assert!(watcher.consider(&[detected("zoom", true)]).is_some());
+        let json = serde_json::to_value(&quiet).unwrap();
+        assert_eq!(json["outcome"], "nothing-transcribed");
+        assert_eq!(json["reconnects"], 2);
     }
 
     #[test]
@@ -1952,5 +2115,74 @@ mod tests {
         let reason = kw_meeting_core::declined("tinfoil-realtime").unwrap();
         assert!(reason.contains("attestation"), "{reason}");
         assert!(kw_meeting_core::client("tinfoil-realtime").is_none());
+    }
+
+    #[test]
+    fn a_saved_note_keeps_each_sources_delivery_facts_without_guessing_why() {
+        let mut content = "The transcript.".to_owned();
+        append_delivery_facts(&mut content, Delivered::Audio, Delivered::Nothing);
+
+        assert_eq!(
+            content,
+            "The transcript.\n\nRecording sources:\n\
+             - Microphone: delivered non-silent audio.\n\
+             - System audio: opened but delivered no audio blocks."
+        );
+
+        let expected = [
+            (Delivered::NotCaptured, "was not captured"),
+            (Delivered::Nothing, "opened but delivered no audio blocks"),
+            (Delivered::Silence, "delivered only digital silence"),
+            (Delivered::Audio, "delivered non-silent audio"),
+        ];
+        for (state, fact) in expected {
+            assert_eq!(state.note_fact(), fact);
+        }
+    }
+}
+
+#[cfg(test)]
+mod cancellation_tests {
+    use super::until_cancelled;
+    use tokio::sync::oneshot;
+
+    #[tokio::test]
+    async fn explicit_cancel_interrupts_a_stalled_operation() {
+        let (tx, rx) = oneshot::channel();
+        let (started, ready) = oneshot::channel();
+        let task = tokio::spawn(until_cancelled(
+            async move {
+                let _ = started.send(());
+                std::future::pending::<()>().await;
+            },
+            rx,
+        ));
+        assert!(ready.await.is_ok());
+        let _ = tx.send(());
+        let result = tokio::time::timeout(std::time::Duration::from_secs(1), task).await;
+        assert!(matches!(result, Ok(Ok(None))));
+    }
+
+    #[tokio::test]
+    async fn cancel_wins_over_queued_work() {
+        let (tx, rx) = oneshot::channel();
+        let _ = tx.send(());
+        let polled = std::sync::atomic::AtomicBool::new(false);
+        let result = until_cancelled(
+            async {
+                polled.store(true, std::sync::atomic::Ordering::SeqCst);
+            },
+            rx,
+        )
+        .await;
+        assert!(result.is_none());
+        assert!(!polled.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn dropping_sender_for_normal_stop_still_finishes() {
+        let (tx, rx) = oneshot::channel::<()>();
+        drop(tx);
+        assert_eq!(until_cancelled(async { 42 }, rx).await, Some(42));
     }
 }

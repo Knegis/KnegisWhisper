@@ -8,16 +8,30 @@
 //!
 //! So a model carries [`Integrity::Pinned`] where a digest is known and
 //! [`Integrity::Size`] otherwise, and which one applied is reported rather than
-//! implied. Upstream checks size alone for all six. Pinning all of them means
-//! downloading roughly seven gigabytes once, which is a job for a tool rather
-//! than something to invent digests for here: `tiny` is pinned because it was
-//! actually downloaded and hashed while this was written, and the rest say
-//! plainly that they were not.
+//! implied. Upstream checks size alone for all six. **All six are now pinned.**
+//! This module used to hold a `PINNED` table of its own with `tiny` alone in it
+//! and a note that the rest were "a job for a tool rather than something to
+//! invent digests for here"; that tool is `tools/model-pin/pin.mjs`, and on
+//! 2026-08-31 it downloaded and hashed roughly seven gigabytes of model in one
+//! run. `tiny` reproduced the digest this file had carried since it was written.
 //!
-//! Size is checked with a tolerance because the registry's `expectedSizeBytes`
-//! are rounded — `ggml-tiny.bin` is declared as 78,000,000 and is really
-//! 77,691,713. A tolerance rather than a rewrite of the registry, because the
-//! rounded figures are also what the settings screen shows.
+//! **The pins do not live here.** They live in `WHISPER_PINS` in
+//! `tools/integration-audit/generate-provider-registry.mjs`, beside
+//! `SHERPA_PINS` and `LOCAL_LLM_PINS`, and reach this module as
+//! [`WhisperModel::sha256`] and [`WhisperModel::expected_size_bytes`]. Three
+//! model families keeping their pins in three different places was the actual
+//! problem: `model-pin --verify` had to *parse this file's Rust* to check the
+//! whisper half, and now it reads one generated JSON document for all of them.
+//!
+//! `expected_size_bytes` is consequently the **measured** length now, not the
+//! rounded one — `ggml-tiny.bin` is 77,691,713 bytes, where the baseline
+//! declared 78,000,000. Nothing was lost in overriding it: the settings screen
+//! renders `sizeMb`, not this field, and [`integrity_for`] below is its only
+//! reader. (An earlier version of this comment claimed the rounded figures were
+//! "also what the settings screen shows". That was never true — see
+//! `apps/desktop/src/views/SettingsTranscription.tsx`, which formats `sizeMb`.)
+//!
+//! The size-only path is kept anyway; see [`Integrity::Size`].
 
 use std::path::{Path, PathBuf};
 
@@ -27,45 +41,64 @@ use kw_sidecar::manifest::Sha256Digest;
 
 /// How much a model file may differ from its declared size.
 ///
-/// Generous, because the declared figures are rounded for display. It is still
+/// Generous, because a *declared* figure is rounded for display. It is still
 /// enough to catch the failures that matter: a truncated transfer, an error page
 /// saved as a model, a rate-limit response.
-pub const SIZE_TOLERANCE: f64 = 0.05;
-
-/// Digests for the models that have actually been downloaded and hashed.
 ///
-/// Anything absent from this table is size-checked only, and
-/// [`Verification::SizeOnly`] says so to the caller instead of letting it assume
-/// a digest was involved.
-const PINNED: [(&str, &str, u64); 1] = [(
-    "tiny",
-    "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21",
-    77_691_713,
-)];
+/// **No shipped model reaches this any more**, because all six carry a measured
+/// digest and an exact length. It is not dead: [`within_tolerance`]'s other
+/// caller is the `SizeCheck::Approximate` arm of `download_gguf` in
+/// `apps/desktop/src-tauri/src/local_llm.rs`, kept for the same reason — a model
+/// added to a registry before anybody measures it should be degraded, not
+/// broken. A tolerance is the right answer to a rounded number and the wrong
+/// answer to a measured one.
+pub const SIZE_TOLERANCE: f64 = 0.05;
 
 /// What is known about a model's bytes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Integrity {
-    /// A digest measured from the real file.
+    /// A digest measured from the real file, with the length measured beside it.
     Pinned {
         digest: Sha256Digest,
         size_bytes: u64,
     },
-    /// Only a declared size, rounded.
+    /// A declared length and no digest, held to [`SIZE_TOLERANCE`].
+    ///
+    /// **Unreachable for every model the registry ships today** — all six are
+    /// pinned. Kept deliberately, and not dead code: it is the honest answer for
+    /// a model added to `config/upstream-integration-baseline.json` before
+    /// anybody has spent the bandwidth to hash it, which for `large` is 2.9 GB.
+    /// Deleting this would leave two options for that model, refusing to install
+    /// it or installing it while implying a digest match, and both are worse.
+    ///
+    /// **Why this is not what sherpa does.** `sherpa_models::install` refuses an
+    /// unpinned model outright with `MissingPin`. The asymmetry is deliberate and
+    /// rests on what the two formats are: a whisper model is a bare `.bin` that
+    /// is downloaded and never unpacked, so the worst an unverified one can do is
+    /// produce bad transcripts. A sherpa model is a `.tar.bz2` that goes through
+    /// `kw_sidecar::extract`, which means path traversal and decompression are in
+    /// play before anything reads a weight. Refusing to unpack an unauthenticated
+    /// archive and agreeing to load unauthenticated weights are proportionate to
+    /// two different exposures, not one rule applied inconsistently.
     Size { expected_bytes: u64 },
     /// The registry gave neither.
     Unknown,
 }
 
 /// What integrity check a model can be held to.
+///
+/// Reads the pin off the registry entry rather than off a table in this file;
+/// `WHISPER_PINS` in `tools/integration-audit/generate-provider-registry.mjs` is
+/// where it is written down, and the generator refuses to emit half a pin.
 #[must_use]
 pub fn integrity_for(model: &WhisperModel) -> Integrity {
-    if let Some((_, digest, size)) = PINNED.iter().find(|(id, _, _)| *id == model.id) {
+    // Both halves or neither. `kw_sidecar::integrity::verify` needs the length
+    // as well as the digest, so a digest on its own cannot be checked -- and
+    // reporting `Pinned` for something that cannot be verified is the one
+    // outcome worth ruling out here.
+    if let (Some(digest), Some(size_bytes)) = (model.sha256.as_deref(), model.expected_size_bytes) {
         if let Ok(digest) = Sha256Digest::parse(digest) {
-            return Integrity::Pinned {
-                digest,
-                size_bytes: *size,
-            };
+            return Integrity::Pinned { digest, size_bytes };
         }
     }
 
@@ -81,6 +114,12 @@ pub enum Verification {
     /// The digest matched.
     DigestMatched,
     /// Only the size was checked, because no digest is known for this model.
+    ///
+    /// Nothing produces this today; it is [`Integrity::Size`]'s outcome and is
+    /// kept for the same reason. The distinction it draws — "the right length"
+    /// against "the file the publisher built" — is what
+    /// `local_model::VerifiedBy` puts on screen, and a UI that cannot say the
+    /// weaker thing will say the stronger one instead.
     SizeOnly { bytes: u64 },
     /// Nothing could be checked. Reported, never silent.
     Unchecked { bytes: u64 },
@@ -158,6 +197,21 @@ pub fn is_installed(dir: &Path, model: &WhisperModel) -> bool {
 }
 
 /// Download a model into `dir` and verify it.
+///
+/// The download is bounded where the model carries a **measured** length, and
+/// unbounded where it does not. All six shipped models carry one as of
+/// `a82d06b`, so in practice every install is bounded; the unbounded arm is for
+/// the same model [`Integrity::Size`] exists for — one added to the baseline
+/// before anybody has spent the bandwidth to measure it.
+///
+/// **The bound is only ever an exact figure.** Bounding a *declared* length
+/// would reintroduce KNEG-101, where `download_gguf` compared a finished
+/// download against a size that was 7.4% wrong for eighteen models and deleted
+/// all eighteen. That bug wasted the bandwidth; a bound would have refused the
+/// transfer mid-flight instead, which is faster and just as wrong. So
+/// [`Integrity::Size`]'s tolerance stays a *post*-download check and never
+/// becomes a bound: a rounded figure cannot bound anything, because the true
+/// length may be on either side of it.
 pub async fn install(
     policy: &NetworkPolicy,
     model: &WhisperModel,
@@ -176,14 +230,35 @@ pub async fn install(
     let final_path = model_path(dir, model);
     let partial = final_path.with_extension("partial");
 
-    policy
-        .download_to_file(
-            RequestPurpose::UserTriggeredModelDownload,
-            &model.download_url,
-            &partial,
-            &mut |written, total| progress(ModelProgress::Downloading { written, total }),
-        )
-        .await?;
+    let integrity = integrity_for(model);
+    let mut report = |written, total| progress(ModelProgress::Downloading { written, total });
+    match &integrity {
+        // A measured length, so it is exact and can bound the transfer.
+        Integrity::Pinned { size_bytes, .. } => {
+            policy
+                .download_to_file_bounded(
+                    RequestPurpose::UserTriggeredModelDownload,
+                    &model.download_url,
+                    &partial,
+                    *size_bytes,
+                    &mut report,
+                )
+                .await?;
+        }
+        // `Integrity::Size`'s figure is declared, and `Unknown` has none at
+        // all. Neither can bound a download; both are still checked against
+        // afterwards by `check` below.
+        Integrity::Size { .. } | Integrity::Unknown => {
+            policy
+                .download_to_file(
+                    RequestPurpose::UserTriggeredModelDownload,
+                    &model.download_url,
+                    &partial,
+                    &mut report,
+                )
+                .await?;
+        }
+    }
 
     progress(ModelProgress::Verifying);
 
@@ -195,7 +270,7 @@ pub async fn install(
         })?
         .len();
 
-    let verification = match check(&partial, bytes, &integrity_for(model), &model.file_name) {
+    let verification = match check(&partial, bytes, &integrity, &model.file_name) {
         Ok(verification) => verification,
         Err(err) => {
             // A file that failed its check must not be left where a later run
@@ -247,6 +322,12 @@ fn check(
 }
 
 /// Whether `actual` is close enough to `expected`.
+///
+/// Two callers, and neither is reached by anything the registry ships today:
+/// [`check`]'s [`Integrity::Size`] arm above, and `SizeCheck::Approximate` in
+/// `apps/desktop/src-tauri/src/local_llm.rs` — the last remaining consumer
+/// outside this crate. Both exist for the model nobody has measured yet. See
+/// [`SIZE_TOLERANCE`].
 #[must_use]
 pub fn within_tolerance(actual: u64, expected: u64) -> bool {
     if expected == 0 {
@@ -280,8 +361,30 @@ mod tests {
             .expect("a whisper model with that id")
     }
 
+    /// A model shaped like one added to the registry before it was measured.
+    ///
+    /// Built by hand rather than found in the registry, because there is no
+    /// unpinned whisper model any more — which is what
+    /// `every_whisper_model_is_pinned_to_a_measured_digest` asserts, and the
+    /// reason the size path needs a fixture to be exercised at all.
+    fn unmeasured_model(expected_size_bytes: Option<u64>) -> WhisperModel {
+        WhisperModel {
+            id: "not-yet-measured".to_owned(),
+            name: "Not yet measured".to_owned(),
+            file_name: "ggml-not-yet-measured.bin".to_owned(),
+            download_url: "https://huggingface.co/example/resolve/main/x.bin".to_owned(),
+            size_mb: Some(142.0),
+            sha256: None,
+            expected_size_bytes,
+            recommended: false,
+        }
+    }
+
     #[test]
-    fn the_pinned_model_is_held_to_its_digest() {
+    fn the_pinned_model_is_held_to_its_measured_digest_and_length() {
+        // 77,691,713 rather than the baseline's rounded 78,000,000: this also
+        // asserts that WHISPER_PINS' measured size reached the registry, since
+        // the generator overrides upstream's figure with it.
         match integrity_for(model("tiny")) {
             Integrity::Pinned { digest, size_bytes } => {
                 assert_eq!(size_bytes, 77_691_713);
@@ -292,33 +395,57 @@ mod tests {
     }
 
     #[test]
+    fn every_whisper_model_is_pinned_to_a_measured_digest() {
+        // Mirrors `every_installable_sherpa_model_has_integrity_and_size_limits`
+        // in sherpa_models.rs. All six were downloaded and hashed on 2026-08-31,
+        // so anything weaker than Pinned here means a pin was dropped from
+        // WHISPER_PINS in tools/integration-audit/generate-provider-registry.mjs
+        // -- and a model that quietly fell back to a size check would install
+        // while the screen still said "digest" for its neighbours.
+        for model in &registry().local_asr.whisper {
+            match integrity_for(model) {
+                Integrity::Pinned { digest, size_bytes } => {
+                    assert_eq!(digest.as_str().len(), 64, "{}", model.id);
+                    assert!(size_bytes > 0, "{}", model.id);
+                    // The measured length, never the rounded display figure.
+                    assert_ne!(size_bytes % 1_000_000, 0, "{} looks rounded", model.id);
+                }
+                other => panic!("{} is {other:?} rather than pinned", model.id),
+            }
+        }
+    }
+
+    #[test]
     fn an_unpinned_model_says_so_rather_than_implying_a_digest() {
         // The distinction the caller needs: nothing here pretends the bytes were
         // verified against a known-good digest when they were not.
-        match integrity_for(model("base")) {
-            Integrity::Size { expected_bytes } => assert!(expected_bytes > 0),
+        match integrity_for(&unmeasured_model(Some(148_000_000))) {
+            Integrity::Size { expected_bytes } => assert_eq!(expected_bytes, 148_000_000),
             other => panic!("{other:?}"),
         }
     }
 
     #[test]
-    fn every_shipped_whisper_model_can_be_checked_somehow() {
-        // A model with neither a digest nor a size would install unverified, so
-        // this fails if the registry ever loses expectedSizeBytes.
-        for model in &registry().local_asr.whisper {
-            assert_ne!(
-                integrity_for(model),
-                Integrity::Unknown,
-                "{} has nothing to check against",
-                model.id
-            );
-        }
+    fn a_model_with_no_size_at_all_is_unknown_rather_than_pinned() {
+        assert_eq!(integrity_for(&unmeasured_model(None)), Integrity::Unknown);
+    }
+
+    #[test]
+    fn a_digest_with_no_length_is_not_reported_as_pinned() {
+        // The generator cannot emit this pair -- WHISPER_PINS dies on half a pin
+        // -- but `verify` needs both numbers, so claiming Pinned here would
+        // promise a check that cannot run.
+        let mut model = unmeasured_model(None);
+        model.sha256 = Some("ab".repeat(32));
+        assert_eq!(integrity_for(&model), Integrity::Unknown);
     }
 
     #[test]
     fn the_rounded_registry_size_still_accepts_the_real_file() {
-        // ggml-tiny.bin is declared as 78,000,000 and is really 77,691,713.
-        // A strict equality check would reject every model in the registry.
+        // What the tolerance is for, in the one case that still reaches it: a
+        // model carrying upstream's rounded declaration. ggml-tiny.bin was
+        // declared as 78,000,000 and is really 77,691,713, which is the shape of
+        // every figure in the baseline.
         assert!(within_tolerance(77_691_713, 78_000_000));
     }
 
@@ -366,14 +493,43 @@ mod tests {
     #[test]
     fn a_file_that_fails_its_size_check_is_reported_with_both_numbers() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("ggml-base.bin");
+        let path = dir.path().join("ggml-not-yet-measured.bin");
         std::fs::write(&path, b"nope").unwrap();
 
-        let err = check(&path, 4, &integrity_for(model("base")), "ggml-base.bin").unwrap_err();
+        let unmeasured = unmeasured_model(Some(148_000_000));
+        let err = check(
+            &path,
+            4,
+            &integrity_for(&unmeasured),
+            "ggml-not-yet-measured.bin",
+        )
+        .unwrap_err();
 
         let message = err.to_string();
         assert!(message.contains('4'), "{message}");
         assert!(message.contains("cut short"), "{message}");
+    }
+
+    #[test]
+    fn a_pinned_model_whose_bytes_are_wrong_fails_on_the_digest_not_the_length() {
+        // The upgrade this pass bought, asserted rather than assumed: a file of
+        // exactly the right length that is not the right file used to pass for
+        // five of the six models. It cannot now, and the error names integrity
+        // rather than a cut-short download. Five bytes rather than the real
+        // 77 MB, because the arm being exercised is `check`'s, not the network's.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ggml-tiny.bin");
+        std::fs::write(&path, b"wrong").unwrap();
+
+        let pinned = Integrity::Pinned {
+            digest: Sha256Digest::parse(&"ab".repeat(32)).unwrap(),
+            size_bytes: 5,
+        };
+        let err = check(&path, 5, &pinned, "ggml-tiny.bin").unwrap_err();
+        assert!(
+            matches!(err, ModelError::Integrity(_)),
+            "{err} -- the length matched, so only the digest can have caught this"
+        );
     }
 
     #[test]

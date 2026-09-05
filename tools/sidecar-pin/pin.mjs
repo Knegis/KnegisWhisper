@@ -16,7 +16,12 @@
  *      `executableInArchive` is measured too. That path is guessed more often
  *      than the digest is, and a wrong one fails at first launch with an error
  *      about a missing file rather than about a wrong pin.
- *   4. Prints a JSON fragment ready to paste, or writes it with `--write`.
+ *   4. Measures what the asset extracts to -- the sum of the entries inside the
+ *      payload directory, which is what `install::extract_with_limit` actually
+ *      writes, not the archive's whole uncompressed size. `maxExtractedSizeBytes`
+ *      is that figure plus headroom; see `withHeadroom` for why the ceiling is a
+ *      judgement while everything around it is a measurement.
+ *   5. Prints a JSON fragment ready to paste, or writes it with `--write`.
  *
  * Archives are read with a central-directory reader for zip and a header walk
  * for tar.gz, tar.xz and tar.bz2, rather than with a dependency. This tool
@@ -48,9 +53,15 @@
  *
  *   node tools/sidecar-pin/pin.mjs --verify        # re-measure every pinned target
  *
+ *   node tools/sidecar-pin/pin.mjs --extracted            # report extracted sizes
+ *   node tools/sidecar-pin/pin.mjs --extracted --write    # and set the ceilings
+ *
  * `--verify` is the reason this is worth having beyond the first pin: it proves
  * the bytes at a URL still hash to what is committed. A release retagged in
- * place is otherwise invisible.
+ * place is otherwise invisible. It also re-measures the extracted size and
+ * fails if a committed ceiling has become too tight to install through, which
+ * is the failure mode that would otherwise reach a user as "the download
+ * refused itself".
  */
 
 import { spawnSync } from "node:child_process";
@@ -61,7 +72,7 @@ import { tmpdir } from "node:os";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { pipeline } from "node:stream/promises";
-import { gunzipSync } from "node:zlib";
+import { gunzipSync, inflateRawSync } from "node:zlib";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const MANIFEST = join(REPO_ROOT, "config/sidecars.json");
@@ -180,27 +191,75 @@ async function zipEntries(path) {
     const directory = Buffer.alloc(directorySize);
     await handle.read(directory, 0, directorySize, directoryStart);
 
-    const names = [];
+    const entries = [];
     let offset = 0;
-    while (offset < directory.length && names.length < count) {
+    while (offset < directory.length && entries.length < count) {
       if (directory.readUInt32LE(offset) !== 0x0201_4b50) break;
       const nameLength = directory.readUInt16LE(offset + 28);
       const extraLength = directory.readUInt16LE(offset + 30);
       const commentLength = directory.readUInt16LE(offset + 32);
-      names.push(directory.toString("utf8", offset + 46, offset + 46 + nameLength));
+      entries.push({
+        name: directory.toString("utf8", offset + 46, offset + 46 + nameLength),
+        method: directory.readUInt16LE(offset + 10),
+        compressedSize: directory.readUInt32LE(offset + 20),
+        localOffset: directory.readUInt32LE(offset + 42),
+      });
       offset += 46 + nameLength + extraLength + commentLength;
     }
-    return names;
+
+    for (const entry of entries) {
+      entry.size = entry.name.endsWith("/") ? 0 : await inflatedLength(handle, entry);
+    }
+    return entries;
   } finally {
     await handle.close();
   }
 }
 
-/** Entry names in a tar, by walking 512-byte headers. Shared by the tar.gz and
+/**
+ * How many bytes a zip entry actually produces, by decompressing it.
+ *
+ * **Not** `uncompressed_size` from the central directory, which is a
+ * *declaration*, not a measurement. The `zip` crate the Rust installer reads
+ * these archives with bounds an entry's reader by the *compressed* size
+ * (zip-2.4.2/src/read.rs, `make_reader`), not by that field, so a zip can
+ * declare one byte and hand over a megabyte -- and
+ * `crates/sidecar/src/install.rs` therefore refuses on the bytes that arrive.
+ * A ceiling measured off the declaration would be measured against a number
+ * the installer does not use.
+ */
+async function inflatedLength(handle, entry) {
+  if (entry.compressedSize === 0) return 0;
+
+  const header = Buffer.alloc(30);
+  await handle.read(header, 0, 30, entry.localOffset);
+  if (header.readUInt32LE(0) !== 0x0403_4b50) {
+    die(`${entry.name}: no local file header at offset ${entry.localOffset}`);
+  }
+  // The local header repeats the name and may carry different extra data, so
+  // the payload starts after *its* lengths, not the central directory's.
+  const dataStart = entry.localOffset + 30 + header.readUInt16LE(26) + header.readUInt16LE(28);
+
+  const compressed = Buffer.alloc(entry.compressedSize);
+  await handle.read(compressed, 0, entry.compressedSize, dataStart);
+
+  if (entry.method === 0) return compressed.length; // stored
+  if (entry.method === 8) return inflateRawSync(compressed).length; // deflate
+  return die(
+    `${entry.name} uses zip compression method ${entry.method}. The installer builds the ` +
+      `zip crate with the "deflate" feature only, so it could not read this entry either.`
+  );
+}
+
+/** Entries in a tar, by walking 512-byte headers. Shared by the tar.gz and
  * tar.xz readers below, which differ only in how they get from a compressed
- * file on disk to this uncompressed `Buffer`. */
+ * file on disk to this uncompressed `Buffer`.
+ *
+ * A tar entry's body length *is* the size in its header -- the `tar` crate
+ * reads the body through an `io::Take` over that field -- so unlike a zip there
+ * is nothing to decompress and compare it against. */
 function tarEntriesFromBuffer(tar) {
-  const names = [];
+  const entries = [];
 
   for (let offset = 0; offset + 512 <= tar.length; ) {
     const name = tar.toString("utf8", offset, offset + 100).replace(/\0.*$/, "");
@@ -213,12 +272,55 @@ function tarEntriesFromBuffer(tar) {
     // being one, so it is skipped instead of listed.
     const typeFlag = tar.toString("utf8", offset + 156, offset + 157);
     if (!["x", "g", "L", "K"].includes(typeFlag)) {
-      names.push(name);
+      // Only a regular file contributes to what gets written: directories,
+      // symlinks and hard links carry a size of 0 in the header anyway, and
+      // `install::extract_tar` skips anything `entry_type().is_file()` is
+      // false for.
+      const isFile = typeFlag === "0" || typeFlag === "\0" || typeFlag === "";
+      entries.push({ name, size: isFile ? size : 0 });
     }
 
     offset += 512 + Math.ceil(size / 512) * 512;
   }
-  return names;
+  return entries;
+}
+
+/**
+ * The archive-internal directory whose contents get installed. Mirrors
+ * `Asset::payload_dir` in `crates/sidecar/src/manifest.rs`.
+ */
+function payloadDirOf(executableInArchive) {
+  const index = Math.max(
+    executableInArchive.lastIndexOf("/"),
+    executableInArchive.lastIndexOf("\\")
+  );
+  return index === -1 ? "" : executableInArchive.slice(0, index);
+}
+
+/**
+ * How many bytes `install::extract_with_limit` would write for this asset.
+ *
+ * Mirrors `install::payload_relative`: names are normalised to forward slashes,
+ * the payload directory prefix is stripped, and anything outside it is skipped.
+ * That last part is why this is not simply "the archive's uncompressed size" --
+ * the Windows whisper archive carries `main.exe`, `SDL2.dll`, `llama.dll` and a
+ * dozen test binaries that are never written, and counting them would inflate
+ * the ceiling into meaninglessness.
+ */
+function extractedBytes(entries, payloadDir) {
+  let total = 0;
+  for (const { name, size } of entries) {
+    const normalised = name.replace(/\\/g, "/");
+    let relative = normalised;
+    if (payloadDir !== "") {
+      const prefix = `${payloadDir.replace(/\\/g, "/")}/`;
+      if (!normalised.startsWith(prefix)) continue;
+      relative = normalised.slice(prefix.length);
+    }
+    if (relative === "" || relative.endsWith("/")) continue;
+    total += size;
+  }
+  return total;
 }
 
 /** Entry names in a tar.gz, by gunzipping (Node's `zlib` does this natively)
@@ -300,15 +402,17 @@ function tarBz2Entries(path) {
  */
 function findExecutable(entries, executable) {
   const wanted = [executable, `${executable}.exe`];
-  const matches = entries.filter((e) => {
-    const base = e.split("/").pop();
-    return wanted.includes(base);
-  });
+  const matches = entries
+    .map((e) => e.name)
+    .filter((name) => wanted.includes(name.split("/").pop()));
 
   if (matches.length === 0) {
     die(
       `no entry named ${wanted.join(" or ")} in the archive. It contains:\n  ` +
-        entries.slice(0, 40).join("\n  ")
+        entries
+          .slice(0, 40)
+          .map((e) => e.name)
+          .join("\n  ")
     );
   }
   if (matches.length > 1) {
@@ -350,6 +454,128 @@ async function entriesOf(path, kind) {
   return entries;
 }
 
+/* ------------------------------------------------------- the output ceiling */
+
+/**
+ * A decompression-bomb ceiling, from a measured extracted size.
+ *
+ * **This is the one judgement in this tool.** Everything else it emits is
+ * measured: the digest is hashed from the bytes, the size comes from `stat`,
+ * the executable path is read out of the archive's index, and the extracted
+ * total is the sum of what `install::extract_with_limit` would actually write.
+ * The ceiling is that measurement plus 25%, rounded up to the next MiB.
+ *
+ * One stated rule applied to every target, rather than 21 numbers chosen one at
+ * a time. That makes the headroom reproducible and arguable as a rule instead
+ * of as a list.
+ *
+ * **Why 25%.** The drift a pinned asset sees between one upstream build and the
+ * next is a few percent -- a rebuilt binary, an added microarchitecture DLL, a
+ * change in debug symbols -- not a multiple. 25% absorbs that without leaving
+ * the ceiling meaningless: something that decompresses to several times what
+ * was measured is still refused. Being wrong high costs protection; being wrong
+ * low refuses a legitimate install, so it errs high -- the same reasoning
+ * `SHERPA_PINS` in `tools/integration-audit/generate-provider-registry.mjs`
+ * gives for its two hand-chosen ceilings (663 MB measured, 750 MiB pinned).
+ *
+ * The headroom is not a substitute for re-pinning. An upstream change large
+ * enough to matter changes the digest, and `--verify` fails on that first.
+ */
+const HEADROOM = 1.25;
+const MIB = 1024 * 1024;
+
+function withHeadroom(measured) {
+  return Math.ceil((measured * HEADROOM) / MIB) * MIB;
+}
+
+/**
+ * What one target extracts to, measured off the bytes the manifest pins.
+ *
+ * Refuses to measure an asset whose digest has moved: a ceiling derived from
+ * bytes that are not the pinned bytes pins the wrong number, and quietly.
+ */
+async function measureExtracted(name, target, spec) {
+  const measured = await download(spec.url, `${name}-${target}`);
+  try {
+    if (measured.sha256 !== spec.sha256) {
+      die(
+        `${name}/${target}: committed digest ${spec.sha256}, measured ${measured.sha256}. ` +
+          "Re-pin the asset before measuring what it extracts to."
+      );
+    }
+
+    // `Bare` is copied verbatim by `install::extract_bare`, so its extracted
+    // size is its download size -- and there is no header that could claim
+    // otherwise, which makes it the one kind whose ceiling cannot be lied to.
+    if (spec.archive === "bare") {
+      return { extracted: measured.sizeBytes, ceiling: measured.sizeBytes };
+    }
+
+    const entries = await entriesOf(measured.path, spec.archive);
+    const extracted = extractedBytes(entries, payloadDirOf(spec.executableInArchive));
+    return { extracted, ceiling: withHeadroom(extracted) };
+  } finally {
+    rmSync(measured.path, { force: true });
+  }
+}
+
+/**
+ * Measure every published target's extracted size and report it against the
+ * committed ceiling. With `--write`, set the ceiling from the measurement.
+ *
+ * Separate from `--verify` because it is what runs *before* a ceiling exists;
+ * `--verify` then re-runs the same measurement as a check.
+ */
+async function extracted(only, write) {
+  const manifest = JSON.parse(readFileSync(MANIFEST, "utf8"));
+  const rows = [];
+
+  for (const sidecar of manifest.sidecars) {
+    if (only && sidecar.name !== only) continue;
+    for (const [target, spec] of Object.entries(sidecar.targets)) {
+      if (spec.availability !== "published") continue;
+      console.error(`${sidecar.name} / ${target}`);
+
+      const { extracted: size, ceiling } = await measureExtracted(sidecar.name, target, spec);
+      rows.push({
+        target: `${sidecar.name}/${target}`,
+        archive: spec.archive,
+        download: spec.sizeBytes,
+        extracted: size,
+        ceiling,
+        committed: spec.maxExtractedSizeBytes ?? null,
+      });
+      if (write) spec.maxExtractedSizeBytes = ceiling;
+    }
+  }
+
+  const number = (n) => (n === null ? "-" : n.toLocaleString("en-US"));
+  const width = (key) => Math.max(...rows.map((r) => number(r[key]).length));
+  console.log(
+    `\n${"target".padEnd(Math.max(...rows.map((r) => r.target.length)))}  ` +
+      `${"archive".padEnd(7)}  ${"download".padStart(width("download"))}  ` +
+      `${"extracted".padStart(width("extracted"))}  ${"ceiling".padStart(width("ceiling"))}  ` +
+      "committed"
+  );
+  for (const row of rows) {
+    console.log(
+      `${row.target.padEnd(Math.max(...rows.map((r) => r.target.length)))}  ` +
+        `${row.archive.padEnd(7)}  ${number(row.download).padStart(width("download"))}  ` +
+        `${number(row.extracted).padStart(width("extracted"))}  ` +
+        `${number(row.ceiling).padStart(width("ceiling"))}  ${number(row.committed)}`
+    );
+  }
+  console.log(
+    `\n${rows.length} target(s). "extracted" is measured; "ceiling" is that figure plus ` +
+      `${Math.round((HEADROOM - 1) * 100)}% rounded up to the next MiB, which is a judgement.`
+  );
+
+  if (write) {
+    writeFileSync(MANIFEST, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+    console.error(`\nwrote maxExtractedSizeBytes for ${rows.length} target(s) to ${MANIFEST}`);
+  }
+}
+
 /* ---------------------------------------------------------------- measuring */
 
 async function measure({ repo, release, asset, executable, bare }) {
@@ -371,12 +597,18 @@ async function measure({ repo, release, asset, executable, bare }) {
         sha256: measured.sha256,
         sizeBytes: measured.sizeBytes,
         executableInArchive: executable,
+        // `Bare` is copied verbatim, so the extracted size *is* the download
+        // size. Headroom would be meaningless here: a ceiling above the
+        // measured length could only ever be reached by a different file, and
+        // the digest already rules that out.
+        maxExtractedSizeBytes: measured.sizeBytes,
       };
     }
 
     const kind = archiveKind(asset);
     const entries = await entriesOf(measured.path, kind);
     const executableInArchive = findExecutable(entries, executable);
+    const extracted = extractedBytes(entries, payloadDirOf(executableInArchive));
 
     return {
       availability: "published",
@@ -385,6 +617,9 @@ async function measure({ repo, release, asset, executable, bare }) {
       sha256: measured.sha256,
       sizeBytes: measured.sizeBytes,
       executableInArchive,
+      // A judgement, not a measurement -- see `withHeadroom`. The measured
+      // figure is printed beside it so the headroom is visible.
+      maxExtractedSizeBytes: withHeadroom(extracted),
     };
   } finally {
     rmSync(measured.path, { force: true });
@@ -421,16 +656,38 @@ async function verify(only) {
           wrong.push(
             `${sidecar.name}/${target}: committed ${spec.sizeBytes} bytes, measured ${measured.sizeBytes}`
           );
-        } else if (spec.archive !== "bare") {
+        } else if (spec.archive === "bare") {
+          // No archive index to disagree with the pin: the digest and size
+          // checks above already cover the entire file. The ceiling is the
+          // download size, so it is checked against the same figure.
+          if (spec.maxExtractedSizeBytes < measured.sizeBytes) {
+            wrong.push(
+              `${sidecar.name}/${target}: maxExtractedSizeBytes is ` +
+                `${spec.maxExtractedSizeBytes} but the file it copies verbatim is ` +
+                `${measured.sizeBytes} bytes, so no install could ever succeed`
+            );
+          }
+        } else {
           const entries = await entriesOf(measured.path, spec.archive);
-          if (!entries.includes(spec.executableInArchive)) {
+          if (!entries.some((e) => e.name === spec.executableInArchive)) {
             wrong.push(
               `${sidecar.name}/${target}: the archive has no ${spec.executableInArchive}`
             );
           }
+          // A ceiling below what the asset really extracts to refuses every
+          // install of it -- the failure mode `docs/PLATFORM_SUPPORT.md`
+          // records for the sherpa `sizeMb` figure, which was the *extracted*
+          // footprint used as a download bound. Caught here rather than by a
+          // user.
+          const size = extractedBytes(entries, payloadDirOf(spec.executableInArchive));
+          if (size > spec.maxExtractedSizeBytes) {
+            wrong.push(
+              `${sidecar.name}/${target}: extracts to ${size} bytes, over its ` +
+                `maxExtractedSizeBytes of ${spec.maxExtractedSizeBytes}. Re-run ` +
+                "--extracted --write."
+            );
+          }
         }
-        // `bare` has no archive index to disagree with the pin: the digest
-        // and size checks above already cover the entire file.
       } finally {
         rmSync(measured.path, { force: true });
       }
@@ -451,6 +708,11 @@ const options = args(process.argv.slice(2));
 
 if (options.verify) {
   await verify(typeof options.sidecar === "string" ? options.sidecar : null);
+} else if (options.extracted) {
+  await extracted(
+    typeof options.sidecar === "string" ? options.sidecar : null,
+    Boolean(options.write)
+  );
 } else {
   for (const required of ["repo", "release", "asset", "target"]) {
     if (typeof options[required] !== "string") {

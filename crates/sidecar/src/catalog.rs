@@ -188,6 +188,47 @@ mod tests {
     }
 
     #[test]
+    fn every_published_asset_carries_both_bounds() {
+        // `install` passes `size_bytes` to `download_to_file_bounded` and
+        // `max_extracted_size_bytes` to `extract_with_limit`, so a zero in
+        // either is not "unbounded" -- it is a bound nothing can pass, and
+        // every install of that target would refuse itself. `problems()`
+        // reports the same thing at manifest-read time; this asserts it of the
+        // catalogue that actually ships, so a bad pin cannot reach a release
+        // just because nobody ran the validator over it.
+        //
+        // Not asserted: that the ceiling exceeds the download size. It usually
+        // does -- 8.4 MB of whisper zip extracts to 21.2 MB -- but only the
+        // entries inside the payload directory are written, so an archive whose
+        // wanted directory is a small fraction of it can legitimately extract
+        // to less than it downloads.
+        for spec in Catalog::shipped().unwrap().all() {
+            for (target, availability) in &spec.targets {
+                if let Availability::Published(asset) = availability {
+                    assert!(
+                        asset.max_extracted_size_bytes > 0,
+                        "{}/{} has no extraction ceiling",
+                        spec.name,
+                        target.as_str()
+                    );
+                    if asset.archive == crate::manifest::ArchiveKind::Bare {
+                        // Copied verbatim, so the ceiling is the download size
+                        // and headroom above a digest-pinned length would be
+                        // unreachable by anything but a different file.
+                        assert_eq!(
+                            asset.max_extracted_size_bytes,
+                            asset.size_bytes,
+                            "{}/{}",
+                            spec.name,
+                            target.as_str()
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn macos_is_recorded_as_not_published_with_a_reason() {
         // Upstream whisper.cpp releases carry an xcframework, which is a library
         // for embedding in an Xcode project, not a whisper-server executable.

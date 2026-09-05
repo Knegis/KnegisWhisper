@@ -141,9 +141,9 @@ pub enum PolicyError {
     MissingHost,
 
     #[error(
-        "scheme {scheme:?} is not permitted; only https is, or http to a private address          for an explicitly configured self-hosted endpoint"
+        "scheme {scheme:?} is not permitted for host {host:?}; only https is, or http to a private address for an explicitly configured self-hosted endpoint"
     )]
-    SchemeNotPermitted { scheme: String },
+    SchemeNotPermitted { scheme: String, host: String },
 
     #[error("host {host:?} is a blocked vendor service and must never be contacted")]
     BlockedVendorHost { host: String },
@@ -190,6 +190,9 @@ pub enum PolicyError {
         #[source]
         source: std::io::Error,
     },
+
+    #[error("download exceeded its pinned {limit}-byte limit")]
+    DownloadTooLarge { limit: u64 },
 }
 
 /// Vendor hosts that must never be contacted, parsed once from
@@ -213,7 +216,16 @@ fn blocked_hosts() -> &'static BTreeSet<String> {
             Ok(cfg) => cfg
                 .runtime_blocked_hosts
                 .into_iter()
-                .map(|h| h.to_ascii_lowercase())
+                // Trailing dots come off here as well as in `is_blocked`.
+                // Without it the two sides normalise differently: an entry
+                // written with a trailing DNS root dot would never match an
+                // incoming host, because the incoming one has already had its
+                // dot stripped. No entry has one today -- every line in
+                // `config/forbidden-domains.json` is written by this project
+                // -- so this closes a footgun for whoever next edits that
+                // file rather than a live hole. An asymmetry that costs
+                // nothing to remove is not worth keeping to save a line.
+                .map(|h| h.trim_end_matches('.').to_ascii_lowercase())
                 .collect(),
             // domain-scanner:allow-next-line the parse-failure fallback must name the hosts it blocks
             Err(_) => ["openwhispr.com", "pluely.com"]
@@ -323,8 +335,14 @@ fn is_private_ip(ip: std::net::IpAddr) -> bool {
                 return true;
             }
 
-            if let Some(v4) = v6.to_ipv4() {
-                return is_private_ipv4(v4);
+            // Every RFC-defined embedding, not just the two the standard
+            // library's `to_ipv4` knows. See [`embedded_ipv4s`].
+            if embedded_ipv4s(v6)
+                .into_iter()
+                .flatten()
+                .any(is_private_ipv4)
+            {
+                return true;
             }
 
             let first = v6.segments().first().copied().unwrap_or(0);
@@ -334,6 +352,109 @@ fn is_private_ip(ip: std::net::IpAddr) -> bool {
             first & 0xfe00 == 0xfc00 || first & 0xffc0 == 0xfe80
         }
     }
+}
+
+/// Every IPv4 address folded inside an IPv6 one, by any RFC-defined embedding.
+///
+/// At most two, which is why the return type is a fixed array rather than a
+/// `Vec`: only Teredo carries two IPv4 addresses in one address.
+///
+/// **Why the whole family at once.** `Ipv6Addr::to_ipv4` recognises two forms.
+/// The rest were noticed one at a time -- IPv4-translated during the SSRF
+/// review, NAT64 and 6to4 raised unprompted by the re-reviewer -- and each was
+/// accepted on the same reasoning, that the prefix is unrouted on an ordinary
+/// host so a `connect()` to it fails rather than arriving. That reasoning is
+/// about the *host's* configuration, and it stops holding the moment a machine
+/// has 6to4 or a NAT64 resolver, which is not a thing this process can see. The
+/// recorded decision (KNEG-93) was that if this family is ever closed it must be
+/// closed as a family, by enumerating the RFCs rather than by adding a prefix
+/// each time somebody spots one. This is that enumeration.
+///
+/// **Why every one of these reaches the IPv4 address it carries.** In each
+/// form the embedded address is the delivery target: a dual-stack kernel
+/// delivers an IPv4-mapped address directly; a NAT64 gateway translates and
+/// forwards; a 6to4 or Teredo tunnel encapsulates the packet and sends it to
+/// the embedded IPv4. So unwrapping and re-checking against the IPv4 rules is
+/// not a courtesy -- it is the only reading that describes where the bytes go.
+///
+/// | form | prefix | RFC |
+/// | --- | --- | --- |
+/// | IPv4-mapped | `::ffff:0:0/96` | 4291 §2.5.5.2 |
+/// | IPv4-compatible (deprecated) | `::/96` | 4291 §2.5.5.1 |
+/// | IPv4-translated (SIIT) | `::ffff:0:0:0/96` | 2765 |
+/// | NAT64, well-known prefix | `64:ff9b::/96` | 6052 §2.1 |
+/// | NAT64, local-use prefix | `64:ff9b:1::/48` | 8215, laid out by 6052 §2.2 |
+/// | 6to4 | `2002::/16` | 3056 |
+/// | Teredo | `2001:0::/32` | 4380 |
+///
+/// **What this still cannot enumerate**, and it is a real limit rather than an
+/// oversight: RFC 6052 also permits a *network-specific* NAT64 prefix of any
+/// value at /32, /40, /48, /56 or /64. Only the well-known and local-use
+/// prefixes have fixed values, so a site running NAT64 on its own prefix is
+/// invisible here. Nothing short of reading the host's resolver configuration
+/// would see it, which is the same class of problem as DNS rebinding and is out
+/// of scope for the same reason.
+fn embedded_ipv4s(v6: std::net::Ipv6Addr) -> [Option<std::net::Ipv4Addr>; 2] {
+    use std::net::Ipv4Addr;
+
+    let s = v6.segments();
+    let o = v6.octets();
+    let v4 = |a: u8, b: u8, c: u8, d: u8| Some(Ipv4Addr::new(a, b, c, d));
+    let low32 = || v4(o[12], o[13], o[14], o[15]);
+    let none = [None, None];
+
+    // `::ffff:0:0/96` mapped, and `::/96` compatible. Both put the address in
+    // the low 32 bits behind an all-zero prefix; the mapped form's marker is
+    // the `ffff` in segment 5. `::` and `::1` are resolved by the caller
+    // before this runs, so a zero prefix here is genuinely somebody's IPv4.
+    if s[0] == 0
+        && s[1] == 0
+        && s[2] == 0
+        && s[3] == 0
+        && s[4] == 0
+        && (s[5] == 0xffff || s[5] == 0)
+    {
+        return [low32(), None];
+    }
+
+    // `::ffff:0:0:0/96` IPv4-translated, the SIIT source form: the `ffff` sits
+    // one segment earlier than the mapped form, with a zero segment after it.
+    if s[0] == 0 && s[1] == 0 && s[2] == 0 && s[3] == 0xffff && s[4] == 0 && s[5] == 0 {
+        return [low32(), None];
+    }
+
+    if s[0] == 0x0064 && s[1] == 0xff9b {
+        // `64:ff9b::/96`, the well-known NAT64 prefix: address in the low 32.
+        if s[2] == 0 && s[3] == 0 && s[4] == 0 && s[5] == 0 {
+            return [low32(), None];
+        }
+        // `64:ff9b:1::/48`, the local-use prefix, laid out by RFC 6052 §2.2:
+        // for a /48 the address is split around the reserved u-octet, sixteen
+        // bits at 48..64 and sixteen more at 72..88. Getting this wrong in the
+        // obvious way -- reading four contiguous octets -- would decode a
+        // different address than the gateway will.
+        if s[2] == 0x0001 {
+            return [v4(o[6], o[7], o[9], o[10]), None];
+        }
+    }
+
+    // `2002::/16` 6to4: the IPv4 of the tunnel endpoint is bits 16..48.
+    if s[0] == 0x2002 {
+        return [v4(o[2], o[3], o[4], o[5]), None];
+    }
+
+    // `2001:0::/32` Teredo, and the only form carrying two addresses: the
+    // server at bits 32..64 in the clear, and the client at bits 96..128
+    // obfuscated by XOR with all-ones. Both are checked, because a packet to a
+    // Teredo address involves both hosts and either being private is a reason
+    // to refuse.
+    if s[0] == 0x2001 && s[1] == 0x0000 {
+        let server = v4(o[4], o[5], o[6], o[7]);
+        let client = v4(!o[12], !o[13], !o[14], !o[15]);
+        return [server, client];
+    }
+
+    none
 }
 
 /// The IPv4 half of [`is_private_ip`], shared by a plain IPv4 address and an
@@ -398,6 +519,7 @@ pub fn validate(url: &str, purpose: RequestPurpose) -> Result<Url, PolicyError> 
         }
         scheme => Err(PolicyError::SchemeNotPermitted {
             scheme: scheme.to_owned(),
+            host: host.to_owned(),
         }),
     }
 }
@@ -448,6 +570,7 @@ pub fn validate_websocket(url: &str, purpose: RequestPurpose) -> Result<Url, Pol
         }
         scheme => Err(PolicyError::SchemeNotPermitted {
             scheme: scheme.to_owned(),
+            host: host.to_owned(),
         }),
     }
 }
@@ -589,6 +712,50 @@ impl NetworkPolicy {
         Ok(self.client.request(method, url))
     }
 
+    /// The WebSocket address of a sidecar this application started, on loopback.
+    ///
+    /// [`Self::loopback`]'s argument, unchanged: this is not egress, so it is
+    /// not one of the seven purposes. `sherpa-onnx-online-websocket-server` is a
+    /// process we spawned, bound to `127.0.0.1` by `crate::port`, and a socket
+    /// to it is closer to an IPC call than to a network request.
+    ///
+    /// What keeps that honest is the signature, and it is stricter than
+    /// [`Self::loopback`]'s: this takes **a port and nothing else**. There is no
+    /// path argument to smuggle an authority through, no URL to aim somewhere,
+    /// and no way for a later change to widen it without changing the type. The
+    /// returned address is built here and parsed back, so a caller receives a
+    /// [`Url`] it could not have constructed itself out of user input.
+    ///
+    /// `ws://`, not `wss://`, and deliberately: the peer is a local process with
+    /// no certificate, and requiring TLS would mean either shipping one or
+    /// turning verification off. Plaintext to `127.0.0.1` does not cross a
+    /// network interface — which is the same reason
+    /// `RequestPurpose::ExplicitlyConfiguredSelfHostedEndpoint` is the only
+    /// purpose allowed plaintext to a private address, and this is narrower
+    /// still because the host is not the caller's to choose.
+    ///
+    /// # Errors
+    ///
+    /// Only if the address this function wrote does not parse back to the
+    /// loopback host and the port it was given, which would mean the constant
+    /// above had been edited into something else.
+    pub fn loopback_websocket(&self, port: u16) -> Result<Url, PolicyError> {
+        let address = format!("ws://{}:{port}/", std::net::Ipv4Addr::LOCALHOST);
+        let url = Url::parse(&address).map_err(PolicyError::InvalidUrl)?;
+
+        // Read back rather than trusted. The same check `loopback` makes, and
+        // here it guards against this function itself being wrong rather than
+        // against its caller.
+        if url.scheme() != "ws" || url.host_str() != Some("127.0.0.1") || url.port() != Some(port) {
+            return Err(PolicyError::NotALoopbackPath {
+                path: address,
+                reason: "that is not a loopback WebSocket address",
+            });
+        }
+
+        Ok(url)
+    }
+
     /// Stream a URL to a file, following redirects one validated hop at a time.
     ///
     /// The client is built with `Policy::none()` because a silently followed
@@ -614,8 +781,59 @@ impl NetworkPolicy {
         // Tauri command.
         progress: &mut (dyn FnMut(u64, Option<u64>) + Send),
     ) -> Result<Download, PolicyError> {
-        use tokio::io::AsyncWriteExt as _;
+        self.download_to_file_inner(purpose, url, destination, None, progress)
+            .await
+    }
 
+    /// Stream a URL to a file, aborting before more than `max_bytes` are
+    /// written, and deleting the partial file if it aborts.
+    ///
+    /// `max_bytes` is a *pinned length*, not a guess. The two callers pass a
+    /// figure somebody measured — `Asset::size_bytes` from
+    /// `config/sidecars.json`, or `SherpaModel::expected_size_bytes` — so the
+    /// bound is exact and the digest check that follows would have failed on
+    /// anything else anyway. Do not pass a rounded or declared figure: an
+    /// upstream re-upload one byte over the pin would then be reported as a
+    /// refused download rather than as a changed asset. (That is the mistake
+    /// KNEG-101 fixed one layer up, where `download_gguf` compared a finished
+    /// download against a declared size that was 7.4% wrong for eighteen
+    /// models.)
+    ///
+    /// **Two checks, and the first one often does not run.** `content-length`
+    /// is compared against `max_bytes` before the file is created, so an
+    /// over-long body is refused without a byte reaching disk. That check is
+    /// skipped entirely when the response carries no `content-length` — a
+    /// chunked response, or HTTP/1.0 with `Connection: close` — because
+    /// `Option::zip` yields `None` and the comparison cannot be made. The
+    /// running total in the streaming loop is what holds in that case, and it
+    /// is the check that actually guarantees the bound: a `content-length`
+    /// header is a claim by the server, and a body may be longer than its own
+    /// header says.
+    ///
+    /// Neither check is a substitute for the digest. This bounds *how much
+    /// disk a hostile or broken mirror can fill before it is rejected*, which
+    /// is the window a digest cannot cover, because a digest can only be
+    /// computed once the bytes are already written.
+    pub async fn download_to_file_bounded(
+        &self,
+        purpose: RequestPurpose,
+        url: &str,
+        destination: &std::path::Path,
+        max_bytes: u64,
+        progress: &mut (dyn FnMut(u64, Option<u64>) + Send),
+    ) -> Result<Download, PolicyError> {
+        self.download_to_file_inner(purpose, url, destination, Some(max_bytes), progress)
+            .await
+    }
+
+    async fn download_to_file_inner(
+        &self,
+        purpose: RequestPurpose,
+        url: &str,
+        destination: &std::path::Path,
+        max_bytes: Option<u64>,
+        progress: &mut (dyn FnMut(u64, Option<u64>) + Send),
+    ) -> Result<Download, PolicyError> {
         const MAX_HOPS: u8 = 5;
 
         let mut current = url.to_owned();
@@ -665,6 +883,68 @@ impl NetworkPolicy {
         };
 
         let total = response.content_length();
+        // Checked before the file is created, so a body that declares itself
+        // over the limit never puts a byte on disk. `Option::zip` yields `None`
+        // when the response carries no `content-length` at all, which skips
+        // this check rather than failing it -- see the doc comment on
+        // `download_to_file_bounded`. The running total in `stream_to_file` is
+        // what holds in that case, and it is the check that actually
+        // guarantees the bound.
+        if total.zip(max_bytes).is_some_and(|(total, max)| total > max) {
+            return Err(PolicyError::DownloadTooLarge {
+                limit: max_bytes.unwrap_or(0),
+            });
+        }
+
+        match Self::stream_to_file(response, destination, max_bytes, total, progress).await {
+            Ok(written) => Ok(Download {
+                bytes: written,
+                final_url: current,
+                hops,
+            }),
+            Err(err) => {
+                // Every failure after the file was created, not only a refused
+                // ceiling: a truncated body from a dropped connection is just
+                // as convincing to a later `is_installed` check as a refused
+                // one, and neither is the file that was asked for.
+                //
+                // Best-effort. A failed removal must not replace the error
+                // that caused it, which is the one the caller needs, so it is
+                // logged and the original error is returned.
+                match tokio::fs::remove_file(destination).await {
+                    Ok(()) => {}
+                    Err(remove) if remove.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(remove) => tracing::warn!(
+                        path = %destination.display(),
+                        error = %remove,
+                        "could not remove the partial download"
+                    ),
+                }
+                Err(err)
+            }
+        }
+    }
+
+    /// The body half of [`Self::download_to_file_inner`]: create the file,
+    /// stream into it, and report how many bytes landed.
+    ///
+    /// Split out so that *every* way this can fail leaves through one cleanup
+    /// path in the caller. Inline, each `?` was its own partial-file leak — the
+    /// streaming size refusal, the mid-stream write error, and the chunk error
+    /// from a dropped connection, three separate returns and no `remove_file`
+    /// after any of them.
+    ///
+    /// The file is closed by the time this returns, in every arm, which is what
+    /// makes the caller's `remove_file` work on Windows.
+    async fn stream_to_file(
+        response: reqwest::Response,
+        destination: &std::path::Path,
+        max_bytes: Option<u64>,
+        total: Option<u64>,
+        progress: &mut (dyn FnMut(u64, Option<u64>) + Send),
+    ) -> Result<u64, PolicyError> {
+        use tokio::io::AsyncWriteExt as _;
+
         let mut file = tokio::fs::File::create(destination)
             .await
             .map_err(|source| PolicyError::Write {
@@ -675,6 +955,14 @@ impl NetworkPolicy {
         let mut written: u64 = 0;
         let mut stream = response;
         while let Some(chunk) = stream.chunk().await? {
+            // Before the write, so the byte that would cross the limit is
+            // never written -- the bound is on what reaches disk, not on what
+            // is noticed afterwards.
+            if max_bytes.is_some_and(|max| written.saturating_add(chunk.len() as u64) > max) {
+                return Err(PolicyError::DownloadTooLarge {
+                    limit: max_bytes.unwrap_or(0),
+                });
+            }
             file.write_all(&chunk)
                 .await
                 .map_err(|source| PolicyError::Write {
@@ -690,11 +978,7 @@ impl NetworkPolicy {
             source,
         })?;
 
-        Ok(Download {
-            bytes: written,
-            final_url: current,
-            hops,
-        })
+        Ok(written)
     }
 }
 
@@ -930,6 +1214,194 @@ mod tests {
             !dir.path().join("out.zip").exists(),
             "a refused download must not leave a file behind"
         );
+    }
+
+    // --------------------------------------------------------- download bounds
+    //
+    // The first tests for `PolicyError::DownloadTooLarge`, which had none at
+    // all: the bound was written, shipped, and used by one caller, and nothing
+    // had ever exercised it.
+    //
+    // Served over loopback plaintext, so `SELF_HOSTED` is the purpose -- it is
+    // the only one `allows_plaintext_private`. Which purpose validated the URL
+    // has nothing to do with the mechanism under test; `DOWNLOAD` is the
+    // purpose the real callers pass and it cannot reach a loopback server at
+    // all, which is asserted separately above.
+
+    /// A body of `size` bytes, and whether to declare its length.
+    ///
+    /// Two shapes, because the bound has two checks and only one of them can
+    /// run at a time. `Declared` exercises the `content-length` pre-check;
+    /// `Undeclared` omits the header, so `Option::zip` yields `None`, the
+    /// pre-check is skipped, and the running total in the streaming loop is
+    /// what has to refuse. Undeclared is not a contrived shape: a chunked
+    /// response has no `content-length` either.
+    async fn serve_body(size: usize, declare: bool) -> std::net::SocketAddr {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 1024];
+            let _ = socket.read(&mut buf).await;
+
+            // Without `Content-Length`, `Connection: close` is what tells the
+            // client the body ended -- it reads to EOF.
+            let header = if declare {
+                format!("HTTP/1.1 200 OK\r\nContent-Length: {size}\r\nConnection: close\r\n\r\n")
+            } else {
+                "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n".to_owned()
+            };
+            let _ = socket.write_all(header.as_bytes()).await;
+            // Written in chunks so the streaming check meets more than one.
+            let chunk = vec![b'x'; 4096];
+            let mut sent = 0;
+            while sent < size {
+                let take = std::cmp::min(chunk.len(), size - sent);
+                if socket.write_all(&chunk[..take]).await.is_err() {
+                    break;
+                }
+                sent += take;
+            }
+            let _ = socket.shutdown().await;
+        });
+
+        addr
+    }
+
+    #[tokio::test]
+    async fn a_declared_length_over_the_bound_is_refused_before_the_file_is_created() {
+        let addr = serve_body(64 * 1024, true).await;
+        let dir = tempfile::tempdir().unwrap();
+        let destination = dir.path().join("asset");
+        let policy = NetworkPolicy::new().unwrap();
+        let mut seen = |_written: u64, _total: Option<u64>| {};
+
+        let err = policy
+            .download_to_file_bounded(
+                SELF_HOSTED,
+                &format!("http://{addr}/asset"),
+                &destination,
+                1024,
+                &mut seen,
+            )
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(err, PolicyError::DownloadTooLarge { limit: 1024 }),
+            "{err}"
+        );
+        assert!(
+            !destination.exists(),
+            "the content-length check runs before the file is created, so nothing should exist"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_undeclared_body_over_the_bound_is_refused_mid_stream_and_the_partial_is_deleted() {
+        // The check that actually guarantees the bound. With no
+        // `content-length` the pre-check above cannot run at all, so this is
+        // the whole protection -- and it is the path that used to `return`
+        // after creating and partially filling the file, leaving a truncated
+        // download on disk with no `remove_file`.
+        let addr = serve_body(64 * 1024, false).await;
+        let dir = tempfile::tempdir().unwrap();
+        let destination = dir.path().join("asset");
+        let policy = NetworkPolicy::new().unwrap();
+        let mut high_water = 0_u64;
+        let mut seen = |written: u64, _total: Option<u64>| high_water = written;
+
+        let err = policy
+            .download_to_file_bounded(
+                SELF_HOSTED,
+                &format!("http://{addr}/asset"),
+                &destination,
+                8192,
+                &mut seen,
+            )
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(err, PolicyError::DownloadTooLarge { limit: 8192 }),
+            "{err}"
+        );
+        assert!(
+            !destination.exists(),
+            "a refused download must not leave a partial file behind"
+        );
+        assert!(
+            high_water <= 8192,
+            "the bound is on what reaches disk: {high_water} bytes were written"
+        );
+        // Not vacuous: a partial file really did exist before the refusal, so
+        // the assertion above is about a `remove_file` that had work to do
+        // rather than about a file that was never created.
+        assert!(
+            high_water > 0,
+            "nothing was written at all, so this proves nothing about cleanup"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_body_that_exactly_matches_its_bound_is_not_refused() {
+        // A bound that refuses a legitimate install is worse than no bound, and
+        // the real callers pass an *exact* pinned length -- `Asset::size_bytes`
+        // and `SherpaModel::expected_size_bytes` -- so "exactly the limit" is
+        // the normal case, not an edge one. Asserted for both shapes, because
+        // the two checks are separate comparisons.
+        for declare in [true, false] {
+            let addr = serve_body(16 * 1024, declare).await;
+            let dir = tempfile::tempdir().unwrap();
+            let destination = dir.path().join("asset");
+            let policy = NetworkPolicy::new().unwrap();
+            let mut seen = |_written: u64, _total: Option<u64>| {};
+
+            let download = policy
+                .download_to_file_bounded(
+                    SELF_HOSTED,
+                    &format!("http://{addr}/asset"),
+                    &destination,
+                    16 * 1024,
+                    &mut seen,
+                )
+                .await
+                .unwrap_or_else(|err| panic!("declare={declare}: {err}"));
+
+            assert_eq!(download.bytes, 16 * 1024, "declare={declare}");
+            assert_eq!(
+                std::fs::metadata(&destination).unwrap().len(),
+                16 * 1024,
+                "declare={declare}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn an_unbounded_download_still_takes_a_body_of_any_length() {
+        // `download_to_file` is `download_to_file_inner` with `None`, and the
+        // saturating arithmetic in the streaming check must not turn that into
+        // a refusal.
+        let addr = serve_body(64 * 1024, true).await;
+        let dir = tempfile::tempdir().unwrap();
+        let destination = dir.path().join("asset");
+        let policy = NetworkPolicy::new().unwrap();
+        let mut seen = |_written: u64, _total: Option<u64>| {};
+
+        let download = policy
+            .download_to_file(
+                SELF_HOSTED,
+                &format!("http://{addr}/asset"),
+                &destination,
+                &mut seen,
+            )
+            .await
+            .unwrap();
+        assert_eq!(download.bytes, 64 * 1024);
     }
 
     // -------------------------------------------------------------- get_text
@@ -1189,6 +1661,146 @@ mod tests {
         assert!(is_private_host("::1"));
     }
 
+    /// Every other RFC-defined way to fold an IPv4 address into 128 bits.
+    ///
+    /// Closed as a family rather than a prefix at a time, which is the decision
+    /// KNEG-93 recorded: each of these had been noticed separately and accepted
+    /// on the same reasoning -- that the prefix is unrouted on an ordinary host,
+    /// so a `connect()` fails rather than arriving. That is a claim about the
+    /// host's configuration, and it stops holding the moment a machine has 6to4
+    /// or a NAT64 resolver.
+    ///
+    /// The addresses below are written out in hex rather than in the friendlier
+    /// dotted forms on purpose. Two of these layouts are easy to get wrong in a
+    /// way that still parses -- the NAT64 /48 split around the reserved octet,
+    /// and Teredo's XOR-obfuscated client -- so the test states the bits and the
+    /// implementation has to agree with them, rather than both being written
+    /// from the same misreading.
+    #[test]
+    fn the_whole_ipv4_embedding_family_is_recognised_as_private() {
+        // 169.254.169.254 is a9 fe a9 fe; 10.0.0.5 is 0a 00 00 05.
+        for (private, why) in [
+            // RFC 2765 SIIT, `::ffff:0:0:0/96`. The `ffff` sits one segment
+            // earlier than the mapped form, with a zero segment after it.
+            ("::ffff:0:0:a9fe:a9fe", "IPv4-translated, cloud metadata"),
+            ("::ffff:0:0:a00:5", "IPv4-translated, RFC 1918"),
+            // RFC 6052 §2.1, the well-known NAT64 prefix: low 32 bits.
+            ("64:ff9b::a9fe:a9fe", "NAT64 well-known, cloud metadata"),
+            ("64:ff9b::7f00:1", "NAT64 well-known, loopback"),
+            // RFC 8215's local-use prefix, laid out by RFC 6052 §2.2: for a
+            // /48 the address is split around the reserved u-octet, sixteen
+            // bits at 48..64 and sixteen more at 72..88. Reading four
+            // contiguous octets instead would decode a different address than
+            // the gateway will.
+            (
+                "64:ff9b:1:a9fe:a9:fe00::",
+                "NAT64 local-use /48, cloud metadata",
+            ),
+            ("64:ff9b:1:a00:0:500::", "NAT64 local-use /48, RFC 1918"),
+            // RFC 3056 6to4: the tunnel endpoint's IPv4 at bits 16..48.
+            ("2002:a9fe:a9fe::", "6to4, cloud metadata"),
+            ("2002:a00:5::1", "6to4, RFC 1918, with a host part"),
+            ("2002:7f00:1::", "6to4, loopback"),
+            // RFC 4380 Teredo: the server in the clear at bits 32..64, the
+            // client at bits 96..128 XORed with all-ones. Either being private
+            // is a reason to refuse, because a packet involves both.
+            ("2001:0:a9fe:a9fe:0:0:34ff:8ef6", "Teredo, private server"),
+            (
+                "2001:0:cb00:7101:0:0:f5ff:fffe",
+                "Teredo, private client (10.0.0.1)",
+            ),
+        ] {
+            assert!(
+                is_private_host(private),
+                "{private} should be private -- {why}"
+            );
+        }
+
+        for (public, why) in [
+            ("::ffff:0:0:808:808", "IPv4-translated, 8.8.8.8"),
+            ("64:ff9b::808:808", "NAT64 well-known, 8.8.8.8"),
+            ("64:ff9b:1:808:0:800::", "NAT64 local-use /48, 8.8.8.8"),
+            ("2002:808:808::", "6to4, 8.8.8.8"),
+            (
+                "2001:0:cb00:7101:0:0:f7ff:f7f7",
+                "Teredo, both halves public",
+            ),
+            // Not Teredo: the second segment is non-zero, so `2001::/16` at
+            // large must not be swept up. Google's public resolver and the
+            // documentation range both live there.
+            (
+                "2001:4860:4860::8888",
+                "2001:4860::/32 is not the Teredo prefix",
+            ),
+            ("2001:db8::1", "the documentation range is not Teredo"),
+            ("2606:4700:4700::1111", "an ordinary public IPv6 address"),
+        ] {
+            assert!(
+                !is_private_host(public),
+                "{public} should not be private -- {why}"
+            );
+        }
+    }
+
+    /// The decoded address is the one the packet reaches, not merely *an*
+    /// address.
+    ///
+    /// `the_whole_ipv4_embedding_family_is_recognised_as_private` would pass on
+    /// a layout that decoded the wrong four octets, as long as those octets
+    /// happened to be private too -- and in a NAT64 /48 or a Teredo address
+    /// there are plenty of zero octets nearby to decode by accident. This pins
+    /// the exact value.
+    #[test]
+    fn each_embedding_decodes_the_address_the_packet_would_reach() {
+        use std::net::{Ipv4Addr, Ipv6Addr};
+
+        let metadata = Ipv4Addr::new(169, 254, 169, 254);
+        let decoded = |literal: &str| -> Vec<Ipv4Addr> {
+            literal
+                .parse::<Ipv6Addr>()
+                .map(embedded_ipv4s)
+                .unwrap_or([None, None])
+                .into_iter()
+                .flatten()
+                .collect()
+        };
+
+        assert_eq!(decoded("::ffff:a9fe:a9fe"), vec![metadata], "IPv4-mapped");
+        assert_eq!(decoded("::a9fe:a9fe"), vec![metadata], "IPv4-compatible");
+        assert_eq!(
+            decoded("::ffff:0:0:a9fe:a9fe"),
+            vec![metadata],
+            "IPv4-translated"
+        );
+        assert_eq!(
+            decoded("64:ff9b::a9fe:a9fe"),
+            vec![metadata],
+            "NAT64 well-known"
+        );
+        assert_eq!(
+            decoded("64:ff9b:1:a9fe:a9:fe00::"),
+            vec![metadata],
+            "NAT64 local-use"
+        );
+        assert_eq!(decoded("2002:a9fe:a9fe::"), vec![metadata], "6to4");
+        assert_eq!(
+            decoded("2001:0:a9fe:a9fe:0:0:34ff:8ef6"),
+            vec![metadata, Ipv4Addr::new(203, 0, 113, 9)],
+            "Teredo carries two: the server in the clear, the client XORed"
+        );
+
+        // An address in none of the families decodes to nothing, rather than
+        // to whatever its low 32 bits happen to be.
+        assert!(
+            decoded("2606:4700:4700::1111").is_empty(),
+            "an ordinary address"
+        );
+        assert!(
+            decoded("fe80::1").is_empty(),
+            "link-local is native, not an embedding"
+        );
+    }
+
     #[test]
     fn ipv6_unique_local_and_link_local_ranges_are_private() {
         for private in [
@@ -1354,6 +1966,30 @@ mod tests {
         }
     }
 
+    /// A configured host with a trailing dot still matches.
+    ///
+    /// `is_blocked` strips the DNS root dot from its *input*; until KNEG-93 the
+    /// loader did not strip it from the configured entries, so the two sides
+    /// normalised differently and an entry written with a trailing dot would
+    /// have matched nothing at all. No entry has one today -- every line in
+    /// `config/forbidden-domains.json` is written by this project -- so this
+    /// pins the symmetry rather than a live hole, which is the point: the next
+    /// person to edit that file should not have to know.
+    #[test]
+    fn a_configured_host_is_normalised_the_same_way_an_incoming_one_is() {
+        for host in blocked_hosts() {
+            assert!(
+                !host.ends_with('.'),
+                "{host} keeps a trailing dot, which no incoming host ever has"
+            );
+            assert_eq!(
+                *host,
+                host.to_ascii_lowercase(),
+                "{host} is not lowercased, so a lowercased input cannot match it"
+            );
+        }
+    }
+
     #[test]
     fn blocklist_is_loaded_from_config_not_the_fallback() {
         // If include_str!/serde ever break, the fallback set has 2 entries. The
@@ -1411,7 +2047,10 @@ mod tests {
         // cannot use.
         let err = validate("wss://api.openai.com/v1/realtime", AI).unwrap_err();
         match err {
-            PolicyError::SchemeNotPermitted { scheme } => assert_eq!(scheme, "wss"),
+            PolicyError::SchemeNotPermitted { scheme, host } => {
+                assert_eq!(scheme, "wss");
+                assert_eq!(host, "api.openai.com");
+            }
             other => panic!("{other:?}"),
         }
     }

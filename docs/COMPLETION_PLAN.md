@@ -37,11 +37,12 @@ either has no consumer yet or has an explicit, permanent reason it stays undone:
    dispatched manually. The triggers remain commented out on purpose this run, not by oversight —
    see `docs/BUILD_PLAN.md` chunk J. The macOS and Linux jobs are still the only runtime evidence
    this project has for those platforms. Chunk A.
-2. **The two remaining Windows natives — a UIAutomation text monitor and an `IAudioSessionManager2`
-   mic listener — are still not written.** Chunk I (meetings) shipped without needing either; five
-   process-based detectors and the meeting screen itself never called for a focused-element read or
-   a "someone else is using the microphone" signal. Chunk H, still open, with no consumer forcing
-   it.
+2. **One of the two remaining Windows natives is written; the other is declined.** The
+   `IAudioSessionManager2` mic listener landed on 2026-09-01 (KNEG-94) because Teams forced it —
+   see chunk H. The UIAutomation text monitor is closed as declined rather than deferred (KNEG-63):
+   chunk I shipped without it, nothing filed since has asked for it, and a continuous read of the
+   focused element is a materially larger privacy surface than anything else here, being weighed
+   with no feature on the other side of the scale.
 
 The other item that used to sit here — *four of five hotkeys register real OS shortcuts and do
 nothing* — was chunk C and is fixed. Those four actions are no longer registered at all, and the
@@ -81,21 +82,32 @@ Two additions the tree has grown since this was written, both belonging here:
   release retagged in place, and a pin that is never re-measured is a pin nobody is checking. Weekly
   is enough.
 
-## H — The two remaining Windows natives
+## H — The two remaining Windows natives *(one built, one declined)*
 
 System audio and the key listener are done and verified on hardware — see
 [BUILD_PLAN.md](BUILD_PLAN.md) chunk D and the tables in
-[PLATFORM_SUPPORT.md](PLATFORM_SUPPORT.md). What this chunk still holds is the other two capabilities
-settled in [PORTING_MATRIX.md](PORTING_MATRIX.md) as Rust rather than inherited binaries:
+[PLATFORM_SUPPORT.md](PLATFORM_SUPPORT.md). The other two capabilities settled in
+[PORTING_MATRIX.md](PORTING_MATRIX.md) as Rust rather than inherited binaries have now ended in
+opposite places, and the difference between them is worth stating because it is the whole argument
+this chunk was making.
 
-- **Text monitor** — a UIAutomation focused-element read.
-- **Mic listener** — `IAudioSessionManager2`, for "another application is using the microphone".
+**Mic listener — built 2026-09-01, KNEG-94.** `kw_platform::microphone` enumerates capture
+sessions through `IAudioSessionManager2`, and `meeting_detect::detect` takes the result beside the
+process list.
 
-Both were said to serve meetings and sit **behind** chunk I. Chunk I (meetings) is now done and
-shipped without either — the five process-based detectors, the meeting screen, and the clients
-never called for a focused-element read or a "someone else is using the microphone" signal. So this
-chunk stays open with genuinely no consumer forcing it, not merely a consumer that has not landed
-yet; a capability with no consumer is the scaffolding this workspace avoids building ahead of time.
+The prediction this chunk made was that the capability would wait for a consumer. What happened was
+the reverse: a defect nobody could fix any other way went looking for a capability. New Teams runs
+the call inside `ms-teams.exe` and spawns nothing — measured 2026-08-26, 2026-08-28 and
+2026-08-31 — so **no process name could ever have separated a call from an open client**, and
+Teams was unofferable for three weeks. `mic_users_probe` measured the difference on 2026-09-01 with
+a cross-process control on every run: Teams idle holds no capture session, Teams in a call holds
+one. Windows only; nothing equivalent is read on Linux or macOS.
+
+**Text monitor — declined, KNEG-63, at no priority beside KNEG-69 and KNEG-77.** No consumer,
+and unlike the microphone half, no defect pointing at it either. A UIAutomation focused-element
+monitor reads what the user is looking at, continuously; that needs its own disclosure and there is
+nothing on the other side of the scale to weigh it against. Closed as a decision rather than left
+in the backlog reading as unfinished work.
 
 Also still open, and not Windows: the Linux and macOS shortcut fallbacks. `zbus` against the GNOME,
 KDE and Hyprland portals, with `PLATFORM_SUPPORT.md` continuing to say per compositor what Wayland
@@ -146,8 +158,12 @@ an unrelated task.
   `media_import_url` was unregistered as a command rather than shipped with a guard that does not
   cover the fetch. The backend is dormant, not deleted. See `docs/SECURITY.md`'s Network section
   and `docs/NETWORK_BOUNDARY.md`'s "SSRF guards for URL import".
-- Diarization and semantic search, still the three `temporarily-deferred` entries, unattempted this
-  run and already carrying dependencies and named interfaces.
+- Semantic search, still `temporarily-deferred`, carrying a dependency claim nobody has
+  re-checked. **Diarization is no longer beside it**: it was built on 2026-09-01 (KNEG-123,
+  KNEG-124) once the three dependencies its `deferral` block named turned out not to be needed —
+  the pinned sherpa release already ships the CLI. Both models are pinned and reachable through
+  `Settings > Meetings`. What remains unproven is whether the speaker turns are *right*, which
+  needs a two-person recording.
 
 **Phase 9 — shipping.** Done except by-hand verification. `.github/workflows/release.yml`
 (`workflow_dispatch` only) builds and publishes unsigned nsis/dmg/appimage/deb bundles on
@@ -172,19 +188,60 @@ phase is what makes them mean something.
 
 ## Loose ends worth closing as they are passed
 
-Not chunks of their own; each belonged to whichever chunk touched it first. Two of the three are now
-closed.
+Not chunks of their own; each belonged to whichever chunk touched it first. Two of the three closed
+as work. The third — the orphan tables — closed on 2026-09-01 as a **recorded decision**: the tables
+stay, one of them gained a candidate owner, and the invariant nobody had written down is now pinned
+by a test.
 
 - **All three `RequestPurpose` variants named here now have callers — closed.**
   `UserTriggeredMediaImport` is called from `apps/desktop/src-tauri/src/media.rs`;
   `UserConfiguredCalendarProvider` from `crates/calendar-core`'s exchange and sync code;
   `OwnGithubReleasesUpdater` from `apps/desktop/src-tauri/src/updater.rs`. None of the seven
   `RequestPurpose` variants is still a promise with nothing behind it.
-- **Five orphan tables — still open, untouched this run.** `snippets`, `actions`,
-  `agent_conversations`, `agent_messages` and `contacts` are created by `0001_initial.sql` and
-  touched only by the importer. No crate owns them and no manifest entry mentions them. Phase 10
-  claims four; `snippets` still needs a decision. Nothing in this plan's 19 tasks, or the one added
-  mid-run, touched phase 10.
+- **Eight write-only tables — still open, and one now has a candidate owner.** `snippets`,
+  `actions`, `agent_conversations`, `agent_messages`, `contacts`, `speaker_profiles`,
+  `speaker_mappings` and `note_speaker_embeddings` are created by `0001_initial.sql` and written by
+  `storage::import::from_openwhispr`. Nothing reads any of them back and no manifest entry mentions
+  them. Phase 10 claims four. Nothing in this plan's 19 tasks, or the one added mid-run, touched
+  phase 10.
+
+  **"Touched only by the importer" was wrong, and the honest phrase is *write-only ownership*.**
+  Four of the eight are depended on elsewhere. All eight are asserted to exist by
+  `every_expected_table_exists_and_no_cloud_table_does` (`crates/storage/src/lib.rs:268`);
+  `agent_messages` is the subject of `foreign_keys_are_enforced` (`:464`) and `speaker_mappings` of
+  `deleting_a_note_cascades_to_its_speaker_rows` (`:476`); four are named to the user in a shipped
+  sentence at `apps/desktop/src/views/NotesUpload.tsx:342-343` — snippets, custom actions, agent
+  conversations and speaker profiles; and `contacts` is cited **normatively** by two diarization
+  modules (`apps/desktop/src-tauri/src/diarization.rs:36`,
+  `crates/meeting-core/src/diarization.rs:6`) as a thing they deliberately do not reach for. The
+  importer writes them, tests and comments depend on them, nothing reads them back.
+
+  **`snippets` stays — decided 2026-09-01, not deferred again.** It is not inert:
+  `crates/storage/src/import.rs:106` copies it and the screen above promises the user it will.
+  Dropping it would discard a column of the user's OpenWhispr data that a shipped sentence says is
+  copied, to save a five-column table that costs nothing to keep.
+
+  **`speaker_mappings` has a candidate owner it did not have a week ago.** Diarization writes
+  `speaker_0` with the placeholder `Speaker 1` beside it, and
+  `kw_notes_core::transcript::speaker_name` already prefers a mapping over the placeholder
+  (`crates/notes-core/src/transcript.rs:127-129`), so `speaker_mappings` is exactly where a name a
+  person typed would live. No screen offers that rename and **nothing was built here** — the owner
+  is recorded so the next person past does not have to derive it again.
+
+  **`contacts` is in `COPY_PLAN` and not in `MUST_BE_EMPTY`, and that is deliberate.** The rule was
+  exact and unwritten; it is now written on `MUST_BE_EMPTY` (`import.rs:224-241`) and pinned by
+  `must_be_empty_is_exactly_the_autoincrement_tables`. `MUST_BE_EMPTY` guards one risk — the
+  importer preserves row ids, so a non-empty target could collide — and it holds precisely the
+  `COPY_PLAN` tables declared `INTEGER PRIMARY KEY AUTOINCREMENT`, with no exception in either
+  direction. `contacts` is keyed by `email`, `speaker_mappings` and `note_speaker_embeddings` by
+  `(note_id, speaker_id)`, the four calendar tables by a provider-supplied `TEXT` id: none has a
+  surrogate id to collide. The test fails if a future table joins one list and not the other.
+
+  **No migration, and that is the shape of this closing.** The orphan-table decision added none.
+  (`0002_note_recordings.sql` exists since 2026-09-02 for an unrelated reason -- the note-to-recording
+  relation behind KNEG-152 -- and `migrations_are_idempotent_across_reopens` (`lib.rs:250-265`) now
+  asserts `applied == 2`, so the count still pins the migration list.) This closes as a recorded
+  decision rather than as work.
 - **`storage::import::from_openwhispr` has its manifest entry and its screen — closed.**
   `media:openwhispr-import` is `reachable: true` through `Notes > Upload`, landed together with the
   audio and video importers exactly as planned. The URL importer landed with them and was

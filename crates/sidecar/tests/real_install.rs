@@ -81,10 +81,60 @@ async fn the_pinned_whisper_asset_downloads_verifies_and_unpacks() {
         installed.files
     );
 
+    // The install can say what it is. Everything else about the record is
+    // tested against fixtures; what only a real install can show is that the
+    // digest written down is the one the manifest pins and not one recomputed
+    // from whatever arrived.
+    let install_dir = spec.install_dir(root.path());
+    let record = kw_sidecar::record::read(&install_dir);
+    match &record {
+        kw_sidecar::Record::Present(found) => {
+            assert_eq!(found.asset_sha256, asset.sha256);
+            assert_eq!(found.sidecar, "whisper");
+            assert_eq!(found.source_release, spec.source.release);
+        }
+        other => panic!("no record beside a fresh install: {other:?}"),
+    }
+
+    let found = kw_sidecar::locate(
+        "whisper",
+        asset,
+        &kw_sidecar::SearchPath {
+            bundled: None,
+            downloaded: root.path().to_path_buf(),
+        },
+        &kw_sidecar::RealFs,
+    );
+    assert_eq!(
+        kw_sidecar::freshness(&found, &record, "whisper", &asset.sha256),
+        kw_sidecar::Freshness::Current,
+        "a sidecar installed a moment ago is the one this build pins"
+    );
+
+    // A leftover staging directory must not make the next install impossible.
+    // This is the state a real machine was left in on 2026-08-31, and under the
+    // old single-name, hard-erroring code it was permanent for that sidecar.
+    let leftover = root.path().join("whisper.incoming");
+    std::fs::create_dir_all(leftover.join("files")).unwrap();
+    std::fs::write(leftover.join("files").join("half.dll"), b"junk").unwrap();
+
     // Installing again over a working install must leave a working install.
     let again = install(&policy, spec, asset, root.path(), &mut |_| {})
         .await
         .expect("reinstall should succeed");
     assert!(again.executable.is_file());
     assert_eq!(again.files, installed.files);
+    assert!(
+        !leftover.exists(),
+        "the sweep should have taken the leftover staging directory with it"
+    );
+    assert_eq!(
+        kw_sidecar::freshness(
+            &found,
+            &kw_sidecar::record::read(&install_dir),
+            "whisper",
+            &asset.sha256,
+        ),
+        kw_sidecar::Freshness::Current
+    );
 }

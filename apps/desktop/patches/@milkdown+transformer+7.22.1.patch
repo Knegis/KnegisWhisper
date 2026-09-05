@@ -1,0 +1,16 @@
+diff --git a/node_modules/@milkdown/transformer/lib/index.js b/node_modules/@milkdown/transformer/lib/index.js
+index aa0cf0d..5dc0c73 100644
+--- a/node_modules/@milkdown/transformer/lib/index.js
++++ b/node_modules/@milkdown/transformer/lib/index.js
+@@ -371,7 +371,10 @@ var SerializerState = class extends Stack {
+ 			this.#runNode(nodes);
+ 			return this;
+ 		};
+-		this.toString = (remark) => remark.stringify(this.build());
++		// KnegisWhisper patch: an own property rather than an assignment. Tauri runs the
++		// webview with Object.prototype frozen, which makes the inherited `toString`
++		// read-only, and a strict-mode assignment to it throws before the editor mounts.
++		Object.defineProperty(this, "toString", { configurable: true, writable: true, value: (remark) => remark.stringify(this.build()) });
+ 		this.run = (tree) => {
+ 			this.#openMarks = [];
+ 			this.next(tree);

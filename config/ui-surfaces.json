@@ -1,5 +1,5 @@
 {
-  "$comment": "Every UI surface a config/integration-manifest.json entry may name, and whether it exists. `built` is mechanical: tools/integration-audit/verify-parity.mjs requires the named component to exist and to render data-surface=\"<surfaceId>\". The manifest's per-entry `reachable` is the claim that a user can actually configure that integration through the surface, and it may only be true where the surface is built. The two are separate because a surface can exist and still not configure everything it lists -- see Settings > Transcription below.",
+  "$comment": "Every UI surface a config/integration-manifest.json entry or a config/settings-keys.json entry may name, and whether it exists. `built` is mechanical: tools/integration-audit/verify-parity.mjs requires the named component to exist and to render data-surface=\"<surfaceId>\". The per-entry `reachable` in each of those two files is the claim that a user can actually reach that thing through the surface, and it may only be true where the surface is built. The two are separate because a surface can exist and still not configure everything it lists -- see Settings > Transcription below. tools/settings-audit/scan.mjs goes one step further for a settings key: the surface's component must call the IPC wrapper for the command that writes that key, so naming a screen is not enough.",
   "schemaVersion": 1,
   "surfaces": {
     "Settings > Providers": {
@@ -18,7 +18,7 @@
       "surfaceId": "settings.transcription.local",
       "component": "apps/desktop/src/views/SettingsTranscription.tsx",
       "built": true,
-      "note": "Offers whisper models only. The sherpa-onnx sidecar now exists (Task 17) and Task 18 measured and implemented its offline CLI contract for the two Parakeet models -- both transcribe correctly, proven by a real test -- but this screen has not been extended to install or select them, so all four non-whisper local-asr entries stay unreachable: the two Parakeet ones because the runtime is proven but has no selector here yet, and the two Nemotron ones for an unrelated reason -- they are streaming models over sherpa's own WebSocket protocol, which nobody has built a client for. apps/desktop/src-tauri/src/dictation.rs's own comment on LocalTargets names the Parakeet wiring as the anticipated next step."
+      "note": "Offers the six whisper models and, since 121dc4c, the two Parakeet models through the sherpa-onnx sidecar -- sherpa_install_model installs the CLI too if it is missing, and sherpa_use_model resolves a selection before remembering it, so a model that cannot run is refused now rather than at the next dictation. One local engine, not two: a selected sherpa model wins over a running whisper server, and local_server_start clears the sherpa selection. The two Nemotron entries stay unreachable for an unrelated reason -- they are streaming models over sherpa's own WebSocket protocol, which nobody has built a client for. Writes transcription.localModel and transcription.sherpaModel (config/settings-keys.json)."
     },
     "Settings > Intelligence": {
       "surfaceId": "settings.intelligence",
@@ -41,7 +41,20 @@
     "Settings > Meetings": {
       "surfaceId": "settings.meetings",
       "component": "apps/desktop/src/views/SettingsMeetings.tsx",
-      "built": true
+      "built": true,
+      "note": "Sets the meeting provider, the prompt-on-detect switch, the language hint, the key terms, and the allow and deny lists deciding which applications count as a meeting. The lists were the fourth capability found honoured by the backend with no way in, and the first found by tools/settings-audit/scan.mjs rather than by a person reading a screen (KNEG-114); they are edited under the list of running applications, because the name to type is the one each detection there reports."
+    },
+    "Dictation > Shortcuts": {
+      "surfaceId": "dictation.shortcuts",
+      "component": "apps/desktop/src/views/Dictation.tsx",
+      "built": true,
+      "note": "Binds an accelerator to each of the five hotkey actions and writes hotkey.<action>, and since 2026-09-01 (KNEG-64) picks toggle or hold-to-talk per action and writes hotkey.<action>.mode. Binding a key and seeing whether anything handled it are on one screen deliberately -- the first bench check could not tell \"the hotkey did nothing\" from \"the hotkey saved nothing\". The accelerator field also takes Mouse4 and Mouse5, which go to the WH_MOUSE_LL hook; the mode selector ships as toggle for every action and the screen says why holding is offered rather than defaulted. Four of the five actions have no handler; commands::hotkeys reports that as an UnhandledAction rather than letting a bound key look wired."
+    },
+    "Dictation > History": {
+      "surfaceId": "dictation.history",
+      "component": "apps/desktop/src/views/Dictation.tsx",
+      "built": true,
+      "note": "Switches history off, keeps the pre-cleanup transcript, and clears what is stored. The first two controls exist because the backend honoured history.enabled and history.keepRawText with no way in (KNEG-98, KNEG-99) -- the pattern tools/settings-audit/scan.mjs now gates."
     },
     "Integrations > Calendar": {
       "surfaceId": "integrations.calendar",
@@ -58,7 +71,7 @@
       "surfaceId": "integrations.cli",
       "component": "apps/desktop/src/views/IntegrationsCli.tsx",
       "built": true,
-      "note": "Shows the compiled knegiswhisper binary's location (a real check next to this running application and on PATH, never assumed), the discovery file's path, and the discovery file's real permission state as a tagged union with evidence -- InheritedFromProfile renders its own honest sentence rather than the boolean is_as_expected() would collapse it to. See docs/BENCH_CHECK.md, 2026-08-26 finding 2."
+      "note": "Shows the compiled knegiswhisper binary's location (a real check next to this running application and on PATH, never assumed), the discovery file's path, and the discovery file's real permission state as a tagged union with evidence -- ten states, each with its own sentence in discoveryPermissionsLabel, rather than the boolean is_as_expected() would collapse them to. That boolean has been deleted; DiscoveryPermissions::is_confirmed() draws the line at checked versus unchecked, so owner-and-administrators passes (the access list was read back) and inherited-from-profile does not (nothing looked). See docs/BENCH_CHECK.md, 2026-08-26 finding 2."
     },
     "Integrations > MCP": {
       "surfaceId": "integrations.mcp",
@@ -75,7 +88,7 @@
       "surfaceId": "notes.upload",
       "component": "apps/desktop/src/views/NotesUpload.tsx",
       "built": true,
-      "note": "Audio, video and URL import (Task 11's media.rs, driving the ffmpeg and yt-dlp sidecars already pinned in config/sidecars.json), plus the OpenWhispr database importer (storage::import::from_openwhispr), which existed and was tested since early in the build but had no screen until now. The screen renders the full ImportReport -- what copied, what was dropped per table, and which credentials moved into the OS credential store -- not just a success message, and states plainly that yt-dlp's own fetch is not policed by kw_network_policy."
+      "note": "Audio and video import (Task 11's media.rs, driving the ffmpeg sidecar pinned in config/sidecars.json), plus the OpenWhispr database importer (storage::import::from_openwhispr), which existed and was tested since early in the build but had no screen until now. URL import was withdrawn -- media_import_url is unregistered as a command, this screen offers no URL field, and media:url-import is reachable: false; the yt-dlp sidecar stays pinned for a re-opening that has not happened. The screen renders the full ImportReport -- what copied, what was dropped per table, and which credentials moved into the OS credential store -- not just a success message. Every path this screen imports must be one pick_import_file returned: commands::DialogGrants records the canonical form of each dialog-returned path and media_import_audio, media_import_video and import_openwhispr refuse anything else, so a path this screen invented rather than picked is refused before the file is opened (docs/SECURITY.md, Webview)."
     }
   }
 }

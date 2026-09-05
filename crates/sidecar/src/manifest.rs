@@ -205,7 +205,37 @@ pub struct Asset {
     pub sha256: Sha256Digest,
     /// Checked before hashing, so a truncated transfer fails fast and cheaply
     /// rather than after several megabytes of SHA-256.
+    ///
+    /// Also the download bound: `install` passes this to
+    /// `NetworkPolicy::download_to_file_bounded`, so a hostile or broken mirror
+    /// cannot fill the disk in the window before the digest is computed. Exact
+    /// rather than approximate, because `tools/sidecar-pin/pin.mjs` takes it
+    /// from `stat` after the download rather than from `content-length`.
     pub size_bytes: u64,
+
+    /// A decompression-bomb ceiling: the most this asset may write when it is
+    /// unpacked, passed to [`crate::extract_with_limit`].
+    ///
+    /// **A judgement, not a measurement**, and the only field here that is.
+    /// `sha256`, `size_bytes` and `executable_in_archive` are all read off the
+    /// real bytes by `tools/sidecar-pin/pin.mjs`; this is the *measured*
+    /// extracted total plus 25%, rounded up to the next MiB. See `withHeadroom`
+    /// in that tool for why one stated rule rather than 21 hand-chosen numbers,
+    /// and why the headroom errs high — being wrong high costs protection,
+    /// being wrong low refuses a legitimate install.
+    ///
+    /// The measurement it is derived from is the sum of the entries *inside the
+    /// payload directory*, which is what extraction actually writes, not the
+    /// archive's whole uncompressed size. The Windows whisper archive carries
+    /// `main.exe`, `SDL2.dll`, `llama.dll` and a dozen test binaries that are
+    /// never unpacked.
+    ///
+    /// Mandatory, for the same reason `sha256` is: a target added to the
+    /// manifest without one would not parse, which is the pressure that makes
+    /// somebody run the tool. For `Bare` it equals `size_bytes`, because the
+    /// download is copied verbatim and headroom above a digest-pinned length
+    /// could only ever be reached by a different file.
+    pub max_extracted_size_bytes: u64,
     /// Path of the executable inside the archive, e.g.
     /// `Release/whisper-server.exe`.
     ///
@@ -449,6 +479,34 @@ impl SidecarSpec {
             if asset.size_bytes == 0 {
                 problems.push(format!("{}/{}: size is zero", self.name, target.as_str()));
             }
+            if asset.max_extracted_size_bytes == 0 {
+                // Zero is not "no ceiling", it is a ceiling nothing can pass:
+                // `extract_with_limit` would refuse the first entry of every
+                // install. An absent ceiling is not representable -- the field
+                // is mandatory -- so this catches the one value that parses and
+                // still cannot work.
+                problems.push(format!(
+                    "{}/{}: maxExtractedSizeBytes is zero, so no install of it could ever \
+                     succeed. Run tools/sidecar-pin/pin.mjs --extracted --write.",
+                    self.name,
+                    target.as_str()
+                ));
+            }
+            if asset.archive == ArchiveKind::Bare
+                && asset.max_extracted_size_bytes < asset.size_bytes
+            {
+                // `extract_bare` copies the download verbatim, so a ceiling
+                // below the download's own length is arithmetically
+                // unsatisfiable rather than merely tight.
+                problems.push(format!(
+                    "{}/{}: maxExtractedSizeBytes {} is below sizeBytes {}, and a Bare asset \
+                     is copied verbatim -- the ceiling can never be met",
+                    self.name,
+                    target.as_str(),
+                    asset.max_extracted_size_bytes,
+                    asset.size_bytes
+                ));
+            }
             if asset.executable_in_archive.is_empty() {
                 problems.push(format!(
                     "{}/{}: no executable path inside the archive",
@@ -606,6 +664,7 @@ mod tests {
             archive: ArchiveKind::Zip,
             sha256: Sha256Digest::parse(REAL).unwrap(),
             size_bytes: 10,
+            max_extracted_size_bytes: 10,
             executable_in_archive: exe.to_owned(),
         }
     }
@@ -616,6 +675,7 @@ mod tests {
             archive: ArchiveKind::Bare,
             sha256: Sha256Digest::parse(REAL).unwrap(),
             size_bytes: 10,
+            max_extracted_size_bytes: 10,
             executable_in_archive: exe.to_owned(),
         }
     }

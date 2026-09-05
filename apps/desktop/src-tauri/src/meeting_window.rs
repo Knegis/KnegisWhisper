@@ -22,10 +22,7 @@
 //! knows about.
 
 use crate::overlay::OverlayStatus;
-use tauri::{
-    AppHandle, LogicalPosition, LogicalSize, Manager as _, WebviewUrl, WebviewWindow,
-    WebviewWindowBuilder,
-};
+use tauri::{AppHandle, Manager as _, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
 /// The window label, and the fragment the frontend routes on.
 pub const LABEL: &str = "meeting";
@@ -33,9 +30,6 @@ pub const LABEL: &str = "meeting";
 /// Size from the porting matrix's window-role table.
 const WIDTH: f64 = 392.0;
 const HEIGHT: f64 = 92.0;
-
-/// Gap from the screen edges, so it does not sit against the taskbar.
-const MARGIN: f64 = 24.0;
 
 /// Create the window, hidden.
 ///
@@ -70,41 +64,9 @@ pub fn create(app: &AppHandle) -> tauri::Result<WebviewWindow> {
     Ok(window)
 }
 
-/// Put the window in the bottom-right of the monitor it is on.
-///
-/// The overlay sets no position at all, which is one of the open by-hand items
-/// in `docs/BENCH_CHECK.md` — nobody has looked at where it lands. This does it
-/// explicitly, and does it here so the overlay can call the same function once
-/// somebody has decided where *it* belongs.
+/// Put the window in the bottom-right of the monitor work area it is on.
 pub fn position(window: &WebviewWindow) {
-    let monitor = match window.current_monitor() {
-        Ok(Some(monitor)) => monitor,
-        Ok(None) => {
-            tracing::debug!("no monitor reported; leaving the window where it was placed");
-            return;
-        }
-        Err(err) => {
-            tracing::debug!(error = %err, "could not read the monitor");
-            return;
-        }
-    };
-
-    let scale = monitor.scale_factor();
-    let size = monitor.size().to_logical::<f64>(scale);
-    let origin = monitor.position().to_logical::<f64>(scale);
-
-    // Bottom-right, inside the margin. Not the work area -- Tauri does not expose
-    // it -- so on Windows the taskbar is cleared by the margin rather than by
-    // measurement. Worth checking by hand, which the bench check now asks for.
-    let x = origin.x + size.width - WIDTH - MARGIN;
-    let y = origin.y + size.height - HEIGHT - MARGIN * 2.0;
-
-    if let Err(err) = window.set_size(LogicalSize::new(WIDTH, HEIGHT)) {
-        tracing::debug!(error = %err, "could not set the notification window size");
-    }
-    if let Err(err) = window.set_position(LogicalPosition::new(x, y)) {
-        tracing::warn!(error = %err, "could not position the notification window");
-    }
+    crate::window_placement::bottom_right(window, WIDTH, HEIGHT, "meeting notification");
 }
 
 /// Apply the platform treatments and report what happened.
@@ -150,6 +112,37 @@ pub fn set_visible(app: &AppHandle, visible: bool) {
         } else {
             tracing::warn!(error = %err, "could not hide the meeting notification");
         }
+    }
+}
+
+/// Correct an edge-driven visibility state that has no other corrective.
+///
+/// KNEG-167 measured a visible, empty notification window after a missed hide
+/// edge. Detection polling is the later observation that can repair that state.
+/// This is deliberately one-directional: `start` owns showing the window at
+/// the end of its work, because showing while `Starting` would flash an empty
+/// panel before there is state to render.
+pub fn reconcile(app: &AppHandle, has_something_to_say: bool) {
+    let Some(window) = app.get_webview_window(LABEL) else {
+        return;
+    };
+
+    let visible = match window.is_visible() {
+        Ok(visible) => visible,
+        Err(err) => {
+            tracing::debug!(
+                error = %err,
+                "could not read the meeting notification visibility while reconciling"
+            );
+            return;
+        }
+    };
+
+    if visible && !has_something_to_say {
+        tracing::warn!(
+            "a stranded meeting notification window was visible with nothing to render; hiding it"
+        );
+        set_visible(app, false);
     }
 }
 

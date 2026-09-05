@@ -6,9 +6,19 @@
  * Collapsing them would show the full note list as though it were the result.
  */
 
-import { useCallback, useState } from "react";
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+  useState,
+} from "react";
 
+import { NoteEditor } from "../components/NoteEditor";
+import { formatClock } from "../components/RecordingPlayer";
 import { Row } from "../components/Row";
+import { TranscriptPanel } from "../components/TranscriptPanel";
 import {
   createFolder,
   deleteFolder,
@@ -17,13 +27,149 @@ import {
   exportNoteToFile,
   EXPORT_FORMATS,
   getFolders,
+  getNoteRecording,
+  getNoteTranscriptRows,
   getNotes,
   searchNotes,
+  updateNote,
   type ExportedTranscript,
   type ExportFormat,
+  type Note,
+  type NoteUpdate,
   type SearchHit,
 } from "../lib/ipc";
-import { useRefresh } from "../lib/useRefresh";
+import { useAutosave, type AutosaveStatus } from "../lib/useAutosave";
+import { message, useRefresh } from "../lib/useRefresh";
+
+type NoteWorkspaceHandle = {
+  flush: () => Promise<void>;
+};
+
+type EditorPatch = {
+  title?: string;
+  content?: string;
+};
+
+function SaveStatus({
+  status,
+  error,
+  retry,
+}: {
+  status: AutosaveStatus;
+  error: string | null;
+  retry: () => Promise<void>;
+}) {
+  if (status === "idle") return null;
+  if (status === "failed") {
+    return (
+      <span className="save-status error" role="status">
+        Couldn&apos;t save — <button type="button" onClick={() => { void retry(); }}>Retry</button>
+        {error ? <span className="save-error"> {error}</span> : null}
+      </span>
+    );
+  }
+  const text = status === "dirty" ? "Unsaved changes" : status === "saving" ? "Saving…" : "Saved";
+  return <span className="save-status" role="status">{text}</span>;
+}
+
+const NoteWorkspace = forwardRef<
+  NoteWorkspaceHandle,
+  { note: Note; reload: () => Promise<void>; onClose: () => void }
+>(function NoteWorkspace({ note, reload, onClose }, ref) {
+  const initialTitleRef = useRef(note.title);
+  const savedRef = useRef({ title: note.title, content: note.content });
+  const [title, setTitle] = useState(initialTitleRef.current);
+  const [transcript, setTranscript] = useState<{
+    rows: Awaited<ReturnType<typeof getNoteTranscriptRows>>;
+    recording: Awaited<ReturnType<typeof getNoteRecording>>;
+  } | null>(null);
+  const [transcriptError, setTranscriptError] = useState<string | null>(null);
+
+  const save = useCallback(
+    async (patch: Partial<EditorPatch>) => {
+      const request: NoteUpdate = {};
+      if (patch.content !== undefined && patch.content !== savedRef.current.content) {
+        request.content = patch.content;
+      }
+      if (
+        patch.title !== undefined &&
+        patch.title.trim() !== "" &&
+        patch.title !== savedRef.current.title
+      ) {
+        request.title = patch.title;
+      }
+      if (Object.keys(request).length === 0) return;
+      const updated = await updateNote(note.id, request);
+      if (!updated) throw new Error("This note no longer exists.");
+      if (typeof request.content === "string") savedRef.current.content = request.content;
+      if (typeof request.title === "string") savedRef.current.title = request.title;
+      await reload();
+    },
+    [note.id, reload],
+  );
+  const autosave = useAutosave<EditorPatch>({ save });
+
+  useImperativeHandle(ref, () => ({ flush: autosave.flush }), [autosave.flush]);
+
+  useEffect(() => {
+    let current = true;
+    setTranscript(null);
+    setTranscriptError(null);
+    void Promise.all([getNoteTranscriptRows(note.id), getNoteRecording(note.id)]).then(
+      ([rows, recording]) => {
+        if (current) setTranscript({ rows, recording });
+      },
+      (cause: unknown) => {
+        if (current) setTranscriptError(message(cause));
+      },
+    );
+    return () => { current = false; };
+  }, [note.id]);
+
+  return (
+    <article className="note-detail" aria-labelledby={`note-title-${note.id}`}>
+      <header className="note-detail-header">
+        <input
+          id={`note-title-${note.id}`}
+          aria-label="Title"
+          value={title}
+          onChange={(event) => {
+            const next = event.target.value;
+            setTitle(next);
+            if (next.trim() !== "") autosave.schedule({ title: next });
+          }}
+        />
+        <SaveStatus status={autosave.status} error={autosave.error} retry={autosave.retry} />
+        <button
+          type="button"
+          onClick={() => {
+            void autosave.flush().then(onClose);
+          }}
+          aria-label={`Close note ${note.title}`}
+        >
+          Close
+        </button>
+      </header>
+      <div id={`note-body-${note.id}`} className="note-workspace">
+        <NoteEditor
+          key={note.id}
+          noteId={note.id}
+          initialContent={note.content}
+          onChange={(content) => autosave.schedule({ content })}
+        />
+        {transcript?.rows.length ? (
+          <TranscriptPanel
+            rows={transcript.rows}
+            recording={transcript.recording}
+            noteId={note.id}
+          />
+        ) : transcriptError ? (
+          <p className="error">{transcriptError}</p>
+        ) : null}
+      </div>
+    </article>
+  );
+});
 
 export function Notes() {
   const [folderFilter, setFolderFilter] = useState<number | null>(null);
@@ -36,13 +182,15 @@ export function Notes() {
     return { notes, folders };
   }, [folderFilter]);
 
-  const { data, error, guard } = useRefresh(load);
+  const { data, error, guard, reload } = useRefresh(load);
 
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<SearchHit[] | null>(null);
   const [exportFormat, setExportFormat] = useState<ExportFormat>("txt");
   const [preview, setPreview] = useState<ExportedTranscript | null>(null);
   const [exportedTo, setExportedTo] = useState<string | null>(null);
+  const [openNoteId, setOpenNoteId] = useState<number | null>(null);
+  const workspaceRef = useRef<NoteWorkspaceHandle>(null);
 
   if (!data) {
     return (
@@ -53,6 +201,7 @@ export function Notes() {
   }
 
   const { notes, folders } = data;
+  const openNote = notes.find((note) => note.id === openNoteId) ?? null;
 
   return (
     <div className="view">
@@ -167,6 +316,21 @@ export function Notes() {
                 </span>
                 <button
                   type="button"
+                  aria-expanded={openNoteId === note.id}
+                  aria-controls={`note-body-${note.id}`}
+                  onClick={() => {
+                    void (async () => {
+                      await workspaceRef.current?.flush();
+                      setOpenNoteId((current) =>
+                        current === note.id ? null : note.id,
+                      );
+                    })();
+                  }}
+                >
+                  {openNoteId === note.id ? "Close note" : "Open note"}
+                </button>
+                <button
+                  type="button"
                   onClick={() => {
                     void guard(async () => {
                       setExportedTo(null);
@@ -193,10 +357,28 @@ export function Notes() {
                 <button
                   type="button"
                   onClick={() => {
-                    void guard(async () => {
-                      await deleteNote(note.id);
-                      setPreview(null);
-                    });
+                    void getNoteRecording(note.id)
+                      .then(async (recording) => {
+                        const recordingMessage = recording
+                          ? ` It has a recording (${
+                              recording.durationSeconds === null
+                                ? "duration unknown"
+                                : formatClock(recording.durationSeconds)
+                            }, ${recording.storageKey}) and deleting the note deletes it too.`
+                          : " It has no recording.";
+                        if (!window.confirm(`Delete “${note.title}”?${recordingMessage}`)) return;
+                        await workspaceRef.current?.flush();
+                        await guard(async () => {
+                          await deleteNote(note.id);
+                          setOpenNoteId((current) =>
+                            current === note.id ? null : current,
+                          );
+                          setPreview(null);
+                        });
+                      })
+                      .catch((cause: unknown) => {
+                        void guard(async () => { throw cause; });
+                      });
                   }}
                 >
                   Delete
@@ -205,6 +387,16 @@ export function Notes() {
             ))}
           </ul>
         )}
+
+        {openNote ? (
+          <NoteWorkspace
+            key={openNote.id}
+            ref={workspaceRef}
+            note={openNote}
+            reload={reload}
+            onClose={() => setOpenNoteId(null)}
+          />
+        ) : null}
 
         <div className="row">
           <span className="row-label">Export format</span>
@@ -242,6 +434,9 @@ export function Notes() {
                   : undefined
               }
             />
+            <p className="muted">
+              This is the exported transcript, not the note body shown above.
+            </p>
             <pre className="preview">{preview.content}</pre>
           </>
         ) : null}

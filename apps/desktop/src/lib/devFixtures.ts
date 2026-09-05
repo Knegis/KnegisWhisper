@@ -53,6 +53,7 @@ import type {
   Format,
   HotkeyAction,
   HotkeyChange,
+  HotkeyMode,
   HotkeyReport,
   ImportReport,
   InputDevice,
@@ -68,6 +69,7 @@ import type {
   MeetingStatus,
   NewNoteRequest,
   Note,
+  NoteRecording,
   NoteUpdateRequest,
   Offer,
   Outcome,
@@ -79,6 +81,7 @@ import type {
   SessionState,
   Sources,
   TranscriptEvent,
+  TranscriptRow,
   Transcription,
   UpdateCheckResult,
 } from "../generated/ipc-types";
@@ -140,7 +143,11 @@ const standard = (accelerator: string): Accelerator => ({
 });
 
 const BINDINGS: Binding[] = [
-  { action: "dictation", accelerators: [standard("Control+Shift+D")] },
+  {
+    action: "dictation",
+    accelerators: [standard("Control+Shift+D")],
+    mode: "toggle",
+  },
   {
     action: "chat-agent",
     accelerators: [
@@ -150,15 +157,46 @@ const BINDINGS: Binding[] = [
         modifiers: ["Control", "Super"],
       },
     ],
+    mode: "toggle",
   },
-  { action: "voice-agent", accelerators: [standard("Control+Shift+V")] },
+  {
+    // `Control+Alt` rather than another tidy chord, because this is the one
+    // that renders the caution below -- and a fixture that never shows a
+    // warning is a fixture nobody can check the warning against. On a Nordic
+    // or German layout this really does start dictation every time you type
+    // `@` (KNEG-37).
+    action: "voice-agent",
+    accelerators: [
+      {
+        kind: "modifier-only",
+        accelerator: "Control+Alt",
+        modifiers: ["Control", "Alt"],
+      },
+    ],
+    // The one fixture that is held rather than toggled, so the mode control and
+    // the sentence under it are visible in dev mode without anyone changing a
+    // setting. A fixture where every row reads the same is a fixture that
+    // cannot show a difference.
+    mode: "hold",
+  },
   {
     action: "translation",
     accelerators: [
       { kind: "invalid", input: "Ctrl+Shft+T", reason: "unknown key `Shft`" },
     ],
+    mode: "toggle",
   },
-  { action: "meeting", accelerators: [standard("Control+Shift+V")] },
+  {
+    action: "meeting",
+    accelerators: [
+      standard("Control+Shift+V"),
+      // A mouse binding, for the same reason the `Control+Alt` row above is a
+      // caution: the third classification has to be visible somewhere without
+      // anybody owning a five-button mouse.
+      { kind: "mouse-button", accelerator: "Mouse4", alsoDoes: "Back" },
+    ],
+    mode: "toggle",
+  },
 ];
 
 const HOTKEYS: HotkeyReport = {
@@ -166,11 +204,22 @@ const HOTKEYS: HotkeyReport = {
   conflicts: [
     { accelerator: "Control+Shift+V", actions: ["voice-agent", "meeting"] },
   ],
-  unusable: ["translation", "voice-agent"],
   unhandled: [
     {
       action: "voice-agent",
       reason: "no voice-agent client is built into this release",
+    },
+  ],
+  // The sentence `hotkey::cautions` builds when the layout was read and found
+  // to have AltGr -- the Present arm, naming the character, because that is
+  // what a Nordic or German user gets and the one worth being able to see
+  // while styling this.
+  cautions: [
+    {
+      action: "voice-agent",
+      accelerator: "Control+Alt",
+      reason:
+        "Control+Alt also fires when you press AltGr. This layout types '@' with Control and Alt together, and Windows sends left Control and right Alt for AltGr -- which completes this chord, with nothing downstream able to tell that apart from you pressing it deliberately.",
     },
   ],
 };
@@ -545,24 +594,37 @@ const MEETING_PROVIDERS: MeetingProviderSummary[] = [
 
 let meetingStatus: MeetingStatus = {
   state: "idle",
+  transcriptFailure: null,
   provider: null,
   elapsedSeconds: 0,
   sources: null,
   systemAudio: DIAGNOSTICS.systemAudio,
+  // What this machine reported on 2026-09-01, so the harness shows the state a
+  // Windows user actually has rather than an invented one.
+  microphone: {
+    state: "available",
+    mechanism: "IAudioSessionManager2 over every active capture endpoint",
+    endpoints: 1,
+  },
   detected: [
+    // Teams open and idle: the case that was indistinguishable from a call
+    // until the microphone signal, and is now the one that must NOT offer.
     {
       provider: "meeting-detect:teams",
       name: "Microsoft Teams",
       evidence: "ms-teams.exe",
       inCall: false,
+      signal: "none",
     },
     {
       provider: "meeting-detect:zoom",
       name: "Zoom",
       evidence: "CptHost.exe",
       inCall: true,
+      signal: "call-process",
     },
   ],
+  offer: null,
   promptOnDetect: true,
   notificationExcluded: {
     state: "unsupported",
@@ -598,6 +660,16 @@ const ROUTE: RouteReport = {
 const LOCAL_MODELS: LocalStatus = {
   availability: { state: "installable" },
   serverInstalled: true,
+  // `stale` rather than `current`, so the branch that only appears when the
+  // installed binary has fallen behind is one somebody can look at. The
+  // `unknown` branch is the commoner one in the wild -- it is what every
+  // install made before records existed reports -- but a fixture can only show
+  // one, and this is the one nothing else in the app renders.
+  serverFreshness: {
+    state: "stale",
+    installed: "6cdbf1cfd7bc4d0eaa6a4a2f6cfe83b2e0cb0e2c1b9dbb1f5f0e1a4d3c2b1a09",
+    expected: "c2a4b60edb11f7e11a9191ffb50929535527d4d91c9903dbe3e554583bbbc63d",
+  },
   models: [
     {
       id: "whisper-large-v3-turbo-q5",
@@ -645,6 +717,15 @@ const LOCAL_MODELS: LocalStatus = {
 const SHERPA: SherpaStatus = {
   availability: { state: "installable" },
   cliInstalled: true,
+  // `unknown` rather than `stale`, and deliberately the opposite choice from
+  // the whisper block above: this is the commoner state in the wild -- what
+  // every install made before records existed reports -- and the sherpa row is
+  // the one with no Update button beside it, so the sentence has to carry the
+  // whole weight on its own.
+  cliFreshness: {
+    state: "unknown",
+    why: "it was installed before this application started recording what it installs",
+  },
   // One installed and selected, one installable, and the two streaming models
   // carrying the reason they cannot be picked -- the three states this list has,
   // so the screen is worked on against all of them rather than the easy one.
@@ -655,7 +736,7 @@ const SHERPA: SherpaStatus = {
       sizeMb: 630,
       language: "en",
       installed: true,
-      notOffered: null,
+      usedFor: "dictation",
     },
     {
       id: "parakeet-tdt-0.6b-v3",
@@ -663,19 +744,23 @@ const SHERPA: SherpaStatus = {
       sizeMb: 660,
       language: null,
       installed: false,
-      notOffered: null,
+      usedFor: "dictation",
     },
     {
-      id: "nemotron-streaming-en",
-      name: "Nemotron Streaming EN",
-      sizeMb: 480,
+      // The measured one. Installed and chosen for meetings in the harness,
+      // because "a streaming model that cannot be used" was the state this
+      // screen showed until 2026-09-01 and a fixture still showing it would
+      // keep that dead branch alive in the only place anyone looks at it.
+      id: "nemotron-speech-streaming-en-0.6b",
+      name: "Nemotron Speech Streaming EN 0.6B",
+      sizeMb: 442,
       language: "en",
-      installed: false,
-      notOffered:
-        "streaming model — it is served over sherpa-onnx's own WebSocket protocol, and no client for that protocol has been written",
+      installed: true,
+      usedFor: "meetings",
     },
   ],
   selected: "parakeet-unified-en-0.6b",
+  selectedStream: "nemotron-speech-streaming-en-0.6b",
   modelsDir: "C:\\ProgramData\\KnegisWhisper\\models\\sherpa",
 };
 
@@ -686,6 +771,10 @@ const LOCAL_LLM: LocalLlmStatus = {
     tracking: "https://github.com/ggml-org/llama.cpp/releases",
   },
   serverInstalled: false,
+  // Nothing is installed on this fixture's platform, so there is nothing to be
+  // out of date. The `stale` and `unknown` branches are rendered by the two
+  // blocks above; a third copy here would be a third thing to keep in step.
+  serverFreshness: { state: "not-installed" },
   models: [
     {
       id: "qwen2.5-7b-instruct-q4",
@@ -696,11 +785,24 @@ const LOCAL_LLM: LocalLlmStatus = {
       contextLength: 32768,
       recommended: true,
       supportsThinking: false,
-      installed: false,
+      // Installed and still agreeing with the record written when it was
+      // downloaded. The screen must not call this "verified": two integers
+      // agreeing is not a hash, and the caveat on this state is what says so.
+      integrity: { state: "unchanged-since-install", verifiedBy: "stated-digest" },
+      // The ordinary case: thirty-two of the thirty-nine published objects are
+      // checked against the publisher's stated digest, not one measured here.
+      verifiedBy: "stated-digest",
       draft: {
         fileName: "qwen2.5-0.5b-instruct-q4.gguf",
         sizeBytes: 352_000_000,
-        installed: false,
+        // A drafter can rot on its own, so it carries its own state. This one
+        // has been written to since it was installed and its length has not
+        // moved, which is the case the screen has to describe without calling
+        // the file bad.
+        integrity: { state: "changed", recordedBytes: 352_000_000, bytes: 352_000_000 },
+        // Deliberately stronger than its model's, so the screen's "the drafter
+        // differs" branch is rendered by a fixture rather than only in theory.
+        verifiedBy: "digest",
       },
     },
     {
@@ -712,7 +814,34 @@ const LOCAL_LLM: LocalLlmStatus = {
       contextLength: 131072,
       recommended: false,
       supportsThinking: false,
-      installed: false,
+      // The state every GGUF on a real machine is in the day this ships: the
+      // file is there and nothing beside it says what was checked. It is
+      // rendered as neither good news nor bad, which is the whole point.
+      integrity: { state: "unrecorded" },
+      verifiedBy: "digest",
+      draft: null,
+    },
+    {
+      id: "qwen2.5-14b-instruct-q4",
+      name: "Qwen2.5 14B Instruct (Q4_K_M)",
+      provider: "qwen",
+      sizeBytes: 8_990_000_000,
+      quantization: "Q4_K_M",
+      contextLength: 32768,
+      recommended: false,
+      supportsThinking: false,
+      // The one state here that is an accusation, and the one that was
+      // impossible to render before KNEG-130: a re-hash read the whole file and
+      // refused it. Until then the verdict was thrown away with the record and
+      // the row fell back to `unrecorded` -- the *nothing is known* answer --
+      // so the worst finding this application can make looked exactly like the
+      // ordinary state of every model installed before records existed.
+      integrity: {
+        state: "failed-recheck",
+        expected: "9f2c1d4a6b8e0357c1a9d2f4b6e8071932a5c7d9e1f3054627b8d0a2c4e6f819",
+        actual: "0a1b2c3d4e5f60718293a4b5c6d7e8f90112233445566778899aabbccddeeff0",
+      },
+      verifiedBy: "digest",
       draft: null,
     },
     {
@@ -724,7 +853,11 @@ const LOCAL_LLM: LocalLlmStatus = {
       contextLength: null,
       recommended: false,
       supportsThinking: true,
-      installed: false,
+      integrity: { state: "not-installed" },
+      // The degraded case: a model added to the registry before anybody measured
+      // or pinned it. Nothing ships in this state, and the screen still has to
+      // say so plainly rather than leaving the row silent.
+      verifiedBy: "size",
       draft: null,
     },
   ],
@@ -740,7 +873,10 @@ const LOCAL_API: LocalApiStatus = {
   port: 8749,
   discoveryPath:
     "C:\\Users\\dev\\AppData\\Roaming\\KnegisWhisper\\local-api.json",
-  discoveryPermissions: { state: "owner-only" },
+  /* Windows paths, so the Windows state. This used to say "owner-only", which
+   * only a Unix machine can produce and which both screens render with a
+   * literal `0600` that could never appear beside a `C:\` path. */
+  discoveryPermissions: { state: "owner-and-administrators" },
 };
 
 /* ------------------------------------------------------ cli, mcp and import */
@@ -754,7 +890,10 @@ const CLI: CliStatus = {
   discoveryPath:
     "C:\\Users\\dev\\AppData\\Roaming\\KnegisWhisper\\local-api.json",
   localApiRunning: true,
-  discoveryPermissions: { state: "owner-only" },
+  /* Same file, same machine, so the same state as `LOCAL_API` above. The two
+   * screens read one file; a fixture where they disagreed would hide exactly
+   * the drift `discoveryPermissionsLabel` exists to prevent. */
+  discoveryPermissions: { state: "owner-and-administrators" },
 };
 
 const MCP: McpStatus = {
@@ -763,7 +902,12 @@ const MCP: McpStatus = {
    * locate, and a fixture that always finds one never shows it. */
   binaryLocation: { state: "not-found" },
   command: "knegiswhisper-mcp --stdio",
+  discoveryPath:
+    "C:\\Users\\dev\\AppData\\Roaming\\KnegisWhisper\\local-api.json",
   localApiRunning: true,
+  // It is the same file the CLI reads, so this must stay byte-for-byte the
+  // same fixture state and exercise the shared rendering block on both pages.
+  discoveryPermissions: { state: "owner-and-administrators" },
 };
 
 const SIDECARS: SidecarStatus[] = [
@@ -840,6 +984,20 @@ const CALENDAR: CalendarStatus = {
 };
 
 /* ------------------------------------------------------- history and notes */
+
+/**
+ * The two history switches, held rather than returned as constants.
+ *
+ * The Dictation screen reloads after writing either one, so a constant would
+ * make the checkbox snap back and hide the thing worth looking at here: with
+ * `historyEnabled` off, "Keep the text before cleanup" is disabled and says why.
+ *
+ * `historyEnabled` starts on and `keepRawText` starts on. Only the first matches
+ * the real default -- keeping the raw text is off in a real install, and it is on
+ * here so the invented history below can show a `rawText` row.
+ */
+let historyEnabled = true;
+let keepRawText = true;
 
 const HISTORY: Transcription[] = [
   {
@@ -977,6 +1135,41 @@ let notes: Note[] = [
   },
 ];
 
+const noteRecordings = new Map<number, NoteRecording>([
+  [
+    101,
+    {
+      noteId: 101,
+      storageKey: "20260901-101500.wav",
+      durationSeconds: 1847,
+      originalFilename: null,
+      createdAt: "2026-08-26T09:00:00Z",
+    },
+  ],
+]);
+
+const noteTranscriptRows = new Map<number, TranscriptRow[]>([
+  [
+    101,
+    [
+      {
+        index: 0,
+        startSeconds: 72,
+        endSeconds: 86,
+        speaker: "Anna",
+        text: "The localisation pass needs two more days.",
+      },
+      {
+        index: 1,
+        startSeconds: 88,
+        endSeconds: 101,
+        speaker: "Ravi",
+        text: "Then Thursday is the earliest honest date.",
+      },
+    ],
+  ],
+]);
+
 let nextNoteId = 105;
 let nextFolderId = 4;
 
@@ -1008,12 +1201,47 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
     const action = arg<HotkeyAction>(a, "action") ?? "dictation";
     const accelerators = arg<string[]>(a, "accelerators") ?? [];
     const change: HotkeyChange = {
-      binding: { action, accelerators: accelerators.map(standard) },
+      binding: {
+        action,
+        accelerators: accelerators.map(standard),
+        mode: "toggle",
+      },
       registrations: accelerators.map((accelerator) => ({
         state: "registered" as const,
         accelerator,
       })),
       live: accelerators.length > 0,
+      // Computed from the accelerator rather than hardcoded, so typing
+      // `Control+Alt` into the field in dev mode produces the warning the real
+      // backend would. The real rule runs the chord matcher over the keys
+      // AltGr sends; this is the shape of its answer, not a second copy of it.
+      cautions: accelerators
+        .filter((a) => /control|ctrl/i.test(a) && /(^|\+)alt/i.test(a))
+        .map((accelerator) => ({
+          action,
+          accelerator,
+          reason: `${accelerator} also fires when you press AltGr. This layout types '@' with Control and Alt together, and Windows sends left Control and right Alt for AltGr -- which completes this chord, with nothing downstream able to tell that apart from you pressing it deliberately.`,
+        })),
+    };
+    return change;
+  },
+  // Echoes the mode back rather than remembering it: this file exists so a
+  // screen can be looked at without a backend, and a fixture that kept state
+  // would start being a second implementation to keep in step.
+  hotkey_set_mode: (a) => {
+    const action = arg<HotkeyAction>(a, "action") ?? "dictation";
+    const mode = arg<HotkeyMode>(a, "mode") ?? "toggle";
+    const change: HotkeyChange = {
+      binding: {
+        action,
+        accelerators: [standard("Control+Shift+D")],
+        mode,
+      },
+      registrations: [
+        { state: "registered" as const, accelerator: "Control+Shift+D" },
+      ],
+      live: true,
+      cautions: [],
     };
     return change;
   },
@@ -1053,6 +1281,22 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
   },
   history_delete: () => true,
   history_clear: () => HISTORY.length,
+  // Clearing is not switching off and switching off is not clearing, which is
+  // the point the two adjacent controls have to make. `history_clear` reports a
+  // count and leaves the fixture list alone; this pair moves a flag and never
+  // touches a row.
+  history_enabled: () => historyEnabled,
+  history_set_enabled: (a) => {
+    historyEnabled = arg<boolean>(a, "enabled") ?? historyEnabled;
+    return null;
+  },
+  // On, so the invented history above can show a `rawText` row. The real
+  // default is off -- see `KEEP_RAW_TEXT_KEY`.
+  history_keep_raw_text: () => keepRawText,
+  history_set_keep_raw_text: (a) => {
+    keepRawText = arg<boolean>(a, "enabled") ?? keepRawText;
+    return null;
+  },
 
   /* notes */
   notes_list: (a) => {
@@ -1130,9 +1374,22 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
   },
   notes_delete: (a) => {
     const id = arg<number>(a, "id");
+    if (typeof id !== "number") return false;
     const before = notes.length;
     notes = notes.filter((n) => n.id !== id);
+    noteRecordings.delete(id);
+    noteTranscriptRows.delete(id);
     return notes.length !== before;
+  },
+  // `mockIPC` also stubs convertFileSrc. It intentionally has no recording
+  // server, so the recording player's honest error state appears in browser dev.
+  note_recording_get: (a) => {
+    const id = arg<number>(a, "id");
+    return typeof id === "number" ? noteRecordings.get(id) ?? null : null;
+  },
+  note_transcript_rows: (a) => {
+    const id = arg<number>(a, "id");
+    return typeof id === "number" ? noteTranscriptRows.get(id) ?? [] : [];
   },
   folders_list: () => folders,
   folder_create: (a) => {
@@ -1258,6 +1515,11 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
   local_model_install: () => "whisper-large-v3-turbo-q5",
   local_server_start: () => 8178,
   local_server_stop: () => null,
+  local_server_refresh: () => ({
+    files: 37,
+    restarted: "whisper-large-v3-turbo-q5",
+    restartError: null,
+  }),
 
   /* local text generation */
   local_llm_status: () => LOCAL_LLM,
@@ -1292,13 +1554,28 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
     return sources;
   },
   meeting_stop: () => {
+    const provider = meetingStatus.provider;
     meetingStatus = {
       ...meetingStatus,
       state: "idle",
       provider: null,
       elapsedSeconds: 0,
       sources: null,
+      offer: null,
     };
+    // OpenAI is the provider whose capped sessions reconnect. Its fixture uses
+    // the quiet outcome so the second public shape carrying `reconnects` can be
+    // inspected in the browser; every other provider keeps the saved-note path.
+    if (provider === "meeting:openai-realtime") {
+      return {
+        outcome: "nothing-transcribed",
+        recordingPath:
+          "C:\\Users\\dev\\AppData\\Roaming\\KnegisWhisper\\recordings\\2026-08-26T09-00.wav",
+        mic: "silence",
+        system: "nothing",
+        reconnects: 1,
+      } satisfies MeetingOutcome;
+    }
     return {
       outcome: "saved",
       noteId: 101,
@@ -1306,6 +1583,7 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
       recordingPath:
         "C:\\Users\\dev\\AppData\\Roaming\\KnegisWhisper\\recordings\\2026-08-26T09-00.wav",
       gaps: 0,
+      reconnects: 1,
       transcriptIsPartials: false,
     } satisfies MeetingOutcome;
   },
@@ -1316,10 +1594,14 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
       provider: null,
       elapsedSeconds: 0,
       sources: null,
+      offer: null,
     };
     return null;
   },
-  meeting_dismiss: () => null,
+  meeting_dismiss: () => {
+    meetingStatus = { ...meetingStatus, offer: null };
+    return null;
+  },
   meeting_set_prompt: (a) => {
     meetingStatus = {
       ...meetingStatus,
@@ -1366,6 +1648,10 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
       model: "gpt-4o-transcribe",
       durationMs: 184_000,
       source: { kind: "audio" },
+      // A cloud provider answers with prose and reports no timings, so the
+      // screen writes its one honest fallback cue. Left empty on purpose:
+      // these two fixtures exist to show both halves.
+      segments: [],
     }) satisfies MediaImportResult,
   media_import_video: () =>
     ({
@@ -1374,6 +1660,14 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
       model: "whisper-large-v3-turbo-q5",
       durationMs: 921_000,
       source: { kind: "video" },
+      // The local server does report timings, one per utterance.
+      segments: [
+        {
+          text: "Recorded walkthrough of the meeting detector.",
+          timestamp: 0,
+          endTimestamp: 3.4,
+        },
+      ],
     }) satisfies MediaImportResult,
   /* calendars */
   calendar_status: () => CALENDAR,
@@ -1432,7 +1726,26 @@ const devConsole = {
     void emit("dictation-state", state);
   },
   meetingState(state: MeetingState) {
-    meetingStatus = { ...meetingStatus, state };
+    // The failure sentence travels with the state rather than being a second
+    // thing to remember to set: either failure state with an empty detail line
+    // is a rendering of this screen that cannot be reviewed, because the
+    // sentence is most of what it exists to show.
+    //
+    // The `recording-without-transcript` words are the real ones, from the
+    // meeting of 2026-08-28. The `stalled` words are **not** real: no recorder
+    // thread has ever been seen to panic, and this is the sentence the code
+    // would produce, not one anybody has read on a screen (KNEG-116).
+    meetingStatus = {
+      ...meetingStatus,
+      state,
+      offer: state === "idle" ? null : meetingStatus.offer,
+      transcriptFailure:
+        state === "recording-without-transcript"
+          ? "openai-realtime accepted the connection and then stopped transcribing: on the system audio stream the provider reported: The Realtime Beta API is no longer supported."
+          : state === "stalled"
+            ? "the recording thread stopped unexpectedly, so nothing further is being recorded or transcribed. What was captured before it stopped is still on disk, and Stop will transcribe it."
+            : null,
+    };
     void emit("meeting-state", state);
   },
   transcript(text: string, isFinal = true) {
@@ -1445,13 +1758,29 @@ const devConsole = {
     } satisfies TranscriptEvent);
   },
   offer(name = "Zoom") {
-    void emit("meeting-offer", {
+    const next: Offer = {
       provider: "meeting-detect:zoom",
       name,
       evidence: "CptHost.exe",
-    } satisfies Offer);
+      signal: "call-process",
+    };
+    meetingStatus = { ...meetingStatus, offer: next };
+    void emit("meeting-offer", next);
+  },
+  /** The other offer, and the one worth looking at: it appeared on the weaker
+   * signal, so the window has to say so rather than claiming a meeting. */
+  micOffer(name = "Microsoft Teams") {
+    const next: Offer = {
+      provider: "meeting-detect:teams",
+      name,
+      evidence: "ms-teams.exe",
+      signal: "microphone",
+    };
+    meetingStatus = { ...meetingStatus, offer: next };
+    void emit("meeting-offer", next);
   },
   clearOffer() {
+    meetingStatus = { ...meetingStatus, offer: null };
     void emit("meeting-offer", null);
   },
   modelProgress(written: number, total: number | null = 574_000_000) {

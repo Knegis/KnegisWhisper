@@ -90,10 +90,13 @@ impl From<kw_platform::keyhook::HookSupport> for ShortcutHookStatus {
 #[serde(rename_all = "camelCase")]
 pub struct ModelCacheStatus {
     pub path: String,
-    /// True when the per-user path contained a space or a non-ASCII character,
-    /// which makes the native whisper and sherpa binaries fail in ways that do
-    /// not point at the path. Worth surfacing: it means models are shared
-    /// machine-wide.
+    /// True when the per-user path contained a non-ASCII character, which stops
+    /// the native whisper and sherpa binaries opening the model at all -- and
+    /// does so without saying why, which is what makes it worth relocating for.
+    /// Worth surfacing here too: it means models are shared machine-wide.
+    ///
+    /// A space no longer counts. It never did; see
+    /// `kw_storage::paths`'s module documentation for the measurement.
     pub fell_back: bool,
 }
 
@@ -212,7 +215,7 @@ mod tests {
         assert!(!status.path.is_empty());
         if !status.fell_back {
             assert!(
-                kw_storage::paths::is_native_binary_safe(std::path::Path::new(&status.path)),
+                kw_storage::paths::is_native_readable(std::path::Path::new(&status.path)),
                 "a path reported as usable must actually be usable"
             );
         }
