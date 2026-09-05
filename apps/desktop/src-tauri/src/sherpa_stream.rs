@@ -198,6 +198,8 @@ impl SherpaStream {
                 .to_owned()
         })?;
 
+        require_loopback_bind_support(&executable)?;
+
         let model = model_named(model_id)?;
         let files = model_files(&model)?;
 
@@ -298,6 +300,7 @@ pub struct ModelFiles {
 #[must_use]
 pub fn build_args(files: &ModelFiles, port: u16, log: &std::path::Path) -> Vec<String> {
     vec![
+        "--host=127.0.0.1".to_owned(),
         format!("--port={port}"),
         format!("--tokens={}", files.tokens.display()),
         format!("--encoder={}", files.encoder.display()),
@@ -311,6 +314,37 @@ pub fn build_args(files: &ModelFiles, port: u16, log: &std::path::Path) -> Vec<S
         // in the sidecar directory. See the module documentation.
         format!("--log-file={}", log.display()),
     ]
+}
+
+/// Refuse to launch server builds that cannot enforce the local-only boundary.
+///
+/// v1.13.4 does not expose a bind-address option and listens on every interface.
+/// Probing the executable keeps that unsafe build from being started while also
+/// allowing a patched sidecar with the expected option to restore streaming
+/// without weakening this check.
+fn require_loopback_bind_support(executable: &std::path::Path) -> Result<(), String> {
+    let output = std::process::Command::new(executable)
+        .arg("--help")
+        .output()
+        .map_err(|err| format!("could not inspect the streaming server options: {err}"))?;
+    let mut help = output.stdout;
+    help.extend_from_slice(&output.stderr);
+    let help = String::from_utf8_lossy(&help);
+
+    if help_supports_loopback_bind(&help) {
+        Ok(())
+    } else {
+        Err(
+            "the installed streaming server cannot bind to loopback only; refusing to expose \
+             its unauthenticated WebSocket service on the network"
+                .to_owned(),
+        )
+    }
+}
+
+fn help_supports_loopback_bind(help: &str) -> bool {
+    help.split_ascii_whitespace()
+        .any(|word| word == "--host" || word.starts_with("--host="))
 }
 
 /// Where the server's own log goes.
@@ -425,6 +459,7 @@ mod tests {
         // not off the documentation site. A flag this server does not know is
         // not ignored -- sherpa's option parser exits.
         let args = build_args(&files(), 8_250, std::path::Path::new("/tmp/s.log"));
+        assert!(args.contains(&"--host=127.0.0.1".to_owned()), "{args:?}");
         assert!(args.contains(&"--port=8250".to_owned()), "{args:?}");
         assert!(args.iter().any(|a| a.starts_with("--tokens=")));
         assert!(args.iter().any(|a| a.starts_with("--encoder=")));
@@ -447,6 +482,16 @@ mod tests {
             .find(|a| a.starts_with("--log-file="))
             .expect("the log file is always specified");
         assert_eq!(log, "--log-file=/tmp/s.log");
+    }
+
+    #[test]
+    fn a_server_without_a_host_option_is_not_treated_as_loopback_safe() {
+        assert!(!help_supports_loopback_bind(
+            "Options:\n  --port=6006  The port on which the server will listen."
+        ));
+        assert!(help_supports_loopback_bind(
+            "Options:\n  --host=127.0.0.1  The address on which to listen."
+        ));
     }
 
     #[test]
