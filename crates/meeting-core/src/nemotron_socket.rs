@@ -94,6 +94,14 @@ struct Connection {
     finished: Arc<Notify>,
 }
 
+impl Drop for Connection {
+    fn drop(&mut self) {
+        // A dropped JoinHandle detaches its task, which still owns the socket's
+        // read half. This also covers aborted connects and timed-out cleanup.
+        self.reader.abort();
+    }
+}
+
 impl Connection {
     /// Close the socket and stop its reader.
     async fn close(mut self) {

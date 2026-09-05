@@ -126,7 +126,7 @@ use kw_platform::microphone::MicrophoneSupport;
 use kw_storage::Db;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter as _, Manager as _, State};
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{mpsc, oneshot, Mutex};
 use ts_rs::TS;
 
 /// State changes.
@@ -532,6 +532,7 @@ struct Live {
     provider_id: String,
     commands: sync_mpsc::Sender<RecorderCommand>,
     pump: tokio::task::JoinHandle<Result<MeetingTranscript, MeetingError>>,
+    cancel_pump: oneshot::Sender<()>,
     /// Where the WAV is being written.
     ///
     /// Kept here as well as in `Finished` because the two paths that never
@@ -945,6 +946,7 @@ impl MeetingRuntime {
             }
         };
         if let Err(err) = provider.connect(config).await {
+            cancel_provider(provider.as_mut()).await;
             self.release_stream(stream_lease).await;
             return Err(err.to_string());
         }
@@ -957,6 +959,7 @@ impl MeetingRuntime {
             match spawn_recorder(path.clone(), system_audio) {
                 Ok(parts) => parts,
                 Err(err) => {
+                    cancel_provider(provider.as_mut()).await;
                     self.release_stream(stream_lease).await;
                     return Err(err);
                 }
@@ -970,16 +973,25 @@ impl MeetingRuntime {
         // run for minutes, that is the common case rather than a rare race.
         // `announce_transcript_ended` decides it under the `live` lock.
         let transcript_failure = Arc::new(OnceLock::new());
+        let (cancel_pump, cancellation) = oneshot::channel();
         let pump = tokio::spawn({
             let app = self.app.clone();
             let live = Arc::clone(&self.live);
             let mine = Arc::clone(&transcript_failure);
             let ended = Arc::clone(&recorder_end);
             async move {
-                let result = pump(provider, session_rate, audio, events_rx, app.clone()).await;
-                // Read after the pump has ended, which is after the audio
-                // channel closed, which is after the recorder's own guard ran.
-                // See [`RecorderExit`] for why that ordering holds.
+                let result = pump(
+                    provider,
+                    session_rate,
+                    audio,
+                    events_rx,
+                    app.clone(),
+                    cancellation,
+                )
+                .await;
+                // On normal completion the audio channel has closed and the
+                // recorder guard has run. Explicit cancellation can end sooner;
+                // that path already took Live, so no failure is announced.
                 let reason =
                     live_transcript_ended(result.as_ref().map(|_| ()), ended.get().copied());
                 announce_transcript_ended(&live, &app, &mine, reason).await;
@@ -991,6 +1003,7 @@ impl MeetingRuntime {
             provider_id: provider_id.to_owned(),
             commands,
             pump,
+            cancel_pump,
             recorder_end,
             recording_path: path,
             sources: sources.clone(),
@@ -1129,7 +1142,10 @@ impl MeetingRuntime {
         };
 
         let _ = live.commands.send(RecorderCommand::Cancel);
-        live.pump.abort();
+        let _ = live.cancel_pump.send(());
+        if let Err(err) = live.pump.await {
+            tracing::warn!(error = %err, "the transcription task failed while cancelling");
+        }
         self.release_stream(live.stream_lease).await;
         if self.lifecycle.lock().await.finished(generation) {
             self.emit_state(MeetingState::Idle);
@@ -1725,9 +1741,59 @@ async fn announce_transcript_ended(
     emit_state(app, MeetingState::RecordingWithoutTranscript);
 }
 
-/// Feed the provider what the recorder forwards, emitting transcript as it comes.
+/// Interrupt even an in-flight provider operation. Dropping the sender (normal
+/// Stop) is not cancellation; only an explicit signal discards transcription.
+async fn until_cancelled<T>(
+    work: impl std::future::Future<Output = T>,
+    cancellation: oneshot::Receiver<()>,
+) -> Option<T> {
+    tokio::select! {
+        biased;
+        () = async {
+            if cancellation.await.is_err() {
+                std::future::pending::<()>().await;
+            }
+        } => None,
+        result = work => Some(result),
+    }
+}
+
+async fn cancel_provider(provider: &mut dyn MeetingTranscriptionProvider) {
+    match tokio::time::timeout(std::time::Duration::from_secs(5), provider.cancel()).await {
+        Ok(Ok(())) => {}
+        Ok(Err(err)) => tracing::warn!(error = %err, "provider cancellation failed"),
+        Err(_) => tracing::warn!("provider cancellation timed out; dropping its sockets"),
+    }
+}
+
 async fn pump(
     mut provider: Box<dyn MeetingTranscriptionProvider>,
+    session_rate: u32,
+    audio: mpsc::UnboundedReceiver<Drained>,
+    events: mpsc::UnboundedReceiver<TranscriptEvent>,
+    app: AppHandle,
+    cancellation: oneshot::Receiver<()>,
+) -> Result<MeetingTranscript, MeetingError> {
+    let result = until_cancelled(
+        pump_audio(provider.as_mut(), session_rate, audio, events, app),
+        cancellation,
+    )
+    .await;
+    let result = result.unwrap_or_else(|| {
+        Err(MeetingError::Disconnected {
+            provider: "meeting".to_owned(),
+            detail: "cancelled by the user".to_owned(),
+        })
+    });
+    if result.is_err() {
+        cancel_provider(provider.as_mut()).await;
+    }
+    result
+}
+
+/// Feed the provider what the recorder forwards, emitting transcript as it comes.
+async fn pump_audio(
+    provider: &mut dyn MeetingTranscriptionProvider,
     session_rate: u32,
     mut audio: mpsc::UnboundedReceiver<Drained>,
     mut events: mpsc::UnboundedReceiver<TranscriptEvent>,
@@ -2072,5 +2138,51 @@ mod tests {
         for (state, fact) in expected {
             assert_eq!(state.note_fact(), fact);
         }
+    }
+}
+
+#[cfg(test)]
+mod cancellation_tests {
+    use super::until_cancelled;
+    use tokio::sync::oneshot;
+
+    #[tokio::test]
+    async fn explicit_cancel_interrupts_a_stalled_operation() {
+        let (tx, rx) = oneshot::channel();
+        let (started, ready) = oneshot::channel();
+        let task = tokio::spawn(until_cancelled(
+            async move {
+                let _ = started.send(());
+                std::future::pending::<()>().await;
+            },
+            rx,
+        ));
+        assert!(ready.await.is_ok());
+        let _ = tx.send(());
+        let result = tokio::time::timeout(std::time::Duration::from_secs(1), task).await;
+        assert!(matches!(result, Ok(Ok(None))));
+    }
+
+    #[tokio::test]
+    async fn cancel_wins_over_queued_work() {
+        let (tx, rx) = oneshot::channel();
+        let _ = tx.send(());
+        let polled = std::sync::atomic::AtomicBool::new(false);
+        let result = until_cancelled(
+            async {
+                polled.store(true, std::sync::atomic::Ordering::SeqCst);
+            },
+            rx,
+        )
+        .await;
+        assert!(result.is_none());
+        assert!(!polled.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn dropping_sender_for_normal_stop_still_finishes() {
+        let (tx, rx) = oneshot::channel::<()>();
+        drop(tx);
+        assert_eq!(until_cancelled(async { 42 }, rx).await, Some(42));
     }
 }
