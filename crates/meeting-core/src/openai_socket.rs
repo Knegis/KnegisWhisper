@@ -90,6 +90,15 @@ impl Connection {
     }
 }
 
+impl Drop for Connection {
+    fn drop(&mut self) {
+        // Dropping a JoinHandle detaches its task. The reader owns the stream
+        // half, so detaching it would also keep the socket alive when a caller
+        // is aborted before it can await `close`.
+        self.reader.abort();
+    }
+}
+
 impl std::fmt::Debug for OpenAiRealtime {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("OpenAiRealtime")
@@ -220,8 +229,16 @@ impl OpenAiRealtime {
             connection.close().await;
         }
 
-        self.mic = Some(self.open(AudioSource::Mic).await?);
-        self.system = Some(self.open(AudioSource::System).await?);
+        let mic = self.open(AudioSource::Mic).await?;
+        let system = match self.open(AudioSource::System).await {
+            Ok(system) => system,
+            Err(err) => {
+                mic.close().await;
+                return Err(err);
+            }
+        };
+        self.mic = Some(mic);
+        self.system = Some(system);
 
         if let Some(clock) = self.clock.as_mut() {
             clock.reconnected(Instant::now());
@@ -322,8 +339,16 @@ impl MeetingTranscriptionProvider for OpenAiRealtime {
 
         // Both, before returning. A session with only the microphone open would
         // transcribe half the meeting and report success.
-        self.mic = Some(self.open(AudioSource::Mic).await?);
-        self.system = Some(self.open(AudioSource::System).await?);
+        let mic = self.open(AudioSource::Mic).await?;
+        let system = match self.open(AudioSource::System).await {
+            Ok(system) => system,
+            Err(err) => {
+                mic.close().await;
+                return Err(err);
+            }
+        };
+        self.mic = Some(mic);
+        self.system = Some(system);
         self.paused = false;
         Ok(())
     }

@@ -968,7 +968,18 @@ impl MeetingRuntime {
             "{}.wav",
             chrono::Utc::now().format("%Y%m%d-%H%M%S")
         ));
-        let (audio, commands, sources) = spawn_recorder(path, system_audio)?;
+        let (audio, commands, sources) = match spawn_recorder(path, system_audio) {
+            Ok(recorder) => recorder,
+            Err(err) => {
+                // `connect` has already opened any cloud sessions. Close them
+                // before returning the recorder error rather than relying on a
+                // remote timeout.
+                if let Err(cancel_err) = provider.cancel().await {
+                    tracing::warn!(error = %cancel_err, "could not cancel the provider after recorder startup failed");
+                }
+                return Err(err);
+            }
+        };
 
         let pump = tokio::spawn(pump(
             provider,
@@ -1043,7 +1054,12 @@ impl MeetingRuntime {
         };
 
         let _ = live.commands.send(RecorderCommand::Cancel);
-        live.pump.abort();
+        // The recorder drops the audio sender after processing Cancel. Let the
+        // pump observe that and await the provider's socket cleanup; aborting
+        // it would drop the provider in the middle of asynchronous cleanup.
+        if let Err(err) = live.pump.await {
+            tracing::warn!(error = %err, "the transcription task failed while cancelling");
+        }
         self.emit_state(MeetingState::Idle);
         crate::meeting_window::set_visible(&self.app, false);
         self.watch.lock().await.0.forget(&live.provider_id);
