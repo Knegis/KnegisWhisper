@@ -6,6 +6,113 @@ that 787 passing tests had all missed**, and the one on 2026-08-26 found three m
 
 Maintained in place. When something here becomes false, edit it.
 
+## 2026-09-07 — owner validation and delivery review
+
+User-observed Windows results:
+
+- KNEG-115: Control+Super toggles after full release, switching bindings without
+  restarting works, and Ctrl+Win+Left/Right do not activate recording.
+- KNEG-169: API start, stop (Not listening), and restart passed. The running UI
+  reported read-back restricted to the owner, SYSTEM and Administrators, with
+  no inherited grants. The original extra trustee's provenance remains unknown.
+- KNEG-155: short-file import, matching audio from transcript rows, playback
+  after application restart, and preserving the source on note deletion passed.
+  A 45-minute local Whisper import completed and playback near its beginning,
+  middle and end worked well. Short Parakeet import also succeeded. Separate
+  manual video UI validation was not reported; native video pipeline tests pass.
+- Whisper: the requested idle-and-repeat dictation session passed without errors.
+  This does not establish why the earlier intermittent exits occurred.
+
+The earlier 90-minute import used Parakeet and was manually interrupted. That
+observation alone was not a failure. The subsequent isolated benchmark did
+reproduce failures on longer repeated-speech fixtures; see PARAKEET_BENCHMARK.md.
+KNEG-115, KNEG-169 and KNEG-155 are Done in Linear under owner authorization.
+
+The delivery review adds app-owned import snapshots and one active import across
+navigation, with real stage/elapsed time and persisted terminal results. Polling
+and navigation behavior are covered by TypeScript tests; the revised UI has not
+been separately exercised by the owner. Audio/video native pipeline tests also
+check the stored successful snapshot. This does not claim a packaged-release or
+hosted GitHub Actions run.
+
+## 2026-09-07 — physical shortcut report and hook replacement fix
+
+The user reported that Control+Super did not work after changing settings,
+while changing back to Control+L worked. Investigation found process-wide OnceLock hook state
+that could not be initialized again after a settings update dropped the hook.
+Hook state now belongs to the installing thread, so accelerator and mode changes
+can install a fresh watcher and callback. A native Windows regression test
+installs and immediately drops three successive hooks; all 152 platform tests
+passed. The injection probe now also replaces a hook before checking events.
+After the fix, the user reported "It all works!" in response to this specific
+physical retest:
+
+- Control+Super in Toggle mode activates once after both keys are released.
+- Switching to Control+L and back to Control+Super without restarting still works.
+- Ctrl+Win+Left and Ctrl+Win+Right do not trigger recording.
+
+These are user-observed Windows results and satisfy the requested KNEG-115
+physical retest. They do not attest to the other issues in the batch, a packaged
+release, or additional keyboard layouts. KNEG-115 was subsequently marked Done with this user evidence.
+
+## 2026-09-05 — safety and import batch: automated native evidence
+
+All destructive checks used temporary databases, recordings, discovery paths and PID records.
+The existing installed binaries and base model were read; no live discovery ACL was changed.
+
+| Check | Observed result |
+| --- | --- |
+| Windows keyboard hook | `keyhook_probe` injected RightControl+RightShift twice. Two Press, two Release and two Activated events; exactly one qualified activation per full release. This was synthetic input, not a physical Control+Super test. |
+| Windows ACL repair | A temporary protected directory was widened with an explicit Everyone Read/Execute ACE. The classifier rejected it and the existing ACL apply removed it. Request-triggered and idle-monitor revocation, refusal before token bytes, bounded repair, and fresh-token retry passed in fixtures. |
+| Audio and video import | `native_audio_video_import_pipeline` used installed ffmpeg and an isolated Whisper base server with the repository speech fixture and a generated MKV. Each retained WAV was 202,638 bytes. Notes and attachments persisted, protocol byte ranges returned 206, deletion removed copies and preserved sources. The app handle was mocked; this did not drive the Upload screen or native picker. |
+| Concurrent recovery | `native_concurrent_recovery_transcribes_after_process_loss` started an isolated base server, terminated its owned child, then sent two recovery requests. Both shared one replacement (PID 13796 to 3188); fixture transcription succeeded. |
+| Whisper idle probe | PID 9868, port 51405, 600.6 seconds, healthy startup, no unexpected exit. |
+| Whisper repeated probe | PID 29292, port 61432, 605.4 seconds, 85 successful fixture requests, no request errors or unexpected exit. |
+
+The probe used `ggml-base.bin`; executable SHA-256 was
+`9eb6ee297215f07ba77a6d588a6a2715f2235f665528529c377b775bbab3cd2d`.
+Both probe children were stopped explicitly after the observation window. These were isolated
+processes on the development machine while other build/test work continued, not a pristine-machine
+or meeting-load reproduction. The intermittent exit cause and the origin of the live extra ACL
+trustee remain unresolved. Raw probe results and bounded stderr are under ignored
+`target/whisper-investigation/`.
+
+Still requiring user/hardware or external evidence:
+
+1. Physical Control+Super and Ctrl+Win+Left/Right retest: passed by user report on
+   2026-09-07 after the hook replacement fix; see the entry above.
+2. Audio import/playback/restart/source preservation passed by user report on
+   2026-09-07. Video pipeline coverage is automated; separate video UI testing was not reported.
+3. Observe the first selective GitHub Actions Windows run after the workflow reaches GitHub.
+   No workflow was dispatched or published as part of this batch.
+
+## 2026-09-05 — KNEG-154 native attachment smoke
+
+Observed through the real Windows webview and native file picker, using the
+opt-in `native_recording_attachment_smoke` harness with an in-memory database,
+a temporary recordings directory, and the repository's speech WAV fixture:
+
+- Opened the unattached fixture note; the action and format explanation rendered.
+- Opened the native WAV picker and cancelled; no player appeared and Attach remained available.
+- Selected `original möte.wav` from a path containing spaces and a non-ASCII filename.
+- The player appeared with a six-second duration; the existing Markdown stayed intact.
+- Pressed the transcript-row Play button; observed Pause and row highlighting,
+  followed by the playback clock advancing from 0:00 to 0:06.
+- Closed and reopened the note; the recording and player were still available.
+- Checked the files afterwards: exactly one app-owned WAV, and both it and the
+  selected original matched the fixture's SHA-256.
+
+This measures native dialog/IPC, WAV attachment, webview media decoding and
+playback progress, and reopening within the same application session. It is not
+an assessment of sound by ear, an application-restart test, a fresh meeting
+recording, or a packaged-release check. Unsaved-editor navigation races are not
+claimed from this run. Automatic tests separately cover cleanup, invalid WAVs,
+database failures, concurrent attachment, and HTTP/desktop deletion.
+
+The harness requires `--features tauri-test` for the Windows Common Controls
+manifest and an interactive desktop. Start Vite first; see README. It registers
+Notes and read-only diagnostics, so other screens are outside this harness.
+
 ## The rule this file follows
 
 **A probe verifies the link it exercised and nothing further.** The keyboard-hook probe on

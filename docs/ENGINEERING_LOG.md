@@ -12,6 +12,92 @@ maintained in place rather than appended to, because its purpose is to be curren
 
 ---
 
+## 2026-09-07 — delivery review and persistent import progress
+
+Reviewed recording transactions/cleanup, permission verification and token
+revocation, keyboard hook replacement, Whisper startup/watchers and renderer
+completion. Added Rust-owned single-import snapshots with operation identity,
+stages, elapsed time, provider/model and terminal results. Upload restores status
+after navigation and links to the saved note; sidecar-install events stay separate.
+The route and local engine are captured before conversion. Failed/busy attempts
+remain actionable and the slot is released after failure or interruption.
+
+Parakeet benchmarks reproduced exit 0xC0000409 on long repeated-speech input;
+see PARAKEET_BENCHMARK.md. Preserved full native exit status/final diagnostics and
+added cancellation cleanup for its child and scratch audio. No native crash cause
+is claimed. Fixed the settings audit mutation test to support CRLF and verify
+that its intended mutation actually happened.
+
+Automated validation includes the repository gates, Windows workspace and IPC
+suites, TypeScript behavior tests, production build and native audio/video
+pipeline. Final delivery validation is against an isolated committed checkout.
+User-observed evidence and remaining external checks are in BENCH_CHECK.md.
+Unrelated icon assets and icon rebuild changes are excluded from this batch.
+Publishing, hosted CI execution and merging remain separate steps.
+
+
+## 2026-09-05 — hotkeys, API permissions, Whisper recovery and retained imports
+
+Implemented KNEG-115, KNEG-169, KNEG-170/KNEG-96 hardening, KNEG-155 and selective KNEG-111/KNEG-40 CI configuration. The owner approved release-qualified modifier toggles, automatic import retention, repair-then-refuse API behavior and selective PR checks. `Control+Super` remains the default.
+
+- **Hotkeys:** raw press/release events remain available for Hold; Toggle uses a separate qualified activation after full release. Any additional key cancels that candidate until the gesture ends. A separately configured longer modifier chord can qualify independently. The Windows hook probe delivered two qualified activations for two injected clean chords.
+- **API permissions:** verify directory and empty exclusive temporary before token bytes; publish and verify before serving. Request admission checks run off the executor; a five-second monitor catches idle exposure. Revocation is permanent for that token, repairs once, stops service and requires explicit retry. Settings, CLI and MCP status retain the failed verdict. An isolated explicit Everyone read grant was detected and removed by the existing ACL implementation; the origin of the real-machine trustee remains unknown.
+- **Whisper:** bounded byte-oriented stderr collection survives invalid UTF-8 and keeps unterminated final output. Exit reporting drains for at most one second and reports capture completeness, exit, lifetime and process identity. Conditional PID removal protects newer processes. Serialized startup shares an attempt among overlapping callers, including failure; dictation and imports use one pre-submission recovery path. No second background restarter or transcription retry was added. Runtime diagnostics disclose failure and recovery.
+- **Imports:** Rust commits the note and recording together, retaining a validated UUID WAV copy and original basename. Failed copies/transactions remove their generated files. The renderer receives the committed note ID and metadata, with retention disclosure and size. Source files and disabled URL-import policy are preserved.
+- **CI:** PRs always run Contracts and select relevant frontend/Windows jobs. Manual dispatch retains the three-platform matrix. No automatic push, release or pin workflow was enabled. File selection includes deletions and renames. Hosted execution has not been observed because these changes have not been published.
+
+Validation: 1,771 workspace tests passed (13 ignored); the Tauri feature suite passed 372 tests (5 ignored). Both Clippy configurations, formatting, repository contracts/scanner suites, TypeScript tests and frontend typecheck/build passed. The existing large-bundle warning remains. Additional focused tests cover the final API lifecycle serialization and startup cleanup.
+
+Native fixture checks passed for audio/video conversion, transcription, persisted recording, playback byte ranges and deletion; concurrent recovery replaced an intentionally terminated owned Whisper process and transcribed successfully. Separate ten-minute idle and repeated-transcription probes saw no unexpected exit; the latter completed 85 requests without errors. These observations do not establish the intermittent crash's cause. See BENCH_CHECK for exact limits and remaining user checks.
+
+## 2026-09-05 — KNEG-162 and KNEG-154: repeatable frontend tests and explicit WAV attachment
+
+`npm test` now compiles TypeScript tests into an ignored output directory and
+runs Node's test runner. The navigation suite asserts the intended destination
+and group mapping. A wrong-group mutation failed an assertion; an injected type
+error stopped before test execution and left no stale compiled test. The CI
+Frontend job and README call the same command; workflow triggers stay paused.
+
+Older notes can now attach their original WAV through one Rust-owned dialog
+command. Paths never cross this IPC boundary. The original is copied to an
+exclusive UUID filename, and the copy is checked sample by sample as 16-bit PCM
+mono/stereo WAV before its metadata is inserted. No timestamp-based matching,
+transcoding, transcription, replacement, or media-import retention is added.
+Failure cleans up the generated copy; cancellation creates nothing. The database
+constraints resolve races with another attachment or note deletion.
+
+The note workspace updates only its recording metadata: its editor and autosave
+remain mounted. A generation check discards late UI responses after navigation.
+Backend tests use disposable databases/files and exercise source preservation,
+WAV rejection, failed insertion/copy, duplicate attachment, and protocol ranges.
+A separately invoked Windows smoke harness registers the real Notes commands and
+playback protocol against disposable data; ordinary test runs never open it.
+
+Validation: 1,753 workspace tests passed (12 intentionally ignored); the explicit
+Tauri test suite passed 367 tests (3 ignored, including the interactive harness).
+All 134 scanner self-tests, the three TypeScript tests, repository contract checks,
+frontend typecheck/build, and workspace Clippy passed. The capability scanner's
+inventory now explicitly includes the second mock `main` webview used by the
+recording-deletion IPC test. Native picker cancellation, attachment, row-playback
+progress, reopening, and source/copy equality were observed; see BENCH_CHECK.md
+for the exact scope and remaining by-ear/restart/package checks.
+
+---
+
+## 2026-09-05 — KNEG-153: desktop and API delete the same recording
+
+Both note-deletion surfaces now capture the attachment and delete the note in one
+SQLite write transaction, then remove the captured file after commit. The local
+API (and MCP through it) no longer skips file cleanup. The shared notes-core
+resolver rejects traversal and Windows drive/alternate-stream syntax.
+
+The agreed policy remains best effort after commit: absent files are harmless,
+other cleanup failures warn, and the note stays deleted. There is no cleanup queue.
+Rollback and concurrency tests use disposable databases and recordings; this is
+not evidence of a native dialog or playback check.
+
+---
+
 ## Carry-forward — what the next session needs to know
 
 > **All 19 tasks in the plan, plus one added mid-run (Task 20, the SSRF boundary fix), are
@@ -174,15 +260,13 @@ maintained in place rather than appended to, because its purpose is to be curren
 
 Maintained in place. If something here becomes false, edit it rather than adding a note.
 
-### CI is paused — nothing is checking any of this
+### Selective CI is configured; hosted execution still needs evidence
 
-`.github/workflows/ci.yml` still contains every job, but its `push` and `pull_request` triggers
-are commented out, so **no commit pushed to this repo is being checked right now**. Only manual
-`workflow_dispatch` runs happen. Every claim in this file that reads "CI is green" is, until the
-triggers come back, a claim about the last run before the pause.
-
-Re-enabling is uncommenting two blocks at the top of that file. Do that before trusting a green
-badge or before the next merge to `main`.
+`ci.yml` now configures Contracts on every PR, relevant frontend and Windows Rust jobs,
+and the full three-platform matrix on manual dispatch. Automatic push runs remain off.
+This replaces the all-manual configuration while keeping the budget pause in the historical
+entries below. No new hosted run has been observed; do not describe local green checks as
+GitHub Actions evidence. Publishing and merging this batch were not authorized.
 
 ### Committed but not usable end to end
 
@@ -916,7 +1000,7 @@ morning and the window was blank — see the 2026-09-03 (KNEG-159) entry above f
 here was green anyway. The CSP claim rests on the bundle checks above and was **not** the cause;
 the seek behaviour rests on Tauri's asset protocol doing the same thing for years. Both remain
 believed, not observed, and the by-hand check is a sub-issue of KNEG-152. Known gaps filed under
-it: the local API's `DELETE /notes/{id}` orphans the WAV (KNEG-153), notes saved
+it: the local API's `DELETE /notes/{id}` orphaned the WAV (KNEG-153; fixed 2026-09-05), notes saved
 before today have a WAV and no way to attach it (KNEG-154), imports are transcribed and discarded
 (KNEG-155), and an attach that fails after the note is saved is only a log line (KNEG-157).
 
