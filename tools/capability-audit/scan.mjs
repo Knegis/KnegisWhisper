@@ -21,6 +21,14 @@
  *   D. Every `WebviewWindowBuilder::new(` can be resolved as either the
  *      same-file `LABEL` const or a string literal that is already a known
  *      label. A builder the gate cannot resolve must fail, not become invisible.
+ *   E. Every capability file is enabled by `tauri.conf.json`. Tauri's
+ *      `security.capabilities` is an allow-list: unset or empty enables every
+ *      file under `capabilities/`, anything else enables only the identifiers
+ *      it names. KNEG-171 was a file that existed, satisfied rule A, and was
+ *      never compiled into the ACL because the list named only `default` --
+ *      so the KNEG-168 fix landed inert and the meeting window recorded with
+ *      an empty indicator for a second time. Rule A and the success listing
+ *      count only enabled capabilities as coverage.
  *
  * **What it does not check.** It checks that a window is *covered* by a
  * capability, not that the capability's permission set is sufficient.
@@ -99,11 +107,48 @@ export function windowLabels(root = REPO_ROOT) {
   return labels;
 }
 
-/** Capability JSON files, retaining only the fields this source-level gate needs. */
+/**
+ * The `security.capabilities` allow-list from `tauri.conf.json`, or `null` when
+ * it is unset or empty, which Tauri reads as "every file in `capabilities/`".
+ * Entries are identifier strings or inline capability objects.
+ */
+export function securityCapabilities(root = REPO_ROOT) {
+  const config = join(root, TAURI_CONFIG);
+  if (!existsSync(config)) return null;
+  const entries = JSON.parse(readFileSync(config, "utf8")).app?.security?.capabilities;
+  return Array.isArray(entries) && entries.length > 0 ? entries : null;
+}
+
+/**
+ * Mark each capability file `enabled` according to the allow-list, and append
+ * any inline capability the list carries, since Tauri compiles those too.
+ * A `null` list enables everything.
+ */
+export function markEnabled(files, entries) {
+  if (entries === null) return files.map((capability) => ({ ...capability, enabled: true }));
+  const named = new Set(entries.filter((entry) => typeof entry === "string"));
+  const marked = files.map((capability) => ({ ...capability, enabled: named.has(capability.identifier) }));
+  for (const entry of entries) {
+    if (entry === null || typeof entry !== "object" || typeof entry.identifier !== "string") continue;
+    marked.push({
+      file: `${TAURI_CONFIG} (inline security.capabilities)`,
+      identifier: entry.identifier,
+      windows: Array.isArray(entry.windows) ? entry.windows : [],
+      permissions: Array.isArray(entry.permissions) ? entry.permissions : [],
+      enabled: true,
+    });
+  }
+  return marked;
+}
+
+/**
+ * Capability JSON files, retaining only the fields this source-level gate needs,
+ * each marked `enabled` by whether `security.capabilities` lets Tauri load it.
+ */
 export function capabilityFiles(root = REPO_ROOT) {
   const directory = join(root, CAPABILITIES);
   if (!existsSync(directory)) return [];
-  return readdirSync(directory)
+  const files = readdirSync(directory)
     .filter((file) => file.endsWith(".json"))
     .sort()
     .map((name) => {
@@ -116,6 +161,12 @@ export function capabilityFiles(root = REPO_ROOT) {
         permissions: Array.isArray(parsed.permissions) ? parsed.permissions : [],
       };
     });
+  return markEnabled(files, securityCapabilities(root));
+}
+
+/** A capability counts as coverage only if Tauri compiles it. Fixtures without the field are enabled. */
+export function isEnabled(capability) {
+  return capability.enabled !== false;
 }
 
 /** Whether `label` matches a Tauri window pattern using this gate's `*` subset. */
@@ -243,22 +294,33 @@ export function builderSites(root = REPO_ROOT) {
   return sites;
 }
 
-/** Return every coverage, stale-config, stale-exemption, and opaque-builder violation. */
+/** Return every coverage, stale-config, stale-exemption, opaque-builder, and disabled-file violation. */
 export function violations({ labels = [], capabilities = [], builders = [], exempt = {} }) {
   const found = [];
   const known = [...new Set(labels.map(({ label }) => label))];
+  const enabled = capabilities.filter(isEnabled);
 
-  // Rule A. KNEG-168: a label absent from every capability receives no events.
+  // Rule A. KNEG-168: a label absent from every enabled capability receives no events.
   for (const label of known) {
     if (Object.hasOwn(exempt, label)) continue;
-    if (capabilities.some((capability) => capability.windows.some((pattern) => matchesWindowPattern(pattern, label)))) {
+    if (enabled.some((capability) => capability.windows.some((pattern) => matchesWindowPattern(pattern, label)))) {
       continue;
     }
     const sources = [...new Set(labels.filter((item) => item.label === label).map((item) => item.source))].join(", ");
     found.push({
       rule: "A. created window is covered by no capability",
       subject: label,
-      detail: `declared by ${sources} and matched by no capability windows list. Add it to a tracked capability, or exempt it in ${MANIFEST} with a reason if it intentionally has no Tauri permissions.`,
+      detail: `declared by ${sources} and matched by no enabled capability windows list. Add it to a tracked capability that security.capabilities enables, or exempt it in ${MANIFEST} with a reason if it intentionally has no Tauri permissions.`,
+    });
+  }
+
+  // Rule E. KNEG-171: a capability file the allow-list does not name is never compiled into the ACL.
+  for (const capability of capabilities) {
+    if (isEnabled(capability)) continue;
+    found.push({
+      rule: "E. capability file is not enabled by security.capabilities",
+      subject: capability.identifier,
+      detail: `${capability.file} exists, but tauri.conf.json security.capabilities does not name ${JSON.stringify(capability.identifier)}, so Tauri never loads it and the windows it lists (${capability.windows.join(", ") || "none"}) get nothing from it. Add the identifier to security.capabilities, or remove that list so every file in ${CAPABILITIES} is enabled.`,
     });
   }
 
@@ -329,12 +391,13 @@ function main() {
   }
 
   const sources = new Set(input.labels.map(({ source }) => source));
+  const enabled = input.capabilities.filter(isEnabled);
   console.log(
     `window capabilities OK — ${input.labels.length} label(s) from ${sources.size} source(s), ` +
-      `${input.capabilities.length} capability file(s) read`
+      `${input.capabilities.length} capability file(s) read, ${enabled.length} enabled by security.capabilities`
   );
   for (const label of [...new Set(input.labels.map(({ label }) => label))]) {
-    const covering = input.capabilities
+    const covering = enabled
       .filter((capability) => capability.windows.some((pattern) => matchesWindowPattern(pattern, label)))
       .map((capability) => capability.identifier);
     if (Object.hasOwn(input.exempt, label)) console.log(`  ${label.padEnd(16)} exempt — ${input.exempt[label]}`);

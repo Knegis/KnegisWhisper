@@ -12,6 +12,35 @@ maintained in place rather than appended to, because its purpose is to be curren
 
 ---
 
+## 2026-09-07 (latest) — KNEG-171: the fix was one word, the lesson is the gate
+
+`security.capabilities: ["default"]` had sat in `tauri.conf.json` since the shell landed on
+2026-08-25 (`7a5a348`), when `default.json` was the only capability file. KNEG-168 added
+`notifications.json` on 2026-09-04 and left the list alone. Tauri treats a non-empty list as an
+allow-list (`tauri-utils 2.9.3`, `acl/mod.rs`, `get_capabilities`), so the new file was parsed,
+written into `gen/schemas/capabilities.json` — which is why that file looked like proof — and never
+compiled into the ACL. The fix adds `"notifications"` to the list. Keeping the list rather than
+deleting it was a choice: an explicit list is a second place where a reviewer sees which windows may
+do what, and with rule E it can no longer drift from the directory.
+
+**Why a gate and not a comment.** Rule E in `tools/capability-audit/scan.mjs` fails when a
+capability file is not enabled by the list, and rule A now counts only enabled capabilities. Run
+against the unfixed tree it named the defect exactly; the same gate had passed that tree for three
+days because it read the files and not the list. The general form is worth stating: a gate that
+checks an artifact exists must also check the switch that decides whether the artifact is used.
+
+**What the panel showed once it could hear.** Recording state, clock, Stop and caption all rendered
+on the first real recording — KNEG-163's fill fix, KNEG-164's read-back and KNEG-165's caption
+running in their own window for the first time. Two things were wrong that nobody could have seen
+before: the second line stays `starting…` for the whole recording because `sources` is read once at
+mount and never again (KNEG-172), and the caption shows the head of a partial that this provider
+grows to 230 characters, so the live edge sits behind an ellipsis (KNEG-173).
+
+**Small measured facts.** `tauri dev` rebuilds and relaunches on a `tauri.conf.json` change in about
+50 s, and the WebView2 debugging port survives the relaunch. CDP `Emulation.setEmulatedMedia` does
+change `prefers-color-scheme` inside a WebView2 webview. `tauri dev`'s `Running` line carries ANSI
+colour codes between the word and the backtick — strip them before grepping for it.
+
 ## 2026-09-07 (later) — KNEG-60, KNEG-161, KNEG-166: instruments instead of eyes, and an inert fix
 
 Three "by hand" issues were closed or advanced by building instruments rather than by looking,

@@ -6,6 +6,65 @@ that 787 passing tests had all missed**, and the one on 2026-08-26 found three m
 
 Maintained in place. When something here becomes false, edit it.
 
+## 2026-09-07 (latest) — KNEG-171: one word in an allow-list, and the panel seen for the first time
+
+Fixed and measured on `dev` after `bf85e18`, same machine and settings as the section below.
+`tauri dev` noticed the `tauri.conf.json` change, rebuilt in 50 s and relaunched the application
+with the debugging port still open, so the same instrument could be pointed at the fixed build.
+
+### Verified
+
+- **The root cause, from two directions.** `tauri-utils 2.9.3`'s `get_capabilities` (`acl/mod.rs`,
+  read in the cargo registry) treats a non-empty `security.capabilities` as an allow-list and
+  includes only the identifiers it names. From inside the running application's `#meeting` webview,
+  `plugin:event|listen` was refused before the change — `allowed on: main, overlay … referenced by:
+  capability: default` — and accepted after it (`OK id=18`; `#update` `OK id=19`; `main` unchanged).
+  The fix is the one word `"notifications"` added to that list.
+- **The gate reads the list now.** `tools/capability-audit/scan.mjs` rule E fails a capability file
+  the allow-list does not name, and rule A counts only enabled capabilities as coverage. Against the
+  unfixed tree it reported three violations — A: `meeting`, `update`; E: `notifications` — and
+  after the one-word change `OK … 2 capability file(s) read, 2 enabled by security.capabilities`.
+  Self-tests 10 of 10, including a KNEG-171 regression case and the real tree's enabled flags.
+- **KNEG-166 items 1, 2, 3 and 6 — the panel renders during a real recording.** Same route as
+  below (`tools/visual-check/app-windows.mjs`, `local-streaming` from `Settings > Meetings` through
+  the real controls, Windows TTS through the speakers):
+  1. `div.notify.notify-recording` from the first sample: red inset edge, pulsing red dot,
+     `RECORDING 0:00` counting every second to `1:00` (60 clock transitions), a `Stop` button.
+     94 DOM samples, none empty.
+  2. The caption appeared under 4 s after speech began and changed 45 times in 60 s — 36 times
+     extending the current utterance, 8 times replaced at an utterance boundary: replacing, not
+     accumulating, across segments. Legible at 13px in the 2× screenshots. Whether ~39 characters
+     is enough is finding 2.
+  3. Stop: `finishing` at 22:46:42.6, `idle` and `IsWindowVisible` false at 22:46:55.0 (12.4 s);
+     "Saved as note 28 (2 min)" with the recording's path on the Meetings screen. The panel's
+     *Transcribing* text during those 12 s was not sampled.
+  6. `Emulation.setEmulatedMedia` does flip `matchMedia('(prefers-color-scheme: …)')` inside the
+     WebView2 webview (checked both ways), and the light and dark screenshots are still identical
+     because `.notify`'s colours are hard-coded and do not follow the scheme — KNEG-165's deliberate
+     choice. This machine runs in light mode, so every default screenshot here is light-mode
+     evidence. Nothing white anywhere.
+
+### Findings
+
+1. **The second line reads `starting…` for the whole recording — KNEG-172.** All 94 samples, up to
+   `Recording 1:00`, while microphone and system audio were both live and `whoIsRecorded` should
+   have said "you and everyone else". Read from `MeetingNotification.tsx`: `sources` is set only by
+   the mount-time `getMeetingStatus()` read, which ran while idle, and the `meeting-state` event
+   does not carry sources — so the panel never learns what it is recording.
+2. **The caption clips its newest words — KNEG-173.** The local streaming provider's partial for one
+   utterance grows to 230 characters over about 12 s; `.notify-live` is `nowrap` with an end
+   ellipsis, so `app-02-caption-3.png` shows a 50-character partial as `This is a test of the
+   meeting notificati…`, and by the DOM record six partials from `0:11` to `0:16` and eight from
+   `0:40` to `0:47` shared their first 42 characters — the visible line cannot have changed while
+   they arrived. The head is shown; the live edge is hidden. Answers KNEG-165's open question: ~39
+   characters are enough for a short utterance and not for this provider's segment granularity.
+
+### Still unchecked, and needs a person at the machine
+
+- KNEG-166 item 4 (a real Teams call and the offer panel) and item 5 (the failure states), plus a
+  person's eyes on the 2× screenshots the tool writes.
+- The *Transcribing* panel during `finishing`, which the instrument does not sample.
+
 ## 2026-09-07 (later) — three instruments, two closures, one live indicator failure
 
 Run through the Codex orchestrator against `dev` at `080b3a3` (run `20260907-kneg60-161`). The
@@ -71,7 +130,9 @@ route `tools/visual-check/README.md` documents.
    `security.capabilities: ["default"]`, which by Tauri's own schema makes the listed capabilities
    the only ones enabled. KNEG-168's `capabilities/notifications.json` landed and is inert, and
    `tools/capability-audit/scan.mjs` passes because it reads the files, not the allow-list. The
-   indicator rule at the top of `MeetingNotification.tsx` is not met today.
+   indicator rule at the top of `MeetingNotification.tsx` was not met — **fixed the same evening**;
+   the section above has the one-word change, the gate that now reads the list, and the first
+   recording during which the panel rendered.
 2. **KNEG-160's pixel claims assumed a 16px rem.** Measured: 952px of content at 1920, not 1088;
    803px at 1000, not 728. The design holds; the numbers were wrong.
 3. **Desktop Duplication's first frame is not a desktop image** when nothing has been presented
@@ -83,9 +144,8 @@ route `tools/visual-check/README.md` documents.
 
 ### Still unchecked, and needs a person at the machine
 
-- KNEG-166 item 4 (a real Teams call and the offer panel) and item 5 (the failure states) — and
-  items 1, 2, 3 and 6 again once KNEG-171 lands, because nothing about the panel's rendering has
-  been seen yet.
+- KNEG-166 item 4 (a real Teams call and the offer panel) and item 5 (the failure states). Items
+  1, 2, 3 and 6 were re-run the same evening, after KNEG-171 — the section above.
 - KNEG-161 item 7's error-boundary route, and the same eight claims in the Tauri window itself.
 - KNEG-60 against a recorder that is not one of these three APIs, and on any other Windows build.
 
