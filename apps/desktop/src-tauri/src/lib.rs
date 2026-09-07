@@ -28,6 +28,7 @@ mod local_asr;
 mod local_llm;
 mod local_model;
 mod media;
+mod media_job;
 mod meeting;
 mod meeting_window;
 mod overlay;
@@ -461,6 +462,7 @@ pub fn run() -> anyhow::Result<()> {
             local_llm::local_llm_recheck_model,
             local_llm::local_llm_refresh_server,
             media::media_import_status,
+            media::media_import_snapshot,
             media::media_import_install_sidecar,
             media::media_import_audio,
             media::media_import_video,

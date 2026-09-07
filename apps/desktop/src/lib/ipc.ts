@@ -80,6 +80,7 @@ import type {
   McpStatus,
   MediaImportProgress,
   MediaImportResult,
+  ImportSnapshot,
   MediaImportSource,
   MediaSidecar,
   MeetingOutcome,
@@ -195,6 +196,7 @@ export type {
   McpStatus,
   MediaImportProgress,
   MediaImportResult,
+  ImportSnapshot,
   MediaImportSource,
   MediaSidecar,
   MeetingOutcome,
@@ -1250,4 +1252,8 @@ export async function setCalendarSelected(
   selected: boolean,
 ): Promise<void> {
   return invoke("calendar_set_selected", { provider, calendarId, selected });
+}
+
+export function getMediaImportSnapshot(): Promise<ImportSnapshot | null> {
+  return invoke<ImportSnapshot | null>("media_import_snapshot");
 }

@@ -1695,10 +1695,9 @@ export type ImportedSegment = { text: string,
 timestamp: number, endTimestamp: number, };
 
 /**
- * What a finished import produced. The frontend turns this into a note; this
- * module does not write one itself.
+ * A committed imported note, its recording, and the transcription result.
  */
-export type MediaImportResult = { text: string, provider: string, model: string | null,
+export type MediaImportResult = { noteId: number, recording: NoteRecording, retainedBytes: number, text: string, provider: string, model: string | null,
 /**
  * The transcript divided into timed utterances, when the engine timed it.
  *
@@ -1725,7 +1724,11 @@ durationMs: number, source: MediaImportSource, };
  * in the generated TypeScript. `ipc_types` asserts against exactly that
  * collision.
  */
-export type MediaImportProgress = { "stage": "downloading", sidecar: string, written: number, total: number | null, } | { "stage": "verifying" } | { "stage": "extracting" } | { "stage": "fetching" } | { "stage": "converting" } | { "stage": "transcribing" } | { "stage": "done" };
+export type MediaImportProgress = { "stage": "downloading", sidecar: string, written: number, total: number | null, } | { "stage": "verifying" } | { "stage": "extracting" } | { "stage": "fetching" } | { "stage": "done" };
+
+export type ImportStage = "preparing" | "converting" | "transcribing" | "saving" | "succeeded" | "failed";
+
+export type ImportSnapshot = { operationId: string, stage: ImportStage, elapsedSeconds: number, provider: string | null, model: string | null, result: MediaImportResult | null, error: string | null, };
 
 /* ---------------------------------------------------------------- updater */
 /**
