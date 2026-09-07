@@ -39,6 +39,7 @@ pub fn mcp_binary_name() -> String {
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct CliStatus {
+    pub blocked_reason: Option<String>,
     /// The binary's name on this platform, e.g. `knegiswhisper.exe`.
     pub binary_name: String,
     /// Where this actually found it, if anywhere.
@@ -68,6 +69,7 @@ pub fn cli_status(api: State<'_, Arc<LocalApiRuntime>>) -> CliStatus {
         binary_location: locate_default(&cli_binary_name()),
         discovery_path: api.discovery_path().display().to_string(),
         local_api_running: api.is_running(),
+        blocked_reason: api.blocked_reason(),
         discovery_permissions: permissions.as_ref().map(DiscoveryPermissions::from),
     }
 }
@@ -76,6 +78,7 @@ pub fn cli_status(api: State<'_, Arc<LocalApiRuntime>>) -> CliStatus {
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct McpStatus {
+    pub blocked_reason: Option<String>,
     /// The binary's name on this platform, e.g. `knegiswhisper-mcp.exe`.
     pub binary_name: String,
     /// Where this actually found it, if anywhere.
@@ -117,6 +120,7 @@ pub fn mcp_status(api: State<'_, Arc<LocalApiRuntime>>) -> McpStatus {
         command,
         discovery_path: api.discovery_path().display().to_string(),
         local_api_running: api.is_running(),
+        blocked_reason: api.blocked_reason(),
         discovery_permissions: permissions.as_ref().map(DiscoveryPermissions::from),
     }
 }

@@ -1541,7 +1541,7 @@ count: number, } | { "state": "still-inheriting" } | { "state": "grants-everyone
 /**
  * What the settings screen shows about the local API.
  */
-export type LocalApiStatus = {
+export type LocalApiStatus = { blockedReason: string | null,
 /**
  * Whether the user has switched it on.
  */
@@ -1588,7 +1588,7 @@ export type BinaryLocation = { "state": "sibling", path: string, } | { "state": 
 /**
  * What `Integrations > CLI` shows.
  */
-export type CliStatus = {
+export type CliStatus = { blockedReason: string | null,
 /**
  * The binary's name on this platform, e.g. `knegiswhisper.exe`.
  */
@@ -1617,7 +1617,7 @@ discoveryPermissions: DiscoveryPermissions | null, };
 /**
  * What `Integrations > MCP` shows.
  */
-export type McpStatus = {
+export type McpStatus = { blockedReason: string | null,
 /**
  * The binary's name on this platform, e.g. `knegiswhisper-mcp.exe`.
  */

@@ -35,7 +35,10 @@ const BIND_ATTEMPTS: u32 = 5;
 
 /// The running server, if there is one.
 pub struct LocalApiRuntime {
+    operation: tokio::sync::Mutex<()>,
     db: Db,
+    guard: std::sync::Mutex<Option<Arc<discovery::AccessGuard>>>,
+    blocked_reason: std::sync::Mutex<Option<String>>,
     served: tokio::sync::Mutex<Option<Served>>,
     /// Whether there is a discovery file on disk for this runtime.
     ///
@@ -80,7 +83,10 @@ impl LocalApiRuntime {
     #[must_use]
     pub fn with_discovery_path(db: Db, discovery_path: std::path::PathBuf) -> Self {
         Self {
+            operation: tokio::sync::Mutex::new(()),
             db,
+            guard: std::sync::Mutex::new(None),
+            blocked_reason: std::sync::Mutex::new(None),
             served: tokio::sync::Mutex::new(None),
             discovery_written: std::sync::atomic::AtomicBool::new(false),
             discovery_path,
@@ -110,10 +116,32 @@ impl LocalApiRuntime {
 
     /// Start the server and write the discovery file.
     pub async fn start(&self) -> Result<u16, String> {
+        let _operation = self.operation.lock().await;
+        let result = self.start_inner().await;
+        *self
+            .blocked_reason
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = result.as_ref().err().cloned();
+        result
+    }
+
+    async fn start_inner(&self) -> Result<u16, String> {
         let mut held = self.served.lock().await;
-        if let Some(existing) = held.as_ref() {
-            return Ok(existing.port());
+        if self.is_running() {
+            if let Some(existing) = held.as_ref() {
+                return Ok(existing.port());
+            }
         }
+        if let Some(stale) = held.take() {
+            stale.shutdown().await;
+        }
+        self.discovery_written
+            .store(false, std::sync::atomic::Ordering::Release);
+
+        *self
+            .guard
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
 
         let token = LocalApiToken::generate().map_err(|err| err.to_string())?;
 
@@ -149,34 +177,48 @@ impl LocalApiRuntime {
             }
         };
 
-        let served = serve(
-            listener,
-            ApiState::new(self.db.pool().clone(), token.clone()),
-        )
-        .map_err(|err| err.to_string())?;
-
-        let permissions =
-            discovery::write(&self.discovery_path, port, &token).map_err(|err| err.to_string())?;
-
-        // `is_confirmed()` and nothing else: it is the one place the checked /
-        // unchecked line is drawn, and both this warning and the two settings
-        // screens go through it so they cannot drift apart. It replaced
-        // `kw_local_api::Permissions::is_as_expected()`, which accepted
-        // `InheritedFromProfile` -- a platform default nothing had verified --
-        // and which no longer exists. See docs/BENCH_CHECK.md finding 2.
-        //
-        // On Windows this now goes quiet, because there is a mechanism there
-        // and it is read back. That is the point of the change, not a side
-        // effect of it: the warning was correct while the DACL was a no-op.
+        let path = self.discovery_path.clone();
+        let write_token = token.clone();
+        let permissions = match tokio::task::spawn_blocking(move || {
+            discovery::write(&path, port, &write_token)
+        })
+        .await
+        .map_err(|e| e.to_string())?
+        {
+            Ok(verdict) => verdict,
+            Err(discovery::DiscoveryError::Permissions { verdict }) => {
+                let error = verdict.explain();
+                *self
+                    .guard
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Arc::new(
+                    discovery::AccessGuard::new(self.discovery_path.clone(), verdict),
+                ));
+                return Err(format!("Local API permissions could not be secured: {error}. Correct the permissions and retry."));
+            }
+            Err(error) => return Err(error.to_string()),
+        };
         if !DiscoveryPermissions::from(&permissions).is_confirmed() {
-            // Worth a warning: the token is the whole access control, so a file
-            // that is not a verified restriction is a real weakening rather
-            // than a cosmetic detail.
-            tracing::warn!(
-                permissions = %permissions.explain(),
-                "the local API discovery file's permissions are not a verified restriction"
-            );
+            return Err("Local API permission verification failed.".to_owned());
         }
+        let guard = Arc::new(discovery::AccessGuard::new(
+            self.discovery_path.clone(),
+            permissions,
+        ));
+        let served = match serve(
+            listener,
+            ApiState::new(self.db.pool().clone(), token).with_access_guard(Arc::clone(&guard)),
+        ) {
+            Ok(served) => served,
+            Err(error) => {
+                let _ = discovery::remove(&self.discovery_path);
+                return Err(error.to_string());
+            }
+        };
+        *self
+            .guard
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(guard);
 
         self.discovery_written
             .store(true, std::sync::atomic::Ordering::Release);
@@ -193,38 +235,49 @@ impl LocalApiRuntime {
         &self.discovery_path
     }
 
-    /// The discovery file's permissions, **read now** rather than remembered.
-    ///
-    /// `None` once the API has stopped: the file is removed with it, so there
-    /// is nothing left to describe. That is what the `Option` means, and it is
-    /// all it means -- the value inside it is never older than this call.
-    ///
-    /// This used to return the verdict `discovery::write` produced at start,
-    /// which is a claim about the past rendered as a claim about the present.
-    /// Anything able to write to `~/.knegiswhisper` can widen the access list
-    /// after that moment, and both settings screens went on reporting the old
-    /// answer until the next launch (KNEG-110).
-    ///
-    /// **Cheap enough not to cache.** Two `stat` calls on Unix, two
-    /// `GetNamedSecurityInfoW` calls on Windows, on a path already in the
-    /// filesystem cache. Nothing polls it on a timer: `useRefresh` fetches when
-    /// a screen mounts and when something asks it to, so a cache would add a
-    /// staleness window to fix a cost nobody is paying.
+    /// Read live permissions while active; retain the failed verdict after
+    /// revocation so screens can explain a stopped API. Explicit Stop clears it.
     pub(crate) fn permissions_now(&self) -> Option<Permissions> {
-        self.is_running()
-            .then(|| discovery::inspect(&self.discovery_path))
+        let guard = self
+            .guard
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        guard.as_ref().map(|guard| {
+            if guard.is_active() {
+                discovery::inspect(&self.discovery_path)
+            } else {
+                guard.verdict()
+            }
+        })
     }
 
-    /// Whether the discovery file is on disk, which is to say whether the API
-    /// is running.
-    ///
-    /// Its own method because two screens ask exactly this and used to ask it
-    /// as `permissions_snapshot().is_some()` -- reading a permission verdict to
-    /// learn something that is not about permissions. That idiom is what made
-    /// the staleness above easy to miss.
+    /// A published discovery file and a token that has not been revoked.
     pub(crate) fn is_running(&self) -> bool {
         self.discovery_written
             .load(std::sync::atomic::Ordering::Acquire)
+            && self
+                .guard
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .as_ref()
+                .is_some_and(|guard| guard.is_active())
+    }
+
+    pub(crate) fn blocked_reason(&self) -> Option<String> {
+        if let Some(guard) = self
+            .guard
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+        {
+            if !guard.is_active() {
+                return Some(format!("Local API access was revoked: {} Retry to create a new token after permissions are secured.", guard.verdict().explain()));
+            }
+        }
+        self.blocked_reason
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     /// Stop the server and remove the discovery file.
@@ -232,6 +285,7 @@ impl LocalApiRuntime {
     /// The file goes with the server: a leftover sends the next client at a port
     /// nothing is listening on, with a token nothing accepts.
     pub async fn stop(&self) {
+        let _operation = self.operation.lock().await;
         let mut held = self.served.lock().await;
         if let Some(served) = held.take() {
             served.shutdown().await;
@@ -243,6 +297,14 @@ impl LocalApiRuntime {
 
         self.discovery_written
             .store(false, std::sync::atomic::Ordering::Release);
+        *self
+            .guard
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+        *self
+            .blocked_reason
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
     }
 }
 
@@ -366,6 +428,7 @@ impl DiscoveryPermissions {
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct LocalApiStatus {
+    pub blocked_reason: Option<String>,
     /// Whether the user has switched it on.
     pub enabled: bool,
     /// Whether it is listening right now.
@@ -399,12 +462,19 @@ pub async fn local_api_status(
         .await
         .unwrap_or(ENABLED_BY_DEFAULT);
 
-    let port = api.served.lock().await.as_ref().map(Served::port);
+    let port = api
+        .served
+        .lock()
+        .await
+        .as_ref()
+        .filter(|_| api.is_running())
+        .map(Served::port);
     let permissions = api.permissions_now();
 
     Ok(LocalApiStatus {
         enabled,
-        running: port.is_some(),
+        running: api.is_running(),
+        blocked_reason: api.blocked_reason(),
         port,
         discovery_path: port.map(|_| api.discovery_path.display().to_string()),
         discovery_permissions: permissions.as_ref().map(DiscoveryPermissions::from),
@@ -456,6 +526,73 @@ mod tests {
             db,
             dir,
         )
+    }
+
+    #[tokio::test]
+    async fn permission_monitor_revokes_without_waiting_for_a_client_request() {
+        let (api, _db, _dir) = runtime().await;
+        api.start().await.unwrap();
+        discovery::remove(&api.discovery_path).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(8), async {
+            while api.is_running() {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(api.blocked_reason().is_some());
+        api.stop().await;
+    }
+
+    #[tokio::test]
+    async fn revoked_token_cannot_be_reused_after_explicit_retry() {
+        let (api, _db, _dir) = runtime().await;
+        let port = api.start().await.unwrap();
+        let (_, old_token) = discovery::read(&api.discovery_path).unwrap();
+        discovery::remove(&api.discovery_path).unwrap();
+        let client = reqwest::Client::new();
+        let response = client
+            .get(format!("http://127.0.0.1:{port}/v1/health"))
+            .bearer_auth(old_token.expose())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::UNAUTHORIZED);
+        assert!(!api.is_running());
+        assert!(api.blocked_reason().is_some());
+        let port = api.start().await.unwrap();
+        let (_, new_token) = discovery::read(&api.discovery_path).unwrap();
+        assert_ne!(old_token.expose(), new_token.expose());
+        let url = format!("http://127.0.0.1:{port}/v1/health");
+        assert_eq!(
+            client
+                .get(&url)
+                .bearer_auth(old_token.expose())
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            reqwest::StatusCode::UNAUTHORIZED
+        );
+        assert!(client
+            .get(&url)
+            .bearer_auth(new_token.expose())
+            .send()
+            .await
+            .unwrap()
+            .status()
+            .is_success());
+        api.stop().await;
+    }
+
+    #[tokio::test]
+    async fn failed_start_has_a_visible_reason_and_no_listener() {
+        let (api, _db, _dir) = runtime().await;
+        std::fs::create_dir(&api.discovery_path).unwrap();
+        assert!(api.start().await.is_err());
+        assert!(!api.is_running());
+        assert!(api.served.lock().await.is_none());
+        assert!(api.blocked_reason().is_some());
     }
 
     #[tokio::test]

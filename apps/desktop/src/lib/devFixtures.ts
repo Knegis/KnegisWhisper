@@ -868,6 +868,7 @@ const LOCAL_LLM: LocalLlmStatus = {
 };
 
 const LOCAL_API: LocalApiStatus = {
+  blockedReason: null,
   enabled: true,
   running: true,
   port: 8749,
@@ -882,6 +883,7 @@ const LOCAL_API: LocalApiStatus = {
 /* ------------------------------------------------------ cli, mcp and import */
 
 const CLI: CliStatus = {
+  blockedReason: null,
   binaryName: "knegiswhisper.exe",
   binaryLocation: {
     state: "sibling",
@@ -897,6 +899,7 @@ const CLI: CliStatus = {
 };
 
 const MCP: McpStatus = {
+  blockedReason: null,
   binaryName: "knegiswhisper-mcp.exe",
   /* Not found on purpose: the screen has a sentence for a binary it cannot
    * locate, and a fixture that always finds one never shows it. */

@@ -38,15 +38,24 @@ use crate::API_VERSION;
 pub struct ApiState {
     pool: SqlitePool,
     token: LocalApiToken,
+    guard: Option<std::sync::Arc<crate::discovery::AccessGuard>>,
     recording_directory: std::path::PathBuf,
 }
 
 impl ApiState {
+    pub fn with_access_guard(
+        mut self,
+        guard: std::sync::Arc<crate::discovery::AccessGuard>,
+    ) -> Self {
+        self.guard = Some(guard);
+        self
+    }
     #[must_use]
     pub fn new(pool: SqlitePool, token: LocalApiToken) -> Self {
         Self {
             pool,
             token,
+            guard: None,
             recording_directory: kw_notes_core::recordings::recording_dir(),
         }
     }
@@ -114,11 +123,25 @@ pub fn serve(listener: TcpListener, state: ApiState) -> Result<Served, ServeErro
     let port = address.port();
     let (shutdown, shutdown_rx) = oneshot::channel();
 
+    let guard = state.guard.clone();
     let app = router(state);
 
     let task = tokio::spawn(async move {
         let served = axum::serve(listener, app).with_graceful_shutdown(async move {
-            let _ = shutdown_rx.await;
+            if let Some(guard) = guard {
+                tokio::pin!(shutdown_rx);
+                loop {
+                    tokio::select! {
+                        _ = &mut shutdown_rx => break,
+                        _ = guard.changed.notified() => {},
+                        _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => { guard.check().await; }
+                    }
+                    if !guard.is_active() {
+                        guard.repair_and_remove().await;
+                        break;
+                    }
+                }
+            } else { let _ = shutdown_rx.await; }
         });
         if let Err(err) = served.await {
             tracing::error!(error = %err, "the local API stopped unexpectedly");
@@ -180,6 +203,15 @@ async fn authenticate(
             .into_response();
     }
 
+    if let Some(guard) = &state.guard {
+        if !guard.check().await {
+            return ApiError::new(
+                ErrorCode::Unauthorized,
+                "local API access was revoked; retry from Settings",
+            )
+            .into_response();
+        }
+    }
     next.run(request).await
 }
 

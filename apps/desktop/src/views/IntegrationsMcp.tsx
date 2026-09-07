@@ -52,6 +52,8 @@ export function IntegrationsMcp() {
     <div className="view">
       {error ? <p className="error">{error}</p> : null}
 
+      {status.blockedReason ? <p className="error" role="alert">{status.blockedReason}</p> : null}
+
       <section data-surface="integrations.mcp">
         <h2>MCP</h2>
         <p className="muted">
