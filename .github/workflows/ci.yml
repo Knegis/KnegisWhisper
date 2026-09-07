@@ -1,16 +1,12 @@
 name: CI
 
-# DISABLED BY BUDGET, NOT BY DEFAULT. The push and pull_request triggers below
-# are commented out because this project is nearly out of GitHub Actions
-# minutes -- running the full matrix on every push would exhaust them. Axel
-# Karlsson (repo owner) decides when that changes. Restore CI by uncommenting
-# the two blocks below once the Actions budget resets or is increased -- do
-# not leave this "temporary" state undated or unowned.
+# Selective PR checks; the full platform matrix remains an explicit manual run.
 on:
-  # push:
-  #   branches: [main, dev]
-  # pull_request:
+  pull_request:
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -21,6 +17,26 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    name: Select checks
+    runs-on: ubuntu-latest
+    outputs:
+      frontend: ${{ steps.paths.outputs.frontend }}
+      windows: ${{ steps.paths.outputs.windows }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - id: paths
+        if: github.event_name == 'pull_request'
+        env:
+          KW_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          KW_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node tools/ci/changes.mjs
+
   # Repository contracts. Cheap, no toolchain, and the most likely thing to
   # catch a real regression -- so it runs first and gates the rest.
   contracts:
@@ -31,6 +47,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+
+      - name: CI selection tests
+        run: node --test tools/ci/changes.test.mjs
 
       - name: Integration parity
         run: node tools/integration-audit/verify-parity.mjs
@@ -127,6 +146,8 @@ jobs:
           '
 
   frontend:
+    needs: [changes, contracts]
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.frontend == 'true'
     name: Frontend
     runs-on: ubuntu-latest
     steps:
@@ -142,6 +163,10 @@ jobs:
 
       - name: Typecheck
         run: npx tsc --noEmit
+        working-directory: apps/desktop
+
+      - name: TypeScript tests
+        run: npm test
         working-directory: apps/desktop
 
       - name: Build
@@ -162,12 +187,14 @@ jobs:
         run: node tools/dev-bundle-audit/scan.mjs
 
   rust:
+    needs: [changes, contracts]
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.windows == 'true'
     name: Rust (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest, ubuntu-latest]
+        os: ${{ fromJSON(github.event_name == 'workflow_dispatch' && '["windows-latest","macos-latest","ubuntu-latest"]' || '["windows-latest"]') }}
     steps:
       - uses: actions/checkout@v4
 
