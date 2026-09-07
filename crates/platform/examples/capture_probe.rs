@@ -753,10 +753,12 @@ mod probe {
     }
 
     fn classify_fill(crop: &Crop, expected: Fill) -> Reading {
-        let pixel_count = crop.bgra.chunks_exact(4).len();
+        let pixel_count = crop.bgra.as_chunks::<4>().0.iter().len();
         let matching = crop
             .bgra
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .filter(|pixel| {
                 channel_close(pixel.first().copied(), expected.b)
                     && channel_close(pixel.get(1).copied(), expected.g)
@@ -792,7 +794,7 @@ mod probe {
 
     fn dominant_colour(crop: &Crop) -> Fill {
         let mut counts = HashMap::<u16, usize>::new();
-        for pixel in crop.bgra.chunks_exact(4) {
+        for pixel in crop.bgra.as_chunks::<4>().0.iter() {
             let Some(&b) = pixel.first() else { continue };
             let Some(&g) = pixel.get(1) else { continue };
             let Some(&r) = pixel.get(2) else { continue };
@@ -803,7 +805,7 @@ mod probe {
             .into_iter()
             .max_by_key(|(_, count)| *count)
             .map_or(0, |(key, _)| key);
-        let (red, green, blue, count) = crop.bgra.chunks_exact(4).fold(
+        let (red, green, blue, count) = crop.bgra.as_chunks::<4>().0.iter().fold(
             (0_u64, 0_u64, 0_u64, 0_u64),
             |(red, green, blue, count), pixel| {
                 let b = pixel.first().copied().unwrap_or(0);
@@ -823,9 +825,8 @@ mod probe {
                 }
             },
         );
-        let average = |sum: u64| -> u8 {
-            u8::try_from(if count == 0 { 0 } else { sum / count }).unwrap_or(0)
-        };
+        let average =
+            |sum: u64| -> u8 { u8::try_from(sum.checked_div(count).unwrap_or(0)).unwrap_or(0) };
         Fill {
             r: average(red),
             g: average(green),
@@ -843,8 +844,10 @@ mod probe {
         }
         let total_difference: u64 = crop
             .bgra
-            .chunks_exact(4)
-            .zip(reference.bgra.chunks_exact(4))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(reference.bgra.as_chunks::<4>().0.iter())
             .map(|(actual, expected)| {
                 actual
                     .iter()
@@ -876,11 +879,13 @@ mod probe {
     }
 
     fn is_single_flat_colour(crop: &Crop) -> bool {
-        let Some(first) = crop.bgra.chunks_exact(4).next() else {
+        let Some(first) = crop.bgra.as_chunks::<4>().0.iter().next() else {
             return true;
         };
         crop.bgra
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .all(|pixel| pixel.iter().take(3).eq(first.iter().take(3)))
     }
 
@@ -1735,7 +1740,7 @@ mod probe {
             .checked_mul(4)
             .ok_or_else(|| "crop stride overflow".to_owned())?;
         for row in crop.bgra.chunks_exact(source_stride).rev() {
-            for pixel in row.chunks_exact(4) {
+            for pixel in row.as_chunks::<4>().0.iter() {
                 let bgr = pixel
                     .get(..3)
                     .ok_or_else(|| "short BGRA pixel".to_owned())?;

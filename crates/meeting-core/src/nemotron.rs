@@ -118,8 +118,10 @@ pub const FINISH_TIMEOUT: Duration = Duration::from_secs(60);
 /// that proves the test bites has to replace the whole expression.
 #[must_use]
 pub fn samples(pcm: &[u8]) -> Vec<f32> {
-    pcm.chunks_exact(2)
-        .filter_map(|pair| <[u8; 2]>::try_from(pair).ok())
+    pcm.as_chunks::<2>()
+        .0
+        .iter()
+        .copied()
         .map(|pair| f32::from(i16::from_le_bytes(pair)) / 32_768.0)
         .collect()
 }
