@@ -513,10 +513,6 @@ export function mediaImportProgressLabel(progress: MediaImportProgress): string 
       return "Unpacking…";
     case "fetching":
       return "Fetching the url…";
-    case "converting":
-      return "Converting…";
-    case "transcribing":
-      return "Transcribing…";
     case "done":
       return "Done.";
   }

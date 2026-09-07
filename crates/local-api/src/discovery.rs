@@ -35,7 +35,6 @@
 //!    descriptor, explicit entries and `SE_DACL_PROTECTED` included.
 
 use std::fs;
-use std::fs::File;
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -74,6 +73,8 @@ pub struct Discovery {
 /// Why the discovery file could not be written or read.
 #[derive(Debug, thiserror::Error)]
 pub enum DiscoveryError {
+    #[error("Local API permissions could not be secured: {verdict:?}. Correct the permissions and retry.")]
+    Permissions { verdict: Permissions },
     #[error(
         "could not work out where your home directory is, so there is nowhere to put {FILE_NAME}"
     )]
@@ -111,76 +112,158 @@ pub fn default_path() -> Result<PathBuf, DiscoveryError> {
 
 /// Write the discovery file, and report what permissions it ended up with.
 pub fn write(path: &Path, port: u16, token: &LocalApiToken) -> Result<Permissions, DiscoveryError> {
-    let parent = path.parent();
-    if let Some(parent) = parent {
-        fs::create_dir_all(parent).map_err(|source| DiscoveryError::Io {
-            action: "create",
-            path: parent.to_path_buf(),
-            source,
-        })?;
-        // Before the temporary exists, not after -- see this module's doc. A
-        // failure here is logged rather than returned: what the caller is told
-        // is the read-back at the end, and a directory that refused will show
-        // up there as the file refusing too, or as `DirectoryNotRestricted`.
-        // Returning an error instead would stop the local API starting over a
-        // permission problem the caller is about to be told about anyway.
-        if let Err(error) = file_acl::apply(parent, PathKind::Directory) {
+    write_with(path, port, token, repair_path)
+}
+
+fn write_with(
+    path: &Path,
+    port: u16,
+    token: &LocalApiToken,
+    secure: impl Fn(&Path, PathKind) -> Result<Permissions, DiscoveryError>,
+) -> Result<Permissions, DiscoveryError> {
+    use std::io::Write;
+    let parent = path.parent().ok_or(DiscoveryError::NoHomeDirectory)?;
+    let io_error = |action, source| DiscoveryError::Io {
+        action,
+        path: path.to_owned(),
+        source,
+    };
+    fs::create_dir_all(parent).map_err(|e| io_error("create directory", e))?;
+    secure(parent, PathKind::Directory)?;
+    let temporary = path.with_extension(format!("json.{}.new", uuid::Uuid::new_v4()));
+    let result = (|| {
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+            .map_err(|e| io_error("create temporary", e))?;
+        secure(&temporary, PathKind::File)?;
+        let body = serde_json::to_vec(&Discovery {
+            version: DISCOVERY_VERSION,
+            port,
+            token: token.expose().to_owned(),
+        })
+        .map_err(|e| io_error("encode", io::Error::other(e)))?;
+        file.write_all(&body).map_err(|e| io_error("write", e))?;
+        file.sync_all().map_err(|e| io_error("sync", e))?;
+        drop(file);
+        fs::rename(&temporary, path).map_err(|e| io_error("publish", e))?;
+        let verdict = inspect(path);
+        if !verdict.is_confirmed() {
+            let repaired = repair(path);
             tracing::warn!(
-                path = %parent.display(),
-                %error,
-                "could not restrict the directory holding the discovery file"
+                ?repaired,
+                "discovery permissions changed during publication; discarding token"
             );
+            let _ = remove(path);
+            return Err(DiscoveryError::Permissions { verdict });
+        }
+        Ok(verdict)
+    })();
+    if let Err(error) = fs::remove_file(&temporary) {
+        if error.kind() != io::ErrorKind::NotFound {
+            tracing::warn!(%error, "could not clean discovery temporary");
         }
     }
+    result
+}
 
-    let body = serde_json::to_string_pretty(&Discovery {
-        version: DISCOVERY_VERSION,
-        port,
-        token: token.expose().to_owned(),
+/// Apply the intended restriction, verify it, and allow one repair attempt.
+fn repair_path(path: &Path, kind: PathKind) -> Result<Permissions, DiscoveryError> {
+    repair_with(|| {
+        if let Err(error) = file_acl::apply(path, kind) {
+            tracing::warn!(%error, "could not apply discovery permissions");
+        }
+        file_acl::verify(path, kind)
     })
-    .map_err(|source| DiscoveryError::Io {
-        action: "encode",
-        path: path.to_path_buf(),
-        source: io::Error::other(source),
-    })?;
+}
 
-    // Written whole and replaced, rather than truncated in place: a client
-    // reading during a rewrite should see the old file or the new one, not half
-    // a token.
-    let temporary = path.with_extension("json.new");
-
-    // Created empty and restricted before the token goes into it. `fs::write`
-    // on its own would put the bytes on disk first; the window is short, but it
-    // is real, and on Unix the directory's `0700` does not close it because a
-    // process already inside the directory would still get a `0644` file.
-    drop(
-        File::create(&temporary).map_err(|source| DiscoveryError::Io {
-            action: "create",
-            path: temporary.clone(),
-            source,
-        })?,
-    );
-    if let Err(error) = file_acl::apply(&temporary, PathKind::File) {
-        tracing::warn!(
-            path = %temporary.display(),
-            %error,
-            "could not restrict the discovery file"
-        );
+fn repair_with(mut attempt: impl FnMut() -> Permissions) -> Result<Permissions, DiscoveryError> {
+    let mut verdict = attempt();
+    if !verdict.is_confirmed() {
+        verdict = attempt();
     }
+    if verdict.is_confirmed() {
+        Ok(verdict)
+    } else {
+        Err(DiscoveryError::Permissions { verdict })
+    }
+}
 
-    fs::write(&temporary, &body).map_err(|source| DiscoveryError::Io {
-        action: "write",
-        path: temporary.clone(),
-        source,
-    })?;
-    fs::rename(&temporary, path).map_err(|source| DiscoveryError::Io {
-        action: "move into place",
-        path: path.to_path_buf(),
-        source,
-    })?;
+/// Repair an exposed discovery pair once. The old token must already be revoked.
+pub fn repair(path: &Path) -> Permissions {
+    if let Some(parent) = path.parent() {
+        let _ = file_acl::apply(parent, PathKind::Directory);
+    }
+    let _ = file_acl::apply(path, PathKind::File);
+    inspect(path)
+}
 
-    // After the rename, against the path the caller is told about.
-    Ok(inspect(path))
+/// A token's lifetime ends permanently when its discovery permissions widen.
+#[derive(Debug)]
+pub struct AccessGuard {
+    path: PathBuf,
+    revoked: std::sync::atomic::AtomicBool,
+    verdict: std::sync::Mutex<Permissions>,
+    pub(crate) changed: tokio::sync::Notify,
+}
+impl AccessGuard {
+    pub fn new(path: PathBuf, verdict: Permissions) -> Self {
+        Self {
+            path,
+            revoked: std::sync::atomic::AtomicBool::new(!verdict.is_confirmed()),
+            verdict: std::sync::Mutex::new(verdict),
+            changed: tokio::sync::Notify::new(),
+        }
+    }
+    pub fn is_active(&self) -> bool {
+        !self.revoked.load(std::sync::atomic::Ordering::Acquire)
+    }
+    pub fn verdict(&self) -> Permissions {
+        self.verdict
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+    pub async fn check(self: &std::sync::Arc<Self>) -> bool {
+        if !self.is_active() {
+            return false;
+        }
+        let path = self.path.clone();
+        let verdict = tokio::task::spawn_blocking(move || inspect(&path))
+            .await
+            .unwrap_or_else(|e| Permissions::Unknown {
+                reason: e.to_string(),
+            });
+        let mut held = self
+            .verdict
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if self.is_active() {
+            let confirmed = verdict.is_confirmed();
+            *held = verdict;
+            if !confirmed {
+                self.revoked
+                    .store(true, std::sync::atomic::Ordering::Release);
+                self.changed.notify_one();
+            }
+        }
+        self.is_active()
+    }
+    pub(crate) async fn repair_and_remove(&self) {
+        let path = self.path.clone();
+        let _ = tokio::task::spawn_blocking(move || {
+            let verdict = repair(&path);
+            tracing::warn!(
+                ?verdict,
+                "local API token revoked; retry explicitly after permission repair"
+            );
+            if let Err(error) = remove(&path) {
+                tracing::warn!(%error, "could not remove revoked discovery file");
+            }
+        })
+        .await;
+    }
 }
 
 /// What the discovery file and the directory holding it grant, right now.
@@ -548,5 +631,98 @@ mod tests {
         // Not asserting an absolute path: this runs on three platforms.
         let path = default_path().expect("a home directory");
         assert!(path.ends_with(Path::new(DIRECTORY_NAME).join(FILE_NAME)));
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod enforcement_tests {
+    use super::*;
+    #[test]
+    fn unsecurable_empty_file_never_receives_token_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("local-api.json");
+        let result = write_with(
+            &path,
+            8200,
+            &LocalApiToken::generate().unwrap(),
+            |path, kind| {
+                if matches!(kind, PathKind::File) {
+                    assert_eq!(fs::metadata(path).unwrap().len(), 0);
+                    Err(DiscoveryError::Permissions {
+                        verdict: Permissions::Unknown {
+                            reason: "fixture read-back unavailable".to_owned(),
+                        },
+                    })
+                } else {
+                    repair_path(path, kind)
+                }
+            },
+        );
+        assert!(result.is_err());
+        assert!(!path.exists());
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 0);
+    }
+    #[test]
+    fn repair_is_bounded_and_unknown_is_never_accepted() {
+        let mut attempts = 0;
+        assert!(repair_with(|| {
+            attempts += 1;
+            Permissions::ExtraTrustees { count: 1 }
+        })
+        .is_err());
+        assert_eq!(attempts, 2);
+        let mut attempts = 0;
+        assert!(repair_with(|| {
+            attempts += 1;
+            if attempts == 1 {
+                Permissions::DirectoryNotRestricted
+            } else {
+                Permissions::OwnerOnly
+            }
+        })
+        .is_ok());
+        assert_eq!(attempts, 2);
+        assert!(repair_with(|| Permissions::InheritedFromProfile).is_err());
+    }
+
+    #[tokio::test]
+    async fn missing_discovery_revokes_permanently_even_after_repair() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("local-api.json");
+        let token = LocalApiToken::generate().unwrap();
+        let guard = std::sync::Arc::new(AccessGuard::new(
+            path.clone(),
+            write(&path, 8200, &token).unwrap(),
+        ));
+        assert!(guard.check().await);
+        remove(&path).unwrap();
+        assert!(!guard.check().await);
+        write(&path, 8200, &token).unwrap();
+        assert!(!guard.check().await);
+    }
+    #[cfg(windows)]
+    #[test]
+    fn explicit_extra_trustee_is_removed_by_existing_acl_application() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("local-api.json");
+        let token = LocalApiToken::generate().unwrap();
+        write(&path, 8200, &token).unwrap();
+        let status = std::process::Command::new("icacls")
+            .arg(dir.path())
+            .args(["/grant", "*S-1-1-0:(OI)(CI)(RX)"])
+            .output()
+            .unwrap();
+        assert!(status.status.success());
+        assert!(!inspect(&path).is_confirmed());
+        assert!(repair(&path).is_confirmed());
+    }
+    #[test]
+    fn failed_publication_removes_its_exclusively_created_temporary() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("local-api.json");
+        fs::create_dir(&path).unwrap();
+        assert!(write(&path, 8200, &LocalApiToken::generate().unwrap()).is_err());
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
     }
 }

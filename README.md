@@ -74,8 +74,9 @@ Requires Rust 1.90+, Node 22+, and a platform C toolchain.
 
 ```sh
 # Repository contracts — every check CI's Contracts job gates on, in its order.
-# This list is what actually runs: ci.yml has had its push and pull_request
-# triggers commented out by Actions budget, so nothing checks a pushed commit.
+# PRs run contracts plus relevant frontend and Windows checks.
+# The full Windows/macOS/Linux matrix runs only through workflow_dispatch.
+node --test tools/ci/changes.test.mjs                       # CI selection
 node tools/integration-audit/verify-parity.mjs               # integration parity
 node tools/settings-audit/scan.mjs                           # settings keys a user can reach
 node tools/integration-audit/verify-binaries.mjs             # binary name collisions
@@ -104,7 +105,12 @@ cargo test --workspace
 cargo test -p knegiswhisper --lib --features tauri-test
 
 # Frontend
-cd apps/desktop && npm ci && npx tsc --noEmit && npx vite build
+cd apps/desktop && npm ci && npm test && npx tsc --noEmit && npx vite build
+
+# Optional native recording-attachment smoke test (Windows, interactive).
+# Keep `npm run dev` running in apps/desktop; run this from the repository root.
+# Uses a disposable database and recordings directory. Close the window to finish.
+cargo test -p knegiswhisper --lib --features tauri-test native_recording_attachment_smoke -- --ignored --nocapture
 
 # Run the app
 cd apps/desktop && npx tauri dev
@@ -124,3 +130,19 @@ services.
 ## License
 
 MIT. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
+
+### Selective CI and recording safety (2026-09-05)
+
+Pull requests run Contracts, then frontend and Windows Rust checks when their inputs change. Frontend changes also select Windows because the desktop embeds the frontend. Documentation-only PRs run Contracts. Manual dispatch retains all three Rust platforms; automatic push, release and pin workflows were not enabled. Hosted-run evidence is still required after this workflow reaches GitHub.
+
+Modifier-only toggle shortcuts, including `Control+Super`, activate after all chord keys are released. Any additional key cancels the gesture. Hold mode and standard shortcuts retain their existing timing.
+
+Audio/video imports retain converted WAV audio for playback until their note is deleted. The source stays intact. The local API serves only after discovery permissions are verified; a widened ACL revokes its token and requires an explicit retry after repair.
+
+Optional Windows fixture pipeline check (installed ffmpeg and Whisper base model required):
+
+```sh
+cargo test -p knegiswhisper --lib --features tauri-test native_audio_video_import_pipeline -- --ignored --nocapture
+```
+
+This uses a temporary database, generated audio/video fixtures, and an isolated server. It verifies conversion, transcription, persistence, playback ranges and deletion; it does not listen through speakers or exercise a physical shortcut.

@@ -12,6 +12,7 @@
 
 import { useEffect, useState } from "react";
 
+import { LocalServerHealth } from "../components/LocalServerHealth";
 import { Row } from "../components/Row";
 import {
   checkForUpdate,
@@ -63,6 +64,7 @@ export function DiagnosticsView({ diagnostics }: { diagnostics: Diagnostics }) {
     // config/integration-manifest.json entries name, and no entry names this
     // screen. A marker for an undeclared surface would be a claim about nothing.
     <div className="view">
+      <LocalServerHealth />
       <section>
         <h2>Runtime</h2>
         <Row label="Version" value={diagnostics.appVersion} />

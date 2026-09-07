@@ -29,6 +29,10 @@
 //!    key of the set goes down, not when the first does — otherwise `Control`
 //!    alone would fire `Control+Super` on its way to being pressed.
 //!
+//! Toggle activation is a separate `Activated` event: all keys must be released
+//! and any intervening key cancels that candidate for the remainder of the gesture.
+//! The press/release rules above remain the hold-mode interface.
+//!
 //! # Two things that are not chords
 //!
 //! **A mouse button is not a modifier and is not a chord.** [`Chord::parse`]
@@ -657,6 +661,8 @@ pub enum Fired {
     /// Reported once per press, and only for a press that was reported: a
     /// release nobody could pair with a press is not an event.
     Released(usize),
+    /// An exact chord was released completely without another key intervening.
+    Activated(usize),
     /// Nothing.
     Nothing,
 }
@@ -686,6 +692,9 @@ pub struct ChordWatcher {
     /// letting go: the release would find nothing to pair with and the
     /// microphone would stay open.
     pressed: Option<usize>,
+    candidate: Option<usize>,
+    cancelled: BTreeSet<usize>,
+    gesture: BTreeSet<Key>,
 }
 
 impl ChordWatcher {
@@ -696,6 +705,9 @@ impl ChordWatcher {
             held: BTreeSet::new(),
             armed: None,
             pressed: None,
+            candidate: None,
+            cancelled: BTreeSet::new(),
+            gesture: BTreeSet::new(),
         }
     }
 
@@ -710,9 +722,14 @@ impl ChordWatcher {
     pub fn key_down(&mut self, key: Key) -> Fired {
         // A repeat of a key already held changes nothing. Windows sends these
         // continuously while a key is held.
-        if !self.held.insert(key) && self.armed.is_some() {
+        if !self.held.insert(key) {
             return Fired::Nothing;
         }
+        // A new key after an exact match contaminates this entire gesture.
+        if let Some(candidate) = self.candidate.take() {
+            self.cancelled.insert(candidate);
+        }
+        self.gesture.insert(key);
 
         // Rule 2, the other half: an ordinary key being down disqualifies every
         // modifier-only chord. Held rather than ignored, so the set is right
@@ -729,6 +746,9 @@ impl ChordWatcher {
                 }
                 self.armed = Some(index);
                 self.pressed = Some(index);
+                if !self.cancelled.contains(&index) && chord.satisfied_by(&self.gesture) {
+                    self.candidate = Some(index);
+                }
                 return Fired::Pressed(index);
             }
         }
@@ -744,6 +764,13 @@ impl ChordWatcher {
     /// key coming up when nothing was pressed is not one either.
     pub fn key_up(&mut self, key: Key) -> Fired {
         self.held.remove(&key);
+        let activated = if self.held.is_empty() {
+            self.gesture.clear();
+            self.cancelled.clear();
+            self.candidate.take()
+        } else {
+            None
+        };
         // Rule 1: releasing any key re-arms, so the next full press fires again.
         self.armed = None;
 
@@ -761,7 +788,7 @@ impl ChordWatcher {
             return index.map_or(Fired::Nothing, Fired::Released);
         }
 
-        Fired::Nothing
+        activated.map_or(Fired::Nothing, Fired::Activated)
     }
 
     /// Forget everything held.
@@ -778,6 +805,9 @@ impl ChordWatcher {
         self.held.clear();
         self.armed = None;
         self.pressed = None;
+        self.candidate = None;
+        self.cancelled.clear();
+        self.gesture.clear();
     }
 
     /// How many keys are currently held. For diagnostics.
@@ -904,6 +934,7 @@ impl HookWatcher {
         match fired {
             Fired::Pressed(index) => translate(index).map_or(Fired::Nothing, Fired::Pressed),
             Fired::Released(index) => translate(index).map_or(Fired::Nothing, Fired::Released),
+            Fired::Activated(index) => translate(index).map_or(Fired::Nothing, Fired::Activated),
             Fired::Nothing => Fired::Nothing,
         }
     }
@@ -1593,7 +1624,7 @@ mod tests {
         assert_eq!(w.key_up(Key::LeftSuper), Fired::Released(0));
         // The second key going up is not a second release: the chord stopped
         // being held once, not twice.
-        assert_eq!(w.key_up(Key::LeftControl), Fired::Nothing);
+        assert_eq!(w.key_up(Key::LeftControl), Fired::Activated(0));
     }
 
     /// Either key of the chord ends the hold, not only the last one pressed.
@@ -1702,5 +1733,83 @@ mod tests {
             }
         }
         assert_eq!(edges, vec![Fired::Pressed(0), Fired::Released(0)]);
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod release_activation_tests {
+    use super::*;
+    fn watcher(name: &str) -> ChordWatcher {
+        ChordWatcher::new(vec![Chord::parse(name).unwrap()])
+    }
+    #[test]
+    fn a_deliberately_bound_longer_modifier_chord_can_still_activate() {
+        let mut w = ChordWatcher::new(vec![
+            Chord::parse("Control+Super").unwrap(),
+            Chord::parse("Control+Super+Shift").unwrap(),
+        ]);
+        w.key_down(Key::LeftControl);
+        w.key_down(Key::LeftSuper);
+        w.key_down(Key::LeftShift);
+        w.key_up(Key::LeftShift);
+        w.key_up(Key::LeftSuper);
+        assert_eq!(w.key_up(Key::LeftControl), Fired::Activated(1));
+    }
+
+    #[test]
+    fn exact_gestures_activate_once_on_final_release() {
+        for name in ["Control+Super", "LeftControl+LeftSuper"] {
+            for (a, b) in [
+                (Key::LeftControl, Key::LeftSuper),
+                (Key::LeftSuper, Key::LeftControl),
+            ] {
+                let mut w = watcher(name);
+                for _ in 0..2 {
+                    assert_eq!(w.key_down(a), Fired::Nothing);
+                    assert_eq!(w.key_down(b), Fired::Pressed(0));
+                    assert_eq!(w.key_down(b), Fired::Nothing);
+                    assert_eq!(w.key_up(a), Fired::Released(0));
+                    assert_eq!(w.key_up(b), Fired::Activated(0));
+                    assert_eq!(w.key_up(b), Fired::Nothing);
+                }
+            }
+        }
+    }
+    #[test]
+    fn any_intervening_key_cancels_until_every_key_is_up() {
+        for extra in [
+            Key::Other(37),
+            Key::Other(39),
+            Key::LeftShift,
+            Key::RightControl,
+        ] {
+            for before in [true, false] {
+                let mut w = watcher("Control+Super");
+                if before {
+                    w.key_down(extra);
+                }
+                w.key_down(Key::LeftControl);
+                w.key_down(Key::LeftSuper);
+                if !before {
+                    w.key_down(extra);
+                }
+                w.key_up(extra);
+                w.key_up(Key::LeftSuper);
+                w.key_down(Key::LeftSuper);
+                w.key_up(Key::LeftSuper);
+                assert_eq!(w.key_up(Key::LeftControl), Fired::Nothing);
+            }
+        }
+    }
+    #[test]
+    fn reset_discards_activation_and_hold_still_releases() {
+        let mut w = watcher("Control+Super");
+        w.key_down(Key::LeftControl);
+        assert_eq!(w.key_down(Key::LeftSuper), Fired::Pressed(0));
+        w.key_down(Key::Other(37));
+        assert_eq!(w.key_up(Key::LeftSuper), Fired::Released(0));
+        w.reset();
+        assert_eq!(w.key_up(Key::LeftControl), Fired::Nothing);
     }
 }

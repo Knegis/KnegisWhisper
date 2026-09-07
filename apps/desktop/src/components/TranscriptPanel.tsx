@@ -7,9 +7,12 @@ type TranscriptPanelProps = {
   rows: TranscriptRow[];
   recording: NoteRecording | null;
   noteId: number;
+  onAttach: () => void;
+  attaching: boolean;
+  attachmentError: string | null;
 };
 
-export function TranscriptPanel({ rows, recording, noteId }: TranscriptPanelProps) {
+export function TranscriptPanel({ rows, recording, noteId, onAttach, attaching, attachmentError }: TranscriptPanelProps) {
   const playerRef = useRef<RecordingPlayerHandle>(null);
   const rowRefs = useRef(new Map<number, HTMLLIElement>());
   const [selected, setSelected] = useState<Set<number>>(() => new Set());
@@ -77,10 +80,17 @@ export function TranscriptPanel({ rows, recording, noteId }: TranscriptPanelProp
           onPlayingChange={setPlaying}
         />
       ) : (
-        <p className="muted">
-          This note has a transcript but no recording attached; notes saved before
-          recordings were attached (2026-09-02) cannot be played.
-        </p>
+        <div>
+          <p className="muted">
+            This note has no recording attached. Select its original recording
+            to play these transcript timings. A copy is saved; your original stays in place.
+          </p>
+          <button type="button" onClick={onAttach} disabled={attaching}>
+            {attaching ? "Attaching…" : "Attach recording…"}
+          </button>
+          <p className="muted">16-bit PCM WAV, mono or stereo.</p>
+          {attachmentError ? <p className="error" role="alert">{attachmentError}</p> : null}
+        </div>
       )}
       {recording && selectionStart !== null && shownEnd !== null ? (
         <button

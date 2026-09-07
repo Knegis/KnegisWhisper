@@ -1,3 +1,4 @@
+let latestImportSnapshot: import("../generated/ipc-types").ImportSnapshot | null = null;
 /**
  * Fixture data for running the UI in a plain browser, with no Rust behind it.
  *
@@ -30,7 +31,7 @@
  */
 
 import { emit } from "@tauri-apps/api/event";
-import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
+import { mockIPC, mockWindows, mockConvertFileSrc } from "@tauri-apps/api/mocks";
 
 import type {
   Accelerator,
@@ -658,6 +659,7 @@ const ROUTE: RouteReport = {
 /* ------------------------------------------------------------ local models */
 
 const LOCAL_MODELS: LocalStatus = {
+  runtimeMessage: "Local model base is ready on port 8178.",
   availability: { state: "installable" },
   serverInstalled: true,
   // `stale` rather than `current`, so the branch that only appears when the
@@ -868,6 +870,7 @@ const LOCAL_LLM: LocalLlmStatus = {
 };
 
 const LOCAL_API: LocalApiStatus = {
+  blockedReason: null,
   enabled: true,
   running: true,
   port: 8749,
@@ -882,6 +885,7 @@ const LOCAL_API: LocalApiStatus = {
 /* ------------------------------------------------------ cli, mcp and import */
 
 const CLI: CliStatus = {
+  blockedReason: null,
   binaryName: "knegiswhisper.exe",
   binaryLocation: {
     state: "sibling",
@@ -897,6 +901,7 @@ const CLI: CliStatus = {
 };
 
 const MCP: McpStatus = {
+  blockedReason: null,
   binaryName: "knegiswhisper-mcp.exe",
   /* Not found on purpose: the screen has a sentence for a binary it cannot
    * locate, and a fixture that always finds one never shows it. */
@@ -1173,6 +1178,20 @@ const noteTranscriptRows = new Map<number, TranscriptRow[]>([
 let nextNoteId = 105;
 let nextFolderId = 4;
 
+function fixtureImport(result: Omit<MediaImportResult, "noteId" | "recording" | "retainedBytes">): MediaImportResult {
+  const noteId = nextNoteId++;
+  const durationSeconds = result.durationMs / 1000;
+  const recording: NoteRecording = { noteId, storageKey: `fixture-${noteId}.wav`, durationSeconds, originalFilename: "fixture.wav", createdAt: nowIso() };
+  const segments = result.segments.length ? result.segments : [{ text: result.text, timestamp: 0, endTimestamp: durationSeconds }];
+  notes.unshift({ id: noteId, title: "Imported fixture", content: result.text, noteType: "import", enhancedContent: null, folderId: null, transcript: JSON.stringify(segments), participants: null, audioDurationSeconds: durationSeconds, createdAt: nowIso(), updatedAt: nowIso() });
+  noteRecordings.set(noteId, recording);
+  noteTranscriptRows.set(noteId, segments.map((segment, index) => ({ index, text: segment.text, speaker: null, startSeconds: segment.timestamp, endSeconds: segment.endTimestamp })));
+  const complete = { ...result, noteId, recording, retainedBytes: durationSeconds * 32000 + 44 };
+  latestImportSnapshot = { operationId: `fixture-${noteId}`, stage: "succeeded", elapsedSeconds: 1, provider: result.provider, model: result.model, result: complete, error: null };
+  return complete;
+}
+
+
 const SETTINGS = new Map<string, unknown>([
   ["dictation.device", "Microphone Array (Realtek(R) Audio)"],
   ["dictation.useLocal", false],
@@ -1381,7 +1400,7 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
     noteTranscriptRows.delete(id);
     return notes.length !== before;
   },
-  // `mockIPC` also stubs convertFileSrc. It intentionally has no recording
+  // The fixture setup stubs convertFileSrc. It intentionally has no recording
   // server, so the recording player's honest error state appears in browser dev.
   note_recording_get: (a) => {
     const id = arg<number>(a, "id");
@@ -1639,10 +1658,11 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
 
   /* media import */
   media_import_status: () => SIDECARS,
+  media_import_snapshot: () => latestImportSnapshot,
   media_import_install_sidecar: () => null,
   pick_import_file: () => "C:\\Users\\dev\\Music\\interview.m4a",
   media_import_audio: () =>
-    ({
+    fixtureImport({
       text: "So the localisation pass is the blocker, and Anna owns it.",
       provider: "openai",
       model: "gpt-4o-transcribe",
@@ -1652,9 +1672,9 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
       // screen writes its one honest fallback cue. Left empty on purpose:
       // these two fixtures exist to show both halves.
       segments: [],
-    }) satisfies MediaImportResult,
+    }),
   media_import_video: () =>
-    ({
+    fixtureImport({
       text: "Recorded walkthrough of the meeting detector.",
       provider: "local",
       model: "whisper-large-v3-turbo-q5",
@@ -1668,7 +1688,7 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
           endTimestamp: 3.4,
         },
       ],
-    }) satisfies MediaImportResult,
+    }),
   /* calendars */
   calendar_status: () => CALENDAR,
   calendar_set_client_id: () => null,
@@ -1861,6 +1881,7 @@ function markThePageAsInvented(): void {
 export function installDevFixtures(): void {
   markThePageAsInvented();
   mockWindows("main");
+  mockConvertFileSrc("windows");
   mockIPC(
     (cmd, payload) => {
       const handler = HANDLERS[cmd];

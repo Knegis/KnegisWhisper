@@ -30,13 +30,15 @@
  * correcting.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
+import { importActive, importProgressText, pollImport } from "../lib/importProgress";
 import { Row } from "../components/Row";
 import {
-  createNote,
   getDictationRoute,
   getMediaImportStatus,
+  getMediaImportSnapshot,
+  type ImportSnapshot,
   importAudioFile,
   importOpenWhispr,
   importVideoFile,
@@ -44,7 +46,6 @@ import {
   onMediaImportProgress,
   pickImportFile,
   type ImportReport,
-  type MediaImportResult,
   type SidecarStatus,
 } from "../lib/ipc";
 import {
@@ -57,56 +58,13 @@ import {
 } from "../lib/labels";
 import { message, useRefresh } from "../lib/useRefresh";
 
-/** The file name without its directory or extension, for a default title. */
-function baseName(path: string): string {
-  const name = path.split(/[\\/]/).pop() ?? path;
-  const dot = name.lastIndexOf(".");
-  return dot > 0 ? name.slice(0, dot) : name;
-}
-
-/**
- * Turn a finished import into the note the screen shows.
- *
- * The transcript is whatever timed utterances the engine reported. The local
- * whisper server reports them; a cloud provider answers with prose and reports
- * none, and in that case this writes the one segment it can honestly write —
- * the whole text, spanning the real duration. That fallback is deliberate
- * rather than an empty `transcript`: the note genuinely was recorded, and an
- * SRT export of it should say so with the real duration instead of reading as
- * a note that was only ever typed.
- *
- * What it must not do is dress the fallback up as timing. One cue spanning 57
- * minutes is what a Swedish import produced on 2026-08-28, and it looked like
- * a subtitle track until you opened it — the reason `segments` is now carried
- * all the way from the server rather than synthesised here.
- */
-async function saveImportedNote(
-  result: MediaImportResult,
-  fallbackTitle: string,
-): Promise<number> {
-  const durationSeconds = result.durationMs / 1000;
-  const title =
-    result.source.kind === "url"
-      ? `Imported from ${result.source.host}`
-      : fallbackTitle;
-
-  const transcript =
-    result.segments.length > 0
-      ? result.segments
-      : [{ text: result.text, timestamp: 0, endTimestamp: durationSeconds }];
-
-  return createNote({
-    title,
-    content: result.text,
-    noteType: "import",
-    folderId: null,
-    transcript: JSON.stringify(transcript),
-    participants: null,
-    audioDurationSeconds: durationSeconds,
-  });
-}
-
-export function NotesUpload() {
+export function NotesUpload({ onOpenNote }: { onOpenNote: (id: number) => void }) {
+  const mounted = useRef(true);
+  const importPending = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
   const load = useCallback(async () => {
     const [sidecars, route] = await Promise.all([
       getMediaImportStatus(),
@@ -119,24 +77,29 @@ export function NotesUpload() {
   const [progress, setProgress] = useState<string | null>(null);
   useEffect(() => {
     let unlisten: (() => void) | undefined;
+    let disposed = false;
     void onMediaImportProgress((p) => {
       setProgress(mediaImportProgressLabel(p));
     }).then((fn) => {
-      unlisten = fn;
+      if (disposed) fn(); else unlisten = fn;
     });
-    return () => unlisten?.();
+    return () => { disposed = true; unlisten?.(); };
   }, []);
 
   // Audio/video import.
   const [localPick, setLocalPick] = useState<
     { kind: "audio" | "video"; path: string } | null
   >(null);
-  const [mediaBusy, setMediaBusy] = useState(false);
+  const [pending, setPending] = useState(false);
+  const [snapshot, setSnapshot] = useState<ImportSnapshot | null>(null);
+  const [snapshotError, setSnapshotError] = useState<string | null>(null);
   const [mediaError, setMediaError] = useState<string | null>(null);
-  const [mediaResult, setMediaResult] = useState<{
-    noteId: number;
-    result: MediaImportResult;
-  } | null>(null);
+  useEffect(() => pollImport(getMediaImportSnapshot,
+    (value) => { setSnapshot(value); setSnapshotError(null); },
+    (error) => setSnapshotError(`Could not check import progress: ${message(error)}`)), []);
+  const mediaBusy = pending || importActive(snapshot);
+  const result = snapshot?.stage === "succeeded" ? snapshot.result : null;
+  const mediaResult = result ? { noteId: result.noteId, result } : null;
 
   // OpenWhispr database import.
   const [dbPath, setDbPath] = useState<string | null>(null);
@@ -148,29 +111,25 @@ export function NotesUpload() {
     const path = await pickImportFile(kind);
     if (path !== null) {
       setLocalPick({ kind, path });
-      setMediaResult(null);
+      setMediaError(null);
       setMediaError(null);
     }
   };
 
   const runLocalImport = async () => {
-    if (!localPick) return;
-    setMediaBusy(true);
+    if (!localPick || importPending.current) return;
+    importPending.current = true;
+    setPending(true);
     setMediaError(null);
-    setMediaResult(null);
     try {
-      const result =
-        localPick.kind === "audio"
-          ? await importAudioFile(localPick.path)
-          : await importVideoFile(localPick.path);
-      const noteId = await saveImportedNote(result, baseName(localPick.path));
-      setMediaResult({ noteId, result });
-      setLocalPick(null);
+      if (localPick.kind === "audio") await importAudioFile(localPick.path);
+      else await importVideoFile(localPick.path);
+      if (mounted.current) setLocalPick(null);
     } catch (e) {
-      setMediaError(message(e));
+      if (mounted.current) setMediaError(message(e));
     } finally {
-      setMediaBusy(false);
-      setProgress(null);
+      importPending.current = false;
+      if (mounted.current) setPending(false);
     }
   };
 
@@ -283,6 +242,7 @@ export function NotesUpload() {
         {sidecarRow("ffmpeg", ffmpeg, () => installMediaImportSidecar("ffmpeg"))}
         {progress ? <Row label="Progress" value={progress} /> : null}
 
+        <p className="muted">Converted audio is retained for playback until you delete its note. Your original file is preserved.</p>
         <h3>Audio or video file</h3>
         <div className="row">
           <span className="row-label">File</span>
@@ -323,15 +283,20 @@ export function NotesUpload() {
           <p className="caveat">ffmpeg must be installed above before this can run.</p>
         ) : null}
 
+        {snapshot ? <p role="status">{importProgressText(snapshot)}{snapshot.provider ? ` · ${snapshot.provider}${snapshot.model ? ` / ${snapshot.model}` : ""}` : ""}</p> : null}
+        {importActive(snapshot) ? <p className="muted">You can leave this screen and return while the import continues. Local transcription may take time; elapsed time does not measure how much audio has been processed.</p> : null}
+        {snapshotError ? <p className="error">{snapshotError}</p> : null}
+        {snapshot?.stage === "failed" ? <p className="error" role="alert">{snapshot.error}</p> : null}
         {mediaResult ? (
           <Row
             label="Imported"
             value={`Saved as note ${mediaResult.noteId}`}
             detail={`${mediaImportSourceLabel(mediaResult.result.source)} · ${mediaResult.result.provider}${
               mediaResult.result.model ? ` / ${mediaResult.result.model}` : ""
-            } · ${Math.round(mediaResult.result.durationMs / 1000)}s of audio`}
+            } · ${Math.round(mediaResult.result.durationMs / 1000)}s of audio · ${(mediaResult.result.retainedBytes / (1024 * 1024)).toFixed(1)} MB retained`}
           />
         ) : null}
+        {mediaResult ? <button type="button" onClick={() => onOpenNote(mediaResult.noteId)}>Open imported note</button> : null}
         {mediaError ? <p className="error">{mediaError}</p> : null}
       </section>
 

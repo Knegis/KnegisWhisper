@@ -44,7 +44,12 @@ pub const LOCAL_MODEL_KEY: &str = "transcription.localModel";
 pub const PROGRESS_EVENT: &str = "local-model-progress";
 
 /// Everything needed to install and run the local server.
+type StartOutcome = (std::time::Instant, String, Result<u16, String>);
+
 pub struct LocalTranscription {
+    operation: tokio::sync::Mutex<()>,
+    last_start: std::sync::Mutex<Option<StartOutcome>>,
+    runtime_message: RwLock<String>,
     catalog: Catalog,
     pids: PidStore,
     policy: kw_network_policy::NetworkPolicy,
@@ -69,6 +74,9 @@ impl LocalTranscription {
     pub fn new(policy: kw_network_policy::NetworkPolicy) -> Result<Self, String> {
         let catalog = Catalog::shipped().map_err(|err| err.to_string())?;
         Ok(Self {
+            operation: tokio::sync::Mutex::new(()),
+            last_start: std::sync::Mutex::new(None),
+            runtime_message: RwLock::new("Local model server is stopped.".to_owned()),
             catalog,
             pids: PidStore::new(&paths::data_dir()),
             policy,
@@ -113,27 +121,22 @@ impl LocalTranscription {
 
     /// Stop the server, if one is running.
     pub async fn stop(&self) {
+        let _operation = self.operation.lock().await;
+        self.stop_inner().await;
+    }
+
+    async fn stop_inner(&self) {
+        *self
+            .last_start
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+        self.set_runtime_message("Local model server is stopped.".to_owned());
         let mut held = self.running.lock().await;
         if let Some(running) = held.take() {
             running.stop(&self.pids).await.unwrap_or_else(|err| {
                 tracing::warn!(error = %err, "could not stop the local model server cleanly");
             });
         }
-        if let Ok(mut port) = self.port.write() {
-            *port = None;
-        }
-        if let Ok(mut model) = self.model.write() {
-            *model = None;
-        }
-    }
-
-    /// Drop the recorded port and model for a server that has already gone.
-    ///
-    /// Not [`Self::stop`]: there is nothing to signal. The child is already
-    /// dead, and asking the reaper to stop it would either find nothing or --
-    /// worse, on a reused process id -- find something else. This only forgets.
-    async fn forget_port(&self) {
-        *self.running.lock().await = None;
         if let Ok(mut port) = self.port.write() {
             *port = None;
         }
@@ -159,6 +162,7 @@ pub struct SharedLocal {
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct LocalStatus {
+    pub runtime_message: String,
     /// Whether this platform has a published server binary at all, and why not.
     pub availability: Availability,
     /// Whether the server binary is installed.
@@ -454,13 +458,38 @@ pub async fn local_model_status(
         })
         .collect();
 
+    let mut runtime_message = local
+        .runtime_message
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    let mut alive = false;
+    if let Some(running) = local.running.lock().await.as_mut() {
+        alive = running.is_running().await;
+        if !alive {
+            runtime_message =
+                format!(
+                "Local model server exited. The next dictation or import will attempt recovery. {}",
+                running.exit_report().unwrap_or_else(|| running.stderr_tail())
+            );
+        }
+    }
     Ok(LocalStatus {
+        runtime_message,
         availability,
         server_installed,
         server_freshness: SidecarFreshness::of(&freshness),
         models,
-        port: local.port.read().ok().and_then(|p| *p),
-        running_model: local.model.read().ok().and_then(|m| m.clone()),
+        port: if alive {
+            local.port.read().ok().and_then(|p| *p)
+        } else {
+            None
+        },
+        running_model: if alive {
+            local.model.read().ok().and_then(|m| m.clone())
+        } else {
+            None
+        },
         install_dir: cache.path.display().to_string(),
         install_dir_fell_back: cache.fell_back || models_dir.fell_back,
     })
@@ -723,6 +752,7 @@ pub async fn local_server_refresh(
     app: AppHandle,
     local: State<'_, Arc<LocalTranscription>>,
 ) -> Result<RefreshOutcome, String> {
+    let _operation = local.operation.lock().await;
     let (spec, asset) = local
         .catalog
         .resolve(SIDECAR)
@@ -738,7 +768,7 @@ pub async fn local_server_refresh(
     // Read before the stop: `stop` clears it, and this is the only record of
     // what has to be put back.
     let was_running = local.model.read().ok().and_then(|held| held.clone());
-    local.stop().await;
+    local.stop_inner().await;
 
     let installed = kw_sidecar::install(&local.policy, spec, asset, &sidecars.path, &mut |p| {
         emit(match p {
@@ -755,7 +785,7 @@ pub async fn local_server_refresh(
     // user with a server that was working a moment ago and is now simply gone.
     let restart = match &was_running {
         None => Restart::NothingWasRunning,
-        Some(model) => match local.start_model(model).await {
+        Some(model) => match local.start_model_inner(model).await {
             Ok(port) => {
                 tracing::info!(port, model = %model, "restarted the local model server after a refresh");
                 Restart::Restarted(model.clone())
@@ -955,8 +985,55 @@ async fn model_to_resume(db: &kw_storage::Db) -> Resume {
 
 impl LocalTranscription {
     /// Start the server for one model, or return the port if it is already up.
+    fn set_runtime_message(&self, message: String) {
+        *self
+            .runtime_message
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = message;
+    }
+
     pub async fn start_model(&self, model_id: &str) -> Result<u16, String> {
+        let requested = std::time::Instant::now();
+        let _operation = self.operation.lock().await;
+        let shared = self
+            .last_start
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        if let Some((finished, model, result)) = shared {
+            if finished >= requested && model == model_id {
+                return result;
+            }
+        }
+        self.set_runtime_message(format!("Checking or starting local model {model_id}..."));
+        let result = self.start_model_inner(model_id).await;
+        self.set_runtime_message(match &result {
+            Ok(port) => format!("Local model {model_id} is ready on port {port}."),
+            Err(error) => format!("Local model could not start: {error}. Retry dictation or choose a model in Settings."),
+        });
+        tracing::info!(
+            model = model_id,
+            succeeded = result.is_ok(),
+            "local model startup or recovery completed"
+        );
+        *self
+            .last_start
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some((
+            std::time::Instant::now(),
+            model_id.to_owned(),
+            result.clone(),
+        ));
+        result
+    }
+
+    async fn start_model_inner(&self, model_id: &str) -> Result<u16, String> {
         let local = self;
+        let same_model =
+            local.model.read().ok().and_then(|m| m.clone()).as_deref() == Some(model_id);
+        if !same_model {
+            local.stop_inner().await;
+        }
         // Already running: answer with the port rather than starting a second
         // one -- but only if something is still there.
         //
@@ -979,7 +1056,7 @@ impl LocalTranscription {
                 port,
                 "the recorded local model server is not answering; starting a new one"
             );
-            local.forget_port().await;
+            local.stop_inner().await;
         }
 
         let (spec, asset) = local
@@ -1044,10 +1121,19 @@ impl LocalTranscription {
             port: chosen,
         };
 
+        local.set_runtime_message(format!("Loading local model {model_id}..."));
+        tracing::info!(model = model_id, executable = %launch.executable.display(), freshness = ?sidecar_freshness(&local.catalog, SIDECAR, &sidecars.path), "starting local model");
         let health = HttpHealth::new(local.policy.clone(), local::HEALTH_PATH);
         let running = process::start(spec, &launch, &local.pids, &health, StartTimings::default())
             .await
             .map_err(|err| err.to_string())?;
+
+        tracing::info!(
+            pid = running.pid(),
+            model = model_id,
+            port = chosen,
+            "local model process is ready"
+        );
 
         // Published only once it has answered, so a dictation never routes to a
         // server that is still loading its model.
@@ -1068,6 +1154,23 @@ impl LocalTranscription {
 pub async fn local_server_stop(local: State<'_, Arc<LocalTranscription>>) -> Result<(), String> {
     local.stop().await;
     Ok(())
+}
+
+/// One attempt before submitting audio; never retries a transcription request.
+pub(crate) async fn ensure_whisper(
+    policy: &kw_network_policy::NetworkPolicy,
+    recorded: Option<u16>,
+    revive: &dyn Revive,
+) -> Result<u16, String> {
+    if let Some(port) = recorded {
+        if HttpHealth::new(policy.clone(), local::HEALTH_PATH)
+            .is_ready(port)
+            .await
+        {
+            return Ok(port);
+        }
+    }
+    revive.revive().await
 }
 
 #[cfg(test)]
@@ -1105,6 +1208,89 @@ mod tests {
     /// `whisper-server.exe` out of it. On Windows that directory cannot be
     /// removed while the executable inside it is running, so an unconditional
     /// reinstall returned an error before the model was ever downloaded.
+    #[cfg(windows)]
+    #[tokio::test]
+    #[ignore = "starts installed Whisper base model with isolated PID records and fixture audio"]
+    async fn native_concurrent_recovery_transcribes_after_process_loss() {
+        use kw_transcription_core::local::LocalTranscriber as _;
+        let directory = tempfile::tempdir().unwrap();
+        let mut runtime = local();
+        runtime.pids = PidStore::new(directory.path());
+        let runtime = Arc::new(runtime);
+        let db = db().await;
+        kw_storage::settings::set(
+            db.pool(),
+            crate::dictation::ROUTE_SETTINGS_KEY,
+            &kw_transcription_core::RouteSettings {
+                use_local_whisper: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        kw_storage::settings::set(db.pool(), LOCAL_MODEL_KEY, &"base")
+            .await
+            .unwrap();
+        let worker = Arc::clone(&runtime);
+        let outcome = tokio::spawn(async move {
+            let (first, second) = tokio::join!(worker.start_model("base"), worker.start_model("base"));
+            assert_eq!(first.as_ref().unwrap(), second.as_ref().unwrap());
+            let original_pid = worker.pids.read(SIDECAR).unwrap().unwrap().pid;
+            let old = worker.running.lock().await.take().unwrap();
+            old.stop(&worker.pids).await.unwrap();
+            // Keep the recorded port, reproducing a dead child between operations.
+            let revive = revive_handle(&worker, &db);
+            let recorded = worker.port.read().unwrap().to_owned();
+            let (first, second) = tokio::join!(ensure_whisper(&worker.policy, recorded, revive.as_ref()), ensure_whisper(&worker.policy, recorded, revive.as_ref()));
+            let port = first.unwrap();
+            assert_eq!(port, second.unwrap());
+            let replacement_pid = worker.pids.read(SIDECAR).unwrap().unwrap().pid;
+            assert_ne!(original_pid, replacement_pid);
+            let wav = include_bytes!("../../../../crates/transcription-core/tests/fixtures/speech-16k-mono.wav").to_vec();
+            let result = kw_transcription_core::local::WhisperServer::new(worker.policy.clone(), port, Some("base".to_owned())).transcribe(wav, None, None).await.unwrap();
+            assert!(matches!(result, kw_transcription_core::local::Inference::Text(ref text) | kw_transcription_core::local::Inference::Timed { ref text, .. } if !text.is_empty()));
+            println!("Concurrent recovery: PID {original_pid} replaced by {replacement_pid}; both callers shared the replacement; fixture transcription succeeded.");
+        }).await;
+        runtime.stop().await;
+        outcome.unwrap();
+    }
+
+    #[tokio::test]
+    async fn overlapping_starts_share_the_completed_attempt_including_failure() {
+        let local = Arc::new(local());
+        let gate = local.operation.lock().await;
+        let one = Arc::clone(&local);
+        let two = Arc::clone(&local);
+        let first = tokio::spawn(async move { one.start_model("fixture-model").await });
+        let second = tokio::spawn(async move { two.start_model("fixture-model").await });
+        tokio::task::yield_now().await;
+        *local.last_start.lock().unwrap() = Some((
+            std::time::Instant::now(),
+            "fixture-model".to_owned(),
+            Err("same failed startup".to_owned()),
+        ));
+        drop(gate);
+        assert_eq!(first.await.unwrap(), Err("same failed startup".to_owned()));
+        assert_eq!(second.await.unwrap(), Err("same failed startup".to_owned()));
+    }
+
+    #[tokio::test]
+    async fn absent_or_dead_port_attempts_revival_once() {
+        #[derive(Debug)]
+        struct Reviver(std::sync::atomic::AtomicUsize);
+        #[async_trait::async_trait]
+        impl Revive for Reviver {
+            async fn revive(&self) -> Result<u16, String> {
+                self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Err("fixture startup failed".to_owned())
+            }
+        }
+        let revive = Reviver(std::sync::atomic::AtomicUsize::new(0));
+        let policy = kw_network_policy::NetworkPolicy::new().unwrap();
+        assert!(ensure_whisper(&policy, None, &revive).await.is_err());
+        assert_eq!(revive.0.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
     #[test]
     fn an_installed_sidecar_is_not_reinstalled() {
         assert!(!sidecar_needed(&installed()));

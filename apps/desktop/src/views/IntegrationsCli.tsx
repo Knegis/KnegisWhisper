@@ -44,6 +44,8 @@ export function IntegrationsCli() {
     <div className="view">
       {error ? <p className="error">{error}</p> : null}
 
+      {status.blockedReason ? <p className="error" role="alert">{status.blockedReason}</p> : null}
+
       <section data-surface="integrations.cli">
         <h2>CLI</h2>
         <p className="muted">

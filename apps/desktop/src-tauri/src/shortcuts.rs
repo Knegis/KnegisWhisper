@@ -177,6 +177,17 @@ pub enum Act {
     Nothing,
 }
 
+fn hooked_act(edge: Edge, mode: HotkeyMode, accelerator: &str) -> Act {
+    if mode == HotkeyMode::Toggle
+        && !kw_platform::keys::names_a_mouse_button(accelerator)
+        && edge == Edge::Press
+    {
+        Act::Nothing
+    } else {
+        act(edge, mode)
+    }
+}
+
 const fn act(edge: Edge, mode: HotkeyMode) -> Act {
     match (edge, mode) {
         // Unchanged, and it has to be: this is the arm the shipped default
@@ -187,6 +198,8 @@ const fn act(edge: Edge, mode: HotkeyMode) -> Act {
         // Under a toggle the key coming up means nothing, and has to keep
         // meaning nothing: acting on it would double every press.
         (Edge::Release, HotkeyMode::Toggle) => Act::Nothing,
+        (Edge::Activated, HotkeyMode::Toggle) => Act::Toggle,
+        (Edge::Activated, HotkeyMode::Hold) => Act::Nothing,
     }
 }
 
@@ -416,9 +429,8 @@ impl Hooks {
         // left recording with nothing to stop it.
         crate::dictation::release_the_hold();
 
-        // Dropped first, and deliberately before installing: Windows allows one
-        // hook per process, so the old one has to be gone before the new one can
-        // exist.
+        // Drop and join the old hook before installing its replacement so
+        // only the current binding and mode can dispatch input.
         let mut held = self
             .installed
             .lock()
@@ -440,7 +452,7 @@ impl Hooks {
                 return;
             };
 
-            let what = act(edge, *mode);
+            let what = hooked_act(edge, *mode, accelerator);
             if !does_something(what) {
                 return;
             }
@@ -573,6 +585,38 @@ fn register_one(
 )]
 mod tests {
     use super::*;
+
+    #[test]
+    fn modifier_toggle_dispatch_waits_for_qualified_activation() {
+        assert_eq!(
+            hooked_act(Edge::Press, HotkeyMode::Toggle, "Control+Super"),
+            Act::Nothing
+        );
+        assert_eq!(
+            hooked_act(Edge::Release, HotkeyMode::Toggle, "Control+Super"),
+            Act::Nothing
+        );
+        assert_eq!(
+            hooked_act(Edge::Activated, HotkeyMode::Toggle, "Control+Super"),
+            Act::Toggle
+        );
+        assert_eq!(
+            hooked_act(Edge::Press, HotkeyMode::Toggle, "Mouse4"),
+            Act::Toggle
+        );
+        assert_eq!(
+            hooked_act(Edge::Press, HotkeyMode::Hold, "Control+Super"),
+            Act::BeginHold
+        );
+        assert_eq!(
+            hooked_act(Edge::Release, HotkeyMode::Hold, "Control+Super"),
+            Act::EndHold
+        );
+        assert_eq!(
+            hooked_act(Edge::Activated, HotkeyMode::Hold, "Control+Super"),
+            Act::Nothing
+        );
+    }
 
     #[test]
     fn only_registered_counts_as_success() {

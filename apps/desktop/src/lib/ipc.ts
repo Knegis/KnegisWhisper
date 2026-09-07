@@ -80,6 +80,7 @@ import type {
   McpStatus,
   MediaImportProgress,
   MediaImportResult,
+  ImportSnapshot,
   MediaImportSource,
   MediaSidecar,
   MeetingOutcome,
@@ -195,6 +196,7 @@ export type {
   McpStatus,
   MediaImportProgress,
   MediaImportResult,
+  ImportSnapshot,
   MediaImportSource,
   MediaSidecar,
   MeetingOutcome,
@@ -710,7 +712,7 @@ export async function deleteFolder(id: number): Promise<boolean> {
 
 /**
  * The recording a note was made from, or `null` for a typed note and for any
- * note saved before recordings were attached to notes (2026-09-02).
+ * older note that has not yet had its original recording attached.
  *
  * Nothing here is a path. `storageKey` is the file's bare name inside the
  * application's recordings directory, and playback goes through
@@ -721,6 +723,11 @@ export async function getNoteRecording(
   id: number,
 ): Promise<NoteRecording | null> {
   return invoke<NoteRecording | null>("note_recording_get", { id });
+}
+
+/** Rust picks and copies the original WAV; cancellation returns null. */
+export async function attachNoteRecording(id: number): Promise<NoteRecording | null> {
+  return invoke<NoteRecording | null>("note_recording_attach_from_dialog", { id });
 }
 
 /**
@@ -1245,4 +1252,8 @@ export async function setCalendarSelected(
   selected: boolean,
 ): Promise<void> {
   return invoke("calendar_set_selected", { provider, calendarId, selected });
+}
+
+export function getMediaImportSnapshot(): Promise<ImportSnapshot | null> {
+  return invoke<ImportSnapshot | null>("media_import_snapshot");
 }

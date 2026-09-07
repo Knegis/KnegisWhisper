@@ -31,12 +31,10 @@ the local LLM lifecycle, the meetings screen and its clients, the calendar scree
 importer, and the MCP and CLI screens all exist. What is left is genuinely new capability that
 either has no consumer yet or has an explicit, permanent reason it stays undone:
 
-1. **CI has not run on push since `afe59b4`, and still has not — deliberately.** Three workflow
-   files (`ci.yml`, `release.yml`, `pin-verify.yml`) were written, reviewed character by character
-   for the property that matters most given the Actions budget (none can fire on a push), and
-   dispatched manually. The triggers remain commented out on purpose this run, not by oversight —
-   see `docs/BUILD_PLAN.md` chunk J. The macOS and Linux jobs are still the only runtime evidence
-   this project has for those platforms. Chunk A.
+1. **Selective PR checks are configured (2026-09-05); hosted execution remains unobserved.**
+   Contracts run on every PR, relevant changes select frontend/Windows checks, and manual dispatch
+   retains all three Rust platforms. Automatic push runs remain off. The first hosted Windows run
+   is still required before treating this configuration as observed CI coverage. Chunk A.
 2. **One of the two remaining Windows natives is written; the other is declined.** The
    `IAudioSessionManager2` mic listener landed on 2026-09-01 (KNEG-94) because Teams forced it —
    see chunk H. The UIAutomation text monitor is closed as declined rather than deferred (KNEG-63):

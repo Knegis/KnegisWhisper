@@ -91,7 +91,6 @@ use std::sync::{Arc, RwLock};
 
 use kw_network_policy::{NetworkPolicy, RequestPurpose};
 use kw_security::CredentialStore;
-use kw_sidecar::process::Health as _;
 use kw_sidecar::{Catalog, RealFs, SearchPath};
 use kw_storage::Db;
 use kw_transcription_core::local::WhisperServer;
@@ -161,11 +160,13 @@ pub enum MediaImportSource {
     },
 }
 
-/// What a finished import produced. The frontend turns this into a note; this
-/// module does not write one itself.
+/// A committed imported note, its recording, and the transcription result.
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct MediaImportResult {
+    pub note_id: i64,
+    pub recording: kw_notes_core::recordings::NoteRecording,
+    pub retained_bytes: u64,
     pub text: String,
     pub provider: String,
     pub model: Option<String>,
@@ -236,10 +237,6 @@ pub enum MediaImportProgress {
     /// Running an import: yt-dlp is fetching the URL.
     #[allow(dead_code)] // dormant: see URL IMPORT, DORMANT in the module doc.
     Fetching,
-    /// Running an import: ffmpeg is converting to 16 kHz mono WAV.
-    Converting,
-    /// Running an import: the configured transcription provider is working.
-    Transcribing,
     /// The install, or the import, finished.
     Done,
 }
@@ -253,6 +250,10 @@ pub enum MediaImportProgress {
 /// whoever is trying to fix it.
 #[derive(Debug, thiserror::Error)]
 pub enum MediaImportError {
+    #[error("{0}")]
+    Busy(String),
+    #[error("Could not retain imported recording: {detail}")]
+    Persistence { detail: String },
     #[error("{sidecar} is not available on this platform: {reason}")]
     SidecarUnavailable {
         sidecar: &'static str,
@@ -544,7 +545,11 @@ async fn run_sidecar_process(
     args: &[String],
 ) -> std::io::Result<ProcessOutcome> {
     let mut command = tokio::process::Command::new(executable);
-    command.args(args).stdin(Stdio::null());
+    command
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .kill_on_drop(true);
 
     #[cfg(windows)]
     {
@@ -613,7 +618,9 @@ pub struct MediaImportRuntime {
     /// `kw_storage::paths` at each use, so a test can point it at an empty
     /// directory -- see [`MediaImportRuntime::rooted`].
     sidecar_root: PathBuf,
+    recording_directory: PathBuf,
     db: Db,
+    jobs: crate::media_job::ImportJobs,
 }
 
 impl std::fmt::Debug for MediaImportRuntime {
@@ -678,6 +685,8 @@ impl MediaImportRuntime {
             local_revive,
             db,
             sidecar_root,
+            recording_directory: kw_notes_core::recordings::recording_dir(),
+            jobs: crate::media_job::ImportJobs::default(),
         })
     }
 
@@ -775,35 +784,10 @@ impl MediaImportRuntime {
     /// spends something that cannot be spent twice.
     async fn whisper_server(&self) -> Result<Option<WhisperServer>, MediaImportError> {
         let recorded = self.local_port.read().ok().and_then(|held| *held);
-        let Some(port) = recorded else {
-            return Ok(None);
-        };
-
-        let answering = kw_sidecar::HttpHealth::new(
-            self.policy.clone(),
-            kw_transcription_core::local::HEALTH_PATH,
-        )
-        .is_ready(port)
-        .await;
-
-        let port = if answering {
-            port
-        } else {
-            tracing::warn!(
-                port,
-                "the local model server has gone; starting it again for this import"
-            );
-            let started = self.local_revive.revive().await.map_err(|err| {
-                MediaImportError::Transcription {
-                    detail: format!(
-                        "the local model server on 127.0.0.1:{port} has gone and could not be \
-                         started again: {err}"
-                    ),
-                }
-            })?;
-            tracing::info!(port = started, "the local model server was started again");
-            started
-        };
+        let port =
+            crate::local_model::ensure_whisper(&self.policy, recorded, self.local_revive.as_ref())
+                .await
+                .map_err(|detail| MediaImportError::Transcription { detail })?;
 
         let model = self.local_model.read().ok().and_then(|held| held.clone());
         // `.timed()`: an import becomes a note that can be exported as SRT or
@@ -860,22 +844,23 @@ impl MediaImportRuntime {
     /// Send `wav` down the existing transcription route. Not a second path to
     /// a provider: the same [`Executor`] and the same resolved [`Transport`]
     /// a dictation would use.
-    async fn transcribe(
-        &self,
-        wav: Vec<u8>,
-    ) -> Result<kw_transcription_core::Transcript, MediaImportError> {
+    async fn prepare(&self) -> Result<PreparedImport, MediaImportError> {
         let transport = self.route_transport().await?;
-
-        let executor = Executor::new(&self.policy, self.credentials.as_ref());
-        // Resolved only for a local route, for the reason `dictation.rs` gives
-        // at the same fork: the executor reads the local engine in its
-        // `Transport::Local` arm and nowhere else, and building one anyway made
-        // an unbuildable sherpa selection fail an import bound for a provider.
         let local = if matches!(transport, Transport::Local) {
             self.local_engine().await?
         } else {
             None
         };
+        Ok(PreparedImport { transport, local })
+    }
+
+    async fn transcribe(
+        &self,
+        wav: Vec<u8>,
+        prepared: PreparedImport,
+    ) -> Result<kw_transcription_core::Transcript, MediaImportError> {
+        let PreparedImport { transport, local } = prepared;
+        let executor = Executor::new(&self.policy, self.credentials.as_ref());
         let executor = match &local {
             Some(engine) => executor.with_local(engine.as_ref()),
             None => executor,
@@ -895,19 +880,23 @@ impl MediaImportRuntime {
 
     /// Convert `input` with ffmpeg, read the result, and transcribe it.
     ///
-    /// The converted file is read into memory and the scratch directory is
-    /// removed *before* transcription is attempted, so a slow or failing
-    /// provider never leaves a converted file on disk longer than it has to,
-    /// and a failure here or later leaves nothing behind to be mistaken for a
-    /// finished import.
+    /// Keep the scratch WAV through transcription so a successful import can
+    /// copy it into owned storage. The caller removes scratch on either outcome.
     async fn convert_and_transcribe<R: Runtime>(
         &self,
         app: &AppHandle<R>,
         ffmpeg: &Path,
         input: &Path,
         scratch: &Path,
+        lease: Option<&crate::media_job::ImportLease<'_>>,
     ) -> Result<(kw_transcription_core::Transcript, u64), MediaImportError> {
-        emit_progress(app, MediaImportProgress::Converting);
+        let prepared = self.prepare().await?;
+        if let Some(lease) = lease {
+            let (provider, model) = prepared.identity();
+            lease.route(provider, model);
+            lease.stage(crate::media_job::ImportStage::Converting);
+        }
+        let _ = app;
 
         let output = scratch.join("converted.wav");
         let args = ffmpeg_convert_args(input, &output);
@@ -927,7 +916,9 @@ impl MediaImportRuntime {
             });
         }
 
-        let wav = std::fs::read(&output).map_err(|source| MediaImportError::io(&output, source))?;
+        let wav = tokio::fs::read(&output)
+            .await
+            .map_err(|source| MediaImportError::io(&output, source))?;
         if wav.len() <= WAV_HEADER_LEN {
             return Err(MediaImportError::Conversion {
                 detail: "the converted file has no audio in it. The source may have no audio \
@@ -937,8 +928,10 @@ impl MediaImportRuntime {
         }
         let duration_ms = wav_duration_ms(wav.len());
 
-        emit_progress(app, MediaImportProgress::Transcribing);
-        let transcript = self.transcribe(wav).await?;
+        if let Some(lease) = lease {
+            lease.stage(crate::media_job::ImportStage::Transcribing);
+        }
+        let transcript = self.transcribe(wav, prepared).await?;
         Ok((transcript, duration_ms))
     }
 
@@ -955,26 +948,47 @@ impl MediaImportRuntime {
         path: &Path,
         source: MediaImportSource,
     ) -> Result<MediaImportResult, MediaImportError> {
+        let lease = self.jobs.begin().map_err(MediaImportError::Busy)?;
+        let result = self.import_local_inner(app, path, source, &lease).await;
+        lease.finish(&result.as_ref().cloned().map_err(ToString::to_string));
+        result
+    }
+
+    async fn import_local_inner<R: Runtime>(
+        &self,
+        app: &AppHandle<R>,
+        path: &Path,
+        source: MediaImportSource,
+        lease: &crate::media_job::ImportLease<'_>,
+    ) -> Result<MediaImportResult, MediaImportError> {
         let input = check_importable_file(path)?;
 
         let ffmpeg = self.locate_executable(MediaSidecar::Ffmpeg)?;
         let scratch = new_scratch_dir()?;
+        let _cleanup = ScratchCleanup(scratch.clone());
 
         let outcome = self
-            .convert_and_transcribe(app, &ffmpeg, &input, &scratch)
+            .convert_and_transcribe(app, &ffmpeg, &input, &scratch, Some(lease))
             .await;
-        let _ = std::fs::remove_dir_all(&scratch);
-
-        let (transcript, duration_ms) = outcome?;
-        emit_progress(app, MediaImportProgress::Done);
-        Ok(MediaImportResult {
-            segments: transcript.segments.iter().map(Into::into).collect(),
-            text: transcript.text,
-            provider: transcript.provider,
-            model: transcript.model,
-            duration_ms,
-            source,
-        })
+        let result = match outcome {
+            Ok((transcript, _)) => {
+                lease.stage(crate::media_job::ImportStage::Saving);
+                save_import(
+                    &self.db,
+                    transcript,
+                    source,
+                    &input,
+                    &scratch.join("converted.wav"),
+                    &self.recording_directory,
+                )
+                .await
+            }
+            Err(error) => Err(error),
+        };
+        if let Err(error) = std::fs::remove_dir_all(&scratch) {
+            tracing::warn!(%error, "could not remove media import scratch directory");
+        }
+        result
     }
 
     /// Import media fetched from a URL by the yt-dlp sidecar. See the module
@@ -997,18 +1011,22 @@ impl MediaImportRuntime {
         let outcome = self
             .fetch_and_transcribe(app, &ytdlp, &ffmpeg, url, &scratch)
             .await;
+        let result = match outcome {
+            Ok((transcript, _)) => {
+                save_import(
+                    &self.db,
+                    transcript,
+                    MediaImportSource::Url { host },
+                    Path::new("download.wav"),
+                    &scratch.join("converted.wav"),
+                    &self.recording_directory,
+                )
+                .await
+            }
+            Err(error) => Err(error),
+        };
         let _ = std::fs::remove_dir_all(&scratch);
-
-        let (transcript, duration_ms) = outcome?;
-        emit_progress(app, MediaImportProgress::Done);
-        Ok(MediaImportResult {
-            segments: transcript.segments.iter().map(Into::into).collect(),
-            text: transcript.text,
-            provider: transcript.provider,
-            model: transcript.model,
-            duration_ms,
-            source: MediaImportSource::Url { host },
-        })
+        result
     }
 
     #[allow(dead_code)] // dormant: see URL IMPORT, DORMANT in the module doc.
@@ -1039,9 +1057,89 @@ impl MediaImportRuntime {
         }
 
         let downloaded = pick_downloaded_file(scratch, DOWNLOAD_PREFIX)?;
-        self.convert_and_transcribe(app, ffmpeg, &downloaded, scratch)
+        self.convert_and_transcribe(app, ffmpeg, &downloaded, scratch, None)
             .await
     }
+}
+
+/// Persist only after transcription succeeds; a failed transaction owns no file.
+async fn save_import(
+    db: &Db,
+    transcript: kw_transcription_core::Transcript,
+    source: MediaImportSource,
+    original: &Path,
+    converted: &Path,
+    directory: &Path,
+) -> Result<MediaImportResult, MediaImportError> {
+    let converted = converted.to_owned();
+    let directory = directory.to_owned();
+    let mut pending = tokio::task::spawn_blocking(move || {
+        crate::recording_attach::prepare_copy(&converted, &directory)
+    })
+    .await
+    .map_err(|e| MediaImportError::Persistence {
+        detail: e.to_string(),
+    })?
+    .map_err(|detail| MediaImportError::Persistence { detail })?;
+    let original_name = original
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned();
+    let title = original
+        .file_stem()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned();
+    let duration_ms = (pending.duration * 1000.0).round() as u64;
+    let segments: Vec<ImportedSegment> = transcript.segments.iter().map(Into::into).collect();
+    let saved_segments = if segments.is_empty() {
+        vec![ImportedSegment {
+            text: transcript.text.clone(),
+            timestamp: 0.0,
+            end_timestamp: pending.duration,
+        }]
+    } else {
+        segments.clone()
+    };
+    let note = kw_notes_core::notes::NewNote {
+        title,
+        content: transcript.text.clone(),
+        note_type: Some("import".to_owned()),
+        transcript: Some(serde_json::to_string(&saved_segments).map_err(|e| {
+            MediaImportError::Persistence {
+                detail: e.to_string(),
+            }
+        })?),
+        audio_duration_seconds: Some(pending.duration),
+        ..Default::default()
+    };
+    let retained_bytes = std::fs::metadata(&pending.path)
+        .map_err(|e| MediaImportError::io(&pending.path, e))?
+        .len();
+    let (note_id, recording) = kw_notes_core::notes::create_with_recording(
+        db.pool(),
+        &note,
+        &pending.key,
+        pending.duration,
+        &original_name,
+    )
+    .await
+    .map_err(|e| MediaImportError::Persistence {
+        detail: format!("Could not save the imported note and recording: {e}"),
+    })?;
+    pending.committed = true;
+    Ok(MediaImportResult {
+        note_id,
+        recording,
+        retained_bytes,
+        text: transcript.text,
+        provider: transcript.provider,
+        model: transcript.model,
+        segments,
+        duration_ms,
+        source,
+    })
 }
 
 fn emit_progress<R: Runtime>(app: &AppHandle<R>, progress: MediaImportProgress) {
@@ -1093,10 +1191,15 @@ pub async fn media_import_audio<R: Runtime>(
     path: String,
 ) -> Result<MediaImportResult, String> {
     let granted = grants.authorise(&path)?;
-    runtime
-        .import_local_file(&app, &granted, MediaImportSource::Audio)
-        .await
-        .map_err(|err| err.to_string())
+    let runtime = Arc::clone(runtime.inner());
+    tokio::spawn(async move {
+        runtime
+            .import_local_file(&app, &granted, MediaImportSource::Audio)
+            .await
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|err| err.to_string())
 }
 
 /// Import a local video file. Only the label differs from audio import --
@@ -1110,10 +1213,52 @@ pub async fn media_import_video<R: Runtime>(
     path: String,
 ) -> Result<MediaImportResult, String> {
     let granted = grants.authorise(&path)?;
-    runtime
-        .import_local_file(&app, &granted, MediaImportSource::Video)
-        .await
-        .map_err(|err| err.to_string())
+    let runtime = Arc::clone(runtime.inner());
+    tokio::spawn(async move {
+        runtime
+            .import_local_file(&app, &granted, MediaImportSource::Video)
+            .await
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|err| err.to_string())
+}
+
+struct ScratchCleanup(PathBuf);
+impl Drop for ScratchCleanup {
+    fn drop(&mut self) {
+        if let Err(error) = std::fs::remove_dir_all(&self.0) {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                tracing::warn!(%error, "could not clean import scratch directory");
+            }
+        }
+    }
+}
+struct PreparedImport {
+    transport: Transport,
+    local: Option<Box<dyn kw_transcription_core::local::LocalTranscriber>>,
+}
+impl PreparedImport {
+    fn identity(&self) -> (String, Option<String>) {
+        match &self.transport {
+            Transport::Local => (
+                "local".into(),
+                self.local.as_ref().and_then(|e| e.model_name()),
+            ),
+            Transport::HttpBatch {
+                provider, model, ..
+            } => (provider.clone(), Some(model.clone())),
+            Transport::ProviderClient {
+                provider, model, ..
+            } => (format!("{provider:?}").to_lowercase(), model.clone()),
+        }
+    }
+}
+#[tauri::command]
+pub fn media_import_snapshot(
+    runtime: State<'_, Arc<MediaImportRuntime>>,
+) -> Option<crate::media_job::ImportSnapshot> {
+    runtime.jobs.snapshot()
 }
 
 #[cfg(test)]
@@ -1149,6 +1294,35 @@ mod tests {
         )
         .unwrap();
         (rt, root)
+    }
+
+    #[cfg(feature = "tauri-test")]
+    #[tokio::test]
+    async fn failed_import_exposes_error_and_releases_app_wide_slot() {
+        let (runtime, root) = runtime().await;
+        let app = tauri::test::mock_builder()
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        let missing = root.path().join("missing.wav");
+        let lease = runtime.jobs.begin().unwrap();
+        assert!(runtime
+            .import_local_file(app.handle(), &missing, MediaImportSource::Audio)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("Another media import"));
+        drop(lease);
+        let first_id = runtime.jobs.snapshot().unwrap().operation_id;
+        assert!(runtime
+            .import_local_file(app.handle(), &missing, MediaImportSource::Audio)
+            .await
+            .is_err());
+        let failed = runtime.jobs.snapshot().unwrap();
+        assert_ne!(failed.operation_id, first_id);
+        assert_eq!(failed.stage, crate::media_job::ImportStage::Failed);
+        assert!(failed.error.is_some());
+        assert!(runtime.jobs.begin().is_ok());
+        assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
     }
 
     /* ------------------------------------------------------- url validation */
@@ -1602,5 +1776,268 @@ mod tests {
             "the traversal should reach the same file, or this asserts nothing"
         );
         assert!(grants.authorise(traversal.to_str().unwrap()).is_err());
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod retained_import_tests {
+    use super::*;
+    fn transcript(timed: bool) -> kw_transcription_core::Transcript {
+        kw_transcription_core::Transcript {
+            text: "hello".to_owned(),
+            provider: "fixture".to_owned(),
+            model: None,
+            segments: if timed {
+                vec![kw_transcription_core::local::TimedSegment {
+                    text: "hello".to_owned(),
+                    start: 0.0,
+                    end: 1.0,
+                }]
+            } else {
+                vec![]
+            },
+        }
+    }
+    fn fixture(dir: &Path) -> PathBuf {
+        let path = dir.join("original möte.wav");
+        std::fs::write(
+            &path,
+            include_bytes!(
+                "../../../../crates/transcription-core/tests/fixtures/speech-16k-mono.wav"
+            ),
+        )
+        .unwrap();
+        path
+    }
+    #[cfg(all(windows, feature = "tauri-test"))]
+    #[tokio::test]
+    #[ignore = "uses installed ffmpeg/Whisper with local fixtures; opt in explicitly"]
+    async fn native_audio_video_import_pipeline() {
+        let dir = tempfile::tempdir().unwrap();
+        let original = fixture(dir.path());
+        let original_bytes = std::fs::read(&original).unwrap();
+        let policy = NetworkPolicy::new().unwrap();
+        let catalog = Catalog::shipped().unwrap();
+        let (spec, asset) = catalog.resolve("whisper").unwrap();
+        let sidecar_root = kw_storage::paths::sidecar_dir().path;
+        let installation = kw_sidecar::locate(
+            "whisper",
+            asset,
+            &SearchPath {
+                bundled: None,
+                downloaded: sidecar_root.clone(),
+            },
+            &RealFs,
+        );
+        let port = kw_sidecar::port::allocate(
+            kw_sidecar::PortRange {
+                first: 18000,
+                last: 19000,
+            },
+            &kw_sidecar::BindProbe,
+        )
+        .unwrap();
+        let model = kw_storage::paths::model_cache_dir()
+            .path
+            .join("ggml-base.bin");
+        let launch = kw_sidecar::process::Launch {
+            executable: installation.executable().unwrap().to_owned(),
+            args: vec![
+                "--model".to_owned(),
+                model.display().to_string(),
+                "--host".to_owned(),
+                "127.0.0.1".to_owned(),
+                "--port".to_owned(),
+                port.to_string(),
+            ],
+            port,
+        };
+        let pids = kw_sidecar::PidStore::new(dir.path());
+        let server = kw_sidecar::process::start(
+            spec,
+            &launch,
+            &pids,
+            &kw_sidecar::HttpHealth::new(policy.clone(), "/health"),
+            kw_sidecar::process::StartTimings::default(),
+        )
+        .await
+        .unwrap();
+        let recording_directory = dir.path().join("recordings");
+        let video = dir.path().join("video with spaces.mkv");
+        let result = async move {
+            let db = Db::open_in_memory().await.unwrap();
+            kw_storage::settings::set(
+                db.pool(),
+                crate::dictation::ROUTE_SETTINGS_KEY,
+                &kw_transcription_core::RouteSettings {
+                    use_local_whisper: true,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+            let mut runtime = MediaImportRuntime::rooted(
+                policy,
+                Arc::new(kw_security::MemoryCredentialStore::new()),
+                Arc::new(RwLock::new(Some(port))),
+                Arc::new(RwLock::new(Some("base".to_owned()))),
+                Arc::new(RwLock::new(None)),
+                Arc::new(crate::local_model::RefusesToRevive),
+                db.clone(),
+                sidecar_root,
+            )
+            .unwrap();
+            runtime.recording_directory = recording_directory;
+            let ffmpeg = runtime.locate_executable(MediaSidecar::Ffmpeg).unwrap();
+            let args = vec!["-y", "-i"]
+                .into_iter()
+                .map(str::to_owned)
+                .chain([original.display().to_string()])
+                .chain(
+                    [
+                        "-f",
+                        "lavfi",
+                        "-i",
+                        "color=size=64x64:rate=1",
+                        "-shortest",
+                        "-c:v",
+                        "ffv1",
+                        "-c:a",
+                        "pcm_s16le",
+                    ]
+                    .into_iter()
+                    .map(str::to_owned),
+                )
+                .chain([video.display().to_string()])
+                .collect::<Vec<_>>();
+            assert!(run_sidecar_process(&ffmpeg, &args).await.unwrap().success);
+            let app = tauri::test::mock_builder()
+                .build(tauri::test::mock_context(tauri::test::noop_assets()))
+                .unwrap();
+            for (path, kind) in [
+                (&original, MediaImportSource::Audio),
+                (&video, MediaImportSource::Video),
+            ] {
+                let result = runtime
+                    .import_local_file(app.handle(), path, kind)
+                    .await
+                    .unwrap();
+                assert!(!result.text.is_empty());
+                let snapshot = runtime.jobs.snapshot().unwrap();
+                assert_eq!(snapshot.stage, crate::media_job::ImportStage::Succeeded);
+                assert_eq!(snapshot.result.unwrap().note_id, result.note_id);
+                assert_eq!(snapshot.provider.as_deref(), Some("local"));
+                let copy = runtime
+                    .recording_directory
+                    .join(&result.recording.storage_key);
+                assert!(copy.exists());
+                let request = tauri::http::Request::builder()
+                    .header("Range", "bytes=0-43")
+                    .body(vec![])
+                    .unwrap();
+                assert_eq!(
+                    crate::recordings::response_for(&request, &copy).status(),
+                    206
+                );
+                kw_notes_core::recordings::delete_with_recording(
+                    db.pool(),
+                    result.note_id,
+                    &runtime.recording_directory,
+                )
+                .await
+                .unwrap();
+                assert!(!copy.exists());
+                assert!(path.exists());
+                println!(
+                    "Imported {:?}: note {}, {} bytes retained; playback range and cleanup passed",
+                    result.source, result.note_id, result.retained_bytes
+                );
+            }
+            assert_eq!(std::fs::read(original).unwrap(), original_bytes);
+        };
+        // Stop the owned child even when the fixture assertions fail.
+        let outcome = tokio::spawn(result).await;
+        server.stop(&pids).await.unwrap();
+        outcome.unwrap();
+    }
+
+    #[tokio::test]
+    async fn imports_commit_audio_and_note_together_and_play_through_existing_protocol() {
+        for timed in [true, false] {
+            let dir = tempfile::tempdir().unwrap();
+            let original = fixture(dir.path());
+            let recordings = dir.path().join("recordings");
+            let db = Db::open_in_memory().await.unwrap();
+            let result = save_import(
+                &db,
+                transcript(timed),
+                MediaImportSource::Audio,
+                &original,
+                &original,
+                &recordings,
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                result.recording.original_filename.as_deref(),
+                Some("original möte.wav")
+            );
+            assert_eq!(
+                result.retained_bytes,
+                std::fs::metadata(&original).unwrap().len()
+            );
+            let note = kw_notes_core::notes::get(db.pool(), result.note_id)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(note.note_type, "import");
+            let segments: serde_json::Value =
+                serde_json::from_str(note.transcript.as_deref().unwrap()).unwrap();
+            assert_eq!(segments.as_array().unwrap().len(), 1);
+            assert_eq!(result.segments.is_empty(), !timed);
+            let copy = recordings.join(result.recording.storage_key);
+            let request = tauri::http::Request::builder()
+                .header("Range", "bytes=0-43")
+                .body(vec![])
+                .unwrap();
+            let response = crate::recordings::response_for(&request, &copy);
+            assert_eq!(response.status(), 206);
+            assert_eq!(response.body().len(), 44);
+            kw_notes_core::recordings::delete_with_recording(
+                db.pool(),
+                result.note_id,
+                &recordings,
+            )
+            .await
+            .unwrap();
+            assert!(!copy.exists());
+            assert!(original.exists());
+        }
+    }
+    #[tokio::test]
+    async fn database_failure_rolls_back_note_and_removes_copy() {
+        let dir = tempfile::tempdir().unwrap();
+        let original = fixture(dir.path());
+        let recordings = dir.path().join("recordings");
+        let db = Db::open_in_memory().await.unwrap();
+        sqlx::query("CREATE TRIGGER refuse_import BEFORE INSERT ON note_recordings BEGIN SELECT RAISE(FAIL, 'fixture failure'); END").execute(db.pool()).await.unwrap();
+        assert!(save_import(
+            &db,
+            transcript(false),
+            MediaImportSource::Video,
+            &original,
+            &original,
+            &recordings
+        )
+        .await
+        .is_err());
+        assert_eq!(std::fs::read_dir(&recordings).unwrap().count(), 0);
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM notes")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
+        assert!(original.exists());
     }
 }

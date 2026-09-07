@@ -14,6 +14,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 
+import { LocalServerHealth } from "../components/LocalServerHealth";
 import { Row } from "../components/Row";
 import {
   cancelDictation,
@@ -194,6 +195,7 @@ export function DictationView({
 
   return (
     <div className="view">
+      {route.isLocal ? <LocalServerHealth /> : null}
       {error ? <p className="error">{error}</p> : null}
 
       <section data-surface="dictation.shortcuts">

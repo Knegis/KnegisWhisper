@@ -248,6 +248,8 @@ fn render() -> String {
             crate::media::ImportedSegment,
             crate::media::MediaImportResult,
             crate::media::MediaImportProgress,
+            crate::media_job::ImportStage,
+            crate::media_job::ImportSnapshot,
         ],
         "updater" => [
             crate::updater::UpdateCheckResult,

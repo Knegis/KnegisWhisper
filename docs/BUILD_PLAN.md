@@ -98,7 +98,7 @@ state chunk I and chunk E4 describe below.
 | 6 — Local API and CLI | **Verified on Windows** | `Integrations > CLI` is now built. (Chunk H built its screen and phase 7's `Integrations > MCP` screen together, in one task, since both render the same discovery-permissions state) |
 | 7 — MCP | **Complete** | `tools/knegiswhisper-mcp`, a stdio server (~1573 lines incl. tests), reusing the local API's tool surface and token comparison. 28 crate tests plus protocol tests. Unverified by a person driving a real MCP client — see `BENCH_CHECK.md` |
 | 8 — Media import, diarization, semantic search | Local media import complete; URL import withdrawn; **diarization built 2026-09-01**; semantic search deferred | `media:{audio,video}-import` and `media:openwhispr-import` are reachable through `Notes > Upload`. `media:url-import` was reachable at the close of this plan and is not now: the command was unregistered because the fetch belongs to `yt-dlp` and cannot be policed — see chunk G. The two diarization models and `search:semantic` stay `temporarily-deferred` — Qdrant sidecar, ONNX Runtime, embeddings, none attempted this run |
-| 9 — Packaging | Written, unrun | `createUpdaterArtifacts: true` now (chunk J), release/CI workflows exist and pass locally, but no signing identity exists, no release has ever been published, and **CI triggers remain commented out by design** — chunk J's own value is deferred until someone uncomments them, so every gate in this document runs only when a person runs it |
+| 9 — Packaging | Written, unrun | `createUpdaterArtifacts: true` now (chunk J), release/CI workflows exist and pass locally, but no signing identity exists, no release has ever been published, and **selective PR checks are configured** (2026-09-05); the full matrix remains manual and new hosted execution is still unobserved |
 
 ## The unlock arithmetic
 
@@ -706,16 +706,12 @@ and always has been. Upstream's Qdrant port range is recorded in `docs/PORTING_M
 
 ---
 
-## Chunk J — packaging, updater, CI (phase 9) *(written; CI still paused by design)*
+## Chunk J — packaging, updater, CI (phase 9) *(selective PR checks configured; hosted verification pending)*
 
-- **CI stayed paused, deliberately.** `.github/workflows/ci.yml` still has its `push` and
-  `pull_request` triggers commented out. Three workflow files were written and pass every gate
-  they claim to run, dispatched manually and reviewed character by character for the one property
-  that matters most given the Actions budget — none can fire on a push — but nobody uncommented the
-  triggers. **This chunk's whole value is therefore still deferred**: every gate in this document
-  has run only when a person or an agent ran it by hand this session, and every claim of "green"
-  anywhere in this repository's history is a claim about the last run before the pause, not a
-  standing fact CI is checking right now.
+- **Selective CI configured 2026-09-05.** Contracts run on PRs, relevant changes select frontend
+  and Windows Rust checks, and manual dispatch retains the full platform matrix. Automatic push
+  runs stay off. The historical budget pause remains documented in ENGINEERING_LOG; no hosted
+  run has yet verified this configuration. Release and model-pin workflows are unchanged.
 - **A scheduled `sidecar-pin --verify` job exists** (`pin-verify.yml`), for the reason planned: it
   re-downloads every pinned target, so it does not belong in the per-push contracts job, and nothing
   else would notice a release retagged in place.

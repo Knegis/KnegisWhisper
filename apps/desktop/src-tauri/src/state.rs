@@ -19,6 +19,7 @@ pub struct AppState {
     /// The workspace's single HTTP client. Built once here so every feature
     /// shares one connection pool and one set of timeouts.
     policy: kw_network_policy::NetworkPolicy,
+    recording_directory: std::path::PathBuf,
 }
 
 impl std::fmt::Debug for AppState {
@@ -38,6 +39,7 @@ impl AppState {
             db,
             credentials: Arc::new(OsCredentialStore::new()),
             policy: kw_network_policy::NetworkPolicy::new()?,
+            recording_directory: kw_notes_core::recordings::recording_dir(),
         })
     }
 
@@ -49,12 +51,24 @@ impl AppState {
             db: Db::open_in_memory().await?,
             credentials: Arc::new(kw_security::MemoryCredentialStore::new()),
             policy: kw_network_policy::NetworkPolicy::new()?,
+            recording_directory: kw_notes_core::recordings::recording_dir(),
         })
     }
 
     #[must_use]
     pub const fn db(&self) -> &Db {
         &self.db
+    }
+
+    pub fn recording_directory(&self) -> &std::path::Path {
+        &self.recording_directory
+    }
+
+    /// Keep native and mock IPC tests away from the user's real recordings.
+    #[cfg(all(test, feature = "tauri-test"))]
+    pub fn with_recording_directory(mut self, directory: std::path::PathBuf) -> Self {
+        self.recording_directory = directory;
+        self
     }
 
     #[must_use]

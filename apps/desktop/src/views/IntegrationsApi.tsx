@@ -43,6 +43,8 @@ export function IntegrationsApi() {
     <div className="view">
       {error ? <p className="error">{error}</p> : null}
 
+      {api.blockedReason ? <p className="error" role="alert">{api.blockedReason}</p> : null}
+
       <section data-surface="integrations.api">
         <h2>Local API</h2>
         <Row

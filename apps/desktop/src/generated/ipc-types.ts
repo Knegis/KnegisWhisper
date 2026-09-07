@@ -161,27 +161,10 @@ systemAudio: SystemAudioSupport, };
 export type HotkeyAction = "dictation" | "chat-agent" | "voice-agent" | "translation" | "meeting";
 
 /**
- * Whether a hotkey toggles on each press or acts for as long as it is held.
- *
- * # The default is `Toggle`, and that is deliberate, not inertia
- *
- * Push-to-talk is one of the answers to **KNEG-115** — a two-modifier chord
- * fires on the way into any longer shortcut, and a chord that acts on release
- * cannot fire as a prefix in the damaging way, because the accidental press
- * and the accidental release bracket almost no audio instead of bracketing
- * everything the user did in between. That makes `Hold` a candidate for the
- * shipped default, and **shipping it as the default here would settle KNEG-115
- * in passing**, which is exactly the failure that issue is about. The mode
- * exists; the default is unchanged; the choice stays with the repo owner.
- *
- * # What holding costs, said here rather than found out
- *
- * A hold shorter than a syllable produces a recording shorter than a syllable.
- * The audio gate then reports `InsufficientSpeech` and nothing is transcribed
- * — which is correct behaviour and is also, under push-to-talk, a **routine**
- * outcome rather than the rare one it is under a toggle. Every mistimed tap,
- * every accidental prefix, every "I let go too early" ends that way. A user
- * who reads `InsufficientSpeech` as a fault will go looking for one.
+ * Toggle switches recording once per activation; Hold records while pressed.
+ * Modifier-only toggles qualify on full release without an intervening key.
+ * Standard accelerators and mouse buttons toggle on press. Hold mode still
+ * begins immediately and may report InsufficientSpeech after a very short tap.
  */
 export type HotkeyMode = "toggle" | "hold";
 
@@ -1199,7 +1182,7 @@ verifiedBy: VerifiedBy, };
 /**
  * What can be said about the local model server without touching the network.
  */
-export type LocalStatus = {
+export type LocalStatus = { runtimeMessage: string,
 /**
  * Whether this platform has a published server binary at all, and why not.
  */
@@ -1558,7 +1541,7 @@ count: number, } | { "state": "still-inheriting" } | { "state": "grants-everyone
 /**
  * What the settings screen shows about the local API.
  */
-export type LocalApiStatus = {
+export type LocalApiStatus = { blockedReason: string | null,
 /**
  * Whether the user has switched it on.
  */
@@ -1605,7 +1588,7 @@ export type BinaryLocation = { "state": "sibling", path: string, } | { "state": 
 /**
  * What `Integrations > CLI` shows.
  */
-export type CliStatus = {
+export type CliStatus = { blockedReason: string | null,
 /**
  * The binary's name on this platform, e.g. `knegiswhisper.exe`.
  */
@@ -1634,7 +1617,7 @@ discoveryPermissions: DiscoveryPermissions | null, };
 /**
  * What `Integrations > MCP` shows.
  */
-export type McpStatus = {
+export type McpStatus = { blockedReason: string | null,
 /**
  * The binary's name on this platform, e.g. `knegiswhisper-mcp.exe`.
  */
@@ -1712,10 +1695,9 @@ export type ImportedSegment = { text: string,
 timestamp: number, endTimestamp: number, };
 
 /**
- * What a finished import produced. The frontend turns this into a note; this
- * module does not write one itself.
+ * A committed imported note, its recording, and the transcription result.
  */
-export type MediaImportResult = { text: string, provider: string, model: string | null,
+export type MediaImportResult = { noteId: number, recording: NoteRecording, retainedBytes: number, text: string, provider: string, model: string | null,
 /**
  * The transcript divided into timed utterances, when the engine timed it.
  *
@@ -1742,7 +1724,11 @@ durationMs: number, source: MediaImportSource, };
  * in the generated TypeScript. `ipc_types` asserts against exactly that
  * collision.
  */
-export type MediaImportProgress = { "stage": "downloading", sidecar: string, written: number, total: number | null, } | { "stage": "verifying" } | { "stage": "extracting" } | { "stage": "fetching" } | { "stage": "converting" } | { "stage": "transcribing" } | { "stage": "done" };
+export type MediaImportProgress = { "stage": "downloading", sidecar: string, written: number, total: number | null, } | { "stage": "verifying" } | { "stage": "extracting" } | { "stage": "fetching" } | { "stage": "done" };
+
+export type ImportStage = "preparing" | "converting" | "transcribing" | "saving" | "succeeded" | "failed";
+
+export type ImportSnapshot = { operationId: string, stage: ImportStage, elapsedSeconds: number, provider: string | null, model: string | null, result: MediaImportResult | null, error: string | null, };
 
 /* ---------------------------------------------------------------- updater */
 /**

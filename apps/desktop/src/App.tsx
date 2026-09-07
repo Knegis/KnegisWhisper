@@ -130,6 +130,8 @@ function renderView(
   view: ViewId,
   diagnostics: Diagnostics,
   select: (id: ViewId) => void,
+  importedNoteId: number | null,
+  openImportedNote: (id: number) => void,
 ): ReactNode {
   switch (view) {
     case "dictation":
@@ -137,9 +139,9 @@ function renderView(
     case "meetings":
       return <SettingsMeetings />;
     case "notes":
-      return <Notes />;
+      return <Notes initialNoteId={importedNoteId} />;
     case "notes-upload":
-      return <NotesUpload />;
+      return <NotesUpload onOpenNote={openImportedNote} />;
     case "providers":
       return <SettingsProviders />;
     case "transcription":
@@ -177,6 +179,7 @@ function Shell() {
   // application is for. Reopening on the screen you last used sounds helpful
   // until the screen you last used is the one that failed.
   const [view, setView] = useState<ViewId>(DEFAULT_VIEW);
+  const [importedNoteId, setImportedNoteId] = useState<number | null>(null);
 
   // Both groups start closed. Dictation is a top-level destination, so the
   // opening rail is four screens and two sections -- shorter than the thirteen
@@ -248,7 +251,7 @@ function Shell() {
         {/* `select` rather than `setView`, so landing on Diagnostics opens the
             Developer group that holds it. */}
         <ViewBoundary view={view} onReset={() => select("diagnostics")}>
-          {renderView(view, diagnostics, select)}
+          {renderView(view, diagnostics, select, importedNoteId, (id) => { setImportedNoteId(id); select("notes"); })}
         </ViewBoundary>
       </div>
     </main>

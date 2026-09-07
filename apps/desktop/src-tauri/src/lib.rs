@@ -28,10 +28,12 @@ mod local_asr;
 mod local_llm;
 mod local_model;
 mod media;
+mod media_job;
 mod meeting;
 mod meeting_window;
 mod overlay;
 mod reasoning;
+mod recording_attach;
 mod recordings;
 mod sherpa_stream;
 mod shortcuts;
@@ -420,6 +422,7 @@ pub fn run() -> anyhow::Result<()> {
             commands::notes_update,
             commands::notes_delete,
             commands::note_recording_get,
+            commands::note_recording_attach_from_dialog,
             commands::note_transcript_rows,
             commands::folders_list,
             commands::folder_create,
@@ -459,6 +462,7 @@ pub fn run() -> anyhow::Result<()> {
             local_llm::local_llm_recheck_model,
             local_llm::local_llm_refresh_server,
             media::media_import_status,
+            media::media_import_snapshot,
             media::media_import_install_sidecar,
             media::media_import_audio,
             media::media_import_video,

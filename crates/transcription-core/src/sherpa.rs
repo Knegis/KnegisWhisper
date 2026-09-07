@@ -251,7 +251,11 @@ pub fn interpret(exit_code: Option<i32>, stdout: &[u8], stderr: &str) -> Inferen
     if code != 0 {
         return Inference::Rejected {
             status: u16::try_from(code).unwrap_or(1),
-            body: truncate(stderr),
+            body: format!(
+                "Parakeet exited with code {code} (0x{:08X}). {}",
+                u32::from_ne_bytes(code.to_ne_bytes()),
+                stderr_tail(stderr)
+            ),
         };
     }
 
@@ -402,6 +406,14 @@ pub fn cues(tokens: &[String], timestamps: &[f64]) -> Vec<TimedSegment> {
     out
 }
 
+fn stderr_tail(stderr: &str) -> String {
+    let count = stderr.chars().count();
+    stderr
+        .chars()
+        .skip(count.saturating_sub(STDERR_LIMIT))
+        .collect()
+}
+
 fn truncate(s: &str) -> String {
     if s.chars().count() <= STDERR_LIMIT {
         return s.to_owned();
@@ -486,6 +498,7 @@ impl LocalTranscriber for SherpaOffline {
             .await
             .map_err(|err| err.to_string())?;
         let wav_path = unique_wav_path(&self.temp_dir);
+        let _scratch = ScratchWav(wav_path.clone());
         tokio::fs::write(&wav_path, &wav)
             .await
             .map_err(|err| err.to_string())?;
@@ -494,12 +507,13 @@ impl LocalTranscriber for SherpaOffline {
         let output = tokio::process::Command::new(&self.executable)
             .args(&args)
             .stdin(Stdio::null())
+            .kill_on_drop(true)
             .output()
             .await;
 
         // Best-effort: the temp file is scratch, and a failed cleanup must
         // not hide the real result of the transcription attempt.
-        let _ = tokio::fs::remove_file(&wav_path).await;
+        // ScratchWav also covers cancellation while awaiting the child.
 
         let output = output.map_err(|err| err.to_string())?;
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -508,6 +522,34 @@ impl LocalTranscriber for SherpaOffline {
 
     fn model_name(&self) -> Option<String> {
         self.model_name.clone()
+    }
+}
+
+struct ScratchWav(PathBuf);
+impl Drop for ScratchWav {
+    fn drop(&mut self) {
+        let path = self.0.clone();
+        match std::fs::remove_file(&path) {
+            Ok(()) => return,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
+            Err(_) => {}
+        }
+        // A cancelled Windows child may still be releasing its file handle.
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            runtime.spawn(async move {
+                for _ in 0..5 {
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    match tokio::fs::remove_file(&path).await {
+                        Ok(()) => return,
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
+                        Err(_) => {}
+                    }
+                }
+                tracing::warn!("could not remove Parakeet scratch audio after process cleanup");
+            });
+        } else {
+            tracing::warn!("could not remove Parakeet scratch audio without an active runtime");
+        }
     }
 }
 
@@ -520,6 +562,36 @@ impl LocalTranscriber for SherpaOffline {
 )]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failure_keeps_native_exit_code_and_final_diagnostics() {
+        let stderr = format!("{}final native failure", "configuration ".repeat(100));
+        let result = interpret(Some(-1073740791), b"", &stderr);
+        let Inference::Rejected { body, .. } = result else {
+            panic!("must reject");
+        };
+        assert!(body.contains("0xC0000409"));
+        assert!(body.ends_with("final native failure"));
+        assert!(body.len() < 600);
+    }
+
+    #[tokio::test]
+    async fn cancelling_an_operation_removes_its_scratch_wav() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cancelled.wav");
+        std::fs::write(&path, b"fixture").unwrap();
+        let (ready, receiver) = tokio::sync::oneshot::channel();
+        let owned = path.clone();
+        let task = tokio::spawn(async move {
+            let _scratch = ScratchWav(owned);
+            let _ = ready.send(());
+            std::future::pending::<()>().await;
+        });
+        receiver.await.unwrap();
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        assert!(!path.exists());
+    }
 
     /* ---------------------------------------------- the measured output */
 
@@ -869,7 +941,10 @@ mod tests {
         match interpret(Some(2), b"", "model file not found") {
             Inference::Rejected { status, body } => {
                 assert_eq!(status, 2);
-                assert_eq!(body, "model file not found");
+                assert_eq!(
+                    body,
+                    "Parakeet exited with code 2 (0x00000002). model file not found"
+                );
             }
             other => panic!("{other:?}"),
         }
@@ -888,8 +963,11 @@ mod tests {
         let stderr = "å".repeat(STDERR_LIMIT + 50);
         match interpret(Some(1), b"", &stderr) {
             Inference::Rejected { body, .. } => {
-                assert!(body.ends_with('…'));
-                assert_eq!(body.chars().count(), STDERR_LIMIT + 1);
+                assert!(body.ends_with(&"å".repeat(STDERR_LIMIT)));
+                assert_eq!(
+                    body.chars().count(),
+                    "Parakeet exited with code 1 (0x00000001). ".len() + STDERR_LIMIT
+                );
             }
             other => panic!("{other:?}"),
         }

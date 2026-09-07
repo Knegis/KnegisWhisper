@@ -140,7 +140,9 @@ test("a writer that is not a command is caught", () => {
 
 test("a command generate_handler! does not register is caught", () => {
   const i = inputs();
-  i.lib = i.lib.replace("commands::history_set_enabled,\n", "");
+  const before = i.lib;
+  i.lib = i.lib.replace(/commands::history_set_enabled,\r?\n/, "");
+  assert.notEqual(i.lib, before, "the mutation must remove the command on LF and CRLF checkouts");
   i.backend["lib.rs"] = i.lib;
   const found = violations(i);
   assert.ok(
