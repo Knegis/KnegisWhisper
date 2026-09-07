@@ -3,6 +3,10 @@
 // exempt from that, and it does not need to be: cargo prints the error and
 // fails the build on an `Err` from main exactly as it would on a panic.
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Icon assets are embedded in the executable and generated Tauri context.
+    // Rebuild them even when only the artwork changes.
+    println!("cargo:rerun-if-changed=icons");
+
     // `tauri_build` embeds the Common Controls v6 manifest in the application
     // binary, but Rust's unit-test harness is a separate executable and does
     // not inherit that resource. Tauri's mock runtime links its dialog support,

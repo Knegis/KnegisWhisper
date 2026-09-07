@@ -738,6 +738,10 @@ export type MeetingOutcome = { "outcome": "saved", noteId: number, durationSecon
  */
 recordingPath: string,
 /**
+ * False when the note was saved but its recording could not be attached.
+ */
+recordingAttached: boolean,
+/**
  * Non-zero when audio was never transcribed. A transcript with a hole in
  * it must not look complete.
  */

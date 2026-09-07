@@ -368,6 +368,8 @@ pub enum MeetingOutcome {
         duration_seconds: f64,
         /// Where the recording is, so the note is not the only copy.
         recording_path: String,
+        /// False when the note was saved but its recording could not be attached.
+        recording_attached: bool,
         /// Non-zero when audio was never transcribed. A transcript with a hole in
         /// it must not look complete.
         gaps: u32,
@@ -1377,33 +1379,19 @@ impl MeetingRuntime {
 
         match kw_notes_core::notes::create(self.db.pool(), &note).await {
             Ok(note_id) => {
-                match crate::recordings::storage_key_for(&finished.path) {
-                    Some(key) => {
-                        if let Err(error) = kw_notes_core::recordings::attach(
-                            self.db.pool(),
-                            note_id,
-                            &key,
-                            Some(finished.duration_seconds),
-                            None,
-                        )
-                        .await
-                        {
-                            // The note and WAV still exist, but this note loses
-                            // playback; attaching must not turn Saved into Failed.
-                            tracing::error!(note_id, path = %path, error = %error, "could not attach the meeting recording");
-                        }
-                    }
-                    None => {
-                        // The note and WAV still exist, but this note loses
-                        // playback; attaching must not turn Saved into Failed.
-                        tracing::error!(note_id, path = %path, error = "recording path has no valid storage key", "could not attach the meeting recording");
-                    }
-                }
+                let recording_attached = attach_meeting_recording(
+                    &self.db,
+                    note_id,
+                    &finished.path,
+                    finished.duration_seconds,
+                )
+                .await;
 
                 MeetingOutcome::Saved {
                     note_id,
                     duration_seconds: finished.duration_seconds,
                     recording_path: path,
+                    recording_attached,
                     gaps: transcript.gaps,
                     reconnects: transcript.reconnects,
                     transcript_is_partials: from_partials,
@@ -1578,6 +1566,32 @@ fn pump_result(
         // A panic in the pump, or the task being aborted. Neither should happen;
         // both used to leave the screen stuck on "Recording" for ever.
         Err(err) => Err(format!("the transcription task failed: {err}.")),
+    }
+}
+
+/// Attachment is best effort after saving the transcript. Never remove the
+/// note or recording on failure; expose the result to the meeting screen.
+async fn attach_meeting_recording(
+    db: &Db,
+    note_id: i64,
+    path: &std::path::Path,
+    duration_seconds: f64,
+) -> bool {
+    let Some(key) = crate::recordings::storage_key_for(path) else {
+        tracing::error!(
+            note_id,
+            "could not attach the meeting recording: invalid storage key"
+        );
+        return false;
+    };
+    match kw_notes_core::recordings::attach(db.pool(), note_id, &key, Some(duration_seconds), None)
+        .await
+    {
+        Ok(()) => true,
+        Err(error) => {
+            tracing::error!(note_id, error = %error, "could not attach the meeting recording");
+            false
+        }
     }
 }
 
@@ -2086,6 +2100,7 @@ mod tests {
             note_id: 7,
             duration_seconds: 61.0,
             recording_path: "C:/x.wav".to_owned(),
+            recording_attached: false,
             gaps: 2,
             reconnects: 1,
             transcript_is_partials: true,
@@ -2093,6 +2108,7 @@ mod tests {
         let json = serde_json::to_value(&outcome).unwrap();
         assert_eq!(json["outcome"], "saved");
         assert_eq!(json["noteId"], 7);
+        assert_eq!(json["recordingAttached"], false);
         assert_eq!(json["gaps"], 2);
         assert_eq!(json["reconnects"], 1);
         assert_eq!(json["transcriptIsPartials"], true);
@@ -2106,6 +2122,55 @@ mod tests {
         let json = serde_json::to_value(&quiet).unwrap();
         assert_eq!(json["outcome"], "nothing-transcribed");
         assert_eq!(json["reconnects"], 2);
+    }
+
+    #[tokio::test]
+    async fn recording_attachment_failure_preserves_note_and_wav_and_allows_retry() {
+        let db = kw_storage::Db::open_in_memory().await.unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("meeting.wav");
+        let original = b"recording contents must survive attachment failure";
+        std::fs::write(&path, original).unwrap();
+        let id = kw_notes_core::notes::create(
+            db.pool(),
+            &kw_notes_core::notes::NewNote {
+                title: "Saved meeting".into(),
+                content: "Keep the transcript".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let before = kw_notes_core::notes::get(db.pool(), id).await.unwrap();
+        sqlx::query("CREATE TRIGGER reject_attachment BEFORE INSERT ON note_recordings BEGIN SELECT RAISE(FAIL, 'injected attachment failure'); END")
+            .execute(db.pool()).await.unwrap();
+
+        assert!(!attach_meeting_recording(&db, id, &path, 12.0).await);
+        assert_eq!(
+            kw_notes_core::notes::get(db.pool(), id).await.unwrap(),
+            before
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        assert!(kw_notes_core::recordings::get(db.pool(), id)
+            .await
+            .unwrap()
+            .is_none());
+
+        sqlx::query("DROP TRIGGER reject_attachment")
+            .execute(db.pool())
+            .await
+            .unwrap();
+        assert!(attach_meeting_recording(&db, id, &path, 12.0).await);
+        assert!(kw_notes_core::recordings::get(db.pool(), id)
+            .await
+            .unwrap()
+            .is_some());
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        assert!(!attach_meeting_recording(&db, id, std::path::Path::new("/"), 12.0).await);
+        assert_eq!(
+            kw_notes_core::notes::get(db.pool(), id).await.unwrap(),
+            before
+        );
     }
 
     #[test]
