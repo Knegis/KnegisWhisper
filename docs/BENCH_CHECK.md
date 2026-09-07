@@ -809,17 +809,19 @@ item is therefore no longer a decision to make; only the check below remains.
    installed will do), and press Import again on the same path. The second attempt must be
    accepted; a grant that did not survive a retry would break a flow that works today.
 
-### Added by chunk H (MCP and CLI screens), and unchecked
+### Added by chunk H (MCP and CLI screens)
 
-1. **Drive `tools/knegiswhisper-mcp` from a real MCP client** (an editor or agent that speaks the
-   protocol over stdio), not the protocol-test harness this task wrote for itself. Confirm
-   `initialize` negotiates a version correctly against a client that asks for one this server does
-   not support, and that at least one tool call against a real running application (list notes,
-   read history) returns real data with no secret in it.
-2. **Look at `Integrations > CLI` and `Integrations > MCP` side by side** and confirm the
-   permissions caveat reads identically on both — the fix for the two screens drifting apart is
-   tested at the unit level; nobody has looked at both screens open at once.
-3. **Run `knegiswhisper` against a machine where the local API is off**, and confirm the CLI's
+On 2026-09-07 the official Python MCP SDK 2.2.0 connected to the compiled stdio
+server against an isolated Windows desktop profile. Initialization negotiated
+`2024-11-05`, 23 tools were listed, and note creation/export, history search,
+status/models and a local fixture transcription returned real data. Both CLI and
+MCP screens were visually inspected and displayed the same permissions readback
+and administrator caveat. Detailed scope is in [CLI_MCP_WORKFLOWS.md](CLI_MCP_WORKFLOWS.md).
+This establishes SDK interoperability; it does not validate every editor's setup.
+
+Still unchecked:
+
+1. **Run `knegiswhisper` against a machine where the local API is off**, and confirm the CLI's
    error is the one the screen would predict rather than a generic connection failure.
 
 ### Added by Task 20 (the SSRF boundary fix)

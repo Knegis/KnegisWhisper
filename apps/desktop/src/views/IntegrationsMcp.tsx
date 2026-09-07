@@ -66,6 +66,12 @@ export function IntegrationsMcp() {
         </p>
 
         <Row label="Binary" value={location.text} detail={location.detail} />
+        <p className="muted">
+          Tools can create and export notes, upload media for transcription, inspect or cancel jobs,
+          discover models and control meeting recording. Uploads read files accessible to the MCP
+          server process and use the application's configured transcription provider.
+          Recording tools control the visible meeting recorder, including meetings started here.
+        </p>
         <DiscoveryFileRows
           discoveryPath={status.discoveryPath}
           permissions={status.discoveryPermissions}

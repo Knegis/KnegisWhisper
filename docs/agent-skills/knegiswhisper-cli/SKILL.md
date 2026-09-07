@@ -17,17 +17,27 @@ for you.
 ## Before anything else
 
 The local API is **off by default**. The user switches it on under
-**Integrations › API**. Until then both tools have nothing to connect to, which
+**Developer > Local API**. Until then both tools have nothing to connect to, which
 is a configuration state and not a fault.
 
 Where the binaries are, and the command to paste into an MCP client's
-configuration, are both shown in the application under **Integrations › CLI**
-and **Integrations › MCP**.
+configuration, are both shown in the application under **Developer > CLI**
+and **Developer > MCP**.
 
 ## The CLI
 
 ```
 knegiswhisper health
+knegiswhisper status
+knegiswhisper models list
+knegiswhisper notes create --title TITLE --content MARKDOWN [--folder ID]
+knegiswhisper notes export ID [--format markdown] [--transcript] [--output PATH] [--force]
+knegiswhisper transcribe file PATH
+knegiswhisper jobs status ID
+knegiswhisper jobs cancel ID
+knegiswhisper recording start --provider ID [--system-audio]
+knegiswhisper recording stop
+knegiswhisper history search QUERY [--limit N] [--after ID]
 
 knegiswhisper notes list   [--limit N] [--folder ID] [--type TYPE]
 knegiswhisper notes get    <ID>
@@ -83,10 +93,15 @@ which matters when deciding whether to ask the user to start it.
 ## The MCP server
 
 `knegiswhisper-mcp` speaks JSON-RPC over stdio and advertises itself as
-`knegiswhisper-mcp`. Thirteen tools, one per endpoint:
+`knegiswhisper-mcp`. Tools map to the local API:
 
 ```
 health
+app_status  models_list
+notes_create  notes_export
+transcription_create  jobs_get  jobs_cancel
+recording_start  recording_stop
+transcriptions_search
 notes_list  notes_get  notes_search  notes_patch  notes_delete
 folders_list
 dictionary_list  dictionary_update
@@ -120,7 +135,11 @@ copy here would be a second thing to keep in step.
 
 ## What has and has not been exercised
 
-The CLI has been run against a live application. **No MCP client has ever
-connected to `knegiswhisper-mcp`** — the protocol handling is unit-tested and
-has never had a real client on the other end (KNEG-91). If something in the
-handshake behaves unlike this file says, believe the wire and report it.
+On 2026-09-07, the compiled CLI and the official Python MCP SDK exercised an
+isolated running Windows app with local Whisper tiny. MCP negotiated protocol
+`2024-11-05`, listed 23 tools, created/exported notes, searched history, read
+status/models and transcribed a fixture into a saved note. CLI checks also
+covered cancellation, interrupted-job recovery and microphone meeting start/stop.
+See [workflow behavior and validation](../../CLI_MCP_WORKFLOWS.md). Cloud
+credentials, system-audio capture and third-party editor configuration were
+outside this run.

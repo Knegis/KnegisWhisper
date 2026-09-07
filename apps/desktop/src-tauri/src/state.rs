@@ -37,7 +37,11 @@ impl AppState {
         let db = Db::open(&path).await?;
         Ok(Self {
             db,
-            credentials: Arc::new(OsCredentialStore::new()),
+            credentials: if kw_storage::paths::debug_profile().is_some() {
+                Arc::new(kw_security::MemoryCredentialStore::new())
+            } else {
+                Arc::new(OsCredentialStore::new())
+            },
             policy: kw_network_policy::NetworkPolicy::new()?,
             recording_directory: kw_notes_core::recordings::recording_dir(),
         })

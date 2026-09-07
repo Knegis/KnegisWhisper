@@ -25,6 +25,7 @@
 //! reported honestly rather than described optimistically.
 
 pub mod discovery;
+pub mod runtime;
 pub mod server;
 pub mod wire;
 

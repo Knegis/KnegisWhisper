@@ -36,6 +36,16 @@ use crate::protocol::ErrorObject;
 /// Each entry names one local API route. There is no tool here without a
 /// route behind it, and no route with two tools in front of it.
 const TOOLS: &[&str] = &[
+    "notes_create",
+    "transcription_create",
+    "jobs_get",
+    "jobs_cancel",
+    "transcriptions_search",
+    "notes_export",
+    "recording_start",
+    "recording_stop",
+    "app_status",
+    "models_list",
     "health",
     "notes_list",
     "notes_get",
@@ -62,6 +72,16 @@ pub fn definitions() -> Vec<Value> {
 /// function's `match` fell out of sync, and a test below catches that.
 fn definition(name: &str) -> Value {
     let (description, schema) = match name {
+        "notes_create" => ("Create an editable note from a title and Markdown content.", json!({"type":"object","properties":{"title":{"type":"string"},"content":{"type":"string"},"folder_id":{"type":"integer"}},"required":["title","content"],"additionalProperties":false})),
+        "transcription_create" => ("Upload and transcribe a local media file accessible to this MCP server process. May send audio to the app's configured provider. Returns a job ID; poll jobs_get.", json!({"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false})),
+        "jobs_get" => ("Read durable transcription job status and result note ID.", json!({"type":"object","properties":{"id":{"type":"string"}},"required":["id"],"additionalProperties":false})),
+        "jobs_cancel" => ("Request cancellation of an import before its save phase.", json!({"type":"object","properties":{"id":{"type":"string"}},"required":["id"],"additionalProperties":false})),
+        "transcriptions_search" => ("Search final dictation history text, newest first.", json!({"type":"object","properties":{"query":{"type":"string"},"limit":{"type":"integer","minimum":1},"after":{"type":"integer","minimum":1}},"required":["query"],"additionalProperties":false})),
+        "notes_export" => ("Export a note's editable Markdown, or select transcript for timed export. Returns content and a suggested filename; does not write a file.", json!({"type":"object","properties":{"id":{"type":"integer"},"format":{"type":"string","enum":["markdown","text","md","txt","json","srt","vtt"]},"transcript":{"type":"boolean"}},"required":["id"],"additionalProperties":false})),
+        "recording_start" => ("Start a visible meeting recording in the desktop app. Captures microphone; system audio only if requested. May send audio to the selected provider.", json!({"type":"object","properties":{"provider":{"type":"string"},"system_audio":{"type":"boolean"}},"required":["provider"],"additionalProperties":false})),
+        "recording_stop" => ("Stop the active meeting (including one started in the desktop) and return its saved outcome.", json!({"type":"object","properties":{},"required":[],"additionalProperties":false})),
+        "app_status" => ("Report recording state, transcription route and durable import metadata.", json!({"type":"object","properties":{},"required":[],"additionalProperties":false})),
+        "models_list" => ("List transcription models and configuration/installation readiness. Does not test provider connectivity.", json!({"type":"object","properties":{},"required":[],"additionalProperties":false})),
         "health" => (
             "Check whether KnegisWhisper is running and report its version. Maps to GET \
              /v1/health.",
@@ -235,6 +255,22 @@ impl CallResult {
 /// failure — comes back as `Ok`, because reaching it and getting a "no" is
 /// not a protocol error.
 pub async fn call(client: &Client, name: &str, args: &Value) -> Result<CallResult, ErrorObject> {
+    if [
+        "notes_create",
+        "transcription_create",
+        "jobs_get",
+        "jobs_cancel",
+        "transcriptions_search",
+        "notes_export",
+        "recording_start",
+        "recording_stop",
+        "app_status",
+        "models_list",
+    ]
+    .contains(&name)
+    {
+        return workflow_call(client, name, args).await;
+    }
     match name {
         "health" => Ok(respond(client.get("/v1/health").await)),
         "notes_list" => notes_list(client, args).await,
@@ -257,6 +293,110 @@ pub async fn call(client: &Client, name: &str, args: &Value) -> Result<CallResul
 
 /// Turn the local API's answer into a tool result: the JSON on success, the
 /// error's message — the same one a CLI user would see — on failure.
+async fn workflow_call(
+    client: &Client,
+    name: &str,
+    args: &Value,
+) -> Result<CallResult, ErrorObject> {
+    let definition = definition(name);
+    let properties = definition
+        .pointer("/inputSchema/properties")
+        .ok_or_else(|| ErrorObject::invalid_params("tool schema unavailable"))?;
+    let object = args
+        .as_object()
+        .ok_or_else(|| ErrorObject::invalid_params("arguments must be an object"))?;
+    for (key, val) in object {
+        let schema = properties
+            .get(key)
+            .ok_or_else(|| ErrorObject::invalid_params(format!("unknown argument {key}")))?;
+        let valid = match schema.get("type").and_then(Value::as_str) {
+            Some("string") => val.is_string(),
+            Some("integer") => val.as_i64().is_some(),
+            Some("boolean") => val.is_boolean(),
+            _ => false,
+        };
+        if !valid {
+            return Err(ErrorObject::invalid_params(format!(
+                "invalid type for {key}"
+            )));
+        }
+        if let Some(values) = schema.get("enum").and_then(Value::as_array) {
+            if !values.contains(val) {
+                return Err(ErrorObject::invalid_params(format!("invalid {key}")));
+            }
+        }
+    }
+    let result = match name {
+        "notes_create" => {
+            required_string(args, "title", name)?;
+            required_string(args, "content", name)?;
+            client
+                .request(Method::POST, "/v1/notes", Some(args.clone()))
+                .await
+        }
+        "transcription_create" => {
+            let path = required_string(args, "path", name)?;
+            client.transcribe_file(std::path::Path::new(&path)).await
+        }
+        "jobs_get" | "jobs_cancel" => {
+            let id = required_string(args, "id", name)?;
+            let path = query_path("", &[("id".into(), id)]);
+            // Use the same percent encoder as query values for this path component.
+            let encoded = path.strip_prefix("?id=").unwrap_or("");
+            if name == "jobs_get" {
+                client.get(&format!("/v1/jobs/{encoded}")).await
+            } else {
+                client
+                    .request(Method::POST, &format!("/v1/jobs/{encoded}/cancel"), None)
+                    .await
+            }
+        }
+        "transcriptions_search" => {
+            let mut pairs = vec![("q".into(), required_string(args, "query", name)?)];
+            if let Some(limit) = optional_u32(args, "limit")? {
+                pairs.push(("limit".into(), limit.to_string()));
+            }
+            if let Some(after) = optional_i64(args, "after")? {
+                pairs.push(("after".into(), after.to_string()));
+            }
+            client
+                .get(&query_path("/v1/transcriptions/search", &pairs))
+                .await
+        }
+        "notes_export" => {
+            let id = required_i64(args, "id", name)?;
+            let format = optional_string(args, "format")?.unwrap_or_else(|| "markdown".into());
+            let timed = args
+                .get("transcript")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            client
+                .get(&query_path(
+                    &format!("/v1/notes/{id}/export"),
+                    &[
+                        ("format".into(), format),
+                        ("transcript".into(), timed.to_string()),
+                    ],
+                ))
+                .await
+        }
+        "recording_start" => {
+            required_string(args, "provider", name)?;
+            client
+                .request(Method::POST, "/v1/recording/start", Some(args.clone()))
+                .await
+        }
+        "recording_stop" => {
+            client
+                .request(Method::POST, "/v1/recording/stop", None)
+                .await
+        }
+        "app_status" => client.get("/v1/status").await,
+        "models_list" => client.get("/v1/models").await,
+        _ => return Err(ErrorObject::invalid_params("unknown tool")),
+    };
+    Ok(respond(result))
+}
 fn respond(outcome: Result<Value, CliError>) -> CallResult {
     match outcome {
         Ok(value) => CallResult::ok(kw_cli::render::as_json(&value)),
@@ -531,7 +671,7 @@ mod tests {
     fn the_tool_count_matches_the_local_apis_routes() {
         // health, notes: list/get/search/patch/delete, folders: list,
         // dictionary: list/update, transcriptions: list/get/delete/forget-audio.
-        assert_eq!(definitions().len(), 13);
+        assert_eq!(definitions().len(), 23);
     }
 
     #[test]

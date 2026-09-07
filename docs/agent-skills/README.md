@@ -19,12 +19,13 @@ table in `crates/local-api/src/server.rs`, the request shapes in
 `tools/knegiswhisper-mcp/src/tools.rs`. Nothing is described from memory of what
 an endpoint like this usually does.
 
-**What that is not:** evidence that an agent has driven any of it. No MCP client
-has ever connected to `knegiswhisper-mcp` (KNEG-91), so the shapes below are
-*read from the source* rather than *observed on the wire*. The difference
-matters and is the reason it is said here rather than assumed.
+On 2026-09-07, the official Python MCP client connected over stdio to the
+compiled server and exercised tools against an isolated running Windows app.
+The CLI also completed local transcription and recording workflows. See
+[`../CLI_MCP_WORKFLOWS.md`](../CLI_MCP_WORKFLOWS.md) for behavior and the precise
+validation scope; these checks do not establish cloud-provider connectivity.
 
 | file | what it covers |
 | --- | --- |
-| [`knegiswhisper-api/SKILL.md`](knegiswhisper-api/SKILL.md) | The HTTP API: discovery, authentication, all thirteen endpoints |
+| [`knegiswhisper-api/SKILL.md`](knegiswhisper-api/SKILL.md) | The HTTP API: discovery, authentication, notes, history and desktop workflows |
 | [`knegiswhisper-cli/SKILL.md`](knegiswhisper-cli/SKILL.md) | The `knegiswhisper` command and the `knegiswhisper-mcp` stdio server |

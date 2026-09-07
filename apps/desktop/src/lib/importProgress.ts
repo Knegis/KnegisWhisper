@@ -1,10 +1,10 @@
 import type { ImportSnapshot } from "../generated/ipc-types.js";
 
 export function importActive(snapshot: ImportSnapshot | null): boolean {
-  return snapshot !== null && snapshot.stage !== "succeeded" && snapshot.stage !== "failed";
+  return snapshot !== null && snapshot.stage !== "succeeded" && snapshot.stage !== "failed" && snapshot.stage !== "cancelled";
 }
 export function importProgressText(snapshot: ImportSnapshot): string {
-  const labels = { preparing: "Preparing import", converting: "Converting audio", transcribing: "Transcribing", saving: "Saving note and recording", succeeded: "Import complete", failed: "Import failed" };
+  const labels = { preparing: "Preparing import", converting: "Converting audio", transcribing: "Transcribing", saving: "Saving note and recording", succeeded: "Import complete", failed: "Import failed", cancelled: "Import cancelled" };
   const seconds = Math.max(0, Math.floor(snapshot.elapsedSeconds));
   return `${labels[snapshot.stage]} · ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")} elapsed`;
 }
