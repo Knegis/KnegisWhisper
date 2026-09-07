@@ -31,7 +31,7 @@ let latestImportSnapshot: import("../generated/ipc-types").ImportSnapshot | null
  */
 
 import { emit } from "@tauri-apps/api/event";
-import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
+import { mockIPC, mockWindows, mockConvertFileSrc } from "@tauri-apps/api/mocks";
 
 import type {
   Accelerator,
@@ -1400,7 +1400,7 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
     noteTranscriptRows.delete(id);
     return notes.length !== before;
   },
-  // `mockIPC` also stubs convertFileSrc. It intentionally has no recording
+  // The fixture setup stubs convertFileSrc. It intentionally has no recording
   // server, so the recording player's honest error state appears in browser dev.
   note_recording_get: (a) => {
     const id = arg<number>(a, "id");
@@ -1881,6 +1881,7 @@ function markThePageAsInvented(): void {
 export function installDevFixtures(): void {
   markThePageAsInvented();
   mockWindows("main");
+  mockConvertFileSrc("windows");
   mockIPC(
     (cmd, payload) => {
       const handler = HANDLERS[cmd];
