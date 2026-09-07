@@ -54,3 +54,27 @@ tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
 # anything is not evidence of absence -- see the example's own doc comment.
 # No cycle: `kw-audio-core` does not depend on this crate.
 kw-audio-core.workspace = true
+
+# `capture_probe` alone exercises recorder-facing capture stacks. Keeping these
+# features dev-only prevents a hardware validation instrument from expanding
+# the APIs linked by the shipping platform crate.
+[target.'cfg(windows)'.dev-dependencies.windows]
+workspace = true
+features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_HiDpi",
+    "Win32_System_Com",
+    "Win32_System_WinRT",
+    "Win32_System_WinRT_Direct3D11",
+    "Win32_System_WinRT_Graphics_Capture",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Foundation",
+    "Graphics",
+    "Graphics_Capture",
+    "Graphics_DirectX_Direct3D11",
+]
