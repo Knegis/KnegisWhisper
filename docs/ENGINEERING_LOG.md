@@ -35,6 +35,20 @@ User-observed evidence and remaining external checks are in BENCH_CHECK.md.
 Unrelated icon assets and icon rebuild changes are excluded from this batch.
 Publishing, hosted CI execution and merging remain separate steps.
 
+The isolated committed checkout passed 1,776 workspace tests (13 ignored),
+375 Tauri mock-webview tests (5 ignored), six TypeScript tests, formatting,
+workspace/IPC Clippy, the production frontend build, contract/generated checks
+and scanner/CI-selection suites. The existing frontend chunk-size warning remains.
+Browser fixtures additionally verified completion restored after navigation and
+opening the imported note with editor/transcript controls. That check exposed a
+missing development-only `convertFileSrc` mock, now fixed; it is not native audio
+playback evidence. The temporary browser preview was closed after verification.
+
+KNEG-170's functional recovery/diagnostics scope is now Done, with the unresolved
+Whisper exit cause explicitly linked to open KNEG-96. KNEG-111/KNEG-40 still await
+hosted Windows success. The local PR text and complete check/commit inventory are
+prepared under ignored `target/delivery/`; no publication was performed.
+
 
 ## 2026-09-05 — hotkeys, API permissions, Whisper recovery and retained imports
 
