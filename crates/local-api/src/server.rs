@@ -38,12 +38,17 @@ use crate::API_VERSION;
 pub struct ApiState {
     pool: SqlitePool,
     token: LocalApiToken,
+    recording_directory: std::path::PathBuf,
 }
 
 impl ApiState {
     #[must_use]
-    pub const fn new(pool: SqlitePool, token: LocalApiToken) -> Self {
-        Self { pool, token }
+    pub fn new(pool: SqlitePool, token: LocalApiToken) -> Self {
+        Self {
+            pool,
+            token,
+            recording_directory: kw_notes_core::recordings::recording_dir(),
+        }
     }
 }
 
@@ -317,9 +322,13 @@ async fn delete_note(
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     let id = crate::wire::parse_id(&id)?;
-    let removed = notes::delete(&state.pool, id)
-        .await
-        .map_err(|err| storage_failed("notes::delete", &err))?;
+    let removed = kw_notes_core::recordings::delete_with_recording(
+        &state.pool,
+        id,
+        &state.recording_directory,
+    )
+    .await
+    .map_err(|err| storage_failed("notes::delete", &err))?;
 
     if removed {
         Ok(StatusCode::NO_CONTENT)
@@ -432,5 +441,68 @@ async fn delete_audio(
         transcriptions::AudioForgotten::Cleared
         | transcriptions::AudioForgotten::NoAudioToForget => Ok(StatusCode::NO_CONTENT),
         transcriptions::AudioForgotten::NoSuchRow => Err(ApiError::not_found("transcription")),
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod recording_deletion_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn authenticated_delete_removes_recording_but_unauthenticated_does_not() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = kw_storage::Db::open_in_memory().await.unwrap();
+        let id = notes::create(
+            db.pool(),
+            &notes::NewNote {
+                title: "Recorded".to_owned(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let audio = dir.path().join("owned.wav");
+        std::fs::write(&audio, b"audio").unwrap();
+        kw_notes_core::recordings::attach(db.pool(), id, "owned.wav", None, None)
+            .await
+            .unwrap();
+        let token = LocalApiToken::generate().unwrap();
+        let mut state = ApiState::new(db.pool().clone(), token.clone());
+        state.recording_directory = dir.path().to_owned();
+        let server = serve(TcpListener::bind("127.0.0.1:0").await.unwrap(), state).unwrap();
+        let url = format!("http://127.0.0.1:{}/v1/notes/{id}", server.port());
+        let client = reqwest::Client::new();
+        assert_eq!(
+            client.delete(&url).send().await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert!(audio.exists());
+        assert_eq!(
+            client
+                .delete(&url)
+                .header("Authorization", token.header_value())
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::NO_CONTENT
+        );
+        assert!(!audio.exists());
+        assert!(kw_notes_core::recordings::get(db.pool(), id)
+            .await
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            client
+                .delete(&url)
+                .header("Authorization", token.header_value())
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+        server.shutdown().await;
     }
 }

@@ -8,12 +8,13 @@
 //! protocol. This surface does not list recordings, accept renderer-supplied
 //! paths, or serve anything outside the application-owned directory.
 
-use std::ffi::OsStr;
 use std::fs::File;
 use std::io::{Read as _, Seek as _, SeekFrom};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use kw_notes_core::NoteRecording;
+#[cfg(test)]
+use kw_notes_core::recordings::is_valid_storage_key;
+pub(crate) use kw_notes_core::recordings::{recording_dir, storage_key_for};
 use tauri::http::header::{
     HeaderValue, ACCEPT_RANGES, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE, RANGE,
 };
@@ -28,38 +29,6 @@ pub(crate) const SCHEME: &str = "recording";
 /// The maximum body returned for one range request, matching the intended
 /// 1 MiB cap for this protocol.
 const MAX_LEN: u64 = 1024 * 1024;
-
-/// Where meeting recordings are kept.
-pub(crate) fn recording_dir() -> PathBuf {
-    kw_storage::paths::data_dir().join("meetings")
-}
-
-/// Whether `key` is one plain file name rather than a path.
-pub(crate) fn is_valid_storage_key(key: &str) -> bool {
-    !key.is_empty()
-        && key != "."
-        && key != ".."
-        && key.trim() == key
-        && !key.contains(['/', '\\', '\0'])
-        && Path::new(key).file_name() == Some(OsStr::new(key))
-}
-
-/// Resolve a validated storage key inside the application-owned directory.
-pub(crate) fn resolve(key: &str) -> Option<PathBuf> {
-    if !is_valid_storage_key(key) {
-        return None;
-    }
-
-    let directory = recording_dir();
-    let joined = directory.join(key);
-    (joined.parent() == Some(directory.as_path())).then_some(joined)
-}
-
-/// Derive the storage key from a path the recorder constructed itself.
-pub(crate) fn storage_key_for(path: &Path) -> Option<String> {
-    let key = path.file_name()?.to_str()?;
-    is_valid_storage_key(key).then(|| key.to_owned())
-}
 
 /// Parse the note id from a custom-protocol request path.
 pub(crate) fn note_id_from_path(path: &str) -> Option<i64> {
@@ -255,7 +224,9 @@ pub(crate) fn serve<R: tauri::Runtime>(
                 return;
             }
         };
-        let Some(path) = resolve(&recording.storage_key) else {
+        let Some(path) =
+            kw_notes_core::recordings::resolve(state.recording_directory(), &recording.storage_key)
+        else {
             tracing::error!(note_id, key = %recording.storage_key, "stored note recording key is invalid");
             responder.respond(response(StatusCode::FORBIDDEN, Vec::new()));
             return;
@@ -263,25 +234,6 @@ pub(crate) fn serve<R: tauri::Runtime>(
 
         responder.respond(response_for(&request, &path));
     });
-}
-
-async fn remove_at(path: &Path, key: &str) {
-    match tokio::fs::remove_file(path).await {
-        Ok(()) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => {
-            tracing::warn!(storage_key = key, error = %error, "could not remove a deleted note's recording");
-        }
-    }
-}
-
-/// Remove the application-owned file after its note has been deleted.
-pub(crate) async fn remove_file_for(recording: &NoteRecording) {
-    let Some(path) = resolve(&recording.storage_key) else {
-        tracing::warn!(storage_key = %recording.storage_key, "refused to remove an invalid recording key");
-        return;
-    };
-    remove_at(&path, &recording.storage_key).await;
 }
 
 #[cfg(test)]
@@ -293,6 +245,7 @@ pub(crate) async fn remove_file_for(recording: &NoteRecording) {
 )]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     fn wav() -> Vec<u8> {
         kw_audio_core::wav::encode_wav(&vec![0.25; 256], 16_000)
@@ -465,9 +418,9 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("remove.wav");
 
-        remove_at(&path, "remove.wav").await;
+        kw_notes_core::recordings::remove_file(directory.path(), "remove.wav").await;
         std::fs::write(&path, wav()).unwrap();
-        remove_at(&path, "remove.wav").await;
+        kw_notes_core::recordings::remove_file(directory.path(), "remove.wav").await;
         assert!(!path.exists());
     }
 }

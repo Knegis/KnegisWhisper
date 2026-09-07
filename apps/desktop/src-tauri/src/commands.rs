@@ -1133,25 +1133,12 @@ pub async fn notes_update(
 /// Delete a note and its application-owned recording. Returns whether the note
 /// existed.
 ///
-/// The renderer tells the user the file goes with the note before asking for
-/// confirmation. The local API's DELETE in `crates/local-api/src/server.rs:320`
-/// does not remove the file; that known gap is tracked by the orchestrator.
+/// Both desktop and local HTTP API use the shared transactional deletion path.
 #[tauri::command]
 pub async fn notes_delete(state: State<'_, AppState>, id: i64) -> CmdResult<bool> {
-    let recording = note_recordings::get(state.db().pool(), id)
+    note_recordings::delete_with_recording(state.db().pool(), id, state.recording_directory())
         .await
-        .map_err(|e| fail("could not read the note's recording", e))?;
-    let deleted = notes::delete(state.db().pool(), id)
-        .await
-        .map_err(|e| fail("could not delete the note", e))?;
-
-    if deleted {
-        if let Some(recording) = recording {
-            crate::recordings::remove_file_for(&recording).await;
-        }
-    }
-
-    Ok(deleted)
+        .map_err(|e| fail("could not delete the note", e))
 }
 
 /// The recording attached to a note, if it has one.
