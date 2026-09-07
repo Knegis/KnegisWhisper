@@ -205,6 +205,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.os }}
+          cache-on-failure: true
 
       # Tauri needs the system webview and its build dependencies on Linux.
       - name: Linux system dependencies
@@ -235,13 +236,13 @@ jobs:
         run: cargo fmt --all --check
 
       - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --profile ci --workspace --all-targets -- -D warnings
 
       - name: Test
-        run: cargo test --workspace
+        run: cargo test --profile ci --workspace
 
       - name: Build
-        run: cargo build --workspace
+        run: cargo build --profile ci --workspace
 
       # Last on purpose. This is the only step that resolves `tauri` with a
       # different feature set, so it rebuilds tauri and everything downstream;
@@ -253,4 +254,4 @@ jobs:
       # nowhere, which is what KNEG-147 recorded. `tools/feature-audit/scan.mjs`
       # in the Contracts job is what keeps it from silently going away again.
       - name: Test (Tauri IPC boundary)
-        run: cargo test -p knegiswhisper --lib --features tauri-test
+        run: cargo test --profile ci -p knegiswhisper --lib --features tauri-test

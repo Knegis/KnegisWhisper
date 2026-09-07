@@ -115,3 +115,25 @@ tests (14 opt-in tests ignored); and the desktop library's Tauri-enabled suite
 Clippy with warnings denied also passed. Rust 1.98 is used
 for matching the hosted runner. The hosted follow-up is PR #38; its actual
 Windows job, not these local results, supplies KNEG-40/KNEG-111's evidence.
+
+## Hosted audio failure and follow-up
+
+Run 34164649234 passed Windows Format and Clippy, then crashed in the
+kw-audio-core test process with STATUS_ACCESS_VIOLATION (0xc0000005). Compilation
+took about 51 minutes before execution reached the failing device-probe tests.
+This is KNEG-178. CPAL 0.15.3 caches an IMMDeviceEnumerator created in the first
+calling thread's COM apartment. That pointer can outlive the apartment, matching
+[the upstream lifetime report](https://github.com/RustAudio/cpal/issues/1302).
+
+The dependency is pinned to a local copy of the same 0.15.3 release with a small
+WASAPI patch: create and release an owned enumerator on each calling thread.
+The patch and provenance are documented in `vendor/cpal/KNEG_PATCH.md`. It
+applies to production too. A separate integration-test process exercises eight
+sequential probing threads. This test passes locally both before and after the
+patch; the hosted environment must establish resolution of its observed crash.
+
+Hosted checks now use the `ci` profile, with dependency optimization disabled
+and limited debug information. Debug assertions remain enabled, while ordinary
+development and release profiles retain their existing settings. Dependency
+cache saving on failure prevents another test failure from throwing away the
+entire cold build. Vendored files also select the Windows CI job.
