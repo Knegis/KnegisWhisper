@@ -56,6 +56,7 @@ import type {
 } from "./ipc";
 
 import type { DiarizationRole } from "../generated/providers";
+import { meetingRecordingWarning } from "./meetingRecordingWarning";
 
 /**
  * A state and, where there is one, what backs it up.
@@ -720,6 +721,8 @@ export function meetingOutcomeLabel(outcome: MeetingOutcome): string {
     case "saved": {
       const minutes = Math.round(outcome.durationSeconds / 60);
       const parts = [`Saved as note ${outcome.noteId} (${minutes} min).`];
+      const recordingWarning = meetingRecordingWarning(outcome.recordingAttached);
+      if (recordingWarning) parts.push(recordingWarning);
       if (outcome.transcriptIsPartials) {
         // Said plainly rather than left for the reader to notice and wonder.
         //

@@ -12,6 +12,20 @@ maintained in place rather than appended to, because its purpose is to be curren
 
 ---
 
+## 2026-09-07 — KNEG-157: disclose meeting recording attachment failures
+
+The saved meeting outcome now carries `recordingAttached`. Attachment failure
+keeps the successful note outcome and original WAV, but the meeting result
+explains that playback is unavailable and directs the user to the note's
+“Attach recording…” action with the existing recording path. Generated IPC types
+and frontend fixtures carry the flag. No migration or automatic retry was added.
+
+A temporary-database trigger forces attachment insertion to fail: the regression
+check verifies that the note and recording survive, no attachment is committed,
+and attachment succeeds after the fault is removed. Invalid storage keys report
+failure too. Frontend tests check the failure/recovery message and its absence
+on success; the IPC serialization test verifies the false flag reaches JSON.
+
 ## 2026-09-07 — delivery review and persistent import progress
 
 Reviewed recording transactions/cleanup, permission verification and token

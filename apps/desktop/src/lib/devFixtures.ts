@@ -1604,6 +1604,7 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
       gaps: 0,
       reconnects: 1,
       transcriptIsPartials: false,
+      recordingAttached: true,
     } satisfies MeetingOutcome;
   },
   meeting_cancel: () => {
