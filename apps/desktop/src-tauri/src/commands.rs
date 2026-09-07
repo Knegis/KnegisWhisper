@@ -1152,6 +1152,41 @@ pub async fn note_recording_get(
         .map_err(|e| fail("could not read the note's recording", e))
 }
 
+/// Pick and attach in Rust: no filesystem path crosses this IPC boundary.
+#[tauri::command]
+pub async fn note_recording_attach_from_dialog(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: i64,
+) -> CmdResult<Option<NoteRecording>> {
+    use tauri_plugin_dialog::DialogExt as _;
+    crate::recording_attach::ensure_available(state.db(), id).await?;
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.dialog()
+        .file()
+        .set_title("Attach original recording")
+        .add_filter("WAV recording", &["wav"])
+        .pick_file(move |chosen| {
+            let _ = tx.send(chosen);
+        });
+    let selected = rx
+        .await
+        .map_err(|e| fail("the open dialog closed unexpectedly", e))?
+        .map(|chosen| {
+            chosen
+                .into_path()
+                .map_err(|e| fail("could not resolve the chosen recording", e))
+        })
+        .transpose()?;
+    crate::recording_attach::from_selection(
+        state.db().clone(),
+        id,
+        selected,
+        state.recording_directory().to_owned(),
+    )
+    .await
+}
+
 /// Folders in display order.
 #[tauri::command]
 pub async fn folders_list(state: State<'_, AppState>) -> CmdResult<Vec<notes::Folder>> {

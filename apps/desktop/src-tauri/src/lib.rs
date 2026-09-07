@@ -32,6 +32,7 @@ mod meeting;
 mod meeting_window;
 mod overlay;
 mod reasoning;
+mod recording_attach;
 mod recordings;
 mod sherpa_stream;
 mod shortcuts;
@@ -420,6 +421,7 @@ pub fn run() -> anyhow::Result<()> {
             commands::notes_update,
             commands::notes_delete,
             commands::note_recording_get,
+            commands::note_recording_attach_from_dialog,
             commands::note_transcript_rows,
             commands::folders_list,
             commands::folder_create,

@@ -28,6 +28,7 @@ import {
   EXPORT_FORMATS,
   getFolders,
   getNoteRecording,
+  attachNoteRecording,
   getNoteTranscriptRows,
   getNotes,
   searchNotes,
@@ -84,6 +85,38 @@ const NoteWorkspace = forwardRef<
     recording: Awaited<ReturnType<typeof getNoteRecording>>;
   } | null>(null);
   const [transcriptError, setTranscriptError] = useState<string | null>(null);
+  const [attaching, setAttaching] = useState(false);
+  const [attachmentError, setAttachmentError] = useState<string | null>(null);
+  const attachmentGeneration = useRef(0);
+  const attachmentPending = useRef(false);
+
+  useEffect(() => {
+    attachmentGeneration.current += 1;
+    attachmentPending.current = false;
+    setAttaching(false);
+    setAttachmentError(null);
+    return () => { attachmentGeneration.current += 1; };
+  }, [note.id]);
+
+  const attachRecording = async () => {
+    if (attachmentPending.current) return;
+    attachmentPending.current = true;
+    const generation = attachmentGeneration.current;
+    setAttaching(true);
+    setAttachmentError(null);
+    try {
+      const recording = await attachNoteRecording(note.id);
+      if (generation !== attachmentGeneration.current || recording === null) return;
+      setTranscript((previous) => previous === null ? previous : { ...previous, recording });
+    } catch (cause: unknown) {
+      if (generation === attachmentGeneration.current) setAttachmentError(message(cause));
+    } finally {
+      if (generation === attachmentGeneration.current) {
+        attachmentPending.current = false;
+        setAttaching(false);
+      }
+    }
+  };
 
   const save = useCallback(
     async (patch: Partial<EditorPatch>) => {
@@ -162,6 +195,9 @@ const NoteWorkspace = forwardRef<
             rows={transcript.rows}
             recording={transcript.recording}
             noteId={note.id}
+            onAttach={() => { void attachRecording(); }}
+            attaching={attaching}
+            attachmentError={attachmentError}
           />
         ) : transcriptError ? (
           <p className="error">{transcriptError}</p>
@@ -171,7 +207,7 @@ const NoteWorkspace = forwardRef<
   );
 });
 
-export function Notes() {
+export function Notes({ initialNoteId = null }: { initialNoteId?: number | null }) {
   const [folderFilter, setFolderFilter] = useState<number | null>(null);
 
   const load = useCallback(async () => {
@@ -189,7 +225,7 @@ export function Notes() {
   const [exportFormat, setExportFormat] = useState<ExportFormat>("txt");
   const [preview, setPreview] = useState<ExportedTranscript | null>(null);
   const [exportedTo, setExportedTo] = useState<string | null>(null);
-  const [openNoteId, setOpenNoteId] = useState<number | null>(null);
+  const [openNoteId, setOpenNoteId] = useState<number | null>(initialNoteId);
   const workspaceRef = useRef<NoteWorkspaceHandle>(null);
 
   if (!data) {

@@ -35,7 +35,15 @@ test("the real tree is clean, and all parser inventories are live", () => {
   assert.deepEqual(real.labels.map(({ label }) => label).sort(), ["main", "meeting", "overlay", "update"]);
   assert.equal(new Set(real.labels.map(({ source }) => source)).size, 2);
   assert.equal(real.capabilities.length, 2);
-  assert.equal(real.builders.length, 4);
+  // Three production panels plus the import and recording-deletion mock webviews.
+  assert.equal(real.builders.length, 5);
+  assert.deepEqual(
+    real.builders.filter(({ kind }) => kind === "literal").map(({ file, arg }) => ({ file, arg })),
+    [
+      { file: "apps/desktop/src-tauri/src/media.rs", arg: "main" },
+      { file: "apps/desktop/src-tauri/src/recording_attach.rs", arg: "main" },
+    ],
+  );
   assert.deepEqual(violations(real), []);
 });
 
