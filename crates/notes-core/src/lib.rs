@@ -10,6 +10,7 @@
 //! search text is escaped into FTS5 query syntax rather than passed through.
 //! Users type prose; FTS5 reads expressions.
 
+pub mod document;
 pub mod notes;
 pub mod recordings;
 pub mod transcript;

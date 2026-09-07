@@ -14,10 +14,11 @@ pub enum ImportStage {
     Saving,
     Succeeded,
     Failed,
+    Cancelled,
 }
 impl ImportStage {
     fn active(self) -> bool {
-        !matches!(self, Self::Succeeded | Self::Failed)
+        !matches!(self, Self::Succeeded | Self::Failed | Self::Cancelled)
     }
 }
 #[derive(Debug, Clone, Serialize, TS)]
@@ -34,10 +35,26 @@ pub struct ImportSnapshot {
 struct Entry {
     snapshot: ImportSnapshot,
     started: Instant,
+    cancel: tokio::sync::watch::Sender<bool>,
 }
-#[derive(Default)]
-pub struct ImportJobs(Mutex<Option<Entry>>);
+#[derive(Default, Clone)]
+pub struct ImportJobs(
+    std::sync::Arc<Mutex<Option<Entry>>>,
+    std::sync::Arc<std::sync::atomic::AtomicBool>,
+);
 impl ImportJobs {
+    pub fn close(&self) {
+        let held = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.1.store(true, std::sync::atomic::Ordering::SeqCst);
+        if let Some(entry) = held.as_ref() {
+            if entry.snapshot.stage.active() && entry.snapshot.stage != ImportStage::Saving {
+                let _ = entry.cancel.send(true);
+            }
+        }
+    }
     pub fn snapshot(&self) -> Option<ImportSnapshot> {
         self.0
             .lock()
@@ -51,11 +68,14 @@ impl ImportJobs {
                 snapshot
             })
     }
-    pub fn begin(&self) -> Result<ImportLease<'_>, String> {
+    pub fn begin(&self) -> Result<ImportLease, String> {
         let mut held = self
             .0
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if self.1.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err("The app is shutting down.".into());
+        }
         if held.as_ref().is_some_and(|e| e.snapshot.stage.active()) {
             return Err(
                 "Another media import is running. Wait for it to finish before starting another."
@@ -63,7 +83,9 @@ impl ImportJobs {
             );
         }
         let id = uuid::Uuid::new_v4().to_string();
+        let (cancel, cancel_rx) = tokio::sync::watch::channel(false);
         *held = Some(Entry {
+            cancel,
             started: Instant::now(),
             snapshot: ImportSnapshot {
                 operation_id: id.clone(),
@@ -77,18 +99,72 @@ impl ImportJobs {
         });
         tracing::info!(operation_id = %id, stage = ?ImportStage::Preparing, "media import stage");
         Ok(ImportLease {
-            jobs: self,
+            jobs: self.clone(),
             id,
             finished: false,
+            cancel: cancel_rx,
         })
     }
+    pub fn cancel(&self, id: &str) -> Result<(), String> {
+        let held = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let entry = held
+            .as_ref()
+            .filter(|e| e.snapshot.operation_id == id)
+            .ok_or("job is no longer active")?;
+        if entry.snapshot.stage == ImportStage::Cancelled {
+            return Ok(());
+        }
+        if !entry.snapshot.stage.active() || entry.snapshot.stage == ImportStage::Saving {
+            return Err("job is saving or already finished".into());
+        }
+        let _ = entry.cancel.send(true);
+        Ok(())
+    }
 }
-pub struct ImportLease<'a> {
-    jobs: &'a ImportJobs,
+pub struct ImportLease {
+    jobs: ImportJobs,
     id: String,
     finished: bool,
+    cancel: tokio::sync::watch::Receiver<bool>,
 }
-impl ImportLease<'_> {
+impl ImportLease {
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+    pub fn is_cancelled(&self) -> bool {
+        *self.cancel.borrow()
+    }
+    pub async fn cancelled(&self) {
+        let mut cancel = self.cancel.clone();
+        let _ = cancel.wait_for(|v| *v).await;
+    }
+    /// Cancellation and entry into the commit phase share the same lock.
+    pub fn begin_saving(&self) -> Result<(), String> {
+        let mut held = self
+            .jobs
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let entry = held
+            .as_mut()
+            .filter(|e| e.snapshot.operation_id == self.id)
+            .ok_or("job disappeared")?;
+        if *entry.cancel.borrow() {
+            return Err("import cancelled".into());
+        }
+        entry.snapshot.stage = ImportStage::Saving;
+        Ok(())
+    }
+    pub fn finish_cancelled(mut self) {
+        self.update(|s| {
+            s.stage = ImportStage::Cancelled;
+            s.error = None;
+        });
+        self.finished = true;
+    }
     fn update(&self, f: impl FnOnce(&mut ImportSnapshot)) {
         let mut held = self
             .jobs
@@ -127,7 +203,7 @@ impl ImportLease<'_> {
         self.finished = true;
     }
 }
-impl Drop for ImportLease<'_> {
+impl Drop for ImportLease {
     fn drop(&mut self) {
         if !self.finished {
             self.update(|s| {
@@ -142,6 +218,32 @@ impl Drop for ImportLease<'_> {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn cancellation_and_saving_are_mutually_exclusive_and_release_slot() {
+        let jobs = ImportJobs::default();
+        let lease = jobs.begin().unwrap();
+        jobs.cancel(lease.id()).unwrap();
+        lease.cancelled().await;
+        assert!(lease.begin_saving().is_err());
+        lease.finish_cancelled();
+        let lease = jobs.begin().unwrap();
+        lease.begin_saving().unwrap();
+        assert!(jobs.cancel(lease.id()).is_err());
+        lease.finish(&Err("fixture save failure".into()));
+        assert!(jobs.begin().is_ok());
+    }
+
+    #[test]
+    fn shutdown_refuses_new_jobs_but_does_not_cancel_a_commit() {
+        let jobs = ImportJobs::default();
+        let lease = jobs.begin().unwrap();
+        lease.begin_saving().unwrap();
+        jobs.close();
+        assert!(!lease.is_cancelled());
+        assert!(jobs.begin().is_err());
+        drop(lease);
+        assert!(jobs.begin().is_err());
+    }
     #[test]
     fn busy_failure_retry_and_terminal_snapshot() {
         let jobs = ImportJobs::default();

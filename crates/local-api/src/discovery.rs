@@ -106,6 +106,9 @@ pub enum DiscoveryError {
 
 /// The default location of the discovery file.
 pub fn default_path() -> Result<PathBuf, DiscoveryError> {
+    if let Some(profile) = kw_storage::paths::debug_profile() {
+        return Ok(profile.join(FILE_NAME));
+    }
     let home = dirs::home_dir().ok_or(DiscoveryError::NoHomeDirectory)?;
     Ok(home.join(DIRECTORY_NAME).join(FILE_NAME))
 }

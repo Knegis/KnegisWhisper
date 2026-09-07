@@ -43,9 +43,27 @@ pub const APP_DIR: &str = "KnegisWhisper";
 /// in practice means a misconfigured container.
 #[must_use]
 pub fn data_dir() -> PathBuf {
+    if let Some(profile) = debug_profile() {
+        return profile;
+    }
     dirs::data_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(APP_DIR)
+}
+
+/// Isolated developer smoke profile. Release builds always use the OS profile.
+#[must_use]
+pub fn debug_profile() -> Option<PathBuf> {
+    #[cfg(debug_assertions)]
+    {
+        std::env::var_os("KW_AUTOMATION_PROFILE")
+            .map(PathBuf::from)
+            .filter(|p| p.is_absolute())
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        None
+    }
 }
 
 /// The database file.

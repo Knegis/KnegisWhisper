@@ -51,12 +51,17 @@ export function IntegrationsCli() {
         <p className="muted">
           <code>{status.binaryName}</code> is a compiled command-line client over
           the same local API as this settings window — notes, transcripts, the
-          dictionary. It talks to this running application over the discovery
+          dictionary, file transcription jobs, exports and meeting recording. It talks to this running application over the discovery
           file below, so it can only do anything while the application is
           running.
         </p>
 
         <Row label="Binary" value={location.text} detail={location.detail} />
+        <p className="muted">
+          Start with <code>knegiswhisper status</code> or <code>knegiswhisper models list</code>.
+          Use <code>transcribe file PATH</code> to upload media, then <code>jobs status ID</code> to retrieve the result.
+          File transcription uses your configured provider. <code>recording start --provider ID</code> starts a visible microphone meeting recording.
+        </p>
         <DiscoveryFileRows
           discoveryPath={status.discoveryPath}
           permissions={status.discoveryPermissions}

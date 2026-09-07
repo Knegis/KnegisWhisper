@@ -25,6 +25,7 @@
 
 pub mod dictionary;
 pub mod import;
+pub mod jobs;
 pub mod paths;
 pub mod settings;
 pub mod transcriptions;
@@ -254,15 +255,15 @@ mod tests {
         let first = Db::open(&path).await.unwrap();
         first.close().await;
 
-        // The second open must not try to re-apply either migration.
+        // The second open must not re-apply any migration.
         let second = Db::open(&path).await.unwrap();
         let applied: i64 = sqlx::query_scalar("SELECT count(*) FROM _sqlx_migrations")
             .fetch_one(second.pool())
             .await
             .unwrap();
         assert_eq!(
-            applied, 2,
-            "0001_initial and 0002_note_recordings, each recorded exactly once"
+            applied, 3,
+            "initial, note recordings, and automation migrations recorded exactly once"
         );
         second.close().await;
     }
