@@ -320,7 +320,7 @@ export async function runAppWindows(options) {
     timestamp: new Date().toISOString(),
     measurementScope: [
       "running application through WebView2 remote debugging;",
-      "route is believed until this machine runs it",
+      "route measured on this machine on 2026-09-07",
     ].join(" "),
   });
   const ctx = { options, out, report };

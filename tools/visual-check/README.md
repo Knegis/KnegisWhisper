@@ -56,9 +56,11 @@ Win32 visibility every two seconds, recording transitions and the first five
 caption changes. `theme` captures light and dark, while `stop` records finishing,
 window hiding, and the still-existing hidden meeting target.
 
-This WebView2 remote-debugging route is **believed from Microsoft documentation,
-not yet measured on this machine**. If the loopback port does not answer, the
-tool repeats the environment-variable launch command rather than treating an
-empty target list as absence of application windows. Its output directory also
+This WebView2 remote-debugging route was **measured on 2026-09-07**: with the
+variable set before `npm run tauri:dev`, all four webviews (`main`, `#overlay`,
+`#meeting`, `#update`) appear on the port and `__TAURI_INTERNALS__.invoke` works
+from `Runtime.evaluate`. If the loopback port does not answer, the tool repeats
+the environment-variable launch command rather than treating an empty target
+list as absence of application windows. Its output directory also
 contains append-only-in-practice `report.json` and `report.md` records for the
 chosen command sequence.
