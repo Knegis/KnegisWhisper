@@ -45,7 +45,7 @@ import {
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const CI = ".github/workflows/ci.yml";
-const THE_STEP = "cargo test -p knegiswhisper --lib --features tauri-test";
+const THE_STEP = "cargo test --profile ci -p knegiswhisper --lib --features tauri-test";
 
 const ciSource = () => readFileSync(join(REPO_ROOT, CI), "utf8");
 
@@ -128,17 +128,17 @@ test("an exemption with a reason satisfies rule A, and is reported rather than h
   const base = withCi(ciSource().replace(THE_STEP, "cargo test --workspace"));
   assert.equal(violations(base).length, 1, "the premise: unexempt, this is a violation");
 
-  const exempt = { "tauri-test": "the mock runtime needs a Windows manifest CI cannot embed" };
+  const exempt = { ...base.exempt, "tauri-test": "the mock runtime needs a Windows manifest CI cannot embed" };
   assert.deepEqual(violations({ ...base, exempt }), []);
 
   // And the bare name and the qualified name are both accepted spellings.
-  const qualified = { "knegiswhisper/tauri-test": "same decision, written the other way" };
+  const qualified = { ...base.exempt, "knegiswhisper/tauri-test": "same decision, written the other way" };
   assert.deepEqual(violations({ ...base, exempt: qualified }), []);
 });
 
 test("rule B: an exemption naming no feature is fiction", () => {
   const real = collect(REPO_ROOT);
-  const found = violations({ ...real, exempt: { "long-gone": "renamed three waves ago" } });
+  const found = violations({ ...real, exempt: { ...real.exempt, "long-gone": "renamed three waves ago" } });
 
   assert.deepEqual(rules(found), ["B. exemption names no feature"]);
   assert.equal(found[0].subject, "long-gone");
