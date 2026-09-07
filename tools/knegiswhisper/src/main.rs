@@ -35,6 +35,20 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Current recording, route, and import status.
+    Status,
+    /// Discover models and configuration readiness.
+    #[command(subcommand)]
+    Models(Models),
+    /// Transcribe an uploaded file asynchronously.
+    #[command(subcommand)]
+    Transcribe(Transcribe),
+    /// Inspect or cancel a durable import job.
+    #[command(subcommand)]
+    Jobs(Jobs),
+    /// Control meeting recording in the desktop app.
+    #[command(subcommand)]
+    Recording(Recording),
     /// Check that KnegisWhisper is running.
     Health,
 
@@ -57,6 +71,27 @@ enum Command {
 
 #[derive(Debug, Subcommand)]
 enum Notes {
+    /// Create an editable note.
+    Create {
+        #[arg(long)]
+        title: String,
+        #[arg(long)]
+        content: String,
+        #[arg(long)]
+        folder: Option<i64>,
+    },
+    /// Export the editable note, or its original timed transcript.
+    Export {
+        id: i64,
+        #[arg(long, default_value = "markdown", value_parser = ["markdown", "text", "md", "txt", "json", "srt", "vtt"])]
+        format: String,
+        #[arg(long)]
+        transcript: bool,
+        #[arg(long)]
+        output: Option<std::path::PathBuf>,
+        #[arg(long, requires = "output")]
+        force: bool,
+    },
     /// List notes, most recently edited first.
     List {
         #[arg(long, default_value_t = 20)]
@@ -106,6 +141,15 @@ enum Dictionary {
 
 #[derive(Debug, Subcommand)]
 enum History {
+    /// Search final dictation text.
+    Search {
+        #[arg(required = true)]
+        query: Vec<String>,
+        #[arg(long, default_value_t = 20)]
+        limit: u32,
+        #[arg(long)]
+        after: Option<i64>,
+    },
     /// List dictations, newest first.
     List {
         #[arg(long, default_value_t = 20)]
@@ -120,6 +164,30 @@ enum History {
     Delete { id: i64 },
     /// Delete only the kept recording, leaving the transcript.
     ForgetAudio { id: i64 },
+}
+
+#[derive(Debug, Subcommand)]
+enum Models {
+    List,
+}
+#[derive(Debug, Subcommand)]
+enum Transcribe {
+    File { path: std::path::PathBuf },
+}
+#[derive(Debug, Subcommand)]
+enum Jobs {
+    Status { id: String },
+    Cancel { id: String },
+}
+#[derive(Debug, Subcommand)]
+enum Recording {
+    Start {
+        #[arg(long)]
+        provider: String,
+        #[arg(long)]
+        system_audio: bool,
+    },
+    Stop,
 }
 
 fn main() -> std::process::ExitCode {
@@ -172,6 +240,107 @@ async fn run(cli: &Cli) -> Result<String, CliError> {
 /// cheap and doing it here keeps the branch in one place.
 async fn dispatch(client: &Client, command: &Command) -> Result<(Value, String), CliError> {
     match command {
+        Command::Status => json_answer(client.get("/v1/status").await),
+        Command::Models(Models::List) => json_answer(client.get("/v1/models").await),
+        Command::Transcribe(Transcribe::File { path }) => {
+            json_answer(client.transcribe_file(path).await)
+        }
+        Command::Jobs(Jobs::Status { id }) => {
+            json_answer(client.get(&format!("/v1/jobs/{}", urlencode(id))).await)
+        }
+        Command::Jobs(Jobs::Cancel { id }) => json_answer(
+            client
+                .request(
+                    Method::POST,
+                    &format!("/v1/jobs/{}/cancel", urlencode(id)),
+                    None,
+                )
+                .await,
+        ),
+        Command::Recording(Recording::Start {
+            provider,
+            system_audio,
+        }) => json_answer(
+            client
+                .request(
+                    Method::POST,
+                    "/v1/recording/start",
+                    Some(json!({"provider": provider, "system_audio": system_audio})),
+                )
+                .await,
+        ),
+        Command::Recording(Recording::Stop) => json_answer(
+            client
+                .request(Method::POST, "/v1/recording/stop", None)
+                .await,
+        ),
+        Command::Notes(Notes::Create {
+            title,
+            content,
+            folder,
+        }) => {
+            let value = client
+                .request(
+                    Method::POST,
+                    "/v1/notes",
+                    Some(json!({"title": title, "content": content, "folder_id": folder})),
+                )
+                .await?;
+            let human = render::note(&value);
+            Ok((value, human))
+        }
+        Command::Notes(Notes::Export {
+            id,
+            format,
+            transcript,
+            output,
+            force,
+        }) => {
+            let value = client
+                .get(&format!(
+                    "/v1/notes/{id}/export?format={}&transcript={transcript}",
+                    urlencode(format)
+                ))
+                .await?;
+            let content = value
+                .pointer("/data/content")
+                .and_then(Value::as_str)
+                .ok_or_else(|| CliError::Transport {
+                    detail: "export response has no content".into(),
+                })?
+                .to_owned();
+            if let Some(path) = output {
+                use std::io::Write as _;
+                let mut file = std::fs::OpenOptions::new()
+                    .write(true)
+                    .create(true)
+                    .truncate(*force)
+                    .create_new(!*force)
+                    .open(path)
+                    .map_err(|e| CliError::Refused(format!("could not create export: {e}")))?;
+                file.write_all(content.as_bytes())
+                    .map_err(|e| CliError::Refused(format!("could not write export: {e}")))?;
+                Ok((value, format!("exported to {}", path.display())))
+            } else {
+                Ok((value, content))
+            }
+        }
+        Command::History(History::Search {
+            query,
+            limit,
+            after,
+        }) => {
+            let mut path = format!(
+                "/v1/transcriptions/search?q={}&limit={limit}",
+                urlencode(&query.join(" "))
+            );
+            if let Some(after) = after {
+                path.push_str(&format!("&after={after}"));
+            }
+            let value = client.get(&path).await?;
+            let human = render::history(&value);
+            Ok((value, human))
+        }
         Command::Health => {
             let value = client.get("/v1/health").await?;
             let human = render::health(&value);
@@ -313,6 +482,12 @@ async fn dispatch(client: &Client, command: &Command) -> Result<(Value, String),
             ))
         }
     }
+}
+
+fn json_answer(result: Result<Value, CliError>) -> Result<(Value, String), CliError> {
+    let value = result?;
+    let human = render::as_json(&value);
+    Ok((value, human))
 }
 
 async fn dictionary_update(

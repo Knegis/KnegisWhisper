@@ -179,6 +179,7 @@ function Shell() {
   // application is for. Reopening on the screen you last used sounds helpful
   // until the screen you last used is the one that failed.
   const [view, setView] = useState<ViewId>(DEFAULT_VIEW);
+  const [sidebarExpanded, setSidebarExpanded] = useState(true);
   const [importedNoteId, setImportedNoteId] = useState<number | null>(null);
 
   // Both groups start closed. Dictation is a top-level destination, so the
@@ -236,8 +237,10 @@ function Shell() {
   }
 
   return (
-    <main className="shell">
+    <main className={sidebarExpanded ? "shell" : "shell shell-sidebar-retracted"}>
       <Sidebar
+        expanded={sidebarExpanded}
+        onToggle={() => setSidebarExpanded((expanded) => !expanded)}
         view={view}
         openGroups={openGroups}
         onSelect={select}

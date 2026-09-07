@@ -40,9 +40,27 @@ pub struct ApiState {
     token: LocalApiToken,
     guard: Option<std::sync::Arc<crate::discovery::AccessGuard>>,
     recording_directory: std::path::PathBuf,
+    runtime: Option<std::sync::Arc<dyn crate::runtime::Runtime>>,
+    upload_directory: std::path::PathBuf,
 }
 
 impl ApiState {
+    #[must_use]
+    pub fn with_runtime(
+        mut self,
+        runtime: std::sync::Arc<dyn crate::runtime::Runtime>,
+        uploads: std::path::PathBuf,
+    ) -> Self {
+        self.runtime = Some(runtime);
+        self.upload_directory = uploads;
+        self
+    }
+
+    fn runtime(&self) -> Result<&dyn crate::runtime::Runtime, ApiError> {
+        self.runtime
+            .as_deref()
+            .ok_or_else(|| ApiError::new(ErrorCode::Unavailable, "desktop runtime is unavailable"))
+    }
     pub fn with_access_guard(
         mut self,
         guard: std::sync::Arc<crate::discovery::AccessGuard>,
@@ -57,6 +75,8 @@ impl ApiState {
             token,
             guard: None,
             recording_directory: kw_notes_core::recordings::recording_dir(),
+            runtime: None,
+            upload_directory: std::path::PathBuf::new(),
         }
     }
 }
@@ -160,6 +180,21 @@ pub fn serve(listener: TcpListener, state: ApiState) -> Result<Served, ServeErro
 /// The route table.
 fn router(state: ApiState) -> Router {
     Router::new()
+        .route("/v1/notes", post(create_note))
+        .route("/v1/notes/{id}/export", get(export_note))
+        .route("/v1/transcriptions/search", get(search_history))
+        .route("/v1/status", get(app_status))
+        .route("/v1/models", get(models))
+        .route("/v1/recording/start", post(recording_start))
+        .route("/v1/recording/stop", post(recording_stop))
+        .route("/v1/jobs/{id}", get(get_job))
+        .route("/v1/jobs/{id}/cancel", post(cancel_job))
+        .route(
+            "/v1/jobs/transcriptions",
+            post(upload_transcription).layer(DefaultBodyLimit::max(
+                crate::runtime::MAX_UPLOAD_BYTES + 65536,
+            )),
+        )
         .route("/v1/health", get(health))
         .route("/v1/notes/list", get(list_notes))
         .route("/v1/notes/search", get(search_notes))
@@ -232,6 +267,271 @@ fn storage_failed(context: &str, err: &kw_storage::StorageError) -> ApiError {
 }
 
 // -------------------------------------------------------------------- handlers
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NoteCreate {
+    title: String,
+    content: String,
+    folder_id: Option<i64>,
+}
+async fn create_note(
+    State(state): State<ApiState>,
+    Json(input): Json<NoteCreate>,
+) -> Result<Json<Item<notes::Note>>, ApiError> {
+    if let Some(folder) = input.folder_id {
+        if folder <= 0
+            || !notes::folders(&state.pool)
+                .await
+                .map_err(|e| storage_failed("folders", &e))?
+                .iter()
+                .any(|f| f.id == folder)
+        {
+            return Err(ApiError::validation(
+                "folder_id must name an existing folder",
+            ));
+        }
+    }
+    let id = notes::create(
+        &state.pool,
+        &notes::NewNote {
+            title: input.title,
+            content: input.content,
+            folder_id: input.folder_id,
+            ..Default::default()
+        },
+    )
+    .await
+    .map_err(|e| storage_failed("create", &e))?;
+    get_note(State(state), Path(id.to_string())).await
+}
+#[derive(serde::Deserialize)]
+struct ExportParams {
+    #[serde(default = "markdown_format")]
+    format: String,
+    #[serde(default)]
+    transcript: bool,
+}
+fn markdown_format() -> String {
+    "markdown".into()
+}
+async fn export_note(
+    State(state): State<ApiState>,
+    Path(id): Path<String>,
+    Query(params): Query<ExportParams>,
+) -> Result<Json<Item<kw_notes_core::document::Document>>, ApiError> {
+    let format = match params.format.as_str() {
+        "markdown" | "md" => kw_notes_core::transcript::Format::Md,
+        "text" | "txt" => kw_notes_core::transcript::Format::Txt,
+        "json" => kw_notes_core::transcript::Format::Json,
+        "srt" => kw_notes_core::transcript::Format::Srt,
+        "vtt" => kw_notes_core::transcript::Format::Vtt,
+        _ => return Err(ApiError::validation("unsupported export format")),
+    };
+    if !params.transcript && format != kw_notes_core::transcript::Format::Md {
+        return Err(ApiError::validation(
+            "editable notes export as markdown; use transcript=true for other formats",
+        ));
+    }
+    let note = get_note(State(state), Path(id)).await?.0.data;
+    let document = kw_notes_core::document::render(&note, format, params.transcript)
+        .map_err(|_| ApiError::validation("the stored transcript cannot be exported"))?;
+    if params.transcript && document.segment_count == 0 {
+        return Err(ApiError::validation(
+            "this note has no timed transcript to export",
+        ));
+    }
+    Ok(Json(Item { data: document }))
+}
+#[derive(serde::Deserialize)]
+struct HistorySearch {
+    q: String,
+    limit: Option<u32>,
+    after: Option<i64>,
+}
+async fn search_history(
+    State(state): State<ApiState>,
+    Query(params): Query<HistorySearch>,
+) -> Result<Json<Page<transcriptions::Transcription>>, ApiError> {
+    let request = ListParams {
+        limit: params.limit,
+        after: params.after,
+        ..Default::default()
+    }
+    .validate()?;
+    let escaped = notes::escape_query(&params.q)
+        .ok_or_else(|| ApiError::validation("a search needs something to search for"))?;
+    let mut rows: Vec<transcriptions::Transcription> = sqlx::query_as("SELECT t.* FROM transcriptions t JOIN transcriptions_fts f ON f.rowid = t.id WHERE transcriptions_fts MATCH ? AND (? IS NULL OR t.id < ?) ORDER BY t.id DESC LIMIT ?")
+        .bind(escaped).bind(request.after).bind(request.after).bind(i64::from(request.limit) + 1)
+        .fetch_all(&state.pool).await.map_err(|_| ApiError::internal())?;
+    let has_more = rows.len() > request.limit as usize;
+    rows.truncate(request.limit as usize);
+    let next_cursor = if has_more {
+        rows.last().map(|r| r.id)
+    } else {
+        None
+    };
+    Ok(Json(Page {
+        data: rows,
+        has_more,
+        next_cursor,
+    }))
+}
+async fn app_status(
+    State(state): State<ApiState>,
+) -> Result<Json<Item<serde_json::Value>>, ApiError> {
+    Ok(Json(Item {
+        data: state.runtime()?.status().await?,
+    }))
+}
+async fn models(State(state): State<ApiState>) -> Result<Json<Item<serde_json::Value>>, ApiError> {
+    Ok(Json(Item {
+        data: state.runtime()?.models().await?,
+    }))
+}
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RecordingStart {
+    provider: String,
+    #[serde(default)]
+    system_audio: bool,
+}
+async fn recording_start(
+    State(state): State<ApiState>,
+    Json(input): Json<RecordingStart>,
+) -> Result<Json<Item<serde_json::Value>>, ApiError> {
+    if input.provider.trim().is_empty() {
+        return Err(ApiError::validation("provider is required"));
+    }
+    let runtime = state
+        .runtime
+        .clone()
+        .ok_or_else(|| ApiError::new(ErrorCode::Unavailable, "desktop runtime is unavailable"))?;
+    let data = tokio::spawn(async move {
+        runtime
+            .recording_start(&input.provider, input.system_audio)
+            .await
+    })
+    .await
+    .map_err(|_| ApiError::internal())??;
+    Ok(Json(Item { data }))
+}
+async fn recording_stop(
+    State(state): State<ApiState>,
+) -> Result<Json<Item<serde_json::Value>>, ApiError> {
+    // Own the stop task even when an HTTP client disconnects.
+    let runtime = state
+        .runtime
+        .clone()
+        .ok_or_else(|| ApiError::new(ErrorCode::Unavailable, "desktop runtime is unavailable"))?;
+    let data = tokio::spawn(async move { runtime.recording_stop().await })
+        .await
+        .map_err(|_| ApiError::internal())??;
+    Ok(Json(Item { data }))
+}
+async fn get_job(
+    State(state): State<ApiState>,
+    Path(id): Path<String>,
+) -> Result<Json<Item<kw_storage::jobs::Job>>, ApiError> {
+    let job = kw_storage::jobs::get(&state.pool, &id)
+        .await
+        .map_err(|_| ApiError::internal())?
+        .ok_or_else(|| ApiError::not_found("job"))?;
+    Ok(Json(Item { data: job }))
+}
+async fn cancel_job(
+    State(state): State<ApiState>,
+    Path(id): Path<String>,
+) -> Result<Json<Item<serde_json::Value>>, ApiError> {
+    Ok(Json(Item {
+        data: state.runtime()?.cancel(&id).await?,
+    }))
+}
+async fn upload_transcription(
+    State(state): State<ApiState>,
+    mut multipart: axum::extract::Multipart,
+) -> Result<(StatusCode, Json<Item<serde_json::Value>>), ApiError> {
+    use std::io::Write as _;
+    use std::time::Duration;
+    state.runtime()?;
+    tokio::fs::create_dir_all(&state.upload_directory)
+        .await
+        .map_err(|_| ApiError::internal())?;
+    let mut field = tokio::time::timeout(Duration::from_secs(60), multipart.next_field())
+        .await
+        .map_err(|_| ApiError::validation("upload timed out"))?
+        .map_err(|_| ApiError::validation("invalid multipart upload"))?
+        .ok_or_else(|| ApiError::validation("upload one file field"))?;
+    if field.name() != Some("file") {
+        return Err(ApiError::validation("upload one file field"));
+    }
+    let extension = field
+        .file_name()
+        .and_then(|s| std::path::Path::new(s).extension())
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if ![
+        "wav", "mp3", "m4a", "mp4", "ogg", "flac", "webm", "aac", "wma", "mov", "mkv", "avi",
+    ]
+    .contains(&extension.as_str())
+    {
+        return Err(ApiError::validation("unsupported media extension"));
+    }
+    let upload = crate::runtime::Upload {
+        name: field
+            .file_name()
+            .and_then(|s| std::path::Path::new(s).file_name())
+            .and_then(|s| s.to_str())
+            .unwrap_or("media")
+            .to_owned(),
+        path: state
+            .upload_directory
+            .join(format!("{}.{}", uuid::Uuid::new_v4(), extension)),
+    };
+    // Drop closes the file before Upload removes it on all error paths.
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(upload.path())
+        .map_err(|_| ApiError::internal())?;
+    let mut bytes = 0usize;
+    loop {
+        let chunk = tokio::time::timeout(Duration::from_secs(60), field.chunk())
+            .await
+            .map_err(|_| ApiError::validation("upload timed out"))?
+            .map_err(|_| ApiError::validation("invalid or oversized upload"))?;
+        let Some(chunk) = chunk else { break };
+        bytes = bytes.saturating_add(chunk.len());
+        if bytes > crate::runtime::MAX_UPLOAD_BYTES {
+            return Err(ApiError::new(
+                ErrorCode::PayloadTooLarge,
+                "media exceeds 500 MiB",
+            ));
+        }
+        file.write_all(&chunk).map_err(|_| ApiError::internal())?;
+    }
+    file.flush().map_err(|_| ApiError::internal())?;
+    drop(file);
+    if bytes == 0 {
+        return Err(ApiError::validation("media is empty"));
+    }
+    drop(field);
+    if tokio::time::timeout(Duration::from_secs(60), multipart.next_field())
+        .await
+        .map_err(|_| ApiError::validation("upload timed out"))?
+        .map_err(|_| ApiError::validation("invalid multipart upload"))?
+        .is_some()
+    {
+        return Err(ApiError::validation("upload exactly one file"));
+    }
+    // Once submitted, the operation belongs to the app, not the connection.
+    let runtime = state.runtime.clone().ok_or_else(ApiError::internal)?;
+    let data = tokio::spawn(async move { runtime.transcribe(upload).await })
+        .await
+        .map_err(|_| ApiError::internal())??;
+    Ok((StatusCode::ACCEPTED, Json(Item { data })))
+}
 
 async fn health() -> Json<Item<Health>> {
     Json(Item {

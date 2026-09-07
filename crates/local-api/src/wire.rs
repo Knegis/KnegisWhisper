@@ -43,6 +43,8 @@ pub enum ErrorCode {
     ValidationError,
     PayloadTooLarge,
     InternalError,
+    Conflict,
+    Unavailable,
 }
 
 impl ErrorCode {
@@ -56,6 +58,8 @@ impl ErrorCode {
             Self::ValidationError => 400,
             Self::PayloadTooLarge => 413,
             Self::InternalError => 500,
+            Self::Conflict => 409,
+            Self::Unavailable => 503,
         }
     }
 }

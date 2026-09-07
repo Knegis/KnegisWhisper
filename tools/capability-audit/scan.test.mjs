@@ -15,7 +15,7 @@ import assert from "node:assert/strict";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { collect, matchesWindowPattern, violations } from "./scan.mjs";
+import { collect, markEnabled, matchesWindowPattern, securityCapabilities, violations } from "./scan.mjs";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const labels = ["main", "overlay", "meeting", "update"].map((label) => ({
@@ -35,6 +35,11 @@ test("the real tree is clean, and all parser inventories are live", () => {
   assert.deepEqual(real.labels.map(({ label }) => label).sort(), ["main", "meeting", "overlay", "update"]);
   assert.equal(new Set(real.labels.map(({ source }) => source)).size, 2);
   assert.equal(real.capabilities.length, 2);
+  // KNEG-171: a file in capabilities/ is not a capability until security.capabilities names it.
+  assert.deepEqual(real.capabilities.map(({ identifier, enabled }) => ({ identifier, enabled })), [
+    { identifier: "default", enabled: true },
+    { identifier: "notifications", enabled: true },
+  ]);
   // Three production panels plus the import and recording-deletion mock webviews.
   assert.equal(real.builders.length, 5);
   assert.deepEqual(
@@ -58,6 +63,44 @@ test("KNEG-168 regression: meeting and update have no capability", () => {
     found.filter(({ rule }) => rule.startsWith("A.")).map(({ subject }) => subject).sort(),
     ["meeting", "update"]
   );
+});
+
+test("KNEG-171 regression: a capability file the allow-list does not name covers nothing", () => {
+  const found = violations({
+    labels,
+    capabilities: [allCovered[0], { ...allCovered[1], enabled: false }],
+    builders: noBuilders,
+    exempt: {},
+  });
+  assert.deepEqual(
+    found.filter(({ rule }) => rule.startsWith("A.")).map(({ subject }) => subject).sort(),
+    ["meeting", "update"]
+  );
+  assert.deepEqual(
+    found.filter(({ rule }) => rule.startsWith("E.")).map(({ subject, detail }) => [subject, /security\.capabilities/.test(detail)]),
+    [["notifications", true]]
+  );
+});
+
+test("the allow-list reading: unset or empty enables every file, a list enables only what it names", () => {
+  const files = [
+    { file: "capabilities/default.json", identifier: "default", windows: ["main"], permissions: [] },
+    { file: "capabilities/notifications.json", identifier: "notifications", windows: ["meeting"], permissions: [] },
+  ];
+  const enabled = (marked) => marked.map(({ identifier, enabled }) => `${identifier}:${enabled}`);
+  assert.deepEqual(enabled(markEnabled(files, null)), ["default:true", "notifications:true"]);
+  assert.deepEqual(enabled(markEnabled(files, ["default"])), ["default:true", "notifications:false"]);
+  assert.deepEqual(enabled(markEnabled(files, ["default", "notifications"])), ["default:true", "notifications:true"]);
+
+  const inline = markEnabled(files, [
+    "default",
+    { identifier: "drag", windows: ["main"], permissions: ["core:window:allow-start-dragging"] },
+  ]);
+  assert.deepEqual(enabled(inline), ["default:true", "notifications:false", "drag:true"]);
+  assert.match(inline[2].file, /tauri\.conf\.json/);
+
+  assert.deepEqual(securityCapabilities(REPO_ROOT), ["default", "notifications"]);
+  assert.equal(securityCapabilities(resolve(REPO_ROOT, "tools")), null);
 });
 
 test("all four current labels are covered by the two capabilities", () => {

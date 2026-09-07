@@ -64,7 +64,7 @@ Reported as one of four states, never a boolean:
 
 | Platform | State | Mechanism |
 | --- | --- | --- |
-| Windows 10 2004+ | `active` | `SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)`, then **`GetWindowDisplayAffinity` read back** and compared. `active` is reported only when the read-back matches. |
+| Windows 10 2004+ | `active` | `SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)`, then **`GetWindowDisplayAffinity` read back** and compared. `active` is reported only when the read-back matches. **Measured 2026-09-07** with `crates/platform/examples/capture_probe.rs`: GDI `BitBlt`, Windows.Graphics.Capture monitor capture and DXGI Desktop Duplication all show the desktop where the excluded window is while an unexcluded control window stays visible (3 of 3 `EFFECTIVE`), and Windows.Graphics.Capture window capture of the excluded window delivers no frames. One machine, Windows 11 10.0.26200. |
 | Windows < 10 2004 | `failed` | `WDA_EXCLUDEFROMCAPTURE` is unavailable; the call fails and the OS error is reported verbatim. |
 | macOS | `unsupported` | Not implemented. `NSWindow.sharingType = NSWindowSharingNone` is the intended mechanism and it is readable, so this can become `active` with evidence — but it cannot be built or run from the current development machine, and an unverified claim about a privacy feature is worse than an admitted gap. |
 | Linux (all) | `unsupported` | There is no such facility. Neither X11 nor any current Wayland protocol lets a client ask to be omitted from a screen capture. |
@@ -81,6 +81,14 @@ not prove that a particular screen recorder is excluded — that depends on whic
 recorder uses, and no API reports that from inside this process. `Evidence::ReadBack` names the
 API it consulted so the claim stays attached to its source, and the settings screen says exactly
 this rather than showing a bare green check.
+
+What the read-back cannot say, a probe can measure from outside the process: `capture_probe`
+(`cargo run -p kw-platform --example capture_probe`) draws an excluded window beside an unexcluded
+control and looks at what each recorder API actually delivers. On 2026-09-07 all three delivered the
+desktop behind the excluded window and the control intact, so on this machine the flag does what the
+settings screen hopes it does. That is a measurement of three APIs on one Windows build, not a
+guarantee about every recorder; the read-back stays the only claim the application makes about
+itself. `docs/BENCH_CHECK.md` § 2026-09-07 (later) has the rows.
 
 Under-claiming here is deliberate. Pluely's entire mechanism is Tauri's `contentProtected` flag,
 it never verifies the result, and it is a no-op on Linux — yet its README promises "absolute

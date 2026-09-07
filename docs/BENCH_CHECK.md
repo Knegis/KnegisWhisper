@@ -6,6 +6,149 @@ that 787 passing tests had all missed**, and the one on 2026-08-26 found three m
 
 Maintained in place. When something here becomes false, edit it.
 
+## 2026-09-07 (latest) — KNEG-171: one word in an allow-list, and the panel seen for the first time
+
+Fixed and measured on `dev` after `bf85e18`, same machine and settings as the section below.
+`tauri dev` noticed the `tauri.conf.json` change, rebuilt in 50 s and relaunched the application
+with the debugging port still open, so the same instrument could be pointed at the fixed build.
+
+### Verified
+
+- **The root cause, from two directions.** `tauri-utils 2.9.3`'s `get_capabilities` (`acl/mod.rs`,
+  read in the cargo registry) treats a non-empty `security.capabilities` as an allow-list and
+  includes only the identifiers it names. From inside the running application's `#meeting` webview,
+  `plugin:event|listen` was refused before the change — `allowed on: main, overlay … referenced by:
+  capability: default` — and accepted after it (`OK id=18`; `#update` `OK id=19`; `main` unchanged).
+  The fix is the one word `"notifications"` added to that list.
+- **The gate reads the list now.** `tools/capability-audit/scan.mjs` rule E fails a capability file
+  the allow-list does not name, and rule A counts only enabled capabilities as coverage. Against the
+  unfixed tree it reported three violations — A: `meeting`, `update`; E: `notifications` — and
+  after the one-word change `OK … 2 capability file(s) read, 2 enabled by security.capabilities`.
+  Self-tests 10 of 10, including a KNEG-171 regression case and the real tree's enabled flags.
+- **KNEG-166 items 1, 2, 3 and 6 — the panel renders during a real recording.** Same route as
+  below (`tools/visual-check/app-windows.mjs`, `local-streaming` from `Settings > Meetings` through
+  the real controls, Windows TTS through the speakers):
+  1. `div.notify.notify-recording` from the first sample: red inset edge, pulsing red dot,
+     `RECORDING 0:00` counting every second to `1:00` (60 clock transitions), a `Stop` button.
+     94 DOM samples, none empty.
+  2. The caption appeared under 4 s after speech began and changed 45 times in 60 s — 36 times
+     extending the current utterance, 8 times replaced at an utterance boundary: replacing, not
+     accumulating, across segments. Legible at 13px in the 2× screenshots. Whether ~39 characters
+     is enough is finding 2.
+  3. Stop: `finishing` at 22:46:42.6, `idle` and `IsWindowVisible` false at 22:46:55.0 (12.4 s);
+     "Saved as note 28 (2 min)" with the recording's path on the Meetings screen. The panel's
+     *Transcribing* text during those 12 s was not sampled.
+  6. `Emulation.setEmulatedMedia` does flip `matchMedia('(prefers-color-scheme: …)')` inside the
+     WebView2 webview (checked both ways), and the light and dark screenshots are still identical
+     because `.notify`'s colours are hard-coded and do not follow the scheme — KNEG-165's deliberate
+     choice. This machine runs in light mode, so every default screenshot here is light-mode
+     evidence. Nothing white anywhere.
+
+### Findings
+
+1. **The second line reads `starting…` for the whole recording — KNEG-172.** All 94 samples, up to
+   `Recording 1:00`, while microphone and system audio were both live and `whoIsRecorded` should
+   have said "you and everyone else". Read from `MeetingNotification.tsx`: `sources` is set only by
+   the mount-time `getMeetingStatus()` read, which ran while idle, and the `meeting-state` event
+   does not carry sources — so the panel never learns what it is recording.
+2. **The caption clips its newest words — KNEG-173.** The local streaming provider's partial for one
+   utterance grows to 230 characters over about 12 s; `.notify-live` is `nowrap` with an end
+   ellipsis, so `app-02-caption-3.png` shows a 50-character partial as `This is a test of the
+   meeting notificati…`, and by the DOM record six partials from `0:11` to `0:16` and eight from
+   `0:40` to `0:47` shared their first 42 characters — the visible line cannot have changed while
+   they arrived. The head is shown; the live edge is hidden. Answers KNEG-165's open question: ~39
+   characters are enough for a short utterance and not for this provider's segment granularity.
+
+### Still unchecked, and needs a person at the machine
+
+- KNEG-166 item 4 (a real Teams call and the offer panel) and item 5 (the failure states), plus a
+  person's eyes on the 2× screenshots the tool writes.
+- The *Transcribing* panel during `finishing`, which the instrument does not sample.
+
+## 2026-09-07 (later) — three instruments, two closures, one live indicator failure
+
+Run through the Codex orchestrator against `dev` at `080b3a3` (run `20260907-kneg60-161`). The
+instruments landed in `e75e860` (`tools/visual-check/`) and `19a92a2`
+(`crates/platform/examples/capture_probe.rs`), merged as `cd17676` and `d94ac5b`. Windows 11 Pro
+10.0.26200, one monitor at 150% scale, Edge and WebView2 152.0.4191.66. The dev build was relaunched
+with `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222`, which exposes all four
+webviews (`main`, `#overlay`, `#meeting`, `#update`) as Chrome DevTools Protocol targets and lets
+`window.__TAURI_INTERNALS__.invoke` be driven from outside — measured, not believed, and now the
+route `tools/visual-check/README.md` documents.
+
+### Verified
+
+- **KNEG-60 — capture exclusion holds against all three recorder capture paths.**
+  `cargo run -p kw-platform --example capture_probe` creates a magenta window and a green control
+  window, captures both through GDI `BitBlt`, Windows.Graphics.Capture monitor capture and DXGI
+  Desktop Duplication, applies `kw_platform::window::exclude_from_capture` to the magenta one, and
+  captures again. Before: every path saw both windows (`match=1.000`). After: every path saw the
+  desktop where the excluded window is (`ABSENT`, dominant `#fefefe` — removed from the
+  composition, not blacked out) while the control stayed `VISIBLE` (`match=1.000`).
+  `verdict: 3 of 3 methods EFFECTIVE`. Windows.Graphics.Capture `CreateForWindow` on the excluded
+  window delivered **no frames at all** within 3 s, which is what "share this window" would see.
+  The first run scored Desktop Duplication `NO ANSWER` because its first acquired frame carried no
+  desktop image (black, control included) — the probe's own control caught it, and `19a92a2` skips
+  frames with `LastPresentTime == 0`. `--target-title "KnegisWhisper meeting"` during a recording
+  read the real window's affinity as `0x11` at (1296,954)–(1906,1105) physical pixels; its pixels
+  could not be compared with anything because the panel rendered nothing (finding 1).
+  What this does not prove: any recorder that uses a fourth API, any other Windows build, or that
+  the panel's *content* is protected — it had none.
+- **KNEG-161 — the rebuilt shell rail, measured in headless Edge against the dev fixtures**
+  (`node tools/visual-check/shell-rail.mjs`; the fixture banner removed for geometry, the
+  `FIXTURES` title kept; the same engine and version as the WebView2 the application runs in, but
+  **not the Tauri window**). The root font size is **14px**, so every pixel figure KNEG-160 quoted
+  at a 16px rem is off by a factor of 1.14:
+  1. rail `position: fixed` at (0, 0), 182px wide (13rem), `.shell` padding-left 182px; unchanged
+     after scrolling the Providers screen 600px;
+  2. `::after` content `"+"` closed and `"-"` open on both headers, ProFontWindows loaded; the
+     glyphs are characters, not boxes (2× clips, looked at);
+  3. headers `display: flex`, `justify-content: space-between`;
+  4. child padding-left 23.8px (1.7rem) against 8.4px; exactly one filled rail item (Providers);
+     the open `Settings` header carries `--text` and a transparent background;
+  5. `.content` 803px wide at 1000×720 and **952px** (68rem at 14px, not 1088) at 1920×1080;
+  6. `.note-workspace` one track (719px) at 1000×720, two (539px 308px) at 1400×900;
+  7. from Intelligence with `Settings` collapsed, "go to Providers" opens `Settings` and marks
+     Providers current, and collapsing the group you stand in keeps the screen. **Not measured:**
+     the error boundary's "Go to Diagnostics", because no fixture can make a screen throw;
+  8. `2px solid` outline on all eleven rail buttons a Tab reached — four top-level, both headers,
+     five children; `aria-current` on the `nav-child`, never on a header.
+- **KNEG-166 items 1, 2, 3 and 6 — reached by instrument; what they showed is finding 1.** A
+  `local-streaming` meeting started from `Settings > Meetings` through the real controls (18 s to
+  `recording`, microphone and system audio on, Windows TTS speaking through the speakers so the
+  caption had words to show). The window was on screen for all 60 s (`IsWindowVisible` true in 29
+  samples, affinity `0x11`), stayed on screen through 47 s of `finishing`, and hid at `idle`. Stop
+  saved "note 27 (1 min)". Light and dark screenshots were both blank.
+
+### Findings
+
+1. **The meeting notification window renders nothing during a real recording — KNEG-171, Urgent.**
+   120 DOM samples over the recording read `div.notify.notify-empty`: no `Recording m:ss`, no
+   Stop, no caption, and no *Transcribing* during `finishing`. Inside that webview
+   `plugin:event|listen` is refused — `event.listen not allowed on window "meeting" … allowed on:
+   main, overlay … referenced by: capability: default` — because `tauri.conf.json` sets
+   `security.capabilities: ["default"]`, which by Tauri's own schema makes the listed capabilities
+   the only ones enabled. KNEG-168's `capabilities/notifications.json` landed and is inert, and
+   `tools/capability-audit/scan.mjs` passes because it reads the files, not the allow-list. The
+   indicator rule at the top of `MeetingNotification.tsx` was not met — **fixed the same evening**;
+   the section above has the one-word change, the gate that now reads the list, and the first
+   recording during which the panel rendered.
+2. **KNEG-160's pixel claims assumed a 16px rem.** Measured: 952px of content at 1920, not 1088;
+   803px at 1000, not 728. The design holds; the numbers were wrong.
+3. **Desktop Duplication's first frame is not a desktop image** when nothing has been presented
+   since `DuplicateOutput`; a probe that trusted it reported a black control. Fixed in the probe,
+   and worth knowing for any future capture code.
+4. **PowerShell binds `$null` to a .NET `string` as an empty string**, so
+   `FindWindowW($null, title)` searches for an empty class name and finds nothing —
+   `tools/visual-check/win32.mjs` enumerates windows instead, and says why.
+
+### Still unchecked, and needs a person at the machine
+
+- KNEG-166 item 4 (a real Teams call and the offer panel) and item 5 (the failure states). Items
+  1, 2, 3 and 6 were re-run the same evening, after KNEG-171 — the section above.
+- KNEG-161 item 7's error-boundary route, and the same eight claims in the Tauri window itself.
+- KNEG-60 against a recorder that is not one of these three APIs, and on any other Windows build.
+
 ## 2026-09-07 — owner validation and delivery review
 
 User-observed Windows results:
@@ -809,17 +952,19 @@ item is therefore no longer a decision to make; only the check below remains.
    installed will do), and press Import again on the same path. The second attempt must be
    accepted; a grant that did not survive a retry would break a flow that works today.
 
-### Added by chunk H (MCP and CLI screens), and unchecked
+### Added by chunk H (MCP and CLI screens)
 
-1. **Drive `tools/knegiswhisper-mcp` from a real MCP client** (an editor or agent that speaks the
-   protocol over stdio), not the protocol-test harness this task wrote for itself. Confirm
-   `initialize` negotiates a version correctly against a client that asks for one this server does
-   not support, and that at least one tool call against a real running application (list notes,
-   read history) returns real data with no secret in it.
-2. **Look at `Integrations > CLI` and `Integrations > MCP` side by side** and confirm the
-   permissions caveat reads identically on both — the fix for the two screens drifting apart is
-   tested at the unit level; nobody has looked at both screens open at once.
-3. **Run `knegiswhisper` against a machine where the local API is off**, and confirm the CLI's
+On 2026-09-07 the official Python MCP SDK 2.2.0 connected to the compiled stdio
+server against an isolated Windows desktop profile. Initialization negotiated
+`2024-11-05`, 23 tools were listed, and note creation/export, history search,
+status/models and a local fixture transcription returned real data. Both CLI and
+MCP screens were visually inspected and displayed the same permissions readback
+and administrator caveat. Detailed scope is in [CLI_MCP_WORKFLOWS.md](CLI_MCP_WORKFLOWS.md).
+This establishes SDK interoperability; it does not validate every editor's setup.
+
+Still unchecked:
+
+1. **Run `knegiswhisper` against a machine where the local API is off**, and confirm the CLI's
    error is the one the screen would predict rather than a generic connection failure.
 
 ### Added by Task 20 (the SSRF boundary fix)

@@ -205,7 +205,9 @@ require an explicit confirmation field.
 Strict CSP, no `unsafe-eval`. Capabilities are per-window and least-privilege: no shell, no
 arbitrary filesystem access, no process spawning, no direct database or credential access, no
 HTTP. Command payloads are typed and validated at the boundary; paths and URLs are validated
-before use.
+before use. The capability files themselves are enabled by name in `tauri.conf.json`'s
+`security.capabilities`; a file that list does not name is parsed and ignored, which is what
+KNEG-171 was, and `tools/capability-audit/scan.mjs` fails when the list and the directory disagree.
 
 The `recording` URI scheme serves the application-owned WAV attached to a note, addressed only by
 note id. `recordings::serve` looks up that id and `recordings::resolve` accepts only a plain file

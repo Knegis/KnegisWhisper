@@ -26,6 +26,75 @@ use kw_storage::Db;
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, DuplexStream, ReadHalf, WriteHalf};
 use tokio::net::TcpListener;
+
+#[tokio::test(flavor = "multi_thread")]
+async fn new_tools_round_trip_notes_and_report_unavailable_runtime_as_tool_errors() {
+    let harness = Harness::start().await;
+    let created = kw_mcp::tools::call(
+        &harness.client,
+        "notes_create",
+        &json!({"title":"Meeting","content":"budget"}),
+    )
+    .await
+    .unwrap()
+    .into_value();
+    assert_eq!(created["isError"], false);
+    let note: Value =
+        serde_json::from_str(created["content"][0]["text"].as_str().unwrap()).unwrap();
+    let exported = kw_mcp::tools::call(
+        &harness.client,
+        "notes_export",
+        &json!({"id":note["data"]["id"]}),
+    )
+    .await
+    .unwrap()
+    .into_value();
+    assert_eq!(exported["isError"], false);
+    let export: Value =
+        serde_json::from_str(exported["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(export["data"]["content"], "# Meeting\n\nbudget\n");
+    let search = kw_mcp::tools::call(
+        &harness.client,
+        "transcriptions_search",
+        &json!({"query":"budget"}),
+    )
+    .await
+    .unwrap()
+    .into_value();
+    assert_eq!(search["isError"], false);
+    for (name, args) in [
+        ("app_status", json!({})),
+        ("models_list", json!({})),
+        ("recording_start", json!({"provider":"local"})),
+        ("recording_stop", json!({})),
+        ("jobs_get", json!({"id":"missing"})),
+        ("jobs_cancel", json!({"id":"missing"})),
+        ("transcription_create", json!({"path":"missing.wav"})),
+    ] {
+        assert_eq!(
+            kw_mcp::tools::call(&harness.client, name, &args)
+                .await
+                .unwrap()
+                .into_value()["isError"],
+            true,
+            "{name}"
+        );
+    }
+    for (name, args) in [
+        ("notes_create", json!({"title":"missing content"})),
+        (
+            "recording_start",
+            json!({"provider":"local","system_audio":"yes"}),
+        ),
+        ("notes_export", json!({"id":1,"format":"html"})),
+        ("app_status", json!({"secret":"invalid"})),
+    ] {
+        assert!(kw_mcp::tools::call(&harness.client, name, &args)
+            .await
+            .is_err());
+    }
+    harness.stop().await;
+}
 use tokio::task::JoinHandle;
 
 struct Harness {
@@ -174,6 +243,16 @@ async fn tools_list_matches_the_local_apis_surface() {
     // One tool per route `crates/local-api/src/server.rs` actually serves —
     // nothing invented, nothing missing.
     let expected = [
+        "notes_create",
+        "transcription_create",
+        "jobs_get",
+        "jobs_cancel",
+        "transcriptions_search",
+        "notes_export",
+        "recording_start",
+        "recording_stop",
+        "app_status",
+        "models_list",
         "health",
         "notes_list",
         "notes_get",

@@ -7,7 +7,7 @@ const flush = async () => { await Promise.resolve(); await Promise.resolve(); };
 test("stages expose elapsed time without a fabricated percentage", () => {
   assert.equal(importActive(null), false);
   for (const stage of ["preparing", "converting", "transcribing", "saving"] as const) assert.equal(importActive(snapshot(stage)), true);
-  for (const stage of ["succeeded", "failed"] as const) assert.equal(importActive(snapshot(stage)), false);
+  for (const stage of ["succeeded", "failed", "cancelled"] as const) assert.equal(importActive(snapshot(stage)), false);
   assert.equal(importProgressText(snapshot("transcribing")), "Transcribing · 1:05 elapsed");
 });
 test("navigation discards the old response and a new view restores the server snapshot", async () => {

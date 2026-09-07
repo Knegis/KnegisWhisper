@@ -25,6 +25,65 @@ use kw_storage::transcriptions;
 use kw_storage::Db;
 use tokio::net::TcpListener;
 
+#[tokio::test(flavor = "multi_thread")]
+async fn automation_commands_create_export_and_refuse_unavailable_runtime() {
+    let harness = Harness::start().await;
+    let out = harness.run(&[
+        "notes",
+        "create",
+        "--title",
+        "Meeting",
+        "--content",
+        "**Budget**",
+        "--json",
+    ]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let note: serde_json::Value = serde_json::from_str(&stdout(&out)).unwrap();
+    let id = note["data"]["id"].to_string();
+    let out = harness.run(&["notes", "export", &id]);
+    assert_eq!(code(&out), 0);
+    assert!(stdout(&out).contains("**Budget**"));
+    let path = harness._dir.path().join("note.md");
+    let name = path.to_str().unwrap();
+    assert_eq!(
+        code(&harness.run(&["notes", "export", &id, "--output", name])),
+        0
+    );
+    assert_eq!(
+        code(&harness.run(&["notes", "export", &id, "--output", name])),
+        1
+    );
+    assert_eq!(
+        code(&harness.run(&["notes", "export", &id, "--output", name, "--force"])),
+        0
+    );
+    assert_eq!(
+        std::fs::read_to_string(path).unwrap(),
+        "# Meeting\n\n**Budget**\n"
+    );
+    assert_eq!(
+        code(&harness.run(&["history", "search", "budget", "--json"])),
+        0
+    );
+    for argv in [
+        vec!["status"],
+        vec!["models", "list"],
+        vec!["recording", "start", "--provider", "local"],
+        vec!["recording", "stop"],
+        vec!["jobs", "cancel", "unknown"],
+    ] {
+        let out = harness.run(&argv);
+        assert_eq!(code(&out), 1, "{argv:?}: {}", stderr(&out));
+        assert!(stdout(&out).is_empty());
+    }
+    assert_eq!(code(&harness.run(&["jobs", "status", "unknown"])), 3);
+    assert_eq!(
+        code(&harness.run(&["transcribe", "file", "missing.wav"])),
+        2
+    );
+    harness.stop().await;
+}
+
 struct Harness {
     served: Served,
     discovery_path: PathBuf,

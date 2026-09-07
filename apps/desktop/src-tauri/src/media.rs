@@ -358,6 +358,25 @@ fn validate_import_url(url: &str) -> Result<url::Url, MediaImportError> {
 /// `-vn` drops any video stream. Harmless when there was never one -- a plain
 /// audio file passes through untouched by it -- which is exactly why audio
 /// and video import share one conversion path.
+const MAX_CONVERTED_BYTES: u64 = 512 * 1024 * 1024;
+/// Uploaded media cannot select playlist demuxers or network protocols.
+fn uploaded_ffmpeg_args(input: &Path, output: &Path) -> Vec<String> {
+    let mut args: Vec<String> = [
+        "-protocol_whitelist",
+        "file,pipe",
+        "-format_whitelist",
+        "wav,mp3,mov,matroska,webm,ogg,flac,aac,asf,avi",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect();
+    // -fs is an output option; insert it immediately before the output filename.
+    let mut conversion = ffmpeg_convert_args(input, output);
+    let destination = conversion.pop().unwrap_or_default();
+    args.extend(conversion);
+    args.extend(["-fs".into(), MAX_CONVERTED_BYTES.to_string(), destination]);
+    args
+}
 fn ffmpeg_convert_args(input: &Path, output: &Path) -> Vec<String> {
     vec![
         "-hide_banner".to_owned(),
@@ -544,6 +563,14 @@ async fn run_sidecar_process(
     executable: &Path,
     args: &[String],
 ) -> std::io::Result<ProcessOutcome> {
+    run_cancellable_sidecar(executable, args, None).await
+}
+
+async fn run_cancellable_sidecar(
+    executable: &Path,
+    args: &[String],
+    lease: Option<&crate::media_job::ImportLease>,
+) -> std::io::Result<ProcessOutcome> {
     let mut command = tokio::process::Command::new(executable);
     command
         .args(args)
@@ -558,20 +585,55 @@ async fn run_sidecar_process(
         command.creation_flags(0x0800_0000);
     }
 
-    let output = command.output().await?;
+    use tokio::io::AsyncReadExt as _;
+    command.stderr(Stdio::piped());
+    let mut child = command.spawn()?;
+    let mut stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| std::io::Error::other("missing stderr pipe"))?;
+    let reader = tokio::spawn(async move {
+        let mut tail = Vec::new();
+        let mut buffer = [0u8; 4096];
+        loop {
+            let count = stderr.read(&mut buffer).await?;
+            if count == 0 {
+                break;
+            }
+            tail.extend_from_slice(buffer.get(..count).unwrap_or_default());
+            if tail.len() > STDERR_TAIL_BYTES {
+                tail.drain(..tail.len() - STDERR_TAIL_BYTES);
+            }
+        }
+        Ok::<_, std::io::Error>(tail)
+    });
+    let cancelled = async {
+        match lease {
+            Some(lease) => lease.cancelled().await,
+            None => std::future::pending::<()>().await,
+        }
+    };
+    let status = tokio::select! {
+        biased;
+        _ = cancelled => {
+            let _ = child.start_kill();
+            child.wait().await
+        }
+        status = child.wait() => status,
+    };
+    let stderr = reader.await.map_err(std::io::Error::other)??;
+    let status = status?;
     Ok(ProcessOutcome {
-        success: output.status.success(),
-        stderr_tail: String::from_utf8_lossy(tail_bytes(&output.stderr, STDERR_TAIL_BYTES))
-            .into_owned(),
+        success: status.success()
+            && !lease.is_some_and(crate::media_job::ImportLease::is_cancelled),
+        stderr_tail: String::from_utf8_lossy(tail_bytes(&stderr, STDERR_TAIL_BYTES)).into_owned(),
     })
 }
 
 /// A fresh, empty scratch directory for one import, under the same
 /// native-binary-safe root ffmpeg's model cache uses.
-fn new_scratch_dir() -> Result<PathBuf, MediaImportError> {
-    let dir = kw_storage::paths::audio_temp_dir()
-        .join("import")
-        .join(uuid::Uuid::new_v4().to_string());
+fn new_scratch_dir(id: &str) -> Result<PathBuf, MediaImportError> {
+    let dir = kw_storage::paths::audio_temp_dir().join("import").join(id);
     std::fs::create_dir_all(&dir).map_err(|source| MediaImportError::io(&dir, source))?;
     Ok(dir)
 }
@@ -630,6 +692,148 @@ impl std::fmt::Debug for MediaImportRuntime {
 }
 
 impl MediaImportRuntime {
+    pub(crate) fn snapshot(&self) -> Option<crate::media_job::ImportSnapshot> {
+        self.jobs.snapshot()
+    }
+    pub(crate) async fn shutdown(&self) {
+        self.jobs.close();
+        if let Some(snapshot) = self.jobs.snapshot() {
+            let _ = self.jobs.cancel(&snapshot.operation_id);
+            while self.jobs.snapshot().is_some_and(|s| {
+                !matches!(
+                    s.stage,
+                    crate::media_job::ImportStage::Succeeded
+                        | crate::media_job::ImportStage::Failed
+                        | crate::media_job::ImportStage::Cancelled
+                )
+            }) {
+                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            }
+        }
+    }
+
+    async fn begin_import(
+        &self,
+    ) -> Result<(crate::media_job::ImportLease, PreparedImport), MediaImportError> {
+        let lease = self.jobs.begin().map_err(MediaImportError::Busy)?;
+        kw_storage::jobs::create(self.db.pool(), lease.id())
+            .await
+            .map_err(|e| MediaImportError::Persistence {
+                detail: e.to_string(),
+            })?;
+        let preparation = tokio::select! {
+            biased;
+            _ = lease.cancelled() => Err(MediaImportError::Busy("import cancelled".into())),
+            result = self.prepare() => result,
+        };
+        let prepared = match preparation {
+            Ok(p) => p,
+            Err(error) => {
+                if lease.is_cancelled() {
+                    let _ = kw_storage::jobs::stage(self.db.pool(), lease.id(), "cancelled", None)
+                        .await;
+                    lease.finish_cancelled();
+                } else {
+                    let _ = kw_storage::jobs::stage(self.db.pool(), lease.id(), "failed", Some("Configured transcription route is unavailable. Check the desktop settings.")).await;
+                    lease.finish(&Err(error.to_string()));
+                }
+                return Err(error);
+            }
+        };
+        let (provider, model) = prepared.identity();
+        kw_storage::jobs::route(self.db.pool(), lease.id(), &provider, model.as_deref())
+            .await
+            .map_err(|e| MediaImportError::Persistence {
+                detail: e.to_string(),
+            })?;
+        lease.route(provider, model);
+        Ok((lease, prepared))
+    }
+
+    async fn run_import<R: Runtime>(
+        &self,
+        app: &AppHandle<R>,
+        path: &Path,
+        source: MediaImportSource,
+        lease: crate::media_job::ImportLease,
+        prepared: PreparedImport,
+    ) -> Result<MediaImportResult, MediaImportError> {
+        let result = self
+            .import_local_inner(app, path, source, &lease, prepared)
+            .await;
+        if result.is_err() {
+            let cancelled = lease.is_cancelled();
+            let stage = if cancelled { "cancelled" } else { "failed" };
+            kw_storage::jobs::stage(self.db.pool(), lease.id(), stage,
+                if cancelled { None } else { Some("Media import failed. Check the desktop diagnostics and provider configuration.") })
+                .await.map_err(|e| MediaImportError::Persistence { detail: e.to_string() })?;
+            if cancelled {
+                lease.finish_cancelled();
+            } else {
+                lease.finish(&result.as_ref().cloned().map_err(ToString::to_string));
+            }
+        } else {
+            lease.finish(&result.as_ref().cloned().map_err(ToString::to_string));
+        }
+        result
+    }
+
+    pub(crate) async fn submit_upload(
+        self: &Arc<Self>,
+        app: AppHandle,
+        upload: kw_local_api::runtime::Upload,
+    ) -> Result<serde_json::Value, kw_local_api::ApiError> {
+        let (lease, mut prepared) = self.begin_import().await.map_err(|e| match e {
+            MediaImportError::Busy(_) => kw_local_api::ApiError::new(
+                kw_local_api::ErrorCode::Conflict,
+                "another import is running",
+            ),
+            _ => kw_local_api::ApiError::new(
+                kw_local_api::ErrorCode::Unavailable,
+                "configured transcription route is unavailable; check desktop settings",
+            ),
+        })?;
+        prepared.upload_name = Some(upload.name().to_owned());
+        let id = lease.id().to_owned();
+        let runtime = Arc::clone(self);
+        tokio::spawn(async move {
+            let _ = runtime
+                .run_import(
+                    &app,
+                    upload.path(),
+                    MediaImportSource::Audio,
+                    lease,
+                    prepared,
+                )
+                .await;
+            drop(upload);
+        });
+        let job = kw_storage::jobs::get(self.db.pool(), &id)
+            .await
+            .map_err(|_| kw_local_api::ApiError::internal())?
+            .ok_or_else(kw_local_api::ApiError::internal)?;
+        serde_json::to_value(job).map_err(|_| kw_local_api::ApiError::internal())
+    }
+
+    pub(crate) async fn cancel_job(
+        &self,
+        id: &str,
+    ) -> Result<serde_json::Value, kw_local_api::ApiError> {
+        let job = kw_storage::jobs::get(self.db.pool(), id)
+            .await
+            .map_err(|_| kw_local_api::ApiError::internal())?
+            .ok_or_else(|| kw_local_api::ApiError::not_found("job"))?;
+        if job.stage == "cancelled" {
+            return serde_json::to_value(job).map_err(|_| kw_local_api::ApiError::internal());
+        }
+        self.jobs.cancel(id).map_err(|_| {
+            kw_local_api::ApiError::new(
+                kw_local_api::ErrorCode::Conflict,
+                "job is saving or already finished",
+            )
+        })?;
+        Ok(serde_json::json!({"id": id, "cancellation_requested": true}))
+    }
     /// Load the catalogue and hold the handles a transcription needs, without
     /// touching the network.
     pub fn new(
@@ -851,7 +1055,11 @@ impl MediaImportRuntime {
         } else {
             None
         };
-        Ok(PreparedImport { transport, local })
+        Ok(PreparedImport {
+            transport,
+            local,
+            upload_name: None,
+        })
     }
 
     async fn transcribe(
@@ -859,7 +1067,9 @@ impl MediaImportRuntime {
         wav: Vec<u8>,
         prepared: PreparedImport,
     ) -> Result<kw_transcription_core::Transcript, MediaImportError> {
-        let PreparedImport { transport, local } = prepared;
+        let PreparedImport {
+            transport, local, ..
+        } = prepared;
         let executor = Executor::new(&self.policy, self.credentials.as_ref());
         let executor = match &local {
             Some(engine) => executor.with_local(engine.as_ref()),
@@ -888,19 +1098,42 @@ impl MediaImportRuntime {
         ffmpeg: &Path,
         input: &Path,
         scratch: &Path,
-        lease: Option<&crate::media_job::ImportLease<'_>>,
+        lease: Option<&crate::media_job::ImportLease>,
     ) -> Result<(kw_transcription_core::Transcript, u64), MediaImportError> {
         let prepared = self.prepare().await?;
+        self.convert_prepared(app, ffmpeg, input, scratch, lease, prepared)
+            .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn convert_prepared<R: Runtime>(
+        &self,
+        app: &AppHandle<R>,
+        ffmpeg: &Path,
+        input: &Path,
+        scratch: &Path,
+        lease: Option<&crate::media_job::ImportLease>,
+        prepared: PreparedImport,
+    ) -> Result<(kw_transcription_core::Transcript, u64), MediaImportError> {
         if let Some(lease) = lease {
             let (provider, model) = prepared.identity();
             lease.route(provider, model);
             lease.stage(crate::media_job::ImportStage::Converting);
+            kw_storage::jobs::stage(self.db.pool(), lease.id(), "converting", None)
+                .await
+                .map_err(|e| MediaImportError::Persistence {
+                    detail: e.to_string(),
+                })?;
         }
         let _ = app;
 
         let output = scratch.join("converted.wav");
-        let args = ffmpeg_convert_args(input, &output);
-        let outcome = run_sidecar_process(ffmpeg, &args)
+        let args = if prepared.upload_name.is_some() {
+            uploaded_ffmpeg_args(input, &output)
+        } else {
+            ffmpeg_convert_args(input, &output)
+        };
+        let outcome = run_cancellable_sidecar(ffmpeg, &args, lease)
             .await
             .map_err(|source| MediaImportError::io(ffmpeg, source))?;
 
@@ -916,6 +1149,17 @@ impl MediaImportRuntime {
             });
         }
 
+        if prepared.upload_name.is_some()
+            && tokio::fs::metadata(&output)
+                .await
+                .map_err(|e| MediaImportError::io(&output, e))?
+                .len()
+                >= MAX_CONVERTED_BYTES
+        {
+            return Err(MediaImportError::Conversion {
+                detail: "decoded media exceeds 512 MiB".into(),
+            });
+        }
         let wav = tokio::fs::read(&output)
             .await
             .map_err(|source| MediaImportError::io(&output, source))?;
@@ -930,8 +1174,21 @@ impl MediaImportRuntime {
 
         if let Some(lease) = lease {
             lease.stage(crate::media_job::ImportStage::Transcribing);
+            kw_storage::jobs::stage(self.db.pool(), lease.id(), "transcribing", None)
+                .await
+                .map_err(|e| MediaImportError::Persistence {
+                    detail: e.to_string(),
+                })?;
         }
-        let transcript = self.transcribe(wav, prepared).await?;
+        let transcript = if let Some(lease) = lease {
+            tokio::select! {
+                biased;
+                _ = lease.cancelled() => return Err(MediaImportError::Busy("import cancelled".into())),
+                result = self.transcribe(wav, prepared) => result?,
+            }
+        } else {
+            self.transcribe(wav, prepared).await?
+        };
         Ok((transcript, duration_ms))
     }
 
@@ -948,10 +1205,8 @@ impl MediaImportRuntime {
         path: &Path,
         source: MediaImportSource,
     ) -> Result<MediaImportResult, MediaImportError> {
-        let lease = self.jobs.begin().map_err(MediaImportError::Busy)?;
-        let result = self.import_local_inner(app, path, source, &lease).await;
-        lease.finish(&result.as_ref().cloned().map_err(ToString::to_string));
-        result
+        let (lease, prepared) = self.begin_import().await?;
+        self.run_import(app, path, source, lease, prepared).await
     }
 
     async fn import_local_inner<R: Runtime>(
@@ -959,27 +1214,39 @@ impl MediaImportRuntime {
         app: &AppHandle<R>,
         path: &Path,
         source: MediaImportSource,
-        lease: &crate::media_job::ImportLease<'_>,
+        lease: &crate::media_job::ImportLease,
+        prepared: PreparedImport,
     ) -> Result<MediaImportResult, MediaImportError> {
         let input = check_importable_file(path)?;
 
         let ffmpeg = self.locate_executable(MediaSidecar::Ffmpeg)?;
-        let scratch = new_scratch_dir()?;
+        let scratch = new_scratch_dir(lease.id())?;
         let _cleanup = ScratchCleanup(scratch.clone());
 
+        let original = prepared
+            .upload_name
+            .as_ref()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| input.clone());
         let outcome = self
-            .convert_and_transcribe(app, &ffmpeg, &input, &scratch, Some(lease))
+            .convert_prepared(app, &ffmpeg, &input, &scratch, Some(lease), prepared)
             .await;
         let result = match outcome {
             Ok((transcript, _)) => {
-                lease.stage(crate::media_job::ImportStage::Saving);
-                save_import(
+                lease.begin_saving().map_err(MediaImportError::Busy)?;
+                kw_storage::jobs::stage(self.db.pool(), lease.id(), "saving", None)
+                    .await
+                    .map_err(|e| MediaImportError::Persistence {
+                        detail: e.to_string(),
+                    })?;
+                save_import_job(
                     &self.db,
                     transcript,
                     source,
-                    &input,
+                    &original,
                     &scratch.join("converted.wav"),
                     &self.recording_directory,
+                    Some(lease.id()),
                 )
                 .await
             }
@@ -1006,7 +1273,7 @@ impl MediaImportRuntime {
         let ytdlp = self.locate_executable(MediaSidecar::YtDlp)?;
         let ffmpeg = self.locate_executable(MediaSidecar::Ffmpeg)?;
 
-        let scratch = new_scratch_dir()?;
+        let scratch = new_scratch_dir(&uuid::Uuid::new_v4().to_string())?;
 
         let outcome = self
             .fetch_and_transcribe(app, &ytdlp, &ffmpeg, url, &scratch)
@@ -1071,6 +1338,18 @@ async fn save_import(
     converted: &Path,
     directory: &Path,
 ) -> Result<MediaImportResult, MediaImportError> {
+    save_import_job(db, transcript, source, original, converted, directory, None).await
+}
+
+async fn save_import_job(
+    db: &Db,
+    transcript: kw_transcription_core::Transcript,
+    source: MediaImportSource,
+    original: &Path,
+    converted: &Path,
+    directory: &Path,
+    job: Option<&str>,
+) -> Result<MediaImportResult, MediaImportError> {
     let converted = converted.to_owned();
     let directory = directory.to_owned();
     let mut pending = tokio::task::spawn_blocking(move || {
@@ -1117,12 +1396,13 @@ async fn save_import(
     let retained_bytes = std::fs::metadata(&pending.path)
         .map_err(|e| MediaImportError::io(&pending.path, e))?
         .len();
-    let (note_id, recording) = kw_notes_core::notes::create_with_recording(
+    let (note_id, recording) = kw_notes_core::notes::create_with_recording_job(
         db.pool(),
         &note,
         &pending.key,
         pending.duration,
         &original_name,
+        job,
     )
     .await
     .map_err(|e| MediaImportError::Persistence {
@@ -1235,6 +1515,7 @@ impl Drop for ScratchCleanup {
     }
 }
 struct PreparedImport {
+    upload_name: Option<String>,
     transport: Transport,
     local: Option<Box<dyn kw_transcription_core::local::LocalTranscriber>>,
 }

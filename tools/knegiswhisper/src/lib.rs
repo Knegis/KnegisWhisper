@@ -104,6 +104,61 @@ pub struct Client {
 }
 
 impl Client {
+    /// Stream a regular media file from this client, never a server-side path.
+    pub async fn transcribe_file(
+        &self,
+        path: &std::path::Path,
+    ) -> Result<serde_json::Value, CliError> {
+        let file = tokio::fs::File::open(path)
+            .await
+            .map_err(|e| CliError::Usage(format!("could not open media: {e}")))?;
+        let metadata = file
+            .metadata()
+            .await
+            .map_err(|e| CliError::Usage(e.to_string()))?;
+        if !metadata.is_file()
+            || metadata.len() == 0
+            || metadata.len() > kw_local_api::runtime::MAX_UPLOAD_BYTES as u64
+        {
+            return Err(CliError::Usage(
+                "choose a nonempty regular media file no larger than 500 MiB".into(),
+            ));
+        }
+        let filename = path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .ok_or_else(|| CliError::Usage("media needs a UTF-8 filename".into()))?;
+        let part =
+            reqwest::multipart::Part::stream_with_length(reqwest::Body::from(file), metadata.len())
+                .file_name(filename.to_owned());
+        let response = self
+            .http
+            .post(format!("{}/v1/jobs/transcriptions", self.base))
+            .header("Authorization", self.token.header_value())
+            .multipart(reqwest::multipart::Form::new().part("file", part))
+            .send()
+            .await
+            .map_err(|e| {
+                if e.is_connect() {
+                    CliError::NotRunning
+                } else {
+                    CliError::Transport {
+                        detail: e.to_string(),
+                    }
+                }
+            })?;
+        let status = response.status();
+        let body = response.text().await.map_err(|e| CliError::Transport {
+            detail: e.to_string(),
+        })?;
+        if !status.is_success() {
+            return Err(interpret_failure(status.as_u16(), &body));
+        }
+        serde_json::from_str(&body).map_err(|e| CliError::Transport {
+            detail: e.to_string(),
+        })
+    }
+
     /// Find the running application through its discovery file.
     ///
     /// A missing file and an unreadable one are told apart: the first means "not

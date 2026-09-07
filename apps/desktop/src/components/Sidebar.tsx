@@ -33,6 +33,8 @@
 import { childrenOf, isGroup, NAV, type ViewId } from "../lib/navigation";
 
 export function Sidebar({
+  expanded,
+  onToggle,
   view,
   openGroups,
   onSelect,
@@ -41,6 +43,8 @@ export function Sidebar({
   os,
   arch,
 }: {
+  expanded: boolean;
+  onToggle: () => void;
   view: ViewId;
   openGroups: ReadonlySet<string>;
   onSelect: (id: ViewId) => void;
@@ -50,70 +54,101 @@ export function Sidebar({
   arch: string;
 }) {
   return (
-    <nav className="sidebar">
-      <h1>KnegisWhisper</h1>
-      <p className="muted">
-        v{appVersion} · {os} {arch}
-      </p>
-      <ul>
-        {NAV.map((entry) => {
-          if (!isGroup(entry)) {
+    <nav className="sidebar" aria-label="Main navigation">
+      <button
+        type="button"
+        className="sidebar-toggle"
+        aria-label={expanded ? "Retract sidebar" : "Expand sidebar"}
+        title={expanded ? "Retract sidebar" : "Expand sidebar"}
+        aria-expanded={expanded}
+        aria-controls="sidebar-navigation"
+        onClick={onToggle}
+      >
+        <svg
+          width="24"
+          height="24"
+          viewBox="0 0 24 24"
+          fill="none"
+          xmlns="http://www.w3.org/2000/svg"
+          stroke="currentColor"
+          strokeWidth="1.5"
+          aria-hidden="true"
+          focusable="false"
+        >
+          <path d="M3 3H21V21H3V3Z" strokeLinecap="square" strokeLinejoin="miter" />
+          <path d="M9.5 21V3" strokeLinecap="round" strokeLinejoin="round" />
+          <path
+            d={expanded ? "M7.25 10L5.5 12L7.25 14" : "M5.5 10L7.25 12L5.5 14"}
+            strokeLinecap="square"
+            strokeLinejoin="miter"
+          />
+        </svg>
+      </button>
+      <div id="sidebar-navigation" hidden={!expanded}>
+        <h1>KnegisWhisper</h1>
+        <p className="muted">
+          v{appVersion} · {os} {arch}
+        </p>
+        <ul>
+          {NAV.map((entry) => {
+            if (!isGroup(entry)) {
+              return (
+                <li key={entry.id}>
+                  <button
+                    type="button"
+                    className={entry.id === view ? "nav-current" : undefined}
+                    aria-current={entry.id === view ? "page" : undefined}
+                    onClick={() => onSelect(entry.id)}
+                  >
+                    {entry.label}
+                  </button>
+                </li>
+              );
+            }
+
+            const children = childrenOf(entry);
+            const open = openGroups.has(entry.id);
+
             return (
               <li key={entry.id}>
+                {/*
+                 * No `aria-current` on a header: the child is the page, not the
+                 * group. `aria-expanded` is honest here because pressing this is
+                 * the only thing that opens or closes the list below it.
+                 */}
                 <button
                   type="button"
-                  className={entry.id === view ? "nav-current" : undefined}
-                  aria-current={entry.id === view ? "page" : undefined}
-                  onClick={() => onSelect(entry.id)}
+                  className={open ? "nav-group nav-group-open" : "nav-group"}
+                  aria-expanded={open}
+                  onClick={() => onToggleGroup(entry.id)}
                 >
                   {entry.label}
                 </button>
+                {open ? (
+                  <ul className="nav-children">
+                    {children.map((child) => (
+                      <li key={child.id}>
+                        <button
+                          type="button"
+                          className={
+                            child.id === view
+                              ? "nav-child nav-current"
+                              : "nav-child"
+                          }
+                          aria-current={child.id === view ? "page" : undefined}
+                          onClick={() => onSelect(child.id)}
+                        >
+                          {child.label}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
               </li>
             );
-          }
-
-          const children = childrenOf(entry);
-          const open = openGroups.has(entry.id);
-
-          return (
-            <li key={entry.id}>
-              {/*
-               * No `aria-current` on a header: the child is the page, not the
-               * group. `aria-expanded` is honest here because pressing this is
-               * the only thing that opens or closes the list below it.
-               */}
-              <button
-                type="button"
-                className={open ? "nav-group nav-group-open" : "nav-group"}
-                aria-expanded={open}
-                onClick={() => onToggleGroup(entry.id)}
-              >
-                {entry.label}
-              </button>
-              {open ? (
-                <ul className="nav-children">
-                  {children.map((child) => (
-                    <li key={child.id}>
-                      <button
-                        type="button"
-                        className={
-                          child.id === view
-                            ? "nav-child nav-current"
-                            : "nav-child"
-                        }
-                        aria-current={child.id === view ? "page" : undefined}
-                        onClick={() => onSelect(child.id)}
-                      >
-                        {child.label}
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              ) : null}
-            </li>
-          );
-        })}
-      </ul>
+          })}
+        </ul>
+      </div>
     </nav>
   );
 }

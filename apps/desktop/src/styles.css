@@ -360,6 +360,7 @@ h2,
   width: var(--nav-col);
   padding: 2rem 0.75rem 2rem 1.5rem;
   overflow-y: auto;
+  overflow-x: hidden;
   border-right: 1px solid var(--faint);
 }
 
@@ -1608,4 +1609,66 @@ button:focus-visible {
 button:disabled {
   opacity: 0.55;
   cursor: default;
+}
+
+/* Keep the disclosure control reachable when the navigation is retracted. */
+.shell-sidebar-retracted {
+  --nav-col: 4rem;
+}
+
+.sidebar button.sidebar-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  padding: 0.25rem;
+  /* Centre in the 4rem retracted rail; keep the same anchor when expanded. */
+  margin-left: -0.5rem;
+  margin-bottom: 1rem;
+  color: var(--text);
+}
+
+.sidebar-toggle svg {
+  flex-shrink: 0;
+}
+
+.shell-sidebar-retracted .sidebar {
+  padding-right: 0.5rem;
+  padding-left: 1.5rem;
+}
+
+/* Override the fixed rail rules above on narrow browser windows. */
+@media (max-width: 44rem) {
+  .shell .sidebar {
+    position: static;
+    width: auto;
+    padding: 1.5rem 1.5rem 1rem;
+    overflow: visible;
+    border-right: 0;
+    border-bottom: 1px solid var(--faint);
+  }
+
+  .shell-sidebar-retracted .sidebar-toggle {
+    margin-bottom: 0;
+  }
+}
+
+/* A brief resize keeps the toggle anchored while the page gains or loses space. */
+@media (prefers-reduced-motion: no-preference) {
+  .shell {
+    transition: padding-left 160ms ease-in-out;
+  }
+
+  .sidebar {
+    transition: width 160ms ease-in-out;
+  }
+}
+
+/* Lay out navigation at its final width while the rail reveals it. This avoids
+ * transient wrapping and scrollbars during expansion; tall menus still scroll. */
+@media (min-width: 44.001rem) {
+  #sidebar-navigation {
+    width: calc(var(--nav-col) - 2.25rem - 1px);
+  }
 }

@@ -94,10 +94,29 @@ pub async fn create_with_recording(
     duration: f64,
     original: &str,
 ) -> Result<(i64, crate::recordings::NoteRecording), StorageError> {
+    create_with_recording_job(pool, note, key, duration, original, None).await
+}
+
+/// A completed import and its durable job reference commit together.
+pub async fn create_with_recording_job(
+    pool: &SqlitePool,
+    note: &NewNote,
+    key: &str,
+    duration: f64,
+    original: &str,
+    job: Option<&str>,
+) -> Result<(i64, crate::recordings::NoteRecording), StorageError> {
     let mut tx = pool.begin().await?;
     let id = create_on(&mut *tx, note).await?;
     let recording =
         crate::recordings::attach_on(&mut *tx, id, key, Some(duration), Some(original)).await?;
+    if let Some(job) = job {
+        let changed = sqlx::query("UPDATE import_jobs SET stage = 'succeeded', note_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND stage = 'saving'")
+            .bind(id).bind(job).execute(&mut *tx).await?;
+        if changed.rows_affected() != 1 {
+            return Err(StorageError::Sqlx(sqlx::Error::RowNotFound));
+        }
+    }
     tx.commit().await?;
     Ok((id, recording))
 }

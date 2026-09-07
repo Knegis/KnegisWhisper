@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "notifications",
-  "description": "Least-privilege permissions for the two content-protected notification panels: meeting and update. They need event subscription and nothing else: their remaining calls invoke this application's own commands, which the ACL does not gate. Until KNEG-168 these panels were absent from every capability, so they had no event permission and rendered nothing during a live recording. This capability deliberately grants only core:event:default, narrower than the dashboard and overlay's core:default; see default.json, docs/NETWORK_BOUNDARY.md, and docs/SECURITY.md.",
+  "description": "Least-privilege permissions for the two content-protected notification panels: meeting and update. They need event subscription and nothing else: their remaining calls invoke this application's own commands, which the ACL does not gate. Until KNEG-168 these panels were absent from every capability, so they had no event permission and rendered nothing during a live recording. This capability deliberately grants only core:event:default, narrower than the dashboard and overlay's core:default; see default.json, docs/NETWORK_BOUNDARY.md, and docs/SECURITY.md. Tauri compiles a capability file only if tauri.conf.json's security.capabilities names it: that list is an allow-list, and until KNEG-171 it named only default, so this file existed for three days and was never loaded while recordings ran with an empty indicator. tools/capability-audit/scan.mjs rule E now fails when a file here is missing from that list.",
   "windows": ["meeting", "update"],
   "permissions": ["core:event:default"]
 }

@@ -12,6 +12,82 @@ maintained in place rather than appended to, because its purpose is to be curren
 
 ---
 
+## 2026-09-07 (latest) — KNEG-171: the fix was one word, the lesson is the gate
+
+`security.capabilities: ["default"]` had sat in `tauri.conf.json` since the shell landed on
+2026-08-25 (`7a5a348`), when `default.json` was the only capability file. KNEG-168 added
+`notifications.json` on 2026-09-04 and left the list alone. Tauri treats a non-empty list as an
+allow-list (`tauri-utils 2.9.3`, `acl/mod.rs`, `get_capabilities`), so the new file was parsed,
+written into `gen/schemas/capabilities.json` — which is why that file looked like proof — and never
+compiled into the ACL. The fix adds `"notifications"` to the list. Keeping the list rather than
+deleting it was a choice: an explicit list is a second place where a reviewer sees which windows may
+do what, and with rule E it can no longer drift from the directory.
+
+**Why a gate and not a comment.** Rule E in `tools/capability-audit/scan.mjs` fails when a
+capability file is not enabled by the list, and rule A now counts only enabled capabilities. Run
+against the unfixed tree it named the defect exactly; the same gate had passed that tree for three
+days because it read the files and not the list. The general form is worth stating: a gate that
+checks an artifact exists must also check the switch that decides whether the artifact is used.
+
+**What the panel showed once it could hear.** Recording state, clock, Stop and caption all rendered
+on the first real recording — KNEG-163's fill fix, KNEG-164's read-back and KNEG-165's caption
+running in their own window for the first time. Two things were wrong that nobody could have seen
+before: the second line stays `starting…` for the whole recording because `sources` is read once at
+mount and never again (KNEG-172), and the caption shows the head of a partial that this provider
+grows to 230 characters, so the live edge sits behind an ellipsis (KNEG-173).
+
+**Small measured facts.** `tauri dev` rebuilds and relaunches on a `tauri.conf.json` change in about
+50 s, and the WebView2 debugging port survives the relaunch. CDP `Emulation.setEmulatedMedia` does
+change `prefers-color-scheme` inside a WebView2 webview. `tauri dev`'s `Running` line carries ANSI
+colour codes between the word and the backtick — strip them before grepping for it.
+
+## 2026-09-07 (later) — KNEG-60, KNEG-161, KNEG-166: instruments instead of eyes, and an inert fix
+
+Three "by hand" issues were closed or advanced by building instruments rather than by looking,
+through an orchestrated run (two Codex workers, `e75e860` and `19a92a2`, merged `cd17676` and
+`d94ac5b`). The judgement calls:
+
+**A probe for capture exclusion, not a screen recorder.** KNEG-60 asked for "a second machine or a
+capture tool". A recorder would have answered for one product; `capture_probe` answers for the three
+capture APIs recorders are built on (GDI `BitBlt`, Windows.Graphics.Capture, DXGI Desktop
+Duplication), with an unexcluded control window beside the excluded one so a capture path that
+cannot see its own known-positive pixels scores `NO ANSWER` rather than `EFFECTIVE`. That control
+earned its place on the first run: Desktop Duplication's first acquired frame after `DuplicateOutput`
+carries no desktop image when nothing has been presented since, and the probe reported a black
+control instead of a false pass. The capture-stack `windows` features are dev-dependencies, so the
+shipping crate links nothing new; `PrintWindow` is declared by hand because `windows 0.58` files it
+under an XPS feature nothing else wants.
+
+**Headless Edge as the shell's first pixel-level measurement.** KNEG-161's eight claims were
+believed from CSS. Edge 152 is the engine WebView2 152 runs, so `tools/visual-check/shell-rail.mjs`
+measures computed style and geometry there against the dev fixtures — and says so in its report
+header, because fixtures and a real window are different evidence. The fixture banner is removed by
+default: it pads `body` by 2.6rem while the fixed rail is not shifted, a misalignment that exists
+only in the fixture tab. The tool reports pixels beside the live rem basis rather than asserting
+KNEG-160's figures, which turned out to assume a 16px rem in a 14px application.
+
+**WebView2 remote debugging as the way to drive the real application.** Setting
+`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222` before `npm run tauri:dev`
+exposes every webview as a CDP target, and `window.__TAURI_INTERNALS__.invoke` works from
+`Runtime.evaluate`. Believed from documentation when the brief was written, measured the same
+evening. `app-windows.mjs` drives the Meetings screen by its visible controls, not by IPC, because
+the question was what a person would see.
+
+**What the instrument found, and why two gates missed it.** During a real recording the meeting
+notification window was visible and empty for 60 s. The webview cannot `listen`: `tauri.conf.json`
+sets `security.capabilities: ["default"]`, and Tauri enables only the listed capabilities when that
+entry is set, so KNEG-168's `notifications.json` was never loaded. Nothing failed loudly — the ACL
+denial is a rejected promise the panel discards, `tools/capability-audit/scan.mjs` reads the
+capability files rather than the allow-list, and the mock-webview IPC test does not exercise
+events. KNEG-171 carries the fix and the gate. The lesson is the one this log keeps relearning: a
+fix whose only evidence is that its file exists has not been verified, and the check that would have
+caught this is the same check that found it — start a meeting and read the panel.
+
+**Two small measured facts worth not rediscovering.** PowerShell binds `$null` to a .NET `string`
+parameter as an empty string, so `FindWindowW($null, title)` finds nothing; enumerate windows or
+pass `[NullString]::Value`. And a CDP `Page.captureScreenshot` `clip` is in page coordinates, so a
+clip of a fixed element taken after a scroll must add `window.scrollY`.
+
 ## 2026-09-07 — KNEG-157: disclose meeting recording attachment failures
 
 The saved meeting outcome now carries `recordingAttached`. Attachment failure

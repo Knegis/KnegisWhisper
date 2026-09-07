@@ -11,16 +11,17 @@
 //! connection tests are explicitly invoked by the user, never run at startup.
 //! See `docs/NETWORK_BOUNDARY.md`.
 
+mod automation;
 mod binary_locator;
 mod calendar;
 mod commands;
 mod diagnostics;
+mod diarization;
 mod dictation;
 mod gguf_check;
 mod integrations;
 // Test-only: it renders `apps/desktop/src/generated/ipc-types.ts` and asserts
 // the committed copy still matches the Rust types. Nothing at runtime calls it.
-mod diarization;
 #[cfg(test)]
 mod ipc_types;
 mod local_api;
@@ -342,7 +343,13 @@ pub fn run() -> anyhow::Result<()> {
             app.manage(calendars);
 
             // Off unless the user has switched it on. See local_api.rs.
-            let api = std::sync::Arc::new(local_api::LocalApiRuntime::new(db));
+            tauri::async_runtime::block_on(kw_storage::jobs::interrupt_unfinished(db.pool()))?;
+            tauri::async_runtime::block_on(automation::clean_job_scratch(&db,
+                &kw_storage::paths::audio_temp_dir().join("import")))?;
+            let uploads = kw_storage::paths::database_path().with_file_name("api-uploads");
+            automation::clean_uploads(&uploads)?;
+            let api = std::sync::Arc::new(local_api::LocalApiRuntime::new(db)
+                .with_runtime(std::sync::Arc::new(automation::DesktopRuntime::new(handle.clone())), uploads));
             tauri::async_runtime::block_on(api.start_if_enabled());
             app.manage(api);
 
@@ -490,6 +497,8 @@ pub fn run() -> anyhow::Result<()> {
             calendar::calendar_sync,
             calendar::calendar_set_selected,
         ])
-        .run(tauri::generate_context!())
-        .context("the application exited with an error")
+        .build(tauri::generate_context!())
+        .context("the application could not be built")?
+        .run(automation::on_event);
+    Ok(())
 }

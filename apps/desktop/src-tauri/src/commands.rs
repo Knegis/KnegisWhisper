@@ -1236,28 +1236,9 @@ pub struct ExportedTranscript {
 /// Everything outside `[A-Za-z0-9]` becomes a hyphen, because the export is
 /// written to a path the user picked on a filesystem we know nothing about, and
 /// a title is free text that can hold separators, colons, and newlines.
+#[cfg(test)]
 fn export_filename(title: &str, format: transcript::Format) -> String {
-    let mut stem = String::new();
-    let mut pending_hyphen = false;
-
-    for ch in title.chars() {
-        if ch.is_ascii_alphanumeric() {
-            if pending_hyphen && !stem.is_empty() {
-                stem.push('-');
-            }
-            pending_hyphen = false;
-            stem.push(ch);
-        } else {
-            pending_hyphen = true;
-        }
-    }
-
-    if stem.is_empty() {
-        stem.push_str("transcript");
-    }
-    stem.truncate(80);
-
-    format!("{stem}.{}", format.extension())
+    kw_notes_core::document::filename(title, format.extension())
 }
 
 /// Parse the single stored transcript representation shared by export and
@@ -1321,21 +1302,14 @@ async fn render_export(
         .map_err(|e| fail("could not read the note", e))?
         .ok_or_else(|| "there is no note with that id".to_owned())?;
 
-    let segments = transcript_segments(&note)?;
-
-    let content = transcript::export(
-        format,
-        &transcript_meta(&note),
-        &segments,
-        &transcript_mappings(),
-        &transcript::SpeakerLabels::default(),
-    );
+    let document = kw_notes_core::document::render(&note, format, true)
+        .map_err(|e| fail("the note's transcript is not a list of segments", e))?;
 
     Ok(ExportedTranscript {
         format,
-        filename: export_filename(&note.title, format),
-        content,
-        segment_count: segments.len(),
+        filename: document.filename,
+        content: document.content,
+        segment_count: document.segment_count,
     })
 }
 

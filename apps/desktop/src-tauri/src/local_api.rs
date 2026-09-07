@@ -35,6 +35,8 @@ const BIND_ATTEMPTS: u32 = 5;
 
 /// The running server, if there is one.
 pub struct LocalApiRuntime {
+    runtime: Option<Arc<dyn kw_local_api::runtime::Runtime>>,
+    uploads: std::path::PathBuf,
     operation: tokio::sync::Mutex<()>,
     db: Db,
     guard: std::sync::Mutex<Option<Arc<discovery::AccessGuard>>>,
@@ -69,6 +71,15 @@ impl std::fmt::Debug for LocalApiRuntime {
 }
 
 impl LocalApiRuntime {
+    pub fn with_runtime(
+        mut self,
+        runtime: Arc<dyn kw_local_api::runtime::Runtime>,
+        uploads: std::path::PathBuf,
+    ) -> Self {
+        self.runtime = Some(runtime);
+        self.uploads = uploads;
+        self
+    }
     /// Use the real discovery path under the user's home directory.
     #[must_use]
     pub fn new(db: Db) -> Self {
@@ -83,6 +94,8 @@ impl LocalApiRuntime {
     #[must_use]
     pub fn with_discovery_path(db: Db, discovery_path: std::path::PathBuf) -> Self {
         Self {
+            runtime: None,
+            uploads: std::path::PathBuf::new(),
             operation: tokio::sync::Mutex::new(()),
             db,
             guard: std::sync::Mutex::new(None),
@@ -205,10 +218,14 @@ impl LocalApiRuntime {
             self.discovery_path.clone(),
             permissions,
         ));
-        let served = match serve(
-            listener,
-            ApiState::new(self.db.pool().clone(), token).with_access_guard(Arc::clone(&guard)),
-        ) {
+        let served = match serve(listener, {
+            let state =
+                ApiState::new(self.db.pool().clone(), token).with_access_guard(Arc::clone(&guard));
+            match &self.runtime {
+                Some(runtime) => state.with_runtime(Arc::clone(runtime), self.uploads.clone()),
+                None => state,
+            }
+        }) {
             Ok(served) => served,
             Err(error) => {
                 let _ = discovery::remove(&self.discovery_path);

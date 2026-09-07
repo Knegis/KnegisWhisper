@@ -15,7 +15,7 @@ reach `127.0.0.1`, there is nowhere else to try.
 ## Before anything else: is it on?
 
 The local API is **off by default**. The user turns it on under
-**Integrations › API** in the application. Until they do, there is no discovery
+**Developer > Local API** in the application. Until they do, there is no discovery
 file and no listener, and that is a configuration state rather than a fault —
 say so instead of retrying.
 
@@ -60,6 +60,16 @@ back as `{"data": …}`, a collection as a list under the same key.
 
 | method | path | what it does |
 | --- | --- | --- |
+| `POST` | `/v1/notes` | Create an editable note: title, content, optional folder_id |
+| `GET` | `/v1/notes/{id}/export` | Editable Markdown; transcript=true selects timed export |
+| `GET` | `/v1/transcriptions/search?q=…` | Final dictation text; limit and after page newest first |
+| `POST` | `/v1/jobs/transcriptions` | One multipart file field; returns HTTP 202 with job metadata |
+| `GET` | `/v1/jobs/{id}` | Durable stage, route, timestamps, result note_id, error |
+| `POST` | `/v1/jobs/{id}/cancel` | Request cancellation before saving |
+| `POST` | `/v1/recording/start` | Meeting recording: required provider, optional system_audio |
+| `POST` | `/v1/recording/stop` | Finish the application's active meeting |
+| `GET` | `/v1/status` | Recording, route, and latest import metadata |
+| `GET` | `/v1/models` | Models and configuration readiness, not connectivity proof |
 | `GET` | `/v1/health` | Confirm the application is up and answering |
 | `GET` | `/v1/notes/list` | Notes, most recently edited first |
 | `GET` | `/v1/notes/search` | Full-text search over notes |
@@ -105,7 +115,7 @@ succeeding at it would hide that.
 ```
 
 `code` is one of `unauthorized`, `forbidden`, `not_found`, `validation_error`,
-`payload_too_large`, `internal_error`. Branch on the code; the message is for a
+`payload_too_large`, `conflict`, `unavailable`, `internal_error`. Branch on the code; the message is for a
 person and may change.
 
 An `internal_error` message is deliberately vague. The detail went to the
@@ -113,6 +123,12 @@ application's log, because a storage failure can carry a file path or a column
 name, and the API will not hand those to a caller.
 
 ## Things worth not getting wrong
+
+See [workflow behavior](../../CLI_MCP_WORKFLOWS.md) for upload limits, job stages,
+cancellation, editable versus timed exports, and recording side effects. Uploads
+contain file bytes, never a path for the server to open. Recording controls the
+existing meeting recorder; `models` reports configuration without testing cloud
+connectivity.
 
 - **Deletions are real and immediate.** `DELETE /v1/notes/{id}` and
   `DELETE /v1/transcriptions/{id}` remove the user's own dictated content. Ask
