@@ -25,7 +25,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use tokio::io::{AsyncBufReadExt as _, BufReader};
+use tokio::io::AsyncReadExt as _;
 
 use crate::manifest::SidecarSpec;
 use crate::pid::{PidRecord, PidStore};
@@ -127,6 +127,8 @@ pub struct Running {
     /// not take the handle away from [`Running::stop`].
     child: Arc<tokio::sync::Mutex<tokio::process::Child>>,
     stderr: Arc<Mutex<StderrTail>>,
+    capture: tokio::sync::watch::Receiver<Option<String>>,
+    exit_report: Arc<Mutex<Option<String>>>,
     /// Set by [`Running::stop`] before it kills, so the watcher can tell a
     /// shutdown we asked for from one we did not.
     asked_to_stop: Arc<AtomicBool>,
@@ -176,6 +178,13 @@ impl Running {
             .unwrap_or_default()
     }
 
+    pub fn exit_report(&self) -> Option<String> {
+        self.exit_report
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
     /// Ask it to stop, and clear its PID record.
     ///
     /// Uses the child handle rather than the reaper: this is our own child, so
@@ -204,7 +213,7 @@ impl Running {
             let _ = child.kill().await;
             let _ = child.wait().await;
         }
-        store.clear(&self.name)?;
+        store.clear_if_pid(&self.name, self.pid)?;
         Ok(())
     }
 }
@@ -252,24 +261,27 @@ pub async fn start<H: Health>(
     let pid = child.id().unwrap_or_default();
     let stderr = Arc::new(Mutex::new(StderrTail::new()));
 
+    let (capture_tx, capture) = tokio::sync::watch::channel(None);
     if let Some(pipe) = child.stderr.take() {
         let sink = Arc::clone(&stderr);
         tokio::spawn(async move {
-            let mut lines = BufReader::new(pipe).lines();
-            while let Ok(Some(line)) = lines.next_line().await {
-                if let Ok(mut tail) = sink.lock() {
-                    tail.push(&line);
-                }
-            }
+            let result = collect_stderr(pipe, sink).await;
+            let _ = capture_tx.send(Some(result));
         });
+    } else {
+        let _ = capture_tx.send(Some("stderr pipe unavailable".to_owned()));
     }
 
-    store.write(&PidRecord {
+    if let Err(error) = store.write(&PidRecord {
         name: spec.name.clone(),
         pid,
         port: launch.port,
         executable: launch.executable.display().to_string(),
-    })?;
+    }) {
+        let _ = child.kill().await;
+        let _ = child.wait().await;
+        return Err(ProcessError::Pid(error));
+    }
 
     let running = Running {
         name: spec.name.clone(),
@@ -278,6 +290,8 @@ pub async fn start<H: Health>(
         executable: launch.executable.clone(),
         child: Arc::new(tokio::sync::Mutex::new(child)),
         stderr,
+        capture,
+        exit_report: Arc::new(Mutex::new(None)),
         asked_to_stop: Arc::new(AtomicBool::new(false)),
     };
 
@@ -299,7 +313,9 @@ pub async fn start<H: Health>(
             child.try_wait()
         };
         if let Ok(Some(status)) = exited {
-            let _ = store.clear(&spec.name);
+            let _ = store.clear_if_pid(&spec.name, pid);
+            let capture = drain_stderr(running.capture.clone()).await;
+            tracing::debug!(%capture, "startup exit diagnostics drained");
             return Err(ProcessError::ExitedDuringStartup {
                 name: spec.name.clone(),
                 exit: describe(&status),
@@ -355,6 +371,9 @@ fn watch_for_death(running: &Running, store: &PidStore, interval: Duration) {
     let port = running.port;
     let child = Arc::clone(&running.child);
     let stderr = Arc::clone(&running.stderr);
+    let capture = running.capture.clone();
+    let exit_report = Arc::clone(&running.exit_report);
+    let executable = running.executable.clone();
     let asked_to_stop = Arc::clone(&running.asked_to_stop);
     let store: PidStore = (*store).clone();
     let started = std::time::Instant::now();
@@ -392,11 +411,16 @@ fn watch_for_death(running: &Running, store: &PidStore, interval: Duration) {
                 return;
             }
 
+            let capture = drain_stderr(capture).await;
+            if asked_to_stop.load(Ordering::SeqCst) {
+                return;
+            }
             let tail = stderr
                 .lock()
                 .map(|tail| tail.text())
                 .unwrap_or_else(|_| "the diagnostics buffer was poisoned".to_owned());
 
+            *exit_report.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(format!("{} (PID {pid}) exited with {} after {} seconds. Diagnostics capture: {capture}. {tail}", executable.display(), describe(&status), started.elapsed().as_secs()));
             tracing::error!(
                 sidecar = %name,
                 pid,
@@ -404,6 +428,8 @@ fn watch_for_death(running: &Running, store: &PidStore, interval: Duration) {
                 exit = %describe(&status),
                 ran_for_seconds = started.elapsed().as_secs(),
                 diagnostics = %tail,
+                capture = %capture,
+                executable = %executable.display(),
                 "the sidecar exited on its own; nothing asked it to stop"
             );
 
@@ -412,7 +438,7 @@ fn watch_for_death(running: &Running, store: &PidStore, interval: Duration) {
             // look like a live server. The reaper verifies before acting, so
             // this is belt and braces -- and it is also the thing a test can
             // observe, since a log line is not.
-            if let Err(err) = store.clear(&name) {
+            if let Err(err) = store.clear_if_pid(&name, pid) {
                 tracing::warn!(
                     sidecar = %name,
                     error = %err,
@@ -434,33 +460,62 @@ fn describe(status: &std::process::ExitStatus) -> String {
 /// A bounded ring of the most recent diagnostics.
 #[derive(Debug, Default)]
 struct StderrTail {
-    lines: std::collections::VecDeque<String>,
-    bytes: usize,
+    bytes: std::collections::VecDeque<u8>,
 }
-
 impl StderrTail {
     fn new() -> Self {
         Self::default()
     }
-
-    fn push(&mut self, line: &str) {
-        self.bytes += line.len() + 1;
-        self.lines.push_back(line.to_owned());
-        while self.bytes > STDERR_TAIL_BYTES {
-            match self.lines.pop_front() {
-                Some(dropped) => self.bytes -= dropped.len() + 1,
-                None => break,
+    fn append(&mut self, bytes: &[u8]) {
+        for byte in bytes {
+            if self.bytes.len() == STDERR_TAIL_BYTES {
+                self.bytes.pop_front();
             }
+            self.bytes.push_back(*byte);
         }
     }
-
-    fn text(&self) -> String {
-        self.lines
-            .iter()
-            .map(String::as_str)
-            .collect::<Vec<_>>()
-            .join("\n")
+    #[cfg(test)]
+    fn push(&mut self, line: &str) {
+        self.append(line.as_bytes());
+        self.append(b"\n");
     }
+    fn text(&self) -> String {
+        String::from_utf8_lossy(&self.bytes.iter().copied().collect::<Vec<_>>()).into_owned()
+    }
+}
+
+async fn collect_stderr(
+    mut pipe: impl tokio::io::AsyncRead + Unpin,
+    sink: Arc<Mutex<StderrTail>>,
+) -> String {
+    let mut buffer = [0u8; 4096];
+    loop {
+        match pipe.read(&mut buffer).await {
+            Ok(0) => return "complete".to_owned(),
+            Ok(count) => {
+                if let Ok(mut tail) = sink.lock() {
+                    tail.append(buffer.get(..count).unwrap_or_default());
+                }
+            }
+            Err(error) => return format!("read failed: {error}"),
+        }
+    }
+}
+
+async fn drain_stderr(mut capture: tokio::sync::watch::Receiver<Option<String>>) -> String {
+    let drain = async {
+        loop {
+            if let Some(status) = capture.borrow_and_update().clone() {
+                return status;
+            }
+            if capture.changed().await.is_err() {
+                return "capture task ended without status".to_owned();
+            }
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(1), drain)
+        .await
+        .unwrap_or_else(|_| "timed out draining stderr".to_owned())
 }
 
 /// A health check that asks the sidecar over loopback.
@@ -900,5 +955,65 @@ mod tests {
         tail.push("error: failed to open model file");
         assert!(tail.text().contains("failed to open model file"));
         assert_eq!(tail.text().lines().count(), 2);
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod capture_regressions {
+    use super::*;
+    #[tokio::test]
+    async fn a_reader_failure_is_reported_as_incomplete_capture() {
+        struct Broken;
+        impl tokio::io::AsyncRead for Broken {
+            fn poll_read(
+                self: std::pin::Pin<&mut Self>,
+                _: &mut std::task::Context<'_>,
+                _: &mut tokio::io::ReadBuf<'_>,
+            ) -> std::task::Poll<std::io::Result<()>> {
+                std::task::Poll::Ready(Err(std::io::Error::other("fixture read failure")))
+            }
+        }
+        let result = collect_stderr(Broken, Arc::new(Mutex::new(StderrTail::new()))).await;
+        assert!(result.contains("read failed: fixture read failure"));
+    }
+
+    #[tokio::test]
+    async fn invalid_utf8_and_unterminated_tail_are_preserved() {
+        let sink = Arc::new(Mutex::new(StderrTail::new()));
+        let mut bytes = vec![b'x'; STDERR_TAIL_BYTES * 3];
+        bytes.extend_from_slice(b"\xff final exit detail");
+        assert_eq!(
+            collect_stderr(bytes.as_slice(), Arc::clone(&sink)).await,
+            "complete"
+        );
+        let tail = sink.lock().unwrap();
+        assert_eq!(tail.bytes.len(), STDERR_TAIL_BYTES);
+        assert!(tail.text().ends_with("final exit detail"));
+        assert!(tail.text().contains(char::REPLACEMENT_CHARACTER));
+    }
+    #[tokio::test]
+    async fn completed_capture_does_not_wait_and_open_capture_is_bounded() {
+        let (tx, rx) = tokio::sync::watch::channel(Some("complete".to_owned()));
+        assert_eq!(drain_stderr(rx).await, "complete");
+        drop(tx);
+        let (_tx, rx) = tokio::sync::watch::channel(None);
+        assert_eq!(drain_stderr(rx).await, "timed out draining stderr");
+    }
+    #[test]
+    fn old_watcher_cannot_clear_replacement_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = PidStore::new(dir.path());
+        let record = PidRecord {
+            name: "whisper".to_owned(),
+            pid: 2,
+            port: 8178,
+            executable: "fixture".to_owned(),
+        };
+        store.write(&record).unwrap();
+        store.clear_if_pid("whisper", 1).unwrap();
+        assert_eq!(store.read("whisper").unwrap(), Some(record));
+        store.clear_if_pid("whisper", 2).unwrap();
+        assert!(store.read("whisper").unwrap().is_none());
     }
 }

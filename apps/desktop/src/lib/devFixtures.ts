@@ -658,6 +658,7 @@ const ROUTE: RouteReport = {
 /* ------------------------------------------------------------ local models */
 
 const LOCAL_MODELS: LocalStatus = {
+  runtimeMessage: "Local model base is ready on port 8178.",
   availability: { state: "installable" },
   serverInstalled: true,
   // `stale` rather than `current`, so the branch that only appears when the

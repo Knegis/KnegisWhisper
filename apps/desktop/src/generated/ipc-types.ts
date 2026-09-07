@@ -1182,7 +1182,7 @@ verifiedBy: VerifiedBy, };
 /**
  * What can be said about the local model server without touching the network.
  */
-export type LocalStatus = {
+export type LocalStatus = { runtimeMessage: string,
 /**
  * Whether this platform has a published server binary at all, and why not.
  */

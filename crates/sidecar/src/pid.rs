@@ -71,6 +71,8 @@ pub struct PidStore {
     dir: PathBuf,
 }
 
+static RECORD_MUTATION: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 impl PidStore {
     /// Open the store under an application data directory. Does not touch the
     /// filesystem; the directory is created on first write.
@@ -102,6 +104,9 @@ impl PidStore {
 
     /// Record a process we just started, replacing any previous record.
     pub fn write(&self, record: &PidRecord) -> Result<(), PidError> {
+        let _lock = RECORD_MUTATION
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let path = self.path_for(&record.name)?;
 
         fs::create_dir_all(&self.dir).map_err(|source| PidError::CreateDir {
@@ -126,6 +131,24 @@ impl PidStore {
 
     /// Forget a record. Absent is success — the caller wants it gone, and it is.
     pub fn clear(&self, name: &str) -> Result<(), PidError> {
+        let _lock = RECORD_MUTATION
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.clear_unlocked(name)
+    }
+
+    /// A watcher may only remove the record of the process it observed.
+    pub fn clear_if_pid(&self, name: &str, pid: u32) -> Result<(), PidError> {
+        let _lock = RECORD_MUTATION
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if self.read(name)?.is_some_and(|record| record.pid == pid) {
+            self.clear_unlocked(name)?;
+        }
+        Ok(())
+    }
+
+    fn clear_unlocked(&self, name: &str) -> Result<(), PidError> {
         let path = self.path_for(name)?;
         match fs::remove_file(&path) {
             Ok(()) => Ok(()),
