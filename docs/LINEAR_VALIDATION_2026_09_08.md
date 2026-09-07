@@ -109,8 +109,9 @@ Start the development UI from `apps/desktop` with `npm run tauri:dev` and the
 documented WebView2 debugger argument. Use a separate WebView data directory
 when running an isolated second native instance.
 
-Local checks passed: frontend typecheck/build and eight tests; the desktop
-library's Tauri-enabled suite (382 passed, six opt-in tests ignored); and
-549 meeting-core/platform/transcription-core library tests. Rust 1.98 is used
+Local checks passed: frontend typecheck/build and eight tests; 1,793 workspace
+tests (14 opt-in tests ignored); and the desktop library's Tauri-enabled suite
+(382 passed, six opt-in tests ignored). Rust 1.98 formatting and workspace
+Clippy with warnings denied also passed. Rust 1.98 is used
 for matching the hosted runner. The hosted follow-up is PR #38; its actual
 Windows job, not these local results, supplies KNEG-40/KNEG-111's evidence.
