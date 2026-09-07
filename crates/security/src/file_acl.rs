@@ -573,6 +573,11 @@ mod windows_impl {
         outcome
     }
 
+    #[cfg(test)]
+    pub(super) fn token_user_sid_for_test() -> Result<String, String> {
+        sid_string(token_user()?.psid())
+    }
+
     fn read_token_user(token: HANDLE, needed: u32) -> Result<SidBuffer, String> {
         if needed == 0 {
             return Err("GetTokenInformation(TokenUser) asked for no buffer".to_owned());
@@ -1344,7 +1349,12 @@ mod tests {
         let facts = read_back(&path).expect("the file was just written");
         let entries = facts.dacl.expect("a real file has an access list");
         let requested = Requested {
-            allowed: vec![facts.owner.clone(), "S-1-5-18".to_owned()],
+            // Elevated Windows can assign Administrators as the owner. The
+            // directory grants the process token user, independently of owner.
+            allowed: vec![
+                windows_impl::token_user_sid_for_test().expect("the process has a token user"),
+                "S-1-5-18".to_owned(),
+            ],
             mask: 0,
             inheritable: false,
         };

@@ -137,3 +137,11 @@ and limited debug information. Debug assertions remain enabled, while ordinary
 development and release profiles retain their existing settings. Dependency
 cache saving on failure prevents another test failure from throwing away the
 entire cold build. Vendored files also select the Windows CI job.
+
+Run 34168329984 subsequently passed all 86 hosted audio-core tests and the
+separate thread-lifetime regression, confirming the crash is resolved. Its next
+failure was KNEG-179: the ACL inheritance test assumed the file owner was the
+process token user. Elevated Windows may assign Administrators as owner. The
+test now checks the actual token user; the production access policy is unchanged.
+Workspace CI uses `--no-fail-fast` to report failures across all packages in one
+run while still failing the check if any test fails.

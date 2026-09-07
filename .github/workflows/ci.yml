@@ -239,7 +239,7 @@ jobs:
         run: cargo clippy --profile ci --workspace --all-targets -- -D warnings
 
       - name: Test
-        run: cargo test --profile ci --workspace
+        run: cargo test --profile ci --workspace --no-fail-fast
 
       - name: Build
         run: cargo build --profile ci --workspace
