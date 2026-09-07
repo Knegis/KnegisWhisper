@@ -27,8 +27,24 @@ fn main() {
         return;
     }
 
+    // Reproduce a settings update: the previous registration must not poison
+    // the replacement, and its callback must never receive replacement events.
+    let previous = match kw_platform::keyhook::KeyHook::install(
+        &["RightControl+RightShift".to_owned()],
+        |_, _| {},
+    ) {
+        Ok(hook) => hook,
+        Err(err) => {
+            eprintln!("initial hook failed: {err}");
+            std::process::exit(1);
+        }
+    };
+    drop(previous);
+
     let presses = Arc::new(AtomicUsize::new(0));
     let releases = Arc::new(AtomicUsize::new(0));
+    let activations = Arc::new(AtomicUsize::new(0));
+    let activated = Arc::clone(&activations);
     let down = Arc::clone(&presses);
     let up = Arc::clone(&releases);
 
@@ -38,6 +54,7 @@ fn main() {
             match edge {
                 Edge::Press => down.fetch_add(1, Ordering::SeqCst),
                 Edge::Release => up.fetch_add(1, Ordering::SeqCst),
+                Edge::Activated => activated.fetch_add(1, Ordering::SeqCst),
             };
             println!("  chord {index} {edge:?}");
         },
@@ -76,6 +93,12 @@ fn main() {
         println!("but reported {ups} release(s), so push-to-talk would not stop cleanly.");
     }
 
+    let toggles = activations.load(Ordering::SeqCst);
+    println!("qualified release activations: {toggles}");
+    assert_eq!(
+        toggles, 2,
+        "each clean chord must qualify once on full release"
+    );
     drop(hook);
     println!("uninstalled.");
 }

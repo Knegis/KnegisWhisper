@@ -8,7 +8,7 @@
 //!
 //! Deliberately thin. Everything that decides *when a chord has fired* is in
 //! [`crate::keys`] and is fully tested; what is here is the Win32 plumbing, which
-//! no test can reach.
+//! native Windows tests and probes exercise separately.
 //!
 //! # How it differs from upstream
 //!
@@ -35,8 +35,8 @@
 //! # The mouse hook
 //!
 //! A second hook, `WH_MOUSE_LL`, **on the same thread**, and only when a mouse
-//! button is actually bound. One hook per type per process is the constraint
-//! [`windows_impl::STATE`] already states; the thread is shared because it
+//! button is actually bound. Both callbacks share thread-local state; the
+//! thread is shared because it
 //! already owns a message loop and a `WM_QUIT` shutdown path, and a second
 //! thread would be a second thing to get wrong at exit for no capability.
 //!
@@ -63,6 +63,7 @@ use crate::PlatformError;
 pub enum Edge {
     Press,
     Release,
+    Activated,
 }
 
 /// Whether this platform can watch a modifier-only chord, and how.
@@ -180,8 +181,9 @@ impl KeyHook {
 
 #[cfg(target_os = "windows")]
 mod windows_impl {
+    use std::cell::OnceCell;
     use std::sync::mpsc;
-    use std::sync::{Mutex, OnceLock};
+    use std::sync::Mutex;
     use std::thread;
 
     use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
@@ -195,20 +197,17 @@ mod windows_impl {
     use super::{Edge, Fired, HookWatcher, PlatformError};
     use crate::keys::{Key, MouseButton};
 
-    /// The state the hook callback reaches.
-    ///
-    /// A `static` because a Win32 hook procedure is a bare `extern "system" fn`
-    /// with no user pointer — there is nowhere to put a closure. One hook per
-    /// process is the actual constraint, so a single global is not a shortcut
-    /// around a limitation; it *is* the limitation, stated. Both procedures
-    /// share it, because both feed one watcher: two watchers would each have
-    /// their own idea of what is held and neither would be right.
+    // Low-level callbacks run on the installing thread. Keeping their state
+    // there makes every installation independent and drops the callback and
+    // pending gesture when that thread exits, including failed installations.
     struct HookState {
         watcher: Mutex<HookWatcher>,
-        on_fire: Box<dyn Fn(usize, Edge) + Send + Sync>,
+        on_fire: Box<dyn Fn(usize, Edge) + Send>,
     }
 
-    static STATE: OnceLock<HookState> = OnceLock::new();
+    thread_local! {
+        static STATE: OnceCell<HookState> = const { OnceCell::new() };
+    }
 
     /// A hook that is installed, and the thread running its message loop.
     pub struct Installed {
@@ -277,31 +276,33 @@ mod windows_impl {
             return unsafe { CallNextHookEx(None, code, wparam, lparam) };
         }
 
-        if let Some(state) = STATE.get() {
-            // SAFETY: for a WH_KEYBOARD_LL hook with a non-negative code,
-            // lparam points at a KBDLLHOOKSTRUCT for the lifetime of this call.
-            let info = unsafe { &*(lparam.0 as *const KBDLLHOOKSTRUCT) };
-            let key = key_of(info.vkCode);
+        STATE.with(|slot| {
+            if let Some(state) = slot.get() {
+                // SAFETY: for a WH_KEYBOARD_LL hook with a non-negative code,
+                // lparam points at a KBDLLHOOKSTRUCT for the lifetime of this call.
+                let info = unsafe { &*(lparam.0 as *const KBDLLHOOKSTRUCT) };
+                let key = key_of(info.vkCode);
 
-            // Recover from a poisoned lock rather than panicking: a panic here
-            // unwinds through a Win32 callback, which is undefined behaviour.
-            let mut watcher = state
-                .watcher
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+                // Recover from a poisoned lock rather than panicking: a panic here
+                // unwinds through a Win32 callback, which is undefined behaviour.
+                let mut watcher = state
+                    .watcher
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
 
-            let fired = match wparam.0 as u32 {
-                WM_KEYDOWN | WM_SYSKEYDOWN => watcher.key_down(key),
-                WM_KEYUP | WM_SYSKEYUP => watcher.key_up(key),
-                _ => Fired::Nothing,
-            };
+                let fired = match wparam.0 as u32 {
+                    WM_KEYDOWN | WM_SYSKEYDOWN => watcher.key_down(key),
+                    WM_KEYUP | WM_SYSKEYUP => watcher.key_up(key),
+                    _ => Fired::Nothing,
+                };
 
-            // Dropped before the callback: `on_fire` must not be able to
-            // re-enter the watcher and deadlock the input path.
-            drop(watcher);
+                // Dropped before the callback: `on_fire` must not be able to
+                // re-enter the watcher and deadlock the input path.
+                drop(watcher);
 
-            report(state, fired);
-        }
+                report(state, fired);
+            }
+        });
 
         // Always. The shortcut still reaches the rest of the system; nothing is
         // swallowed. See the module documentation.
@@ -348,28 +349,30 @@ mod windows_impl {
 
         let message = wparam.0 as u32;
         if message == WM_XBUTTONDOWN || message == WM_XBUTTONUP {
-            if let Some(state) = STATE.get() {
-                // SAFETY: for a WH_MOUSE_LL hook with a non-negative code,
-                // lparam points at an MSLLHOOKSTRUCT for the lifetime of this
-                // call.
-                let info = unsafe { &*(lparam.0 as *const MSLLHOOKSTRUCT) };
+            STATE.with(|slot| {
+                if let Some(state) = slot.get() {
+                    // SAFETY: for a WH_MOUSE_LL hook with a non-negative code,
+                    // lparam points at an MSLLHOOKSTRUCT for the lifetime of this
+                    // call.
+                    let info = unsafe { &*(lparam.0 as *const MSLLHOOKSTRUCT) };
 
-                if let Some(button) = button_of(info.mouseData) {
-                    let mut watcher = state
-                        .watcher
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    if let Some(button) = button_of(info.mouseData) {
+                        let mut watcher = state
+                            .watcher
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
 
-                    let fired = if message == WM_XBUTTONDOWN {
-                        watcher.button_down(button)
-                    } else {
-                        watcher.button_up(button)
-                    };
+                        let fired = if message == WM_XBUTTONDOWN {
+                            watcher.button_down(button)
+                        } else {
+                            watcher.button_up(button)
+                        };
 
-                    drop(watcher);
-                    report(state, fired);
+                        drop(watcher);
+                        report(state, fired);
+                    }
                 }
-            }
+            });
         }
 
         // Always, and for the same reason the keyboard hook does: the click
@@ -388,6 +391,7 @@ mod windows_impl {
         match fired {
             Fired::Pressed(index) => (state.on_fire)(index, Edge::Press),
             Fired::Released(index) => (state.on_fire)(index, Edge::Release),
+            Fired::Activated(index) => (state.on_fire)(index, Edge::Activated),
             Fired::Nothing => {}
         }
     }
@@ -396,42 +400,11 @@ mod windows_impl {
     where
         F: Fn(usize, Edge) + Send + 'static,
     {
-        // Read before the watcher is moved into the static: whether a mouse
+        // Read before the watcher is moved into its thread: whether a mouse
         // hook is needed is a property of what is being watched, and asking
         // afterwards would mean reaching back through a lock from the thread
         // that is about to install it.
         let needs_mouse = watcher.watches_a_button();
-
-        // `Fn(usize, Edge) + Send` from the caller, stored as `Send + Sync`
-        // because the hook procedure reaches it through a `static`. Wrapping in
-        // a mutex-free way needs `Sync`, so the closure is boxed behind one.
-        struct Sendable<F>(F);
-        // SAFETY: the closure is only ever called from the single hook thread.
-        // `Sync` is required by `OnceLock` and is not exercised.
-        unsafe impl<F: Send> Sync for Sendable<F> {}
-
-        impl<F: Fn(usize, Edge)> Sendable<F> {
-            fn call(&self, index: usize, edge: Edge) {
-                (self.0)(index, edge);
-            }
-        }
-
-        let sendable = Sendable(on_fire);
-        let boxed: Box<dyn Fn(usize, Edge) + Send + Sync> =
-            Box::new(move |i, edge| sendable.call(i, edge));
-
-        STATE
-            .set(HookState {
-                watcher: Mutex::new(watcher),
-                on_fire: boxed,
-            })
-            .map_err(|_| {
-                PlatformError::Unsupported(
-                    "a keyboard hook is already installed. Windows allows one per process, so \
-                     changing the watched shortcuts means restarting the application."
-                        .to_owned(),
-                )
-            })?;
 
         // The hook has to be installed on a thread with a message loop, because
         // Windows delivers low-level hook callbacks by dispatching to the
@@ -442,6 +415,26 @@ mod windows_impl {
         let join = thread::Builder::new()
             .name("kw-keyhook".to_owned())
             .spawn(move || {
+                STATE.with(|slot| {
+                    let _ = slot.set(HookState {
+                        watcher: Mutex::new(watcher),
+                        on_fire: Box::new(on_fire),
+                    });
+                });
+                // Create the queue before publishing the thread ID so an
+                // immediate drop can always post WM_QUIT successfully.
+                let mut queued = MSG::default();
+                // SAFETY: a valid MSG pointer; this creates this thread's queue.
+                unsafe {
+                    let _ = windows::Win32::UI::WindowsAndMessaging::PeekMessageW(
+                        &mut queued,
+                        None,
+                        0,
+                        0,
+                        windows::Win32::UI::WindowsAndMessaging::PM_NOREMOVE,
+                    );
+                }
+
                 // SAFETY: a null module handle and thread id 0 install a global
                 // low-level hook, which is the documented use of
                 // WH_KEYBOARD_LL.
@@ -530,6 +523,17 @@ mod windows_impl {
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
+
+    /// Settings replace the hook for both accelerator and mode changes.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn native_hook_can_be_replaced_after_immediate_drop() {
+        for accelerator in ["Control+Super", "RightControl+RightShift", "Control+Super"] {
+            let hook = KeyHook::install(&[accelerator.to_owned()], |_, _| {})
+                .expect("each settings update must install a fresh hook");
+            drop(hook);
+        }
+    }
 
     /// The support report matches the platform this is built for.
     #[test]

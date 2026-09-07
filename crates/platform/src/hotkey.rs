@@ -124,27 +124,10 @@ impl HotkeyAction {
     }
 }
 
-/// Whether a hotkey toggles on each press or acts for as long as it is held.
-///
-/// # The default is `Toggle`, and that is deliberate, not inertia
-///
-/// Push-to-talk is one of the answers to **KNEG-115** — a two-modifier chord
-/// fires on the way into any longer shortcut, and a chord that acts on release
-/// cannot fire as a prefix in the damaging way, because the accidental press
-/// and the accidental release bracket almost no audio instead of bracketing
-/// everything the user did in between. That makes `Hold` a candidate for the
-/// shipped default, and **shipping it as the default here would settle KNEG-115
-/// in passing**, which is exactly the failure that issue is about. The mode
-/// exists; the default is unchanged; the choice stays with the repo owner.
-///
-/// # What holding costs, said here rather than found out
-///
-/// A hold shorter than a syllable produces a recording shorter than a syllable.
-/// The audio gate then reports `InsufficientSpeech` and nothing is transcribed
-/// — which is correct behaviour and is also, under push-to-talk, a **routine**
-/// outcome rather than the rare one it is under a toggle. Every mistimed tap,
-/// every accidental prefix, every "I let go too early" ends that way. A user
-/// who reads `InsufficientSpeech` as a fault will go looking for one.
+/// Toggle switches recording once per activation; Hold records while pressed.
+/// Modifier-only toggles qualify on full release without an intervening key.
+/// Standard accelerators and mouse buttons toggle on press. Hold mode still
+/// begins immediately and may report InsufficientSpeech after a very short tap.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize, TS,
 )]
@@ -668,28 +651,10 @@ pub struct Caution {
 
 /// Every modifier-only accelerator in `bindings`, with what it also fires on.
 ///
-/// **The measured defect (KNEG-115).** A two-modifier chord completes the
-/// instant both keys are down — before the third key of a longer shortcut
-/// arrives — so it goes off on the way past. `Control+Super` is the shipped
-/// default and `Ctrl+Win+Left` switches virtual desktop, which means an ordinary
-/// keystroke starts a dictation. Driving the shipped matcher with a real key
-/// order measures it at one fire per switch, and `on_hotkey` is a **toggle**, so
-/// two switches record the interval between them and paste the transcript
-/// wherever the cursor is.
-///
-/// **This warns and changes nothing.** When a modifier-only chord should fire is
-/// KNEG-115's open question, and every answer to it costs something: firing on
-/// release adds the hold time to every dictation start, which is the latency
-/// `ModifierOnly` exists to avoid. Choosing that in passing would be deciding
-/// the behaviour of the shipped default on the way past — which is, with some
-/// irony, exactly the failure being warned about. So the exposure is disclosed
-/// and the decision is left where it belongs.
-///
-/// **Every modifier-only chord gets one**, not only the ones with a named
-/// example, because the general statement is true of all of them and
-/// [`crate::keys::COMMON_PREFIXES`] cannot be exhaustive. A caution that
-/// appeared only for the five listed keystrokes would read as a clean bill of
-/// health for the sixth.
+/// Toggle mode qualifies only after complete release without an extra key.
+/// Hold mode retains press matching, including the longer-shortcut caveat.
+/// Examples come from the raw press matcher; they describe gestures cancelled
+/// in toggle mode and gestures that can still begin a hold.
 #[must_use]
 pub fn prefix_cautions(bindings: &[Binding]) -> Vec<Caution> {
     let mut found = Vec::new();
@@ -706,16 +671,16 @@ pub fn prefix_cautions(bindings: &[Binding]) -> Vec<Caution> {
                 format!(" On this platform that includes {press}.")
             });
 
-            // Only for the action that is actually handled. Saying "recorded
-            // and pasted" about a hotkey nothing dispatches would be inventing
-            // a consequence -- see `commands::hotkeys`, which reports the other
-            // four as unhandled rather than letting them look wired.
-            let consequence = if binding.action == HotkeyAction::Dictation {
-                " Dictation is a toggle, so two of those record everything in between and put \
-                 the transcript wherever the cursor is."
-            } else {
-                ""
-            };
+            if binding.mode == HotkeyMode::Toggle {
+                found.push(Caution {
+                    action: binding.action,
+                    accelerator: accelerator.clone(),
+                    reason: format!("{accelerator} activates its toggle after all chord keys are released. Any additional key cancels activation, including longer shortcuts.{example}"),
+                });
+                continue;
+            }
+            let consequence =
+                " Hold mode starts immediately and ends when a chord key is released.";
 
             found.push(Caution {
                 action: binding.action,
@@ -803,14 +768,14 @@ pub fn cautions(bindings: &[Binding], altgr: &crate::keyboard_layout::AltGr) -> 
             // rather than asserting it does.
             let reason = match altgr {
                 AltGr::Present { example } => format!(
-                    "{accelerator} also fires when you press {press}. This layout types \
+                    "{accelerator} can match {press}. A toggle activates only on full release without another key; hold mode starts immediately. This layout types \
                      {example:?} with Control and Alt together, and Windows sends left \
                      Control and right Alt for AltGr -- which completes this chord, with \
                      nothing downstream able to tell that apart from you pressing it \
                      deliberately.{remedy}"
                 ),
                 AltGr::Unknown { why } => format!(
-                    "{accelerator} also fires when you press {press}, on any layout with \
+                    "{accelerator} can match {press}. Toggle mode waits for full release without another key; hold mode starts immediately. This applies on layouts with \
                      an AltGr key -- Nordic, German and most non-US layouts. Windows sends \
                      left Control and right Alt for AltGr, which completes this chord. \
                      Whether this layout has one was not determined: {why}.{remedy}"
@@ -1165,7 +1130,10 @@ mod tests {
         let found = prefix_cautions(&[bound(HotkeyAction::Dictation, "Alt+Super")]);
         assert_eq!(found.len(), 1, "{found:?}");
         let reason = &found[0].reason;
-        assert!(reason.contains("as soon as both keys are down"), "{reason}");
+        assert!(
+            reason.contains("after all chord keys are released"),
+            "{reason}"
+        );
         assert!(
             !reason.contains("On this platform"),
             "no example exists, so none should be claimed: {reason}"
@@ -1195,7 +1163,7 @@ mod tests {
         let reason = &found[0].reason;
         assert!(reason.contains("Ctrl+Win+Left"), "{reason}");
         assert!(
-            !reason.contains("toggle"),
+            !reason.contains("record everything"),
             "nothing dispatches this action, so it records nothing: {reason}"
         );
     }

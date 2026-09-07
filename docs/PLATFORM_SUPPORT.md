@@ -471,10 +471,16 @@ behave differently in a way the user can notice.
 The hook sees every keystroke on the machine, including into other applications. **Nothing is
 logged.** What leaves the module is the index of a chord that matched, never a key.
 
-**A modifier-only chord fires on the second modifier going down**, which is what makes it feel
-immediate and also means a key pressed *afterwards* cannot call it back. The documented rule that an
-ordinary key disqualifies a modifier-only chord catches a key already held — somebody mid-word — not
-one pressed a moment later.
+**Modifier-only toggle chords activate on full release (KNEG-115, 2026-09-05).**
+An exact chord arms a candidate; any additional key cancels it until every key is up.
+`Control+Super` remains the default. Hold mode still begins on press and ends when
+one chord key is released; standard registered accelerators and mouse buttons keep
+their existing timing. Matcher and desktop dispatch tests cover this behavior;
+a physical shortcut check remains separate from those tests.
+
+The historical AltGr measurements below describe press matching. For toggle mode,
+typing another key cancels activation, but tapping AltGr alone can still match
+Control+Alt on release. Hold mode retains the measured press behavior.
 
 **The AltGr consequence, measured 2026-08-26 and warned about since 2026-08-31 (KNEG-37).** Windows
 has no AltGr virtual key: the keyboard layout synthesises **left Control plus right Alt**, so on a
