@@ -43,3 +43,59 @@ GPU integration, automatic retries or chunking was introduced. A separate
 follow-up should investigate this native failure using the reproducer before
 choosing a model/runtime change or chunking strategy. Whisper is the measured
 working option for the owner's long recording.
+
+## Follow-up investigation — 2026-09-07
+
+A fresh isolated 15-minute reproduction using the same installed model and
+binary exited with `0xC0000409` after 17.21 seconds. Stderr drained completely,
+but the diagnostic filter found no exception/allocation error line. A targeted
+Application event-log query found no matching recent crash report. Neither
+observation identifies the native failure cause. The generated WAV was removed.
+
+The same repeated-speech signal was then divided into three contiguous five-minute
+pieces, preserving the source repetition offset at each boundary. Each piece ran
+in a separate sequential process, with the same model, binary and default two
+threads. This was an experiment, not a production code change.
+
+| Piece | Wall time | Peak working set | Exit |
+| --- | --- | --- | --- |
+| 0–5 minutes | 56.06 s | 2.920 GB | 0 |
+| 5–10 minutes | 56.06 s | 2.920 GB | 0 |
+| 10–15 minutes | 54.06 s | 2.919 GB | 0 |
+
+All three completed in 166.18 seconds of process time. The ten-minute experiment
+cap was not reached. All children exited and generated WAVs were removed. Stdout
+was discarded, so successful exit does not establish transcript completeness or
+quality at the boundaries. Measurements and scripts are in ignored
+`target/delivery/parakeet-diagnosis.json` and `parakeet-chunk-probe.json`.
+
+### Upstream evidence and interpretation
+
+[NVIDIA's model card](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3)
+distinguishes full attention (its 24-minute example uses an A100 with 80 GB) from
+local attention for longer recordings, and demonstrates changing the attention
+configuration in NeMo. The [sherpa v1.13.4 export script](https://github.com/k2-fsa/sherpa-onnx/blob/v1.13.4/scripts/nemo/parakeet-tdt-0.6b-v3/export_onnx.py)
+exports the default model without that attention change. The app currently passes
+one complete WAV to its offline CLI; it does not apply a long-form inference path.
+
+Input-length-dependent encoder memory is therefore a supported hypothesis, not
+a confirmed allocation failure or a diagnosis of insufficient hardware. The
+same binary and machine successfully handled all three shorter pieces. These
+sources describe the upstream configuration; inspecting an export script alone
+does not establish every property of the installed ONNX graph.
+
+### Proposed next implementation
+
+Prototype bounded, sequential chunks only for Parakeet imports, using five minutes
+as an initially measured upper bound rather than a universal safe limit. Preserve
+the original retained WAV, apply chunk offsets to transcript timings, and validate
+word/segment continuity before selecting an overlap/deduplication policy. Do not
+silently accept missing chunks, replay a submitted failed chunk, switch providers,
+or claim a percentage of internal model inference. The existing import slot,
+failure reporting and cleanup must cover every child and temporary chunk.
+
+Before shipping: measure a complete 45-minute fixture, assert timing offsets and
+boundary content on known speech, test failure/cancellation cleanup and playback
+against the retained full recording. A new runtime/model export, GPU integration
+or native crash dump investigation remains an alternative follow-up, not a change
+made by this experiment.
