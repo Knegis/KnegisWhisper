@@ -1314,9 +1314,17 @@ label:has(> input[type="checkbox"]) {
    * chrome; it is brighter than the label below because it is live content. */
   color: #d4d4d8;
   text-transform: none;
+  display: flex;
+  justify-content: flex-end;
   overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.notify-live > span {
+  /* Keep the live edge in view without reversing speech or guessing how many
+   * characters fit. Short captions still start at the normal left edge. */
+  flex: 0 0 auto;
+  min-width: 100%;
 }
 
 .notify button {

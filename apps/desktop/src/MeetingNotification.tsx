@@ -54,62 +54,90 @@ export function MeetingNotification() {
     useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const [stateReadProblem, setStateReadProblem] = useState<string | null>(null);
-  const offerFromEvent = useRef(false);
-  const stateFromEvent = useRef(false);
   const notificationCaptureExcludedRef = useRef(false);
 
   useEffect(() => {
-    // Read once as well as subscribing: the window is hidden until there is
-    // something to say, so by the time it is shown the event that caused it may
-    // already have been delivered.
-    void getMeetingStatus()
-      .then((status) => {
-        // Events win over the asynchronous read. In particular, an offer event
-        // carrying `null` is a withdrawal; applying this older status afterward
-        // would resurrect the offer the user just dismissed.
-        if (!stateFromEvent.current) setState(status.state);
-        if (!offerFromEvent.current) setOffer(status.offer);
-        setSources(status.sources);
-        setElapsed(status.elapsedSeconds);
-        const excluded = status.notificationExcluded?.state === "active";
-        notificationCaptureExcludedRef.current = excluded;
-        setNotificationCaptureExcluded(excluded);
-        if (!excluded) setLiveTranscript(null);
-      })
-      .catch((err: unknown) => setStateReadProblem(String(err)));
-
+    let disposed = false;
+    let revision = 0;
+    let currentState: MeetingState | null = null;
     const unlisteners: Array<() => void> = [];
-    void onMeetingState((next) => {
-      stateFromEvent.current = true;
-      setState(next);
-      // A caption is a claim that words are still arriving. Failure states keep
-      // recording visible, but must not leave its last partial looking live.
-      if (
-        !meetingIsLive(next) ||
-        next === "recording-without-transcript" ||
-        next === "stalled"
-      ) {
+    const keepListener = (fn: () => void) => {
+      if (disposed) fn();
+      else unlisteners.push(fn);
+    };
+    // A hidden window survives between meetings. Refresh the runtime snapshot
+    // on state transitions, and discard reads overtaken by a newer event/read.
+    const refresh = () => {
+      const requested = ++revision;
+      void getMeetingStatus()
+        .then((status) => {
+          if (disposed || requested !== revision) return;
+          currentState = status.state;
+          setState(status.state);
+          setOffer(status.offer);
+          setSources(status.sources);
+          setElapsed(status.elapsedSeconds);
+          setStateReadProblem(null);
+          const excluded = status.notificationExcluded?.state === "active";
+          notificationCaptureExcludedRef.current = excluded;
+          setNotificationCaptureExcluded(excluded);
+          if (!excluded || status.state !== "recording") setLiveTranscript(null);
+        })
+        .catch((err: unknown) => {
+          if (!disposed && requested === revision) setStateReadProblem(String(err));
+        });
+    };
+
+    const subscriptions = [
+      onMeetingState((next) => {
+        currentState = next;
+        setState(next);
+        if (!meetingIsLive(next)) {
+          setSources(null);
+          setElapsed(0);
+        }
+        // A caption is a claim that words are still arriving. Failure states keep
+        // recording visible, but must not leave its last partial looking live.
+        if (
+          !meetingIsLive(next) ||
+          next === "recording-without-transcript" ||
+          next === "stalled"
+        ) {
+          setLiveTranscript(null);
+        }
+        refresh();
+      }).then(keepListener),
+      onMeetingOffer((next) => {
+        // Invalidate any pending snapshot which may contain a withdrawn offer.
+        ++revision;
+        setOffer(next);
+        refresh();
+      }).then(keepListener),
+      // Replaced rather than appended: every event is a partial, and overlapping
+      // provider windows would repeat words were their text accumulated.
+      onMeetingTranscript((event) => {
+        if (
+          currentState === "recording" &&
+          notificationCaptureExcludedRef.current &&
+          event.text.trim().length > 0
+        ) {
+          setLiveTranscript(event.text);
+        }
+      }).then(keepListener),
+      onMeetingOutcome(() => {
         setLiveTranscript(null);
-      }
-    }).then((fn) => unlisteners.push(fn));
-    void onMeetingOffer((next) => {
-      offerFromEvent.current = true;
-      setOffer(next);
-    }).then((fn) => unlisteners.push(fn));
-    // Replaced rather than appended: every event is a partial, and overlapping
-    // provider windows would repeat words if their text were accumulated.
-    void onMeetingTranscript((event) => {
-      if (
-        notificationCaptureExcludedRef.current &&
-        event.text.trim().length > 0
-      ) {
-        setLiveTranscript(event.text);
-      }
-    }).then((fn) => unlisteners.push(fn));
-    void onMeetingOutcome(() => {
-      setLiveTranscript(null);
-    }).then((fn) => unlisteners.push(fn));
-    return () => unlisteners.forEach((fn) => fn());
+      }).then(keepListener),
+    ];
+    // Subscribe before reading so a transition between the two is not lost.
+    void Promise.all(subscriptions).then(() => {
+      if (!disposed) refresh();
+    }).catch((err: unknown) => {
+      if (!disposed) setStateReadProblem(String(err));
+    });
+    return () => {
+      disposed = true;
+      unlisteners.forEach((fn) => fn());
+    };
   }, []);
 
   const transcriptEnded = state === "recording-without-transcript";
@@ -122,7 +150,7 @@ export function MeetingNotification() {
   // Counted here rather than asked for every second: the runtime owns the
   // session and the clock, and one command a second to render a timer would be
   // an IPC round trip for something arithmetic can do. Re-synced from
-  // `getMeetingStatus` whenever the window is shown, so it cannot drift far.
+  // `getMeetingStatus` on every runtime state transition.
   useEffect(() => {
     if (!recording) return undefined;
     const timer = window.setInterval(() => setElapsed((s) => s + 1), 1000);
@@ -155,7 +183,9 @@ export function MeetingNotification() {
                 : whoIsRecorded(sources)}
           </span>
           {notificationCaptureExcluded && liveTranscript ? (
-            <span className="notify-live">{liveTranscript}</span>
+            <span className="notify-live">
+              <span dir="auto">{liveTranscript}</span>
+            </span>
           ) : null}
         </span>
         <button

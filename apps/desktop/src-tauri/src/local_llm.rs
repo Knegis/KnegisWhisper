@@ -1495,6 +1495,54 @@ pub async fn local_llm_stop(llm: State<'_, Arc<LocalLlm>>) -> Result<(), String>
 mod tests {
     use super::*;
 
+    /// A live generation check against the model started through the desktop
+    /// Local models screen. It exercises the real dictation cleanup adapter;
+    /// microphone capture and clipboard insertion are deliberately separate.
+    #[tokio::test]
+    #[ignore = "requires KW_LLM_PROBE_PORT and the installed Qwen2.5 1.5B model running locally"]
+    async fn native_cleanup_uses_running_local_model() {
+        use kw_app_core::dictation::Cleanup as _;
+        let _ = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::WARN)
+            .try_init();
+
+        let port: u16 = std::env::var("KW_LLM_PROBE_PORT")
+            .expect("set KW_LLM_PROBE_PORT to the desktop's running local model port")
+            .parse()
+            .expect("a port number");
+        assert!((8221..=8240).contains(&port));
+        let endpoint = LocalEndpoint::default();
+        endpoint.set(Some(port));
+        endpoint.last_used.store(1, Ordering::Relaxed);
+        let cleanup = crate::dictation::ModelCleanup::new(
+            NetworkPolicy::new().unwrap(),
+            Arc::new(kw_security::MemoryCredentialStore::new()),
+            Arc::new(RwLock::new(Some((
+                kw_reasoning_core::ChatRoute::Local,
+                "qwen2.5-1.5b-instruct-q5_k_m".to_owned(),
+            )))),
+            endpoint.clone(),
+        );
+        let raw = "um please bring apples oranges and bananas to the meeting tomorrow";
+        let began = std::time::Instant::now();
+        let cleaned = cleanup.clean(raw).await;
+        println!(
+            "raw={raw:?}; cleaned={cleaned:?}; elapsed={:?}",
+            began.elapsed()
+        );
+        assert_ne!(
+            cleaned, raw,
+            "the infallible fallback is not evidence of generation"
+        );
+        for word in ["apples", "oranges", "bananas", "tomorrow"] {
+            assert!(
+                cleaned.to_lowercase().contains(word),
+                "lost {word}: {cleaned}"
+            );
+        }
+        assert!(endpoint.idle_for() < Duration::from_secs(120));
+    }
+
     #[test]
     fn the_catalogue_has_a_llama_sidecar_on_a_loopback_port_range() {
         let catalog = Catalog::shipped().expect("the shipped catalogue must parse");
