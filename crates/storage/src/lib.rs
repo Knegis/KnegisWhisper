@@ -262,8 +262,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            applied, 3,
-            "initial, note recordings, and automation migrations recorded exactly once"
+            applied, 4,
+            "initial, note recordings, automation, and desktop origin migrations recorded exactly once"
         );
         second.close().await;
     }

@@ -1730,7 +1730,7 @@ durationMs: number, source: MediaImportSource, };
  */
 export type MediaImportProgress = { "stage": "downloading", sidecar: string, written: number, total: number | null, } | { "stage": "verifying" } | { "stage": "extracting" } | { "stage": "fetching" } | { "stage": "done" };
 
-export type ImportStage = "preparing" | "converting" | "transcribing" | "saving" | "succeeded" | "failed" | "cancelled";
+export type ImportStage = "preparing" | "converting" | "transcribing" | "saving" | "succeeded" | "failed" | "cancelled" | "interrupted";
 
 export type ImportSnapshot = { operationId: string, stage: ImportStage, elapsedSeconds: number, provider: string | null, model: string | null, result: MediaImportResult | null, error: string | null, };
 

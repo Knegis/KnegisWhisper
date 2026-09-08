@@ -15,10 +15,14 @@ pub enum ImportStage {
     Succeeded,
     Failed,
     Cancelled,
+    Interrupted,
 }
 impl ImportStage {
     fn active(self) -> bool {
-        !matches!(self, Self::Succeeded | Self::Failed | Self::Cancelled)
+        !matches!(
+            self,
+            Self::Succeeded | Self::Failed | Self::Cancelled | Self::Interrupted
+        )
     }
 }
 #[derive(Debug, Clone, Serialize, TS)]
@@ -43,6 +47,40 @@ pub struct ImportJobs(
     std::sync::Arc<std::sync::atomic::AtomicBool>,
 );
 impl ImportJobs {
+    /// Called once during startup, after durable jobs have been reconciled.
+    pub async fn recover(&self, db: &kw_storage::Db) -> Result<(), kw_storage::StorageError> {
+        let Some(job) = kw_storage::jobs::last_desktop(db.pool()).await? else {
+            return Ok(());
+        };
+        // A committed note is already succeeded in the same transaction. Never
+        // invite a retry for that job, or resurrect an older interrupted import.
+        if job.stage != "failed"
+            || job.error.as_deref() != Some(kw_storage::jobs::INTERRUPTED_ERROR)
+        {
+            return Ok(());
+        }
+        let mut held = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if held.is_none() {
+            let (cancel, _) = tokio::sync::watch::channel(false);
+            *held = Some(Entry {
+                started: Instant::now(),
+                cancel,
+                snapshot: ImportSnapshot {
+                    operation_id: job.id,
+                    stage: ImportStage::Interrupted,
+                    elapsed_seconds: 0.0,
+                    provider: job.provider,
+                    model: job.model,
+                    result: None,
+                    error: Some("The app closed before your import finished. Choose the audio or video file again, then select Import and transcribe to retry.".into()),
+                },
+            });
+        }
+        Ok(())
+    }
     pub fn close(&self) {
         let held = self
             .0
@@ -218,6 +256,90 @@ impl Drop for ImportLease {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn restart_recovers_desktop_interruption_until_a_new_desktop_attempt() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("imports.db");
+        let db = kw_storage::Db::open(&path).await.unwrap();
+        kw_storage::jobs::create_desktop(db.pool(), "desktop")
+            .await
+            .unwrap();
+        kw_storage::jobs::stage(db.pool(), "desktop", "transcribing", None)
+            .await
+            .unwrap();
+        kw_storage::jobs::route(db.pool(), "desktop", "local", Some("tiny"))
+            .await
+            .unwrap();
+        // A newer API upload must not hide the desktop's interrupted job.
+        kw_storage::jobs::create(db.pool(), "api").await.unwrap();
+        db.close().await;
+        for _ in 0..2 {
+            let db = kw_storage::Db::open(&path).await.unwrap();
+            kw_storage::jobs::interrupt_unfinished(db.pool())
+                .await
+                .unwrap();
+            let jobs = ImportJobs::default();
+            jobs.recover(&db).await.unwrap();
+            let snapshot = jobs.snapshot().unwrap();
+            assert_eq!(snapshot.operation_id, "desktop");
+            assert_eq!(snapshot.stage, ImportStage::Interrupted);
+            assert!(!snapshot.stage.active());
+            assert!(snapshot.result.is_none());
+            assert_eq!(snapshot.model.as_deref(), Some("tiny"));
+            assert!(snapshot
+                .error
+                .unwrap()
+                .contains("Choose the audio or video file again"));
+            assert!(jobs.cancel("desktop").is_err());
+            // Recovered state does not block a fresh attempt or hang shutdown.
+            let lease = jobs.begin().unwrap();
+            assert_ne!(lease.id(), "desktop");
+            lease.finish_cancelled();
+            jobs.close();
+            db.close().await;
+        }
+        let db = kw_storage::Db::open(&path).await.unwrap();
+        for stage in ["succeeded", "failed", "cancelled"] {
+            kw_storage::jobs::create_desktop(db.pool(), stage)
+                .await
+                .unwrap();
+            kw_storage::jobs::stage(db.pool(), stage, stage, None)
+                .await
+                .unwrap();
+            kw_storage::jobs::interrupt_unfinished(db.pool())
+                .await
+                .unwrap();
+            let jobs = ImportJobs::default();
+            jobs.recover(&db).await.unwrap();
+            assert!(
+                jobs.snapshot().is_none(),
+                "must not resurrect the older interruption after {stage}"
+            );
+        }
+        db.close().await;
+    }
+
+    #[tokio::test]
+    async fn recovery_ignores_automation_and_preserves_an_existing_live_snapshot() {
+        let db = kw_storage::Db::open_in_memory().await.unwrap();
+        kw_storage::jobs::create(db.pool(), "api").await.unwrap();
+        kw_storage::jobs::interrupt_unfinished(db.pool())
+            .await
+            .unwrap();
+        let jobs = ImportJobs::default();
+        jobs.recover(&db).await.unwrap();
+        assert!(jobs.snapshot().is_none());
+        kw_storage::jobs::create_desktop(db.pool(), "desktop")
+            .await
+            .unwrap();
+        kw_storage::jobs::interrupt_unfinished(db.pool())
+            .await
+            .unwrap();
+        let lease = jobs.begin().unwrap();
+        jobs.recover(&db).await.unwrap();
+        assert_eq!(jobs.snapshot().unwrap().operation_id, lease.id());
+        drop(lease);
+    }
     #[tokio::test]
     async fn cancellation_and_saving_are_mutually_exclusive_and_release_slot() {
         let jobs = ImportJobs::default();
