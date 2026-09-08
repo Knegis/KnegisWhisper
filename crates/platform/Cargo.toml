@@ -47,6 +47,56 @@ features = [
     "Win32_System_Com",
 ]
 
+# The `CGEventTap` half of `keyhook`, and nothing else. Both crates are already
+# in `Cargo.lock` -- Tauri's own macOS dependencies pull them -- so this adds a
+# feature selection rather than a new supply-chain surface.
+#
+# `default-features = false` with the modules named explicitly, for the reason
+# the `windows` block above gives: relying on another crate happening to enable
+# a feature is a dependency on nothing declared anywhere. The default set is
+# most of CoreGraphics and most of CoreFoundation, neither of which this crate
+# reads.
+[target.'cfg(target_os = "macos")'.dependencies.objc2-core-graphics]
+workspace = true
+default-features = false
+features = [
+    "std",
+    # CGEventTapCreate, CGEventTapEnable, CGEventGetFlags,
+    # CGEventGetIntegerValueField, and CGPreflightListenEventAccess -- which is
+    # how the Accessibility permission is *reported* rather than assumed. Pulls
+    # objc2-core-foundation/CFMachPort, the type the tap comes back as.
+    "CGEvent",
+    # CGEventType, CGEventField, CGEventTapLocation / Placement / Options, and
+    # CGEventMask.
+    "CGEventTypes",
+]
+
+[target.'cfg(target_os = "macos")'.dependencies.objc2-core-foundation]
+workspace = true
+default-features = false
+features = [
+    "std",
+    # CFRunLoop, CFRunLoopSource and kCFRunLoopCommonModes. A tap delivers
+    # through a run loop the way a Win32 hook delivers through a message queue,
+    # so this is the direct counterpart of the message loop in windows_impl.
+    "CFRunLoop",
+    # CFMachPortCreateRunLoopSource: the tap is a mach port and has to be turned
+    # into a run-loop source before anything is delivered.
+    "CFMachPort",
+]
+
+# The XDG global-shortcuts portal client in `portal_shortcuts`. Already in
+# `Cargo.lock` -- Tauri's Linux dependencies pull it -- so this is a feature
+# selection rather than a new crate, the same argument the macOS block makes.
+#
+# `tokio` rather than zbus's default `async-io`: this crate already depends on
+# tokio, and two executors in one process is a way to deadlock that nothing in
+# here would be able to diagnose.
+[target.'cfg(target_os = "linux")'.dependencies.zbus]
+workspace = true
+default-features = false
+features = ["tokio"]
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
 # `mic_users_probe` only, and only so it can open the microphone itself and

@@ -154,7 +154,6 @@ And one that is this project's own, recorded 2026-09-08 (KNEG-221):
   `tauri-nspanel` row above for the same reason. A transparent window that paints an opaque
   background is a separate defect class (KNEG-163 on Windows), and rule F cannot see it.
 
-
 ## Audio capture
 
 | Capability | Windows | macOS | Linux |
@@ -443,26 +442,49 @@ listener that is still unwritten.
 | Capability | Windows | macOS | Linux X11 | GNOME Wayland | KDE Wayland | Hyprland |
 | --- | --- | --- | --- | --- | --- | --- |
 | Standard accelerators | **verified** | plugin, unverified | plugin, unverified | plugin, unverified | plugin, unverified | plugin, unverified |
-| Modifier-only (`Control+Super`) | **verified** — `WH_KEYBOARD_LL` | not built | not built | not built | not built | not built |
-| Right-side modifiers | built — same hook | not built | not built | not built | not built | not built |
-| Globe / `Fn` | not built | not built | not built | not built | not built | not built |
-| Mouse buttons 4/5 | **measured** — `WH_MOUSE_LL` | not built | not built | not built | not built | not built |
-| Push-to-talk, hooked accelerators | **measured** — one hook, both edges | not built | not built | not built | not built | not built |
+| Modifier-only (`Control+Super`) | **verified** — `WH_KEYBOARD_LL` | written — `CGEventTap`, compile-only | cannot | cannot | cannot | cannot |
+| Right-side modifiers | built — same hook | written — same tap, compile-only | cannot | cannot | cannot | cannot |
+| Globe / `Fn` | not built | not built — deliberately, see below | not built | not built | not built | not built |
+| Mouse buttons 4/5 | **measured** — `WH_MOUSE_LL` | written — same tap, compile-only | cannot | cannot | cannot | cannot |
+| Push-to-talk, hooked accelerators | **measured** — one hook, both edges | written — same tap, compile-only | cannot | cannot | cannot | cannot |
+| Portal registration (`GlobalShortcuts`) | not applicable | not applicable | written, compile-only, no consumer | written, compile-only, no consumer | written, compile-only, no consumer | written, compile-only, no consumer |
 | Push-to-talk, standard accelerators | believed, never run | believed, never run | believed, never run | believed, never run | believed, never run | believed, never run |
 
-**"not built" and "unverified" are different answers and the distinction is the point.** *Not built*
-means there is no code for it anywhere, on any platform: `keyhook::support()` returns `Unsupported`
-for every target that is not Windows, so no hook-dependent capability exists off Windows at all.
-*Unverified* means the code is cross-platform, compiles in CI, and **has never been run there** — see
-the verification table at the top of this document, which records macOS and Linux as compile-only.
+**Four answers in that table, and the distinctions are the point.** Rewritten 2026-09-08 for
+KNEG-62, which added two of them.
 
-**There is one registration mechanism and it is the same on every platform.** Everything in the
-Standard-accelerators row goes through `tauri_plugin_global_shortcut` (`shortcuts.rs:19`), and there
-is no second path beside it — no `gsettings`, no `KGlobalAccel`, no `hyprctl`, and no
-desktop-portal client anywhere in this repository. A compositor-native shortcut slot is therefore
-not something this application can reach for on Wayland, whatever the compositor offers; the
-portal's own limit — it takes only chords the compositor can register — is described in the next
-section and would apply on top.
+- *Not built* — there is no code for it anywhere, on any platform.
+- *Cannot* — no mechanism exists to build against. This is the honest answer for a modifier-only
+  chord on Linux and is not a backlog item: X11 cannot observe one globally without grabbing the
+  keyboard away from every other application, and Wayland has no interface for it at all. The
+  portal is a *registration* API and its trigger grammar has no way to spell a chord with no key
+  in it, so no compositor can grant one however willing it is.
+- *Written, compile-only* — the code exists and has **never run**. macOS's `CGEventTap` and the
+  Linux portal client are both in this state, and `cargo check --target aarch64-apple-darwin` /
+  `--target x86_64-unknown-linux-gnu` against `kw-platform` is the whole of the evidence. Both
+  cross-checks run from the Windows development machine, which is how they are known to compile at
+  all without waiting for a dispatched CI job.
+- *Unverified* — the code is cross-platform, compiles in CI, and has never been run there. This is
+  what the plugin row means.
+
+`keyhook::support()` therefore has three answers rather than two. Windows is unconditionally
+`Available`; **macOS depends on a permission and is asked, not assumed** —
+`CGPreflightListenEventAccess` decides, and a refusal names System Settings > Privacy & Security >
+Accessibility rather than reporting that macOS cannot do this; everything else is `Unsupported`
+with the *cannot* reason above.
+
+**There is one registration mechanism *in use* and it is the same on every platform.** Everything
+in the Standard-accelerators row goes through `tauri_plugin_global_shortcut` (`shortcuts.rs:19`),
+and there is still no second path *taken* — no `gsettings`, no `KGlobalAccel` and no `hyprctl`.
+
+A desktop-portal client now exists (`kw_platform::portal_shortcuts`, KNEG-62) and **nothing calls
+it**, which is a deliberate half-step rather than an oversight: the module is compile-checked for
+Linux and its accelerator-to-trigger vocabulary is unit-tested on every platform, but wiring it
+into `shortcuts.rs` would change registration behaviour on a platform this project has never run
+(KNEG-61), and the desktop crate cannot even be compile-checked for Linux from the development
+machine — `coreaudio-sys` and the GTK `pkg-config` probes need the real SDKs. So the vocabulary is
+in place for the wiring to be written against, and the wiring is filed separately. Until it lands,
+a Wayland compositor's native shortcut slot is not something this application reaches for.
 
 The default dictation hotkey is `Control+Super`, which is modifier-only and therefore invisible to
 the cross-platform API — hence the native hook. **The default is not adjusted per platform.**
@@ -473,6 +495,22 @@ returns nothing, and `nothing_ships_holding_by_default` pins the value. Every pl
 `Settings > Dictation` says it does nothing and to add an ordinary key — rather than the shipped
 default silently becoming something else.
 
+**KNEG-62 asked for the opposite and it was declined, 2026-09-08.** That issue's description says
+"on X11 and GNOME the effective default hotkey is adjusted because modifier-only combinations do
+not work there". It is recorded here as a decision rather than as outstanding work, because the
+rule above was settled deliberately after it was written and the reasoning still holds: a default
+that differs per platform means the documentation, the settings screen and the user's memory of
+what they configured can all disagree, and the failure it avoids — a dead key with no explanation —
+is already avoided by saying so on screen. What KNEG-62 *did* change is that the sentence
+`Settings > Dictation` shows on Linux now names the mechanism that is missing rather than implying
+one could be added; see `portal_shortcuts::PortalRefusal::ModifierOnly`.
+
+**Globe / `Fn` on macOS is the one row that could have been claimed and was not.** macOS reports it
+through the same `flagsChanged` events as the eight real modifiers, so the tap sees it. It maps to
+`Key::Other` like any ordinary key, because `keys::Key` has no `Fn` variant and the accelerator
+vocabulary has no spelling for one — mapping it onto a spare modifier would have made this row read
+as supported without any user being able to bind it.
+
 **What is built, as against what the table says is possible:**
 
 | | State |
@@ -481,7 +519,8 @@ default silently becoming something else.
 | Windows right-side modifiers | **Built and reachable** since 2026-08-31 (KNEG-35). `RightControl+Super` and `RightControl+RightShift` both classify as `ModifierOnly` and go to the keyboard hook, which is the only mechanism that can see a side at all. The spellings come from one table, `keys::SIDED_MODIFIERS`, read by `Chord::parse` and by `hotkey::classify`, so the set each accepts cannot drift from the other. A side combined with an *ordinary* key (`RightControl+D`) is refused, because neither mechanism can take it — the register cannot see the side and the hook only matches modifiers — and the refusal names both ways out. **Never driven from the screen:** the hook path is measured by `keyhook_probe` and the classifier by unit tests, and nobody has typed one into `Dictation > Shortcuts` (KNEG-47). |
 | Windows mouse buttons 4/5 | **Built and measured** since 2026-09-01 (KNEG-64). A second hook, `WH_MOUSE_LL`, on the same thread as the keyboard one, installed only when a button is actually bound — that hook sits in the path of every mouse *move* on the machine, so it is not carried for nothing. `Mouse4` and `Mouse5` classify as `Accelerator::MouseButton`, a third classification rather than a modifier-only chord with an odd spelling. `cargo run -p kw-platform --example mousehook_probe` measures both halves: the raw encoding (the button number is in `mouseData`'s **high** word — 1 for `XBUTTON1`, 2 for `XBUTTON2` — while `SendInput` takes the same numbers in the *low* word) and the shipped hook firing once per press and once per release for the right index, with mouse movement and a wheel notch as the control. **Never driven from a real mouse:** every press in the probe is injected, and nobody has pressed a physical side button (KNEG-47's mouse twin). |
 | Windows push-to-talk | **Built** since 2026-09-01 (KNEG-64), per action, and **off by default**. `hotkey.<action>.mode` is `toggle` or `hold`; the shipped value is `toggle` for all five and deliberately stays that way — holding is one of the candidate answers to KNEG-115, and shipping it as the default would settle that open question in passing. The hook path is measured (`keyhook_probe` reports two presses **and two releases** for two injected chords); the plugin path — push-to-talk on an ordinary accelerator like `Control+Shift+D` — routes `ShortcutState::Released` through the same decision and is **believed, not run**. |
-| macOS, Linux | Not built, and the reason is reported rather than the capability being silently absent: macOS needs a `CGEventTap` and the Accessibility permission that goes with it, and Wayland's global-shortcuts portal takes only chords the compositor can register. |
+| macOS | **Written 2026-09-08 (KNEG-62), never run.** A `CGEventTap` at `kCGHIDEventTap`, `ListenOnly`, on a dedicated `CFRunLoop` thread — the direct counterpart of the Windows hook thread, and it never swallows or rewrites an event for the same stated reason. The decision logic is not new: it reuses `keys::HookWatcher` unchanged, so what was written is plumbing plus two tables. **The load-bearing platform difference:** a modifier press is not a key event on macOS at all — pressing Control alone emits `kCGEventFlagsChanged` and no `keyDown` — so a tap watching only key events would see nothing whatever for `Control+Super`, which is the entire capability. And `CGEventGetFlags`'s public masks are *unsided*, so the side comes from the keycode and the direction from a tracker, not from the flags. `crates/platform/src/macos_input.rs` holds both tables with ten unit tests that **run on Windows** — deliberately outside the `cfg`, because there is no Mac and no probe here, so the one checkable part is placed where a check can reach it. Mutation-checked: swapping Option and Command, or shifting the mouse-button numbering by one, each fails the test that claims to catch it. The permission is *asked* (`CGPreflightListenEventAccess`), never assumed. |
+| Linux | **Cannot**, for modifier-only chords, mouse buttons and push-to-talk on a hooked chord — see the four answers above; this is a missing mechanism, not missing work. For *ordinary* accelerators there is now a written `org.freedesktop.portal.GlobalShortcuts` client (`kw_platform::portal_shortcuts`, KNEG-62), **compile-only and with no consumer**. Its tested half is the accelerator-to-trigger vocabulary — `Super` becomes `LOGO`, modifiers are emitted in the grammar's order so two spellings of one chord cannot compete for the same keys, and modifier-only, sided and mouse accelerators are refused *before* the D-Bus call with a reason the user can act on. Its untested half is the D-Bus itself: no session bus, no `xdg-desktop-portal` and no compositor has answered any of it, so it is **believed, not confirmed**, in the same sense as the realtime meeting clients (KNEG-55/56/57). Needs xdg-desktop-portal 1.17 or newer. |
 
 **An accelerator being live is only half of a working hotkey.** Of the five actions
 `HotkeyAction` declares, exactly one — dictation — has anything behind it. The other four used to
