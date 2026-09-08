@@ -51,7 +51,9 @@
 //! *unshifted* — an asymmetry that is exactly where this goes wrong. See
 //! `cargo run -p kw-platform --example mousehook_probe`.
 
-use crate::keys::{Fired, HookWatcher, Watched};
+use crate::keys::Watched;
+#[cfg(target_os = "windows")]
+use crate::keys::{Fired, HookWatcher};
 use crate::PlatformError;
 
 /// Which edge of a press an event is.

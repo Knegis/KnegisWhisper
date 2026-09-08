@@ -219,6 +219,7 @@ jobs:
             libssl-dev \
             libglib2.0-dev \
             libgtk-3-dev \
+            libasound2-dev \
             patchelf
 
       # The frontend must exist before generate_context! embeds it.

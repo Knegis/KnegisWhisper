@@ -74,6 +74,7 @@ const CONTROL_AND_ALT: u8 = 0b0000_0110;
 /// Polish and Portuguese layouts and is the one every user of those recognises
 /// instantly. The list ends with the Latin-1 characters that are AltGr on
 /// layouts where none of the ASCII ones are.
+#[cfg(windows)]
 const CANDIDATES: [char; 14] = [
     '@', '$', '{', '}', '[', ']', '\\', '|', '~', '€', '£', '¤', 'µ', '§',
 ];
