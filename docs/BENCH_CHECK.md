@@ -717,8 +717,20 @@ says "seen to match". Everything else about chunk E is green tests.
    size and a margin, because Tauri does not expose the work area — so the
    taskbar is cleared by guess. The dictation overlay still sets no position at
    all, which is item 7 below.
-7. **Dictate while a meeting is recording** and check the tray tooltip, the
-   overlay and the notification window all say something true at once.
+7. ~~**Dictate while a meeting is recording** and check the tray tooltip, the
+   overlay and the notification window all say something true at once.~~
+   **Done, 2026-09-08.** The overlay and panel half was measured earlier that
+   day; the tray tooltip was the piece left, and it is now read off the
+   notification area through UI Automation: `KnegisWhisper` before any activity
+   (the builder's initial value, so `set_tooltip` had not run),
+   `KnegisWhisper - Recording a meeting`, then
+   `KnegisWhisper - Recording a meeting and a dictation`, then back to
+   `KnegisWhisper - Recording a meeting` when the dictation was cancelled. That
+   last transition is the one worth having: it shows on screen what
+   `the_two_recordings_do_not_overwrite_each_other` asserts in a unit test.
+   Windows' own privacy indicator read `Microphone in use by: KnegisWhisper`
+   over the same period, which is independent corroboration that a capture was
+   open. See `docs/LINEAR_VALIDATION_2026_09_08.md`.
 8. **Record a meeting through OpenAI Realtime**, with the key that exists on this
    machine. Nothing about it has touched a live service: the request shaping and
    the event grammar are fixtures, and a 401 from a malformed header would look
@@ -1106,6 +1118,19 @@ gate's backlog is now empty. Breaking the new control on purpose is what showed 
 been satisfied by an *import* since it was written — tightened, and the tightening in turn caught
 red-handed inventing an unreachable setting, because `IntegrationsApi.tsx` calls its wrapper by
 reference. See `docs/ENGINEERING_LOG.md` § 2026-08-31 (KNEG-114).
+
+**Driven for the first time on 2026-09-08, and one sentence about it was wrong.** The control and
+the command had still never been exercised by anything. Both are now: `notepad.exe` typed into
+*Also count as a meeting* appeared in the detection list within one poll as
+`A program you listed - notepad.exe`, `inCall: false`, `signal: "none"`; the deny list removed it
+again; both persisted and read back. **No offer window appeared, and that is correct.**
+`watcher::consider` filters to `Detected::in_call()`, and a user-listed program is given
+`CallSignal::Microphone` only when it is actually holding a capture session. So KNEG-114's closing
+note - and the checklist item taken from it - promising an offer *"within five seconds"* for any
+process the user lists is wrong for a listed program that is not capturing audio. The escape hatch
+is real for the case it was written for, because a Zoom in a call does hold the microphone; it is
+the "any process you have running" phrasing that overstates it. Corrected here rather than left to
+be rediscovered.
 
 ### Added by the live Teams meeting, same day
 
