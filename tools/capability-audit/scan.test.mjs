@@ -49,6 +49,18 @@ test("the real tree is clean, and all parser inventories are live", () => {
       { file: "apps/desktop/src-tauri/src/recording_attach.rs", arg: "main" },
     ],
   );
+  // KNEG-221: the three panel windows are transparent, and both halves of the
+  // macOS configuration that makes them compile there are set.
+  assert.deepEqual(
+    real.transparency.sites.map(({ file, line }) => `${file}:${line}`),
+    [
+      "apps/desktop/src-tauri/src/meeting_window.rs:53",
+      "apps/desktop/src-tauri/src/overlay.rs:92",
+      "apps/desktop/src-tauri/src/update_window.rs:58",
+    ],
+  );
+  assert.equal(real.transparency.cargoFeature, true);
+  assert.equal(real.transparency.configFlag, true);
   assert.deepEqual(violations(real), []);
 });
 
@@ -139,6 +151,62 @@ test("rule D rejects an unresolvable builder and accepts both legitimate forms",
   });
   assert.deepEqual(rules(found), ["D. window construction has no resolvable label"]);
   assert.equal(found[0].subject, "src/future.rs:12");
+});
+
+test("KNEG-221 regression: a transparent window with neither half of the macOS configuration", () => {
+  const found = violations({
+    labels,
+    capabilities: allCovered,
+    builders: noBuilders,
+    exempt: {},
+    transparency: { sites: [{ file: "src/meeting_window.rs", line: 53 }], cargoFeature: false, configFlag: false },
+  });
+  assert.deepEqual(rules(found), ["F. transparent window is not configured for macOS"]);
+  assert.equal(found[0].subject, "src/meeting_window.rs:53");
+  // The message has to name both edits, because enabling either alone leaves a
+  // different failure: the feature alone builds but disagrees with the config
+  // the Tauri CLI derives, the config alone does not reach `cargo build`.
+  assert.match(found[0].detail, /macos-private-api/);
+  assert.match(found[0].detail, /macOSPrivateApi/);
+});
+
+test("rule F names the half that is missing, and one site reports for all of them", () => {
+  const sites = [
+    { file: "src/meeting_window.rs", line: 53 },
+    { file: "src/overlay.rs", line: 92 },
+    { file: "src/update_window.rs", line: 58 },
+  ];
+  const featureOnly = violations({
+    labels,
+    capabilities: allCovered,
+    builders: noBuilders,
+    exempt: {},
+    transparency: { sites, cargoFeature: true, configFlag: false },
+  });
+  assert.deepEqual(rules(featureOnly), ["F. transparent window is not configured for macOS"]);
+  assert.equal(featureOnly.length, 1, "one violation for the configuration, not one per call site");
+  assert.match(featureOnly[0].detail, /app\.macOSPrivateApi/);
+  assert.doesNotMatch(featureOnly[0].detail, /Cargo\.toml/);
+
+  const configOnly = violations({
+    labels,
+    capabilities: allCovered,
+    builders: noBuilders,
+    exempt: {},
+    transparency: { sites, cargoFeature: false, configFlag: true },
+  });
+  assert.deepEqual(rules(configOnly), ["F. transparent window is not configured for macOS"]);
+  assert.match(configOnly[0].detail, /Cargo\.toml/);
+  assert.doesNotMatch(configOnly[0].detail, /app\.macOSPrivateApi/);
+});
+
+test("rule F is quiet when both halves are set, and when nothing is transparent", () => {
+  const sites = [{ file: "src/overlay.rs", line: 92 }];
+  const base = { labels, capabilities: allCovered, builders: noBuilders, exempt: {} };
+  assert.deepEqual(violations({ ...base, transparency: { sites, cargoFeature: true, configFlag: true } }), []);
+  // A tree with no transparent window needs neither, so the rule must not
+  // demand a private API nothing asks for.
+  assert.deepEqual(violations({ ...base, transparency: { sites: [], cargoFeature: false, configFlag: false } }), []);
 });
 
 test("an exempt label does not trip rule A", () => {

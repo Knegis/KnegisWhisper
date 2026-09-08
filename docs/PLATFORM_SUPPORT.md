@@ -112,7 +112,7 @@ commented out — so there is no reference implementation to copy.
 
 | Capability | Windows | macOS | Linux X11 | Linux Wayland |
 | --- | --- | --- | --- | --- |
-| Transparent, undecorated | yes | yes | yes | compositor-dependent |
+| Transparent, undecorated | yes | private API, compile-verified only — see below | yes | compositor-dependent |
 | Non-activating (no focus steal) | `WS_EX_NOACTIVATE` + `WM_MOUSEACTIVATE` — **new work** | `NSWindowStyleMaskNonActivatingPanel` via `tauri-nspanel` — unverified | window-type hint | compositor-dependent |
 | Always-on-top | `"pop-up-menu"` level | `"floating"` level 1 | `"screen-saver"` level | GNOME: `"floating"` |
 | Visible on all workspaces | not applicable | `CanJoinAllSpaces` | yes | compositor-dependent |
@@ -128,6 +128,32 @@ Two notes carried over from the upstream audit:
   than expose a toggle that does not work.
 - **Linux ignores the `forward` flag**, so click-through cannot be toggled per-region there.
   OpenWhispr skips the toggle entirely on Linux.
+
+And one that is this project's own, recorded 2026-09-08 (KNEG-221):
+
+- **macOS transparency is a private API, and the row above used to say plain "yes".** It said so
+  while the desktop application did not compile on macOS at all. `WebviewWindowBuilder::transparent`
+  is `#[cfg(any(not(target_os = "macos"), feature = "macos-private-api"))]` in tauri 2.11.5, so the
+  three transparent panels — the meeting notification, the dictation overlay and the update
+  notification — were `E0599: no method named transparent` there while compiling cleanly on Windows
+  and Linux. Both halves are now set: the `macos-private-api` feature in
+  `apps/desktop/src-tauri/Cargo.toml` (what the compiler needs, and what CI's `cargo` invocations
+  see) and `app.macOSPrivateApi` in `tauri.conf.json` (what the Tauri CLI derives its feature list
+  from, and what the runtime reads). `tools/capability-audit/scan.mjs` rule F fails when a
+  `.transparent(...)` call is not matched by both, which is what makes the defect visible from a
+  machine that cannot compile for macOS.
+
+  **The cost, stated plainly: the bundle is ineligible for the Mac App Store while this is on.**
+  Accepted rather than worked around, because the alternative is an opaque rectangle. The indicator
+  rule at the top of `MeetingNotification.tsx` and `Overlay.tsx` is that the person at the keyboard
+  always sees that a microphone is open; a non-transparent always-on-top panel is a worse product
+  than one that cannot be sold through Apple's store, and this project ships its own installers
+  (`docs/BUILD_PLAN.md` chunk J) rather than through the store.
+
+  **Still compile-verified only.** Nothing has run on macOS — that is KNEG-59, and it covers the
+  `tauri-nspanel` row above for the same reason. A transparent window that paints an opaque
+  background is a separate defect class (KNEG-163 on Windows), and rule F cannot see it.
+
 
 ## Audio capture
 
