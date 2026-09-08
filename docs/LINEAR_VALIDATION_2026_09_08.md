@@ -253,3 +253,16 @@ Under the git-ignored `target/issue-validation/`:
 `kneg51-detect-readback.json`, `kneg51-stop-outcome.json`,
 `kneg51-screen-after-stop.json`, `owner-db-before.txt`, `tauri-dev.log`, and
 the disposable profile itself. Local, not shipped by this commit.
+
+### A correction to the test counts in this day's commit messages
+
+`591e891`, `a1e2272` and `83c72ea` each say "826 tests in 40 suites". That is an
+**undercount of the same passing run**, not a different result: the command that
+produced the figure piped `cargo test` through `tail`, so only the last forty
+`test result` lines were summed. The full workspace suite is **1,818 tests, 0
+failures, exit 0**, re-run after everything above had landed, together with
+`cargo fmt --all --check`, `cargo clippy --profile ci --workspace --all-targets
+-- -D warnings`, all nine Contracts gates, the frontend typecheck and its eleven
+tests, and `cargo clippy -p kw-platform --lib -- -D warnings` for
+`aarch64-apple-darwin` and `x86_64-unknown-linux-gnu`. Corrected here and on the
+Linear issues rather than by rewriting the commits.
