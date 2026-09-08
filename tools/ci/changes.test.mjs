@@ -20,3 +20,9 @@ test("shared build inputs and workflows run both", () => {
     assert.deepEqual(classifyChanges([path]), { frontend: true, windows: true });
   }
 });
+
+test("vendored dependency changes cannot bypass the Windows build", () => {
+  for (const path of ["vendor/cpal/Cargo.toml", "vendor/cpal/build.rs", "vendor/cpal/src/host/wasapi/device.rs"]) {
+    assert.deepEqual(classifyChanges([path]), { frontend: true, windows: true });
+  }
+});

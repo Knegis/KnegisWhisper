@@ -361,8 +361,7 @@ fn last_sentence(stderr: &str) -> String {
     stderr
         .lines()
         .map(str::trim)
-        .filter(|line| !line.is_empty() && !line.starts_with("progress "))
-        .next_back()
+        .rfind(|line| !line.is_empty() && !line.starts_with("progress "))
         .unwrap_or("it exited without saying why")
         .to_owned()
 }

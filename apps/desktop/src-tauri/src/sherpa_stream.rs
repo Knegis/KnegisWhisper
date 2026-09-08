@@ -174,17 +174,34 @@ impl SherpaStream {
 
     /// Start the server on `model_id`, and answer with the port it came up on.
     ///
-    /// Already running on the same model is a no-op returning the same port: the
-    /// meeting runtime asks for this every time a meeting starts, and restarting
-    /// a loaded model between two meetings would cost the load time for nothing.
+    /// A healthy process on the same model is reused. A cached port is not
+    /// evidence of a live server: the provider can exit between meetings.
     pub async fn start(&self, model_id: &str) -> Result<(u16, StreamLease), String> {
         let mut held = self.inner.state.lock().await;
         if held.model.as_deref() == Some(model_id) && held.running.is_some() {
             let port = held.port.ok_or_else(|| {
                 "the streaming server is running without a published port".to_owned()
             })?;
-            let lease = held.acquire_lease();
-            return Ok((port, lease));
+            let alive = match held.running.as_mut() {
+                Some(running) => running.is_running().await,
+                None => false,
+            };
+            let ready = alive
+                && tokio::time::timeout(
+                    Duration::from_secs(2),
+                    kw_sidecar::Health::is_ready(&WebSocketHealth, port),
+                )
+                .await
+                .unwrap_or(false);
+            if ready {
+                let lease = held.acquire_lease();
+                return Ok((port, lease));
+            }
+            tracing::warn!(
+                port,
+                alive,
+                "replacing an unavailable streaming server at meeting start"
+            );
         }
 
         let spec = self

@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 
 export function classifyChanges(paths) {
-  const shared = paths.some(p => /^(?:config|tools|scripts|\.github|\.cargo)\//.test(p)
+  const shared = paths.some(p => /^(?:config|tools|scripts|vendor|\.github|\.cargo)\//.test(p)
     || /^(?:Cargo\.(?:toml|lock)|rust-toolchain(?:\.toml)?|rustfmt\.toml|clippy\.toml|package(?:-lock)?\.json)$/.test(p));
   const frontend = shared || paths.some(p => p.startsWith("apps/desktop/") && !p.startsWith("apps/desktop/src-tauri/"));
   const windows = shared || frontend || paths.some(p => p.startsWith("crates/") || p.startsWith("apps/desktop/src-tauri/") || p.endsWith(".rs"));

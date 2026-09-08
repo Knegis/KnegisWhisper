@@ -254,11 +254,7 @@ async fn a_long_recording_exports_as_many_cues_not_one() {
     }
 
     // And the file must reach the end of the recording, not stop near zero.
-    let last_cue = srt
-        .lines()
-        .filter(|line| line.contains(" --> "))
-        .next_back()
-        .unwrap();
+    let last_cue = srt.lines().rfind(|line| line.contains(" --> ")).unwrap();
     assert!(
         !last_cue.starts_with("00:00:0"),
         "the last cue starts in the first ten seconds: {last_cue}"
