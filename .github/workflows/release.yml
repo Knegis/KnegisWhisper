@@ -35,6 +35,11 @@ jobs:
   build:
     name: Build (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    # Step conditions cannot read secrets directly. Expose only presence here;
+    # certificate values remain scoped to the steps that import them.
+    env:
+      HAS_APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE != '' }}
+      HAS_WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE != '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -92,7 +97,7 @@ jobs:
       # also required, these steps import the identity but do not yet cause
       # anything to be signed with it -- that wiring is future work.
       - name: Import Apple signing certificate
-        if: matrix.os == 'macos-latest' && secrets.APPLE_CERTIFICATE != ''
+        if: matrix.os == 'macos-latest' && env.HAS_APPLE_CERTIFICATE == 'true'
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -106,7 +111,7 @@ jobs:
           rm -f "$RUNNER_TEMP/certificate.p12"
 
       - name: Import Windows signing certificate
-        if: matrix.os == 'windows-latest' && secrets.WINDOWS_CERTIFICATE != ''
+        if: matrix.os == 'windows-latest' && env.HAS_WINDOWS_CERTIFICATE == 'true'
         env:
           WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
           WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
