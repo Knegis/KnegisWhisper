@@ -1,5 +1,6 @@
 [workspace]
 resolver = "2"
+exclude = ["vendor/cpal"]
 members = [
     "apps/desktop/src-tauri",
     "crates/app-core",
@@ -189,3 +190,15 @@ opt-level = 0
 
 [profile.dev.package."*"]
 opt-level = 2
+
+# Hosted checks need diagnostics and debug assertions, not optimized audio
+# dependencies. A cold Windows run spent 51 minutes compiling before tests.
+[profile.ci]
+inherits = "dev"
+debug = 1
+
+[profile.ci.package."*"]
+opt-level = 0
+
+[patch.crates-io]
+cpal = { path = "vendor/cpal" }

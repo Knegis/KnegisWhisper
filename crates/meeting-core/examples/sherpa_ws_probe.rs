@@ -250,18 +250,22 @@ fn describe_binary(frame: usize, bytes: &[u8]) {
 
     if bytes.len().is_multiple_of(4) {
         let as_f32: Vec<f32> = bytes
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .take(6)
-            .filter_map(|c| c.try_into().ok().map(f32::from_le_bytes))
+            .map(|&c| f32::from_le_bytes(c))
             .collect();
         println!("           as f32 le: {as_f32:?}");
         println!("           ({} samples if f32)", bytes.len() / 4);
     }
 
     let as_i16: Vec<i16> = bytes
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .take(6)
-        .filter_map(|c| c.try_into().ok().map(i16::from_le_bytes))
+        .map(|&c| i16::from_le_bytes(c))
         .collect();
     println!("           as i16 le: {as_i16:?}");
     println!("           ({} samples if i16)", bytes.len() / 2);
@@ -441,8 +445,10 @@ fn read_wav_f32(path: &str) -> Result<Vec<f32>, String> {
                 break;
             };
             return Ok(data
-                .chunks_exact(2)
-                .filter_map(|c| <[u8; 2]>::try_from(c).ok())
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .copied()
                 .map(|raw| f32::from(i16::from_le_bytes(raw)) / 32768.0)
                 .collect());
         }
