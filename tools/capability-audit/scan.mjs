@@ -29,6 +29,24 @@
  *      so the KNEG-168 fix landed inert and the meeting window recorded with
  *      an empty indicator for a second time. Rule A and the success listing
  *      count only enabled capabilities as coverage.
+ *   F. A window built with `.transparent(...)` has both halves of the macOS
+ *      transparency configuration: the `macos-private-api` feature on the
+ *      desktop crate's `tauri` dependency, and `app.macOSPrivateApi` in
+ *      `tauri.conf.json`. KNEG-221 was the first half missing. The builder
+ *      method is `#[cfg(any(not(target_os = "macos"), feature =
+ *      "macos-private-api"))]`, so three call sites that compile on Windows
+ *      and Linux are `E0599: no method named transparent` on macOS — a defect
+ *      no amount of work on a Windows machine can see, which is why it reached
+ *      `dev` and surfaced only in a dispatched macOS CI job. Both halves are
+ *      read because either can be set alone and they live in different files:
+ *      the feature is what the compiler needs, the config flag is what the
+ *      Tauri CLI derives its own feature list from and what the runtime reads.
+ *
+ * **Why rule F lives in this gate rather than a Rust test.** The Contracts job
+ * runs on every push; the Rust job runs its macOS leg only on
+ * `workflow_dispatch`. A gate that needs a Mac to notice a Mac-only compile
+ * error is the gap this rule closes, so it has to be readable from tracked
+ * files alone.
  *
  * **What it does not check.** It checks that a window is *covered* by a
  * capability, not that the capability's permission set is sufficient.
@@ -40,6 +58,12 @@
  * A future Tauri pattern this reader does not understand will produce a rule A
  * false alarm, which is the safe direction rather than silently missing a
  * window with no permissions.
+ *
+ * Rule F checks that transparency is *configured*, not that it *renders*. A
+ * transparent window that paints an opaque background is KNEG-163's defect and
+ * is invisible here. Nor does it check the reverse — the configuration set with
+ * nothing transparent — because `macOSPrivateApi` also sets the webview's
+ * `fullScreenEnabled` preference, so it has a second legitimate reason to be on.
  *
  * Usage:
  *   node tools/capability-audit/scan.mjs [--json]
@@ -53,6 +77,7 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const TAURI_CONFIG = "apps/desktop/src-tauri/tauri.conf.json";
 const RUST_SOURCE = "apps/desktop/src-tauri/src";
 const CAPABILITIES = "apps/desktop/src-tauri/capabilities";
+const DESKTOP_MANIFEST = "apps/desktop/src-tauri/Cargo.toml";
 
 export const MANIFEST = "config/window-capabilities.json";
 
@@ -294,8 +319,79 @@ export function builderSites(root = REPO_ROOT) {
   return sites;
 }
 
-/** Return every coverage, stale-config, stale-exemption, opaque-builder, and disabled-file violation. */
-export function violations({ labels = [], capabilities = [], builders = [], exempt = {} }) {
+/**
+ * Every `.transparent(...)` call on a window builder, with its line.
+ *
+ * Comments are stripped first for the same reason rule D strips them: the
+ * three call sites are described in prose in more than one module doc, and a
+ * gate that counted those would be reporting on documentation.
+ */
+export function transparentSites(root = REPO_ROOT) {
+  const sites = [];
+  for (const file of rustFiles(root)) {
+    const source = stripRustComments(readFileSync(join(root, file), "utf8"));
+    for (const match of source.matchAll(/\.transparent\s*\(/g)) {
+      sites.push({ file, line: source.slice(0, match.index).split("\n").length });
+    }
+  }
+  return sites;
+}
+
+/**
+ * The two independent halves of macOS window transparency.
+ *
+ * `cargoFeature` is what makes the builder method exist when the compiler runs;
+ * `configFlag` is what the Tauri CLI derives its own feature list from and what
+ * the runtime reads. They are separate files and either can be set alone, which
+ * is why rule F reads both rather than inferring one from the other.
+ *
+ * An unreadable manifest or one whose `tauri` entry this line-oriented reader
+ * cannot resolve reports `false`, so rule F fires. Same direction as rule D: a
+ * gate that cannot see the answer must fail rather than pass.
+ */
+export function macosTransparency(root = REPO_ROOT) {
+  return { cargoFeature: tauriFeatureEnabled(root), configFlag: privateApiConfigured(root) };
+}
+
+/** Whether the desktop crate's `tauri` dependency enables `macos-private-api`. */
+function tauriFeatureEnabled(root) {
+  const manifest = join(root, DESKTOP_MANIFEST);
+  if (!existsSync(manifest)) return false;
+  let table = null;
+  for (const raw of readFileSync(manifest, "utf8").split(/\r?\n/)) {
+    const line = raw.trim();
+    // A feature named only by a commented-out line does not count, for the
+    // reason tools/feature-audit/scan.mjs records at length.
+    if (line.startsWith("#") || line === "") continue;
+    if (line.startsWith("[")) {
+      table = line.replace(/^\[+|\]+.*$/g, "");
+      continue;
+    }
+    if (table !== "dependencies") continue;
+    const eq = line.indexOf("=");
+    if (eq < 0 || line.slice(0, eq).trim().replace(/^"|"$/g, "") !== "tauri") continue;
+    const features = /\bfeatures\s*=\s*\[([^\]]*)\]/.exec(line.slice(eq + 1));
+    if (features === null) return false;
+    return features[1].split(",").some((entry) => entry.trim().replace(/^"|"$/g, "") === "macos-private-api");
+  }
+  return false;
+}
+
+/** Whether `app.macOSPrivateApi` is set in `tauri.conf.json`. */
+function privateApiConfigured(root) {
+  const config = join(root, TAURI_CONFIG);
+  if (!existsSync(config)) return false;
+  return JSON.parse(readFileSync(config, "utf8")).app?.macOSPrivateApi === true;
+}
+
+/** Return every coverage, stale-config, stale-exemption, opaque-builder, disabled-file, and macOS-transparency violation. */
+export function violations({
+  labels = [],
+  capabilities = [],
+  builders = [],
+  exempt = {},
+  transparency = { sites: [], cargoFeature: false, configFlag: false },
+}) {
   const found = [];
   const known = [...new Set(labels.map(({ label }) => label))];
   const enabled = capabilities.filter(isEnabled);
@@ -356,6 +452,33 @@ export function violations({ labels = [], capabilities = [], builders = [], exem
       detail: `WebviewWindowBuilder::new uses ${builder.arg === "" ? "no second argument" : JSON.stringify(builder.arg)}. Use the same-file pub const LABEL convention or a string literal matching a known label so rule A can cover this window.`,
     });
   }
+
+  // Rule F. KNEG-221: `.transparent()` does not exist on macOS without the
+  // feature, so this is a compile error there and nothing at all on Windows.
+  // Reported once for the configuration rather than once per call site: the
+  // edit is the same two lines however many windows are transparent.
+  const sites = transparency.sites ?? [];
+  if (sites.length > 0 && !(transparency.cargoFeature && transparency.configFlag)) {
+    const missing = [];
+    if (!transparency.cargoFeature) {
+      missing.push(
+        `add "macos-private-api" to the tauri dependency's features in ${DESKTOP_MANIFEST} (CI builds with cargo, not the Tauri CLI, so the CLI's config-derived feature never reaches it)`
+      );
+    }
+    if (!transparency.configFlag) {
+      missing.push(`set app.macOSPrivateApi to true in ${TAURI_CONFIG} (what the Tauri CLI and the runtime read)`);
+    }
+    found.push({
+      rule: "F. transparent window is not configured for macOS",
+      subject: `${sites[0].file}:${sites[0].line}`,
+      detail:
+        `${sites.length} window builder call(s) set .transparent(...) — ` +
+        `${sites.map(({ file, line }) => `${file}:${line}`).join(", ")} — but macOS transparency is a private API behind a Tauri feature. ` +
+        `Without it the builder method does not exist on macOS at all: ` +
+        `"E0599: no method named transparent on WebviewWindowBuilder". To fix, ${missing.join("; and ")}. ` +
+        `Enabling it makes the bundle ineligible for the Mac App Store — see docs/PLATFORM_SUPPORT.md.`,
+    });
+  }
   return found;
 }
 
@@ -368,6 +491,7 @@ export function collect(root = REPO_ROOT) {
     capabilities: capabilityFiles(root),
     builders: builderSites(root),
     exempt,
+    transparency: { sites: transparentSites(root), ...macosTransparency(root) },
   };
 }
 

@@ -287,6 +287,7 @@ export function NotesUpload({ onOpenNote }: { onOpenNote: (id: number) => void }
         {importActive(snapshot) ? <p className="muted">You can leave this screen and return while the import continues. Local transcription may take time; elapsed time does not measure how much audio has been processed.</p> : null}
         {snapshotError ? <p className="error">{snapshotError}</p> : null}
         {snapshot?.stage === "failed" ? <p className="error" role="alert">{snapshot.error}</p> : null}
+        {snapshot?.stage === "interrupted" ? <p className="caveat" role="alert">{snapshot.error}</p> : null}
         {mediaResult ? (
           <Row
             label="Imported"

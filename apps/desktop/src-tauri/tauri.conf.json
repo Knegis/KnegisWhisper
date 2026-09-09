@@ -36,6 +36,7 @@
         "notifications"
       ]
     },
+    "macOSPrivateApi": true,
     "withGlobalTauri": false
   },
   "plugins": {

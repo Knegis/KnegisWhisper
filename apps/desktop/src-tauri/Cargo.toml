@@ -63,7 +63,24 @@ workspace = true
 tauri-build.workspace = true
 
 [dependencies]
-tauri = { workspace = true, features = ["tray-icon", "image-png"] }
+# `macos-private-api` is what makes `WebviewWindowBuilder::transparent` exist on
+# macOS at all -- it is `#[cfg(any(not(target_os = "macos"), feature =
+# "macos-private-api"))]` in tauri 2.11.5. Without it the three transparent
+# panels are a compile error there ("E0599: no method named transparent") and
+# nothing whatsoever on Windows, which is how KNEG-221 reached dev.
+#
+# Declared here rather than left to the Tauri CLI. The CLI derives this feature
+# from `app.macOSPrivateApi` in tauri.conf.json, but CI runs `cargo clippy`,
+# `cargo test` and `cargo build` directly and never goes through the CLI, so the
+# derived feature never arrives. Both are set and
+# `tools/capability-audit/scan.mjs` rule F fails when they disagree.
+#
+# This comment is the only prose either half carries: `tauri.conf.json`'s `app`
+# object is deny-unknown-fields, so the `$comment` key that documents
+# `plugins.updater.pubkey` is refused there -- `unknown field '$comment'`, and
+# the build script fails, which is how that was found rather than guessed.
+# See docs/PLATFORM_SUPPORT.md § Privacy overlay for the App Store trade.
+tauri = { workspace = true, features = ["tray-icon", "image-png", "macos-private-api"] }
 tauri-plugin-global-shortcut.workspace = true
 tauri-plugin-autostart.workspace = true
 tauri-plugin-dialog.workspace = true

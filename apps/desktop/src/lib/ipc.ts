@@ -134,7 +134,7 @@ import type {
   UnhandledAction,
   UpdateCheckResult,
   VerifiedBy,
-} from "../generated/ipc-types";
+} from "../generated/ipc-types.js";
 
 /*
  * Re-exported so components import from one place, and aliased where the Rust

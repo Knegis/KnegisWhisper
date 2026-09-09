@@ -53,10 +53,10 @@ import type {
   UsedFor,
   UpdateCheckResult,
   VerifiedBy,
-} from "./ipc";
+} from "./ipc.js";
 
-import type { DiarizationRole } from "../generated/providers";
-import { meetingRecordingWarning } from "./meetingRecordingWarning";
+import type { DiarizationRole } from "../generated/providers.js";
+import { meetingRecordingWarning } from "./meetingRecordingWarning.js";
 
 /**
  * A state and, where there is one, what backs it up.

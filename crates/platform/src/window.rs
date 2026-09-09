@@ -17,7 +17,9 @@
 //!
 //! Nothing here reports success without asking the OS what happened.
 
-use kw_overlay::{CaptureExclusion, Evidence};
+use kw_overlay::CaptureExclusion;
+#[cfg(target_os = "windows")]
+use kw_overlay::Evidence;
 
 use crate::PlatformError;
 

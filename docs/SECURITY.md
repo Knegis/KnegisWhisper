@@ -78,14 +78,32 @@ makes one themselves:
    public key is not a secret — it is what a client checks a downloaded
    update's signature against, the same role a TLS certificate's public half
    plays.
-3. Add the private key file's contents as the repository secret
+3. **Rebuild before checking whether step 2 worked.** `updater.rs` reads the
+   key from the *compiled-in* configuration, not from the file on disk:
+   `lib.rs` builds the app with `tauri::generate_context!()`, which embeds
+   `tauri.conf.json` at compile time, and `configured_public_key` reads that
+   embedded copy through `app.config()`. So an application that was already
+   built — an installed bundle, or a `cargo run` from before the edit — keeps
+   reporting `NoPublicKeyConfigured` no matter what the file now says, and
+   there is nothing on screen to distinguish that from having pasted the key
+   wrongly. This step is written out because the procedure used to go straight
+   from step 2 to the CI secret, and a maintainer following it had no way to
+   tell a stale binary from a bad key (KNEG-43).
+
+   The rebuild itself needs no special flag and no `cargo clean`: the
+   desktop crate's build script emits
+   `cargo:rerun-if-changed=apps/desktop/src-tauri/tauri.conf.json`, so an
+   ordinary `cargo build`, `cargo run` or `npx tauri dev` recompiles the
+   context after the edit. It is the *skipping* of a build that is the trap,
+   not the build being hard to trigger.
+4. Add the private key file's contents as the repository secret
    `TAURI_SIGNING_PRIVATE_KEY` (repository Settings > Secrets and variables >
    Actions). If step 1 set a password, also add
    `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. `.github/workflows/release.yml`
    reads both as environment variables on its `tauri build` step and signs
    updater artifacts only when they are present; without them, that workflow
    builds unsigned bundles, which is the state this repository is in today.
-4. **The private key must never be committed, and must never be generated on
+5. **The private key must never be committed, and must never be generated on
    a machine this project's CI or tooling controls.** It belongs nowhere in
    this repository, in `Cargo.lock`, or in any workflow file — only in the
    repository secret and, before that, on whatever machine ran step 1.

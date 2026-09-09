@@ -2,6 +2,9 @@
 use crate::StorageError;
 use serde::Serialize;
 use sqlx::{FromRow, SqlitePool};
+
+pub const INTERRUPTED_ERROR: &str =
+    "The app stopped before this job completed. Submit it again to retry.";
 #[derive(Debug, Clone, Serialize, FromRow)]
 pub struct Job {
     pub id: String,
@@ -26,6 +29,23 @@ pub async fn get(pool: &SqlitePool, id: &str) -> Result<Option<Job>, StorageErro
         .fetch_optional(pool)
         .await?)
 }
+/// Record desktop ownership before any preparation or audio work starts.
+/// No source path or picker grant is persisted.
+pub async fn create_desktop(pool: &SqlitePool, id: &str) -> Result<(), StorageError> {
+    sqlx::query("INSERT INTO import_jobs (id, stage, origin) VALUES (?, 'preparing', 'desktop')")
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn last_desktop(pool: &SqlitePool) -> Result<Option<Job>, StorageError> {
+    Ok(sqlx::query_as(
+        "SELECT * FROM import_jobs WHERE origin = 'desktop' ORDER BY rowid DESC LIMIT 1",
+    )
+    .fetch_optional(pool)
+    .await?)
+}
 pub async fn stage(
     pool: &SqlitePool,
     id: &str,
@@ -47,7 +67,8 @@ pub async fn route(
     Ok(())
 }
 pub async fn interrupt_unfinished(pool: &SqlitePool) -> Result<(), StorageError> {
-    sqlx::query("UPDATE import_jobs SET stage = 'failed', error = 'The app stopped before this job completed. Submit it again to retry.', updated_at = CURRENT_TIMESTAMP WHERE stage NOT IN ('succeeded','failed','cancelled')")
+    sqlx::query("UPDATE import_jobs SET stage = 'failed', error = ?, updated_at = CURRENT_TIMESTAMP WHERE stage NOT IN ('succeeded','failed','cancelled')")
+        .bind(INTERRUPTED_ERROR)
         .execute(pool).await?;
     Ok(())
 }

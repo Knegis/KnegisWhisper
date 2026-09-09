@@ -15,8 +15,10 @@ pub mod insertion;
 pub mod keyboard_layout;
 pub mod keyhook;
 pub mod keys;
+pub mod macos_input;
 pub mod meeting_detect;
 pub mod microphone;
+pub mod portal_shortcuts;
 pub mod window;
 
 /// Failures from talking to the operating system.

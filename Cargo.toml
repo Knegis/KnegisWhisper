@@ -160,6 +160,19 @@ tauri-plugin-autostart = "2"
 # traversal through export.
 tauri-plugin-dialog = "2"
 
+# macOS input, for `kw_platform::keyhook`'s CGEventTap. Pinned to the versions
+# Tauri's own macOS dependency tree already resolves, so this selects features
+# on crates that are in `Cargo.lock` either way rather than adding two.
+# `default-features = false` and the module list live at the point of use --
+# see `crates/platform/Cargo.toml`.
+objc2-core-graphics = { version = "0.3.2", default-features = false }
+objc2-core-foundation = { version = "0.3.2", default-features = false }
+
+# The Linux desktop portal, for `kw_platform::portal_shortcuts`. Pinned to the
+# version Tauri's Linux tree already resolves, for the same reason the two
+# objc2 crates are.
+zbus = { version = "4.4", default-features = false }
+
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
 missing_debug_implementations = "warn"

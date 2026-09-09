@@ -692,6 +692,9 @@ impl std::fmt::Debug for MediaImportRuntime {
 }
 
 impl MediaImportRuntime {
+    pub(crate) async fn recover_jobs(&self) -> Result<(), kw_storage::StorageError> {
+        self.jobs.recover(&self.db).await
+    }
     pub(crate) fn snapshot(&self) -> Option<crate::media_job::ImportSnapshot> {
         self.jobs.snapshot()
     }
@@ -705,6 +708,7 @@ impl MediaImportRuntime {
                     crate::media_job::ImportStage::Succeeded
                         | crate::media_job::ImportStage::Failed
                         | crate::media_job::ImportStage::Cancelled
+                        | crate::media_job::ImportStage::Interrupted
                 )
             }) {
                 tokio::time::sleep(std::time::Duration::from_millis(25)).await;
@@ -714,13 +718,17 @@ impl MediaImportRuntime {
 
     async fn begin_import(
         &self,
+        desktop: bool,
     ) -> Result<(crate::media_job::ImportLease, PreparedImport), MediaImportError> {
         let lease = self.jobs.begin().map_err(MediaImportError::Busy)?;
-        kw_storage::jobs::create(self.db.pool(), lease.id())
-            .await
-            .map_err(|e| MediaImportError::Persistence {
-                detail: e.to_string(),
-            })?;
+        if desktop {
+            kw_storage::jobs::create_desktop(self.db.pool(), lease.id()).await
+        } else {
+            kw_storage::jobs::create(self.db.pool(), lease.id()).await
+        }
+        .map_err(|e| MediaImportError::Persistence {
+            detail: e.to_string(),
+        })?;
         let preparation = tokio::select! {
             biased;
             _ = lease.cancelled() => Err(MediaImportError::Busy("import cancelled".into())),
@@ -783,7 +791,7 @@ impl MediaImportRuntime {
         app: AppHandle,
         upload: kw_local_api::runtime::Upload,
     ) -> Result<serde_json::Value, kw_local_api::ApiError> {
-        let (lease, mut prepared) = self.begin_import().await.map_err(|e| match e {
+        let (lease, mut prepared) = self.begin_import(false).await.map_err(|e| match e {
             MediaImportError::Busy(_) => kw_local_api::ApiError::new(
                 kw_local_api::ErrorCode::Conflict,
                 "another import is running",
@@ -1205,7 +1213,7 @@ impl MediaImportRuntime {
         path: &Path,
         source: MediaImportSource,
     ) -> Result<MediaImportResult, MediaImportError> {
-        let (lease, prepared) = self.begin_import().await?;
+        let (lease, prepared) = self.begin_import(true).await?;
         self.run_import(app, path, source, lease, prepared).await
     }
 

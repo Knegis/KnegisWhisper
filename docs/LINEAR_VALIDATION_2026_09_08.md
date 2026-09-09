@@ -145,3 +145,124 @@ process token user. Elevated Windows may assign Administrators as owner. The
 test now checks the actual token user; the production access policy is unchanged.
 Workspace CI uses `--no-fail-fast` to report failures across all packages in one
 run while still failing the check if any test fails.
+
+## Later on 8 September: the tray tooltip, the detection lists, the capture
+## result, and the Apple Calendar row
+
+A second autonomous native session, against `83c72ea`, covering the parts of
+KNEG-51 that no test can reach and the one part of KNEG-81 that needs no Mac.
+Isolated the same way as the earlier runs: `KW_AUTOMATION_PROFILE` pointed at a
+disposable profile under `target/issue-validation/kneg51-profile`, with `models`
+and `sidecars` as directory junctions to the installed assets so the run used
+real models without copying 4.5 GB. **The owner's database was not opened.**
+Its SHA-256 was recorded before and after and is identical
+(`c4bd126e657ee051f216c9fe05b1cbd0adfe2d7a7d90c8050db490e6fef75055`); the
+junctions were removed afterwards with `cmd /c rmdir`, which removes a reparse
+point without following it, and the installed `models` (4.0 GB) and `sidecars`
+(461 MB) were re-measured intact.
+
+### The tray tooltip, during a meeting and a dictation at once (KNEG-51)
+
+The state machine behind this was already unit-tested, including the
+both-at-once case. What had never been observed is whether `tray.set_tooltip`
+reaches the tray. It does. Read through UI Automation off the notification
+area's `SystemTray.NormalButton`, across three states in one session:
+
+| State | Tooltip read from the tray |
+| --- | --- |
+| Launched, no activity yet | `KnegisWhisper` — the builder's initial value; `set_tooltip` has not been called |
+| `local-streaming` meeting recording | `KnegisWhisper — Recording a meeting` |
+| Dictation started on top of it | `KnegisWhisper — Recording a meeting and a dictation` |
+| Dictation cancelled, meeting still live | `KnegisWhisper — Recording a meeting` |
+
+The last row is the one worth having: it shows on screen what
+`the_two_recordings_do_not_overwrite_each_other` asserts in the unit test —
+ending the dictation does not clear the meeting. Windows' own privacy indicator
+corroborated the capture independently, reading `Microphone in use by:
+KnegisWhisper` for the same period.
+
+### The detection allow and deny lists (KNEG-51, and KNEG-114's remainder)
+
+`meetings.detect` had never been driven by anything — not by a screen, not by
+hand. It is now, through the real `Settings > Meetings` textareas and again
+through `meeting_set_detect_lists` directly. `notepad.exe` was used as the
+subject deliberately: certainly running, certainly not a meeting client, so it
+tests the list without asserting anything about a real client's signature,
+which is KNEG-58's separate question. Record was never pressed.
+
+The list works. Within one poll the detection list gained
+`{provider: "generic", name: "A program you listed", evidence: "notepad.exe",
+inCall: false, signal: "none"}`, and both textareas persisted and read back.
+Adding the same name to the deny list removed it again, and both lists were
+restored empty.
+
+**No offer appeared, and that is correct — but it contradicts what two issues
+say.** `watcher::consider` filters to `Detected::in_call()`, and a
+user-listed program is given `CallSignal::Microphone` only if it is actually
+holding a capture session, otherwise `CallSignal::None`. Notepad holds no
+microphone, so `offer` stayed `null` with `promptOnDetect: true`. KNEG-58's own
+text states this correctly — *"a user-listed program is reported as running,
+never as in a call"* — but KNEG-114's closing note, and the KNEG-51 checklist
+item derived from it, promise an offer *"within five seconds"* for any process
+the user lists. That wording is wrong for a listed program that is not
+capturing audio. The escape hatch itself is real for the case it was written
+for, since a Zoom in a call does hold the microphone; it is the "any process
+you have running" phrasing that overstates it.
+
+### The capture-delivery result, read rather than assumed (KNEG-51)
+
+A 107-second `local-streaming` meeting with system audio requested, speakers
+muted and nothing playing. `meeting_stop` returned:
+
+```
+outcome: nothing-transcribed   mic: audio   system: nothing   reconnects: 0
+recording: …/kneg51-profile/meetings/20260908-205622.wav
+```
+
+So the two captures are reported separately and named, which is what the check
+asked for: the microphone delivered audible audio, the system output delivered
+nothing at all — the branch an idle output device produces, distinct from
+digital silence and not folded into it. On screen:
+
+> Nothing was transcribed. The microphone was recorded with audible sound in the
+> recording, and none of it produced a transcript — so this is a transcription
+> problem rather than a quiet meeting. The recording is at …
+
+The right one of the three branches, and it sends the reader after a cause
+rather than calling it a quiet meeting.
+
+**One thing checked and found not to be a defect.** That sentence says nothing
+about system audio having delivered nothing, even though it was requested. That
+is `deliveryLabel`'s documented priority, not an omission: audible audio with no
+transcript is reported first *wherever it happened*, because it is the only
+branch that should send anybody looking for a cause. Recorded here because the
+opposite conclusion was the obvious one to reach.
+
+### The Apple Calendar row (KNEG-81)
+
+`Settings > Calendar` renders the Apple section visible (746×145 at y=580, not
+hidden, no empty calendar list) reading **"Not supported in this build"** with
+the full EventKit reason beneath it, naming macOS explicitly as unimplemented
+rather than merely unavailable. That is the whole of what KNEG-81 can settle
+without a Mac; the binding itself still needs one.
+
+### Evidence
+
+Under the git-ignored `target/issue-validation/`:
+`kneg51-81-part1.json`, `kneg51-detection.json`,
+`kneg51-detect-readback.json`, `kneg51-stop-outcome.json`,
+`kneg51-screen-after-stop.json`, `owner-db-before.txt`, `tauri-dev.log`, and
+the disposable profile itself. Local, not shipped by this commit.
+
+### A correction to the test counts in this day's commit messages
+
+`591e891`, `a1e2272` and `83c72ea` each say "826 tests in 40 suites". That is an
+**undercount of the same passing run**, not a different result: the command that
+produced the figure piped `cargo test` through `tail`, so only the last forty
+`test result` lines were summed. The full workspace suite is **1,818 tests, 0
+failures, exit 0**, re-run after everything above had landed, together with
+`cargo fmt --all --check`, `cargo clippy --profile ci --workspace --all-targets
+-- -D warnings`, all nine Contracts gates, the frontend typecheck and its eleven
+tests, and `cargo clippy -p kw-platform --lib -- -D warnings` for
+`aarch64-apple-darwin` and `x86_64-unknown-linux-gnu`. Corrected here and on the
+Linear issues rather than by rewriting the commits.
