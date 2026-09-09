@@ -1210,9 +1210,14 @@ fn payload_relative(name: &str, payload_dir: &str) -> Result<Option<PathBuf>, In
     }
 
     let candidate = PathBuf::from(stripped);
-    let safe = candidate
-        .components()
-        .all(|component| matches!(component, Component::Normal(_) | Component::CurDir));
+    // Archive names have the same safety rules on every host. Unix treats
+    // `C:/file` and `C:file` as normal components, not Windows prefixes.
+    let drive_qualified =
+        matches!(stripped.as_bytes(), [letter, b':', ..] if letter.is_ascii_alphabetic());
+    let safe = !drive_qualified
+        && candidate
+            .components()
+            .all(|component| matches!(component, Component::Normal(_) | Component::CurDir));
     if !safe {
         // `..`, a leading `/`, or `C:` -- the zip-slip family. Refused rather
         // than normalised, because a normalised traversal is still someone
@@ -1713,11 +1718,59 @@ mod tests {
 
     #[test]
     fn a_windows_drive_letter_is_refused() {
-        let refused = payload_relative("C:/Windows/System32/evil.dll", "");
-        assert!(
-            refused.is_err(),
-            "a drive-qualified path is not relative to anything"
+        for name in [
+            "C:/Windows/System32/evil.dll",
+            "c:\\evil.dll",
+            "Z:evil.dll",
+            "d:",
+        ] {
+            for payload in ["", "Release"] {
+                let entry = if payload.is_empty() {
+                    name.to_owned()
+                } else {
+                    format!("{payload}/{name}")
+                };
+                assert!(
+                    matches!(
+                        payload_relative(&entry, payload),
+                        Err(InstallError::UnsafeEntry { .. })
+                    ),
+                    "{entry} must be refused on every host"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn ordinary_drive_letter_names_remain_relative() {
+        for name in ["C", "c.dll", "C/weights.bin"] {
+            assert_eq!(
+                payload_relative(name, "").unwrap(),
+                Some(PathBuf::from(name))
+            );
+        }
+    }
+
+    #[test]
+    fn a_drive_qualified_zip_entry_rolls_back_prior_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let archive = write_archive(
+            dir.path(),
+            &zip_with(&[
+                ("Release/first", b"written first"),
+                ("Release/C:/evil.dll", b"refused"),
+            ]),
         );
+        let dest = dir.path().join("out");
+        fs::create_dir_all(&dest).unwrap();
+        fs::write(dest.join("existing"), b"keep").unwrap();
+        assert!(matches!(
+            extract(&archive, ArchiveKind::Zip, "Release", "", &dest),
+            Err(InstallError::UnsafeEntry { .. })
+        ));
+        assert!(!dest.join("first").exists());
+        assert_eq!(fs::read(dest.join("existing")).unwrap(), b"keep");
+        assert_eq!(fs::read_dir(&dest).unwrap().count(), 1);
     }
 
     #[test]
