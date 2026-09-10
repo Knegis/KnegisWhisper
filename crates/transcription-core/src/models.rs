@@ -8,7 +8,8 @@
 //!
 //! So a model carries [`Integrity::Pinned`] where a digest is known and
 //! [`Integrity::Size`] otherwise, and which one applied is reported rather than
-//! implied. Upstream checks size alone for all six. **All six are now pinned.**
+//! implied. Upstream checks size alone for its six models. **Every shipped model is now pinned,**
+//! including the two KB Whisper additions.
 //! This module used to hold a `PINNED` table of its own with `tiny` alone in it
 //! and a note that the rest were "a job for a tool rather than something to
 //! invent digests for here"; that tool is `tools/model-pin/pin.mjs`, and on
@@ -45,7 +46,7 @@ use kw_sidecar::manifest::Sha256Digest;
 /// enough to catch the failures that matter: a truncated transfer, an error page
 /// saved as a model, a rate-limit response.
 ///
-/// **No shipped model reaches this any more**, because all six carry a measured
+/// **No shipped model reaches this any more**, because all shipped models carry a measured
 /// digest and an exact length. It is not dead: [`within_tolerance`]'s other
 /// caller is the `SizeCheck::Approximate` arm of `download_gguf` in
 /// `apps/desktop/src-tauri/src/local_llm.rs`, kept for the same reason — a model
@@ -199,7 +200,7 @@ pub fn is_installed(dir: &Path, model: &WhisperModel) -> bool {
 /// Download a model into `dir` and verify it.
 ///
 /// The download is bounded where the model carries a **measured** length, and
-/// unbounded where it does not. All six shipped models carry one as of
+/// unbounded where it does not. All shipped models carry one; the original six were pinned as of
 /// `a82d06b`, so in practice every install is bounded; the unbounded arm is for
 /// the same model [`Integrity::Size`] exists for — one added to the baseline
 /// before anybody has spent the bandwidth to measure it.
@@ -397,7 +398,8 @@ mod tests {
     #[test]
     fn every_whisper_model_is_pinned_to_a_measured_digest() {
         // Mirrors `every_installable_sherpa_model_has_integrity_and_size_limits`
-        // in sherpa_models.rs. All six were downloaded and hashed on 2026-08-31,
+        // in sherpa_models.rs. The original six were measured on 2026-08-31;
+        // KB Whisper Tiny and Base were measured on 2026-09-10,
         // so anything weaker than Pinned here means a pin was dropped from
         // WHISPER_PINS in tools/integration-audit/generate-provider-registry.mjs
         // -- and a model that quietly fell back to a size check would install
