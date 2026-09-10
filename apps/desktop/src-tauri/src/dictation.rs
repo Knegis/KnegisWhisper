@@ -577,10 +577,10 @@ impl StateSink for EventSink {
             *held = state;
         }
 
-        // Shown for the whole of a recording, hidden as soon as it is over.
-        // `OverlayStatus::recording_indicator_visible` reads the same value, so
-        // what the settings screen reports is what actually happened.
-        crate::overlay::set_visible(&self.app, state.is_recording());
+        // Reconcile the recording box or persistent microphone from the same
+        // authoritative state. An idle floating button is not a recording
+        // indicator in diagnostics.
+        crate::persistent_overlay::state_changed(&self.app, state.is_recording());
 
         // The tray is the only indicator that is always on screen, so it says so
         // too. Through `dictating` rather than a setter, because a meeting may

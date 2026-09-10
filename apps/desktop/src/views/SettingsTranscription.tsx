@@ -15,6 +15,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 
+import { MicrophoneSettings } from "../components/MicrophoneSettings";
 import { Row } from "../components/Row";
 import {
   getDictationRoute,
@@ -225,6 +226,7 @@ export function SettingsTranscription({
     <div className="view">
       {error ? <p className="error">{error}</p> : null}
 
+      <MicrophoneSettings />
       <section data-surface="settings.transcription">
         <h2>Cloud providers</h2>
         <p className="muted">

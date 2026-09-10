@@ -1257,3 +1257,12 @@ export async function setCalendarSelected(
 export function getMediaImportSnapshot(): Promise<ImportSnapshot | null> {
   return invoke<ImportSnapshot | null>("media_import_snapshot");
 }
+
+
+export interface OverlayPreferences { supported: boolean; enabled: boolean }
+export async function getOverlayPreferences(): Promise<OverlayPreferences> { return invoke("overlay_preferences"); }
+export async function setOverlayPreferences(enabled: boolean): Promise<OverlayPreferences> { return invoke("overlay_preferences_set", { enabled }); }
+export async function resetOverlayPosition(): Promise<void> { return invoke("overlay_position_reset"); }
+export function onOverlayPreferences(handler: (value: OverlayPreferences) => void) { return listen<OverlayPreferences>("overlay-preferences", e => handler(e.payload)); }
+export async function dragOverlay(phase: "start" | "move" | "end" | "cancel"): Promise<void> { return invoke("overlay_drag", { phase }); }
+export async function setOverlayMessage(visible: boolean): Promise<void> { return invoke("overlay_message", { visible }); }

@@ -265,6 +265,14 @@
       ],
       "ui": "Settings > Meetings",
       "reachable": true
+    },
+    "dictation.floatingMicrophone": {
+      "what": "Persistent Windows dictation microphone preference and saved monitor-relative placement.",
+      "writtenBy": [
+        "overlay_preferences_set"
+      ],
+      "ui": "Settings > Dictation microphone",
+      "reachable": true
     }
   }
 }

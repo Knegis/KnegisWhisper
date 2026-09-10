@@ -10,7 +10,8 @@
 //!
 //! There is also a rule here that is not negotiable: **the overlay is visible
 //! whenever recording is active.** The local user always knows. Nothing in this
-//! file hides the window while the microphone is live, and
+//! file hides the window while the microphone is live. The optional floating
+//! microphone also remains visible while idle.
 //! [`OverlayStatus::recording_indicator_visible`] is what the settings screen
 //! reads to prove it.
 
@@ -37,13 +38,8 @@ pub struct OverlayStatus {
     pub capture_exclusion: CaptureExclusion,
     /// Whether the window refuses focus, and how we know.
     pub non_activating: NonActivating,
-    /// Whether the overlay is visible right now.
-    ///
-    /// This was a hardcoded `true` while nothing recorded, which made the
-    /// guarantee it was supposed to express vacuous. It is now a real read of the
-    /// window, and [`set_visible`] is the only thing that changes it — called
-    /// from the dictation state sink, so "recording" and "the user can see it"
-    /// cannot come apart.
+    /// Whether dictation is recording and its indicator window is visible.
+    /// An idle persistent microphone does not count as a recording indicator.
     pub recording_indicator_visible: bool,
     /// What the platform's display server is, for honest failure messages.
     pub display_server: String,
@@ -74,8 +70,8 @@ impl NonActivating {
 
 /// Create the overlay window and apply the platform treatments.
 ///
-/// The window is created hidden. It is shown when recording starts and hidden
-/// when it stops, which is the whole point of it.
+/// The window starts hidden. The presentation controller shows it during
+/// recording, or continuously when the floating microphone is enabled.
 pub fn create(app: &AppHandle) -> tauri::Result<WebviewWindow> {
     if let Some(existing) = app.get_webview_window(LABEL) {
         return Ok(existing);
@@ -92,9 +88,10 @@ pub fn create(app: &AppHandle) -> tauri::Result<WebviewWindow> {
             .transparent(true)
             .always_on_top(true)
             .skip_taskbar(true)
-            // Declarative half of not-taking-focus. The imperative half
-            // (WS_EX_NOACTIVATE) is applied below, because this flag alone does not
-            // stop a click from activating the window.
+            // Keep non-activation in Tauri's own window flags: resizing can
+            // overwrite a style applied only through Get/SetWindowLongPtr.
+            // The imperative read-back below still verifies the actual result.
+            .focusable(!cfg!(target_os = "windows"))
             .focused(false)
             .visible(false)
             .build()?;
@@ -161,7 +158,8 @@ pub fn apply_treatments(overlay: &WebviewWindow) -> OverlayStatus {
         non_activating,
         // Read, not assumed. A window that failed to show would otherwise
         // report an indicator the user cannot see.
-        recording_indicator_visible: overlay.is_visible().unwrap_or(false),
+        recording_indicator_visible: crate::persistent_overlay::recording(overlay.app_handle())
+            && overlay.is_visible().unwrap_or(false),
         display_server: window::display_server_description(),
     }
 }

@@ -33,6 +33,7 @@ mod media_job;
 mod meeting;
 mod meeting_window;
 mod overlay;
+mod persistent_overlay;
 mod reasoning;
 mod recording_attach;
 mod recordings;
@@ -358,10 +359,14 @@ pub fn run() -> anyhow::Result<()> {
 
             // The overlay is created up front so its capture-exclusion state is
             // a fact about a real window by the time the user opens settings,
-            // rather than a prediction. It stays hidden until recording starts.
+            // rather than a prediction. Restore the chosen presentation next.
+            persistent_overlay::initialize(&handle);
             match overlay::create(&handle) {
                 Ok(window) => {
                     let status = overlay::apply_treatments(&window);
+                    if let Err(error) = persistent_overlay::reconcile(&handle, true) {
+                        tracing::warn!(%error, "could not restore microphone overlay");
+                    }
                     tracing::info!(
                         capture_exclusion = ?status.capture_exclusion,
                         non_activating = ?status.non_activating,
@@ -442,6 +447,11 @@ pub fn run() -> anyhow::Result<()> {
             dictation::dictation_use_local,
             dictation::dictation_set_cloud_provider,
             dictation::dictation_toggle,
+            persistent_overlay::overlay_preferences,
+            persistent_overlay::overlay_preferences_set,
+            persistent_overlay::overlay_position_reset,
+            persistent_overlay::overlay_drag,
+            persistent_overlay::overlay_message,
             dictation::dictation_cancel,
             dictation::dictation_set_device,
             dictation::input_devices,
