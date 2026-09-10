@@ -86,6 +86,8 @@ pub fn create(app: &AppHandle) -> tauri::Result<WebviewWindow> {
             .resizable(false)
             .decorations(false)
             .transparent(true)
+            // A native shadow outlines the whole transparent window as a box.
+            .shadow(false)
             .always_on_top(true)
             .skip_taskbar(true)
             // Keep non-activation in Tauri's own window flags: resizing can

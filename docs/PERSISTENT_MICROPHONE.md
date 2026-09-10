@@ -2,12 +2,14 @@
 
 On Windows, Settings > Transcription > Dictation microphone offers **Always show
 dictation microphone**. It defaults to off. Enabling it replaces the dictation
-recording box with a 48px circular microphone that remains visible while idle.
+recording box with a small 32px by 6px rectangle with a subtle 1px corner radius while idle. Hover reveals a 20px microphone
+inside a 52px by 28px button with a 2px corner radius; the hit target remains fixed during the
+transition. Recording, processing, and error states remain expanded.
 Click to start dictation and click again to finish. Existing hotkeys and the
 meeting indicators retain their behavior.
 
 The supplied microphone SVGs are bundled as theme-aware masks. Recording uses the
-speaking icon even during silence. Transcription and insertion show a busy state
+speaking icon even during silence, with the same blue selection color as settings. Transcription and insertion show a busy state
 and reject duplicate actions. Failed operations show a dismissible message;
 unknown backend state never presents a ready microphone.
 

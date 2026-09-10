@@ -103,7 +103,7 @@ export function Overlay() {
   const view = microphoneState(state, unavailable);
   return <div className="microphone-overlay">
   {error && <div className="microphone-error" role="alert"><span>{error}</span>{state === null && <button onClick={() => { void getDictationState().then(value => { setState(value); setUnavailable(false); setError(null); }).catch(e => setError(String(e))); }}>Retry status</button>}<button aria-label="Dismiss message" onClick={() => setError(null)}>{"\u00d7"}</button></div>}
-  <button className={`floating-microphone ${view.recording ? "is-recording" : ""}`} aria-label={view.label} title={`${view.label}. Drag to move.`} aria-disabled={view.disabled || pending} aria-busy={view.busy || pending} onPointerDown={e => {
+  <button className={`floating-microphone ${view.recording ? "is-recording" : ""}`} data-expanded={state !== "idle" || pending || error !== null} aria-label={view.label} title={`${view.label}. Drag to move.`} aria-disabled={view.disabled || pending} aria-busy={view.busy || pending} onPointerDown={e => {
       if (e.button !== 0)
         return;
       e.preventDefault();
