@@ -1259,7 +1259,7 @@ export function getMediaImportSnapshot(): Promise<ImportSnapshot | null> {
 }
 
 
-export interface OverlayPreferences { supported: boolean; enabled: boolean }
+export interface OverlayPreferences { supported: boolean; enabled: boolean; vertical: boolean }
 export async function getOverlayPreferences(): Promise<OverlayPreferences> { return invoke("overlay_preferences"); }
 export async function setOverlayPreferences(enabled: boolean): Promise<OverlayPreferences> { return invoke("overlay_preferences_set", { enabled }); }
 export async function resetOverlayPosition(): Promise<void> { return invoke("overlay_position_reset"); }

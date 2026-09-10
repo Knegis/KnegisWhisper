@@ -40,7 +40,6 @@ export function Overlay() {
         } }),
         onOverlayPreferences(value => { prefRevision++; if (!disposed) {
           setPrefs(value);
-          setError(null);
         } }),
         onDictationOutcome(value => { if (!disposed && value.outcome === "failed")
           setError(value.message); }),
@@ -65,6 +64,7 @@ export function Overlay() {
     } });
     return () => { disposed = true; stops.forEach(stop => stop()); };
   }, []);
+  useEffect(() => { setError(null); }, [prefs?.enabled]);
   useEffect(() => {
     if (prefs?.enabled)
       void setOverlayMessage(error !== null).catch(() => { });
@@ -101,7 +101,7 @@ export function Overlay() {
     return <div className={`overlay overlay-${state ?? "idle"}`}><span className={`indicator indicator-${state === "recording" ? "recording" : "idle"}`} aria-hidden="true"/><span className="overlay-text">{label}</span></div>;
   }
   const view = microphoneState(state, unavailable);
-  return <div className="microphone-overlay">
+  return <div className={`microphone-overlay ${prefs.vertical ? "is-vertical" : ""}`}>
   {error && <div className="microphone-error" role="alert"><span>{error}</span>{state === null && <button onClick={() => { void getDictationState().then(value => { setState(value); setUnavailable(false); setError(null); }).catch(e => setError(String(e))); }}>Retry status</button>}<button aria-label="Dismiss message" onClick={() => setError(null)}>{"\u00d7"}</button></div>}
   <button className={`floating-microphone ${view.recording ? "is-recording" : ""}`} data-expanded={state !== "idle" || pending || error !== null} aria-label={view.label} title={`${view.label}. Drag to move.`} aria-disabled={view.disabled || pending} aria-busy={view.busy || pending} onPointerDown={e => {
       if (e.button !== 0)

@@ -14,6 +14,9 @@ and reject duplicate actions. Failed operations show a dismissible message;
 unknown backend state never presents a ready microphone.
 
 Drag at least six CSS pixels to move the button without starting dictation.
+Within 12 logical pixels of either side of the monitor work area, the button
+turns vertical while its microphone icon remains upright. Moving away restores
+the horizontal shape; orientation is derived again when restoring placement.
 Placement is stored as logical offsets relative to the monitor, clamped to its
 work area on restoration. A missing monitor falls back to bottom center. Reset
 position clears the saved placement. Disabling the setting during recording

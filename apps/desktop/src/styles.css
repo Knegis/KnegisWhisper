@@ -1685,7 +1685,7 @@ button:disabled {
 .microphone-overlay { height: 100%; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; padding: 16px 6px; gap: 6px; user-select: none; }
 /* Keep the hit target and layout fixed as the visible pill expands. */
 .floating-microphone { position: relative; display: flex; align-items: center; justify-content: center; width: 52px; height: 32px; min-height: 32px; padding: 0; flex-shrink: 0; border-radius: 1px; background: transparent; color: white; box-shadow: none; border: 0; cursor: pointer; touch-action: none; }
-.floating-microphone::before { content: ""; position: absolute; width: 32px; height: 6px; border-radius: 1px; background: #858985; transition: width 160ms ease, height 160ms ease, background-color 160ms ease; pointer-events: none; }
+.floating-microphone::before { content: ""; position: absolute; width: 32px; height: 6px; border-radius: 1px; background: #858985; transition: width 160ms ease, height 160ms ease, transform 160ms ease, background-color 160ms ease; pointer-events: none; }
 button.floating-microphone:hover:not(:disabled) { background: transparent; color: white; border-color: transparent; box-shadow: none; }
 .floating-microphone:is(:hover, :focus-visible, :active, [data-expanded="true"])::before { width: 52px; height: 28px; border-radius: 2px; background: #303430; }
 .floating-microphone:focus-visible { outline: 2px solid #858985; outline-offset: 2px; }
@@ -1702,3 +1702,8 @@ button.floating-microphone:hover:not(:disabled) { background: transparent; color
 .microphone-error button { padding: 0 4px; min-height: 20px; }
 .microphone-status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 .microphone-setting { display: flex; align-items: center; gap: 10px; }
+
+/* Turn only the button surface; microphone glyphs and status remain upright. */
+.microphone-overlay.is-vertical { padding-top: 6px; padding-bottom: 6px; }
+.microphone-overlay.is-vertical .floating-microphone { width: 32px; height: 52px; min-height: 52px; }
+.microphone-overlay.is-vertical .floating-microphone::before { transform: rotate(90deg); }

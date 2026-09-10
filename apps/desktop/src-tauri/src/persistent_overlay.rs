@@ -28,6 +28,7 @@ pub struct SavedPosition {
 pub struct Snapshot {
     pub supported: bool,
     pub enabled: bool,
+    pub vertical: bool,
 }
 #[derive(Clone, Copy)]
 struct Drag {
@@ -41,6 +42,7 @@ pub struct Controller {
     drag: Mutex<Option<Drag>>,
     writes: tokio::sync::Mutex<()>,
     message: AtomicBool,
+    vertical: AtomicBool,
 }
 fn controller(app: &AppHandle) -> tauri::State<'_, Controller> {
     app.state::<Controller>()
@@ -51,6 +53,7 @@ fn snapshot(app: &AppHandle) -> Result<Snapshot, String> {
     Ok(Snapshot {
         supported: cfg!(windows),
         enabled: cfg!(windows) && prefs.enabled,
+        vertical: state.vertical.load(Ordering::SeqCst),
     })
 }
 pub fn initialize(app: &AppHandle) {
@@ -98,6 +101,25 @@ fn clamp(window: &WebviewWindow) -> Result<(), String> {
         .set_position(PhysicalPosition::new(x, y))
         .map_err(|e| e.to_string())
 }
+/// Use work-area edges and logical distance so docking behaves across DPI scales.
+fn update_orientation(app: &AppHandle, window: &WebviewWindow) -> Result<(), String> {
+    let area = crate::window_placement::resolved_work_area(window, "floating microphone")
+        .ok_or("Monitor work area unavailable")?;
+    let pos = window.outer_position().map_err(|e| e.to_string())?;
+    let size = window.outer_size().map_err(|e| e.to_string())?;
+    let scale = window.scale_factor().map_err(|e| e.to_string())?;
+    let vertical = at_side_edge(pos.x, size.width, area, scale);
+    if controller(app).vertical.swap(vertical, Ordering::SeqCst) != vertical {
+        app.emit(EVENT, snapshot(app)?).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+fn at_side_edge(x: i32, width: u32, area: kw_platform::window::WorkArea, scale: f64) -> bool {
+    let distance = (f64::from(x) - f64::from(area.left))
+        .min(f64::from(area.right) - f64::from(x) - f64::from(width));
+    distance <= 12.0 * scale
+}
+
 fn bounded_position(
     x: i32,
     y: i32,
@@ -150,6 +172,9 @@ pub fn reconcile(app: &AppHandle, restore_position: bool) -> Result<(), String> 
             restore(app, &window)?;
         }
         clamp(&window)?;
+        if !controller(app).message.load(Ordering::SeqCst) {
+            update_orientation(app, &window)?;
+        }
         window.show().map_err(|e| e.to_string())
     } else {
         overlay::set_visible(app, active);
@@ -186,11 +211,11 @@ pub async fn overlay_preferences_set(app: AppHandle, enabled: bool) -> Result<Sn
     kw_storage::settings::set(db.db().pool(), KEY, &prefs)
         .await
         .map_err(|e| e.to_string())?;
-    let value = publish(&app, prefs)?;
+    publish(&app, prefs)?;
     state.message.store(false, Ordering::SeqCst);
     *state.drag.lock().map_err(|e| e.to_string())? = None;
     reconcile(&app, true)?;
-    Ok(value)
+    snapshot(&app)
 }
 #[tauri::command]
 pub async fn overlay_position_reset(app: AppHandle) -> Result<(), String> {
@@ -238,6 +263,7 @@ pub async fn overlay_drag(
             ))
             .map_err(|e| e.to_string())?;
         clamp(&window)?;
+        update_orientation(&app, &window)?;
     }
     if phase == "end" {
         *state.drag.lock().map_err(|e| e.to_string())? = None;
@@ -314,6 +340,20 @@ mod tests {
         assert_eq!(bounded_position(-2000, -300, 64, 64, area), (-1920, -200));
         assert_eq!(bounded_position(500, 900, 128, 128, area), (-128, 712));
         assert_eq!(bounded_position(-900, 100, 96, 96, area), (-900, 100));
+    }
+    #[test]
+    fn side_docking_uses_both_edges_and_scales_the_threshold() {
+        let area = kw_platform::window::WorkArea {
+            left: -1920,
+            top: 0,
+            right: 0,
+            bottom: 1080,
+        };
+        assert!(at_side_edge(-1920, 64, area, 1.0));
+        assert!(at_side_edge(-76, 64, area, 1.0));
+        assert!(!at_side_edge(-77, 64, area, 1.0));
+        assert!(at_side_edge(-1900, 128, area, 2.0));
+        assert!(!at_side_edge(-960, 64, area, 1.0));
     }
     #[tokio::test]
     async fn preferences_survive_storage_round_trip() -> anyhow::Result<()> {
