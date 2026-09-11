@@ -9,7 +9,11 @@ use tauri::{AppHandle, Emitter as _, LogicalSize, Manager as _, PhysicalPosition
 
 const KEY: &str = "dictation.floatingMicrophone";
 const EVENT: &str = "overlay-preferences";
-const SIZE: f64 = 64.0;
+const SIZE: f64 = 96.0;
+const PANEL_WIDTH: f64 = 280.0;
+const PANEL_HEIGHT: f64 = 360.0;
+const PANEL_X: f64 = (PANEL_WIDTH - SIZE) / 2.0;
+const PANEL_Y: f64 = PANEL_HEIGHT - SIZE;
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Preferences {
@@ -42,7 +46,10 @@ pub struct Controller {
     drag: Mutex<Option<Drag>>,
     writes: tokio::sync::Mutex<()>,
     message: AtomicBool,
+    panel_origin: Mutex<Option<PhysicalPosition<i32>>>,
     vertical: AtomicBool,
+    #[cfg(windows)]
+    clicks: Mutex<Option<kw_platform::pointer_watch::Watch>>,
 }
 fn controller(app: &AppHandle) -> tauri::State<'_, Controller> {
     app.state::<Controller>()
@@ -90,12 +97,25 @@ fn overlay_window(app: &AppHandle) -> Result<WebviewWindow, String> {
         .ok_or_else(|| "The dictation overlay is unavailable".to_owned())
 }
 fn clamp(window: &WebviewWindow) -> Result<(), String> {
-    let area = crate::window_placement::resolved_work_area(window, "floating microphone")
+    let mut area = crate::window_placement::resolved_work_area(window, "floating microphone")
         .ok_or("Monitor work area unavailable")?;
     let size = window.outer_size().map_err(|e| e.to_string())?;
     let pos = window.outer_position().map_err(|e| e.to_string())?;
     let width = i32::try_from(size.width).map_err(|e| e.to_string())?;
     let height = i32::try_from(size.height).map_err(|e| e.to_string())?;
+    let scale = window.scale_factor().map_err(|e| e.to_string())?;
+    // The compact window includes transparent space below its buttons. Let that
+    // space overlap the taskbar while keeping both clickable parts above it.
+    if size == LogicalSize::new(SIZE, SIZE).to_physical::<u32>(scale) {
+        let allowance = if at_side_edge(pos.x, size.width, area, scale) {
+            4.0
+        } else {
+            24.0
+        };
+        area.bottom = area
+            .bottom
+            .saturating_add((allowance * scale).round() as i32);
+    }
     let (x, y) = bounded_position(pos.x, pos.y, width, height, area);
     window
         .set_position(PhysicalPosition::new(x, y))
@@ -158,6 +178,20 @@ fn restore(app: &AppHandle, window: &WebviewWindow) -> Result<(), String> {
         }
     }
     crate::window_placement::bottom_center(window, SIZE, SIZE, "floating microphone");
+    // The transparent lower half already separates the visible button from the taskbar.
+    // Put the native window at the work-area bottom instead of adding another 24px gap.
+    if let Some(area) = crate::window_placement::resolved_work_area(window, "floating microphone") {
+        let pos = window.outer_position().map_err(|e| e.to_string())?;
+        let size = window.outer_size().map_err(|e| e.to_string())?;
+        let height = i32::try_from(size.height).map_err(|e| e.to_string())?;
+        window
+            .set_position(PhysicalPosition::new(
+                pos.x,
+                area.bottom.saturating_sub(height),
+            ))
+            .map_err(|e| e.to_string())?;
+        clamp(window)?;
+    }
     Ok(())
 }
 pub fn reconcile(app: &AppHandle, restore_position: bool) -> Result<(), String> {
@@ -213,6 +247,10 @@ pub async fn overlay_preferences_set(app: AppHandle, enabled: bool) -> Result<Sn
         .map_err(|e| e.to_string())?;
     publish(&app, prefs)?;
     state.message.store(false, Ordering::SeqCst);
+    #[cfg(windows)]
+    {
+        *state.clicks.lock().map_err(|e| e.to_string())? = None;
+    }
     *state.drag.lock().map_err(|e| e.to_string())? = None;
     reconcile(&app, true)?;
     snapshot(&app)
@@ -224,6 +262,10 @@ pub async fn overlay_position_reset(app: AppHandle) -> Result<(), String> {
     let mut prefs = state.prefs.lock().map_err(|e| e.to_string())?.clone();
     prefs.position = None;
     state.message.store(false, Ordering::SeqCst);
+    #[cfg(windows)]
+    {
+        *state.clicks.lock().map_err(|e| e.to_string())? = None;
+    }
     save(&app, prefs).await?;
     reconcile(&app, true)
 }
@@ -274,12 +316,18 @@ pub async fn overlay_drag(
         let pos = window.outer_position().map_err(|e| e.to_string())?;
         let mut prefs = state.prefs.lock().map_err(|e| e.to_string())?.clone();
         let message = state.message.load(Ordering::SeqCst);
+        if message {
+            *state.panel_origin.lock().map_err(|e| e.to_string())? = Some(PhysicalPosition::new(
+                pos.x + (PANEL_X * monitor.scale_factor()) as i32,
+                pos.y + (PANEL_Y * monitor.scale_factor()) as i32,
+            ));
+        }
         prefs.position = monitor.name().map(|name| SavedPosition {
             monitor: name.clone(),
             x: (f64::from(pos.x) - f64::from(monitor.position().x)) / monitor.scale_factor()
-                + if message { 108.0 } else { 0.0 },
+                + if message { PANEL_X } else { 0.0 },
             y: (f64::from(pos.y) - f64::from(monitor.position().y)) / monitor.scale_factor()
-                + if message { 80.0 } else { 0.0 },
+                + if message { PANEL_Y } else { 0.0 },
         });
         save(&app, prefs).await?;
     }
@@ -302,21 +350,63 @@ pub async fn overlay_message(
     }
     let pos = window.outer_position().map_err(|e| e.to_string())?;
     let scale = window.scale_factor().map_err(|e| e.to_string())?;
-    let direction = if visible { 1.0 } else { -1.0 };
+    let anchor = if visible {
+        *state.panel_origin.lock().map_err(|e| e.to_string())? = Some(pos);
+        pos
+    } else {
+        state
+            .panel_origin
+            .lock()
+            .map_err(|e| e.to_string())?
+            .take()
+            .unwrap_or(pos)
+    };
     window
         .set_size(LogicalSize::new(
-            if visible { 280.0 } else { SIZE },
-            if visible { 144.0 } else { SIZE },
+            if visible { PANEL_WIDTH } else { SIZE },
+            if visible { PANEL_HEIGHT } else { SIZE },
         ))
         .map_err(|e| e.to_string())?;
     window
         .set_position(PhysicalPosition::new(
-            f64::from(pos.x) - direction * 108.0 * scale,
-            f64::from(pos.y) - direction * 80.0 * scale,
+            f64::from(anchor.x) - if visible { PANEL_X * scale } else { 0.0 },
+            f64::from(anchor.y) - if visible { PANEL_Y * scale } else { 0.0 },
         ))
         .map_err(|e| e.to_string())?;
     clamp(&window)?;
+    let placed = window.outer_position().map_err(|e| e.to_string())?;
+    // Clamping the popup must not move its microphone away from the saved anchor.
+    window.emit("overlay-anchor-offset", serde_json::json!({
+        "x": if visible { (f64::from(anchor.x) - f64::from(placed.x)) / scale - PANEL_X } else { 0.0 },
+        "y": if visible { (f64::from(anchor.y) - f64::from(placed.y)) / scale - PANEL_Y } else { 0.0 },
+    })).map_err(|e| e.to_string())?;
     state.message.store(visible, Ordering::SeqCst);
+    #[cfg(windows)]
+    {
+        let mut clicks = state.clicks.lock().map_err(|e| e.to_string())?;
+        *clicks = None;
+        if visible {
+            let (send, mut receive) = tokio::sync::mpsc::unbounded_channel();
+            *clicks = Some(kw_platform::pointer_watch::watch(send).map_err(|e| e.to_string())?);
+            let window = window.clone();
+            tauri::async_runtime::spawn(async move {
+                while let Some((x, y)) = receive.recv().await {
+                    if let (Ok(pos), Ok(size)) = (window.outer_position(), window.outer_size()) {
+                        if i64::from(x) < i64::from(pos.x)
+                            || i64::from(y) < i64::from(pos.y)
+                            || i64::from(x) >= i64::from(pos.x) + i64::from(size.width)
+                            || i64::from(y) >= i64::from(pos.y) + i64::from(size.height)
+                        {
+                            let _ = window.emit("overlay-outside-click", ());
+                        }
+                    }
+                }
+            });
+        }
+    }
+    if !visible {
+        update_orientation(&app, &window)?;
+    }
     Ok(())
 }
 

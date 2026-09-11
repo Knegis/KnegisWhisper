@@ -294,7 +294,7 @@ impl Transcriber for RouteTranscriber {
         // executor answers `LocalNotAvailable`, which is the honest state — a
         // local route with no server is not something to paper over.
         let local = match transport {
-            Transport::Local => {
+            Transport::Local { .. } => {
                 let whisper = if crate::local_asr::resolve(&self.local_sherpa).is_some() {
                     None
                 } else {
@@ -815,7 +815,7 @@ pub async fn dictation_route(
         &settings,
         &kw_transcription_core::RouteRequest::default(),
     ) {
-        Ok(Transport::Local) => Ok(RouteReport {
+        Ok(Transport::Local { .. }) => Ok(RouteReport {
             destination: "local model".to_owned(),
             is_local: true,
             leaves_device: false,
@@ -870,6 +870,51 @@ pub async fn dictation_use_local(
     kw_storage::settings::set(runtime.db.pool(), ROUTE_SETTINGS_KEY, &settings)
         .await
         .map_err(|err| err.to_string())
+}
+
+/// Local decoder languages, independent of cloud-provider preferences.
+#[tauri::command]
+pub async fn dictation_local_language(
+    runtime: tauri::State<'_, Arc<DictationRuntime>>,
+) -> Result<Vec<String>, String> {
+    let settings = runtime.route_settings().await;
+    Ok(if settings.local_languages.is_empty() {
+        settings.local_language.into_iter().collect()
+    } else {
+        settings.local_languages
+    })
+}
+fn validated_local_languages(languages: Vec<String>) -> Result<Vec<String>, String> {
+    if languages.len() > 2 {
+        return Err("Choose at most two languages".into());
+    }
+    let mut seen = std::collections::HashSet::new();
+    for language in &languages {
+        if !matches!(
+            language.as_str(),
+            "sv" | "en" | "da" | "no" | "fi" | "de" | "fr" | "es"
+        ) || !seen.insert(language)
+        {
+            return Err("Choose distinct supported dictation languages".into());
+        }
+    }
+    Ok(languages)
+}
+#[tauri::command]
+pub async fn dictation_set_local_language(
+    app: tauri::AppHandle,
+    runtime: tauri::State<'_, Arc<DictationRuntime>>,
+    languages: Vec<String>,
+) -> Result<(), String> {
+    let languages = validated_local_languages(languages)?;
+    let mut settings = runtime.route_settings().await;
+    settings.local_language = None;
+    settings.local_languages.clone_from(&languages);
+    kw_storage::settings::set(runtime.db.pool(), ROUTE_SETTINGS_KEY, &settings)
+        .await
+        .map_err(|e| e.to_string())?;
+    app.emit("dictation-languages", &languages)
+        .map_err(|e| e.to_string())
 }
 
 /// Point dictation at a cloud provider and model.
@@ -1122,6 +1167,16 @@ pub(crate) fn release_the_hold() {
     clippy::indexing_slicing
 )]
 mod tests {
+    #[test]
+    fn local_languages_validate_count_codes_and_duplicates() {
+        assert!(super::validated_local_languages(vec![]).unwrap().is_empty());
+        assert!(super::validated_local_languages(vec!["sv".into(), "en".into()]).is_ok());
+        assert!(super::validated_local_languages(vec!["sv".into(), "sv".into()]).is_err());
+        assert!(
+            super::validated_local_languages(vec!["sv".into(), "en".into(), "de".into()]).is_err()
+        );
+        assert!(super::validated_local_languages(vec!["invalid".into()]).is_err());
+    }
     use super::*;
 
     /* --------------------------------------------- which local engine */

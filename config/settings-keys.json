@@ -140,7 +140,8 @@
       "what": "Where dictation audio goes: the local engine, or a named cloud provider and model.",
       "writtenBy": [
         "dictation_use_local",
-        "dictation_set_cloud_provider"
+        "dictation_set_cloud_provider",
+        "dictation_set_local_language"
       ],
       "ui": "Settings > Transcription",
       "reachable": true

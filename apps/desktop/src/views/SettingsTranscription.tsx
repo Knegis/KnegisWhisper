@@ -1,3 +1,4 @@
+import { LocalLanguagePicker } from "../components/LocalLanguagePicker";
 /**
  * Settings > Transcription, and Settings > Transcription > Local.
  *
@@ -327,6 +328,8 @@ export function SettingsTranscription({
 
       <section data-surface="settings.transcription.local">
         <h2>Local transcription</h2>
+        <LocalLanguagePicker disabled={sherpa.selected !== null} />
+        <p className="muted">Applies to local Whisper dictation, including KB Whisper. Other local engines use their model's supported languages.</p>
         {local.availability.state === "not-published" ? (
           <>
             <Row

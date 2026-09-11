@@ -1682,21 +1682,18 @@ button:disabled {
 }
 
 /* Persistent dictation control: native window retains WS_EX_NOACTIVATE. */
-.microphone-overlay { height: 100%; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; padding: 16px 6px; gap: 6px; user-select: none; }
+.microphone-overlay { height: 100%; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; padding: 0; gap: 6px; user-select: none; }
 /* Keep the hit target and layout fixed as the visible pill expands. */
 .floating-microphone { position: relative; display: flex; align-items: center; justify-content: center; width: 52px; height: 32px; min-height: 32px; padding: 0; flex-shrink: 0; border-radius: 1px; background: transparent; color: white; box-shadow: none; border: 0; cursor: pointer; touch-action: none; }
-.floating-microphone::before { content: ""; position: absolute; width: 32px; height: 6px; border-radius: 1px; background: #858985; transition: width 160ms ease, height 160ms ease, transform 160ms ease, background-color 160ms ease; pointer-events: none; }
 button.floating-microphone:hover:not(:disabled) { background: transparent; color: white; border-color: transparent; box-shadow: none; }
-.floating-microphone:is(:hover, :focus-visible, :active, [data-expanded="true"])::before { width: 52px; height: 28px; border-radius: 2px; background: #303430; }
 .floating-microphone:focus-visible { outline: 2px solid #858985; outline-offset: 2px; }
-.floating-microphone.is-recording::before { background: var(--band); }
 .floating-microphone[aria-disabled="true"] { cursor: progress; }
 .microphone-glyph { position: relative; display: block; width: 20px; height: 20px; background: currentColor; mask: url('./assets/microphone.svg') center / contain no-repeat; opacity: 0; transform: scale(0.8); transition: opacity 120ms ease, transform 160ms ease; pointer-events: none; }
 .floating-microphone:is(:hover, :focus-visible, :active, [data-expanded="true"]) .microphone-glyph { opacity: 1; transform: scale(1); }
 .microphone-glyph.speaking { mask-image: url('./assets/microphone-speaking.svg'); }
 .microphone-spinner { position: relative; display: block; width: 18px; height: 18px; border: 2px solid #8888; border-top-color: currentColor; border-radius: 50%; animation: microphone-spin 1s linear infinite; }
 @keyframes microphone-spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .microphone-spinner { animation: none; } .floating-microphone::before, .microphone-glyph { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .microphone-spinner { animation: none; } .microphone-controls::before, .microphone-glyph { transition: none; } }
 .microphone-error { display: flex; gap: 6px; align-items: flex-start; padding: 8px; background: var(--bg); color: var(--text, #eee); font-size: 12px; width: 100%; max-height: 72px; overflow: auto; border-radius: 8px; box-shadow: 0 2px 6px #0005; }
 .microphone-error span { flex: 1; overflow-wrap: anywhere; }
 .microphone-error button { padding: 0 4px; min-height: 20px; }
@@ -1704,6 +1701,38 @@ button.floating-microphone:hover:not(:disabled) { background: transparent; color
 .microphone-setting { display: flex; align-items: center; gap: 10px; }
 
 /* Turn only the button surface; microphone glyphs and status remain upright. */
-.microphone-overlay.is-vertical { padding-top: 6px; padding-bottom: 6px; }
+
 .microphone-overlay.is-vertical .floating-microphone { width: 32px; height: 52px; min-height: 52px; }
-.microphone-overlay.is-vertical .floating-microphone::before { transform: rotate(90deg); }
+
+.microphone-controls { pointer-events: none; position: relative; width: 96px; height: 96px; flex-shrink: 0; }
+.microphone-controls .floating-microphone { pointer-events: auto; position: absolute; left: 48px; top: 48px; transform: translate(-50%, -50%); margin: 0; }
+button.microphone-language-toggle { position: absolute; left: 74px; top: 34px; width: 16px; height: 28px; min-height: 28px; margin: 0; padding: 0; border: 0; border-radius: 0 2px 2px 0; background: transparent; color: white; font-size: 16px; line-height: 1; }
+button.microphone-language-toggle:hover:not(:disabled) { background: transparent; color: white; }
+.is-vertical .microphone-language-toggle { left: 34px; top: 74px; width: 28px; height: 16px; min-height: 16px; border-radius: 0 0 2px 2px; }
+.microphone-language-menu { width: calc(100% - 12px); max-height: 252px; overflow: auto; padding: 10px; border-radius: 4px; background: var(--bg); color: var(--text); font-size: 12px; line-height: 1.4; box-shadow: 0 2px 6px #0005; }
+.local-language-picker { border: 0; padding: 0; margin: 0; min-width: 0; }
+.local-language-picker legend { font-weight: 600; margin-bottom: 6px; }
+.local-language-picker p { margin: 6px 0; }
+.local-language-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 12px; margin-top: 8px; max-width: 320px; }
+.local-language-options label { display: flex; align-items: center; gap: 6px; }
+.microphone-language-menu button { margin: 0; min-height: 24px; padding: 3px 8px; font-size: 12px; }
+.microphone-language-menu input { width: 14px; height: 14px; }
+
+.microphone-language-toggle { opacity: 0; pointer-events: none; transition: opacity 120ms ease; }
+.microphone-controls:is(:hover, .hold-hover) .microphone-language-toggle, .microphone-language-toggle:focus-visible { opacity: 1; pointer-events: auto; }
+
+.microphone-controls:is(:hover, .hold-hover) .microphone-glyph { opacity: 1; transform: scale(1); }
+@media (prefers-reduced-motion: reduce) { .microphone-language-toggle { transition: none; } }
+
+.microphone-language-toggle span { display: inline-block; }
+.is-vertical .microphone-language-toggle span { transform: rotate(90deg); }
+
+/* One animated surface, with separate dictation and language hit targets. */
+.microphone-controls::before { content: ""; position: absolute; left: 48px; top: 48px; width: 32px; height: 6px; border-radius: 1px; background: #858985; --surface-shift: 0px; --surface-angle: 0deg; transform: translate(-50%, -50%) rotate(var(--surface-angle)) translateX(var(--surface-shift)); transition: width 160ms ease, height 160ms ease, transform 160ms ease, background-color 160ms ease; pointer-events: none; }
+.is-vertical .microphone-controls::before { --surface-angle: 90deg; }
+.microphone-controls:has(.floating-microphone[data-expanded="true"])::before { width: 52px; height: 28px; border-radius: 2px; background: #303430; }
+.microphone-controls:is(:hover, .hold-hover, :has(:focus-visible))::before { width: 68px; height: 28px; --surface-shift: 8px; border-radius: 2px; background: #303430; }
+.microphone-controls:has(.is-recording)::before { background: var(--band); }
+.microphone-controls:has(:focus-visible) .microphone-language-toggle { opacity: 1; pointer-events: auto; }
+.microphone-controls:has(:focus-visible) .microphone-glyph { opacity: 1; transform: scale(1); }
+@media (prefers-reduced-motion: reduce) { .microphone-controls::before { transition: none; } }

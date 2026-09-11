@@ -1,3 +1,5 @@
+import { listen } from "@tauri-apps/api/event";
+import { LocalLanguagePicker } from "./components/LocalLanguagePicker";
 /** Renders authoritative dictation state; the floating control shares the same pipeline. */
 import { useEffect, useRef, useState } from "react";
 import { getDictationState, onDictationState, onDictationOutcome, toggleDictation, getOverlayPreferences, onOverlayPreferences, dragOverlay, setOverlayMessage, type SessionState, type OverlayPreferences } from "./lib/ipc";
@@ -8,6 +10,9 @@ export function Overlay() {
   const [unavailable, setUnavailable] = useState(false);
   const [prefs, setPrefs] = useState<OverlayPreferences | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [holdHover, setHoldHover] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [anchorOffset, setAnchorOffset] = useState({ x: 0, y: 0 });
   const [pending, setPending] = useState(false);
   const inFlight = useRef(false);
   const pointerClick = useRef(false);
@@ -34,6 +39,8 @@ export function Overlay() {
     let prefRevision = 0;
     void (async () => {
       await Promise.all([
+        listen<{ x: number; y: number }>("overlay-anchor-offset", event => { if (!disposed) setAnchorOffset(event.payload); }),
+        listen("overlay-outside-click", () => { if (!disposed) setMenuOpen(false); }),
         onDictationState(value => { revision++; if (!disposed) {
           setState(value);
           setUnavailable(false);
@@ -64,14 +71,30 @@ export function Overlay() {
     } });
     return () => { disposed = true; stops.forEach(stop => stop()); };
   }, []);
-  useEffect(() => { setError(null); }, [prefs?.enabled]);
+  useEffect(() => { setError(null); setMenuOpen(false); }, [prefs?.enabled]);
   useEffect(() => {
+    let disposed = false;
     if (prefs?.enabled)
-      void setOverlayMessage(error !== null).catch(() => { });
-  }, [error, prefs?.enabled]);
+      void setOverlayMessage(error !== null || menuOpen).catch(() => { }).finally(() => {
+        // Keep the expanded surface through native resize, then use its normal CSS exit.
+        requestAnimationFrame(() => requestAnimationFrame(() => { if (!disposed) setHoldHover(false); }));
+      });
+    return () => { disposed = true; };
+  }, [error, menuOpen, prefs?.enabled]);
+  useEffect(() => {
+    if (!menuOpen) return;
+    const closeOutside = (event: PointerEvent) => {
+      if (event.target instanceof Element && !event.target.closest(".microphone-language-menu, .microphone-language-toggle")) setMenuOpen(false);
+    };
+    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") setMenuOpen(false); };
+    document.addEventListener("pointerdown", closeOutside);
+    document.addEventListener("keydown", escape);
+    return () => { document.removeEventListener("pointerdown", closeOutside); document.removeEventListener("keydown", escape); };
+  }, [menuOpen]);
   const act = async () => {
     if (inFlight.current || state === null || (state !== "idle" && state !== "recording"))
       return;
+    setMenuOpen(false);
     inFlight.current = true;
     setPending(true);
     setError(null);
@@ -102,9 +125,11 @@ export function Overlay() {
   }
   const view = microphoneState(state, unavailable);
   return <div className={`microphone-overlay ${prefs.vertical ? "is-vertical" : ""}`}>
-  {error && <div className="microphone-error" role="alert"><span>{error}</span>{state === null && <button onClick={() => { void getDictationState().then(value => { setState(value); setUnavailable(false); setError(null); }).catch(e => setError(String(e))); }}>Retry status</button>}<button aria-label="Dismiss message" onClick={() => setError(null)}>{"\u00d7"}</button></div>}
+  {menuOpen && <div className="microphone-language-menu" role="dialog" aria-label="Dictation languages"><LocalLanguagePicker /><button type="button" onClick={() => setMenuOpen(false)}>Done</button></div>}
+  {!menuOpen && error && <div className="microphone-error" role="alert"><span>{error}</span>{state === null && <button onClick={() => { void getDictationState().then(value => { setState(value); setUnavailable(false); setError(null); }).catch(e => setError(String(e))); }}>Retry status</button>}<button aria-label="Dismiss message" onClick={() => setError(null)}>{"\u00d7"}</button></div>}
+  <div key="microphone-controls" role="group" aria-label="Dictation controls" className={`microphone-controls ${holdHover ? "hold-hover" : ""}`} style={{ transform: `translate(${anchorOffset.x}px, ${anchorOffset.y}px)` }}>
   <button className={`floating-microphone ${view.recording ? "is-recording" : ""}`} data-expanded={state !== "idle" || pending || error !== null} aria-label={view.label} title={`${view.label}. Drag to move.`} aria-disabled={view.disabled || pending} aria-busy={view.busy || pending} onPointerDown={e => {
-      if (e.button !== 0)
+      if (menuOpen || e.button !== 0)
         return;
       e.preventDefault();
       pointerClick.current = true;
@@ -129,13 +154,15 @@ export function Overlay() {
     }} onPointerCancel={() => { gesture.current = null; void enqueue("cancel"); }} onLostPointerCapture={() => { if (gesture.current) {
     gesture.current = null;
     void enqueue("cancel");
-  } }} onClick={e => { if (pointerClick.current) {
+  } }} onClick={e => { if (menuOpen) { void act(); return; } if (pointerClick.current) {
     pointerClick.current = false;
     return;
   } if (e.detail === 0 && !view.disabled && !pending)
     void act(); }}>
    {view.busy ? <span className="microphone-spinner" aria-hidden="true"/> : <span className={`microphone-glyph ${view.recording ? "speaking" : ""}`} aria-hidden="true"/>}
   </button>
+  <button type="button" className="microphone-language-toggle" aria-label="Choose dictation languages" aria-expanded={menuOpen} title="Dictation languages" onClick={() => { setHoldHover(true); setMenuOpen(value => !value); }}><span>{menuOpen ? "\u00d7" : ">"}</span></button>
+  </div>
   <span className="microphone-status" aria-live="polite">{view.label}</span>
  </div>;
 }

@@ -6,6 +6,21 @@ on the existing whisper.cpp server, including dictation started from the floatin
 microphone. Model selection persists and the existing server recovery applies.
 After installation, local transcription requires no cloud credentials.
 
+The **Whisper dictation languages** picker is available in Settings and from the
+`>` button beside the floating microphone. Pick one or two languages, or choose
+Detect automatically to clear the selection. The choice persists and stays in
+sync between both surfaces. A single language forces that decoder language.
+Two languages first run local language detection, then decode using whichever
+selected language has the highest reported probability. This adds a detection
+pass and chooses one language per dictation; it does not guarantee accurate
+language switching within one sentence. If neither selected language has a
+reported score, the app asks for automatic detection or a single language.
+
+Supported choices are Swedish, English, Danish, Norwegian, Finnish, German,
+French, and Spanish. The setting applies to local Whisper dictation; other local
+engines retain their model-defined languages. Changing this setting does not
+restart the model or change cloud-provider language preferences.
+
 These are KBLab's official default Stage 2 GGML Q5 models, specialized for Swedish.
 They supplement the existing Whisper models. Tiny downloads approximately 30 MB;
 Base downloads approximately 55 MB. The quantized files reduce download and

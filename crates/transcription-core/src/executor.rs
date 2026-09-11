@@ -181,7 +181,7 @@ impl<'a> Executor<'a> {
         wav: Vec<u8>,
     ) -> Result<Transcript, TranscriptionError> {
         match transport {
-            Transport::Local => self.transcribe_locally(wav).await,
+            Transport::Local { languages } => self.transcribe_locally(wav, languages).await,
 
             Transport::ProviderClient {
                 provider,
@@ -236,7 +236,11 @@ impl<'a> Executor<'a> {
     }
 
     /// Transcribe with the running local model server.
-    async fn transcribe_locally(&self, wav: Vec<u8>) -> Result<Transcript, TranscriptionError> {
+    async fn transcribe_locally(
+        &self,
+        wav: Vec<u8>,
+        languages: &[String],
+    ) -> Result<Transcript, TranscriptionError> {
         let Some(local) = self.local else {
             return Err(TranscriptionError::LocalNotAvailable {
                 reason: "no local model server is running".to_owned(),
@@ -246,7 +250,7 @@ impl<'a> Executor<'a> {
         // No size check: there is no upload. The recording length cap belongs to
         // capture, where it can stop the recording rather than discard it.
         match local
-            .transcribe(wav, None, None)
+            .transcribe_languages(wav, languages, None)
             .await
             .map_err(|detail| TranscriptionError::LocalFailed { detail })?
         {
@@ -610,6 +614,40 @@ pub fn interpret_response(
 mod tests {
     use super::*;
     use kw_security::{KeyRef, MemoryCredentialStore};
+
+    #[derive(Debug)]
+    struct LanguageProbe(Option<String>);
+    #[async_trait::async_trait]
+    impl LocalTranscriber for LanguageProbe {
+        async fn transcribe(
+            &self,
+            _wav: Vec<u8>,
+            language: Option<&str>,
+            _prompt: Option<&str>,
+        ) -> Result<Inference, String> {
+            assert_eq!(language, self.0.as_deref());
+            Ok(Inference::Text("Hej".to_owned()))
+        }
+    }
+    #[tokio::test]
+    async fn local_language_reaches_the_decoder_including_auto() {
+        let policy = NetworkPolicy::new().unwrap();
+        let credentials = MemoryCredentialStore::new();
+        for language in [None, Some("sv".to_owned()), Some("en".to_owned())] {
+            let local = LanguageProbe(language.clone());
+            let executor = Executor::new(&policy, &credentials).with_local(&local);
+            let transcript = executor
+                .transcribe(
+                    &Transport::Local {
+                        languages: language.into_iter().collect(),
+                    },
+                    vec![],
+                )
+                .await
+                .unwrap();
+            assert_eq!(transcript.text, "Hej");
+        }
+    }
 
     /* -------------------------------------------- a 2xx is not automatically ok */
 

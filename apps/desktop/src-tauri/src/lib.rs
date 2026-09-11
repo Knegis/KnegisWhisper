@@ -445,6 +445,8 @@ pub fn run() -> anyhow::Result<()> {
             dictation::dictation_state,
             dictation::dictation_route,
             dictation::dictation_use_local,
+            dictation::dictation_local_language,
+            dictation::dictation_set_local_language,
             dictation::dictation_set_cloud_provider,
             dictation::dictation_toggle,
             persistent_overlay::overlay_preferences,

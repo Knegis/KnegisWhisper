@@ -1266,3 +1266,14 @@ export async function resetOverlayPosition(): Promise<void> { return invoke("ove
 export function onOverlayPreferences(handler: (value: OverlayPreferences) => void) { return listen<OverlayPreferences>("overlay-preferences", e => handler(e.payload)); }
 export async function dragOverlay(phase: "start" | "move" | "end" | "cancel"): Promise<void> { return invoke("overlay_drag", { phase }); }
 export async function setOverlayMessage(visible: boolean): Promise<void> { return invoke("overlay_message", { visible }); }
+
+export async function getLocalDictationLanguages(): Promise<string[]> {
+  return invoke("dictation_local_language");
+}
+export async function setLocalDictationLanguages(languages: string[]): Promise<void> {
+  return invoke("dictation_set_local_language", { languages });
+}
+
+export function onLocalDictationLanguages(handler: (languages: string[]) => void) {
+  return listen<string[]>("dictation-languages", event => handler(event.payload));
+}
