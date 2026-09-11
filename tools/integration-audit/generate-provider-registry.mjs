@@ -294,6 +294,12 @@ const enterprise = R.enterpriseProviders.map((p) => ({
  * or to one that moves weekly.
  */
 const HF_REVISIONS = {
+  "KBLab/kb-whisper-tiny": {
+    revision: "76d796af43a50fa34321efa562c9b9887a187463",
+  },
+  "KBLab/kb-whisper-base": {
+    revision: "1499d2d2f0c7ed545bd6f2eec85287cf8d8c8b38",
+  },
   "LiquidAI/LFM2-2.6B-GGUF": {
     revision: "a759abdc5955d4ca97763e5cb7ff3940589ba898",
     lastModified: "2026-03-30",
@@ -848,7 +854,7 @@ for (const [id, pin] of Object.entries(LOCAL_LLM_PINS)) {
 // --- local ASR ---------------------------------------------------------------
 
 /**
- * Integrity pins for the six whisper models: a measured digest and the exact
+ * Integrity pins for the shipped whisper models: a measured digest and the exact
  * byte count that goes with it.
  *
  * Here rather than in Rust, and here rather than in the baseline, for the
@@ -907,7 +913,36 @@ for (const [id, pin] of Object.entries(LOCAL_LLM_PINS)) {
  * Never hand-write an entry. Both numbers come out of
  * `node tools/model-pin/pin.mjs --url <downloadUrl> --id <id>`.
  */
+// App-owned additions stay separate from the frozen upstream baseline.
+// Official KBLab Stage 2 Q5 GGML weights, downloaded and hashed on 2026-09-10.
+// Unique cache filenames avoid colliding with OpenAI or each other.
+const OWN_WHISPER_MODELS = {
+  "kb-whisper-tiny": {
+    name: "KB Whisper Tiny (Swedish, Q5)",
+    fileName: "ggml-kb-whisper-tiny-q5_0.bin",
+    downloadUrl: "https://huggingface.co/KBLab/kb-whisper-tiny/resolve/main/ggml-model-q5_0.bin",
+    sizeMb: 30,
+  },
+  "kb-whisper-base": {
+    name: "KB Whisper Base (Swedish, Q5)",
+    fileName: "ggml-kb-whisper-base-q5_0.bin",
+    downloadUrl: "https://huggingface.co/KBLab/kb-whisper-base/resolve/main/ggml-model-q5_0.bin",
+    sizeMb: 55,
+  },
+};
+for (const id of Object.keys(OWN_WHISPER_MODELS)) {
+  if (id in R.whisperModels) die(`App-owned whisper model "${id}" collides with the baseline.`);
+}
+const whisperModels = { ...R.whisperModels, ...OWN_WHISPER_MODELS };
 const WHISPER_PINS = {
+  "kb-whisper-tiny": {
+    sha256: "98d46b7d23e5528d006e8a42e29eb0cb39b44bed94e1329f10f57d1fd15c658b",
+    expectedSizeBytes: 29_875_738,
+  },
+  "kb-whisper-base": {
+    sha256: "aead29b356bca8840e72a8dc2286e2d69e6702639751a1e60cb3c8eacefec546",
+    expectedSizeBytes: 55_295_450,
+  },
   tiny: {
     sha256: "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21",
     expectedSizeBytes: 77_691_713,
@@ -940,10 +975,10 @@ const WHISPER_PINS = {
 // a length degrades silently to a size check on a model the screen would still
 // be describing as digest-verified.
 for (const [id, pin] of Object.entries(WHISPER_PINS)) {
-  if (!(id in R.whisperModels)) {
+  if (!(id in whisperModels)) {
     die(
       `WHISPER_PINS has an entry for "${id}", which is not a model in the ` +
-        `baseline's whisperModels. Fix the id, or remove the pin.`
+        `shipped whisperModels. Fix the id, or remove the pin.`
     );
   }
   if (!/^[0-9a-f]{64}$/.test(pin.sha256)) {
@@ -962,7 +997,7 @@ for (const [id, pin] of Object.entries(WHISPER_PINS)) {
   }
 }
 
-const whisper = Object.entries(R.whisperModels).map(([id, m]) => ({
+const whisper = Object.entries(whisperModels).map(([id, m]) => ({
   id,
   name: m.name,
   fileName: m.fileName,

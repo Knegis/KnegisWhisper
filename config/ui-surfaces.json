@@ -89,6 +89,11 @@
       "component": "apps/desktop/src/views/NotesUpload.tsx",
       "built": true,
       "note": "Audio and video import (Task 11's media.rs, driving the ffmpeg sidecar pinned in config/sidecars.json), plus the OpenWhispr database importer (storage::import::from_openwhispr), which existed and was tested since early in the build but had no screen until now. URL import was withdrawn -- media_import_url is unregistered as a command, this screen offers no URL field, and media:url-import is reachable: false; the yt-dlp sidecar stays pinned for a re-opening that has not happened. The screen renders the full ImportReport -- what copied, what was dropped per table, and which credentials moved into the OS credential store -- not just a success message. Every path this screen imports must be one pick_import_file returned: commands::DialogGrants records the canonical form of each dialog-returned path and media_import_audio, media_import_video and import_openwhispr refuse anything else, so a path this screen invented rather than picked is refused before the file is opened (docs/SECURITY.md, Webview)."
+    },
+    "Settings > Dictation microphone": {
+      "surfaceId": "settings.microphone",
+      "component": "apps/desktop/src/components/MicrophoneSettings.tsx",
+      "built": true
     }
   }
 }

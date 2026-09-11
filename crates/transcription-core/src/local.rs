@@ -362,6 +362,25 @@ pub trait LocalTranscriber: Send + Sync + std::fmt::Debug {
         prompt: Option<&str>,
     ) -> Result<Inference, String>;
 
+    /// Engines without language detection retain their own language behavior.
+    async fn transcribe_languages(
+        &self,
+        wav: Vec<u8>,
+        languages: &[String],
+        prompt: Option<&str>,
+    ) -> Result<Inference, String> {
+        self.transcribe(
+            wav,
+            if languages.len() == 1 {
+                languages.first().map(String::as_str)
+            } else {
+                None
+            },
+            prompt,
+        )
+        .await
+    }
+
     /// A name for the history row.
     fn model_name(&self) -> Option<String> {
         None
@@ -457,9 +476,55 @@ impl LocalTranscriber for WhisperServer {
         Ok(interpret(status, &body))
     }
 
+    async fn transcribe_languages(
+        &self,
+        wav: Vec<u8>,
+        languages: &[String],
+        prompt: Option<&str>,
+    ) -> Result<Inference, String> {
+        if languages.len() > 2 {
+            return Err("Choose at most two dictation languages".into());
+        }
+        if languages.len() < 2 {
+            return self
+                .transcribe(wav, languages.first().map(String::as_str), prompt)
+                .await;
+        }
+        let part = reqwest::multipart::Part::bytes(wav.clone())
+            .file_name("audio.wav")
+            .mime_str("audio/wav")
+            .map_err(|e| e.to_string())?;
+        let form = reqwest::multipart::Form::new()
+            .part("file", part)
+            .text("language", "auto")
+            .text("detect_language", "true")
+            .text("response_format", "verbose_json")
+            .text("no_language_probabilities", "false");
+        let response = self
+            .policy
+            .loopback(reqwest::Method::POST, self.port, INFERENCE_PATH)
+            .map_err(|e| e.to_string())?
+            .multipart(form)
+            .send()
+            .await
+            .map_err(|e| describe_send_failure(self.port, &e))?;
+        let response = response.error_for_status().map_err(|e| e.to_string())?;
+        let body: serde_json::Value = response.json().await.map_err(|e| e.to_string())?;
+        let language = selected_language(&body, languages)?;
+        self.transcribe(wav, Some(&language), prompt).await
+    }
+
     fn model_name(&self) -> Option<String> {
         self.model.clone()
     }
+}
+
+fn selected_language(body: &serde_json::Value, languages: &[String]) -> Result<String, String> {
+    languages.iter().filter_map(|language| {
+        let probability = body.get("language_probabilities")?.get(language)?.as_f64()?;
+        (probability.is_finite() && probability > 0.0).then_some((language, probability))
+    }).max_by(|a, b| a.1.total_cmp(&b.1)).map(|(language, _)| language.clone())
+      .ok_or_else(|| "Could not detect either selected language. Choose automatic detection or one language and try again.".to_owned())
 }
 
 /// Say which failure this was, because the two need different fixes.
@@ -492,6 +557,72 @@ fn describe_send_failure(port: u16, err: &reqwest::Error) -> String {
     clippy::indexing_slicing
 )]
 mod tests {
+    #[test]
+    fn pair_detection_only_chooses_selected_languages_and_rejects_missing_scores() {
+        let candidates = vec!["sv".to_owned(), "en".to_owned()];
+        let body = serde_json::json!({"language_probabilities":{"de":0.8,"sv":0.1,"en":0.09}});
+        assert_eq!(super::selected_language(&body, &candidates).unwrap(), "sv");
+        assert!(super::selected_language(
+            &serde_json::json!({"language_probabilities":{"de":1.0}}),
+            &candidates
+        )
+        .is_err());
+    }
+
+    #[tokio::test]
+    async fn two_languages_detect_then_send_the_selected_language_for_transcription() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            for phase in 0..2 {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut bytes = Vec::new();
+                loop {
+                    let mut chunk = [0; 4096];
+                    let count = socket.read(&mut chunk).await.unwrap();
+                    assert!(count > 0);
+                    bytes.extend_from_slice(&chunk[..count]);
+                    if let Some(end) = bytes.windows(4).position(|p| p == b"\r\n\r\n") {
+                        let headers = String::from_utf8_lossy(&bytes[..end]).to_lowercase();
+                        let length: usize = headers
+                            .lines()
+                            .find_map(|l| l.strip_prefix("content-length:"))
+                            .unwrap()
+                            .trim()
+                            .parse()
+                            .unwrap();
+                        if bytes.len() >= end + 4 + length {
+                            break;
+                        }
+                    }
+                }
+                let request = String::from_utf8_lossy(&bytes);
+                let body = if phase == 0 {
+                    assert!(request.contains("name=\"detect_language\"\r\n\r\ntrue"));
+                    r#"{"language_probabilities":{"de":0.7,"en":0.2,"sv":0.1}}"#
+                } else {
+                    assert!(request.contains("name=\"language\"\r\n\r\nen"));
+                    assert!(!request.contains("name=\"detect_language\""));
+                    r#"{"text":"Hello"}"#
+                };
+                socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).as_bytes()).await.unwrap();
+            }
+        });
+        let engine =
+            super::WhisperServer::new(kw_network_policy::NetworkPolicy::new().unwrap(), port, None);
+        let result = super::LocalTranscriber::transcribe_languages(
+            &engine,
+            vec![0, 1],
+            &["sv".into(), "en".into()],
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(matches!(result, super::Inference::Text(text) if text == "Hello"));
+        server.await.unwrap();
+    }
+
     use super::*;
 
     fn options() -> ServerOptions {

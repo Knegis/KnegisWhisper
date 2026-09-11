@@ -138,7 +138,7 @@ fn anchored_position(
     ))
 }
 
-fn resolved_work_area(window: &WebviewWindow, role: &'static str) -> Option<WorkArea> {
+pub(crate) fn resolved_work_area(window: &WebviewWindow, role: &'static str) -> Option<WorkArea> {
     #[cfg(target_os = "windows")]
     {
         match window

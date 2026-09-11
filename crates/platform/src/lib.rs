@@ -111,3 +111,6 @@ mod tests {
         assert!(!matches!(failure, PlatformError::Unsupported(_)));
     }
 }
+
+#[cfg(target_os = "windows")]
+pub mod pointer_watch;

@@ -1058,7 +1058,7 @@ impl MediaImportRuntime {
     /// a dictation would use.
     async fn prepare(&self) -> Result<PreparedImport, MediaImportError> {
         let transport = self.route_transport().await?;
-        let local = if matches!(transport, Transport::Local) {
+        let local = if matches!(transport, Transport::Local { .. }) {
             self.local_engine().await?
         } else {
             None
@@ -1530,7 +1530,7 @@ struct PreparedImport {
 impl PreparedImport {
     fn identity(&self) -> (String, Option<String>) {
         match &self.transport {
-            Transport::Local => (
+            Transport::Local { .. } => (
                 "local".into(),
                 self.local.as_ref().and_then(|e| e.model_name()),
             ),

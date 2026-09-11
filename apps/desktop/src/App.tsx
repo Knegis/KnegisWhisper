@@ -1,3 +1,4 @@
+import { LanguagePopup } from "./components/LanguagePopup";
 /**
  * The shell: a rail, a view, and an error boundary. Nothing else.
  *
@@ -266,11 +267,13 @@ function Shell() {
  * bundle means one CSP and one build.
  */
 export default function App() {
-  // One bundle, four surfaces. The closed union and no `default` make a fifth
+  // One bundle, multiple surfaces. The closed union and no `default` make a new
   // surface a compile-visible addition rather than a quiet fall-through.
   switch (currentSurface()) {
     case "main":
       return <Shell />;
+    case "dictation-languages":
+      return <LanguagePopup />;
     case "overlay":
       return <Overlay />;
     case "meeting":

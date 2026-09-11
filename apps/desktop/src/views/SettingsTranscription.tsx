@@ -1,3 +1,4 @@
+import { LocalLanguagePicker } from "../components/LocalLanguagePicker";
 /**
  * Settings > Transcription, and Settings > Transcription > Local.
  *
@@ -15,6 +16,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 
+import { MicrophoneSettings } from "../components/MicrophoneSettings";
 import { Row } from "../components/Row";
 import {
   getDictationRoute,
@@ -225,6 +227,7 @@ export function SettingsTranscription({
     <div className="view">
       {error ? <p className="error">{error}</p> : null}
 
+      <MicrophoneSettings />
       <section data-surface="settings.transcription">
         <h2>Cloud providers</h2>
         <p className="muted">
@@ -325,6 +328,8 @@ export function SettingsTranscription({
 
       <section data-surface="settings.transcription.local">
         <h2>Local transcription</h2>
+        <LocalLanguagePicker disabled={sherpa.selected !== null} />
+        <p className="muted">Applies to local Whisper dictation, including KB Whisper. Other local engines use their model's supported languages.</p>
         {local.availability.state === "not-published" ? (
           <>
             <Row

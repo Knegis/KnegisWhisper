@@ -711,7 +711,7 @@ mod tests {
     }
 
     fn route() -> Transport {
-        Transport::Local
+        Transport::Local { languages: vec![] }
     }
 
     /// A [`History`] that answers nothing but `record`, to exercise the trait's

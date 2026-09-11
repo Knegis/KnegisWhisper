@@ -124,7 +124,7 @@ pub struct CortiConfig {
 )]
 pub enum Transport {
     /// A local model. Engine and model selection stay with the local manager.
-    Local,
+    Local { languages: Vec<String> },
 
     /// A provider needing its own client. See [`ProviderClientKind`].
     ProviderClient {
@@ -211,6 +211,10 @@ pub struct RouteSettings {
     /// `"self-hosted"`, `"local"`, or `"providers"`.
     pub transcription_mode: Option<String>,
     pub use_local_whisper: bool,
+    /// Decoder language for local dictation; absent means automatic detection.
+    pub local_language: Option<String>,
+    /// Zero means automatic detection; one forces decoding; two restrict detection.
+    pub local_languages: Vec<String>,
     pub remote_transcription_url: Option<String>,
     pub remote_transcription_model: Option<String>,
     pub cloud_transcription_provider: Option<String>,
@@ -425,7 +429,13 @@ pub fn resolve(
     }
 
     if settings.use_local_whisper {
-        return Ok(Transport::Local);
+        return Ok(Transport::Local {
+            languages: if settings.local_languages.is_empty() {
+                settings.local_language.clone().into_iter().collect()
+            } else {
+                settings.local_languages.clone()
+            },
+        });
     }
 
     // The one place upstream defaults, and the one we keep: absent configuration
@@ -778,7 +788,10 @@ mod tests {
             cloud_transcription_provider: Some("openai".to_owned()),
             ..Default::default()
         };
-        assert_eq!(resolve_with(&settings).unwrap(), Transport::Local);
+        assert_eq!(
+            resolve_with(&settings).unwrap(),
+            Transport::Local { languages: vec![] }
+        );
     }
 
     #[test]
@@ -968,6 +981,36 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn local_language_survives_storage_and_does_not_replace_cloud_language() {
+        let settings = RouteSettings {
+            use_local_whisper: true,
+            local_language: Some("sv".into()),
+            preferred_language: Some("en".into()),
+            ..providers("openai")
+        };
+        let encoded = serde_json::to_string(&settings).unwrap();
+        let restored: RouteSettings = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(
+            resolve_with(&restored).unwrap(),
+            Transport::Local {
+                languages: vec!["sv".into()]
+            }
+        );
+        let cloud = RouteSettings {
+            use_local_whisper: false,
+            ..restored
+        };
+        assert!(
+            matches!(resolve_with(&cloud).unwrap(), Transport::HttpBatch { language: Some(language), .. } if language == "en")
+        );
+        let old: RouteSettings = serde_json::from_str(r#"{"useLocalWhisper":true}"#).unwrap();
+        assert_eq!(
+            resolve_with(&old).unwrap(),
+            Transport::Local { languages: vec![] }
+        );
     }
 
     /* ============================================================== language */

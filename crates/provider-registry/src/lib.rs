@@ -214,7 +214,7 @@ pub struct WhisperModel {
     pub size_mb: Option<f64>,
     /// SHA-256 of the model file, measured from a real download.
     ///
-    /// Non-null for all six shipped models. `Option` because a model added to
+    /// Non-null for all shipped models. `Option` because a model added to
     /// the registry before anybody downloads it has no digest, and
     /// `models::integrity_for` degrades to a size check rather than pretending
     /// otherwise.
@@ -495,7 +495,11 @@ mod tests {
         assert_eq!(r.reasoning.len(), 7, "reasoning providers");
         assert_eq!(r.enterprise.len(), 3, "enterprise providers");
         assert_eq!(r.local_llm.len(), 6, "local llm providers");
-        assert_eq!(r.local_asr.whisper.len(), 6, "whisper models");
+        assert_eq!(
+            r.local_asr.whisper.len(),
+            8,
+            "six upstream plus two KB Whisper models"
+        );
         assert_eq!(r.local_asr.sherpa.len(), 4, "sherpa models");
 
         let models: usize = r
@@ -507,6 +511,33 @@ mod tests {
             + r.enterprise.iter().map(|p| p.models.len()).sum::<usize>()
             + r.local_llm.iter().map(|p| p.models.len()).sum::<usize>();
         assert_eq!(models, 96, "total provider-array models");
+    }
+
+    #[test]
+    fn kb_whisper_models_are_pinned_and_have_distinct_cache_files() {
+        let r = reg();
+        let mut files = std::collections::HashSet::new();
+        for model in &r.local_asr.whisper {
+            assert!(files.insert(&model.file_name), "duplicate cache filename");
+        }
+        for (id, size) in [
+            ("kb-whisper-tiny", 29_875_738),
+            ("kb-whisper-base", 55_295_450),
+        ] {
+            let model = r
+                .local_asr
+                .whisper
+                .iter()
+                .find(|m| m.id == id)
+                .expect("KB model present");
+            assert!(model.name.contains("Swedish"));
+            assert!(model
+                .download_url
+                .starts_with(&format!("https://huggingface.co/KBLab/{id}/resolve/")));
+            assert!(!model.download_url.contains("/main/"));
+            assert_eq!(model.sha256.as_ref().map(String::len), Some(64));
+            assert_eq!(model.expected_size_bytes, Some(size));
+        }
     }
 
     #[test]

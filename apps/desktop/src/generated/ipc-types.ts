@@ -56,13 +56,8 @@ captureExclusion: CaptureExclusion,
  */
 nonActivating: NonActivating,
 /**
- * Whether the overlay is visible right now.
- *
- * This was a hardcoded `true` while nothing recorded, which made the
- * guarantee it was supposed to express vacuous. It is now a real read of the
- * window, and [`set_visible`] is the only thing that changes it — called
- * from the dictation state sink, so "recording" and "the user can see it"
- * cannot come apart.
+ * Whether dictation is recording and its indicator window is visible.
+ * An idle persistent microphone does not count as a recording indicator.
  */
 recordingIndicatorVisible: boolean,
 /**
