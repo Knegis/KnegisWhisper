@@ -1182,6 +1182,7 @@ label:has(> input[type="checkbox"]) {
  * equally local: it gives `.overlay` and `.notify`'s existing `height: 100%`
  * the window to resolve against instead of letting them collapse to `auto`.
  */
+:root[data-window="dictation-languages"],
 :root[data-window="overlay"],
 :root[data-window="meeting"],
 :root[data-window="update"] {
@@ -1190,6 +1191,7 @@ label:has(> input[type="checkbox"]) {
   scrollbar-gutter: auto;
 }
 
+:root[data-window="dictation-languages"] body,
 :root[data-window="overlay"] body,
 :root[data-window="meeting"] body,
 :root[data-window="update"] body {
@@ -1197,6 +1199,7 @@ label:has(> input[type="checkbox"]) {
   background: transparent;
 }
 
+:root[data-window="dictation-languages"] #root,
 :root[data-window="overlay"] #root,
 :root[data-window="meeting"] #root,
 :root[data-window="update"] #root {
@@ -1682,7 +1685,7 @@ button:disabled {
 }
 
 /* Persistent dictation control: native window retains WS_EX_NOACTIVATE. */
-.microphone-overlay { height: 100%; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; padding: 0; gap: 6px; user-select: none; }
+.microphone-overlay { height: 100%; overflow: clip; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; padding: 0; gap: 6px; user-select: none; }
 /* Keep the hit target and layout fixed as the visible pill expands. */
 .floating-microphone { position: relative; display: flex; align-items: center; justify-content: center; width: 52px; height: 32px; min-height: 32px; padding: 0; flex-shrink: 0; border-radius: 1px; background: transparent; color: white; box-shadow: none; border: 0; cursor: pointer; touch-action: none; }
 button.floating-microphone:hover:not(:disabled) { background: transparent; color: white; border-color: transparent; box-shadow: none; }
@@ -1719,7 +1722,7 @@ button.microphone-language-toggle:hover:not(:disabled) { background: transparent
 .microphone-language-menu input { width: 14px; height: 14px; }
 
 .microphone-language-toggle { opacity: 0; pointer-events: none; transition: opacity 120ms ease; }
-.microphone-controls:is(:hover, .hold-hover) .microphone-language-toggle, .microphone-language-toggle:focus-visible { opacity: 1; pointer-events: auto; }
+.microphone-controls:is(:hover, .hold-hover, :has(.is-recording)) .microphone-language-toggle, .microphone-language-toggle:focus-visible { opacity: 1; pointer-events: auto; }
 
 .microphone-controls:is(:hover, .hold-hover) .microphone-glyph { opacity: 1; transform: scale(1); }
 @media (prefers-reduced-motion: reduce) { .microphone-language-toggle { transition: none; } }
@@ -1730,9 +1733,12 @@ button.microphone-language-toggle:hover:not(:disabled) { background: transparent
 /* One animated surface, with separate dictation and language hit targets. */
 .microphone-controls::before { content: ""; position: absolute; left: 48px; top: 48px; width: 32px; height: 6px; border-radius: 1px; background: #858985; --surface-shift: 0px; --surface-angle: 0deg; transform: translate(-50%, -50%) rotate(var(--surface-angle)) translateX(var(--surface-shift)); transition: width 160ms ease, height 160ms ease, transform 160ms ease, background-color 160ms ease; pointer-events: none; }
 .is-vertical .microphone-controls::before { --surface-angle: 90deg; }
-.microphone-controls:has(.floating-microphone[data-expanded="true"])::before { width: 52px; height: 28px; border-radius: 2px; background: #303430; }
+.microphone-controls:has(.floating-microphone[data-expanded="true"])::before { width: 68px; height: 28px; --surface-shift: 8px; border-radius: 2px; background: #303430; }
 .microphone-controls:is(:hover, .hold-hover, :has(:focus-visible))::before { width: 68px; height: 28px; --surface-shift: 8px; border-radius: 2px; background: #303430; }
-.microphone-controls:has(.is-recording)::before { background: var(--band); }
+.microphone-controls:has(.floating-microphone.is-recording)::before { background: var(--band); }
 .microphone-controls:has(:focus-visible) .microphone-language-toggle { opacity: 1; pointer-events: auto; }
 .microphone-controls:has(:focus-visible) .microphone-glyph { opacity: 1; transform: scale(1); }
 @media (prefers-reduced-motion: reduce) { .microphone-controls::before { transition: none; } }
+
+.language-popup { height: 100%; overflow: clip; padding: 6px; }
+.language-popup .microphone-language-menu { width: 100%; max-height: 100%; }

@@ -1277,3 +1277,5 @@ export async function setLocalDictationLanguages(languages: string[]): Promise<v
 export function onLocalDictationLanguages(handler: (languages: string[]) => void) {
   return listen<string[]>("dictation-languages", event => handler(event.payload));
 }
+
+export async function setOverlayLanguageMenu(visible: boolean): Promise<void> { return invoke("overlay_message", { visible, menu: true }); }

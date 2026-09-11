@@ -7,6 +7,8 @@ use std::sync::{
 };
 use tauri::{AppHandle, Emitter as _, LogicalSize, Manager as _, PhysicalPosition, WebviewWindow};
 
+/// The separate language popup; the microphone keeps `overlay::LABEL`.
+pub const LABEL: &str = "dictation-languages";
 const KEY: &str = "dictation.floatingMicrophone";
 const EVENT: &str = "overlay-preferences";
 const SIZE: f64 = 96.0;
@@ -50,6 +52,8 @@ pub struct Controller {
     vertical: AtomicBool,
     #[cfg(windows)]
     clicks: Mutex<Option<kw_platform::pointer_watch::Watch>>,
+    #[cfg(windows)]
+    menu_clicks: Mutex<Option<kw_platform::pointer_watch::Watch>>,
 }
 fn controller(app: &AppHandle) -> tauri::State<'_, Controller> {
     app.state::<Controller>()
@@ -178,17 +182,11 @@ fn restore(app: &AppHandle, window: &WebviewWindow) -> Result<(), String> {
         }
     }
     crate::window_placement::bottom_center(window, SIZE, SIZE, "floating microphone");
-    // The transparent lower half already separates the visible button from the taskbar.
-    // Put the native window at the work-area bottom instead of adding another 24px gap.
+    // Use the same lower boundary as dragging, including the transparent padding.
     if let Some(area) = crate::window_placement::resolved_work_area(window, "floating microphone") {
         let pos = window.outer_position().map_err(|e| e.to_string())?;
-        let size = window.outer_size().map_err(|e| e.to_string())?;
-        let height = i32::try_from(size.height).map_err(|e| e.to_string())?;
         window
-            .set_position(PhysicalPosition::new(
-                pos.x,
-                area.bottom.saturating_sub(height),
-            ))
+            .set_position(PhysicalPosition::new(pos.x, area.bottom))
             .map_err(|e| e.to_string())?;
         clamp(window)?;
     }
@@ -246,6 +244,7 @@ pub async fn overlay_preferences_set(app: AppHandle, enabled: bool) -> Result<Sn
         .await
         .map_err(|e| e.to_string())?;
     publish(&app, prefs)?;
+    hide_language_menu(&app)?;
     state.message.store(false, Ordering::SeqCst);
     #[cfg(windows)]
     {
@@ -261,6 +260,7 @@ pub async fn overlay_position_reset(app: AppHandle) -> Result<(), String> {
     let _guard = state.writes.lock().await;
     let mut prefs = state.prefs.lock().map_err(|e| e.to_string())?.clone();
     prefs.position = None;
+    hide_language_menu(&app)?;
     state.message.store(false, Ordering::SeqCst);
     #[cfg(windows)]
     {
@@ -339,7 +339,14 @@ pub async fn overlay_message(
     app: AppHandle,
     window: WebviewWindow,
     visible: bool,
+    menu: Option<bool>,
 ) -> Result<(), String> {
+    if menu == Some(true) {
+        if window.label() != overlay::LABEL && (window.label() != LABEL || visible) {
+            return Err("Language menu unavailable".into());
+        }
+        return language_menu(&app, visible).await;
+    }
     if window.label() != overlay::LABEL || !snapshot(&app)?.enabled {
         return Ok(());
     }
@@ -361,25 +368,17 @@ pub async fn overlay_message(
             .take()
             .unwrap_or(pos)
     };
+    // Apply the native bounds together on the UI thread, so no paint can occur
+    // between resizing, moving, and clamping the transparent overlay.
+    let (send, receive) = tokio::sync::oneshot::channel();
+    let panel = window.clone();
     window
-        .set_size(LogicalSize::new(
-            if visible { PANEL_WIDTH } else { SIZE },
-            if visible { PANEL_HEIGHT } else { SIZE },
-        ))
+        .run_on_main_thread(move || {
+            let result = position_panel(&panel, visible, anchor, scale);
+            let _ = send.send(result);
+        })
         .map_err(|e| e.to_string())?;
-    window
-        .set_position(PhysicalPosition::new(
-            f64::from(anchor.x) - if visible { PANEL_X * scale } else { 0.0 },
-            f64::from(anchor.y) - if visible { PANEL_Y * scale } else { 0.0 },
-        ))
-        .map_err(|e| e.to_string())?;
-    clamp(&window)?;
-    let placed = window.outer_position().map_err(|e| e.to_string())?;
-    // Clamping the popup must not move its microphone away from the saved anchor.
-    window.emit("overlay-anchor-offset", serde_json::json!({
-        "x": if visible { (f64::from(anchor.x) - f64::from(placed.x)) / scale - PANEL_X } else { 0.0 },
-        "y": if visible { (f64::from(anchor.y) - f64::from(placed.y)) / scale - PANEL_Y } else { 0.0 },
-    })).map_err(|e| e.to_string())?;
+    receive.await.map_err(|e| e.to_string())??;
     state.message.store(visible, Ordering::SeqCst);
     #[cfg(windows)]
     {
@@ -407,6 +406,124 @@ pub async fn overlay_message(
     if !visible {
         update_orientation(&app, &window)?;
     }
+    Ok(())
+}
+
+pub fn create_language_popup(app: &AppHandle) -> tauri::Result<()> {
+    let popup = tauri::WebviewWindowBuilder::new(
+        app,
+        LABEL,
+        tauri::WebviewUrl::App("index.html#dictation-languages".into()),
+    )
+    .title("Dictation languages")
+    .inner_size(280.0, 252.0)
+    .resizable(false)
+    .decorations(false)
+    .transparent(true)
+    .shadow(false)
+    .always_on_top(true)
+    .skip_taskbar(true)
+    .focusable(!cfg!(windows))
+    .focused(false)
+    .visible(false)
+    .build()?;
+    let _ = overlay::apply_treatments(&popup);
+    Ok(())
+}
+fn hide_language_menu(app: &AppHandle) -> Result<(), String> {
+    if let Some(popup) = app.get_webview_window(LABEL) {
+        popup.hide().map_err(|e| e.to_string())?;
+    }
+    #[cfg(windows)]
+    {
+        *controller(app)
+            .menu_clicks
+            .lock()
+            .map_err(|e| e.to_string())? = None;
+    }
+    app.emit("overlay-language-menu", false)
+        .map_err(|e| e.to_string())
+}
+async fn language_menu(app: &AppHandle, visible: bool) -> Result<(), String> {
+    let state = controller(app);
+    let _guard = state.writes.lock().await;
+    if !visible || !snapshot(app)?.enabled {
+        return hide_language_menu(app);
+    }
+    let mic = overlay_window(app)?;
+    let popup = app
+        .get_webview_window(LABEL)
+        .ok_or("Language menu unavailable")?;
+    let pos = mic.outer_position().map_err(|e| e.to_string())?;
+    let scale = mic.scale_factor().map_err(|e| e.to_string())?;
+    // Only move the popup. The microphone's native window never changes bounds.
+    let above = f64::from(pos.y) - 224.0 * scale;
+    let y = match crate::window_placement::resolved_work_area(&mic, "language popup") {
+        Some(area) if above < f64::from(area.top) => f64::from(pos.y) + 74.0 * scale,
+        _ => above,
+    };
+    popup
+        .set_position(PhysicalPosition::new(f64::from(pos.x) - 92.0 * scale, y))
+        .map_err(|e| e.to_string())?;
+    clamp(&popup)?;
+    popup.show().map_err(|e| e.to_string())?;
+    app.emit("overlay-language-menu", true)
+        .map_err(|e| e.to_string())?;
+    #[cfg(windows)]
+    {
+        let (send, mut receive) = tokio::sync::mpsc::unbounded_channel();
+        *state.menu_clicks.lock().map_err(|e| e.to_string())? =
+            Some(kw_platform::pointer_watch::watch(send).map_err(|e| e.to_string())?);
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move {
+            while let Some((x, y)) = receive.recv().await {
+                if !contains_point(&popup, x, y) && !contains_point(&mic, x, y) {
+                    let _ = hide_language_menu(&app);
+                    break;
+                }
+            }
+        });
+    }
+    Ok(())
+}
+#[cfg(windows)]
+fn contains_point(window: &WebviewWindow, x: i32, y: i32) -> bool {
+    match (window.outer_position(), window.outer_size()) {
+        (Ok(pos), Ok(size)) => {
+            i64::from(x) >= i64::from(pos.x)
+                && i64::from(y) >= i64::from(pos.y)
+                && i64::from(x) < i64::from(pos.x) + i64::from(size.width)
+                && i64::from(y) < i64::from(pos.y) + i64::from(size.height)
+        }
+        _ => false,
+    }
+}
+
+fn position_panel(
+    window: &WebviewWindow,
+    visible: bool,
+    anchor: PhysicalPosition<i32>,
+    scale: f64,
+) -> Result<(), String> {
+    window
+        .set_size(LogicalSize::new(
+            if visible { PANEL_WIDTH } else { SIZE },
+            if visible { PANEL_HEIGHT } else { SIZE },
+        ))
+        .map_err(|e| e.to_string())?;
+    window
+        .set_position(PhysicalPosition::new(
+            f64::from(anchor.x) - if visible { PANEL_X * scale } else { 0.0 },
+            f64::from(anchor.y) - if visible { PANEL_Y * scale } else { 0.0 },
+        ))
+        .map_err(|e| e.to_string())?;
+    clamp(window)?;
+    let placed = window.outer_position().map_err(|e| e.to_string())?;
+    // Clamping the popup must not move its microphone away from the saved anchor.
+    window.emit("overlay-anchor-offset", serde_json::json!({
+        "x": if visible { (f64::from(anchor.x) - f64::from(placed.x)) / scale - PANEL_X } else { 0.0 },
+        "y": if visible { (f64::from(anchor.y) - f64::from(placed.y)) / scale - PANEL_Y } else { 0.0 },
+    })).map_err(|e| e.to_string())?;
     Ok(())
 }
 

@@ -98,6 +98,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<WebviewWindow> {
             .visible(false)
             .build()?;
 
+    crate::persistent_overlay::create_language_popup(app)?;
     crate::window_placement::bottom_center(&overlay, WIDTH, HEIGHT, "dictation overlay");
     Ok(overlay)
 }
