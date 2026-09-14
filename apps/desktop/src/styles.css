@@ -1627,7 +1627,7 @@ button:disabled {
   --nav-col: 4rem;
 }
 
-.sidebar button.sidebar-toggle {
+.app-titlebar button.sidebar-toggle {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1635,8 +1635,9 @@ button:disabled {
   height: 2rem;
   padding: 0.25rem;
   /* Centre in the 4rem retracted rail; keep the same anchor when expanded. */
-  margin-left: -0.5rem;
-  margin-bottom: 1rem;
+  flex-shrink: 0;
+  align-self: center;
+  margin: 0 0 0 1rem;
   color: var(--text);
 }
 
@@ -1660,9 +1661,6 @@ button:disabled {
     border-bottom: 1px solid var(--faint);
   }
 
-  .shell-sidebar-retracted .sidebar-toggle {
-    margin-bottom: 0;
-  }
 }
 
 /* A brief resize keeps the toggle anchored while the page gains or loses space. */
@@ -1742,3 +1740,26 @@ button.microphone-language-toggle:hover:not(:disabled) { background: transparent
 
 .language-popup { height: 100%; overflow: clip; padding: 6px; }
 .language-popup .microphone-language-menu { width: 100%; max-height: 100%; }
+
+/* Custom chrome belongs only to the main window; floating panels stay borderless. */
+:root[data-window="main"] { --titlebar-height: 38px; overflow: hidden; scrollbar-gutter: auto; }
+:root[data-window="main"] .shell { position: fixed; inset: var(--titlebar-height) 0 0; overflow-y: auto; }
+:root[data-window="main"] .sidebar { top: var(--titlebar-height); }
+.app-titlebar { position: fixed; inset: 0 0 auto; height: var(--titlebar-height); display: flex; align-items: stretch; z-index: 1000; background: var(--bg); color: var(--text); border-bottom: 1px solid var(--faint); user-select: none; }
+.app-titlebar-drag { flex: 1; min-width: 0; display: flex; align-items: center; padding-left: 16px; font-size: 13px; cursor: default; }
+.app-titlebar-drag span { pointer-events: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.app-titlebar-buttons { display: flex; flex-shrink: 0; }
+.app-titlebar-buttons button { display: flex; align-items: center; justify-content: center; width: 46px; height: 100%; min-height: 0; margin: 0; padding: 0; border: 0; border-radius: 0; background: transparent; color: inherit; box-shadow: none; }
+.app-titlebar-buttons button:hover:not(:disabled) { background: var(--faint); color: inherit; }
+.app-titlebar-buttons button:active:not(:disabled) { background: var(--band); color: var(--band-ink); }
+.app-titlebar-buttons button.window-close:hover:not(:disabled) { background: #c42b1c; color: white; }
+.app-titlebar-buttons button:focus-visible { outline: 2px solid var(--band); outline-offset: -3px; }
+.window-icon { display: block; width: 20px; height: 20px; background: currentColor; mask-position: center; mask-size: contain; mask-repeat: no-repeat; pointer-events: none; }
+.window-icon-minimize { mask-image: url('./assets/window/minus.svg'); }
+.window-icon-maximize { mask-image: url('./assets/window/de-compress.svg'); }
+.window-icon-restore { mask-image: url('./assets/window/compress.svg'); }
+.window-icon-close { mask-image: url('./assets/window/xmark.svg'); }
+.window-control-error { position: fixed; top: var(--titlebar-height); right: 0; z-index: 1001; max-width: 32rem; padding: 12px; background: var(--bg); color: var(--text); border: 1px solid var(--faint); }
+
+:root[data-window="main"] .sidebar { padding-top: 0.75rem; }
+#sidebar-navigation > ul { margin-top: 0; }

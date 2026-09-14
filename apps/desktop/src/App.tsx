@@ -1,3 +1,4 @@
+import { TitleBar } from "./components/TitleBar";
 import { LanguagePopup } from "./components/LanguagePopup";
 /**
  * The shell: a rail, a view, and an error boundary. Nothing else.
@@ -172,7 +173,7 @@ function renderView(
   }
 }
 
-function Shell() {
+function Shell({ sidebarExpanded }: { sidebarExpanded: boolean }) {
   const load = useCallback(() => getDiagnostics(), []);
   const { data: diagnostics, error } = useRefresh(load);
 
@@ -180,7 +181,6 @@ function Shell() {
   // application is for. Reopening on the screen you last used sounds helpful
   // until the screen you last used is the one that failed.
   const [view, setView] = useState<ViewId>(DEFAULT_VIEW);
-  const [sidebarExpanded, setSidebarExpanded] = useState(true);
   const [importedNoteId, setImportedNoteId] = useState<number | null>(null);
 
   // Both groups start closed. Dictation is a top-level destination, so the
@@ -241,14 +241,10 @@ function Shell() {
     <main className={sidebarExpanded ? "shell" : "shell shell-sidebar-retracted"}>
       <Sidebar
         expanded={sidebarExpanded}
-        onToggle={() => setSidebarExpanded((expanded) => !expanded)}
         view={view}
         openGroups={openGroups}
         onSelect={select}
         onToggleGroup={toggleGroup}
-        appVersion={diagnostics.appVersion}
-        os={diagnostics.os}
-        arch={diagnostics.arch}
       />
 
       <div className="content">
@@ -266,12 +262,18 @@ function Shell() {
  * Four windows are served by one bundle, routed through `currentSurface()`. One
  * bundle means one CSP and one build.
  */
+function MainWindow() {
+  const [sidebarExpanded, setSidebarExpanded] = useState(true);
+  const toggleSidebar = () => setSidebarExpanded(expanded => !expanded);
+  return <><TitleBar sidebarExpanded={sidebarExpanded} onToggleSidebar={toggleSidebar} /><Shell sidebarExpanded={sidebarExpanded} /></>;
+}
+
 export default function App() {
   // One bundle, multiple surfaces. The closed union and no `default` make a new
   // surface a compile-visible addition rather than a quiet fall-through.
   switch (currentSurface()) {
     case "main":
-      return <Shell />;
+      return <MainWindow />;
     case "dictation-languages":
       return <LanguagePopup />;
     case "overlay":
