@@ -183,7 +183,7 @@ mod tests {
                 cmd: "notes_delete".to_owned(),
                 callback: tauri::ipc::CallbackFn(0),
                 error: tauri::ipc::CallbackFn(1),
-                url: "http://tauri.localhost".parse().unwrap(),
+                url: webview.url().unwrap(),
                 body: tauri::ipc::InvokeBody::Json(serde_json::json!({"id": id})),
                 headers: Default::default(),
                 invoke_key: tauri::test::INVOKE_KEY.to_owned(),
