@@ -1,5 +1,5 @@
 /**
- * The rail: the application's name, what version is running, and every screen.
+ * The rail: navigation to every screen.
  *
  * It renders `lib/navigation.ts`'s tree and holds no state -- `App.tsx` owns
  * both the current view and the set of open groups, and passes them down. That
@@ -34,61 +34,20 @@ import { childrenOf, isGroup, NAV, type ViewId } from "../lib/navigation";
 
 export function Sidebar({
   expanded,
-  onToggle,
   view,
   openGroups,
   onSelect,
   onToggleGroup,
-  appVersion,
-  os,
-  arch,
 }: {
   expanded: boolean;
-  onToggle: () => void;
   view: ViewId;
   openGroups: ReadonlySet<string>;
   onSelect: (id: ViewId) => void;
   onToggleGroup: (id: string) => void;
-  appVersion: string;
-  os: string;
-  arch: string;
 }) {
   return (
     <nav className="sidebar" aria-label="Main navigation">
-      <button
-        type="button"
-        className="sidebar-toggle"
-        aria-label={expanded ? "Retract sidebar" : "Expand sidebar"}
-        title={expanded ? "Retract sidebar" : "Expand sidebar"}
-        aria-expanded={expanded}
-        aria-controls="sidebar-navigation"
-        onClick={onToggle}
-      >
-        <svg
-          width="24"
-          height="24"
-          viewBox="0 0 24 24"
-          fill="none"
-          xmlns="http://www.w3.org/2000/svg"
-          stroke="currentColor"
-          strokeWidth="1.5"
-          aria-hidden="true"
-          focusable="false"
-        >
-          <path d="M3 3H21V21H3V3Z" strokeLinecap="square" strokeLinejoin="miter" />
-          <path d="M9.5 21V3" strokeLinecap="round" strokeLinejoin="round" />
-          <path
-            d={expanded ? "M7.25 10L5.5 12L7.25 14" : "M5.5 10L7.25 12L5.5 14"}
-            strokeLinecap="square"
-            strokeLinejoin="miter"
-          />
-        </svg>
-      </button>
       <div id="sidebar-navigation" hidden={!expanded}>
-        <h1>KnegisWhisper</h1>
-        <p className="muted">
-          v{appVersion} · {os} {arch}
-        </p>
         <ul>
           {NAV.map((entry) => {
             if (!isGroup(entry)) {

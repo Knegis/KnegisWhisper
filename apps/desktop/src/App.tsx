@@ -1,3 +1,4 @@
+import { TitleBar } from "./components/TitleBar";
 import { LanguagePopup } from "./components/LanguagePopup";
 /**
  * The shell: a rail, a view, and an error boundary. Nothing else.
@@ -40,7 +41,7 @@ import { LanguagePopup } from "./components/LanguagePopup";
  * died.
  */
 
-import { Component, useCallback, useState, type ReactNode } from "react";
+import { Component, useCallback, useEffect, useState, type ReactNode } from "react";
 
 import { Sidebar } from "./components/Sidebar";
 import { getDiagnostics, type Diagnostics } from "./lib/ipc";
@@ -132,6 +133,7 @@ function renderView(
   diagnostics: Diagnostics,
   select: (id: ViewId) => void,
   importedNoteId: number | null,
+  searchNoteRequest: { id: number } | null,
   openImportedNote: (id: number) => void,
 ): ReactNode {
   switch (view) {
@@ -140,7 +142,7 @@ function renderView(
     case "meetings":
       return <SettingsMeetings />;
     case "notes":
-      return <Notes initialNoteId={importedNoteId} />;
+      return <Notes initialNoteId={importedNoteId} openRequest={searchNoteRequest} />;
     case "notes-upload":
       return <NotesUpload onOpenNote={openImportedNote} />;
     case "providers":
@@ -172,7 +174,7 @@ function renderView(
   }
 }
 
-function Shell() {
+function Shell({ sidebarExpanded, searchNoteRequest, clearSearchRequest }: { sidebarExpanded: boolean; searchNoteRequest: { id: number } | null; clearSearchRequest: () => void }) {
   const load = useCallback(() => getDiagnostics(), []);
   const { data: diagnostics, error } = useRefresh(load);
 
@@ -180,7 +182,6 @@ function Shell() {
   // application is for. Reopening on the screen you last used sounds helpful
   // until the screen you last used is the one that failed.
   const [view, setView] = useState<ViewId>(DEFAULT_VIEW);
-  const [sidebarExpanded, setSidebarExpanded] = useState(true);
   const [importedNoteId, setImportedNoteId] = useState<number | null>(null);
 
   // Both groups start closed. Dictation is a top-level destination, so the
@@ -207,6 +208,8 @@ function Shell() {
       setOpenGroups((prev) => (prev.has(group) ? prev : new Set(prev).add(group)));
     }
   }, []);
+
+  useEffect(() => { if (searchNoteRequest) select("notes"); }, [searchNoteRequest, select]);
 
   const toggleGroup = useCallback((id: string) => {
     setOpenGroups((prev) => {
@@ -241,21 +244,17 @@ function Shell() {
     <main className={sidebarExpanded ? "shell" : "shell shell-sidebar-retracted"}>
       <Sidebar
         expanded={sidebarExpanded}
-        onToggle={() => setSidebarExpanded((expanded) => !expanded)}
         view={view}
         openGroups={openGroups}
         onSelect={select}
         onToggleGroup={toggleGroup}
-        appVersion={diagnostics.appVersion}
-        os={diagnostics.os}
-        arch={diagnostics.arch}
       />
 
       <div className="content">
         {/* `select` rather than `setView`, so landing on Diagnostics opens the
             Developer group that holds it. */}
         <ViewBoundary view={view} onReset={() => select("diagnostics")}>
-          {renderView(view, diagnostics, select, importedNoteId, (id) => { setImportedNoteId(id); select("notes"); })}
+          {renderView(view, diagnostics, select, importedNoteId, searchNoteRequest, (id) => { clearSearchRequest(); setImportedNoteId(id); select("notes"); })}
         </ViewBoundary>
       </div>
     </main>
@@ -266,12 +265,19 @@ function Shell() {
  * Four windows are served by one bundle, routed through `currentSurface()`. One
  * bundle means one CSP and one build.
  */
+function MainWindow() {
+  const [sidebarExpanded, setSidebarExpanded] = useState(true);
+  const [searchNoteRequest, setSearchNoteRequest] = useState<{ id: number } | null>(null);
+  const toggleSidebar = () => setSidebarExpanded(expanded => !expanded);
+  return <><TitleBar sidebarExpanded={sidebarExpanded} onToggleSidebar={toggleSidebar} onOpenNote={id => setSearchNoteRequest({ id })} /><Shell sidebarExpanded={sidebarExpanded} searchNoteRequest={searchNoteRequest} clearSearchRequest={() => setSearchNoteRequest(null)} /></>;
+}
+
 export default function App() {
   // One bundle, multiple surfaces. The closed union and no `default` make a new
   // surface a compile-visible addition rather than a quiet fall-through.
   switch (currentSurface()) {
     case "main":
-      return <Shell />;
+      return <MainWindow />;
     case "dictation-languages":
       return <LanguagePopup />;
     case "overlay":

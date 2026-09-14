@@ -31,6 +31,7 @@ import {
   attachNoteRecording,
   getNoteTranscriptRows,
   getNotes,
+  getNote,
   searchNotes,
   updateNote,
   type ExportedTranscript,
@@ -160,7 +161,7 @@ const NoteWorkspace = forwardRef<
   }, [note.id]);
 
   return (
-    <article className="note-detail" aria-labelledby={`note-title-${note.id}`}>
+    <article id={`note-detail-${note.id}`} className="note-detail" aria-labelledby={`note-title-${note.id}`}>
       <header className="note-detail-header">
         <input
           id={`note-title-${note.id}`}
@@ -207,7 +208,7 @@ const NoteWorkspace = forwardRef<
   );
 });
 
-export function Notes({ initialNoteId = null }: { initialNoteId?: number | null }) {
+export function Notes({ initialNoteId = null, openRequest = null }: { initialNoteId?: number | null; openRequest?: { id: number } | null }) {
   const [folderFilter, setFolderFilter] = useState<number | null>(null);
 
   const load = useCallback(async () => {
@@ -218,7 +219,7 @@ export function Notes({ initialNoteId = null }: { initialNoteId?: number | null 
     return { notes, folders };
   }, [folderFilter]);
 
-  const { data, error, guard, reload } = useRefresh(load);
+  const { data, error, guard, reload, fail } = useRefresh(load);
 
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<SearchHit[] | null>(null);
@@ -227,6 +228,26 @@ export function Notes({ initialNoteId = null }: { initialNoteId?: number | null 
   const [exportedTo, setExportedTo] = useState<string | null>(null);
   const [openNoteId, setOpenNoteId] = useState<number | null>(initialNoteId);
   const workspaceRef = useRef<NoteWorkspaceHandle>(null);
+  const [requestedNote, setRequestedNote] = useState<Note | null>(null);
+  const scrollToRequest = useRef<number | null>(null);
+  useEffect(() => {
+    if (!openRequest) return;
+    let cancelled = false;
+    void (async () => {
+      await workspaceRef.current?.flush();
+      const note = await getNote(openRequest.id);
+      if (cancelled) return;
+      if (!note) throw new Error("This note is no longer available.");
+      scrollToRequest.current = note.id;
+      setRequestedNote(note); setFolderFilter(null); setQuery(""); setHits(null); setOpenNoteId(note.id);
+    })().catch(e => { if (!cancelled) fail(e); });
+    return () => { cancelled = true; };
+  }, [openRequest, fail]);
+  useEffect(() => {
+    if (scrollToRequest.current !== openNoteId) return;
+    const element = document.getElementById(`note-detail-${openNoteId}`);
+    if (element) { element.scrollIntoView({ block: "start" }); scrollToRequest.current = null; }
+  }, [openNoteId, requestedNote, data]);
 
   if (!data) {
     return (
@@ -237,7 +258,7 @@ export function Notes({ initialNoteId = null }: { initialNoteId?: number | null 
   }
 
   const { notes, folders } = data;
-  const openNote = notes.find((note) => note.id === openNoteId) ?? null;
+  const openNote = notes.find((note) => note.id === openNoteId) ?? (requestedNote?.id === openNoteId ? requestedNote : null);
 
   return (
     <div className="view">
