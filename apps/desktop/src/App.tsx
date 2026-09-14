@@ -41,7 +41,7 @@ import { LanguagePopup } from "./components/LanguagePopup";
  * died.
  */
 
-import { Component, useCallback, useState, type ReactNode } from "react";
+import { Component, useCallback, useEffect, useState, type ReactNode } from "react";
 
 import { Sidebar } from "./components/Sidebar";
 import { getDiagnostics, type Diagnostics } from "./lib/ipc";
@@ -133,6 +133,7 @@ function renderView(
   diagnostics: Diagnostics,
   select: (id: ViewId) => void,
   importedNoteId: number | null,
+  searchNoteRequest: { id: number } | null,
   openImportedNote: (id: number) => void,
 ): ReactNode {
   switch (view) {
@@ -141,7 +142,7 @@ function renderView(
     case "meetings":
       return <SettingsMeetings />;
     case "notes":
-      return <Notes initialNoteId={importedNoteId} />;
+      return <Notes initialNoteId={importedNoteId} openRequest={searchNoteRequest} />;
     case "notes-upload":
       return <NotesUpload onOpenNote={openImportedNote} />;
     case "providers":
@@ -173,7 +174,7 @@ function renderView(
   }
 }
 
-function Shell({ sidebarExpanded }: { sidebarExpanded: boolean }) {
+function Shell({ sidebarExpanded, searchNoteRequest, clearSearchRequest }: { sidebarExpanded: boolean; searchNoteRequest: { id: number } | null; clearSearchRequest: () => void }) {
   const load = useCallback(() => getDiagnostics(), []);
   const { data: diagnostics, error } = useRefresh(load);
 
@@ -207,6 +208,8 @@ function Shell({ sidebarExpanded }: { sidebarExpanded: boolean }) {
       setOpenGroups((prev) => (prev.has(group) ? prev : new Set(prev).add(group)));
     }
   }, []);
+
+  useEffect(() => { if (searchNoteRequest) select("notes"); }, [searchNoteRequest, select]);
 
   const toggleGroup = useCallback((id: string) => {
     setOpenGroups((prev) => {
@@ -251,7 +254,7 @@ function Shell({ sidebarExpanded }: { sidebarExpanded: boolean }) {
         {/* `select` rather than `setView`, so landing on Diagnostics opens the
             Developer group that holds it. */}
         <ViewBoundary view={view} onReset={() => select("diagnostics")}>
-          {renderView(view, diagnostics, select, importedNoteId, (id) => { setImportedNoteId(id); select("notes"); })}
+          {renderView(view, diagnostics, select, importedNoteId, searchNoteRequest, (id) => { clearSearchRequest(); setImportedNoteId(id); select("notes"); })}
         </ViewBoundary>
       </div>
     </main>
@@ -264,8 +267,9 @@ function Shell({ sidebarExpanded }: { sidebarExpanded: boolean }) {
  */
 function MainWindow() {
   const [sidebarExpanded, setSidebarExpanded] = useState(true);
+  const [searchNoteRequest, setSearchNoteRequest] = useState<{ id: number } | null>(null);
   const toggleSidebar = () => setSidebarExpanded(expanded => !expanded);
-  return <><TitleBar sidebarExpanded={sidebarExpanded} onToggleSidebar={toggleSidebar} /><Shell sidebarExpanded={sidebarExpanded} /></>;
+  return <><TitleBar sidebarExpanded={sidebarExpanded} onToggleSidebar={toggleSidebar} onOpenNote={id => setSearchNoteRequest({ id })} /><Shell sidebarExpanded={sidebarExpanded} searchNoteRequest={searchNoteRequest} clearSearchRequest={() => setSearchNoteRequest(null)} /></>;
 }
 
 export default function App() {

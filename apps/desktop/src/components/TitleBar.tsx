@@ -1,7 +1,8 @@
+import { TitleBarSearch } from "./TitleBarSearch";
 import { useEffect, useState } from "react";
 import { getCurrentWindow, type Window as AppWindow } from "@tauri-apps/api/window";
 
-export function TitleBar({ sidebarExpanded, onToggleSidebar }: { sidebarExpanded: boolean; onToggleSidebar: () => void }) {
+export function TitleBar({ sidebarExpanded, onToggleSidebar, onOpenNote }: { sidebarExpanded: boolean; onToggleSidebar: () => void; onOpenNote: (id: number) => void }) {
   const [maximized, setMaximized] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const native = "__TAURI_INTERNALS__" in window;
@@ -64,6 +65,7 @@ export function TitleBar({ sidebarExpanded, onToggleSidebar }: { sidebarExpanded
         </svg>
       </button>
 
+      <TitleBarSearch onOpenNote={onOpenNote} />
       <div className="app-titlebar-drag" data-tauri-drag-region>
         <span>KnegisWhisper</span>
       </div>
