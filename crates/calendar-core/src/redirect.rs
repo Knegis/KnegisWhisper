@@ -34,6 +34,7 @@ const RESPONSE_WRITE_BUDGET: Duration = Duration::from_secs(2);
 /// (or a port collision with something unexpected) tying up memory instead of
 /// failing promptly.
 const MAX_REQUEST_LINE_BYTES: usize = 8 * 1024;
+const MAX_HEADER_BYTES: usize = 16 * 1024;
 
 /// The page shown after the browser lands here. Static on purpose: nothing
 /// from the request -- not the code, not the state, not any `error` the
@@ -159,10 +160,33 @@ impl LoopbackReceiver {
             .await
             .map_err(|_elapsed| RedirectError::TimedOut)??;
 
-        let _ = timeout(RESPONSE_WRITE_BUDGET, write_courtesy_page(&mut stream)).await;
+        let _ = timeout(RESPONSE_WRITE_BUDGET, async {
+            // Closing with unread HTTP headers can reset the connection on
+            // macOS. Drain only the bounded header section, never a body.
+            read_headers(&mut stream).await?;
+            write_courtesy_page(&mut stream).await
+        })
+        .await;
 
         Ok(params)
     }
+}
+
+/// Consume headers without retaining their potentially sensitive contents.
+async fn read_headers(stream: &mut (impl AsyncRead + Unpin)) -> Result<(), RedirectError> {
+    let mut line_bytes = 0;
+    for _ in 0..MAX_HEADER_BYTES {
+        let byte = stream.read_u8().await.map_err(RedirectError::Read)?;
+        if byte == b'\n' {
+            if line_bytes == 0 {
+                return Ok(());
+            }
+            line_bytes = 0;
+        } else if byte != b'\r' {
+            line_bytes += 1;
+        }
+    }
+    Err(RedirectError::MalformedRequest)
 }
 
 /// Accept one connection, read its request line, and parse the callback --
@@ -344,6 +368,9 @@ mod tests {
         let response = client.await.unwrap();
         assert!(response.starts_with("HTTP/1.1 200"));
         assert!(response.contains("close this window"));
+        let (headers, body) = response.split_once("\r\n\r\n").unwrap();
+        assert!(headers.contains(&format!("Content-Length: {}", body.len())));
+        assert_eq!(body, RESPONSE_BODY);
     }
 
     #[tokio::test]
@@ -420,5 +447,70 @@ mod tests {
         assert_eq!(params.state, Some("the-state".to_owned()));
 
         client.await.unwrap();
+    }
+    #[tokio::test]
+    async fn headers_are_bounded_and_may_arrive_in_fragments() {
+        let (mut writer, mut reader) = tokio::io::duplex(64);
+        let task = tokio::spawn(async move {
+            writer.write_all(b"Host: local\r").await.unwrap();
+            tokio::task::yield_now().await;
+            writer.write_all(b"\nX-Test: yes\r\n\r\n").await.unwrap();
+        });
+        read_headers(&mut reader).await.unwrap();
+        task.await.unwrap();
+        let bytes = vec![b'x'; MAX_HEADER_BYTES];
+        assert!(matches!(
+            read_headers(&mut bytes.as_slice()).await,
+            Err(RedirectError::MalformedRequest)
+        ));
+        assert!(matches!(
+            read_headers(&mut b"Host: local".as_slice()).await,
+            Err(RedirectError::Read(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_parsed_callback_survives_incomplete_or_oversized_headers() {
+        for suffix in [Vec::new(), vec![b'x'; MAX_HEADER_BYTES + 1]] {
+            let receiver = LoopbackReceiver::bind().await.unwrap();
+            let mut client = TcpStream::connect(("127.0.0.1", receiver.port()))
+                .await
+                .unwrap();
+            client
+                .write_all(b"GET /callback?code=saved HTTP/1.1\r\n")
+                .await
+                .unwrap();
+            client.write_all(&suffix).await.unwrap();
+            client.shutdown().await.unwrap();
+            assert_eq!(
+                receiver
+                    .receive(Duration::from_secs(5))
+                    .await
+                    .unwrap()
+                    .code
+                    .as_deref(),
+                Some("saved")
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn stalled_headers_cannot_lose_a_parsed_callback() {
+        let receiver = LoopbackReceiver::bind().await.unwrap();
+        let mut client = TcpStream::connect(("127.0.0.1", receiver.port()))
+            .await
+            .unwrap();
+        client
+            .write_all(b"GET /callback?code=saved HTTP/1.1\r\n")
+            .await
+            .unwrap();
+        let params = timeout(
+            RESPONSE_WRITE_BUDGET + Duration::from_secs(1),
+            receiver.receive(Duration::from_secs(5)),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(params.code.as_deref(), Some("saved"));
     }
 }
