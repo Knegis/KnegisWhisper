@@ -25,12 +25,14 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
   collect,
+  cargoManifests,
   violations,
   declaredFeatures,
   enablements,
@@ -57,6 +59,25 @@ function withCi(source) {
 }
 
 const rules = (found) => found.map((v) => v.rule).sort();
+
+test("KNEG-226: worktree copies are excluded while ordinary manifests remain audited", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "kw-feature-audit-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const manifests = [
+    "Cargo.toml",
+    "apps/desktop/Cargo.toml",
+    "vendor/example/Cargo.toml",
+    ".worktrees/stale/apps/desktop/Cargo.toml",
+    ".worktrees/stale/crates/obsolete/Cargo.toml",
+  ];
+  for (const manifest of manifests) {
+    mkdirSync(dirname(join(root, manifest)), { recursive: true });
+    writeFileSync(join(root, manifest), '[package]\nname = "example"\n');
+  }
+  // The selected root may itself be a linked worktree.
+  writeFileSync(join(root, ".git"), "gitdir: /unused/worktree/metadata\n");
+  assert.deepEqual(cargoManifests(root), manifests.slice(0, 3));
+});
 
 test("the real tree is clean, and not vacuously so", () => {
   const real = collect(REPO_ROOT);
