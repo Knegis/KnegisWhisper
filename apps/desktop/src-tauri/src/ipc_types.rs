@@ -138,6 +138,7 @@ fn render() -> String {
             kw_platform::hotkey::Caution,
             crate::commands::HotkeyReport,
             crate::shortcuts::Registration,
+        crate::shortcuts::RegistrationReport,
             crate::commands::HotkeyChange,
         ],
         "providers" => [

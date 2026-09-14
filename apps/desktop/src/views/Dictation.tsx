@@ -24,6 +24,8 @@ import {
   getHistory,
   getHistoryEnabled,
   getHotkeys,
+  getSetting,
+  setHotkeyPortal,
   getInputDevices,
   getKeepRawText,
   isInsertionSupported,
@@ -71,6 +73,7 @@ export function DictationView({
       history,
       historyOn,
       keepRaw,
+      portalPreference,
     ] = await Promise.all([
       getHotkeys(),
       getDictationState(),
@@ -80,6 +83,7 @@ export function DictationView({
       getHistory(20),
       getHistoryEnabled(),
       getKeepRawText(),
+      getSetting("hotkey.usePortal"),
     ]);
     return {
       hotkeys,
@@ -90,10 +94,17 @@ export function DictationView({
       history,
       historyOn,
       keepRaw,
+      portalPreference: portalPreference === true,
     };
   }, []);
 
   const { data, error, reload, guard } = useRefresh(load);
+
+  useEffect(() => {
+    if (!data?.hotkeys.portalEnabled) return;
+    const timer = window.setInterval(() => void reload(), 3000);
+    return () => window.clearInterval(timer);
+  }, [data?.hotkeys.portalEnabled, reload]);
 
   /** Live session state, which arrives by event between reads. */
   const [session, setSession] = useState<string | null>(null);
@@ -200,6 +211,30 @@ export function DictationView({
 
       <section data-surface="dictation.shortcuts">
         <h2>Shortcuts</h2>
+        {hotkeys.portalSupported && (
+          <div className="field">
+            <label>
+              <input type="checkbox" checked={data.portalPreference}
+                onChange={(event) => { const enabled = event.target.checked; void guard(async () => {
+                  await setHotkeyPortal(enabled); await reload();
+                }); }} />
+              Use desktop portal for shortcuts
+            </label>
+            <p className="muted">Opt-in preview. Restart the application after changing this setting. The desktop may ask you to approve or change the shortcut.</p>
+            {data.portalPreference !== hotkeys.portalEnabled && <p role="status">Restart required to apply this change.</p>}
+          </div>
+        )}
+        {hotkeys.portalEnabled && hotkeys.registrations.map((report) => (
+          <div key={report.action} className="row-detail">
+            {report.results.map((result, index) => <p key={index}>
+              {result.accelerator}: {result.state === "portal"
+                ? `Desktop shortcut: ${result.granted ?? "see desktop shortcut settings"}`
+                : result.state === "registered" ? "Registered using the fallback shortcut service."
+                : result.state === "hooked" ? "Keyboard hook active."
+                : result.reason}
+            </p>)}
+          </div>
+        ))}
         {hotkeys.bindings.map((b) => (
           <div key={b.action} className="row">
             <span className="row-label">{b.action}</span>

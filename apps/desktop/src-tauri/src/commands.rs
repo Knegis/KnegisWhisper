@@ -90,6 +90,9 @@ pub struct UnhandledAction {
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct HotkeyReport {
+    pub registrations: Vec<crate::shortcuts::RegistrationReport>,
+    pub portal_supported: bool,
+    pub portal_enabled: bool,
     pub bindings: Vec<Binding>,
     /// Accelerators claimed by more than one action.
     pub conflicts: Vec<hotkey::Conflict>,
@@ -104,6 +107,17 @@ pub struct HotkeyReport {
     pub cautions: Vec<hotkey::Caution>,
 }
 
+/// Save the opt-in Linux backend choice. Applied only at the next startup.
+#[tauri::command]
+pub async fn hotkey_set_portal(state: State<'_, AppState>, enabled: bool) -> CmdResult<()> {
+    if !cfg!(target_os = "linux") {
+        return Err("Desktop portal shortcuts are only available on Linux.".into());
+    }
+    settings::set(state.db().pool(), "hotkey.usePortal", &enabled)
+        .await
+        .map_err(|e| fail("could not save the shortcut backend", e))
+}
+
 /// Read the configured hotkeys and say what will actually work.
 ///
 /// This is where the modifier-only problem surfaces: upstream's default
@@ -111,8 +125,14 @@ pub struct HotkeyReport {
 /// register. Reporting it as configured would leave the user pressing a dead
 /// key, so it comes back as a problem with an explanation.
 #[tauri::command]
-pub async fn hotkeys(state: State<'_, AppState>) -> CmdResult<HotkeyReport> {
-    Ok(report_for(load_bindings(&state).await?))
+pub async fn hotkeys(
+    state: State<'_, AppState>,
+    hooks: State<'_, std::sync::Arc<crate::shortcuts::Hooks>>,
+) -> CmdResult<HotkeyReport> {
+    let mut report = report_for(load_bindings(&state).await?);
+    report.registrations = hooks.reports();
+    report.portal_enabled = hooks.portal_enabled;
+    Ok(report)
 }
 
 /// Build the report from bindings that have already been loaded.
@@ -158,6 +178,9 @@ fn report_with_layout(
         .collect();
 
     HotkeyReport {
+        registrations: Vec::new(),
+        portal_supported: cfg!(target_os = "linux"),
+        portal_enabled: false,
         bindings,
         conflicts,
         unhandled,

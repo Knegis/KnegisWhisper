@@ -201,6 +201,9 @@ const BINDINGS: Binding[] = [
 ];
 
 const HOTKEYS: HotkeyReport = {
+  registrations: [],
+  portalSupported: false,
+  portalEnabled: false,
   bindings: BINDINGS,
   conflicts: [
     { accelerator: "Control+Shift+V", actions: ["voice-agent", "meeting"] },
