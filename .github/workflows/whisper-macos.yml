@@ -1,0 +1,42 @@
+name: macOS Whisper server artifacts
+on:
+  workflow_dispatch:
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  build:
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15-intel
+            arch: x86_64
+          - runner: macos-15
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with:
+          repository: ggml-org/whisper.cpp
+          ref: 371b5a7561823ab2bb32142d2751e35e7534727b
+          path: upstream-whisper
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - name: Build, package and verify
+        run: python3 tools/whisper-macos/build.py upstream-whisper target/whisper-macos ${{ matrix.arch }}
+      - uses: actions/upload-artifact@v7
+        with:
+          name: whisper-b4938-macos-${{ matrix.arch }}
+          path: target/whisper-macos/artifacts/*
+          if-no-files-found: error
+      - name: Preserve smoke-test diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: whisper-smoke-log-${{ matrix.arch }}
+          path: target/whisper-macos/smoke-server.log
+          if-no-files-found: ignore
