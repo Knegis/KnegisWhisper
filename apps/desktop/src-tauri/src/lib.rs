@@ -160,6 +160,9 @@ pub fn run() -> anyhow::Result<()> {
             // Cloned before `policy` is moved into the dictation runtime below.
             let meeting_policy = policy.clone();
             let calendar_policy = policy.clone();
+            let portal_enabled = cfg!(target_os = "linux") && tauri::async_runtime::block_on(
+                kw_storage::settings::get::<bool>(state.db().pool(), "hotkey.usePortal")
+            ).ok().flatten().unwrap_or(false);
             app.manage(state);
 
             // Local transcription. The catalogue is parsed here so a malformed
@@ -382,7 +385,7 @@ pub fn run() -> anyhow::Result<()> {
 
             // Held in state so a settings change replaces the hook rather than
             // trying to install a second one, which Windows refuses.
-            let hooks = std::sync::Arc::new(shortcuts::Hooks::default());
+            let hooks = std::sync::Arc::new(shortcuts::Hooks::new(portal_enabled));
             let registrations = shortcuts::register_all(&handle, &bindings, &hooks);
             app.manage(std::sync::Arc::clone(&hooks));
             let live = registrations.iter().filter(|r| r.is_live()).count();
@@ -408,6 +411,7 @@ pub fn run() -> anyhow::Result<()> {
             commands::settings_set,
             commands::settings_keys,
             commands::hotkeys,
+            commands::hotkey_set_portal,
             commands::hotkey_set,
             commands::hotkey_set_mode,
             commands::history,

@@ -68,7 +68,9 @@ export const MANIFEST = "config/cargo-features.json";
 export const WORKFLOW_DIR = ".github/workflows";
 
 /** Directories that never hold a Cargo.toml worth reading. */
-const SKIP = new Set(["target", "node_modules", ".git", "dist", "coverage"]);
+// Local checkout copies are not inputs to this checkout's CI. Do not skip all
+// nested .git markers: vendored packages/submodules must still be audited.
+const SKIP = new Set(["target", "node_modules", ".git", ".worktrees", "dist", "coverage"]);
 
 /**
  * Every Cargo.toml in the tree, not only the workspace members. A feature on a

@@ -30,6 +30,11 @@ pub const HOTKEY_EVENT: &str = "hotkey";
     rename_all_fields = "camelCase"
 )]
 pub enum Registration {
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    Portal {
+        accelerator: String,
+        granted: Option<String>,
+    },
     Registered {
         accelerator: String,
     },
@@ -82,12 +87,15 @@ impl Registration {
     /// the lie this state was added to end.
     #[must_use]
     pub const fn succeeded(&self) -> bool {
-        matches!(self, Self::Registered { .. } | Self::Hooked { .. })
+        matches!(
+            self,
+            Self::Registered { .. } | Self::Hooked { .. } | Self::Portal { .. }
+        )
     }
 }
 
 /// The outcome of registering every configured hotkey.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct RegistrationReport {
     pub action: HotkeyAction,
@@ -235,6 +243,10 @@ pub fn register_all(
     bindings: &[Binding],
     hooks: &Hooks,
 ) -> Vec<RegistrationReport> {
+    #[cfg(target_os = "linux")]
+    if hooks.portal_enabled {
+        return portal_runtime::register(app, bindings, hooks);
+    }
     let manager = app.global_shortcut();
 
     if let Err(err) = manager.unregister_all() {
@@ -330,7 +342,9 @@ pub fn register_all(
         // of them is the user's to make.
         for result in &report.results {
             match result {
-                Registration::Registered { .. } | Registration::Hooked { .. } => {}
+                Registration::Registered { .. }
+                | Registration::Hooked { .. }
+                | Registration::Portal { .. } => {}
                 Registration::Rejected {
                     accelerator,
                     reason,
@@ -361,6 +375,7 @@ pub fn register_all(
         );
     }
 
+    hooks.set_reports(reports.clone());
     reports
 }
 
@@ -371,7 +386,31 @@ pub fn register_all(
 /// refused. Held in application state instead, and replaced rather than added to.
 #[derive(Default)]
 pub struct Hooks {
+    pub portal_enabled: bool,
+    pub reports: std::sync::Arc<std::sync::Mutex<Vec<RegistrationReport>>>,
+    #[cfg(target_os = "linux")]
+    portal_task: std::sync::Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
+    #[cfg(target_os = "linux")]
+    portal_generation: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    #[cfg(target_os = "linux")]
+    portal_gate: std::sync::Arc<std::sync::Mutex<()>>,
     installed: std::sync::Mutex<Option<kw_platform::keyhook::KeyHook>>,
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for Hooks {
+    fn drop(&mut self) {
+        self.portal_generation
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if let Some(task) = self
+            .portal_task
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+        {
+            task.abort();
+        }
+    }
 }
 
 impl std::fmt::Debug for Hooks {
@@ -388,6 +427,54 @@ impl std::fmt::Debug for Hooks {
 }
 
 impl Hooks {
+    pub fn new(portal_enabled: bool) -> Self {
+        Self {
+            portal_enabled,
+            reports: Default::default(),
+            installed: Default::default(),
+            #[cfg(target_os = "linux")]
+            portal_task: Default::default(),
+            #[cfg(target_os = "linux")]
+            portal_generation: Default::default(),
+            #[cfg(target_os = "linux")]
+            portal_gate: Default::default(),
+        }
+    }
+
+    /// Release the portal connection before desktop shutdown.
+    #[cfg(target_os = "linux")]
+    pub fn stop_portal(&self) {
+        let _guard = self
+            .portal_gate
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.portal_generation
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if let Some(task) = self
+            .portal_task
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+        {
+            task.abort();
+        }
+        crate::dictation::release_the_hold();
+    }
+
+    pub fn reports(&self) -> Vec<RegistrationReport> {
+        self.reports
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    fn set_reports(&self, reports: Vec<RegistrationReport>) {
+        *self
+            .reports
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = reports;
+    }
+
     /// Install a hook for every modifier-only accelerator in `bindings`.
     ///
     /// Returns the accelerators that are now live through it. An accelerator
@@ -873,3 +960,7 @@ mod tests {
         assert_eq!(json["accelerator"], "Alt+D");
     }
 }
+
+#[cfg(target_os = "linux")]
+#[path = "shortcut_portal.rs"]
+mod portal_runtime;

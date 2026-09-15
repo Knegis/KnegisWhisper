@@ -1844,7 +1844,7 @@ mod tests {
                 cmd: command.to_owned(),
                 callback: tauri::ipc::CallbackFn(0),
                 error: tauri::ipc::CallbackFn(1),
-                url: "http://tauri.localhost".parse().unwrap(),
+                url: webview.url().unwrap(),
                 body: tauri::ipc::InvokeBody::Json(body),
                 headers: Default::default(),
                 invoke_key: tauri::test::INVOKE_KEY.to_owned(),
@@ -1972,6 +1972,21 @@ mod tests {
         let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
             .build()
             .unwrap();
+
+        let foreign = tauri::test::get_ipc_response(
+            &webview,
+            tauri::webview::InvokeRequest {
+                cmd: "media_import_audio".to_owned(),
+                callback: tauri::ipc::CallbackFn(0),
+                error: tauri::ipc::CallbackFn(1),
+                url: "https://example.invalid".parse().unwrap(),
+                body: tauri::ipc::InvokeBody::Json(serde_json::json!({"path": retry})),
+                headers: Default::default(),
+                invoke_key: tauri::test::INVOKE_KEY.to_owned(),
+            },
+        )
+        .unwrap_err();
+        assert!(foreign.as_str().unwrap().contains("not allowed"));
 
         // Driven by the shared list rather than by a copy of it. A fourth
         // path-taking command is asserted by being added to

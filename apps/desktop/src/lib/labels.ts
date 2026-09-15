@@ -212,6 +212,8 @@ export function changeLabel(change: HotkeyChange): string {
 /** The saved-and-registered half of [`changeLabel`], without any caution. */
 function changeVerdict(change: HotkeyChange): string {
   if (change.live) {
+    const portal = change.registrations.find((r) => r.state === "portal");
+    if (portal) return `${portal.accelerator}: desktop shortcut ${portal.granted ?? "shown in desktop settings"}.`;
     // Two mechanisms can make a shortcut live, and the difference is one the
     // user can notice: a hooked chord does not take the keystroke away from
     // other applications, so `Control+Super` still opens the Start menu.

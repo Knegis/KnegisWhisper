@@ -11,6 +11,8 @@ pub fn on_event(app: &tauri::AppHandle, event: tauri::RunEvent) {
             return;
         }
         api.prevent_exit();
+        #[cfg(target_os = "linux")]
+        app.state::<Arc<crate::shortcuts::Hooks>>().stop_portal();
         let app = app.clone();
         tauri::async_runtime::spawn(async move {
             let cleanup = async {

@@ -210,7 +210,7 @@ export type Caution = { action: HotkeyAction, accelerator: string, reason: strin
 /**
  * One action's hotkeys, classified, with any problems spelled out.
  */
-export type HotkeyReport = { bindings: Array<Binding>,
+export type HotkeyReport = { registrations: Array<RegistrationReport>, portalSupported: boolean, portalEnabled: boolean, bindings: Array<Binding>,
 /**
  * Accelerators claimed by more than one action.
  */
@@ -232,7 +232,12 @@ cautions: Array<Caution>, };
 /**
  * What happened when we tried to register one accelerator.
  */
-export type Registration = { "state": "registered", accelerator: string, } | { "state": "hooked", accelerator: string, } | { "state": "rejected", accelerator: string, reason: string, } | { "state": "not-registrable", accelerator: string, reason: string, } | { "state": "unhandled", accelerator: string, reason: string, };
+export type Registration = { "state": "portal", accelerator: string, granted: string | null, } | { "state": "registered", accelerator: string, } | { "state": "hooked", accelerator: string, } | { "state": "rejected", accelerator: string, reason: string, } | { "state": "not-registrable", accelerator: string, reason: string, } | { "state": "unhandled", accelerator: string, reason: string, };
+
+/**
+ * The outcome of registering every configured hotkey.
+ */
+export type RegistrationReport = { action: HotkeyAction, results: Array<Registration>, };
 
 /**
  * What changing one action's hotkey actually achieved.

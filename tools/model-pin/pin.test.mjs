@@ -200,7 +200,7 @@ test("pinnedTargets survives a registry with no localAsr at all", () => {
   assert.deepEqual(pinnedTargets({}), []);
 });
 
-test("the committed registry still carries pins for all six whisper models", () => {
+test("the committed registry still carries pins for all eight whisper models", () => {
   // Not a unit test of anything — an assertion that the real file this tool
   // reads still has something in it, so `--verify` would have something to
   // measure. A pin dropped from WHISPER_PINS would otherwise make `--verify`
@@ -217,7 +217,18 @@ test("the committed registry still carries pins for all six whisper models", () 
   const targets = pinnedTargets();
   const whisper = targets.filter((t) => t.kind === "whisper");
   const sherpa = targets.filter((t) => t.kind === "sherpa");
-  assert.equal(whisper.length, 6, "every whisper model is pinned");
+  assert.deepEqual(
+    whisper.map((t) => t.id).sort(),
+    ["base", "kb-whisper-base", "kb-whisper-tiny", "large", "medium", "small", "tiny", "turbo"],
+    "every standard and KB Whisper model is pinned exactly once"
+  );
+  for (const id of ["kb-whisper-base", "kb-whisper-tiny"]) {
+    const pin = whisper.find((t) => t.id === id);
+    const source = parseHfUrl(pin.url);
+    assert.equal(source.repo, `KBLab/${id}`);
+    assert.equal(source.path, "ggml-model-q5_0.bin");
+    assert.match(source.revision, /^[0-9a-f]{40}$/, `${id} is not pinned to a commit`);
+  }
   assert.equal(sherpa.length, 4, "both Parakeet archives and both Nemotron archives are pinned");
   for (const t of targets) {
     assert.match(t.sha256, /^[0-9a-f]{64}$/, `${t.id} has no usable digest`);
@@ -414,12 +425,20 @@ test("hfRepos skips a whisper model hosted off Hugging Face rather than guessing
 });
 
 test("hfRepos reads every repository the committed registry downloads from", () => {
-  // 36 GGUF repositories plus ggerganov/whisper.cpp. The count is asserted for
+  // 36 GGUF repositories plus ggerganov/whisper.cpp and two KB repositories.
+  // The count is asserted for
   // the reason the 39-object count is: a repository silently dropping out of
   // the registry would make --revisions read fewer and still report success.
   const repos = hfRepos();
-  assert.equal(repos.length, 37);
+  assert.equal(repos.length, 39);
   assert.ok(repos.some((r) => r.repo === "ggerganov/whisper.cpp"));
+  assert.deepEqual(
+    repos.filter((r) => r.repo.startsWith("KBLab/")),
+    [
+      { repo: "KBLab/kb-whisper-base", from: ["whisper/kb-whisper-base"] },
+      { repo: "KBLab/kb-whisper-tiny", from: ["whisper/kb-whisper-tiny"] },
+    ]
+  );
   for (const { repo, from } of repos) {
     assert.match(repo, /^[^/]+\/[^/]+$/, `${repo} is not an owner/name pair`);
     assert.ok(from.length > 0, `${repo} is named by nothing`);

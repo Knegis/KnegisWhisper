@@ -23,15 +23,10 @@
 //!   unit-tested on every platform including the one this was written on. The
 //!   trigger *syntax* they produce is read from the portal specification and
 //!   has never been handed to a real portal.
-//! * The D-Bus plumbing in `linux_impl` is **believed, not confirmed**: no
-//!   session bus, no portal and no compositor has ever answered any of it. It
-//!   compiles for `x86_64-unknown-linux-gnu` and that is the whole of the
-//!   evidence. This is the same epistemic state as the meeting clients in
-//!   `crates/meeting-core` — see KNEG-55, KNEG-56, KNEG-57 — and it is filed
-//!   the same way rather than described as working.
-//! * Nothing consumes it yet. `apps/desktop/src-tauri/src/shortcuts.rs` still
-//!   routes every registrable accelerator through
-//!   `tauri_plugin_global_shortcut`, on every platform.
+//! * The Linux client has a private-bus regression test, but a real compositor
+//!   still needs to validate its consent UI, grants and activation delivery.
+//! * The desktop consumes it only when `hotkey.usePortal` is enabled and the
+//!   application restarts. The existing plugin remains the default backend.
 //!
 //! # What "per compositor" means here
 //!
@@ -308,6 +303,15 @@ pub mod linux_impl {
         default_path = "/org/freedesktop/portal/desktop"
     )]
     trait GlobalShortcuts {
+        #[zbus(property)]
+        fn version(&self) -> zbus::Result<u32>;
+        #[zbus(signal)]
+        fn shortcuts_changed(
+            &self,
+            session_handle: OwnedObjectPath,
+            shortcuts: Vec<(String, HashMap<String, OwnedValue>)>,
+        ) -> zbus::Result<()>;
+
         /// Returns the *request* path, not the session. The session handle
         /// arrives in the `Response` results under `session_handle`.
         fn create_session(
@@ -401,6 +405,24 @@ pub mod linux_impl {
         }
     }
 
+    impl PortalError {
+        /// Only transport/interface absence permits falling back, never consent denial.
+        pub fn can_fallback(&self) -> bool {
+            match self {
+                Self::Unreachable(zbus::Error::MethodError(name, _, _)) => matches!(
+                    name.as_str(),
+                    "org.freedesktop.DBus.Error.ServiceUnknown"
+                        | "org.freedesktop.DBus.Error.NameHasNoOwner"
+                        | "org.freedesktop.DBus.Error.UnknownInterface"
+                        | "org.freedesktop.DBus.Error.UnknownMethod"
+                ),
+                Self::Unreachable(zbus::Error::Address(_))
+                | Self::Unreachable(zbus::Error::InputOutput(_)) => true,
+                _ => false,
+            }
+        }
+    }
+
     impl std::error::Error for PortalError {}
 
     impl From<zbus::Error> for PortalError {
@@ -457,28 +479,87 @@ pub mod linux_impl {
         where
             F: Fn(usize, crate::keyhook::Edge) + Send,
         {
+            self.deliver_with_changes(on_fire, |_| {}).await
+        }
+
+        pub async fn deliver_with_changes<F, C>(
+            &self,
+            on_fire: F,
+            on_change: C,
+        ) -> Result<(), PortalError>
+        where
+            F: Fn(usize, crate::keyhook::Edge) + Send,
+            C: Fn(&[Bound]) + Send,
+        {
             let portal = GlobalShortcutsProxy::new(&self.connection).await?;
             let mut activated = portal.receive_activated().await?;
             let mut deactivated = portal.receive_deactivated().await?;
-
+            let mut changed = portal.receive_shortcuts_changed().await?;
+            let session = zbus::Proxy::new(
+                &self.connection,
+                "org.freedesktop.portal.Desktop",
+                self.session.as_str(),
+                "org.freedesktop.portal.Session",
+            )
+            .await?;
+            let mut closed = session.receive_signal("Closed").await?;
+            let bus = zbus::fdo::DBusProxy::new(&self.connection).await?;
+            let mut owners = bus.receive_name_owner_changed().await?;
+            // Subscribe before checking ownership so a disappearing service
+            // cannot leave a session apparently registered forever.
+            let name = zbus::names::BusName::try_from("org.freedesktop.portal.Desktop")
+                .map_err(zbus::Error::from)?;
+            if !bus.name_has_owner(name).await.map_err(zbus::Error::from)? {
+                return Err(PortalError::Unexpected("the shortcut portal exited"));
+            }
+            let mut current = self.bound.clone();
             loop {
-                let (id, edge) = tokio::select! {
-                    Some(signal) = activated.next() => match signal.args() {
-                        Ok(args) => (args.shortcut_id.clone(), crate::keyhook::Edge::Press),
-                        Err(_) => continue,
+                let event = tokio::select! {
+                    signal = activated.next() => match signal {
+                        Some(signal) => match signal.args() {
+                            Ok(args) if args.session_handle == self.session => Some((args.shortcut_id.clone(), crate::keyhook::Edge::Press)),
+                            _ => None,
+                        },
+                        None => break,
                     },
-                    Some(signal) = deactivated.next() => match signal.args() {
-                        Ok(args) => (args.shortcut_id.clone(), crate::keyhook::Edge::Release),
-                        Err(_) => continue,
+                    signal = deactivated.next() => match signal {
+                        Some(signal) => match signal.args() {
+                            Ok(args) if args.session_handle == self.session => Some((args.shortcut_id.clone(), crate::keyhook::Edge::Release)),
+                            _ => None,
+                        },
+                        None => break,
                     },
-                    else => break,
+                    signal = changed.next() => {
+                        let Some(signal) = signal else { break; };
+                        let (handle, changes) = signal.message().body().deserialize::<(OwnedObjectPath, Vec<(String, HashMap<String, OwnedValue>)>)>()?;
+                        if handle == self.session {
+                            for (id, values) in changes {
+                                if let Some(bound) = current.iter_mut().find(|b| id_for(b.index) == id) {
+                                    bound.granted = values.get("trigger_description").and_then(|v| <&str>::try_from(v).ok()).map(str::to_owned);
+                                }
+                            }
+                            on_change(&current);
+                        }
+                        None
+                    },
+                    signal = owners.next() => {
+                        let Some(signal) = signal else { break; };
+                        if let Ok(args) = signal.args() {
+                            if args.name.as_str() == "org.freedesktop.portal.Desktop" {
+                                break;
+                            }
+                        }
+                        None
+                    },
+                    _ = closed.next() => break,
                 };
-
-                if let Some(index) = self.index_of(&id) {
-                    on_fire(index, edge);
+                if let Some((id, edge)) = event {
+                    if let Some(index) = self.index_of(&id) {
+                        on_fire(index, edge);
+                    }
                 }
             }
-            Ok(())
+            Err(PortalError::Unexpected("the shortcut session closed"))
         }
 
         /// Which accelerator a portal shortcut id refers to.
@@ -533,6 +614,7 @@ pub mod linux_impl {
 
         let connection = Connection::session().await?;
         let portal = GlobalShortcutsProxy::new(&connection).await?;
+        let _version = portal.version().await?;
 
         let mut create_options = HashMap::new();
         let handle_token = token();
@@ -540,8 +622,13 @@ pub mod linux_impl {
         create_options.insert("handle_token", Value::from(handle_token.as_str()));
         create_options.insert("session_handle_token", Value::from(session_token.as_str()));
 
+        let request_proxy = response_proxy(&connection, &handle_token).await?;
+        let response = request_proxy.receive_response().await?;
         let request = portal.create_session(create_options).await?;
-        let results = await_response(&connection, &request).await?;
+        if request.as_str() != request_proxy.inner().path().as_str() {
+            return Err(PortalError::Unexpected("unexpected create request path"));
+        }
+        let results = await_response(response).await?;
         let session =
             results
                 .get("session_handle")
@@ -574,19 +661,25 @@ pub mod linux_impl {
 
         // An empty parent window: this is not a dialog raised from one of our
         // windows, and the portal takes "" for "no parent".
+        let bind_proxy = response_proxy(&connection, &bind_token).await?;
+        let response = bind_proxy.receive_response().await?;
         let request = portal
             .bind_shortcuts(&session, &shortcuts, "", bind_options)
             .await?;
-        let mut results = await_response(&connection, &request).await?;
+        if request.as_str() != bind_proxy.inner().path().as_str() {
+            return Err(PortalError::Unexpected("unexpected bind request path"));
+        }
+        let mut results = await_response(response).await?;
         let granted = granted_triggers(&mut results);
 
         let bound = wanted
             .into_iter()
+            .filter(|(index, _, _)| granted.contains_key(&id_for(*index)))
             .map(|(index, accelerator, trigger)| Bound {
                 index,
                 accelerator,
                 requested: trigger,
-                granted: granted.get(&id_for(index)).cloned(),
+                granted: granted.get(&id_for(index)).cloned().flatten(),
             })
             .collect();
 
@@ -612,15 +705,26 @@ pub mod linux_impl {
     /// zvariant — a value may carry a file descriptor, which cannot be
     /// duplicated infallibly — so borrowed args cannot be handed back out of
     /// this function. Deserializing gives an owned map directly.
-    async fn await_response(
-        connection: &Connection,
-        request: &OwnedObjectPath,
-    ) -> Result<HashMap<String, OwnedValue>, PortalError> {
-        let proxy = RequestProxy::builder(connection)
-            .path(request)?
+    async fn response_proxy<'a>(
+        connection: &'a Connection,
+        token: &str,
+    ) -> Result<RequestProxy<'a>, PortalError> {
+        let sender = connection
+            .unique_name()
+            .ok_or(PortalError::Unexpected("no bus name"))?
+            .as_str()
+            .trim_start_matches(':')
+            .replace('.', "_");
+        let path = format!("/org/freedesktop/portal/desktop/request/{sender}/{token}");
+        Ok(RequestProxy::builder(connection)
+            .path(path)?
             .build()
-            .await?;
-        let mut stream = proxy.receive_response().await?;
+            .await?)
+    }
+
+    async fn await_response(
+        mut stream: ResponseStream<'_>,
+    ) -> Result<HashMap<String, OwnedValue>, PortalError> {
         let Some(signal) = stream.next().await else {
             return Err(PortalError::Unexpected(
                 "the request closed without answering",
@@ -661,7 +765,9 @@ pub mod linux_impl {
     /// or one with no description, is left as granted-but-undescribed rather
     /// than treated as failed: the specification permits it, and calling it a
     /// failure would tell the user a working shortcut is broken.
-    fn granted_triggers(results: &mut HashMap<String, OwnedValue>) -> HashMap<String, String> {
+    fn granted_triggers(
+        results: &mut HashMap<String, OwnedValue>,
+    ) -> HashMap<String, Option<String>> {
         let mut found = HashMap::new();
         // Removed rather than borrowed: `Vec::try_from` needs the owned value,
         // and `OwnedValue` is not `Clone`.
@@ -670,12 +776,11 @@ pub mod linux_impl {
         };
         if let Ok(list) = Vec::<(String, HashMap<String, OwnedValue>)>::try_from(value) {
             for (id, vardict) in list {
-                if let Some(description) = vardict
+                let description = vardict
                     .get("trigger_description")
                     .and_then(|value| <&str>::try_from(value).ok())
-                {
-                    found.insert(id, description.to_owned());
-                }
+                    .map(str::to_owned);
+                found.insert(id, description);
             }
         }
         found
@@ -694,16 +799,314 @@ pub mod linux_impl {
 
     /// A fresh handle token.
     ///
-    /// The portal requires a token unique to the caller, historically used to
-    /// *predict* the request's object path. Predicting it is the racier way of
-    /// using the portal and is deliberately not done here — the path the call
-    /// returns is used instead — but the interface still requires a token, so
-    /// one is generated per request rather than a constant being reused, which
-    /// would collide between two simultaneous requests.
+    /// The token predicts the request path, allowing a response subscription
+    /// before sending the method call. The returned path is checked against it.
+    /// A fresh token prevents collisions between simultaneous requests.
     fn token() -> String {
         use std::sync::atomic::{AtomicU64, Ordering};
         static NEXT: AtomicU64 = AtomicU64::new(0);
         format!("kw{}", NEXT.fetch_add(1, Ordering::Relaxed))
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod portal_bus_tests {
+    use super::linux_impl;
+    use std::collections::HashMap;
+    use std::sync::{
+        atomic::{AtomicU32, Ordering},
+        Arc, Mutex,
+    };
+    use zbus::{
+        zvariant::{OwnedObjectPath, OwnedValue},
+        Connection,
+    };
+
+    struct Portal {
+        response: Arc<AtomicU32>,
+    }
+    fn string(value: &str) -> OwnedValue {
+        OwnedValue::try_from(zbus::zvariant::Value::from(value.to_owned())).unwrap()
+    }
+    fn request_path(
+        options: &HashMap<String, OwnedValue>,
+        header: &zbus::message::Header<'_>,
+    ) -> OwnedObjectPath {
+        let sender = header
+            .sender()
+            .unwrap()
+            .as_str()
+            .trim_start_matches(':')
+            .replace('.', "_");
+        let token = <&str>::try_from(options.get("handle_token").unwrap()).unwrap();
+        format!("/org/freedesktop/portal/desktop/request/{sender}/{token}")
+            .try_into()
+            .unwrap()
+    }
+    const SESSION: &str = "/org/freedesktop/portal/desktop/session/test/session";
+    const DESKTOP: &str = "/org/freedesktop/portal/desktop";
+    const INTERFACE: &str = "org.freedesktop.portal.GlobalShortcuts";
+
+    #[zbus::interface(name = "org.freedesktop.portal.GlobalShortcuts")]
+    impl Portal {
+        #[zbus(property)]
+        fn version(&self) -> u32 {
+            1
+        }
+        async fn create_session(
+            &self,
+            options: HashMap<String, OwnedValue>,
+            #[zbus(connection)] connection: &Connection,
+            #[zbus(header)] header: zbus::message::Header<'_>,
+        ) -> zbus::fdo::Result<OwnedObjectPath> {
+            let path = request_path(&options, &header);
+            let results = HashMap::from([("session_handle".to_owned(), string(SESSION))]);
+            // Intentionally emit before returning: clients must subscribe first.
+            connection
+                .emit_signal(
+                    None::<&str>,
+                    path.as_str(),
+                    "org.freedesktop.portal.Request",
+                    "Response",
+                    &(0u32, results),
+                )
+                .await
+                .unwrap();
+            Ok(path)
+        }
+        async fn bind_shortcuts(
+            &self,
+            _session_handle: OwnedObjectPath,
+            _shortcuts: Vec<(String, HashMap<String, OwnedValue>)>,
+            _parent_window: String,
+            options: HashMap<String, OwnedValue>,
+            #[zbus(connection)] connection: &Connection,
+            #[zbus(header)] header: zbus::message::Header<'_>,
+        ) -> zbus::fdo::Result<OwnedObjectPath> {
+            let path = request_path(&options, &header);
+            let shortcuts = vec![(
+                "kw-shortcut-0".to_owned(),
+                HashMap::from([("trigger_description".to_owned(), string("Ctrl+Shift+D"))]),
+            )];
+            let results = HashMap::from([(
+                "shortcuts".to_owned(),
+                OwnedValue::try_from(zbus::zvariant::Value::from(shortcuts)).unwrap(),
+            )]);
+            connection
+                .emit_signal(
+                    None::<&str>,
+                    path.as_str(),
+                    "org.freedesktop.portal.Request",
+                    "Response",
+                    &(self.response.load(Ordering::SeqCst), results),
+                )
+                .await
+                .unwrap();
+            Ok(path)
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires dbus-run-session; run explicitly in Linux CI"]
+    async fn portal_bus_round_trip() {
+        let mode = Arc::new(AtomicU32::new(0));
+        let service = zbus::connection::Builder::session()
+            .unwrap()
+            .name("org.freedesktop.portal.Desktop")
+            .unwrap()
+            .serve_at(
+                DESKTOP,
+                Portal {
+                    response: Arc::clone(&mode),
+                },
+            )
+            .unwrap()
+            .build()
+            .await
+            .unwrap();
+        let bindings = vec![
+            "Control+D".to_owned(),
+            "Control+E".to_owned(),
+            "Control+Super".to_owned(),
+        ];
+        let (session, refused) = tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            linux_impl::bind(&bindings, &bindings),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(refused.len(), 1);
+        assert_eq!(
+            session.bound().len(),
+            1,
+            "an omitted shortcut is not a successful grant"
+        );
+        assert_eq!(session.bound()[0].granted.as_deref(), Some("Ctrl+Shift+D"));
+        let edges = Arc::new(Mutex::new(Vec::new()));
+        let grants = Arc::new(Mutex::new(Vec::new()));
+        let output = Arc::clone(&edges);
+        let changed = Arc::clone(&grants);
+        let delivery = tokio::spawn(async move {
+            session
+                .deliver_with_changes(
+                    move |index, edge| output.lock().unwrap().push((index, edge)),
+                    move |bound| *changed.lock().unwrap() = bound.to_vec(),
+                )
+                .await
+        });
+        // Subscribe-ready is observed through repeated test signals, with a hard deadline.
+        let handle: OwnedObjectPath = SESSION.try_into().unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            while edges.lock().unwrap().is_empty() {
+                service
+                    .emit_signal(
+                        None::<&str>,
+                        DESKTOP,
+                        INTERFACE,
+                        "Activated",
+                        &(
+                            handle.clone(),
+                            "kw-shortcut-0",
+                            1u64,
+                            HashMap::<String, OwnedValue>::new(),
+                        ),
+                    )
+                    .await
+                    .unwrap();
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        service
+            .emit_signal(
+                None::<&str>,
+                DESKTOP,
+                INTERFACE,
+                "Deactivated",
+                &(
+                    handle.clone(),
+                    "kw-shortcut-0",
+                    2u64,
+                    HashMap::<String, OwnedValue>::new(),
+                ),
+            )
+            .await
+            .unwrap();
+        let shortcuts = vec![(
+            "kw-shortcut-0".to_owned(),
+            HashMap::from([("trigger_description".to_owned(), string("Alt+D"))]),
+        )];
+        service
+            .emit_signal(
+                None::<&str>,
+                DESKTOP,
+                INTERFACE,
+                "ShortcutsChanged",
+                &(handle.clone(), shortcuts),
+            )
+            .await
+            .unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            loop {
+                if !grants.lock().unwrap().is_empty()
+                    && edges
+                        .lock()
+                        .unwrap()
+                        .iter()
+                        .any(|(_, e)| *e == crate::keyhook::Edge::Release)
+                {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(grants.lock().unwrap()[0].granted.as_deref(), Some("Alt+D"));
+        service
+            .emit_signal(
+                None::<&str>,
+                SESSION,
+                "org.freedesktop.portal.Session",
+                "Closed",
+                &HashMap::<String, OwnedValue>::new(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_secs(3), delivery)
+                .await
+                .unwrap()
+                .unwrap()
+                .is_err()
+        );
+        mode.store(1, Ordering::SeqCst);
+        let error = linux_impl::bind(&bindings, &bindings).await.err().unwrap();
+        assert!(matches!(error, linux_impl::PortalError::Cancelled));
+        assert!(!error.can_fallback());
+        mode.store(2, Ordering::SeqCst);
+        let error = linux_impl::bind(&bindings, &bindings).await.err().unwrap();
+        assert!(matches!(error, linux_impl::PortalError::Refused { .. }));
+        assert!(!error.can_fallback());
+        mode.store(0, Ordering::SeqCst);
+        let (session, _) = linux_impl::bind(&bindings, &bindings).await.unwrap();
+        let ready = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let observed = Arc::clone(&ready);
+        let delivery = tokio::spawn(async move {
+            session
+                .deliver(move |_, _| {
+                    observed.store(true, Ordering::SeqCst);
+                })
+                .await
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            while !ready.load(Ordering::SeqCst) {
+                service
+                    .emit_signal(
+                        None::<&str>,
+                        DESKTOP,
+                        INTERFACE,
+                        "Activated",
+                        &(
+                            handle.clone(),
+                            "kw-shortcut-0",
+                            1u64,
+                            HashMap::<String, OwnedValue>::new(),
+                        ),
+                    )
+                    .await
+                    .unwrap();
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        service
+            .release_name("org.freedesktop.portal.Desktop")
+            .await
+            .unwrap();
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_secs(3), delivery)
+                .await
+                .unwrap()
+                .unwrap()
+                .is_err()
+        );
+        let error = tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            linux_impl::bind(&bindings, &bindings),
+        )
+        .await
+        .unwrap()
+        .err()
+        .unwrap();
+        assert!(
+            error.can_fallback(),
+            "an absent portal allows plugin fallback"
+        );
     }
 }
 

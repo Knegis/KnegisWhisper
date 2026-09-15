@@ -18,6 +18,7 @@ import { fileURLToPath } from "node:url";
 import { collect, markEnabled, matchesWindowPattern, securityCapabilities, violations } from "./scan.mjs";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
+// Historical four-window fixtures for KNEG-168/171.
 const labels = ["main", "overlay", "meeting", "update"].map((label) => ({
   label,
   source: label === "main" ? "tauri.conf.json" : "Rust pub const LABEL",
@@ -32,16 +33,17 @@ const rules = (found) => found.map(({ rule }) => rule);
 
 test("the real tree is clean, and all parser inventories are live", () => {
   const real = collect(REPO_ROOT);
-  assert.deepEqual(real.labels.map(({ label }) => label).sort(), ["main", "meeting", "overlay", "update"]);
+  assert.deepEqual(real.labels.map(({ label }) => label).sort(), ["dictation-languages", "main", "meeting", "overlay", "update"]);
   assert.equal(new Set(real.labels.map(({ source }) => source)).size, 2);
-  assert.equal(real.capabilities.length, 2);
+  assert.equal(real.capabilities.length, 3);
   // KNEG-171: a file in capabilities/ is not a capability until security.capabilities names it.
   assert.deepEqual(real.capabilities.map(({ identifier, enabled }) => ({ identifier, enabled })), [
     { identifier: "default", enabled: true },
     { identifier: "notifications", enabled: true },
+    { identifier: "titlebar", enabled: true },
   ]);
-  // Three production panels plus the import and recording-deletion mock webviews.
-  assert.equal(real.builders.length, 5);
+  // Four production panels plus the import and recording-deletion mock webviews.
+  assert.equal(real.builders.length, 6);
   assert.deepEqual(
     real.builders.filter(({ kind }) => kind === "literal").map(({ file, arg }) => ({ file, arg })),
     [
@@ -49,14 +51,15 @@ test("the real tree is clean, and all parser inventories are live", () => {
       { file: "apps/desktop/src-tauri/src/recording_attach.rs", arg: "main" },
     ],
   );
-  // KNEG-221: the three panel windows are transparent, and both halves of the
+  // KNEG-221: the four panel windows are transparent, and both halves of the
   // macOS configuration that makes them compile there are set.
   assert.deepEqual(
-    real.transparency.sites.map(({ file, line }) => `${file}:${line}`),
+    real.transparency.sites.map(({ file }) => file),
     [
-      "apps/desktop/src-tauri/src/meeting_window.rs:53",
-      "apps/desktop/src-tauri/src/overlay.rs:92",
-      "apps/desktop/src-tauri/src/update_window.rs:58",
+      "apps/desktop/src-tauri/src/meeting_window.rs",
+      "apps/desktop/src-tauri/src/overlay.rs",
+      "apps/desktop/src-tauri/src/persistent_overlay.rs",
+      "apps/desktop/src-tauri/src/update_window.rs",
     ],
   );
   assert.equal(real.transparency.cargoFeature, true);
@@ -111,11 +114,11 @@ test("the allow-list reading: unset or empty enables every file, a list enables 
   assert.deepEqual(enabled(inline), ["default:true", "notifications:false", "drag:true"]);
   assert.match(inline[2].file, /tauri\.conf\.json/);
 
-  assert.deepEqual(securityCapabilities(REPO_ROOT), ["default", "notifications"]);
+  assert.deepEqual(securityCapabilities(REPO_ROOT), ["default", "notifications", "titlebar"]);
   assert.equal(securityCapabilities(resolve(REPO_ROOT, "tools")), null);
 });
 
-test("all four current labels are covered by the two capabilities", () => {
+test("historical four-window fixture is covered by its two capabilities", () => {
   assert.deepEqual(violations({ labels, capabilities: allCovered, builders: noBuilders, exempt: {} }), []);
 });
 
@@ -225,4 +228,17 @@ test("window matching supports plain labels, star globs, and literal regex chara
   assert.equal(matchesWindowPattern("panel-*", "panel-"), true);
   assert.equal(matchesWindowPattern("panel.*", "panelxanything"), false);
   assert.equal(matchesWindowPattern("panel.*", "panel.anything"), true);
+});
+
+
+test("language popup loses coverage when removed from notifications", () => {
+  const real = collect(REPO_ROOT);
+  real.capabilities = real.capabilities.map((c) => ({ ...c, windows: c.windows.filter((w) => w !== "dictation-languages") }));
+  assert.ok(violations(real).some((v) => v.rule.startsWith("A.") && v.subject === "dictation-languages"));
+});
+
+test("a disabled titlebar capability is reported even though main has other coverage", () => {
+  const real = collect(REPO_ROOT);
+  real.capabilities = real.capabilities.map((c) => c.identifier === "titlebar" ? { ...c, enabled: false } : c);
+  assert.ok(violations(real).some((v) => v.rule.startsWith("E.") && v.subject === "titlebar"));
 });
