@@ -5,6 +5,7 @@ import "./lib/devPrototypeFreeze";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
+import { installFileDropGuard } from "./lib/fileDrops";
 import { currentSurface } from "./lib/surface";
 import "./styles.css";
 
@@ -21,6 +22,8 @@ if (import.meta.env.DEV && !("__TAURI_INTERNALS__" in window)) {
   const { installDevFixtures } = await import("./lib/devFixtures");
   installDevFixtures();
 }
+
+installFileDropGuard(window);
 
 const container = document.getElementById("root");
 if (!container) {
