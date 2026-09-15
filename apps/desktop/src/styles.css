@@ -890,6 +890,8 @@ button.marked:hover:not(:disabled) {
 .note-editor .milkdown .ProseMirror {
   min-height: 16rem;
   padding: 0;
+  padding-left: var(--note-editor-gutter, 0px);
+  margin-left: calc(-1 * var(--note-editor-gutter, 0px));
   background: transparent;
 }
 
@@ -1836,7 +1838,7 @@ button.microphone-language-toggle:hover:not(:disabled) { background: transparent
 .notes-main-heading { display: flex; align-items: center; justify-content: space-between; gap: 1rem; max-width: 64rem; margin: 0 auto 1.5rem; }
 .notes-main-heading h2 { margin: 0; }
 .notes-main .note-detail { max-width: 64rem; margin: 0 auto; padding: 0; background: transparent; }
-.notes-main .note-workspace { grid-template-columns: minmax(0, 1fr); }
+.notes-main .note-workspace { grid-template-columns: minmax(0, 1fr); margin-top: 0; }
 .notes-main .note-editor, .notes-main .note-editor .milkdown .ProseMirror { min-height: 55vh; }
 .notes-empty { max-width: 40rem; margin: 15vh auto 0; text-align: center; }
 .notes-library { min-height: 0; min-width: 0; overflow: auto; padding: 0.75rem 0.5rem; border-left: 1px solid var(--faint); }
