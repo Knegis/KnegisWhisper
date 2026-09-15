@@ -943,7 +943,15 @@ mod portal_bus_tests {
             1,
             "an omitted shortcut is not a successful grant"
         );
-        assert_eq!(session.bound()[0].granted.as_deref(), Some("Ctrl+Shift+D"));
+        assert_eq!(
+            session
+                .bound()
+                .first()
+                .expect("one granted shortcut")
+                .granted
+                .as_deref(),
+            Some("Ctrl+Shift+D")
+        );
         let edges = Arc::new(Mutex::new(Vec::new()));
         let grants = Arc::new(Mutex::new(Vec::new()));
         let output = Arc::clone(&edges);
@@ -1025,7 +1033,16 @@ mod portal_bus_tests {
         })
         .await
         .unwrap();
-        assert_eq!(grants.lock().unwrap()[0].granted.as_deref(), Some("Alt+D"));
+        assert_eq!(
+            grants
+                .lock()
+                .unwrap()
+                .first()
+                .expect("a changed shortcut grant")
+                .granted
+                .as_deref(),
+            Some("Alt+D")
+        );
         service
             .emit_signal(
                 None::<&str>,
