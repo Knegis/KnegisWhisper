@@ -16,6 +16,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { LocalServerHealth } from "../components/LocalServerHealth";
 import { Row } from "../components/Row";
+import { ShortcutRecorder } from "../components/ShortcutRecorder";
 import {
   cancelDictation,
   clearHistory,
@@ -111,6 +112,7 @@ export function DictationView({
   const [lastHotkey, setLastHotkey] = useState<string | null>(null);
   const [lastOutcome, setLastOutcome] = useState<string | null>(null);
   const [draftKeys, setDraftKeys] = useState<Record<string, string>>({});
+  const [captureBusy, setCaptureBusy] = useState(false);
   /** Per-action outcome of the last Set press, so the control is never silent. */
   const [hotkeyResult, setHotkeyResult] = useState<Record<string, string>>({});
 
@@ -274,6 +276,7 @@ export function DictationView({
               */}
               <input
                 aria-label={`accelerator for ${b.action}`}
+                disabled={captureBusy}
                 value={draftKeys[b.action] ?? acceleratorText(b)}
                 onChange={(e) => {
                   setDraftKeys((prev) => ({
@@ -285,8 +288,15 @@ export function DictationView({
                   if (e.key === "Enter") applyHotkey(b);
                 }}
               />
+              <ShortcutRecorder disabled={captureBusy || hotkeys.portalEnabled}
+                onBusy={setCaptureBusy}
+                onCaptured={value => {
+                  setDraftKeys(prev => ({ ...prev, [b.action]: value }));
+                  setHotkeyResult(prev => ({ ...prev, [b.action]: "Shortcut recorded. Press Set to save." }));
+                }}
+                onError={message => setHotkeyResult(prev => ({ ...prev, [b.action]: message }))} />
               {/* Never disabled: a control that silently does nothing is the defect. */}
-              <button type="button" onClick={() => applyHotkey(b)}>
+              <button type="button" disabled={captureBusy} onClick={() => applyHotkey(b)}>
                 Set
               </button>
               {/*
@@ -299,6 +309,7 @@ export function DictationView({
               */}
               <select
                 aria-label={`mode for ${b.action}`}
+                disabled={captureBusy}
                 value={b.mode}
                 onChange={(e) => applyMode(b, e.target.value as HotkeyMode)}
               >

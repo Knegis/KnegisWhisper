@@ -1219,6 +1219,8 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
 
   /* hotkeys */
   hotkeys: () => HOTKEYS,
+  hotkey_capture_start: () => 1,
+  hotkey_capture_end: () => undefined,
   hotkey_set: (a) => {
     const action = arg<HotkeyAction>(a, "action") ?? "dictation";
     const accelerators = arg<string[]>(a, "accelerators") ?? [];

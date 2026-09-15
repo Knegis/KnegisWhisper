@@ -274,6 +274,13 @@ export async function getDiagnostics(): Promise<Diagnostics> {
 
 /* ----------------------------------------------------------------- hotkeys */
 
+export function startHotkeyCapture(): Promise<number> {
+  return invoke<number>("hotkey_capture_start");
+}
+export function endHotkeyCapture(token: number): Promise<void> {
+  return invoke<void>("hotkey_capture_end", { token });
+}
+
 export async function setHotkeyPortal(enabled: boolean): Promise<void> {
   return invoke<void>("hotkey_set_portal", { enabled });
 }

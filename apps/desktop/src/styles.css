@@ -1700,6 +1700,9 @@ button.floating-microphone:hover:not(:disabled) { background: transparent; color
 .microphone-error button { padding: 0 4px; min-height: 20px; }
 .microphone-status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 .microphone-setting { display: flex; align-items: center; gap: 10px; }
+.shortcut-recorder { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 4px 0; }
+.shortcut-recorder label { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
+.shortcut-recorder p { flex-basis: 100%; margin: 0; font-size: 13px; }
 
 /* Turn only the button surface; microphone glyphs and status remain upright. */
 
