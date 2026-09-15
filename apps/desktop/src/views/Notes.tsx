@@ -11,9 +11,12 @@ import {
   useCallback,
   useEffect,
   useImperativeHandle,
+  useLayoutEffect,
   useRef,
   useState,
 } from "react";
+
+import { createPortal } from "react-dom";
 
 import { NoteEditor } from "../components/NoteEditor";
 import { formatClock } from "../components/RecordingPlayer";
@@ -21,9 +24,9 @@ import { Row } from "../components/Row";
 import { TranscriptPanel } from "../components/TranscriptPanel";
 import {
   createFolder,
+  createNote,
   deleteFolder,
   deleteNote,
-  exportNote,
   exportNoteToFile,
   EXPORT_FORMATS,
   getFolders,
@@ -34,7 +37,6 @@ import {
   getNote,
   searchNotes,
   updateNote,
-  type ExportedTranscript,
   type ExportFormat,
   type Note,
   type NoteUpdate,
@@ -208,7 +210,62 @@ const NoteWorkspace = forwardRef<
   );
 });
 
+function noteDate(value: string | null) {
+  if (!value) return "Date unavailable";
+  const date = new Date(value.includes("T") ? value : value.replace(" ", "T") + "Z");
+  return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(date);
+}
+
 export function Notes({ initialNoteId = null, openRequest = null }: { initialNoteId?: number | null; openRequest?: { id: number } | null }) {
+  const [context, setContext] = useState<{ note: Note; x: number; y: number; anchor: HTMLButtonElement } | null>(null);
+  const contextRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    if (!context || !contextRef.current) return;
+    const menu = contextRef.current;
+    const bounds = menu.getBoundingClientRect();
+    menu.style.left = `${Math.max(8, Math.min(context.x, window.innerWidth - bounds.width - 8))}px`;
+    menu.style.top = `${Math.max(8, Math.min(context.y, window.innerHeight - bounds.height - 8))}px`;
+    menu.querySelector<HTMLButtonElement>("button")?.focus();
+    const outside = (event: PointerEvent) => { if (!menu.contains(event.target as Node)) setContext(null); };
+    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") { event.preventDefault(); setContext(null); context.anchor.focus(); } };
+    const close = () => setContext(null);
+    document.addEventListener("pointerdown", outside);
+    document.addEventListener("keydown", escape);
+    window.addEventListener("resize", close);
+    window.addEventListener("blur", close);
+    return () => { document.removeEventListener("pointerdown", outside); document.removeEventListener("keydown", escape); window.removeEventListener("resize", close); window.removeEventListener("blur", close); };
+  }, [context]);
+  const [libraryTool, setLibraryTool] = useState<"search" | "folders" | "new-folder" | null>(null);
+  const [folderName, setFolderName] = useState("");
+  const searchGeneration = useRef(0);
+  const toolRef = useRef<HTMLDivElement>(null);
+  useEffect(() => { toolRef.current?.querySelector<HTMLInputElement | HTMLSelectElement>("input, select")?.focus(); }, [libraryTool]);
+  const [libraryExpanded, setLibraryExpanded] = useState(true);
+  const [libraryPeek, setLibraryPeek] = useState(false);
+  const libraryVisible = libraryExpanded || libraryPeek;
+  useEffect(() => {
+    if (libraryExpanded) return;
+    let closeTimer: ReturnType<typeof setTimeout> | undefined;
+    const cancelClose = () => { clearTimeout(closeTimer); closeTimer = undefined; };
+    const closeSoon = () => {
+      if (!closeTimer) closeTimer = setTimeout(() => { setLibraryPeek(false); closeTimer = undefined; }, 250);
+    };
+    const move = (event: PointerEvent) => {
+      if (event.pointerType !== "mouse") return;
+      const target = event.target instanceof Element ? event.target : null;
+      if (context || target?.closest('.notes-library, .notes-library-toggle, .notes-context-menu')) { cancelClose(); return; }
+      if (event.clientX >= window.innerWidth - 8 && event.clientY >= 38) {
+        cancelClose(); setLibraryPeek(true);
+      } else {
+        closeSoon();
+      }
+    };
+    const leave = () => { if (!context) closeSoon(); };
+    document.addEventListener("pointermove", move);
+    document.documentElement.addEventListener("pointerleave", leave);
+    return () => { cancelClose(); document.removeEventListener("pointermove", move); document.documentElement.removeEventListener("pointerleave", leave); };
+  }, [libraryExpanded, context]);
+
   const [folderFilter, setFolderFilter] = useState<number | null>(null);
 
   const load = useCallback(async () => {
@@ -224,11 +281,18 @@ export function Notes({ initialNoteId = null, openRequest = null }: { initialNot
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<SearchHit[] | null>(null);
   const [exportFormat, setExportFormat] = useState<ExportFormat>("txt");
-  const [preview, setPreview] = useState<ExportedTranscript | null>(null);
   const [exportedTo, setExportedTo] = useState<string | null>(null);
   const [openNoteId, setOpenNoteId] = useState<number | null>(initialNoteId);
   const workspaceRef = useRef<NoteWorkspaceHandle>(null);
   const [requestedNote, setRequestedNote] = useState<Note | null>(null);
+  const initialSelectionDone = useRef(false);
+  useEffect(() => {
+    if (!data || initialSelectionDone.current) return;
+    initialSelectionDone.current = true;
+    if (initialNoteId !== null || openRequest) return;
+    const first = data.notes.at(0);
+    if (first) { setRequestedNote(first); setOpenNoteId(first.id); }
+  }, [data, initialNoteId, openRequest]);
   const scrollToRequest = useRef<number | null>(null);
   useEffect(() => {
     if (!openRequest) return;
@@ -249,6 +313,19 @@ export function Notes({ initialNoteId = null, openRequest = null }: { initialNot
     if (element) { element.scrollIntoView({ block: "start" }); scrollToRequest.current = null; }
   }, [openNoteId, requestedNote, data]);
 
+  const selectNote = async (id: number) => {
+    await workspaceRef.current?.flush();
+    const note = await getNote(id);
+    if (!note) throw new Error("This note is no longer available.");
+    setRequestedNote(note);
+    setOpenNoteId(id);
+  };
+  const newNote = () => guard(async () => {
+    await workspaceRef.current?.flush();
+    const id = await createNote({ title: "Untitled note", content: "" });
+    await selectNote(id);
+  });
+
   if (!data) {
     return (
       <div className="view">
@@ -257,151 +334,26 @@ export function Notes({ initialNoteId = null, openRequest = null }: { initialNot
     );
   }
 
+  const titlebarControls = document.getElementById("notes-titlebar-controls");
   const { notes, folders } = data;
   const openNote = notes.find((note) => note.id === openNoteId) ?? (requestedNote?.id === openNoteId ? requestedNote : null);
 
   return (
-    <div className="view">
+    <div className={`view notes-view ${libraryVisible ? "" : "notes-library-collapsed"}`}>
       {error ? <p className="error">{error}</p> : null}
 
-      <section data-surface="notes.export">
-        <h2>Notes</h2>
-
-        <div className="row">
-          <span className="row-label">Search</span>
-          <span className="row-value controls">
-            <input
-              type="search"
-              value={query}
-              placeholder="Words to look for"
-              onChange={(e) => {
-                const next = e.target.value;
-                setQuery(next);
-                // An empty box is not a search for nothing — it is not
-                // searching. Rust refuses an empty query, so never send one.
-                if (next.trim() === "") {
-                  setHits(null);
-                  return;
-                }
-                void guard(async () => {
-                  setHits(await searchNotes(next, 20));
-                });
-              }}
-            />
-          </span>
-        </div>
-
-        <div className="row">
-          <span className="row-label">Folder</span>
-          <span className="row-value controls">
-            <select
-              value={folderFilter ?? ""}
-              onChange={(e) => {
-                setFolderFilter(
-                  e.target.value === "" ? null : Number(e.target.value),
-                );
-              }}
-            >
-              <option value="">All folders</option>
-              {folders.map((f) => (
-                <option key={f.id} value={f.id}>
-                  {f.name}
-                </option>
-              ))}
-            </select>
-            <button
-              type="button"
-              onClick={() => {
-                const name = window.prompt("Folder name");
-                if (name === null || name.trim() === "") return;
-                void guard(() => createFolder(name));
-              }}
-            >
-              New folder
+      {titlebarControls && createPortal(<>
+            <button type="button" className="notes-library-toggle" aria-label={libraryExpanded ? "Collapse notes sidebar" : "Expand notes sidebar"} title={libraryExpanded ? "Collapse notes sidebar" : "Expand notes sidebar"} aria-expanded={libraryVisible} aria-controls="notes-library-content" onClick={() => { setLibraryPeek(false); setLibraryExpanded(value => !value); }}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="M3 3H21V21H3Z M14.5 3V21"/><path d={libraryExpanded ? "M17 10L19 12L17 14" : "M19 10L17 12L19 14"}/></svg>
             </button>
-            {folderFilter === null ? null : (
-              <button
-                type="button"
-                onClick={() => {
-                  void guard(async () => {
-                    await deleteFolder(folderFilter);
-                    // The notes survive with no folder, so the filter that
-                    // pointed at it no longer selects anything real.
-                    setFolderFilter(null);
-                  });
-                }}
-              >
-                Delete folder
-              </button>
-            )}
-          </span>
-        </div>
-
-        {hits === null ? null : (
-          <>
-            <h3>
-              {hits.length === 0
-                ? `Nothing matches "${query}"`
-                : `${hits.length} match${hits.length === 1 ? "" : "es"}`}
-            </h3>
-            <ul className="list">
-              {hits.map((hit) => (
-                <li key={hit.id}>
-                  <strong>{hit.title}</strong>
-                  <span className="muted"> {hit.snippet}</span>
-                </li>
-              ))}
-            </ul>
-          </>
-        )}
-
-        {notes.length === 0 ? (
-          <p className="muted">
-            No notes yet. Meetings and imported recordings write them; dictation
-            writes history instead.
-          </p>
-        ) : (
-          <ul className="list">
-            {notes.map((note) => (
-              <li key={note.id}>
-                <strong>{note.title}</strong>
-                <span className="muted">
-                  {" "}
-                  {note.noteType}
-                  {note.transcript ? " · has a transcript" : ""}
-                  {note.updatedAt ? ` · ${note.updatedAt}` : ""}
-                </span>
-                <button
-                  type="button"
-                  aria-expanded={openNoteId === note.id}
-                  aria-controls={`note-body-${note.id}`}
-                  onClick={() => {
-                    void (async () => {
-                      await workspaceRef.current?.flush();
-                      setOpenNoteId((current) =>
-                        current === note.id ? null : note.id,
-                      );
-                    })();
-                  }}
-                >
-                  {openNoteId === note.id ? "Close note" : "Open note"}
-                </button>
+      </>, titlebarControls)}
+      {context && createPortal(<div ref={contextRef} className="notes-context-menu" role="dialog" aria-label={`Actions for ${context.note.title}`} style={{ left: context.x, top: context.y }} onContextMenu={event => event.preventDefault()} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) setContext(null); }}>
                 <button
                   type="button"
                   onClick={() => {
+                    setContext(null);
                     void guard(async () => {
-                      setExportedTo(null);
-                      setPreview(await exportNote(note.id, exportFormat));
-                    });
-                  }}
-                >
-                  Preview {exportFormat}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    void guard(async () => {
-                      const path = await exportNoteToFile(note.id, exportFormat);
+                      const path = await exportNoteToFile(context.note.id, exportFormat);
                       // `null` is a cancelled dialog, not a failure. Saying
                       // "exported" for it would be a lie about a file that does
                       // not exist.
@@ -414,7 +366,8 @@ export function Notes({ initialNoteId = null, openRequest = null }: { initialNot
                 <button
                   type="button"
                   onClick={() => {
-                    void getNoteRecording(note.id)
+                    setContext(null);
+                    void getNoteRecording(context.note.id)
                       .then(async (recording) => {
                         const recordingMessage = recording
                           ? ` It has a recording (${
@@ -423,14 +376,13 @@ export function Notes({ initialNoteId = null, openRequest = null }: { initialNot
                                 : formatClock(recording.durationSeconds)
                             }, ${recording.storageKey}) and deleting the note deletes it too.`
                           : " It has no recording.";
-                        if (!window.confirm(`Delete “${note.title}”?${recordingMessage}`)) return;
+                        if (!window.confirm(`Delete “${context.note.title}”?${recordingMessage}`)) return;
                         await workspaceRef.current?.flush();
                         await guard(async () => {
-                          await deleteNote(note.id);
+                          await deleteNote(context.note.id);
                           setOpenNoteId((current) =>
-                            current === note.id ? null : current,
+                            current === context.note.id ? null : current,
                           );
-                          setPreview(null);
                         });
                       })
                       .catch((cause: unknown) => {
@@ -440,29 +392,13 @@ export function Notes({ initialNoteId = null, openRequest = null }: { initialNot
                 >
                   Delete
                 </button>
-              </li>
-            ))}
-          </ul>
-        )}
-
-        {openNote ? (
-          <NoteWorkspace
-            key={openNote.id}
-            ref={workspaceRef}
-            note={openNote}
-            reload={reload}
-            onClose={() => setOpenNoteId(null)}
-          />
-        ) : null}
-
         <div className="row">
           <span className="row-label">Export format</span>
           <span className="row-value controls">
-            <select
+            <select aria-label="Export format"
               value={exportFormat}
               onChange={(e) => {
                 setExportFormat(e.target.value as ExportFormat);
-                setPreview(null);
               }}
             >
               {EXPORT_FORMATS.map((f) => (
@@ -474,30 +410,103 @@ export function Notes({ initialNoteId = null, openRequest = null }: { initialNot
           </span>
         </div>
 
+      </div>, document.body)}
+      <div className="notes-layout">
+        <section className="notes-main" aria-label="Note editor">
+          <header className="notes-main-heading"><h2>Notes</h2><button type="button" onClick={() => { void newNote(); }}>New note</button></header>
+        {openNote ? (
+          <NoteWorkspace
+            key={openNote.id}
+            ref={workspaceRef}
+            note={openNote}
+            reload={reload}
+            onClose={() => setOpenNoteId(null)}
+          />
+        ) : <div className="notes-empty"><h3>Your writing space</h3><p className="muted">Choose a note or meeting from the sidebar, or start a new note.</p><button type="button" onClick={() => { void newNote(); }}>New note</button></div>}
+
+        </section>
+        <aside className="notes-library" aria-label="Notes and meetings">
+          <section id="notes-library-content" data-surface="notes.export" hidden={!libraryVisible}>
+
+        <div className="notes-library-tools" role="toolbar" aria-label="Notes library tools">
+          <button type="button" aria-label="Search notes" title="Search notes" aria-expanded={libraryTool === "search"} aria-controls="notes-library-tool-panel" onClick={() => setLibraryTool(value => value === "search" ? null : "search")}>
+            <span className="notes-tool-search-icon" aria-hidden="true" />
+          </button>
+          <button type="button" aria-label="Folders" title="Folders" aria-expanded={libraryTool === "folders"} aria-controls="notes-library-tool-panel" data-active={folderFilter !== null} onClick={() => setLibraryTool(value => value === "folders" ? null : "folders")}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" aria-hidden="true"><path d="M3 7V4h6l3 3h9v13H3V7Zm0 3h18" /></svg>
+          </button>
+          <button type="button" aria-label="New folder" title="New folder" aria-expanded={libraryTool === "new-folder"} aria-controls="notes-library-tool-panel" onClick={() => setLibraryTool(value => value === "new-folder" ? null : "new-folder")}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 7V4h6l3 3h9v13H3V7Zm6 7h6m-3-3v6" /></svg>
+          </button>
+        </div>
+        <div id="notes-library-tool-panel" ref={toolRef} onKeyDown={event => { if (event.key === "Escape") { setLibraryTool(null); document.querySelector<HTMLButtonElement>('.notes-library-tools button[aria-expanded="true"]')?.focus(); } }}>
+          {libraryTool === "search" && <div className="notes-tool-panel">
+            <input type="search" aria-label="Search notes and meetings" placeholder="Search notes and meetings" value={query} onChange={event => {
+              const next = event.target.value;
+              setQuery(next);
+              const generation = ++searchGeneration.current;
+              if (!next.trim()) { setHits(null); return; }
+              void searchNotes(next, 20).then(value => { if (generation === searchGeneration.current) setHits(value); }).catch(fail);
+            }} />
+          </div>}
+          {libraryTool === "folders" && <div className="notes-tool-panel">
+            <select aria-label="Folder" value={folderFilter ?? ""} onChange={event => setFolderFilter(event.target.value === "" ? null : Number(event.target.value))}>
+              <option value="">All folders</option>
+              {folders.map(folder => <option key={folder.id} value={folder.id}>{folder.name}</option>)}
+            </select>
+            {folderFilter !== null && <button type="button" onClick={() => { void guard(async () => { await deleteFolder(folderFilter); setFolderFilter(null); }); }}>Delete folder</button>}
+          </div>}
+          {libraryTool === "new-folder" && <form className="notes-tool-panel" onSubmit={event => { event.preventDefault(); if (!folderName.trim()) return; void guard(async () => { await createFolder(folderName.trim()); setFolderName(""); setLibraryTool("folders"); }); }}>
+            <input aria-label="Folder name" placeholder="Folder name" value={folderName} onChange={event => setFolderName(event.target.value)} />
+            <button type="submit" disabled={!folderName.trim()}>Create folder</button>
+          </form>}
+        </div>
+
+        {hits === null ? null : (
+          <>
+            <h3>
+              {hits.length === 0
+                ? `Nothing matches "${query}"`
+                : `${hits.length} match${hits.length === 1 ? "" : "es"}`}
+            </h3>
+            <ul className="list">
+              {hits.map((hit) => (
+                <li key={hit.id}>
+                  <button type="button" onClick={() => { void selectNote(hit.id).catch(fail); }}>{hit.title}</button>
+                  <span className="muted"> {hit.snippet}</span>
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+
+        {hits !== null ? null : notes.length === 0 ? (
+          <p className="muted">
+            No notes in this folder. Create a note, record a meeting, or import a recording.
+          </p>
+        ) : (
+          <ul className="list">
+            {notes.map((note) => (
+              <li key={note.id}>
+                <button type="button" className={`notes-entry ${openNoteId === note.id ? "notes-entry-current" : ""}`} aria-current={openNoteId === note.id ? "page" : undefined} onClick={() => { void selectNote(note.id).catch(fail); }}
+                  onContextMenu={event => { event.preventDefault(); setContext({ note, x: event.clientX, y: event.clientY, anchor: event.currentTarget }); }}
+                  onKeyDown={event => { if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) { event.preventDefault(); const rect = event.currentTarget.getBoundingClientRect(); setContext({ note, x: rect.left, y: rect.bottom, anchor: event.currentTarget }); } }}
+                  aria-haspopup="dialog">
+                  <span className="notes-entry-title">{note.title}</span>
+                  <time className="notes-entry-date" dateTime={note.createdAt ?? undefined}>{noteDate(note.createdAt)}</time>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+
+
         {exportedTo ? <Row label="Written to" value={exportedTo} /> : null}
 
-        {preview ? (
-          <>
-            <Row
-              label={`Preview (${preview.filename})`}
-              value={
-                preview.segmentCount === 0
-                  ? "No transcript segments"
-                  : `${preview.segmentCount} segment${preview.segmentCount === 1 ? "" : "s"}`
-              }
-              detail={
-                preview.segmentCount === 0
-                  ? "this note was typed, not recorded"
-                  : undefined
-              }
-            />
-            <p className="muted">
-              This is the exported transcript, not the note body shown above.
-            </p>
-            <pre className="preview">{preview.content}</pre>
-          </>
-        ) : null}
-      </section>
+
+          </section>
+        </aside>
+      </div>
     </div>
   );
 }

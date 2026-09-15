@@ -67,6 +67,7 @@ export function TitleBar({ sidebarExpanded, onToggleSidebar, onOpenNote }: { sid
 
       <TitleBarSearch onOpenNote={onOpenNote} />
       <div className="app-titlebar-drag" data-tauri-drag-region />
+      <div id="notes-titlebar-controls" />
       <div className="app-titlebar-buttons">
         <button type="button" disabled={!native} aria-label="Minimize window" title="Minimize" onClick={() => void act(w => w.minimize())}><span className="window-icon window-icon-minimize" aria-hidden="true" /></button>
         <button type="button" disabled={!native} aria-label={maximized ? "Restore window" : "Maximize window"} title={maximized ? "Restore" : "Maximize"} onClick={() => void act(w => w.toggleMaximize())}><span className={`window-icon ${maximized ? "window-icon-restore" : "window-icon-maximize"}`} aria-hidden="true" /></button>
