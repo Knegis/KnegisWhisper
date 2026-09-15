@@ -67,6 +67,53 @@ impl WorkArea {
     }
 }
 
+/// Limit a frameless Windows window to a physical-pixel rectangle, including
+/// native hit testing. `None` restores its full rectangular surface.
+#[cfg(windows)]
+pub fn set_input_region(
+    window: NativeWindow,
+    bounds: Option<WorkArea>,
+) -> Result<(), PlatformError> {
+    use windows::Win32::{
+        Foundation::HWND,
+        Graphics::Gdi::{CreateRectRgn, DeleteObject, SetWindowRgn},
+    };
+    if !window.is_valid() {
+        return Err(PlatformError::Window(
+            "The window has no native handle".into(),
+        ));
+    }
+    // SAFETY: the caller supplies a live window; rectangle coordinates are values.
+    // Windows owns the region on success; on failure we retain and delete it.
+    unsafe {
+        let region = if let Some(rect) = bounds {
+            let region = CreateRectRgn(rect.left, rect.top, rect.right, rect.bottom);
+            if region.is_invalid() {
+                return Err(PlatformError::Window(
+                    "Could not create window input region".into(),
+                ));
+            }
+            Some(region)
+        } else {
+            None
+        };
+        if SetWindowRgn(
+            HWND(window.0 as *mut core::ffi::c_void),
+            region.unwrap_or_default(),
+            true,
+        ) == 0
+        {
+            if let Some(region) = region {
+                let _ = DeleteObject(region);
+            }
+            return Err(PlatformError::Window(
+                "Could not apply window input region".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Read the usable monitor rectangle nearest `window`.
 ///
 /// Windows supplies this as `MONITORINFO.rcWork`. Other platforms return

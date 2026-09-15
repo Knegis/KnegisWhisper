@@ -15,12 +15,111 @@ use std::str::FromStr as _;
 use kw_platform::hotkey::{Binding, HotkeyAction, HotkeyMode};
 use kw_platform::keyhook::Edge;
 use serde::Serialize;
-use tauri::{AppHandle, Emitter as _};
+use tauri::{AppHandle, Emitter as _, Manager as _};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt as _, Shortcut, ShortcutState};
 use ts_rs::TS;
 
 /// The event emitted when a hotkey fires.
 pub const HOTKEY_EVENT: &str = "hotkey";
+
+pub fn capture_active(app: &AppHandle) -> bool {
+    app.try_state::<std::sync::Arc<Hooks>>()
+        .is_some_and(|hooks| {
+            hooks
+                .capture_paused
+                .load(std::sync::atomic::Ordering::SeqCst)
+        })
+}
+
+/// Temporarily release global shortcuts so the focused capture input receives
+/// them. A lease restores them even if the frontend closes or crashes.
+#[tauri::command]
+pub async fn hotkey_capture_start(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+) -> Result<u64, String> {
+    if window.label() != "main" || !window.is_visible().map_err(|e| e.to_string())? {
+        return Err("Open the shortcut settings window to record a shortcut.".into());
+    }
+    let hooks = app.state::<std::sync::Arc<Hooks>>();
+    if hooks.portal_enabled {
+        return Err(
+            "Use your desktop's shortcut settings while the shortcut portal is enabled.".into(),
+        );
+    }
+    let bindings = crate::commands::load_bindings(&app.state::<crate::state::AppState>()).await?;
+    let token = {
+        let mut capture = hooks.capture.lock().map_err(|e| e.to_string())?;
+        if capture.is_some() {
+            return Err("A shortcut is already being recorded.".into());
+        }
+        hooks
+            .capture_paused
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        if let Err(error) = app.global_shortcut().unregister_all() {
+            hooks
+                .capture_paused
+                .store(false, std::sync::atomic::Ordering::SeqCst);
+            register_all(&app, &bindings, &hooks);
+            return Err(error.to_string());
+        }
+        crate::dictation::release_the_hold();
+        *hooks
+            .installed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+        let token = hooks
+            .capture_sequence
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            + 1;
+        *capture = Some((token, bindings));
+        token
+    };
+    let expiry_app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+        if let Err(error) = finish_capture(&expiry_app, token) {
+            tracing::warn!(%error, "could not restore shortcuts after capture timeout");
+        }
+    });
+    Ok(token)
+}
+
+fn finish_capture(app: &AppHandle, token: u64) -> Result<(), String> {
+    let hooks = app.state::<std::sync::Arc<Hooks>>();
+    let mut capture = hooks.capture.lock().map_err(|e| e.to_string())?;
+    if capture.as_ref().map(|(current, _)| *current) != Some(token) {
+        return Ok(());
+    }
+    if let Some((_, bindings)) = capture.take() {
+        let reports = register_all(app, &bindings, &hooks);
+        hooks
+            .capture_paused
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        if reports
+            .iter()
+            .flat_map(|r| &r.results)
+            .any(|r| matches!(r, Registration::Rejected { .. }))
+        {
+            return Err(
+                "Some shortcuts could not be restored. Check their status in Shortcuts.".into(),
+            );
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn hotkey_capture_end(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    token: u64,
+) -> Result<(), String> {
+    if window.label() != "main" {
+        return Err("Shortcut capture belongs to the settings window.".into());
+    }
+    finish_capture(&app, token)
+}
 
 /// What happened when we tried to register one accelerator.
 #[derive(Debug, Clone, Serialize, TS)]
@@ -386,6 +485,9 @@ pub fn register_all(
 /// refused. Held in application state instead, and replaced rather than added to.
 #[derive(Default)]
 pub struct Hooks {
+    capture: std::sync::Mutex<Option<(u64, Vec<Binding>)>>,
+    capture_sequence: std::sync::atomic::AtomicU64,
+    capture_paused: std::sync::atomic::AtomicBool,
     pub portal_enabled: bool,
     pub reports: std::sync::Arc<std::sync::Mutex<Vec<RegistrationReport>>>,
     #[cfg(target_os = "linux")]
@@ -429,6 +531,9 @@ impl std::fmt::Debug for Hooks {
 impl Hooks {
     pub fn new(portal_enabled: bool) -> Self {
         Self {
+            capture: Default::default(),
+            capture_sequence: Default::default(),
+            capture_paused: Default::default(),
             portal_enabled,
             reports: Default::default(),
             installed: Default::default(),
@@ -533,6 +638,9 @@ impl Hooks {
         let routes = wanted.clone();
 
         match kw_platform::keyhook::KeyHook::install(&accelerators, move |index, edge| {
+            if capture_active(&app) {
+                return;
+            }
             // Runs on the hook thread, which is in the input path of every
             // keystroke on the machine. Everything here has to return promptly.
             let Some((action, accelerator, mode)) = routes.get(index) else {
@@ -611,6 +719,9 @@ fn register_one(
     let result = app
         .global_shortcut()
         .on_shortcut(shortcut, move |_app, _shortcut, event| {
+            if capture_active(&app_for_handler) {
+                return;
+            }
             // Which edge, rather than "press only". The unconditional filter
             // that used to live here was right for a toggle -- without it every
             // hotkey fired twice, starting and immediately restarting the
@@ -671,6 +782,26 @@ fn register_one(
     clippy::indexing_slicing
 )]
 mod tests {
+    #[test]
+    fn recorded_standard_key_names_are_accepted_by_the_shortcut_parser() {
+        use std::str::FromStr as _;
+        for key in [
+            "D",
+            "1",
+            "ArrowLeft",
+            "Numpad1",
+            "Space",
+            "Tab",
+            "Backquote",
+            "BracketLeft",
+            "NumpadEnter",
+        ] {
+            assert!(
+                tauri_plugin_global_shortcut::Shortcut::from_str(&format!("Control+{key}")).is_ok(),
+                "{key}"
+            );
+        }
+    }
     use super::*;
 
     #[test]

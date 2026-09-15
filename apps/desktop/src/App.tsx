@@ -174,7 +174,7 @@ function renderView(
   }
 }
 
-function Shell({ sidebarExpanded, searchNoteRequest, clearSearchRequest }: { sidebarExpanded: boolean; searchNoteRequest: { id: number } | null; clearSearchRequest: () => void }) {
+function Shell({ sidebarExpanded, onExpandSidebar, searchNoteRequest, clearSearchRequest }: { sidebarExpanded: boolean; onExpandSidebar: () => void; searchNoteRequest: { id: number } | null; clearSearchRequest: () => void }) {
   const load = useCallback(() => getDiagnostics(), []);
   const { data: diagnostics, error } = useRefresh(load);
 
@@ -244,6 +244,7 @@ function Shell({ sidebarExpanded, searchNoteRequest, clearSearchRequest }: { sid
     <main className={sidebarExpanded ? "shell" : "shell shell-sidebar-retracted"}>
       <Sidebar
         expanded={sidebarExpanded}
+        onExpand={onExpandSidebar}
         view={view}
         openGroups={openGroups}
         onSelect={select}
@@ -269,7 +270,7 @@ function MainWindow() {
   const [sidebarExpanded, setSidebarExpanded] = useState(true);
   const [searchNoteRequest, setSearchNoteRequest] = useState<{ id: number } | null>(null);
   const toggleSidebar = () => setSidebarExpanded(expanded => !expanded);
-  return <><TitleBar sidebarExpanded={sidebarExpanded} onToggleSidebar={toggleSidebar} onOpenNote={id => setSearchNoteRequest({ id })} /><Shell sidebarExpanded={sidebarExpanded} searchNoteRequest={searchNoteRequest} clearSearchRequest={() => setSearchNoteRequest(null)} /></>;
+  return <><TitleBar sidebarExpanded={sidebarExpanded} onToggleSidebar={toggleSidebar} onOpenNote={id => setSearchNoteRequest({ id })} /><Shell sidebarExpanded={sidebarExpanded} onExpandSidebar={() => setSidebarExpanded(true)} searchNoteRequest={searchNoteRequest} clearSearchRequest={() => setSearchNoteRequest(null)} /></>;
 }
 
 export default function App() {

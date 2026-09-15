@@ -256,6 +256,9 @@ pub async fn hotkey_set(
     hooks: State<'_, std::sync::Arc<crate::shortcuts::Hooks>>,
 ) -> CmdResult<HotkeyChange> {
     // Fail closed on an unknown action id rather than defaulting to dictation.
+    if crate::shortcuts::capture_active(&app) {
+        return Err("Finish recording the shortcut before saving it.".into());
+    }
     let action = HotkeyAction::from_id(&action)
         .ok_or_else(|| format!("{action:?} is not a hotkey action"))?;
 
@@ -292,6 +295,9 @@ pub async fn hotkey_set_mode(
     mode: String,
     hooks: State<'_, std::sync::Arc<crate::shortcuts::Hooks>>,
 ) -> CmdResult<HotkeyChange> {
+    if crate::shortcuts::capture_active(&app) {
+        return Err("Finish recording the shortcut before changing its mode.".into());
+    }
     let action = HotkeyAction::from_id(&action)
         .ok_or_else(|| format!("{action:?} is not a hotkey action"))?;
 

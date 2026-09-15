@@ -15,7 +15,11 @@ import assert from "node:assert/strict";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { collect, markEnabled, matchesWindowPattern, securityCapabilities, violations } from "./scan.mjs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+
+import { collect, markEnabled, matchesWindowPattern, nativeDropWindows, securityCapabilities, violations } from "./scan.mjs";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 // Historical four-window fixtures for KNEG-168/171.
@@ -64,6 +68,10 @@ test("the real tree is clean, and all parser inventories are live", () => {
   );
   assert.equal(real.transparency.cargoFeature, true);
   assert.equal(real.transparency.configFlag, true);
+  // KNEG-258: the editor is mounted in exactly one place, and the window that
+  // hosts it has given Tauri's own drag and drop up so the handle can drag.
+  assert.deepEqual(real.htmlDrag.sites, [{ file: "apps/desktop/src/components/NoteEditor.tsx", line: 53 }]);
+  assert.deepEqual(real.htmlDrag.windows, []);
   assert.deepEqual(violations(real), []);
 });
 
@@ -220,6 +228,63 @@ test("an exempt label does not trip rule A", () => {
     exempt: { meeting: "deliberately permissionless" },
   });
   assert.deepEqual(found.map(({ subject }) => subject), ["update"]);
+});
+
+test("KNEG-258 regression: the editor is mounted in a window that kept Tauri's drag and drop", () => {
+  const found = violations({
+    labels,
+    capabilities: allCovered,
+    builders: noBuilders,
+    exempt: {},
+    htmlDrag: { sites: [{ file: "src/components/NoteEditor.tsx", line: 53 }], windows: ["main"] },
+  });
+  assert.deepEqual(rules(found), ["G. a window keeps Tauri's drag and drop while the page needs HTML5 drag and drop"]);
+  assert.equal(found[0].subject, "src/components/NoteEditor.tsx:53");
+  // The message has to name the key and the window, because the edit is in a
+  // file the reader of NoteEditor.tsx has no reason to open.
+  assert.match(found[0].detail, /dragDropEnabled/);
+  assert.match(found[0].detail, /"main"/);
+});
+
+test("rule G is quiet with no editor, and fires again when the key is taken off", () => {
+  const windows = ["main"];
+  assert.deepEqual(
+    violations({ labels, capabilities: allCovered, builders: noBuilders, exempt: {}, htmlDrag: { sites: [], windows } }),
+    [],
+    "a page that never drags is entitled to Tauri's file drop",
+  );
+  const sites = [{ file: "src/components/NoteEditor.tsx", line: 53 }];
+  assert.deepEqual(
+    violations({ labels, capabilities: allCovered, builders: noBuilders, exempt: {}, htmlDrag: { sites, windows: [] } }),
+    [],
+  );
+  assert.equal(
+    violations({ labels, capabilities: allCovered, builders: noBuilders, exempt: {}, htmlDrag: { sites, windows } }).length,
+    1,
+  );
+});
+
+test("nativeDropWindows reads the default rather than the absence of the key", () => {
+  // The whole defect is that leaving the key out is not neutral: tauri-utils
+  // defaults it to true. A reader that only reported explicit `true` would
+  // have passed the tree that shipped the bug.
+  const read = (window) => {
+    const dir = mkdtempSync(join(tmpdir(), "capability-audit-"));
+    mkdirSync(join(dir, "apps/desktop/src-tauri"), { recursive: true });
+    writeFileSync(
+      join(dir, "apps/desktop/src-tauri/tauri.conf.json"),
+      JSON.stringify({ app: { windows: [window] } }),
+    );
+    try {
+      return nativeDropWindows(dir);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+  assert.deepEqual(read({ label: "main" }), ["main"]);
+  assert.deepEqual(read({ label: "main", dragDropEnabled: true }), ["main"]);
+  assert.deepEqual(read({ label: "main", dragDropEnabled: false }), []);
+  assert.deepEqual(read({ dragDropEnabled: true }), ["(unlabelled)"]);
 });
 
 test("window matching supports plain labels, star globs, and literal regex characters", () => {

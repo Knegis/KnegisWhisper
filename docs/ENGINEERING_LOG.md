@@ -12,7 +12,76 @@ maintained in place rather than appended to, because its purpose is to be curren
 
 ---
 
-## 2026-09-07 (latest) — KNEG-171: the fix was one word, the lesson is the gate
+## 2026-09-15 (latest) — KNEG-258: the block handle could not drag, and the cause was a default nobody wrote
+
+Dragging a paragraph by its handle in the note editor did nothing. It had never worked: `NoteEditor.tsx`
+has exactly one commit and `tauri.conf.json` has never carried a drag-and-drop setting, so this was not
+a regression, it was the feature arriving broken and nobody trying it until now.
+
+### The chain, read from source rather than guessed
+
+Milkdown's block handle moves a block by HTML5 drag and drop. `@milkdown/plugin-block` sets
+`draggable = true` on the handle, and on `dragstart` fills `dataTransfer` and sets `view.dragging`; it
+does not perform the move itself — every one of its own `dragover`/`drop`/`dragend` callbacks returns
+`false` and leaves the transaction to ProseMirror's `drop` handler. So the move needs a drop.
+
+The `main` window did not set `dragDropEnabled`, and `tauri-utils 2.9.3` defaults it to `true`
+(`config.rs:1947`). With it on, `wry 0.55.1` calls `SetAllowExternalDrop(false)` on the controller and
+then walks the WebView2 child windows calling `RevokeDragDrop` on each and registering its own
+`IDropTarget` — one that reads `CF_HDROP` and nothing else (`webview2/drag_drop.rs`). The drop half of
+an in-page drag never reaches Chromium. Tauri's own doc comment on the field says it outright:
+*"Disabling it is required to use HTML5 drag and drop on the frontend on Windows."*
+
+The `dragstart` still fires, because that half is internal to the renderer. That is why the drag looks
+like it begins, and why the defect reads as "dragging is broken" rather than "nothing happens".
+
+### Measured, because a config change that is not observed is a guess
+
+A scratch probe drove real `SendInput` mouse input at the running window — hover the first paragraph,
+read the handle's rect through the WebView2 debugger, press on it, move in six-step increments to the
+bottom of the third paragraph, release — and recorded every drag event that reached the page. Two runs
+of the same probe against the same build, one key apart:
+
+| | drag events reaching the page | paragraph order | saved markdown |
+| --- | --- | --- | --- |
+| Before | `dragstart`, `dragend` | unchanged | unchanged |
+| After | `dragstart`, `dragenter` ×2, `dragover` ×30, `drop`, `dragend` | Alpha moved to last | Alpha moved to last |
+
+**Synthetic events would have proved nothing.** A CDP-dispatched `dragstart` passes in both builds: the
+question is whether the *OS* drag loop reaches WebView2, and only real mouse input asks it. The probe
+also refuses to report at all when `SetForegroundWindow` fails — one run produced "nothing moved"
+purely because the window never took focus, and a false negative that looks exactly like the defect is
+worse than no run. It aborts the same way when the press would not have landed on the handle.
+
+### What the fix costs, and the guard that pays it
+
+With no drag-drop handler registered, wry leaves `AllowExternalDrop` at WebView2's default, and a file
+dropped on the window navigates the webview to that file — the application replaced by a picture of a
+cat until it is restarted. Tauri had been swallowing those by accident. `src/lib/fileDrops.ts` refuses
+them on purpose: `dragover` and `drop` on `window`, bubble phase, and only when `dataTransfer.types`
+contains `Files`. An in-page drag carries `text/html` and `text/plain`, so the editor is untouched —
+checked in a real browser with real `DragEvent`s, not only in the unit tests, because a made-up event
+object cannot tell you that `types` is the right property to read.
+
+Nothing is lost by refusing them. Crepe's `imageBlock` has no drop path and no Crepe feature this build
+mounts pulls `@milkdown/plugin-upload`, so a dropped file had nowhere to go. Accepting one is a separate
+decision and would start in that module.
+
+### The gate
+
+Rule G in `tools/capability-audit/scan.mjs` fails when the frontend mounts the block handle and a window
+in `tauri.conf.json` has not given Tauri's drag and drop up. It reads the *default*, not the absence of
+the key, which is the whole point: a reader that only reported an explicit `true` would have passed the
+tree that shipped this. Run against the unfixed tree it named `NoteEditor.tsx:53`, the window, the key
+and the edit.
+
+This is the same shape as rule F and as KNEG-171 before it: a platform default that is invisible in the
+tree, that no test on this machine would fail on, and that needs the gate to read the thing that is
+*not* written down.
+
+---
+
+## 2026-09-07 — KNEG-171: the fix was one word, the lesson is the gate
 
 `security.capabilities: ["default"]` had sat in `tauri.conf.json` since the shell landed on
 2026-08-25 (`7a5a348`), when `default.json` was the only capability file. KNEG-168 added
