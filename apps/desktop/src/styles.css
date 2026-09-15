@@ -358,7 +358,7 @@ h2,
   left: 0;
   bottom: 0;
   width: var(--nav-col);
-  padding: 2rem 0.75rem 2rem 1.5rem;
+  padding: 2rem 0.75rem 2rem 0.5rem;
   overflow-y: auto;
   overflow-x: hidden;
   border-right: 1px solid var(--faint);
@@ -379,6 +379,10 @@ h2,
  * replaced by the fill below.
  */
 .sidebar button {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  white-space: nowrap;
   width: 100%;
   text-align: left;
   background: none;
@@ -457,13 +461,13 @@ h2,
  */
 .sidebar button.nav-group {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
+  align-items: center;
   gap: 0.5rem;
 }
 
 .sidebar button.nav-group::after {
   content: "+";
+  margin-left: auto;
 }
 
 /*
@@ -1624,20 +1628,20 @@ button:disabled {
 
 /* Keep the disclosure control reachable when the navigation is retracted. */
 .shell-sidebar-retracted {
-  --nav-col: 4rem;
+  --nav-col: 3.5rem;
 }
 
 .app-titlebar button.sidebar-toggle {
   display: flex;
   align-items: center;
-  justify-content: center;
-  width: 2rem;
-  height: 2rem;
-  padding: 0.25rem;
-  /* Centre in the 4rem retracted rail; keep the same anchor when expanded. */
+  justify-content: flex-start;
+  width: var(--nav-button-size);
+  height: var(--nav-button-size);
+  padding: 0.4rem;
+  /* Use the same left edge and icon inset as the sidebar buttons. */
   flex-shrink: 0;
   align-self: center;
-  margin: 0 0 0 1rem;
+  margin: 0 0 0 calc(0.5rem + var(--nav-button-offset));
   color: var(--text);
 }
 
@@ -1647,8 +1651,24 @@ button:disabled {
 
 .shell-sidebar-retracted .sidebar {
   padding-right: 0.5rem;
-  padding-left: 1.5rem;
+  padding-left: 0.5rem;
 }
+
+.nav-icon { display: block; width: 18px; height: 18px; flex: 0 0 18px; pointer-events: none; }
+/* Share the compact button's left edge and icon inset in both states. */
+.sidebar, .app-titlebar { --nav-button-size: calc(18px + 0.8rem); --nav-button-offset: calc((3.5rem - 1px - var(--nav-button-size)) / 2 - 0.5rem); }
+.sidebar button:not(.nav-child) { margin-left: var(--nav-button-offset); width: calc(100% - var(--nav-button-offset)); padding-left: 0.4rem; }
+span.nav-icon { background: currentColor; mask-position: center; mask-size: contain; mask-repeat: no-repeat; }
+.nav-icon-voice { mask-image: url('./assets/navigation/voice.svg'); }
+.nav-icon-text { mask-image: url('./assets/navigation/text.svg'); }
+.nav-icon-upload { mask-image: url('./assets/navigation/upload.svg'); }
+.nav-icon-code { mask-image: url('./assets/navigation/code.svg'); }
+.nav-icon-terminal { mask-image: url('./assets/navigation/terminal.svg'); }
+.shell-sidebar-retracted #sidebar-navigation { width: 100%; }
+.shell-sidebar-retracted .sidebar button { justify-content: flex-start; gap: 0; width: var(--nav-button-size); height: var(--nav-button-size); padding: 0 0.4rem; margin-left: var(--nav-button-offset); margin-right: 0; }
+.shell-sidebar-retracted .nav-label { display: none; }
+.shell-sidebar-retracted .nav-group::after { display: none; }
+.shell-sidebar-retracted .sidebar button.nav-group.nav-current { color: var(--band-ink); }
 
 /* Override the fixed rail rules above on narrow browser windows. */
 @media (max-width: 44rem) {
@@ -1672,13 +1692,17 @@ button:disabled {
   .sidebar {
     transition: width 160ms ease-in-out;
   }
+
+  .sidebar button:not(.nav-child) {
+    transition: width 160ms ease-in-out;
+  }
 }
 
 /* Lay out navigation at its final width while the rail reveals it. This avoids
  * transient wrapping and scrollbars during expansion; tall menus still scroll. */
 @media (min-width: 44.001rem) {
   #sidebar-navigation {
-    width: calc(var(--nav-col) - 2.25rem - 1px);
+    width: calc(var(--nav-col) - 1.25rem - 1px);
   }
 }
 

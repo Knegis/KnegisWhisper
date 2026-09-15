@@ -31,6 +31,7 @@
  */
 
 import { childrenOf, isGroup, NAV, type ViewId } from "../lib/navigation";
+import { NavIcon } from "./NavIcon";
 
 export function Sidebar({
   expanded,
@@ -38,16 +39,18 @@ export function Sidebar({
   openGroups,
   onSelect,
   onToggleGroup,
+  onExpand,
 }: {
   expanded: boolean;
   view: ViewId;
   openGroups: ReadonlySet<string>;
   onSelect: (id: ViewId) => void;
   onToggleGroup: (id: string) => void;
+  onExpand: () => void;
 }) {
   return (
     <nav className="sidebar" aria-label="Main navigation">
-      <div id="sidebar-navigation" hidden={!expanded}>
+      <div id="sidebar-navigation">
         <ul>
           {NAV.map((entry) => {
             if (!isGroup(entry)) {
@@ -57,9 +60,11 @@ export function Sidebar({
                     type="button"
                     className={entry.id === view ? "nav-current" : undefined}
                     aria-current={entry.id === view ? "page" : undefined}
+                    aria-label={entry.label}
+                    title={!expanded ? entry.label : undefined}
                     onClick={() => onSelect(entry.id)}
                   >
-                    {entry.label}
+                    <NavIcon id={entry.id} /><span className="nav-label">{entry.label}</span>
                   </button>
                 </li>
               );
@@ -77,13 +82,18 @@ export function Sidebar({
                  */}
                 <button
                   type="button"
-                  className={open ? "nav-group nav-group-open" : "nav-group"}
-                  aria-expanded={open}
-                  onClick={() => onToggleGroup(entry.id)}
+                  className={`nav-group ${open ? "nav-group-open" : ""} ${!expanded && children.some(child => child.id === view) ? "nav-current" : ""}`}
+                  aria-label={entry.label}
+                  title={!expanded ? entry.label : undefined}
+                  aria-expanded={expanded && open}
+                  onClick={() => {
+                    if (!expanded) { onExpand(); if (!open) onToggleGroup(entry.id); }
+                    else onToggleGroup(entry.id);
+                  }}
                 >
-                  {entry.label}
+                  <NavIcon id={entry.id} /><span className="nav-label">{entry.label}</span>
                 </button>
-                {open ? (
+                {expanded && open ? (
                   <ul className="nav-children">
                     {children.map((child) => (
                       <li key={child.id}>
@@ -97,7 +107,7 @@ export function Sidebar({
                           aria-current={child.id === view ? "page" : undefined}
                           onClick={() => onSelect(child.id)}
                         >
-                          {child.label}
+                          <NavIcon id={child.id} /><span className="nav-label">{child.label}</span>
                         </button>
                       </li>
                     ))}
