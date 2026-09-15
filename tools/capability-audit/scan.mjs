@@ -41,6 +41,18 @@
  *      read because either can be set alone and they live in different files:
  *      the feature is what the compiler needs, the config flag is what the
  *      Tauri CLI derives its own feature list from and what the runtime reads.
+ *   G. While the frontend mounts Milkdown's block handle, every window
+ *      `tauri.conf.json` declares sets `dragDropEnabled` to false. The handle
+ *      moves a block by HTML5 drag and drop, and on Windows wry services
+ *      Tauri's own drag and drop by calling `SetAllowExternalDrop(false)` and
+ *      then `RevokeDragDrop` on the WebView2 child windows, registering a
+ *      file-drop-only `IDropTarget` in place of the one Chromium uses to
+ *      receive an in-page drop (`wry-0.55.1/src/webview2/drag_drop.rs`). The
+ *      page's own `dragstart` still fires, so the drag appears to begin and
+ *      the block springs back on release. The key defaults to true, and
+ *      Tauri's own documentation for it reads: "Disabling it is required to
+ *      use HTML5 drag and drop on the frontend on Windows." KNEG-258 was that
+ *      default, and it was never written down anywhere in the tree.
  *
  * **Why rule F lives in this gate rather than a Rust test.** The Contracts job
  * runs on every push; the Rust job runs its macOS leg only on
@@ -65,6 +77,15 @@
  * nothing transparent — because `macOSPrivateApi` also sets the webview's
  * `fullScreenEnabled` preference, so it has a second legitimate reason to be on.
  *
+ * Rule G reads the config windows only. The windows built in Rust carry their
+ * own drag-and-drop setting through `WebviewWindowBuilder`, and none of them
+ * hosts an editor; a future window that does would need the same call and this
+ * gate would not ask for it. It reads one editor feature by name rather than
+ * every way a page can set `draggable`, because naming the mechanism is what
+ * makes the failure legible — a generic scan for `draggable` would fire on the
+ * microphone overlay, which drags through pointer events and a Tauri command
+ * instead and is unaffected either way.
+ *
  * Usage:
  *   node tools/capability-audit/scan.mjs [--json]
  */
@@ -78,6 +99,7 @@ const TAURI_CONFIG = "apps/desktop/src-tauri/tauri.conf.json";
 const RUST_SOURCE = "apps/desktop/src-tauri/src";
 const CAPABILITIES = "apps/desktop/src-tauri/capabilities";
 const DESKTOP_MANIFEST = "apps/desktop/src-tauri/Cargo.toml";
+const FRONTEND_SOURCE = "apps/desktop/src";
 
 export const MANIFEST = "config/window-capabilities.json";
 
@@ -384,13 +406,73 @@ function privateApiConfigured(root) {
   return JSON.parse(readFileSync(config, "utf8")).app?.macOSPrivateApi === true;
 }
 
-/** Return every coverage, stale-config, stale-exemption, opaque-builder, disabled-file, and macOS-transparency violation. */
+/** Return relative frontend source paths below `dir`, in stable order. */
+export function frontendFiles(root, dir = join(root, FRONTEND_SOURCE)) {
+  if (!existsSync(dir)) return [];
+  const found = [];
+  const walk = (current) => {
+    for (const entry of readdirSync(current).sort()) {
+      const path = join(current, entry);
+      let stats;
+      try {
+        stats = statSync(path);
+      } catch {
+        continue; // a broken symlink cannot mount an editor
+      }
+      if (stats.isDirectory()) walk(path);
+      else if (/\.(ts|tsx)$/.test(entry)) found.push(relative(root, path).split("\\").join("/"));
+    }
+  };
+  walk(dir);
+  return found;
+}
+
+/**
+ * Where the frontend mounts Milkdown's block handle.
+ *
+ * Line-oriented, and a line that begins a comment does not count, for the same
+ * reason `tauriFeatureEnabled` ignores commented-out features: a feature named
+ * only inside a comment is not mounted. This is not a TypeScript parser, and a
+ * block comment opened earlier on the same line would still match, which fires
+ * the rule rather than hiding it.
+ */
+export function blockHandleSites(root = REPO_ROOT) {
+  const sites = [];
+  for (const file of frontendFiles(root)) {
+    readFileSync(join(root, file), "utf8")
+      .split(/\r?\n/)
+      .forEach((raw, index) => {
+        const line = raw.trim();
+        if (line.startsWith("//") || line.startsWith("*")) return;
+        if (/addFeature\s*\(\s*blockEdit\b/.test(line)) sites.push({ file, line: index + 1 });
+      });
+  }
+  return sites;
+}
+
+/**
+ * Windows declared by `tauri.conf.json` that still take Tauri's native drag and
+ * drop, which is every window that does not set `dragDropEnabled` to false: the
+ * key defaults to true in `tauri-utils`, so leaving it out is the same answer
+ * as writing it in.
+ */
+export function nativeDropWindows(root = REPO_ROOT) {
+  const config = join(root, TAURI_CONFIG);
+  if (!existsSync(config)) return [];
+  const windows = JSON.parse(readFileSync(config, "utf8")).app?.windows ?? [];
+  return windows
+    .filter((window) => window?.dragDropEnabled !== false)
+    .map((window) => (typeof window?.label === "string" ? window.label : "(unlabelled)"));
+}
+
+/** Return every coverage, stale-config, stale-exemption, opaque-builder, disabled-file, macOS-transparency and native-drag violation. */
 export function violations({
   labels = [],
   capabilities = [],
   builders = [],
   exempt = {},
   transparency = { sites: [], cargoFeature: false, configFlag: false },
+  htmlDrag = { sites: [], windows: [] },
 }) {
   const found = [];
   const known = [...new Set(labels.map(({ label }) => label))];
@@ -479,6 +561,29 @@ export function violations({
         `Enabling it makes the bundle ineligible for the Mac App Store — see docs/PLATFORM_SUPPORT.md.`,
     });
   }
+
+  // Rule G. KNEG-258: the block handle's drag is HTML5 drag and drop, and
+  // Tauri's own drag and drop takes the drop half of it away on Windows. One
+  // violation for the configuration, like rule F: the edit is the same key
+  // however many windows carry it.
+  const dragSites = htmlDrag.sites ?? [];
+  const nativeWindows = htmlDrag.windows ?? [];
+  if (dragSites.length > 0 && nativeWindows.length > 0) {
+    found.push({
+      rule: "G. a window keeps Tauri's drag and drop while the page needs HTML5 drag and drop",
+      subject: `${dragSites[0].file}:${dragSites[0].line}`,
+      detail:
+        `Milkdown's block handle is mounted at ` +
+        `${dragSites.map(({ file, line }) => `${file}:${line}`).join(", ")} and moves a block by HTML5 drag and drop, ` +
+        `but ${nativeWindows.map((label) => `"${label}"`).join(", ")} in ${TAURI_CONFIG} ` +
+        `does not set dragDropEnabled to false, and it defaults to true. ` +
+        `On Windows that makes wry revoke WebView2's own OLE drop target and register a file-drop-only one, ` +
+        `so dragstart fires, no drop ever arrives, and the block springs back. ` +
+        `To fix, set "dragDropEnabled": false on the window. ` +
+        `That gives external file drops back to WebView2's default, which navigates the window to the dropped ` +
+        `file — apps/desktop/src/main.tsx refuses those, and this rule is the reason it exists.`,
+    });
+  }
   return found;
 }
 
@@ -492,6 +597,7 @@ export function collect(root = REPO_ROOT) {
     builders: builderSites(root),
     exempt,
     transparency: { sites: transparentSites(root), ...macosTransparency(root) },
+    htmlDrag: { sites: blockHandleSites(root), windows: nativeDropWindows(root) },
   };
 }
 
