@@ -51,6 +51,8 @@ pub struct Controller {
     panel_origin: Mutex<Option<PhysicalPosition<i32>>>,
     vertical: AtomicBool,
     #[cfg(windows)]
+    input_region: Mutex<Option<Option<kw_platform::window::WorkArea>>>,
+    #[cfg(windows)]
     clicks: Mutex<Option<kw_platform::pointer_watch::Watch>>,
     #[cfg(windows)]
     menu_clicks: Mutex<Option<kw_platform::pointer_watch::Watch>>,
@@ -136,6 +138,51 @@ fn update_orientation(app: &AppHandle, window: &WebviewWindow) -> Result<(), Str
     if controller(app).vertical.swap(vertical, Ordering::SeqCst) != vertical {
         app.emit(EVENT, snapshot(app)?).map_err(|e| e.to_string())?;
     }
+    update_input_region(app, window)
+}
+
+// Match the fixed microphone and arrow hit targets in styles.css. Keep the
+// 96px layout/drag anchor, but remove its transparent padding from OS hit tests.
+#[cfg(any(windows, test))]
+fn control_region(vertical: bool, scale: f64) -> kw_platform::window::WorkArea {
+    let (left, top, right, bottom) = if vertical {
+        (32.0, 22.0, 64.0, 90.0)
+    } else {
+        (22.0, 32.0, 90.0, 64.0)
+    };
+    kw_platform::window::WorkArea {
+        left: (left * scale).floor() as i32,
+        top: (top * scale).floor() as i32,
+        right: (right * scale).ceil() as i32,
+        bottom: (bottom * scale).ceil() as i32,
+    }
+}
+
+fn update_input_region(app: &AppHandle, window: &WebviewWindow) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        let state = controller(app);
+        let bounds = if snapshot(app)?.enabled && !state.message.load(Ordering::SeqCst) {
+            Some(control_region(
+                state.vertical.load(Ordering::SeqCst),
+                window.scale_factor().map_err(|e| e.to_string())?,
+            ))
+        } else {
+            None
+        };
+        let mut applied = state.input_region.lock().map_err(|e| e.to_string())?;
+        if *applied != Some(bounds) {
+            let hwnd = window.hwnd().map_err(|e| e.to_string())?;
+            kw_platform::window::set_input_region(
+                kw_platform::window::NativeWindow(hwnd.0 as isize),
+                bounds,
+            )
+            .map_err(|e| e.to_string())?;
+            *applied = Some(bounds);
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = (app, window);
     Ok(())
 }
 fn at_side_edge(x: i32, width: u32, area: kw_platform::window::WorkArea, scale: f64) -> bool {
@@ -209,6 +256,7 @@ pub fn reconcile(app: &AppHandle, restore_position: bool) -> Result<(), String> 
         }
         window.show().map_err(|e| e.to_string())
     } else {
+        update_input_region(app, &window)?;
         overlay::set_visible(app, active);
         Ok(())
     }
@@ -380,6 +428,7 @@ pub async fn overlay_message(
         .map_err(|e| e.to_string())?;
     receive.await.map_err(|e| e.to_string())??;
     state.message.store(visible, Ordering::SeqCst);
+    update_input_region(&app, &window)?;
     #[cfg(windows)]
     {
         let mut clicks = state.clicks.lock().map_err(|e| e.to_string())?;
@@ -490,6 +539,19 @@ async fn language_menu(app: &AppHandle, visible: bool) -> Result<(), String> {
 fn contains_point(window: &WebviewWindow, x: i32, y: i32) -> bool {
     match (window.outer_position(), window.outer_size()) {
         (Ok(pos), Ok(size)) => {
+            if window.label() == overlay::LABEL {
+                let state = controller(window.app_handle());
+                if let Ok(applied) = state.input_region.lock() {
+                    if let Some(Some(region)) = *applied {
+                        let local_x = i64::from(x) - i64::from(pos.x);
+                        let local_y = i64::from(y) - i64::from(pos.y);
+                        return local_x >= i64::from(region.left)
+                            && local_y >= i64::from(region.top)
+                            && local_x < i64::from(region.right)
+                            && local_y < i64::from(region.bottom);
+                    }
+                };
+            }
             i64::from(x) >= i64::from(pos.x)
                 && i64::from(y) >= i64::from(pos.y)
                 && i64::from(x) < i64::from(pos.x) + i64::from(size.width)
@@ -530,6 +592,29 @@ fn position_panel(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn native_control_region_excludes_padding_and_retains_both_buttons() {
+        for scale in [1.0, 1.25, 1.5, 2.0] {
+            for vertical in [false, true] {
+                let region = control_region(vertical, scale);
+                let contains = |x: f64, y: f64| {
+                    x * scale >= f64::from(region.left)
+                        && x * scale < f64::from(region.right)
+                        && y * scale >= f64::from(region.top)
+                        && y * scale < f64::from(region.bottom)
+                };
+                assert!(contains(48.0, 48.0));
+                assert!(if vertical {
+                    contains(48.0, 82.0)
+                } else {
+                    contains(82.0, 48.0)
+                });
+                for (x, y) in [(4.0, 48.0), (48.0, 4.0), (94.0, 48.0), (48.0, 94.0)] {
+                    assert!(!contains(x, y));
+                }
+            }
+        }
+    }
     #[test]
     fn preferences_default_to_the_existing_recording_box() {
         let prefs = Preferences::default();
