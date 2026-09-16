@@ -47,6 +47,7 @@ import { Sidebar } from "./components/Sidebar";
 import { getDiagnostics, type Diagnostics } from "./lib/ipc";
 import { DEFAULT_VIEW, groupOf, type ViewId } from "./lib/navigation";
 import { currentSurface } from "./lib/surface";
+import { installIdleScrollbars } from "./lib/idleScrollbars";
 import { useRefresh } from "./lib/useRefresh";
 import { MeetingNotification } from "./MeetingNotification";
 import { Overlay } from "./Overlay";
@@ -267,6 +268,7 @@ function Shell({ sidebarExpanded, onExpandSidebar, searchNoteRequest, clearSearc
  * bundle means one CSP and one build.
  */
 function MainWindow() {
+  useEffect(installIdleScrollbars, []);
   const [sidebarExpanded, setSidebarExpanded] = useState(true);
   const [searchNoteRequest, setSearchNoteRequest] = useState<{ id: number } | null>(null);
   const toggleSidebar = () => setSidebarExpanded(expanded => !expanded);

@@ -471,7 +471,7 @@ export function Notes({ initialNoteId = null, openRequest = null }: { initialNot
                   onContextMenu={event => { event.preventDefault(); setContext({ note, x: event.clientX, y: event.clientY, anchor: event.currentTarget }); }}
                   onKeyDown={event => { if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) { event.preventDefault(); const rect = event.currentTarget.getBoundingClientRect(); setContext({ note, x: rect.left, y: rect.bottom, anchor: event.currentTarget }); } }}
                   aria-haspopup="dialog">
-                  <span className="notes-entry-title">{note.title}</span>
+                  <span className="notes-entry-title" title={note.title}>{note.title}</span>
                   <time className="notes-entry-date" dateTime={note.createdAt ?? undefined}>{noteDate(note.createdAt)}</time>
                 </button>
               </li>
