@@ -58,7 +58,16 @@ export function NoteEditor({
     const builder = new CrepeBuilder({ root, defaultValue: initialRef.current })
       // The full Crepe class would also add CodeMirror and KaTeX. Those create
       // runtime styles and font assets that production's self-only CSP blocks.
-      .addFeature(blockEdit)
+      .addFeature(blockEdit, {
+        blockHandle: {
+          floatingUIOptions: {
+            // Replace the default flip middleware: the Notes rail must not
+            // move row controls to the opposite side of the document.
+            // Keep Crepe's left/left-start alignment and 16px row spacing.
+            middleware: [{ name: "rowSpacing", fn: ({ x }) => ({ x: x - 16 }) }],
+          },
+        },
+      })
       .addFeature(toolbar)
       .addFeature(placeholder, { text: "Write the note as the conversation develops." })
       .addFeature(cursor)
