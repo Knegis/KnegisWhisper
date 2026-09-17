@@ -1635,7 +1635,8 @@ button:disabled {
 }
 
 .app-titlebar button.sidebar-toggle,
-.app-titlebar button.titlebar-search-trigger {
+.app-titlebar button.titlebar-search-trigger,
+.app-titlebar button.titlebar-history-button {
   display: flex;
   align-items: center;
   justify-content: flex-start;
@@ -1897,3 +1898,7 @@ button.microphone-language-toggle:hover:not(:disabled) { background: transparent
 .vocabulary-word, .vocabulary-list input { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .vocabulary-support { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr)); gap: 1rem; }
 .vocabulary-usage details { max-height: 14rem; overflow: auto; overflow-wrap: anywhere; }
+
+.titlebar-history { display: flex; align-items: center; flex-shrink: 0; gap: 2px; margin-left: 6px; }
+.app-titlebar button.titlebar-history-button { border-radius: 2px; }
+.app-titlebar button.titlebar-history-button:disabled { opacity: 0.3; cursor: default; }

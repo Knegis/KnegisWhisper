@@ -2,7 +2,7 @@ import { TitleBarSearch } from "./TitleBarSearch";
 import { useEffect, useState } from "react";
 import { getCurrentWindow, type Window as AppWindow } from "@tauri-apps/api/window";
 
-export function TitleBar({ sidebarExpanded, onToggleSidebar, onOpenNote }: { sidebarExpanded: boolean; onToggleSidebar: () => void; onOpenNote: (id: number) => void }) {
+export function TitleBar({ sidebarExpanded, onToggleSidebar, onOpenNote, canGoBack, canGoForward, onBack, onForward }: { sidebarExpanded: boolean; onToggleSidebar: () => void; onOpenNote: (id: number) => void; canGoBack: boolean; canGoForward: boolean; onBack: () => void; onForward: () => void }) {
   const [maximized, setMaximized] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const native = "__TAURI_INTERNALS__" in window;
@@ -66,6 +66,14 @@ export function TitleBar({ sidebarExpanded, onToggleSidebar, onOpenNote }: { sid
       </button>
 
       <TitleBarSearch onOpenNote={onOpenNote} />
+      <div className="titlebar-history" role="group" aria-label="Navigation history">
+        <button type="button" className="titlebar-history-button" aria-label="Go back" title="Go back" disabled={!canGoBack} onClick={onBack}>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="M19 12H5M11 6L5 12L11 18" /></svg>
+        </button>
+        <button type="button" className="titlebar-history-button" aria-label="Go forward" title="Go forward" disabled={!canGoForward} onClick={onForward}>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="M5 12H19M13 6L19 12L13 18" /></svg>
+        </button>
+      </div>
       <div className="app-titlebar-drag" data-tauri-drag-region />
       <div id="notes-titlebar-controls" />
       <div className="app-titlebar-buttons">

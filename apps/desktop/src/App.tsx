@@ -16,8 +16,7 @@ import { LanguagePopup } from "./components/LanguagePopup";
  * bundle — and a router would be a dependency that makes one `switch` look
  * like a different `switch`. `currentSurface()` owns the fragment mapping, so
  * this module never repeats it for routing or root-element setup.
- * There is nothing to link to from outside and no history worth preserving: this
- * is a settings window, not a site.
+ * In-memory history tracks pages and individual notes within the main window.
  *
  * The list of screens is no longer here. `lib/navigation.ts` holds the tree —
  * four top-level destinations plus the `Settings` and `Developer` groups — and
@@ -41,11 +40,12 @@ import { LanguagePopup } from "./components/LanguagePopup";
  * died.
  */
 
-import { Component, useCallback, useEffect, useState, type ReactNode } from "react";
+import { Component, useCallback, useEffect, useMemo, useReducer, useState, type ReactNode } from "react";
 
 import { Sidebar } from "./components/Sidebar";
 import { getDiagnostics, type Diagnostics } from "./lib/ipc";
-import { DEFAULT_VIEW, groupOf, type ViewId } from "./lib/navigation";
+import { groupOf, type ViewId } from "./lib/navigation";
+import { defaultDestination, initialHistory, navigationHistory } from "./lib/navigationHistory";
 import { currentSurface } from "./lib/surface";
 import { installIdleScrollbars } from "./lib/idleScrollbars";
 import { useRefresh } from "./lib/useRefresh";
@@ -134,7 +134,6 @@ function renderView(
   view: ViewId,
   diagnostics: Diagnostics,
   select: (id: ViewId) => void,
-  importedNoteId: number | null,
   searchNoteRequest: { id: number } | null,
   openImportedNote: (id: number) => void,
 ): ReactNode {
@@ -144,7 +143,7 @@ function renderView(
     case "meetings":
       return <SettingsMeetings onGoToVocabulary={() => select("vocabulary")} />;
     case "notes":
-      return <Notes initialNoteId={importedNoteId} openRequest={searchNoteRequest} />;
+      return <Notes openRequest={searchNoteRequest} onOpenNote={openImportedNote} />;
     case "vocabulary":
       return <Vocabulary />;
     case "notes-upload":
@@ -178,15 +177,18 @@ function renderView(
   }
 }
 
-function Shell({ sidebarExpanded, onExpandSidebar, searchNoteRequest, clearSearchRequest }: { sidebarExpanded: boolean; onExpandSidebar: () => void; searchNoteRequest: { id: number } | null; clearSearchRequest: () => void }) {
+function Shell({ sidebarExpanded, onExpandSidebar, onToggleSidebar }: { sidebarExpanded: boolean; onExpandSidebar: () => void; onToggleSidebar: () => void }) {
   const load = useCallback(() => getDiagnostics(), []);
   const { data: diagnostics, error } = useRefresh(load);
 
   // Not persisted, and starting on Dictation because that is what the
   // application is for. Reopening on the screen you last used sounds helpful
   // until the screen you last used is the one that failed.
-  const [view, setView] = useState<ViewId>(DEFAULT_VIEW);
-  const [importedNoteId, setImportedNoteId] = useState<number | null>(null);
+  const [history, navigate] = useReducer(navigationHistory, initialHistory);
+  const destination = history.entries[history.index] ?? defaultDestination;
+  const view = destination.view;
+  const searchNoteRequest = useMemo(() => destination.noteId === undefined ? null : { id: destination.noteId }, [destination]);
+  const openNote = useCallback((id: number) => navigate({ type: "visit", destination: { view: "notes", noteId: id } }), []);
 
   // Both groups start closed. Dictation is a top-level destination, so the
   // opening rail is four screens and two sections -- shorter than the thirteen
@@ -206,14 +208,15 @@ function Shell({ sidebarExpanded, onExpandSidebar, searchNoteRequest, clearSearc
    * grows.
    */
   const select = useCallback((id: ViewId) => {
-    setView(id);
-    const group = groupOf(id);
+    navigate({ type: "visit", destination: { view: id } });
+  }, []);
+
+  useEffect(() => {
+    const group = groupOf(view);
     if (group !== null) {
       setOpenGroups((prev) => (prev.has(group) ? prev : new Set(prev).add(group)));
     }
-  }, []);
-
-  useEffect(() => { if (searchNoteRequest) select("notes"); }, [searchNoteRequest, select]);
+  }, [view]);
 
   const toggleGroup = useCallback((id: string) => {
     setOpenGroups((prev) => {
@@ -225,13 +228,17 @@ function Shell({ sidebarExpanded, onExpandSidebar, searchNoteRequest, clearSearc
     });
   }, []);
 
+  const titlebar = <TitleBar sidebarExpanded={sidebarExpanded} onToggleSidebar={onToggleSidebar} onOpenNote={openNote}
+    canGoBack={history.index > 0} canGoForward={history.index < history.entries.length - 1}
+    onBack={() => navigate({ type: "back" })} onForward={() => navigate({ type: "forward" })} />;
+
   if (!diagnostics) {
     // No rail yet, so no rail column to reserve: `.shell-bare` cancels the
     // `padding-left` that holds the fixed rail's width, and the message goes
     // inside `.content` so it keeps the page's own padding in both states.
     // Without that it would sit 13rem in from the left with nothing beside it.
     return (
-      <main className="shell shell-bare">
+      <>{titlebar}<main className="shell shell-bare">
         <div className="content">
           <h1>KnegisWhisper</h1>
           {error ? (
@@ -240,12 +247,12 @@ function Shell({ sidebarExpanded, onExpandSidebar, searchNoteRequest, clearSearc
             <p className="muted">Loading…</p>
           )}
         </div>
-      </main>
+      </main></>
     );
   }
 
   return (
-    <main className={sidebarExpanded ? "shell" : "shell shell-sidebar-retracted"}>
+    <>{titlebar}<main className={sidebarExpanded ? "shell" : "shell shell-sidebar-retracted"}>
       <Sidebar
         expanded={sidebarExpanded}
         onExpand={onExpandSidebar}
@@ -259,10 +266,10 @@ function Shell({ sidebarExpanded, onExpandSidebar, searchNoteRequest, clearSearc
         {/* `select` rather than `setView`, so landing on Diagnostics opens the
             Developer group that holds it. */}
         <ViewBoundary view={view} onReset={() => select("diagnostics")}>
-          {renderView(view, diagnostics, select, importedNoteId, searchNoteRequest, (id) => { clearSearchRequest(); setImportedNoteId(id); select("notes"); })}
+          {renderView(view, diagnostics, select, searchNoteRequest, openNote)}
         </ViewBoundary>
       </div>
-    </main>
+    </main></>
   );
 }
 
@@ -273,9 +280,8 @@ function Shell({ sidebarExpanded, onExpandSidebar, searchNoteRequest, clearSearc
 function MainWindow() {
   useEffect(installIdleScrollbars, []);
   const [sidebarExpanded, setSidebarExpanded] = useState(true);
-  const [searchNoteRequest, setSearchNoteRequest] = useState<{ id: number } | null>(null);
   const toggleSidebar = () => setSidebarExpanded(expanded => !expanded);
-  return <><TitleBar sidebarExpanded={sidebarExpanded} onToggleSidebar={toggleSidebar} onOpenNote={id => setSearchNoteRequest({ id })} /><Shell sidebarExpanded={sidebarExpanded} onExpandSidebar={() => setSidebarExpanded(true)} searchNoteRequest={searchNoteRequest} clearSearchRequest={() => setSearchNoteRequest(null)} /></>;
+  return <Shell sidebarExpanded={sidebarExpanded} onExpandSidebar={() => setSidebarExpanded(true)} onToggleSidebar={toggleSidebar} />;
 }
 
 export default function App() {

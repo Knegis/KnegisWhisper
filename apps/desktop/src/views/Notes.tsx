@@ -194,7 +194,7 @@ function noteDate(value: string | null) {
   return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(date);
 }
 
-export function Notes({ initialNoteId = null, openRequest = null }: { initialNoteId?: number | null; openRequest?: { id: number } | null }) {
+export function Notes({ initialNoteId = null, openRequest = null, onOpenNote }: { initialNoteId?: number | null; openRequest?: { id: number } | null; onOpenNote?: (id: number) => void }) {
   const [context, setContext] = useState<{ note: Note; x: number; y: number; anchor: HTMLButtonElement } | null>(null);
   const contextRef = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
@@ -269,8 +269,8 @@ export function Notes({ initialNoteId = null, openRequest = null }: { initialNot
     initialSelectionDone.current = true;
     if (initialNoteId !== null || openRequest) return;
     const first = data.notes.at(0);
-    if (first) { setRequestedNote(first); setOpenNoteId(first.id); }
-  }, [data, initialNoteId, openRequest]);
+    if (first) { setRequestedNote(first); setOpenNoteId(first.id); onOpenNote?.(first.id); }
+  }, [data, initialNoteId, openRequest, onOpenNote]);
   const scrollToRequest = useRef<number | null>(null);
   useEffect(() => {
     if (!openRequest) return;
@@ -297,6 +297,7 @@ export function Notes({ initialNoteId = null, openRequest = null }: { initialNot
     if (!note) throw new Error("This note is no longer available.");
     setRequestedNote(note);
     setOpenNoteId(id);
+    onOpenNote?.(id);
   };
   const newNote = () => guard(async () => {
     await workspaceRef.current?.flush();
