@@ -17,11 +17,8 @@
 //! `keyterm=a&keyterm=b`, built with [`url::Url::query_pairs_mut`] rather than
 //! string concatenation, so a term containing a space, an ampersand, an equals
 //! sign or a quote cannot alter the query or inject a parameter of its own. The
-//! capability table declares no cap (`max: None`), unlike AssemblyAI's hundred-term
-//! limit, so every term the caller passes is sent — [`endpoint`] still asks
-//! [`crate::capabilities::MeetingProviderCapabilities::keyterms`] how many to send
-//! rather than hard-coding "all of them", so a future change to the table is obeyed
-//! automatically rather than silently ignored.
+//! application limits vocabulary to 100 terms and 400 UTF-8 bytes. Shared
+//! preparation applies these limits and omits hints for incompatible models.
 //!
 //! # Token rotation: declared, and honestly not implemented
 //!
@@ -154,6 +151,17 @@ pub fn endpoint(
     keyterms: &[String],
     caps: &MeetingProviderCapabilities,
 ) -> Result<String, MeetingError> {
+    endpoint_with_model(sample_rate, language, keyterms, caps, None)
+}
+
+/// Use the selected model; unsupported models retain it and omit keyterms.
+pub fn endpoint_with_model(
+    sample_rate: u32,
+    language: Option<&str>,
+    keyterms: &[String],
+    caps: &MeetingProviderCapabilities,
+    model: Option<&str>,
+) -> Result<String, MeetingError> {
     let mut url = Url::parse(ENDPOINT).map_err(|err| MeetingError::Rejected {
         provider: PROVIDER_ID.to_owned(),
         detail: format!("the endpoint template did not parse: {err}"),
@@ -177,6 +185,10 @@ pub fn endpoint(
         query.append_pair("interim_results", "true");
     }
 
+    let prepared = kw_transcription_core::vocabulary::prepare(PROVIDER_ID, model, keyterms);
+    if let Some(model) = model.or_else(|| (!keyterms.is_empty()).then_some("nova-3")) {
+        url.query_pairs_mut().append_pair("model", model);
+    }
     match language.filter(|l| !l.trim().is_empty()) {
         Some(language) => {
             url.query_pairs_mut().append_pair("language", language);
@@ -186,10 +198,15 @@ pub fn endpoint(
         // rather than silently falling back to whatever its own default
         // model language is. UNVERIFIED param name and value.
         None => {
-            url.query_pairs_mut().append_pair("detect_language", "true");
+            if !prepared.supported || (model.is_none() && keyterms.is_empty()) {
+                url.query_pairs_mut().append_pair("detect_language", "true");
+            } else {
+                url.query_pairs_mut().append_pair("language", "multi");
+            }
         }
     }
 
+    let keyterms = &prepared.included;
     let cap = caps.keyterms.effective_count(keyterms.len());
     if cap > 0 {
         let mut query = url.query_pairs_mut();
@@ -491,6 +508,16 @@ mod tests {
     /* ------------------------------------------------------ what is sent */
 
     #[test]
+    fn explicit_incompatible_model_is_preserved_without_sending_hints() {
+        let url =
+            endpoint_with_model(16_000, None, &["Dyve".into()], caps(), Some("nova-2")).unwrap();
+        let pairs = query_pairs(&url);
+        assert!(pairs.contains(&("model".into(), "nova-2".into())));
+        assert!(pairs.contains(&("detect_language".into(), "true".into())));
+        assert!(!pairs.iter().any(|(key, _)| key == "keyterm"));
+    }
+
+    #[test]
     fn the_endpoint_carries_the_wire_facts_entailed_by_the_capability_table_and_passes_the_boundary(
     ) {
         let url = endpoint(16_000, Some("en"), &[], caps()).unwrap();
@@ -555,9 +582,8 @@ mod tests {
     }
 
     #[test]
-    fn no_cap_declared_means_every_keyterm_is_sent() {
-        // `max: None` in the capability table -- unlike AssemblyAI's hundred,
-        // nothing here truncates.
+    fn application_byte_budget_bounds_the_sent_keyterms() {
+        // The application byte budget is stricter than the provider term cap.
         let terms: Vec<String> = (0..250).map(|i| format!("term{i}")).collect();
         let url = endpoint(16_000, None, &terms, caps()).unwrap();
 
@@ -566,9 +592,11 @@ mod tests {
             .filter(|(k, _)| k == "keyterm")
             .map(|(_, v)| v)
             .collect();
-        assert_eq!(sent.len(), 250);
-        assert_eq!(sent[0], "term0");
-        assert_eq!(sent[249], "term249");
+        let review = kw_transcription_core::vocabulary::prepare(PROVIDER_ID, None, &terms);
+        assert_eq!(sent, review.included);
+        assert!(sent.join(", ").len() <= 400);
+        assert!(!review.omitted.is_empty());
+        assert!(query_pairs(&url).contains(&("model".into(), "nova-3".into())));
     }
 
     #[test]
@@ -923,7 +951,7 @@ mod tests {
         assert!(caps.token_rotation);
         match caps.keyterms {
             KeytermSupport::Supported { max, wire } => {
-                assert_eq!(max, None);
+                assert_eq!(max, Some(100));
                 assert_eq!(wire, KeytermWire::RepeatedQueryParam);
             }
             other => panic!("{other:?}"),

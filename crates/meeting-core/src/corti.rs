@@ -240,6 +240,8 @@ pub fn session_config(
             );
         }
 
+        let prepared = kw_transcription_core::vocabulary::prepare("corti-realtime", None, keyterms);
+        let keyterms = &prepared.included;
         let cap = caps.keyterms.effective_count(keyterms.len());
         if cap > 0 {
             // `configuration.keyterms` -- from this project's own audit
@@ -249,13 +251,13 @@ pub fn session_config(
                 .iter()
                 .take(cap)
                 .cloned()
-                .map(Value::String)
+                .map(|term| json!({ "term": term }))
                 .collect();
-            map.insert("keyterms".to_owned(), Value::Array(terms));
+            map.insert("keyterms".to_owned(), json!({ "terms": terms }));
         }
     }
 
-    json!({ "configuration": configuration })
+    json!({ "type": "config", "configuration": configuration })
 }
 
 /// What a server message means to us.
@@ -637,18 +639,18 @@ mod tests {
             .unwrap();
         let sent: Vec<&str> = configuration
             .get("keyterms")
+            .and_then(|value| value.get("terms"))
             .and_then(Value::as_array)
             .unwrap()
             .iter()
-            .filter_map(Value::as_str)
+            .filter_map(|value| value.get("term").and_then(Value::as_str))
             .collect();
         assert_eq!(sent, terms.iter().map(String::as_str).collect::<Vec<_>>());
     }
 
     #[test]
-    fn no_cap_declared_means_every_keyterm_is_sent() {
-        // `max: None` in the capability table -- unlike AssemblyAI's hundred,
-        // nothing here truncates.
+    fn terms_within_the_provider_cap_are_sent() {
+        // Corti accepts up to 1,000 terms subject to per-term limits.
         let terms: Vec<String> = (0..250).map(|i| format!("term{i}")).collect();
         let value = session_config(16_000, None, &terms, caps());
         let configuration = value
@@ -657,6 +659,7 @@ mod tests {
             .unwrap();
         let sent = configuration
             .get("keyterms")
+            .and_then(|value| value.get("terms"))
             .and_then(Value::as_array)
             .unwrap();
         assert_eq!(sent.len(), 250);
@@ -935,7 +938,7 @@ mod tests {
         assert!(!caps.token_rotation);
         match caps.keyterms {
             KeytermSupport::Supported { max, wire } => {
-                assert_eq!(max, None);
+                assert_eq!(max, Some(1000));
                 assert_eq!(wire, KeytermWire::SessionConfig);
             }
             other => panic!("{other:?}"),

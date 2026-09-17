@@ -192,6 +192,7 @@ pub type LocalPort = Arc<RwLock<Option<u16>>>;
 
 /// Executes a resolved route.
 pub struct RouteTranscriber {
+    db: Option<Db>,
     policy: NetworkPolicy,
     credentials: Arc<dyn CredentialStore>,
     local_port: LocalPort,
@@ -228,7 +229,13 @@ impl RouteTranscriber {
             local_model,
             local_sherpa,
             revive,
+            db: None,
         }
+    }
+
+    pub fn with_db(mut self, db: Db) -> Self {
+        self.db = Some(db);
+        self
     }
 
     /// The whisper server to send audio to, starting a new one if the
@@ -311,7 +318,21 @@ impl Transcriber for RouteTranscriber {
             None => executor,
         };
 
+        let prompt = if matches!(transport, Transport::Local { .. })
+            && crate::local_asr::resolve(&self.local_sherpa).is_none()
+        {
+            let words = match &self.db {
+                Some(db) => kw_storage::dictionary::words(db.pool())
+                    .await
+                    .map_err(|e| DictationError::Transcription(e.to_string()))?,
+                None => Vec::new(),
+            };
+            kw_transcription_core::vocabulary::prepare("whisper", None, &words).prompt()
+        } else {
+            None
+        };
         let transcript = executor
+            .with_local_prompt(prompt.as_deref())
             .transcribe(transport, wav)
             .await
             .map_err(|err| DictationError::Transcription(err.to_string()))?;
@@ -672,14 +693,17 @@ impl DictationRuntime {
 
         let session = kw_app_core::dictation::Dictation::new(
             Arc::clone(&recorder) as Arc<dyn Recorder>,
-            Arc::new(RouteTranscriber::new(
-                policy.clone(),
-                Arc::clone(&credentials),
-                local_port,
-                local_model,
-                local_sherpa,
-                local_revive,
-            )),
+            Arc::new(
+                RouteTranscriber::new(
+                    policy.clone(),
+                    Arc::clone(&credentials),
+                    local_port,
+                    local_model,
+                    local_sherpa,
+                    local_revive,
+                )
+                .with_db(db.clone()),
+            ),
             Arc::new(ModelCleanup::new(
                 policy,
                 credentials,

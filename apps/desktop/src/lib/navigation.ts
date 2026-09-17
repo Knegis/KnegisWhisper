@@ -70,6 +70,7 @@ export const NAV = [
   { id: "dictation", label: "Dictation" },
   { id: "meetings", label: "Meetings" },
   { id: "notes", label: "Notes" },
+  { id: "vocabulary", label: "Vocabulary" },
   { id: "notes-upload", label: "Upload" },
   {
     id: "settings",

@@ -600,9 +600,11 @@ mod tests {
                 let request = String::from_utf8_lossy(&bytes);
                 let body = if phase == 0 {
                     assert!(request.contains("name=\"detect_language\"\r\n\r\ntrue"));
+                    assert!(!request.contains("name=\"prompt\""));
                     r#"{"language_probabilities":{"de":0.7,"en":0.2,"sv":0.1}}"#
                 } else {
                     assert!(request.contains("name=\"language\"\r\n\r\nen"));
+                    assert!(request.contains("name=\"prompt\"\r\n\r\nDyve, \u{00c5}sa Karlsson"));
                     assert!(!request.contains("name=\"detect_language\""));
                     r#"{"text":"Hello"}"#
                 };
@@ -615,7 +617,7 @@ mod tests {
             &engine,
             vec![0, 1],
             &["sv".into(), "en".into()],
-            None,
+            Some("Dyve, \u{00c5}sa Karlsson"),
         )
         .await
         .unwrap();

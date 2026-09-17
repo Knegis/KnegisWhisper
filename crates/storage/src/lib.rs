@@ -151,6 +151,7 @@ impl Db {
     async fn from_pool(pool: SqlitePool) -> Result<Self, StorageError> {
         sqlx::migrate!("./migrations").run(&pool).await?;
         assert_no_credential_columns(&pool).await?;
+        dictionary::migrate_vocabulary(&pool).await?;
         Ok(Self { pool })
     }
 

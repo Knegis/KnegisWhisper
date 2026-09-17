@@ -31,3 +31,5 @@ pub use route::{
     RouteSettings, Transport,
 };
 pub use sherpa::{LayoutError, SherpaOffline, TransducerFiles};
+
+pub mod vocabulary;

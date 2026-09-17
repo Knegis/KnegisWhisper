@@ -219,14 +219,6 @@
       "ui": "Settings > Meetings",
       "reachable": true
     },
-    "meetings.keyterms": {
-      "what": "Key terms sent to the meeting transcription provider to bias recognition.",
-      "writtenBy": [
-        "meeting_set_keyterms"
-      ],
-      "ui": "Settings > Meetings",
-      "reachable": true
-    },
     "calendar.google.clientId": {
       "what": "The OAuth client ID the user registers themselves. There is no embedded client; the screen says why.",
       "writtenBy": [

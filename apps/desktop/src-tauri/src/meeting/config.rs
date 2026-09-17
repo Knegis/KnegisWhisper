@@ -141,7 +141,8 @@ pub(super) fn draft_config(
 
     Ok(MeetingProviderConfig {
         provider: provider_id.to_owned(),
-        model: None,
+        model: (provider_id == "deepgram-realtime" && !keyterms.is_empty())
+            .then(|| "nova-3".to_owned()),
         language: normalize_language(language),
         keyterms: normalize_keyterms(keyterms),
         key_ref: None,
@@ -169,7 +170,8 @@ pub(super) fn resolve_provider_config(
 ) -> Result<MeetingProviderConfig, String> {
     let config = MeetingProviderConfig {
         provider: provider_id.to_owned(),
-        model: None,
+        model: (provider_id == "deepgram-realtime" && !keyterms.is_empty())
+            .then(|| "nova-3".to_owned()),
         language: normalize_language(language),
         keyterms: normalize_keyterms(keyterms),
         key_ref,

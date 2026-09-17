@@ -63,7 +63,7 @@ function SaveStatus({
   error: string | null;
   retry: () => Promise<void>;
 }) {
-  if (status === "idle") return null;
+  if (status !== "failed") return null;
   if (status === "failed") {
     return (
       <span className="save-status error" role="status">
@@ -78,11 +78,9 @@ function SaveStatus({
 
 const NoteWorkspace = forwardRef<
   NoteWorkspaceHandle,
-  { note: Note; reload: () => Promise<void>; onClose: () => void }
->(function NoteWorkspace({ note, reload, onClose }, ref) {
-  const initialTitleRef = useRef(note.title);
+  { note: Note; reload: () => Promise<void> }
+>(function NoteWorkspace({ note, reload }, ref) {
   const savedRef = useRef({ title: note.title, content: note.content });
-  const [title, setTitle] = useState(initialTitleRef.current);
   const [transcript, setTranscript] = useState<{
     rows: Awaited<ReturnType<typeof getNoteTranscriptRows>>;
     recording: Awaited<ReturnType<typeof getNoteRecording>>;
@@ -163,35 +161,15 @@ const NoteWorkspace = forwardRef<
   }, [note.id]);
 
   return (
-    <article id={`note-detail-${note.id}`} className="note-detail" aria-labelledby={`note-title-${note.id}`}>
-      <header className="note-detail-header">
-        <input
-          id={`note-title-${note.id}`}
-          aria-label="Title"
-          value={title}
-          onChange={(event) => {
-            const next = event.target.value;
-            setTitle(next);
-            if (next.trim() !== "") autosave.schedule({ title: next });
-          }}
-        />
-        <SaveStatus status={autosave.status} error={autosave.error} retry={autosave.retry} />
-        <button
-          type="button"
-          onClick={() => {
-            void autosave.flush().then(onClose);
-          }}
-          aria-label={`Close note ${note.title}`}
-        >
-          Close
-        </button>
-      </header>
+    <article id={`note-detail-${note.id}`} className="note-detail" aria-label={note.title}>
+      <SaveStatus status={autosave.status} error={autosave.error} retry={autosave.retry} />
       <div id={`note-body-${note.id}`} className="note-workspace">
         <NoteEditor
           key={note.id}
           noteId={note.id}
           initialContent={note.content}
-          onChange={(content) => autosave.schedule({ content })}
+          initialTitle={note.title}
+          onChange={(content, title) => autosave.schedule({ content, title })}
         />
         {transcript?.rows.length ? (
           <TranscriptPanel
@@ -216,7 +194,7 @@ function noteDate(value: string | null) {
   return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(date);
 }
 
-export function Notes({ initialNoteId = null, openRequest = null }: { initialNoteId?: number | null; openRequest?: { id: number } | null }) {
+export function Notes({ initialNoteId = null, openRequest = null, onOpenNote }: { initialNoteId?: number | null; openRequest?: { id: number } | null; onOpenNote?: (id: number) => void }) {
   const [context, setContext] = useState<{ note: Note; x: number; y: number; anchor: HTMLButtonElement } | null>(null);
   const contextRef = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
@@ -291,8 +269,8 @@ export function Notes({ initialNoteId = null, openRequest = null }: { initialNot
     initialSelectionDone.current = true;
     if (initialNoteId !== null || openRequest) return;
     const first = data.notes.at(0);
-    if (first) { setRequestedNote(first); setOpenNoteId(first.id); }
-  }, [data, initialNoteId, openRequest]);
+    if (first) { setRequestedNote(first); setOpenNoteId(first.id); onOpenNote?.(first.id); }
+  }, [data, initialNoteId, openRequest, onOpenNote]);
   const scrollToRequest = useRef<number | null>(null);
   useEffect(() => {
     if (!openRequest) return;
@@ -319,6 +297,7 @@ export function Notes({ initialNoteId = null, openRequest = null }: { initialNot
     if (!note) throw new Error("This note is no longer available.");
     setRequestedNote(note);
     setOpenNoteId(id);
+    onOpenNote?.(id);
   };
   const newNote = () => guard(async () => {
     await workspaceRef.current?.flush();
@@ -413,14 +392,12 @@ export function Notes({ initialNoteId = null, openRequest = null }: { initialNot
       </div>, document.body)}
       <div className="notes-layout">
         <section className="notes-main" aria-label="Note editor">
-          <header className="notes-main-heading"><h2>Notes</h2><button type="button" onClick={() => { void newNote(); }}>New note</button></header>
         {openNote ? (
           <NoteWorkspace
             key={openNote.id}
             ref={workspaceRef}
             note={openNote}
             reload={reload}
-            onClose={() => setOpenNoteId(null)}
           />
         ) : <div className="notes-empty"><h3>Your writing space</h3><p className="muted">Choose a note or meeting from the sidebar, or start a new note.</p><button type="button" onClick={() => { void newNote(); }}>New note</button></div>}
 
@@ -429,6 +406,9 @@ export function Notes({ initialNoteId = null, openRequest = null }: { initialNot
           <section id="notes-library-content" data-surface="notes.export" hidden={!libraryVisible}>
 
         <div className="notes-library-tools" role="toolbar" aria-label="Notes library tools">
+          <button type="button" aria-label="New note" title="New note" onClick={() => { void newNote(); }}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M14 3H4v18h16V9M14 3v6h6l-6-6ZM8 15h8m-4-4v8" /></svg>
+          </button>
           <button type="button" aria-label="Search notes" title="Search notes" aria-expanded={libraryTool === "search"} aria-controls="notes-library-tool-panel" onClick={() => setLibraryTool(value => value === "search" ? null : "search")}>
             <span className="notes-tool-search-icon" aria-hidden="true" />
           </button>
@@ -492,7 +472,7 @@ export function Notes({ initialNoteId = null, openRequest = null }: { initialNot
                   onContextMenu={event => { event.preventDefault(); setContext({ note, x: event.clientX, y: event.clientY, anchor: event.currentTarget }); }}
                   onKeyDown={event => { if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) { event.preventDefault(); const rect = event.currentTarget.getBoundingClientRect(); setContext({ note, x: rect.left, y: rect.bottom, anchor: event.currentTarget }); } }}
                   aria-haspopup="dialog">
-                  <span className="notes-entry-title">{note.title}</span>
+                  <span className="notes-entry-title" title={note.title}>{note.title}</span>
                   <time className="notes-entry-date" dateTime={note.createdAt ?? undefined}>{noteDate(note.createdAt)}</time>
                 </button>
               </li>

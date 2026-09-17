@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { NAV, DEFAULT_VIEW, childrenOf, groupOf, isGroup } from "../src/lib/navigation.js";
 
-const topLevel = ["dictation", "meetings", "notes", "notes-upload"];
+const topLevel = ["dictation", "meetings", "notes", "vocabulary", "notes-upload"];
 const groups = {
   settings: ["providers", "transcription", "intelligence", "local-llm", "calendar"],
   developer: ["api", "cli", "mcp", "diagnostics"],
@@ -19,7 +19,7 @@ test("the rail retains the intended destinations, grouping, and order", () => {
 
 test("every destination has one unique id, distinct from every group id", () => {
   const leaves = NAV.flatMap((entry) => isGroup(entry) ? [...childrenOf(entry)] : [entry]);
-  assert.equal(leaves.length, 13);
+  assert.equal(leaves.length, 14);
   const ids = [...leaves.map((leaf) => leaf.id), ...NAV.filter(isGroup).map((group) => group.id)];
   assert.equal(new Set(ids).size, ids.length);
   assert.equal(DEFAULT_VIEW, "dictation");

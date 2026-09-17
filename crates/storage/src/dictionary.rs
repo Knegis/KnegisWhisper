@@ -14,8 +14,23 @@ use sqlx::{FromRow, SqlitePool};
 
 use crate::StorageError;
 
+/// Shared desktop and API normalization, preserving preferred casing.
+pub fn normalize(word: &str) -> String {
+    word.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+pub fn validate_word(word: &str) -> Result<String, StorageError> {
+    let word = normalize(word);
+    if word.is_empty() || word.chars().count() > 100 {
+        return Err(StorageError::Import(
+            "Vocabulary terms must contain 1-100 characters".into(),
+        ));
+    }
+    Ok(word)
+}
+
 /// One dictionary entry.
-#[derive(Clone, FromRow, Serialize, PartialEq, Eq)]
+#[derive(Clone, FromRow, Serialize, ts_rs::TS, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct DictionaryWord {
     pub id: i64,
@@ -55,7 +70,7 @@ pub async fn words(pool: &SqlitePool) -> Result<Vec<String>, StorageError> {
 }
 
 /// What an update changed.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
 pub struct DictionaryChange {
     pub added: u32,
@@ -76,10 +91,23 @@ pub async fn update(
     add: &[String],
     remove: &[String],
 ) -> Result<DictionaryChange, StorageError> {
+    let add = add
+        .iter()
+        .map(|w| validate_word(w))
+        .collect::<Result<Vec<_>, _>>()?;
     let mut change = DictionaryChange::default();
     let mut tx = pool.begin().await?;
 
-    for word in add {
+    let existing: Vec<String> = sqlx::query_scalar("SELECT word FROM custom_dictionary")
+        .fetch_all(&mut *tx)
+        .await?;
+    let mut known: std::collections::HashSet<String> =
+        existing.iter().map(|w| normalize(w)).collect();
+    for word in &add {
+        if !known.insert(word.clone()) {
+            change.already_present += 1;
+            continue;
+        }
         // `INSERT OR IGNORE` against the UNIQUE index, so a duplicate is
         // reported rather than being an error the caller has to interpret.
         let result = sqlx::query(
@@ -113,6 +141,135 @@ pub async fn update(
     Ok(change)
 }
 
+/// Merge legacy meeting terms exactly once, in the same transaction as the marker.
+pub async fn migrate_vocabulary(pool: &SqlitePool) -> Result<(), StorageError> {
+    let mut tx = pool.begin().await?;
+    let done: Option<String> =
+        sqlx::query_scalar("SELECT value FROM settings WHERE key = 'vocabulary.migrated'")
+            .fetch_optional(&mut *tx)
+            .await?;
+    if done.is_some() {
+        tx.rollback().await?;
+        return Ok(());
+    }
+    let raw: Option<String> =
+        sqlx::query_scalar("SELECT value FROM settings WHERE key = 'meetings.keyterms'")
+            .fetch_optional(&mut *tx)
+            .await?;
+    if raw.is_none() {
+        tx.rollback().await?;
+        return Ok(());
+    }
+    let legacy: Vec<String> = raw
+        .map(|value| serde_json::from_str(&value))
+        .transpose()
+        .map_err(|_| StorageError::Import("Could not migrate meeting vocabulary".into()))?
+        .unwrap_or_default();
+    let existing: Vec<String> = sqlx::query_scalar("SELECT word FROM custom_dictionary")
+        .fetch_all(&mut *tx)
+        .await?;
+    let mut seen: std::collections::HashSet<String> =
+        existing.iter().map(|w| normalize(w)).collect();
+    for word in legacy {
+        let word = normalize(&word);
+        if !word.is_empty() && seen.insert(word.clone()) {
+            sqlx::query("INSERT OR IGNORE INTO custom_dictionary (word, source) VALUES (?, 'meeting-keyterms')")
+                .bind(word).execute(&mut *tx).await?;
+        }
+    }
+    sqlx::query("INSERT INTO settings (key, value) VALUES ('vocabulary.migrated', 'true')")
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Editing preserves identity and provenance; a duplicate is a visible error.
+pub async fn edit(pool: &SqlitePool, id: i64, word: &str) -> Result<(), StorageError> {
+    let word = validate_word(word)?;
+    let mut tx = pool.begin().await?;
+    let others: Vec<String> =
+        sqlx::query_scalar("SELECT word FROM custom_dictionary WHERE id != ?")
+            .bind(id)
+            .fetch_all(&mut *tx)
+            .await?;
+    if others.iter().any(|other| normalize(other) == word) {
+        return Err(StorageError::Import(
+            "Vocabulary entry already exists".into(),
+        ));
+    }
+    let result = sqlx::query(
+        "UPDATE custom_dictionary SET word = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+    )
+    .bind(word)
+    .bind(id)
+    .execute(&mut *tx)
+    .await?;
+    if result.rows_affected() == 0 {
+        return Err(StorageError::Import(
+            "Vocabulary entry no longer exists".into(),
+        ));
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Delete by identity and return the original entry for a session-scoped undo.
+pub async fn delete(pool: &SqlitePool, id: i64) -> Result<DictionaryWord, StorageError> {
+    let mut tx = pool.begin().await?;
+    let word: DictionaryWord =
+        sqlx::query_as("SELECT id, word, source, created_at FROM custom_dictionary WHERE id = ?")
+            .bind(id)
+            .fetch_one(&mut *tx)
+            .await?;
+    sqlx::query("DELETE FROM custom_dictionary WHERE id = ?")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(word)
+}
+
+/// Restore only a previously stored entry; legacy over-limit terms remain intact.
+pub async fn restore(pool: &SqlitePool, word: &DictionaryWord) -> Result<(), StorageError> {
+    sqlx::query("INSERT INTO custom_dictionary (id, word, source, created_at) VALUES (?, ?, ?, ?)")
+        .bind(word.id)
+        .bind(&word.word)
+        .bind(&word.source)
+        .bind(&word.created_at)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Compatibility for callers that replace the entire meeting list.
+pub async fn replace(pool: &SqlitePool, words: &[String]) -> Result<(), StorageError> {
+    let words = words
+        .iter()
+        .map(|w| validate_word(w))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut tx = pool.begin().await?;
+    let rows: Vec<(i64, String)> = sqlx::query_as("SELECT id, word FROM custom_dictionary")
+        .fetch_all(&mut *tx)
+        .await?;
+    for (id, word) in rows {
+        if !words.contains(&word) {
+            sqlx::query("DELETE FROM custom_dictionary WHERE id = ?")
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
+        }
+    }
+    for word in words {
+        sqlx::query("INSERT OR IGNORE INTO custom_dictionary (word, source) VALUES (?, 'manual')")
+            .bind(word)
+            .execute(&mut *tx)
+            .await?;
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,
@@ -130,6 +287,130 @@ mod tests {
 
     fn owned(items: &[&str]) -> Vec<String> {
         items.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    #[tokio::test]
+    async fn undo_restores_identity_and_legacy_terms_without_relaxing_new_term_validation() {
+        let db = db().await;
+        let word = "x".repeat(120);
+        sqlx::query("INSERT INTO custom_dictionary (word, source) VALUES (?, 'legacy')")
+            .bind(&word)
+            .execute(db.pool())
+            .await
+            .unwrap();
+        let before = all(db.pool()).await.unwrap();
+        let removed = delete(db.pool(), before[0].id).await.unwrap();
+        assert!(all(db.pool()).await.unwrap().is_empty());
+        restore(db.pool(), &removed).await.unwrap();
+        assert_eq!(all(db.pool()).await.unwrap(), before);
+        assert!(update(db.pool(), &[word], &[]).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn migration_preserves_existing_ids_and_legacy_long_terms_and_is_idempotent() {
+        let db = db().await;
+        update(db.pool(), &owned(&["Åsa Karlsson"]), &[])
+            .await
+            .unwrap();
+        let before = all(db.pool()).await.unwrap();
+        crate::settings::set(
+            db.pool(),
+            "meetings.keyterms",
+            &vec![
+                " Åsa   Karlsson ".to_owned(),
+                "åsa Karlsson".into(),
+                "x".repeat(120),
+            ],
+        )
+        .await
+        .unwrap();
+        sqlx::query("DELETE FROM settings WHERE key = 'vocabulary.migrated'")
+            .execute(db.pool())
+            .await
+            .unwrap();
+        migrate_vocabulary(db.pool()).await.unwrap();
+        migrate_vocabulary(db.pool()).await.unwrap();
+        let after = all(db.pool()).await.unwrap();
+        assert_eq!(after.len(), 3);
+        assert!(after.contains(&before[0]));
+        edit(db.pool(), before[0].id, "Åsa   Svensson")
+            .await
+            .unwrap();
+        assert!(all(db.pool())
+            .await
+            .unwrap()
+            .iter()
+            .any(|w| w.id == before[0].id && w.word == "Åsa Svensson"));
+    }
+
+    #[tokio::test]
+    async fn invalid_updates_and_duplicate_edits_do_not_partly_apply() {
+        let db = db().await;
+        update(db.pool(), &owned(&["Dyve", "Knegis"]), &[])
+            .await
+            .unwrap();
+        let before = all(db.pool()).await.unwrap();
+        assert!(
+            update(db.pool(), &owned(&["valid", " "]), &owned(&["Dyve"]))
+                .await
+                .is_err()
+        );
+        assert!(edit(db.pool(), before[0].id, "Knegis").await.is_err());
+        assert_eq!(all(db.pool()).await.unwrap(), before);
+    }
+
+    #[tokio::test]
+    async fn corrupt_legacy_data_does_not_mark_migration_complete() {
+        let db = db().await;
+        sqlx::query("DELETE FROM settings WHERE key = 'vocabulary.migrated'")
+            .execute(db.pool())
+            .await
+            .unwrap();
+        crate::settings::set(db.pool(), "meetings.keyterms", &123)
+            .await
+            .unwrap();
+        assert!(migrate_vocabulary(db.pool()).await.is_err());
+        assert!(
+            crate::settings::get::<bool>(db.pool(), "vocabulary.migrated")
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn vocabulary_and_migration_survive_reopening() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("vocabulary.sqlite");
+        let db = crate::Db::open(&path).await.unwrap();
+        update(db.pool(), &owned(&["Dyve"]), &[]).await.unwrap();
+        crate::settings::set(
+            db.pool(),
+            "meetings.keyterms",
+            &owned(&["\u{00c5}sa Karlsson"]),
+        )
+        .await
+        .unwrap();
+        db.pool().close().await;
+        let reopened = crate::Db::open(&path).await.unwrap();
+        let entries = all(reopened.pool()).await.unwrap();
+        assert_eq!(entries.len(), 2);
+        assert!(entries
+            .iter()
+            .any(|entry| entry.word == "\u{00c5}sa Karlsson"));
+        let ids: Vec<_> = entries.iter().map(|entry| entry.id).collect();
+        reopened.pool().close().await;
+        let again = crate::Db::open(&path).await.unwrap();
+        assert_eq!(
+            all(again.pool())
+                .await
+                .unwrap()
+                .iter()
+                .map(|entry| entry.id)
+                .collect::<Vec<_>>(),
+            ids
+        );
+        again.pool().close().await;
     }
 
     #[tokio::test]

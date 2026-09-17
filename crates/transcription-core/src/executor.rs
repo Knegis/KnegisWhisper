@@ -136,7 +136,6 @@ struct BatchRequest<'a> {
 }
 
 /// Executes a resolved route.
-#[derive(Debug)]
 pub struct Executor<'a> {
     policy: &'a NetworkPolicy,
     credentials: &'a dyn CredentialStore,
@@ -146,6 +145,15 @@ pub struct Executor<'a> {
     /// the caller can see and report before the user records anything, instead
     /// of a failure they discover after speaking.
     local: Option<&'a dyn LocalTranscriber>,
+    local_prompt: Option<&'a str>,
+}
+
+impl std::fmt::Debug for Executor<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Executor")
+            .field("has_local", &self.local.is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 impl<'a> Executor<'a> {
@@ -155,6 +163,7 @@ impl<'a> Executor<'a> {
             policy,
             credentials,
             local: None,
+            local_prompt: None,
         }
     }
 
@@ -162,6 +171,13 @@ impl<'a> Executor<'a> {
     #[must_use]
     pub const fn with_local(mut self, local: &'a dyn LocalTranscriber) -> Self {
         self.local = Some(local);
+        self
+    }
+
+    /// Apply a prepared prompt only to local dictation; cloud requests ignore it.
+    #[must_use]
+    pub const fn with_local_prompt(mut self, prompt: Option<&'a str>) -> Self {
+        self.local_prompt = prompt;
         self
     }
 
@@ -250,7 +266,7 @@ impl<'a> Executor<'a> {
         // No size check: there is no upload. The recording length cap belongs to
         // capture, where it can stop the recording rather than discard it.
         match local
-            .transcribe_languages(wav, languages, None)
+            .transcribe_languages(wav, languages, self.local_prompt)
             .await
             .map_err(|detail| TranscriptionError::LocalFailed { detail })?
         {
@@ -647,6 +663,41 @@ mod tests {
                 .unwrap();
             assert_eq!(transcript.text, "Hej");
         }
+    }
+
+    #[derive(Debug)]
+    struct PromptProbe;
+    #[async_trait::async_trait]
+    impl LocalTranscriber for PromptProbe {
+        async fn transcribe(
+            &self,
+            _wav: Vec<u8>,
+            language: Option<&str>,
+            prompt: Option<&str>,
+        ) -> Result<Inference, String> {
+            assert_eq!(language, Some("sv"));
+            assert_eq!(prompt, Some("Dyve, KnegisWhisper"));
+            Ok(Inference::Text("Hej".into()))
+        }
+    }
+    #[tokio::test]
+    async fn executor_forwards_the_prepared_local_dictation_prompt() {
+        let policy = NetworkPolicy::new().unwrap();
+        let credentials = MemoryCredentialStore::new();
+        let local = PromptProbe;
+        let executor = Executor::new(&policy, &credentials)
+            .with_local(&local)
+            .with_local_prompt(Some("Dyve, KnegisWhisper"));
+        assert!(!format!("{executor:?}").contains("KnegisWhisper"));
+        executor
+            .transcribe(
+                &Transport::Local {
+                    languages: vec!["sv".into()],
+                },
+                vec![],
+            )
+            .await
+            .unwrap();
     }
 
     /* -------------------------------------------- a 2xx is not automatically ok */

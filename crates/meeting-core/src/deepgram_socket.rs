@@ -271,11 +271,12 @@ impl DeepgramRealtime {
             detail: "no session configuration".to_owned(),
         })?;
 
-        let endpoint = deepgram::endpoint(
+        let endpoint = deepgram::endpoint_with_model(
             config.sample_rate,
             config.language.as_deref(),
             &config.keyterms,
             caps,
+            config.model.as_deref(),
         )?;
 
         // Through the boundary, every time a socket is opened -- not once at

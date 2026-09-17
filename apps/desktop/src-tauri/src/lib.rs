@@ -20,6 +20,7 @@ mod diarization;
 mod dictation;
 mod gguf_check;
 mod integrations;
+mod vocabulary;
 // Test-only: it renders `apps/desktop/src/generated/ipc-types.ts` and asserts
 // the committed copy still matches the Rust types. Nothing at runtime calls it.
 #[cfg(test)]
@@ -503,6 +504,12 @@ pub fn run() -> anyhow::Result<()> {
             meeting::meeting_set_detect_lists,
             meeting::meeting_language,
             meeting::meeting_set_language,
+            vocabulary::vocabulary_list,
+            vocabulary::vocabulary_update,
+            vocabulary::vocabulary_edit,
+            vocabulary::vocabulary_delete,
+            vocabulary::vocabulary_restore,
+            vocabulary::vocabulary_review,
             meeting::meeting_keyterms,
             meeting::meeting_set_keyterms,
             meeting::meeting_review_config,

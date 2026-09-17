@@ -1213,6 +1213,7 @@ const nowIso = (): string => new Date().toISOString();
 
 /* ---------------------------------------------------------------- handlers */
 
+let removedVocabulary: string | null = null;
 const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
   /* capabilities */
   diagnostics: () => DIAGNOSTICS,
@@ -1638,6 +1639,33 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
   meeting_set_language: (a) => {
     meetingLanguage = arg<string>(a, "language") ?? meetingLanguage;
     return null;
+  },
+  vocabulary_delete: (a) => { const id = arg<number>(a, "id") ?? 0; removedVocabulary = meetingKeyterms[id - 1] ?? null; meetingKeyterms.splice(id - 1, 1); return null; },
+  vocabulary_restore: () => { if (removedVocabulary !== null) meetingKeyterms.push(removedVocabulary); removedVocabulary = null; return null; },
+  vocabulary_list: () => meetingKeyterms.map((word, index) => ({ id: index + 1, word, source: "manual", createdAt: null })),
+  vocabulary_update: (a) => {
+    const add = (arg<string[]>(a, "add") ?? []).map(word => word.trim().replace(/\s+/g, " "));
+    const remove = arg<string[]>(a, "remove") ?? [];
+    if (add.some(word => !word || [...word].length > 100)) throw new Error("Vocabulary terms must contain 1-100 characters");
+    const added = add.filter(word => !meetingKeyterms.includes(word));
+    const removed = meetingKeyterms.filter(word => remove.includes(word)).length;
+    meetingKeyterms = [...new Set([...meetingKeyterms, ...added])].filter(word => !remove.includes(word));
+    return { added: added.length, removed, alreadyPresent: add.length - added.length, notPresent: remove.length - removed };
+  },
+  vocabulary_edit: (a) => {
+    const id = arg<number>(a, "id") ?? 0;
+    const word = (arg<string>(a, "word") ?? "").trim().replace(/\s+/g, " ");
+    if (!word || word.length > 100 || meetingKeyterms.some((value, index) => value === word && index !== id - 1)) throw new Error("Invalid or duplicate vocabulary entry");
+    if (id < 1 || id > meetingKeyterms.length) throw new Error("Entry no longer exists");
+    meetingKeyterms[id - 1] = word;
+    return null;
+  },
+  vocabulary_review: (a) => {
+    const provider = arg<string>(a, "provider");
+    const supported = ["whisper", "assemblyai-realtime", "deepgram-realtime", "corti-realtime"].includes(provider ?? "");
+    const included = supported ? meetingKeyterms.slice(0, 2) : [];
+    return { supported, model: provider === "deepgram-realtime" ? "nova-3" : arg<string>(a, "model") ?? null, included,
+      omitted: meetingKeyterms.slice(included.length).map(word => ({ word, reason: supported ? "Illustrative fixture limit" : "Not supported by this integration" })), limit: "Development fixture: at most 2 terms" };
   },
   meeting_keyterms: () => meetingKeyterms,
   meeting_set_keyterms: (a) => {

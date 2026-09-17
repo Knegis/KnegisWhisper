@@ -1,3 +1,4 @@
+import { editorViewCtx, serializerCtx } from "@milkdown/kit/core";
 import { CrepeBuilder } from "@milkdown/crepe/builder";
 import { blockEdit } from "@milkdown/crepe/feature/block-edit";
 import { cursor } from "@milkdown/crepe/feature/cursor";
@@ -8,6 +9,8 @@ import { placeholder } from "@milkdown/crepe/feature/placeholder";
 import { table } from "@milkdown/crepe/feature/table";
 import { toolbar } from "@milkdown/crepe/feature/toolbar";
 import { useEffect, useRef } from "react";
+import { installEditorMarginDrop } from "../lib/editorMarginDrop";
+import { installEditorGutter } from "../lib/editorGutter";
 
 import "@milkdown/crepe/theme/common/reset.css";
 import "@milkdown/crepe/theme/common/prosemirror.css";
@@ -24,12 +27,14 @@ import "@milkdown/crepe/theme/frame.css";
 type NoteEditorProps = {
   noteId: number;
   initialContent: string;
-  onChange: (markdown: string) => void;
+  initialTitle: string;
+  onChange: (markdown: string, title: string) => void;
 };
 
 export function NoteEditor({
   noteId,
   initialContent,
+  initialTitle,
   onChange,
 }: NoteEditorProps) {
   const rootRef = useRef<HTMLDivElement>(null);
@@ -47,10 +52,22 @@ export function NoteEditor({
     const generation = generationRef.current + 1;
     generationRef.current = generation;
     let superseded = false;
+    let initializing = true;
+    let stopMarginDrop: (() => void) | undefined;
+    let stopGutter: (() => void) | undefined;
     const builder = new CrepeBuilder({ root, defaultValue: initialRef.current })
       // The full Crepe class would also add CodeMirror and KaTeX. Those create
       // runtime styles and font assets that production's self-only CSP blocks.
-      .addFeature(blockEdit)
+      .addFeature(blockEdit, {
+        blockHandle: {
+          floatingUIOptions: {
+            // Replace the default flip middleware: the Notes rail must not
+            // move row controls to the opposite side of the document.
+            // Keep Crepe's left/left-start alignment and 16px row spacing.
+            middleware: [{ name: "rowSpacing", fn: ({ x }) => ({ x: x - 16 }) }],
+          },
+        },
+      })
       .addFeature(toolbar)
       .addFeature(placeholder, { text: "Write the note as the conversation develops." })
       .addFeature(cursor)
@@ -59,14 +76,38 @@ export function NoteEditor({
       .addFeature(table)
       .addFeature(imageBlock)
       .on((api) => {
-        api.markdownUpdated((_ctx, markdown, previous) => {
-          if (markdown !== previous) onChangeRef.current(markdown);
+        api.markdownUpdated((ctx, markdown, previous) => {
+          if (initializing || superseded || markdown === previous) return;
+          const first = ctx.get(editorViewCtx).state.doc.firstChild;
+          const title = first?.type.name === "heading" && first.attrs.level === 1
+            ? first.textContent.trim() || "Untitled note" : "Untitled note";
+          onChangeRef.current(markdown, title);
         });
       });
-    const created = builder.create();
+    const created = builder.create().then(() => {
+      if (superseded) return;
+      builder.editor.action(ctx => {
+        const view = ctx.get(editorViewCtx);
+        stopMarginDrop = installEditorMarginDrop(view, root.closest<HTMLElement>(".notes-main") ?? root);
+        stopGutter = installEditorGutter(view, root.closest<HTMLElement>(".notes-main") ?? root);
+        const first = view.state.doc.firstChild;
+        if (first?.type.name !== "heading" || first.attrs.level !== 1) {
+          const headingType = view.state.schema.nodes.heading;
+          if (!headingType) throw new Error("The note editor requires heading support.");
+          const heading = headingType.create({ level: 1 }, view.state.schema.text(initialTitle.trim() || "Untitled note"));
+          view.dispatch(view.state.tr.insert(0, heading));
+        }
+        initializing = false;
+        const title = view.state.doc.firstChild?.textContent.trim() || "Untitled note";
+        const markdown = ctx.get(serializerCtx)(view.state.doc);
+        if (markdown !== initialContent || title !== initialTitle) onChangeRef.current(markdown, title);
+      });
+    });
 
     return () => {
       superseded = true;
+      stopMarginDrop?.();
+      stopGutter?.();
       void created
         .catch(() => undefined)
         .then(async () => {
