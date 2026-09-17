@@ -161,6 +161,7 @@ const LISTS_KEY: &str = "meetings.detect";
 /// automatic detection where the provider supports it.
 const LANGUAGE_KEY: &str = "meetings.language";
 /// Settings key: terms to bias recognition towards.
+#[cfg(test)]
 const KEYTERMS_KEY: &str = "meetings.keyterms";
 
 /// Prompting is on by default.
@@ -924,10 +925,13 @@ impl MeetingRuntime {
             kw_storage::settings::get_or(self.db.pool(), LANGUAGE_KEY, String::new())
                 .await
                 .unwrap_or_default();
-        let keyterms: Vec<String> =
-            kw_storage::settings::get_or(self.db.pool(), KEYTERMS_KEY, Vec::new())
-                .await
-                .unwrap_or_default();
+        let keyterms = match kw_storage::dictionary::words(self.db.pool()).await {
+            Ok(words) => words,
+            Err(err) => {
+                self.release_stream(stream_lease).await;
+                return Err(format!("Could not read vocabulary: {err}"));
+            }
+        };
 
         // Refuses here, before anything is opened, when the provider cannot
         // detect a language and none is set -- see `resolve_provider_config`'s
@@ -1961,7 +1965,7 @@ pub async fn meeting_set_language(
 pub async fn meeting_keyterms(
     state: State<'_, crate::state::AppState>,
 ) -> Result<Vec<String>, String> {
-    kw_storage::settings::get_or(state.db().pool(), KEYTERMS_KEY, Vec::new())
+    kw_storage::dictionary::words(state.db().pool())
         .await
         .map_err(|e| format!("could not read the keyterms: {e}"))
 }
@@ -1971,7 +1975,7 @@ pub async fn meeting_set_keyterms(
     state: State<'_, crate::state::AppState>,
     keyterms: Vec<String>,
 ) -> Result<(), String> {
-    kw_storage::settings::set(state.db().pool(), KEYTERMS_KEY, &keyterms)
+    kw_storage::dictionary::replace(state.db().pool(), &keyterms)
         .await
         .map_err(|e| format!("could not save the keyterms: {e}"))
 }

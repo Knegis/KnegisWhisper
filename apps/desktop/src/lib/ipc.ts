@@ -1290,3 +1290,14 @@ export function onLocalDictationLanguages(handler: (languages: string[]) => void
 }
 
 export async function setOverlayLanguageMenu(visible: boolean): Promise<void> { return invoke("overlay_message", { visible, menu: true }); }
+
+/* Shared vocabulary: types generated from Rust. */
+export type { DictionaryWord, DictionaryChange, VocabularyReview } from "../generated/ipc-types.js";
+import type { DictionaryWord, DictionaryChange, VocabularyReview } from "../generated/ipc-types.js";
+export const getVocabulary = () => invoke<DictionaryWord[]>("vocabulary_list");
+export const updateVocabulary = (add: string[], remove: string[]) => invoke<DictionaryChange>("vocabulary_update", { add, remove });
+export const editVocabulary = (id: number, word: string) => invoke<void>("vocabulary_edit", { id, word });
+export const reviewVocabulary = (provider: string, model: string | null = null) => invoke<VocabularyReview>("vocabulary_review", { provider, model });
+
+export const deleteVocabulary = (id: number) => invoke<void>("vocabulary_delete", { id });
+export const restoreVocabulary = () => invoke<void>("vocabulary_restore");

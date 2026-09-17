@@ -12,6 +12,7 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+ts-rs.workspace = true
 async-trait.workspace = true
 serde.workspace = true
 serde_json.workspace = true

@@ -93,7 +93,7 @@ impl AudioSource {
 ///
 /// Carries a credential *reference*, never a credential, for the same reason the
 /// transcription route does: only the client resolves it, at the moment of use.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct MeetingProviderConfig {
     pub provider: String,
     pub model: Option<String>,
@@ -104,6 +104,16 @@ pub struct MeetingProviderConfig {
     pub keyterms: Vec<String>,
     pub key_ref: Option<KeyRef>,
     pub sample_rate: u32,
+}
+impl std::fmt::Debug for MeetingProviderConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MeetingProviderConfig")
+            .field("provider", &self.provider)
+            .field("model", &self.model)
+            .field("key_ref", &self.key_ref)
+            .field("keyterm_count", &self.keyterms.len())
+            .finish_non_exhaustive()
+    }
 }
 
 /// One piece of transcript from a provider.
@@ -239,7 +249,13 @@ pub fn validate(config: &MeetingProviderConfig) -> Result<ConfigReview, MeetingE
     }
 
     let requested = config.keyterms.len();
-    let effective = caps.keyterms.effective_count(requested);
+    let effective = kw_transcription_core::vocabulary::prepare(
+        &config.provider,
+        config.model.as_deref(),
+        &config.keyterms,
+    )
+    .included
+    .len();
 
     Ok(ConfigReview {
         keyterms_requested: requested,

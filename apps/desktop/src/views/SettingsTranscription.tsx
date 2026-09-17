@@ -82,8 +82,10 @@ const SERVER_ROW = "sidecar.whisper";
 
 export function SettingsTranscription({
   onGoToProviders,
+  onGoToVocabulary,
 }: {
   onGoToProviders: () => void;
+  onGoToVocabulary: () => void;
 }) {
   const load = useCallback(async () => {
     const [providers, local, sherpa, route] = await Promise.all([
@@ -229,6 +231,7 @@ export function SettingsTranscription({
 
       <MicrophoneSettings />
       <section data-surface="settings.transcription">
+        <button type="button" onClick={onGoToVocabulary}>Manage vocabulary</button>
         <h2>Cloud providers</h2>
         <p className="muted">
           A stored key is not a working provider. Store keys and run a real

@@ -58,6 +58,7 @@ import { IntegrationsApi } from "./views/IntegrationsApi";
 import { IntegrationsCalendar } from "./views/IntegrationsCalendar";
 import { IntegrationsCli } from "./views/IntegrationsCli";
 import { IntegrationsMcp } from "./views/IntegrationsMcp";
+import { Vocabulary } from "./views/Vocabulary";
 import { Notes } from "./views/Notes";
 import { NotesUpload } from "./views/NotesUpload";
 import { SettingsMeetings } from "./views/SettingsMeetings";
@@ -141,16 +142,18 @@ function renderView(
     case "dictation":
       return <DictationView hook={diagnostics.modifierOnlyShortcuts} />;
     case "meetings":
-      return <SettingsMeetings />;
+      return <SettingsMeetings onGoToVocabulary={() => select("vocabulary")} />;
     case "notes":
       return <Notes initialNoteId={importedNoteId} openRequest={searchNoteRequest} />;
+    case "vocabulary":
+      return <Vocabulary />;
     case "notes-upload":
       return <NotesUpload onOpenNote={openImportedNote} />;
     case "providers":
       return <SettingsProviders />;
     case "transcription":
       return (
-        <SettingsTranscription onGoToProviders={() => select("providers")} />
+        <SettingsTranscription onGoToProviders={() => select("providers")} onGoToVocabulary={() => select("vocabulary")} />
       );
     case "intelligence":
       return (

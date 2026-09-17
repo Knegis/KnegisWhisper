@@ -12,6 +12,34 @@
  * Hand-written `invoke()` wrappers live in ../lib/ipc.ts.
  */
 
+/* ------------------------------------------------------------- vocabulary */
+/**
+ * One dictionary entry.
+ */
+export type DictionaryWord = { id: number, word: string,
+/**
+ * `manual`, or the feature that added it.
+ */
+source: string, createdAt: string | null, };
+
+/**
+ * What an update changed.
+ */
+export type DictionaryChange = { added: number,
+/**
+ * Words that were already there. Reported rather than counted as added, so
+ * a caller retrying a request can tell nothing new happened.
+ */
+alreadyPresent: number, removed: number,
+/**
+ * Words asked to be removed that were not there.
+ */
+notPresent: number, };
+
+export type OmittedTerm = { word: string, reason: string, };
+
+export type VocabularyReview = { supported: boolean, model: string | null, included: Array<string>, omitted: Array<OmittedTerm>, limit: string, };
+
 /* ----------------------------------------------------------- capabilities */
 /**
  * How we know a capture-exclusion claim is true.

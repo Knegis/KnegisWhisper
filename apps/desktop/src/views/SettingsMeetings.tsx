@@ -30,7 +30,6 @@ import {
   getMeetingStatus,
   reviewMeetingConfig,
   setMeetingDetectLists,
-  setMeetingKeyterms,
   setMeetingLanguage,
   setMeetingPrompt,
   getDiarizationStatus,
@@ -86,7 +85,7 @@ function onePerLine(text: string): string[] {
 /** The newest partial per source, which is what a partial means. */
 type Live = Partial<Record<TranscriptEvent["source"], string>>;
 
-export function SettingsMeetings() {
+export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () => void }) {
   const load = useCallback(async () => {
     const [providers, status, language, keyterms, detect, diarization] =
       await Promise.all([
@@ -112,7 +111,6 @@ export function SettingsMeetings() {
   // the user types something, the same idea `chosen` already uses for the
   // provider select.
   const [languageDraft, setLanguageDraft] = useState<string | null>(null);
-  const [keytermsDraft, setKeytermsDraft] = useState<string | null>(null);
   const [allowDraft, setAllowDraft] = useState<string | null>(null);
   const [blockDraft, setBlockDraft] = useState<string | null>(null);
   const [review, setReview] = useState<ConfigReview | null>(null);
@@ -154,7 +152,7 @@ export function SettingsMeetings() {
   );
   const selected = chosen ?? usable[0]?.id ?? null;
   const effectiveLanguage = languageDraft ?? data?.language ?? "";
-  const effectiveKeytermsText = keytermsDraft ?? (data?.keyterms ?? []).join("\n");
+  const effectiveKeytermsText = (data?.keyterms ?? []).join("\n");
 
   useEffect(() => {
     if (!selected) {
@@ -216,7 +214,6 @@ export function SettingsMeetings() {
   // will not use is the defect this task exists to close.
   const persistLanguageAndKeyterms = async () => {
     await setMeetingLanguage(effectiveLanguage.trim());
-    await setMeetingKeyterms(onePerLine(effectiveKeytermsText));
   };
 
   // Both lists go in one write because they are one setting: `meetings.detect`
@@ -373,19 +370,10 @@ export function SettingsMeetings() {
               </span>
             </div>
             <div className="row">
-              <span className="row-label">Keyterms</span>
+              <span className="row-label">Vocabulary</span>
               <span className="row-value controls">
-                <textarea
-                  aria-label="Meeting keyterms, one per line"
-                  placeholder="one term per line"
-                  rows={3}
-                  value={effectiveKeytermsText}
-                  disabled={recording}
-                  onChange={(e) => setKeytermsDraft(e.target.value)}
-                  onBlur={() => {
-                    void guard(persistLanguageAndKeyterms);
-                  }}
-                />
+                <button type="button" onClick={onGoToVocabulary}>Manage vocabulary</button>
+                <span className="muted">{data?.keyterms.length ?? 0} saved terms · changes apply to the next meeting</span>
               </span>
             </div>
             {/*
@@ -397,11 +385,12 @@ export function SettingsMeetings() {
              */}
             {keytermReview ? (
               <Row
-                label="Keyterms in use"
+                label="Vocabulary for next meeting"
                 value={keytermReview.value}
                 detail={keytermReview.detail}
               />
             ) : null}
+            {selected === "deepgram-realtime" && (data?.keyterms.length ?? 0) > 0 && <p className="muted">Vocabulary-enabled sessions use Deepgram Nova-3.</p>}
             {languageWarning ? <p className="caveat">{languageWarning}</p> : null}
           </>
         ) : null}

@@ -226,7 +226,7 @@ pub const PROVIDERS: &[MeetingProviderCapabilities] = &[
         name: "Deepgram Realtime",
         audio_leaves_device: true,
         keyterms: KeytermSupport::Supported {
-            max: None,
+            max: Some(100),
             wire: KeytermWire::RepeatedQueryParam,
         },
         session_limit: None,
@@ -244,7 +244,7 @@ pub const PROVIDERS: &[MeetingProviderCapabilities] = &[
         name: "Corti Realtime",
         audio_leaves_device: true,
         keyterms: KeytermSupport::Supported {
-            max: None,
+            max: Some(1000),
             wire: KeytermWire::SessionConfig,
         },
         session_limit: None,

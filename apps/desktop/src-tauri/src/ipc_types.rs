@@ -117,6 +117,12 @@ fn render() -> String {
     );
 
     declared! { out, cfg, seen,
+        "vocabulary" => [
+            kw_storage::dictionary::DictionaryWord,
+            kw_storage::dictionary::DictionaryChange,
+            kw_transcription_core::vocabulary::OmittedTerm,
+            kw_transcription_core::vocabulary::VocabularyReview,
+        ],
         "capabilities" => [
             kw_overlay::Evidence,
             kw_overlay::CaptureExclusion,

@@ -136,6 +136,9 @@ pub fn endpoint(
         url.query_pairs_mut().append_pair("language_code", language);
     }
 
+    let prepared =
+        kw_transcription_core::vocabulary::prepare("assemblyai-realtime", None, keyterms);
+    let keyterms = &prepared.included;
     let cap = caps.keyterms.effective_count(keyterms.len());
     let capped: Vec<&str> = keyterms.iter().take(cap).map(String::as_str).collect();
     if !capped.is_empty() {
@@ -440,7 +443,10 @@ mod tests {
 
         assert_eq!(sent.len(), 100, "matches caps.keyterms.effective_count");
         assert_eq!(sent[0], "term0");
-        assert_eq!(sent[99], "term99");
+        assert_eq!(
+            sent,
+            kw_transcription_core::vocabulary::prepare(PROVIDER_ID, None, &terms).included
+        );
     }
 
     #[test]

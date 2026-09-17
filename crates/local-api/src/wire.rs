@@ -314,7 +314,8 @@ impl DictionaryUpdate {
 fn clean(words: Vec<String>, field: &str) -> Result<Vec<String>, ApiError> {
     let mut cleaned: Vec<String> = Vec::with_capacity(words.len());
     for word in words {
-        let trimmed = word.trim();
+        let normalized = kw_storage::dictionary::normalize(&word);
+        let trimmed = normalized.as_str();
         if trimmed.is_empty() {
             return Err(ApiError::validation(format!(
                 "'{field}' contains a blank word"
