@@ -25,3 +25,5 @@ pub mod sigv4;
 pub use chat::{Chat, ChatError, CLEANUP_SYSTEM_PROMPT};
 pub use params::{shape_for, Intent, ModelShape, RequestOptions};
 pub use route::{cloud_chat_providers, resolve_chat, ChatRoute, ChatRouteError, ChatSettings};
+
+pub mod summary;

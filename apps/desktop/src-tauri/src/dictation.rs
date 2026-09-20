@@ -400,6 +400,12 @@ impl Cleanup for ModelCleanup {
             return text.to_owned();
         };
 
+        let _local_lease = if matches!(route, kw_reasoning_core::ChatRoute::Local) {
+            Some(self.local.requests.lock().await)
+        } else {
+            None
+        };
+
         // `Chat::cleanup` is already infallible by contract: it returns the
         // original on any failure, because a cleanup that errors must not lose
         // the transcript.

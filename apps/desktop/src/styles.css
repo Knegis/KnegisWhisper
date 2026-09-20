@@ -1902,3 +1902,14 @@ button.microphone-language-toggle:hover:not(:disabled) { background: transparent
 .titlebar-history { display: flex; align-items: center; flex-shrink: 0; gap: 2px; margin-left: 6px; }
 .app-titlebar button.titlebar-history-button { border-radius: 2px; }
 .app-titlebar button.titlebar-history-button:disabled { opacity: 0.3; cursor: default; }
+
+/* Separate summary and note editors retain the existing transcript workspace. */
+.note-prose, .summary-pane { min-width: 0; flex: 1; }
+.note-prose[hidden], .summary-pane[hidden] { display: none; }
+.summary-tabs { display: flex; gap: 8px; padding: 12px 0; }
+.summary-tabs [aria-selected="true"] { color: #0015ff; border-bottom: 2px solid currentColor; }
+.summary-toolbar { display: flex; flex-wrap: wrap; gap: 8px; padding-block: 8px; }
+.summary-pane > .muted, .summary-pane > .warn, .summary-pane > .error { padding-inline: 12px; }
+
+.summary-pane { margin: 0; padding: 0; }
+.summary-pane .ProseMirror h2 { font-size: 1.125rem; text-transform: none; letter-spacing: normal; margin: 1.5rem 0 .5rem; }

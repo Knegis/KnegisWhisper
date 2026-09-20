@@ -1,0 +1,92 @@
+# Meeting summaries
+
+Implemented on 2026-09-20. Tracking: [KNEG-278](https://linear.app/axelalbertkarlsson/issue/KNEG-278/implement-editable-meeting-summaries-with-durable-generation-and), child of the OpenWhispr recommendations (KNEG-275). Not pushed or release-validated.
+
+## Use
+
+In Settings > Intelligence > Meeting summaries, select a provider/model and save.
+Automatic generation is off by default. Enable it to summarize newly saved meetings
+and completed audio/video imports, including imports submitted through the local API.
+Turning it off cancels queued automatic jobs; already-running jobs have a Cancel action.
+Older notes can use Generate summary without enabling automatic generation.
+
+Notes has separate Notes and AI summary tabs. Summaries cover overview, decisions,
+actual commitments and unresolved questions, omitting empty sections. The default
+language follows the meeting; Swedish and English can be explicitly selected.
+Timestamp links select the supporting transcript row and use existing recording
+playback when retained audio is available. References are navigation aids, not proof
+that a model's claim is correct. Generated Markdown is escaped before rendering.
+
+Summary edits autosave independently. Regeneration asks before replacing edited or
+imported summaries and keeps the old content until successful. Copy, Export Markdown
+and Export text apply to the summary. Transcript changes mark a summary outdated and
+disable its old source links. Imported legacy summaries remain editable.
+
+## Implementation
+
+- `crates/notes-core/src/summary.rs`: durable job/state operations, optimistic revisions,
+  source snapshots/hash, editing, retry, cancellation and guarded final writes.
+- `crates/storage/migrations/0005_meeting_summaries.sql`: summary metadata and jobs,
+  with cascading note deletion. Prose uses existing `notes.enhanced_content` and FTS.
+- `crates/notes-core/src/notes.rs`: schedule inside the final note-save transaction.
+  Foreign OpenWhispr database imports do not trigger automatic generation.
+- `crates/reasoning-core/src/summary.rs`: evidence IDs, bounded Unicode-safe chunks,
+  structured-output validation, language aggregation and Markdown formatting.
+- `apps/desktop/src-tauri/src/summaries.rs`: one desktop-owned sequential worker,
+  cancellation/invalidation, checkpoint reuse, provider routing and native exports.
+- `SummaryPane.tsx`, `SummarySettingsPanel.tsx`: separate settings, autosave and actions.
+
+Long transcripts are extracted in bounded sections, then combined pairwise until one
+summary remains. Completed extracts are persisted. Queued work survives restart;
+processing jobs become Interrupted and require explicit Retry. Checkpoints are reused
+only with unchanged settings and source. Stale or cancelled results cannot overwrite
+newer edits, changed sources or deleted notes. A failed summary never rolls back the
+saved transcript, note or recording.
+
+Summary requests have a separate 600-second timeout per request. Empty, refused,
+truncated, invalid-JSON and unknown-source responses fail visibly without automatic
+request replay or provider fallback. An optional JSON code fence is accepted; malformed
+JSON is not repaired. Error messages omit raw provider bodies and transcript content.
+The saved setting contains no provider credential; existing credential storage is used.
+
+Local generation uses installed models only and caps context at the runtime's 8,192
+tokens. A shared request lease excludes cleanup/model switching/idle shutdown while
+inference is active and restores the preceding local model after summary use. Local
+health checks now wait for a successful response instead of accepting loading-time
+HTTP 503 as readiness. If no local model was previously running, the summary model
+is unloaded before releasing the request lease. Cloud and enterprise routes reuse the existing transports and
+network policy. No generation API/CLI/MCP endpoint, custom templates or version history
+was added.
+
+## Verification
+
+Passed locally:
+
+- `cargo test --workspace --lib` before the final small readiness/parser changes;
+  affected crate tests repeated afterward.
+- Notes-core tests cover automatic/manual scheduling, atomic import failure, checkpoint
+  recovery, deduplication, edited-summary protection, stale results, deletion and FTS.
+- Reasoning tests cover Unicode chunk boundaries, invalid references, no-substance
+  output, code-fenced JSON, refusal and truncation. Sidecar readiness regression checks
+  both 503 and 200 responses while preserving generic listener-health behavior.
+- Desktop TypeScript check/production build and all 24 frontend tests.
+- Clippy with warnings denied; settings, command-grant and capability audits.
+- Native Windows WebView2 in a disposable profile with a synthetic HTTP provider:
+  automatic generation, long-transcript hierarchical requests, separate persistence,
+  edited-summary protection on failure, cancellation, timestamp display and source-row
+  selection. Native editor changes also persisted through an immediate window-close
+  request, verified by reading the saved database afterward. Reproducible probe: `tools/visual-check/summary-smoke.mjs --isolated-profile`.
+  This probe creates synthetic notes and changes settings; never use a real user profile.
+
+Real installed Qwen2.5 1.5B inference was exercised with a short synthetic Swedish
+meeting. It demonstrated local transport, but omitted commitments/decisions and once
+returned English prose marked as Swedish. Other attempts failed structured-output
+validation and correctly left the saved note untouched. Structured validation cannot establish
+factual completeness or correct language. This model is not a validated recommendation
+for meeting summaries. No real meeting accuracy claim is made.
+
+Still open under KNEG-278: quality evaluation on representative Swedish/English
+meetings and a suitable model, a credentialed BYOK round trip, retained-audio source
+playback and native save-dialog export. The isolated
+profile has no cloud credentials. Automated storage/flow checks do not establish these
+product behaviors. macOS/Linux native execution and release/hosted CI were not tested.

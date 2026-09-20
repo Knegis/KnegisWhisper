@@ -1301,3 +1301,15 @@ export const reviewVocabulary = (provider: string, model: string | null = null) 
 
 export const deleteVocabulary = (id: number) => invoke<void>("vocabulary_delete", { id });
 export const restoreVocabulary = () => invoke<void>("vocabulary_restore");
+
+
+export type { SummarySettings, SummaryState, SummaryReference } from "../generated/ipc-types.js";
+import type { SummarySettings, SummaryState } from "../generated/ipc-types.js";
+export const getSummarySettings = () => invoke<SummarySettings>("summary_settings_get");
+export async function setSummarySettings(settings: SummarySettings): Promise<void> { return invoke<void>("summary_settings_set", { settings }); }
+export const getNoteSummary = (id: number) => invoke<SummaryState>("note_summary_get", { id });
+export const generateNoteSummary = (id: number, revision: number, replaceEdited: boolean, retry: boolean) => invoke<SummaryState>("note_summary_generate", { id, revision, replaceEdited, retry });
+export const cancelNoteSummary = (id: number) => invoke<void>("note_summary_cancel", { id });
+export const updateNoteSummary = (id: number, revision: number, content: string) => invoke<SummaryState>("note_summary_update", { id, revision, content });
+export const exportNoteSummary = (id: number, format: "md" | "txt") => invoke<string | null>("note_summary_export", { id, format });
+export const onNoteSummaryChanged = (handler: (id: number) => void) => listen<number>("note-summary-changed", event => handler(event.payload));

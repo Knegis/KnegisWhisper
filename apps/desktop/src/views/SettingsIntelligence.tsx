@@ -1,3 +1,4 @@
+import { SummarySettingsPanel } from "../components/SummarySettingsPanel";
 /**
  * Settings > Intelligence — the reasoning model that tidies a dictation.
  *
@@ -280,6 +281,7 @@ export function SettingsIntelligence({
     <div className="view">
       {error ? <p className="error">{error}</p> : null}
 
+      <SummarySettingsPanel />
       <section data-surface="settings.intelligence">
         <h2>Dictation cleanup</h2>
         <p className="muted">

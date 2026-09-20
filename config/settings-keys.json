@@ -274,6 +274,14 @@
       ],
       "ui": "Dictation > Shortcuts",
       "reachable": true
+    },
+    "reasoning.summaries": {
+      "what": "Automatic meeting summaries, independent model/endpoint selection, language and context budget.",
+      "writtenBy": [
+        "summary_settings_set"
+      ],
+      "ui": "Settings > Intelligence > Summaries",
+      "reachable": true
     }
   }
 }

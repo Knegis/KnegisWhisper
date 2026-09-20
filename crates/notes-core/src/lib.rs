@@ -18,3 +18,5 @@ pub mod transcript;
 pub use notes::{escape_query, search, Folder, NewNote, Note, NoteUpdate, SearchHit};
 pub use recordings::NoteRecording;
 pub use transcript::{export, Format, NoteMeta, Segment, SpeakerLabels, TranscriptRow};
+
+pub mod summary;

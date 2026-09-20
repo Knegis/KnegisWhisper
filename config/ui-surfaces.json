@@ -100,6 +100,12 @@
       "component": "apps/desktop/src/views/Vocabulary.tsx",
       "built": true,
       "note": "Shared dictionary management and provider-specific recognition-hint usage. Legacy meeting keyterms are migrated into dictionary storage."
+    },
+    "Settings > Intelligence > Summaries": {
+      "surfaceId": "settings.intelligence.summaries",
+      "component": "apps/desktop/src/components/SummarySettingsPanel.tsx",
+      "built": true,
+      "note": "Configures automatic summaries independently of dictation cleanup, including destination, language and context budget."
     }
   }
 }

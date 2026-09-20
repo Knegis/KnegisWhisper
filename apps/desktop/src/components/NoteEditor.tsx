@@ -29,6 +29,7 @@ type NoteEditorProps = {
   initialContent: string;
   initialTitle: string;
   onChange: (markdown: string, title: string) => void;
+  summary?: boolean;
 };
 
 export function NoteEditor({
@@ -36,6 +37,7 @@ export function NoteEditor({
   initialContent,
   initialTitle,
   onChange,
+  summary = false,
 }: NoteEditorProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const initialRef = useRef(initialContent);
@@ -69,7 +71,7 @@ export function NoteEditor({
         },
       })
       .addFeature(toolbar)
-      .addFeature(placeholder, { text: "Write the note as the conversation develops." })
+      .addFeature(placeholder, { text: summary ? "Edit the meeting summary." : "Write the note as the conversation develops." })
       .addFeature(cursor)
       .addFeature(listItem)
       .addFeature(linkTooltip)
@@ -91,7 +93,7 @@ export function NoteEditor({
         stopMarginDrop = installEditorMarginDrop(view, root.closest<HTMLElement>(".notes-main") ?? root);
         stopGutter = installEditorGutter(view, root.closest<HTMLElement>(".notes-main") ?? root);
         const first = view.state.doc.firstChild;
-        if (first?.type.name !== "heading" || first.attrs.level !== 1) {
+        if (!summary && (first?.type.name !== "heading" || first.attrs.level !== 1)) {
           const headingType = view.state.schema.nodes.heading;
           if (!headingType) throw new Error("The note editor requires heading support.");
           const heading = headingType.create({ level: 1 }, view.state.schema.text(initialTitle.trim() || "Untitled note"));
@@ -100,7 +102,7 @@ export function NoteEditor({
         initializing = false;
         const title = view.state.doc.firstChild?.textContent.trim() || "Untitled note";
         const markdown = ctx.get(serializerCtx)(view.state.doc);
-        if (markdown !== initialContent || title !== initialTitle) onChangeRef.current(markdown, title);
+        if (!summary && (markdown !== initialContent || title !== initialTitle)) onChangeRef.current(markdown, title);
       });
     });
 
@@ -119,7 +121,7 @@ export function NoteEditor({
           }
         });
     };
-  }, [noteId]);
+  }, [noteId, summary]);
 
   return (
     <div className="note-editor">
