@@ -89,15 +89,24 @@ pub struct Chat<'a> {
     /// it: `port::allocate` searches 8221–8240, so the second instance on a
     /// machine would have had its requests sent to the first one's server.
     local_port: Option<u16>,
+    summary_request: bool,
 }
 
 impl<'a> Chat<'a> {
+    /// Long-form generation must never accept a partial result.
+    #[must_use]
+    pub const fn for_summary(mut self) -> Self {
+        self.summary_request = true;
+        self
+    }
+
     #[must_use]
     pub const fn new(policy: &'a NetworkPolicy, credentials: &'a dyn CredentialStore) -> Self {
         Self {
             policy,
             credentials,
             local_port: None,
+            summary_request: false,
         }
     }
 
@@ -308,6 +317,9 @@ impl<'a> Chat<'a> {
 
         tracing::debug!(provider = id, "sending an enterprise completion request");
 
+        if self.summary_request {
+            outbound = outbound.timeout(std::time::Duration::from_secs(600));
+        }
         let response =
             outbound
                 .body(shaped.body)
@@ -324,6 +336,9 @@ impl<'a> Chat<'a> {
             detail: e.to_string(),
         })?;
 
+        if self.summary_request {
+            validate_summary_completion(&text)?;
+        }
         if shaped.converse_response {
             enterprise::interpret_converse(status, &text)
         } else {
@@ -404,6 +419,9 @@ impl<'a> Chat<'a> {
             outbound = outbound.bearer_auth(secret.expose());
         }
 
+        if self.summary_request {
+            outbound = outbound.timeout(std::time::Duration::from_secs(600));
+        }
         let response = outbound
             .header(reqwest::header::CONTENT_TYPE, "application/json")
             .body(body.to_string())
@@ -420,6 +438,9 @@ impl<'a> Chat<'a> {
             detail: e.to_string(),
         })?;
 
+        if self.summary_request {
+            validate_summary_completion(&text)?;
+        }
         interpret_completion(provider, status, &text)
     }
 }
@@ -479,6 +500,33 @@ pub fn finish_reason(body: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
+/// A successful HTTP status does not make a truncated or refused summary usable.
+pub fn validate_summary_completion(body: &str) -> Result<(), ChatError> {
+    let parsed: Value = serde_json::from_str(body).unwrap_or(Value::Null);
+    let reason = parsed
+        .pointer("/choices/0/finish_reason")
+        .or_else(|| parsed.get("stopReason"))
+        .and_then(Value::as_str);
+    let refused = parsed
+        .pointer("/choices/0/message/refusal")
+        .is_some_and(|v| !v.is_null() && v.as_str() != Some(""));
+    if is_truncated(reason)
+        || matches!(
+            reason,
+            Some("content_filter" | "guardrail_intervened" | "content_filtered")
+        )
+        || refused
+    {
+        return Err(ChatError::Transport {
+            provider: "summary".into(),
+            detail:
+                "The model refused or truncated the summary. Choose a different model or retry."
+                    .into(),
+        });
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,
@@ -495,6 +543,23 @@ mod tests {
     }
 
     /* ---------------------------------------------- a 2xx is not a success */
+
+    #[test]
+    fn summary_rejects_truncation_and_refusal_in_both_response_shapes() {
+        for body in [
+            r#"{"choices":[{"finish_reason":"length"}]}"#,
+            r#"{"choices":[{"message":{"refusal":"declined"}}]}"#,
+            r#"{"stopReason":"max_tokens"}"#,
+            r#"{"stopReason":"content_filtered"}"#,
+        ] {
+            assert!(validate_summary_completion(body).is_err());
+        }
+        assert!(validate_summary_completion(
+            r#"{"choices":[{"finish_reason":"stop","message":{"refusal":null}}]}"#
+        )
+        .is_ok());
+        assert!(validate_summary_completion(r#"{"stopReason":"end_turn"}"#).is_ok());
+    }
 
     #[test]
     fn a_completion_with_content_succeeds_and_is_trimmed() {

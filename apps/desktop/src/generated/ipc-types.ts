@@ -429,6 +429,16 @@ region: string,
  */
 serviceAccountJson: string, };
 
+export type SummarySettings = { enabled: boolean, provider: string, model: string, selfHostedUrl: string | null, enterprise: boolean, language: string,
+/**
+ * Total context budget, including instructions and output; never a secret.
+ */
+contextBudget: number, };
+
+export type SummaryReference = { id: string, rowIndex: number, };
+
+export type SummaryState = { noteId: number, content: string | null, revision: number, edited: boolean, outdated: boolean, legacy: boolean, status: string | null, completed: number, total: number, error: string | null, language: string | null, generatedAt: string | null, references: Array<SummaryReference>, };
+
 /**
  * What the user configured, as stored.
  *

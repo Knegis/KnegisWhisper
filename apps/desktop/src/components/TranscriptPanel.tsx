@@ -4,6 +4,7 @@ import type { NoteRecording, TranscriptRow } from "../lib/ipc";
 import { formatClock, RecordingPlayer, type RecordingPlayerHandle } from "./RecordingPlayer";
 
 type TranscriptPanelProps = {
+  sourceRequest?: { index: number; nonce: number } | null;
   rows: TranscriptRow[];
   recording: NoteRecording | null;
   noteId: number;
@@ -12,13 +13,22 @@ type TranscriptPanelProps = {
   attachmentError: string | null;
 };
 
-export function TranscriptPanel({ rows, recording, noteId, onAttach, attaching, attachmentError }: TranscriptPanelProps) {
+export function TranscriptPanel({ sourceRequest, rows, recording, noteId, onAttach, attaching, attachmentError }: TranscriptPanelProps) {
   const playerRef = useRef<RecordingPlayerHandle>(null);
   const rowRefs = useRef(new Map<number, HTMLLIElement>());
   const [selected, setSelected] = useState<Set<number>>(() => new Set());
   const [anchor, setAnchor] = useState<number | null>(null);
   const [currentTime, setCurrentTime] = useState(0);
   const [playing, setPlaying] = useState(false);
+
+  useEffect(() => {
+    if (!sourceRequest) return;
+    const row = rows.find(item => item.index === sourceRequest.index);
+    if (!row) return;
+    setSelected(new Set([row.index])); setAnchor(row.index);
+    rowRefs.current.get(row.index)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    if (row.startSeconds !== null && recording) playerRef.current?.playInterval(row.startSeconds, row.endSeconds);
+  }, [sourceRequest, rows, recording]);
 
   const activeRow = useMemo(() => {
     if (!playing) return null;

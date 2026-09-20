@@ -70,6 +70,7 @@ pub struct LocalEndpoint {
     port: Arc<RwLock<Option<u16>>>,
     /// Unix seconds of the last read. `0` means never.
     last_used: Arc<AtomicI64>,
+    pub(crate) requests: Arc<Mutex<()>>,
 }
 
 impl LocalEndpoint {
@@ -295,7 +296,7 @@ impl LocalLlm {
             port: chosen,
         };
 
-        let health = HttpHealth::new(self.policy.clone(), "/health");
+        let health = HttpHealth::new(self.policy.clone(), "/health").require_success();
         let running = process::start(spec, &launch, &self.pids, &health, StartTimings::default())
             .await
             .map_err(|e| e.to_string())?;
@@ -408,6 +409,9 @@ fn watch_for_idle(llm: Arc<LocalLlm>, app: AppHandle) {
                 return;
             }
 
+            let Ok(_lease) = llm.endpoint.requests.try_lock() else {
+                continue;
+            };
             if llm.endpoint.idle_for() >= IDLE_STOP {
                 tracing::info!(
                     minutes = IDLE_STOP.as_secs() / 60,
@@ -435,7 +439,7 @@ fn watch_for_idle(llm: Arc<LocalLlm>, app: AppHandle) {
 ///
 /// So there is one way to reach a running server from a command, and it arms the
 /// timer. Found while reading, not by a failure.
-async fn start_and_watch(
+pub(crate) async fn start_and_watch(
     llm: &Arc<LocalLlm>,
     app: AppHandle,
     model_id: &str,
@@ -1385,6 +1389,14 @@ pub async fn local_llm_start(
     llm: State<'_, Arc<LocalLlm>>,
     model_id: String,
 ) -> Result<u16, String> {
+    let _lease = llm
+        .endpoint
+        .requests
+        .try_lock()
+        .map_err(|_| "A local generation request is running. Try again after it finishes.")?;
+    if llm.running_model().is_some_and(|model| model != model_id) {
+        llm.stop().await;
+    }
     // Armed as the server comes up rather than after the settings write below:
     // the write can fail, and an idle timer is not something to make conditional
     // on remembering a preference.
@@ -1424,6 +1436,11 @@ pub async fn local_llm_refresh_server(
     app: AppHandle,
     llm: State<'_, Arc<LocalLlm>>,
 ) -> Result<crate::local_model::RefreshOutcome, String> {
+    let _lease = llm
+        .endpoint
+        .requests
+        .try_lock()
+        .map_err(|_| "A local generation request is running. Try again after it finishes.")?;
     let (spec, asset) = llm.catalog.resolve(SIDECAR).map_err(|e| e.to_string())?;
     let sidecars = paths::sidecar_dir();
 
@@ -1481,6 +1498,11 @@ pub async fn local_llm_refresh_server(
 
 #[tauri::command]
 pub async fn local_llm_stop(llm: State<'_, Arc<LocalLlm>>) -> Result<(), String> {
+    let _lease = llm
+        .endpoint
+        .requests
+        .try_lock()
+        .map_err(|_| "A local generation request is running. Cancel it first.")?;
     llm.stop().await;
     Ok(())
 }

@@ -526,17 +526,26 @@ async fn drain_stderr(mut capture: tokio::sync::watch::Receiver<Option<String>>)
 /// dropped that page would otherwise look permanently unhealthy.
 #[derive(Debug, Clone)]
 pub struct HttpHealth {
+    require_success: bool,
     policy: kw_network_policy::NetworkPolicy,
     path: String,
     timeout: Duration,
 }
 
 impl HttpHealth {
+    /// Model-loading servers can speak HTTP while still returning 503.
+    #[must_use]
+    pub const fn require_success(mut self) -> Self {
+        self.require_success = true;
+        self
+    }
+
     #[must_use]
     pub fn new(policy: kw_network_policy::NetworkPolicy, path: impl Into<String>) -> Self {
         Self {
             policy,
             path: path.into(),
+            require_success: false,
             timeout: Duration::from_secs(2),
         }
     }
@@ -548,7 +557,11 @@ impl Health for HttpHealth {
         let Ok(request) = self.policy.loopback(reqwest::Method::GET, port, &self.path) else {
             return false;
         };
-        request.timeout(self.timeout).send().await.is_ok()
+        request
+            .timeout(self.timeout)
+            .send()
+            .await
+            .is_ok_and(|response| !self.require_success || response.status().is_success())
     }
 }
 
@@ -564,6 +577,28 @@ mod tests {
     use std::sync::atomic::{AtomicU32, Ordering};
 
     use super::*;
+
+    #[tokio::test]
+    async fn model_health_waits_for_success_but_generic_health_accepts_a_listener() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            for status in [503, 503, 200] {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut buffer = [0_u8; 2048];
+                let _ = socket.read(&mut buffer).await.unwrap();
+                socket.write_all(format!("HTTP/1.1 {status} Test\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").as_bytes()).await.unwrap();
+            }
+        });
+        let health = HttpHealth::new(kw_network_policy::NetworkPolicy::new().unwrap(), "/health");
+        assert!(health.is_ready(port).await);
+        let model_health = health.require_success();
+        assert!(!model_health.is_ready(port).await);
+        assert!(model_health.is_ready(port).await);
+        server.await.unwrap();
+    }
+
     use crate::manifest::{PortRange, Source, Transport};
 
     fn spec() -> SidecarSpec {

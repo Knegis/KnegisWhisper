@@ -41,6 +41,7 @@ mod recordings;
 mod sherpa_stream;
 mod shortcuts;
 mod state;
+mod summaries;
 mod tray;
 mod update_window;
 mod updater;
@@ -164,7 +165,7 @@ pub fn run() -> anyhow::Result<()> {
             let portal_enabled = cfg!(target_os = "linux") && tauri::async_runtime::block_on(
                 kw_storage::settings::get::<bool>(state.db().pool(), "hotkey.usePortal")
             ).ok().flatten().unwrap_or(false);
-            app.manage(state);
+            app.manage(state.clone());
 
             // Local transcription. The catalogue is parsed here so a malformed
             // config/sidecars.json is a startup message rather than a surprise
@@ -244,6 +245,7 @@ pub fn run() -> anyhow::Result<()> {
                     .context("could not prepare the local text-generation server")?,
             );
             tauri::async_runtime::block_on(llm.reap_stale());
+            summaries::start(handle.clone(), state.clone(), std::sync::Arc::clone(&llm));
             let llm_endpoint = llm.endpoint();
             app.manage(std::sync::Arc::clone(&llm));
 
@@ -429,6 +431,13 @@ pub fn run() -> anyhow::Result<()> {
             commands::provider_credential_set,
             commands::provider_credential_present,
             commands::probe_providers,
+            summaries::summary_settings_get,
+            summaries::summary_settings_set,
+            summaries::note_summary_get,
+            summaries::note_summary_generate,
+            summaries::note_summary_cancel,
+            summaries::note_summary_update,
+            summaries::note_summary_export,
             reasoning::reasoning_status,
             reasoning::reasoning_set_cleanup,
             reasoning::enterprise_config_set,

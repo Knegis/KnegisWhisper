@@ -161,6 +161,9 @@ fn render() -> String {
         ],
         "reasoning" => [
             kw_reasoning_core::enterprise::EnterpriseConfig,
+            kw_notes_core::summary::SummarySettings,
+            kw_notes_core::summary::SummaryReference,
+            kw_notes_core::summary::SummaryState,
             crate::reasoning::CleanupSettings,
             crate::reasoning::ReasoningDispatch,
             crate::reasoning::ReasoningModelSummary,

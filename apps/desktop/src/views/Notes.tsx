@@ -1,3 +1,5 @@
+import { SummaryPane, type SummaryPaneHandle } from "../components/SummaryPane";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 /**
  * Notes > Export.
  *
@@ -81,6 +83,10 @@ const NoteWorkspace = forwardRef<
   { note: Note; reload: () => Promise<void> }
 >(function NoteWorkspace({ note, reload }, ref) {
   const savedRef = useRef({ title: note.title, content: note.content });
+  const summaryRef = useRef<SummaryPaneHandle>(null);
+  const [tab, setTab] = useState<"notes" | "summary">(note.enhancedContent !== null ? "summary" : "notes");
+  const [sourceRequest, setSourceRequest] = useState<{ index: number; nonce: number } | null>(null);
+  const [tabError, setTabError] = useState<string | null>(null);
   const [transcript, setTranscript] = useState<{
     rows: Awaited<ReturnType<typeof getNoteTranscriptRows>>;
     recording: Awaited<ReturnType<typeof getNoteRecording>>;
@@ -143,7 +149,19 @@ const NoteWorkspace = forwardRef<
   );
   const autosave = useAutosave<EditorPatch>({ save });
 
-  useImperativeHandle(ref, () => ({ flush: autosave.flush }), [autosave.flush]);
+  const flushBoth = useCallback(async () => { await autosave.flush(); await summaryRef.current?.flush(); }, [autosave.flush]);
+  useImperativeHandle(ref, () => ({ flush: flushBoth }), [flushBoth]);
+  useEffect(() => {
+    if (!("__TAURI_INTERNALS__" in window)) return;
+    let closing = false;
+    const registered = getCurrentWindow().onCloseRequested(async event => {
+      if (closing) return;
+      event.preventDefault();
+      try { await flushBoth(); closing = true; await getCurrentWindow().close(); }
+      catch (cause) { setTabError(String(cause)); }
+    });
+    return () => { void registered.then(stop => stop()); };
+  }, [flushBoth]);
 
   useEffect(() => {
     let current = true;
@@ -163,7 +181,20 @@ const NoteWorkspace = forwardRef<
   return (
     <article id={`note-detail-${note.id}`} className="note-detail" aria-label={note.title}>
       <SaveStatus status={autosave.status} error={autosave.error} retry={autosave.retry} />
+      <div className="summary-tabs" role="tablist" aria-label="Note view">
+        {(["notes", "summary"] as const).map(value => <button key={value} type="button" role="tab" aria-selected={tab === value} tabIndex={tab === value ? 0 : -1} onKeyDown={event => {
+          if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+          event.preventDefault();
+          const next = event.key === "Home" ? "notes" : event.key === "End" ? "summary" : value === "notes" ? "summary" : "notes";
+          const target = event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>("button")[next === "notes" ? 0 : 1];
+          void flushBoth().then(() => { setTab(next); target?.focus(); }).catch(cause => setTabError(String(cause)));
+        }} onClick={() => {
+          void flushBoth().then(() => setTab(value)).catch(cause => setTabError(String(cause)));
+        }}>{value === "notes" ? "Notes" : "AI summary"}</button>)}
+      </div>
+      {tabError && <p className="error" role="alert">{tabError}</p>}
       <div id={`note-body-${note.id}`} className="note-workspace">
+        <div className="note-prose" hidden={tab !== "notes"}>
         <NoteEditor
           key={note.id}
           noteId={note.id}
@@ -171,8 +202,11 @@ const NoteWorkspace = forwardRef<
           initialTitle={note.title}
           onChange={(content, title) => autosave.schedule({ content, title })}
         />
+        </div>
+        <SummaryPane ref={summaryRef} noteId={note.id} visible={tab === "summary"} onSource={index => setSourceRequest({ index, nonce: Date.now() })} />
         {transcript?.rows.length ? (
           <TranscriptPanel
+            sourceRequest={sourceRequest}
             rows={transcript.rows}
             recording={transcript.recording}
             noteId={note.id}

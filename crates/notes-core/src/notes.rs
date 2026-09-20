@@ -53,7 +53,11 @@ pub struct NewNote {
 
 /// Create a note, returning its id.
 pub async fn create(pool: &SqlitePool, note: &NewNote) -> Result<i64, StorageError> {
-    create_on(pool, note).await
+    let mut tx = pool.begin().await?;
+    let id = create_on(&mut *tx, note).await?;
+    crate::summary::enqueue_automatic(&mut tx, id).await?;
+    tx.commit().await?;
+    Ok(id)
 }
 
 async fn create_on<'e, E: sqlx::Executor<'e, Database = sqlx::Sqlite>>(
@@ -108,6 +112,7 @@ pub async fn create_with_recording_job(
 ) -> Result<(i64, crate::recordings::NoteRecording), StorageError> {
     let mut tx = pool.begin().await?;
     let id = create_on(&mut *tx, note).await?;
+    crate::summary::enqueue_automatic(&mut tx, id).await?;
     let recording =
         crate::recordings::attach_on(&mut *tx, id, key, Some(duration), Some(original)).await?;
     if let Some(job) = job {
