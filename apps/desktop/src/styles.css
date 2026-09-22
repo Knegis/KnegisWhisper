@@ -1916,9 +1916,9 @@ button.microphone-language-toggle:hover:not(:disabled) { background: transparent
 
 /* The note owns a single player, regardless of the selected view. */
 .notes-main .note-detail-header input.note-title { width: 100%; min-width: 0; padding: .25rem 0; background: transparent; border: 0; font-family: var(--font-sans); font-size: 2rem; font-weight: 600; line-height: 1.3; }
-.note-detail-header { display: block; margin-bottom: 1.25rem; }
+.note-detail-header { display: block; margin-bottom: 0; padding-bottom: 0; border-bottom: 0; }
 .note-section-heading { font-size: .85rem; font-weight: 600; color: var(--muted); margin: 1rem 0; }
-.note-workspace > section { min-width: 0; }
+.note-workspace > section { min-width: 0; margin-top: 0; }
 .note-workspace [hidden], .note-workspace > [hidden] { display: none; }
 .note-mini-player { position: sticky; bottom: 0; grid-row: 3; padding: .75rem; background: var(--surface); border: 1px solid var(--faint); border-radius: .5rem; z-index: 3; }
 .note-full-player { grid-row: 1; }
@@ -1929,5 +1929,7 @@ button.microphone-language-toggle:hover:not(:disabled) { background: transparent
 .note-workspace .transcript-rows { max-height: none; }
 .note-workspace .transcript-rows li { overflow-wrap: anywhere; }
 .start-from-transcript { margin-bottom: 1rem; }
-.note-tabs { flex-wrap: wrap; }
+.note-tabs { flex-wrap: wrap; padding: 0 0 4px; }
+.note-prose > .note-section-heading:first-child { margin-top: .5rem; }
+.note-tabs > button { margin-top: 0; }
 .notes-main .note-workspace .note-editor, .notes-main .note-workspace .note-editor .milkdown .ProseMirror { min-height: 12rem; }
