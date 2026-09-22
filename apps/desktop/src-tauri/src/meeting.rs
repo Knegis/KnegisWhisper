@@ -1317,15 +1317,9 @@ impl MeetingRuntime {
             };
         }
 
-        let text = segments
-            .iter()
-            .map(|s| s.text.as_str())
-            .collect::<Vec<&str>>()
-            .join("\n");
-
-        let mut content = text.clone();
+        let mut recording_details = String::new();
         if from_partials {
-            content.push_str(
+            recording_details.push_str(
                 "\n\n(The whole-recording pass did not complete, so this is the running \
                  transcript from during the meeting rather than a single pass over the \
                  finished audio.)",
@@ -1337,7 +1331,7 @@ impl MeetingRuntime {
             // how the reader expects should say so. This one is the good case --
             // the whole-recording pass ran afterwards over the complete audio,
             // so nothing is missing from what follows.
-            content.push_str(&format!(
+            recording_details.push_str(&format!(
                 "\n\n(The live transcription stopped early: {reason} This note is the \
                  whole-recording pass, which ran afterwards over the complete audio.)"
             ));
@@ -1347,7 +1341,7 @@ impl MeetingRuntime {
             // asked for. A run that produced labels adds nothing here -- the
             // labels are visible in the note itself, and a sentence announcing
             // that a feature worked is noise.
-            content.push_str(&format!("\n\n({note})"));
+            recording_details.push_str(&format!("\n\n({note})"));
         }
         if transcript.gaps > 0 {
             // Two causes, and `MeetingTranscript::gaps` is one number that does
@@ -1355,7 +1349,7 @@ impl MeetingRuntime {
             // or a session past the limit on how much transcript is retained.
             // Naming both is honest where naming one was accurate until
             // KNEG-109 gave the count a second source.
-            content.push_str(&format!(
+            recording_details.push_str(&format!(
                 "\n\n({} stretch(es) of audio were never transcribed: either the transcriber \
                  could not keep up with the meeting, or the meeting ran past the limit on how \
                  much transcript one session keeps.)",
@@ -1363,7 +1357,7 @@ impl MeetingRuntime {
             ));
         }
         append_delivery_facts(
-            &mut content,
+            &mut recording_details,
             finished.mic_delivered,
             finished.system_delivered,
         );
@@ -1373,7 +1367,8 @@ impl MeetingRuntime {
                 "Meeting — {}",
                 chrono::Local::now().format("%Y-%m-%d %H:%M")
             ),
-            content,
+            content: String::new(),
+            recording_details: Some(recording_details.trim().to_owned()),
             note_type: Some("meeting".to_owned()),
             folder_id: None,
             transcript: serde_json::to_string(&segments).ok(),

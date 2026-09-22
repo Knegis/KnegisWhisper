@@ -939,7 +939,7 @@ endpoints: number, } | { "state": "failed", mechanism: string, reason: string, }
 /**
  * A note, as listed.
  */
-export type Note = { id: number, title: string, content: string, noteType: string, enhancedContent: string | null, folderId: number | null, transcript: string | null, participants: string | null, audioDurationSeconds: number | null, createdAt: string | null, updatedAt: string | null, };
+export type Note = { id: number, title: string, content: string, recordingDetails: string | null, noteType: string, enhancedContent: string | null, folderId: number | null, transcript: string | null, participants: string | null, audioDurationSeconds: number | null, createdAt: string | null, updatedAt: string | null, };
 
 /**
  * A folder.

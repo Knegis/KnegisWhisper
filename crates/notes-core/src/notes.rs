@@ -1,6 +1,6 @@
 //! Notes and folders.
 //!
-//! Full-text search goes through the FTS5 external-content table the storage
+//! Full-text search goes through the FTS5 index the storage
 //! crate builds, and the query it receives is **escaped rather than passed
 //! through**. That is the one thing here worth reading carefully: FTS5 has its
 //! own query syntax, so an unescaped search for `C++ (draft)` is a syntax error
@@ -19,6 +19,7 @@ pub struct Note {
     pub id: i64,
     pub title: String,
     pub content: String,
+    pub recording_details: Option<String>,
     pub note_type: String,
     pub enhanced_content: Option<String>,
     pub folder_id: Option<i64>,
@@ -44,6 +45,7 @@ pub struct Folder {
 pub struct NewNote {
     pub title: String,
     pub content: String,
+    pub recording_details: Option<String>,
     pub note_type: Option<String>,
     pub folder_id: Option<i64>,
     pub transcript: Option<String>,
@@ -73,8 +75,8 @@ async fn create_on<'e, E: sqlx::Executor<'e, Database = sqlx::Sqlite>>(
     let id: i64 = sqlx::query_scalar(
         "INSERT INTO notes
             (title, content, note_type, folder_id, transcript, participants,
-             audio_duration_seconds)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
+             audio_duration_seconds, recording_details)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
          RETURNING id",
     )
     .bind(&title)
@@ -84,6 +86,7 @@ async fn create_on<'e, E: sqlx::Executor<'e, Database = sqlx::Sqlite>>(
     .bind(&note.transcript)
     .bind(&note.participants)
     .bind(note.audio_duration_seconds)
+    .bind(&note.recording_details)
     .fetch_one(pool)
     .await?;
 
@@ -126,7 +129,8 @@ pub async fn create_with_recording_job(
     Ok((id, recording))
 }
 
-const COLUMNS: &str = "id, title, content, note_type, enhanced_content, folder_id, transcript, \
+const COLUMNS: &str =
+    "id, title, content, recording_details, note_type, enhanced_content, folder_id, transcript, \
                        participants, audio_duration_seconds, created_at, updated_at";
 
 /// One note by id.
@@ -313,12 +317,12 @@ pub async fn search(
     let rows = sqlx::query_as::<_, SearchHit>(
         "SELECT notes.id AS id,
                 notes.title AS title,
-                snippet(notes_fts, 1, '[', ']', '…', 24) AS snippet
+                snippet(notes_fts, CASE WHEN notes.id IN (SELECT rowid FROM notes_fts WHERE content MATCH ?1) THEN 1 WHEN notes.id IN (SELECT rowid FROM notes_fts WHERE transcript_text MATCH ?1) THEN 3 ELSE -1 END, '[', ']', '…', 24) AS snippet
          FROM notes_fts
          JOIN notes ON notes.id = notes_fts.rowid
-         WHERE notes_fts MATCH ?
+         WHERE notes_fts MATCH ?1
          ORDER BY rank
-         LIMIT ?",
+         LIMIT ?2",
     )
     .bind(&escaped)
     .bind(limit)
@@ -653,5 +657,55 @@ mod tests {
         let id = add(p, "Gone", "ephemeral content").await;
         delete(p, id).await.unwrap();
         assert!(search(p, "ephemeral", 10).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn empty_personal_notes_preserve_transcript_search_and_recording_details() {
+        let db = db().await;
+        let p = db.pool();
+        let id = create(
+            p,
+            &NewNote {
+                title: "Meeting".into(),
+                transcript: Some(r#"[{"text":"Svenska lanseringen","timestamp":0}]"#.into()),
+                recording_details: Some("Microphone was quiet".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let note = get(p, id).await.unwrap().unwrap();
+        assert!(note.content.is_empty());
+        assert_eq!(
+            note.recording_details.as_deref(),
+            Some("Microphone was quiet")
+        );
+        let hits = search(p, "lanseringen", 10).await.unwrap();
+        assert_eq!(hits[0].id, id);
+        assert!(hits[0].snippet.contains("[lanseringen]"));
+        update(
+            p,
+            id,
+            &NoteUpdate {
+                content: Some("My lanseringen decision".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert!(search(p, "lanseringen", 10).await.unwrap()[0]
+            .snippet
+            .starts_with("My "));
+        sqlx::query("UPDATE notes SET transcript=? WHERE id=?")
+            .bind("Legacy elephant")
+            .bind(id)
+            .execute(p)
+            .await
+            .unwrap();
+        assert!(search(p, "elephant", 10).await.unwrap()[0]
+            .snippet
+            .contains("[elephant]"));
+        delete(p, id).await.unwrap();
+        assert!(search(p, "elephant", 10).await.unwrap().is_empty());
     }
 }

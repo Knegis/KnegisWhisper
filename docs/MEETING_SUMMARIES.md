@@ -1,6 +1,6 @@
 # Meeting summaries
 
-Implemented on 2026-09-20. Tracking: [KNEG-278](https://linear.app/axelalbertkarlsson/issue/KNEG-278/implement-editable-meeting-summaries-with-durable-generation-and), child of the OpenWhispr recommendations (KNEG-275). Not pushed or release-validated.
+Implemented on 2026-09-20. Tracking: [KNEG-278](https://linear.app/axelalbertkarlsson/issue/KNEG-278/implement-editable-meeting-summaries-with-durable-generation-and), child of the OpenWhispr recommendations (KNEG-275). Committed and pushed as `c04491a`; release validation remains outstanding.
 
 ## Use
 
@@ -10,10 +10,10 @@ and completed audio/video imports, including imports submitted through the local
 Turning it off cancels queued automatic jobs; already-running jobs have a Cancel action.
 Older notes can use Generate summary without enabling automatic generation.
 
-Notes has separate Notes and AI summary tabs. Summaries cover overview, decisions,
+The Notes tab shows personal notes followed by a separate AI summary section. Summaries cover overview, decisions,
 actual commitments and unresolved questions, omitting empty sections. The default
 language follows the meeting; Swedish and English can be explicitly selected.
-Timestamp links select the supporting transcript row and use existing recording
+Timestamp links open the Transcript tab, select the supporting row and use existing recording
 playback when retained audio is available. References are navigation aids, not proof
 that a model's claim is correct. Generated Markdown is escaped before rendering.
 

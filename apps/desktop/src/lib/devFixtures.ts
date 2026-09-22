@@ -1080,7 +1080,7 @@ let notes: Note[] = [
     content:
       "Release moves to Thursday. Localisation pass is the blocker; Anna owns it.\n\nOpen: who signs off the Windows installer?",
     noteType: "meeting",
-    enhancedContent:
+    recordingDetails: null, enhancedContent:
       "## Decisions\n\n- Release moves to **Thursday**.\n\n## Owners\n\n- Localisation pass — Anna\n\n## Open questions\n\n- Windows installer sign-off is unassigned.",
     folderId: 3,
     transcript: JSON.stringify([
@@ -1101,7 +1101,7 @@ let notes: Note[] = [
     content:
       "They want on-prem transcription only. Cloud providers are a non-starter for the compliance team.",
     noteType: "meeting",
-    enhancedContent: null,
+    recordingDetails: null, enhancedContent: null,
     folderId: 2,
     transcript: null,
     participants: JSON.stringify([
@@ -1116,7 +1116,7 @@ let notes: Note[] = [
     title: "Scratch",
     content: "check whether WASAPI loopback survives a device change mid-call",
     noteType: "note",
-    enhancedContent: null,
+    recordingDetails: null, enhancedContent: null,
     folderId: 1,
     transcript: null,
     participants: null,
@@ -1133,7 +1133,7 @@ let notes: Note[] = [
       "The overlay, the sidebar and this pane all share `styles.css`, so a change made against three short notes tends to look fine and then fall apart on a real one. " +
       "This note is the real one.\n\nIt has several paragraphs, a list:\n\n- one\n- two\n- three\n\nand a trailing line.",
     noteType: "note",
-    enhancedContent: null,
+    recordingDetails: null, enhancedContent: null,
     folderId: null,
     transcript: null,
     participants: null,
@@ -1186,7 +1186,7 @@ function fixtureImport(result: Omit<MediaImportResult, "noteId" | "recording" | 
   const durationSeconds = result.durationMs / 1000;
   const recording: NoteRecording = { noteId, storageKey: `fixture-${noteId}.wav`, durationSeconds, originalFilename: "fixture.wav", createdAt: nowIso() };
   const segments = result.segments.length ? result.segments : [{ text: result.text, timestamp: 0, endTimestamp: durationSeconds }];
-  notes.unshift({ id: noteId, title: "Imported fixture", content: result.text, noteType: "import", enhancedContent: null, folderId: null, transcript: JSON.stringify(segments), participants: null, audioDurationSeconds: durationSeconds, createdAt: nowIso(), updatedAt: nowIso() });
+  notes.unshift({ id: noteId, title: "Imported fixture", content: "", noteType: "import", recordingDetails: null, enhancedContent: null, folderId: null, transcript: JSON.stringify(segments), participants: null, audioDurationSeconds: durationSeconds, createdAt: nowIso(), updatedAt: nowIso() });
   noteRecordings.set(noteId, recording);
   noteTranscriptRows.set(noteId, segments.map((segment, index) => ({ index, text: segment.text, speaker: null, startSeconds: segment.timestamp, endSeconds: segment.endTimestamp })));
   const complete = { ...result, noteId, recording, retainedBytes: durationSeconds * 32000 + 44 };
@@ -1368,7 +1368,7 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
         title: r?.title ?? "Untitled",
         content: r?.content ?? "",
         noteType: r?.noteType ?? "note",
-        enhancedContent: null,
+        recordingDetails: null, enhancedContent: null,
         folderId: r?.folderId ?? null,
         transcript: r?.transcript ?? null,
         participants: r?.participants ?? null,

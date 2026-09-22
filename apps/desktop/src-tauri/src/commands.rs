@@ -1132,6 +1132,7 @@ pub async fn notes_create(state: State<'_, AppState>, request: NewNoteRequest) -
     notes::create(
         state.db().pool(),
         &notes::NewNote {
+            recording_details: None,
             title: request.title,
             content: request.content,
             note_type: request.note_type,
@@ -1799,6 +1800,7 @@ mod tests {
     #[test]
     fn a_note_crosses_the_boundary_in_camel_case() {
         let note = notes::Note {
+            recording_details: None,
             id: 1,
             title: "Standup".to_owned(),
             content: "body".to_owned(),
@@ -1832,6 +1834,7 @@ mod tests {
                 "id",
                 "noteType",
                 "participants",
+                "recordingDetails",
                 "title",
                 "transcript",
                 "updatedAt",

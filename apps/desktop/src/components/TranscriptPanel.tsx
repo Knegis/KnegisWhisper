@@ -1,34 +1,30 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { NoteRecording, TranscriptRow } from "../lib/ipc";
-import { formatClock, RecordingPlayer, type RecordingPlayerHandle } from "./RecordingPlayer";
+import { formatClock } from "./RecordingPlayer";
 
 type TranscriptPanelProps = {
   sourceRequest?: { index: number; nonce: number } | null;
   rows: TranscriptRow[];
   recording: NoteRecording | null;
-  noteId: number;
-  onAttach: () => void;
-  attaching: boolean;
-  attachmentError: string | null;
+  currentTime: number;
+  playing: boolean;
+  visible: boolean;
+  playInterval: (start: number, end: number | null) => void;
 };
 
-export function TranscriptPanel({ sourceRequest, rows, recording, noteId, onAttach, attaching, attachmentError }: TranscriptPanelProps) {
-  const playerRef = useRef<RecordingPlayerHandle>(null);
+export function TranscriptPanel({ sourceRequest, rows, recording, currentTime, playing, visible, playInterval }: TranscriptPanelProps) {
   const rowRefs = useRef(new Map<number, HTMLLIElement>());
   const [selected, setSelected] = useState<Set<number>>(() => new Set());
   const [anchor, setAnchor] = useState<number | null>(null);
-  const [currentTime, setCurrentTime] = useState(0);
-  const [playing, setPlaying] = useState(false);
 
   useEffect(() => {
-    if (!sourceRequest) return;
+    if (!sourceRequest || !visible) return;
     const row = rows.find(item => item.index === sourceRequest.index);
     if (!row) return;
     setSelected(new Set([row.index])); setAnchor(row.index);
     rowRefs.current.get(row.index)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
-    if (row.startSeconds !== null && recording) playerRef.current?.playInterval(row.startSeconds, row.endSeconds);
-  }, [sourceRequest, rows, recording]);
+  }, [sourceRequest, rows, visible]);
 
   const activeRow = useMemo(() => {
     if (!playing) return null;
@@ -41,10 +37,10 @@ export function TranscriptPanel({ sourceRequest, rows, recording, noteId, onAtta
   }, [currentTime, playing, rows]);
 
   useEffect(() => {
-    if (activeRow !== null) {
+    if (visible && activeRow !== null) {
       rowRefs.current.get(activeRow.index)?.scrollIntoView({ block: "nearest" });
     }
-  }, [activeRow]);
+  }, [activeRow, visible]);
 
   const playableSelected = rows.filter((row) => selected.has(row.index) && row.startSeconds !== null);
   const selectionStart = playableSelected[0]?.startSeconds ?? null;
@@ -82,30 +78,10 @@ export function TranscriptPanel({ sourceRequest, rows, recording, noteId, onAtta
 
   return (
     <aside className="transcript" aria-label="Transcript">
-      {recording ? (
-        <RecordingPlayer
-          ref={playerRef}
-          noteId={noteId}
-          onCurrentTime={setCurrentTime}
-          onPlayingChange={setPlaying}
-        />
-      ) : (
-        <div>
-          <p className="muted">
-            This note has no recording attached. Select its original recording
-            to play these transcript timings. A copy is saved; your original stays in place.
-          </p>
-          <button type="button" onClick={onAttach} disabled={attaching}>
-            {attaching ? "Attaching…" : "Attach recording…"}
-          </button>
-          <p className="muted">16-bit PCM WAV, mono or stereo.</p>
-          {attachmentError ? <p className="error" role="alert">{attachmentError}</p> : null}
-        </div>
-      )}
       {recording && selectionStart !== null && shownEnd !== null ? (
         <button
           type="button"
-          onClick={() => playerRef.current?.playInterval(selectionStart, selectionEnd)}
+          onClick={() => playInterval(selectionStart, selectionEnd)}
         >
           Play selection ({formatClock(selectionStart)}–{formatClock(shownEnd)})
         </button>
@@ -147,7 +123,7 @@ export function TranscriptPanel({ sourceRequest, rows, recording, noteId, onAtta
                   onClick={(event) => {
                     event.stopPropagation();
                     if (row.startSeconds !== null) {
-                      playerRef.current?.playInterval(row.startSeconds, row.endSeconds);
+                      playInterval(row.startSeconds, row.endSeconds);
                     }
                   }}
                 >

@@ -1,5 +1,4 @@
-import { SummaryPane, type SummaryPaneHandle } from "../components/SummaryPane";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { NoteWorkspace, type NoteWorkspaceHandle } from "../components/NoteWorkspace";
 /**
  * Notes > Export.
  *
@@ -9,10 +8,8 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
  */
 
 import {
-  forwardRef,
   useCallback,
   useEffect,
-  useImperativeHandle,
   useLayoutEffect,
   useRef,
   useState,
@@ -20,10 +17,8 @@ import {
 
 import { createPortal } from "react-dom";
 
-import { NoteEditor } from "../components/NoteEditor";
 import { formatClock } from "../components/RecordingPlayer";
 import { Row } from "../components/Row";
-import { TranscriptPanel } from "../components/TranscriptPanel";
 import {
   createFolder,
   createNote,
@@ -32,195 +27,15 @@ import {
   exportNoteToFile,
   EXPORT_FORMATS,
   getFolders,
-  getNoteRecording,
-  attachNoteRecording,
-  getNoteTranscriptRows,
   getNotes,
   getNote,
   searchNotes,
-  updateNote,
+  getNoteRecording,
   type ExportFormat,
   type Note,
-  type NoteUpdate,
   type SearchHit,
 } from "../lib/ipc";
-import { useAutosave, type AutosaveStatus } from "../lib/useAutosave";
-import { message, useRefresh } from "../lib/useRefresh";
-
-type NoteWorkspaceHandle = {
-  flush: () => Promise<void>;
-};
-
-type EditorPatch = {
-  title?: string;
-  content?: string;
-};
-
-function SaveStatus({
-  status,
-  error,
-  retry,
-}: {
-  status: AutosaveStatus;
-  error: string | null;
-  retry: () => Promise<void>;
-}) {
-  if (status !== "failed") return null;
-  if (status === "failed") {
-    return (
-      <span className="save-status error" role="status">
-        Couldn&apos;t save — <button type="button" onClick={() => { void retry(); }}>Retry</button>
-        {error ? <span className="save-error"> {error}</span> : null}
-      </span>
-    );
-  }
-  const text = status === "dirty" ? "Unsaved changes" : status === "saving" ? "Saving…" : "Saved";
-  return <span className="save-status" role="status">{text}</span>;
-}
-
-const NoteWorkspace = forwardRef<
-  NoteWorkspaceHandle,
-  { note: Note; reload: () => Promise<void> }
->(function NoteWorkspace({ note, reload }, ref) {
-  const savedRef = useRef({ title: note.title, content: note.content });
-  const summaryRef = useRef<SummaryPaneHandle>(null);
-  const [tab, setTab] = useState<"notes" | "summary">(note.enhancedContent !== null ? "summary" : "notes");
-  const [sourceRequest, setSourceRequest] = useState<{ index: number; nonce: number } | null>(null);
-  const [tabError, setTabError] = useState<string | null>(null);
-  const [transcript, setTranscript] = useState<{
-    rows: Awaited<ReturnType<typeof getNoteTranscriptRows>>;
-    recording: Awaited<ReturnType<typeof getNoteRecording>>;
-  } | null>(null);
-  const [transcriptError, setTranscriptError] = useState<string | null>(null);
-  const [attaching, setAttaching] = useState(false);
-  const [attachmentError, setAttachmentError] = useState<string | null>(null);
-  const attachmentGeneration = useRef(0);
-  const attachmentPending = useRef(false);
-
-  useEffect(() => {
-    attachmentGeneration.current += 1;
-    attachmentPending.current = false;
-    setAttaching(false);
-    setAttachmentError(null);
-    return () => { attachmentGeneration.current += 1; };
-  }, [note.id]);
-
-  const attachRecording = async () => {
-    if (attachmentPending.current) return;
-    attachmentPending.current = true;
-    const generation = attachmentGeneration.current;
-    setAttaching(true);
-    setAttachmentError(null);
-    try {
-      const recording = await attachNoteRecording(note.id);
-      if (generation !== attachmentGeneration.current || recording === null) return;
-      setTranscript((previous) => previous === null ? previous : { ...previous, recording });
-    } catch (cause: unknown) {
-      if (generation === attachmentGeneration.current) setAttachmentError(message(cause));
-    } finally {
-      if (generation === attachmentGeneration.current) {
-        attachmentPending.current = false;
-        setAttaching(false);
-      }
-    }
-  };
-
-  const save = useCallback(
-    async (patch: Partial<EditorPatch>) => {
-      const request: NoteUpdate = {};
-      if (patch.content !== undefined && patch.content !== savedRef.current.content) {
-        request.content = patch.content;
-      }
-      if (
-        patch.title !== undefined &&
-        patch.title.trim() !== "" &&
-        patch.title !== savedRef.current.title
-      ) {
-        request.title = patch.title;
-      }
-      if (Object.keys(request).length === 0) return;
-      const updated = await updateNote(note.id, request);
-      if (!updated) throw new Error("This note no longer exists.");
-      if (typeof request.content === "string") savedRef.current.content = request.content;
-      if (typeof request.title === "string") savedRef.current.title = request.title;
-      await reload();
-    },
-    [note.id, reload],
-  );
-  const autosave = useAutosave<EditorPatch>({ save });
-
-  const flushBoth = useCallback(async () => { await autosave.flush(); await summaryRef.current?.flush(); }, [autosave.flush]);
-  useImperativeHandle(ref, () => ({ flush: flushBoth }), [flushBoth]);
-  useEffect(() => {
-    if (!("__TAURI_INTERNALS__" in window)) return;
-    let closing = false;
-    const registered = getCurrentWindow().onCloseRequested(async event => {
-      if (closing) return;
-      event.preventDefault();
-      try { await flushBoth(); closing = true; await getCurrentWindow().close(); }
-      catch (cause) { setTabError(String(cause)); }
-    });
-    return () => { void registered.then(stop => stop()); };
-  }, [flushBoth]);
-
-  useEffect(() => {
-    let current = true;
-    setTranscript(null);
-    setTranscriptError(null);
-    void Promise.all([getNoteTranscriptRows(note.id), getNoteRecording(note.id)]).then(
-      ([rows, recording]) => {
-        if (current) setTranscript({ rows, recording });
-      },
-      (cause: unknown) => {
-        if (current) setTranscriptError(message(cause));
-      },
-    );
-    return () => { current = false; };
-  }, [note.id]);
-
-  return (
-    <article id={`note-detail-${note.id}`} className="note-detail" aria-label={note.title}>
-      <SaveStatus status={autosave.status} error={autosave.error} retry={autosave.retry} />
-      <div className="summary-tabs" role="tablist" aria-label="Note view">
-        {(["notes", "summary"] as const).map(value => <button key={value} type="button" role="tab" aria-selected={tab === value} tabIndex={tab === value ? 0 : -1} onKeyDown={event => {
-          if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
-          event.preventDefault();
-          const next = event.key === "Home" ? "notes" : event.key === "End" ? "summary" : value === "notes" ? "summary" : "notes";
-          const target = event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>("button")[next === "notes" ? 0 : 1];
-          void flushBoth().then(() => { setTab(next); target?.focus(); }).catch(cause => setTabError(String(cause)));
-        }} onClick={() => {
-          void flushBoth().then(() => setTab(value)).catch(cause => setTabError(String(cause)));
-        }}>{value === "notes" ? "Notes" : "AI summary"}</button>)}
-      </div>
-      {tabError && <p className="error" role="alert">{tabError}</p>}
-      <div id={`note-body-${note.id}`} className="note-workspace">
-        <div className="note-prose" hidden={tab !== "notes"}>
-        <NoteEditor
-          key={note.id}
-          noteId={note.id}
-          initialContent={note.content}
-          initialTitle={note.title}
-          onChange={(content, title) => autosave.schedule({ content, title })}
-        />
-        </div>
-        <SummaryPane ref={summaryRef} noteId={note.id} visible={tab === "summary"} onSource={index => setSourceRequest({ index, nonce: Date.now() })} />
-        {transcript?.rows.length ? (
-          <TranscriptPanel
-            sourceRequest={sourceRequest}
-            rows={transcript.rows}
-            recording={transcript.recording}
-            noteId={note.id}
-            onAttach={() => { void attachRecording(); }}
-            attaching={attaching}
-            attachmentError={attachmentError}
-          />
-        ) : transcriptError ? (
-          <p className="error">{transcriptError}</p>
-        ) : null}
-      </div>
-    </article>
-  );
-});
+import { useRefresh } from "../lib/useRefresh";
 
 function noteDate(value: string | null) {
   if (!value) return "Date unavailable";
@@ -252,8 +67,14 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote }: 
   const searchGeneration = useRef(0);
   const toolRef = useRef<HTMLDivElement>(null);
   useEffect(() => { toolRef.current?.querySelector<HTMLInputElement | HTMLSelectElement>("input, select")?.focus(); }, [libraryTool]);
-  const [libraryExpanded, setLibraryExpanded] = useState(true);
+  const [libraryExpanded, setLibraryExpanded] = useState(() => !window.matchMedia("(max-width: 900px)").matches);
   const [libraryPeek, setLibraryPeek] = useState(false);
+  useEffect(() => {
+    const narrow = window.matchMedia("(max-width: 900px)");
+    const collapse = () => { if (narrow.matches) { setLibraryExpanded(false); setLibraryPeek(false); } };
+    narrow.addEventListener("change", collapse);
+    return () => narrow.removeEventListener("change", collapse);
+  }, []);
   const libraryVisible = libraryExpanded || libraryPeek;
   useEffect(() => {
     if (libraryExpanded) return;

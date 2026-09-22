@@ -27,22 +27,26 @@ import "@milkdown/crepe/theme/frame.css";
 type NoteEditorProps = {
   noteId: number;
   initialContent: string;
-  initialTitle: string;
-  onChange: (markdown: string, title: string) => void;
+  onChange: (markdown: string) => void;
   summary?: boolean;
+  legacyTitle?: string;
+  onReady?: (markdown: string) => void;
 };
 
 export function NoteEditor({
   noteId,
   initialContent,
-  initialTitle,
   onChange,
   summary = false,
+  legacyTitle,
+  onReady,
 }: NoteEditorProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const initialRef = useRef(initialContent);
   const onChangeRef = useRef(onChange);
   const generationRef = useRef(0);
+  const onReadyRef = useRef(onReady);
+  onReadyRef.current = onReady;
 
   onChangeRef.current = onChange;
 
@@ -55,6 +59,7 @@ export function NoteEditor({
     generationRef.current = generation;
     let superseded = false;
     let initializing = true;
+    let lastMarkdown = initialRef.current;
     let stopMarginDrop: (() => void) | undefined;
     let stopGutter: (() => void) | undefined;
     const builder = new CrepeBuilder({ root, defaultValue: initialRef.current })
@@ -78,12 +83,10 @@ export function NoteEditor({
       .addFeature(table)
       .addFeature(imageBlock)
       .on((api) => {
-        api.markdownUpdated((ctx, markdown, previous) => {
-          if (initializing || superseded || markdown === previous) return;
-          const first = ctx.get(editorViewCtx).state.doc.firstChild;
-          const title = first?.type.name === "heading" && first.attrs.level === 1
-            ? first.textContent.trim() || "Untitled note" : "Untitled note";
-          onChangeRef.current(markdown, title);
+        api.markdownUpdated((_ctx, markdown, previous) => {
+          if (initializing || superseded || markdown === previous || markdown === lastMarkdown) return;
+          lastMarkdown = markdown;
+          onChangeRef.current(markdown);
         });
       });
     const created = builder.create().then(() => {
@@ -93,16 +96,12 @@ export function NoteEditor({
         stopMarginDrop = installEditorMarginDrop(view, root.closest<HTMLElement>(".notes-main") ?? root);
         stopGutter = installEditorGutter(view, root.closest<HTMLElement>(".notes-main") ?? root);
         const first = view.state.doc.firstChild;
-        if (!summary && (first?.type.name !== "heading" || first.attrs.level !== 1)) {
-          const headingType = view.state.schema.nodes.heading;
-          if (!headingType) throw new Error("The note editor requires heading support.");
-          const heading = headingType.create({ level: 1 }, view.state.schema.text(initialTitle.trim() || "Untitled note"));
-          view.dispatch(view.state.tr.insert(0, heading));
+        if (legacyTitle !== undefined && first?.type.name === "heading" && first.attrs.level === 1 && first.textContent.trim() === legacyTitle.trim()) {
+          view.dispatch(view.state.tr.delete(0, first.nodeSize).setMeta("addToHistory", false));
         }
+        lastMarkdown = ctx.get(serializerCtx)(view.state.doc);
+        onReadyRef.current?.(lastMarkdown);
         initializing = false;
-        const title = view.state.doc.firstChild?.textContent.trim() || "Untitled note";
-        const markdown = ctx.get(serializerCtx)(view.state.doc);
-        if (!summary && (markdown !== initialContent || title !== initialTitle)) onChangeRef.current(markdown, title);
       });
     });
 
