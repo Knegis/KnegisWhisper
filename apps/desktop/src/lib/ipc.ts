@@ -720,6 +720,15 @@ export async function updateNote(
   return invoke<boolean>("notes_update", { id, request });
 }
 
+/**
+ * Move a note into a folder, or out of every folder with `null`. Returns
+ * whether the note existed. `updateNote` cannot unfile: its `folderId` is
+ * absent or set.
+ */
+export async function setNoteFolder(id: number, folderId: number | null): Promise<boolean> {
+  return invoke<boolean>("notes_set_folder", { id, folderId });
+}
+
 export async function deleteNote(id: number): Promise<boolean> {
   return invoke<boolean>("notes_delete", { id });
 }

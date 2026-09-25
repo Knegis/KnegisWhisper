@@ -1279,6 +1279,21 @@ pub async fn notes_delete(state: State<'_, AppState>, id: i64) -> CmdResult<bool
         .map_err(|e| fail("could not delete the note", e))
 }
 
+/// Move a note into a folder, or out of every folder with `folderId: null`.
+///
+/// `notes_update` cannot express "no folder": its `folderId` is absent or
+/// set, as a partial update's should be. This is the one call that unfiles.
+#[tauri::command]
+pub async fn notes_set_folder(
+    state: State<'_, AppState>,
+    id: i64,
+    folder_id: Option<i64>,
+) -> CmdResult<bool> {
+    notes::set_folder(state.db().pool(), id, folder_id)
+        .await
+        .map_err(|e| fail("could not move the note", e))
+}
+
 /// A note's speaker name is one edit for every segment with that raw label.
 #[tauri::command]
 pub async fn note_speaker_rename(

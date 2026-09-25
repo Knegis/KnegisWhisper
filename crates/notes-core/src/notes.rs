@@ -361,6 +361,26 @@ pub async fn delete_folder(pool: &SqlitePool, id: i64) -> Result<bool, StorageEr
     Ok(result.rows_affected() > 0)
 }
 
+/// Move a note into a folder, or out of every folder with `None`.
+///
+/// Separate from [`update`] because that call's `folder_id: None` means
+/// "leave it alone" -- the right reading for a partial update and the wrong
+/// one for "no folder", so a caller could never unfile a note through it.
+/// `updated_at` is deliberately not touched: filing a note is not working on
+/// it, and the sidebar orders by that column.
+pub async fn set_folder(
+    pool: &SqlitePool,
+    id: i64,
+    folder_id: Option<i64>,
+) -> Result<bool, StorageError> {
+    let result = sqlx::query("UPDATE notes SET folder_id = ? WHERE id = ?")
+        .bind(folder_id)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(result.rows_affected() > 0)
+}
+
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,
@@ -471,6 +491,35 @@ mod tests {
             1,
             "a zero limit is clamped to one"
         );
+    }
+
+    #[tokio::test]
+    async fn a_note_can_be_filed_and_unfiled() {
+        let db = kw_storage::Db::open_in_memory().await.unwrap();
+        let pool = db.pool();
+        let folder = create_folder(pool, "Work").await.unwrap();
+        let id = create(
+            pool,
+            &NewNote {
+                title: "n".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(set_folder(pool, id, Some(folder)).await.unwrap());
+        assert_eq!(
+            get(pool, id).await.unwrap().unwrap().folder_id,
+            Some(folder)
+        );
+
+        // `update` cannot say "no folder" -- `None` there means leave it
+        // alone -- which is the reason `set_folder` exists.
+        assert!(set_folder(pool, id, None).await.unwrap());
+        assert_eq!(get(pool, id).await.unwrap().unwrap().folder_id, None);
+
+        assert!(!set_folder(pool, id + 100, Some(folder)).await.unwrap());
     }
 
     #[tokio::test]

@@ -453,6 +453,7 @@ pub fn run() -> anyhow::Result<()> {
             commands::notes_get,
             commands::notes_create,
             commands::notes_update,
+            commands::notes_set_folder,
             commands::notes_delete,
             commands::note_recording_get,
             commands::note_recording_attach_from_dialog,

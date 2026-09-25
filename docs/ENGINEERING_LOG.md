@@ -12,7 +12,34 @@ maintained in place rather than appended to, because its purpose is to be curren
 
 ---
 
-## 2026-09-25 (fifth, latest) — KNEG-320: `cargo test` killed the running application's Whisper server, twice
+## 2026-09-25 (sixth, latest) — KNEG-321: the notes sidebar groups by folder, and one call had to be added to make folders usable
+
+The owner asked for two icon swaps (new note, new folder), for the folder button to go, and for
+expand and collapse buttons beside new folder. The list was flat, so there was nothing for those
+two buttons to act on: the folder button had opened a filter (pick one folder, delete it), and
+that was the whole of what folders did. Agreed with the owner: the list groups notes under
+collapsible folder headings, unfiled notes first, the two buttons open or close every folder, and
+the filter goes.
+
+Two things fell out of reading the code:
+
+- **No screen could put a note into a folder.** `folderId` was used by the list filter and
+  nowhere else, so every folder was empty by construction. The note's right-click menu now has
+  *Move to folder*.
+- **No call could take a note out of one.** `notes_update` (and the notes core's `update`) reads
+  `folder_id: None` as "leave it alone", which is right for a partial update and leaves "no folder"
+  unsayable. `notes::set_folder` and `notes_set_folder` are the one place that can unfile, and
+  they leave `updated_at` alone because filing a note is not working on it.
+
+Collapsed state is session state, not a setting: a setting needs a key and a screen under the
+settings audit, and which folders were closed an hour ago is not worth that. Selecting a note by
+search, by a link from elsewhere, or by moving it opens its folder so the selection is never
+hidden. *Delete folder* lives on the heading's right-click menu and says that the notes are kept.
+The grouping is a pure function with four `node --test` cases. Not clicked by anyone yet.
+
+---
+
+## 2026-09-25 (fifth) — KNEG-320: `cargo test` killed the running application's Whisper server, twice
 
 The owner saw *Local model server exited … exited with exit code 1 after 90 seconds* on the
 Dictation page after the KNEG-318 run. The dev log had two of them, at 20:31:35Z and 21:11:11Z

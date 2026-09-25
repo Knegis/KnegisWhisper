@@ -1960,6 +1960,19 @@ button.microphone-language-toggle:hover:not(:disabled) { background: transparent
 .notes-tool-search-icon { background: currentColor; mask: url('./assets/window/input-search.svg') center / contain no-repeat; }
 .notes-library-tools button[aria-expanded="true"], .notes-library-tools button[data-active="true"] { background: var(--band); color: var(--band-ink); }
 .notes-tool-panel { display: flex; flex-direction: column; gap: 0.5rem; margin-top: 0.75rem; }
+/* A folder heading is a row, not a boxed button: a disclosure, the name, the count. Mono
+ * uppercase like the other section labels, muted until pointed at, so the notes stay the
+ * loudest thing in the list. */
+.notes-folder { margin-top: 0.35rem; }
+.notes-library button.notes-folder-toggle { display: flex; align-items: center; gap: 0.4rem; width: 100%; margin: 0; padding: 0.45rem 0.35rem; text-align: left; font-family: var(--font-mono); font-size: 0.75rem; line-height: 16px; letter-spacing: 0.5px; text-transform: uppercase; color: var(--muted); }
+.notes-library button.notes-folder-toggle:hover, .notes-library button.notes-folder-toggle:focus-visible { color: var(--text); }
+.notes-folder-chevron { width: 14px; height: 14px; flex: 0 0 14px; transition: transform 120ms ease; }
+.notes-folder-toggle[aria-expanded="true"] .notes-folder-chevron { transform: rotate(90deg); }
+.notes-folder-name { min-width: 0; flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.notes-folder-count { flex: none; }
+/* Filed notes sit one step in from their heading; the unfiled list keeps the full width. */
+.notes-folder > div > .list { padding-left: 0.9rem; }
+.notes-folder-empty { margin: 0.2rem 0 0.4rem 1.25rem; font-size: 0.8rem; }
 
 /* Vocabulary uses the same compact controls and typography as the sidebar. */
 .vocabulary-add { display: flex; gap: .5rem; margin: 1rem 0; }

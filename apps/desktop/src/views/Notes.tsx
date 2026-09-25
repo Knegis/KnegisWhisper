@@ -30,11 +30,14 @@ import {
   getNotes,
   getNote,
   searchNotes,
+  setNoteFolder,
   getNoteRecording,
   type ExportFormat,
+  type Folder,
   type Note,
   type SearchHit,
 } from "../lib/ipc";
+import { groupNotesByFolder } from "../lib/noteGroups";
 import { useRefresh } from "../lib/useRefresh";
 
 function noteDate(value: string | null) {
@@ -43,8 +46,11 @@ function noteDate(value: string | null) {
   return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(date);
 }
 
+/** The right-click menu's target: a note, or a folder heading. */
+type ContextMenu = { x: number; y: number; anchor: HTMLButtonElement } & ({ kind: "note"; note: Note } | { kind: "folder"; folder: Folder });
+
 export function Notes({ initialNoteId = null, openRequest = null, onOpenNote }: { initialNoteId?: number | null; openRequest?: { id: number } | null; onOpenNote?: (id: number) => void }) {
-  const [context, setContext] = useState<{ note: Note; x: number; y: number; anchor: HTMLButtonElement } | null>(null);
+  const [context, setContext] = useState<ContextMenu | null>(null);
   const contextRef = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     if (!context || !contextRef.current) return;
@@ -62,7 +68,7 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote }: 
     window.addEventListener("blur", close);
     return () => { document.removeEventListener("pointerdown", outside); document.removeEventListener("keydown", escape); window.removeEventListener("resize", close); window.removeEventListener("blur", close); };
   }, [context]);
-  const [libraryTool, setLibraryTool] = useState<"search" | "folders" | "new-folder" | null>(null);
+  const [libraryTool, setLibraryTool] = useState<"search" | "new-folder" | null>(null);
   const [folderName, setFolderName] = useState("");
   const searchGeneration = useRef(0);
   const toolRef = useRef<HTMLDivElement>(null);
@@ -99,15 +105,21 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote }: 
     return () => { cancelClose(); document.removeEventListener("pointermove", move); document.documentElement.removeEventListener("pointerleave", leave); };
   }, [libraryExpanded, context]);
 
-  const [folderFilter, setFolderFilter] = useState<number | null>(null);
+  // Which folders are closed in the sidebar. Session state on purpose: a
+  // setting would need a settings key and a screen, and a folder closed an
+  // hour ago is not a preference worth that.
+  const [collapsed, setCollapsed] = useState<Set<number>>(() => new Set());
+  // Open the folder a note is being shown from, so a note reached by search,
+  // by a link or by moving it is never selected inside a closed group.
+  const reveal = useCallback((folderId: number | null) => {
+    if (folderId === null) return;
+    setCollapsed(prev => { if (!prev.has(folderId)) return prev; const next = new Set(prev); next.delete(folderId); return next; });
+  }, []);
 
   const load = useCallback(async () => {
-    const [notes, folders] = await Promise.all([
-      getNotes(folderFilter === null ? {} : { folderId: folderFilter }),
-      getFolders(),
-    ]);
+    const [notes, folders] = await Promise.all([getNotes(), getFolders()]);
     return { notes, folders };
-  }, [folderFilter]);
+  }, []);
 
   const { data, error, guard, reload, fail } = useRefresh(load);
 
@@ -124,8 +136,8 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote }: 
     initialSelectionDone.current = true;
     if (initialNoteId !== null || openRequest) return;
     const first = data.notes.at(0);
-    if (first) { setRequestedNote(first); setOpenNoteId(first.id); onOpenNote?.(first.id); }
-  }, [data, initialNoteId, openRequest, onOpenNote]);
+    if (first) { setRequestedNote(first); reveal(first.folderId); setOpenNoteId(first.id); onOpenNote?.(first.id); }
+  }, [data, initialNoteId, openRequest, onOpenNote, reveal]);
   const scrollToRequest = useRef<number | null>(null);
   useEffect(() => {
     if (!openRequest) return;
@@ -136,10 +148,10 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote }: 
       if (cancelled) return;
       if (!note) throw new Error("This note is no longer available.");
       scrollToRequest.current = note.id;
-      setRequestedNote(note); setFolderFilter(null); setQuery(""); setHits(null); setOpenNoteId(note.id);
+      setRequestedNote(note); reveal(note.folderId); setQuery(""); setHits(null); setOpenNoteId(note.id);
     })().catch(e => { if (!cancelled) fail(e); });
     return () => { cancelled = true; };
-  }, [openRequest, fail]);
+  }, [openRequest, fail, reveal]);
   useEffect(() => {
     if (scrollToRequest.current !== openNoteId) return;
     const element = document.getElementById(`note-detail-${openNoteId}`);
@@ -171,6 +183,22 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote }: 
   const titlebarControls = document.getElementById("notes-titlebar-controls");
   const { notes, folders } = data;
   const openNote = notes.find((note) => note.id === openNoteId) ?? (requestedNote?.id === openNoteId ? requestedNote : null);
+  const groups = groupNotesByFolder(notes, folders);
+  const renderEntries = (entries: readonly Note[]) => (
+    <ul className="list">
+      {entries.map((note) => (
+        <li key={note.id}>
+          <button type="button" className={`notes-entry ${openNoteId === note.id ? "notes-entry-current" : ""}`} aria-current={openNoteId === note.id ? "page" : undefined} onClick={() => { void selectNote(note.id).catch(fail); }}
+            onContextMenu={event => { event.preventDefault(); setContext({ kind: "note", note, x: event.clientX, y: event.clientY, anchor: event.currentTarget }); }}
+            onKeyDown={event => { if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) { event.preventDefault(); const rect = event.currentTarget.getBoundingClientRect(); setContext({ kind: "note", note, x: rect.left, y: rect.bottom, anchor: event.currentTarget }); } }}
+            aria-haspopup="dialog">
+            <span className="notes-entry-title" title={note.title}>{note.title}</span>
+            <time className="notes-entry-date" dateTime={note.createdAt ?? undefined}>{noteDate(note.createdAt)}</time>
+          </button>
+        </li>
+      ))}
+    </ul>
+  );
 
   return (
     <div className={`view notes-view ${libraryVisible ? "" : "notes-library-collapsed"}`}>
@@ -181,7 +209,8 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote }: 
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="M3 3H21V21H3Z M14.5 3V21"/><path d={libraryExpanded ? "M17 10L19 12L17 14" : "M19 10L17 12L19 14"}/></svg>
             </button>
       </>, titlebarControls)}
-      {context && createPortal(<div ref={contextRef} className="notes-context-menu" role="dialog" aria-label={`Actions for ${context.note.title}`} style={{ left: context.x, top: context.y }} onContextMenu={event => event.preventDefault()} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) setContext(null); }}>
+      {context && createPortal(<div ref={contextRef} className="notes-context-menu" role="dialog" aria-label={context.kind === "note" ? `Actions for ${context.note.title}` : `Actions for folder ${context.folder.name}`} style={{ left: context.x, top: context.y }} onContextMenu={event => event.preventDefault()} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) setContext(null); }}>
+        {context.kind === "note" ? <>
                 <button
                   type="button"
                   onClick={() => {
@@ -244,6 +273,32 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote }: 
           </span>
         </div>
 
+        <div className="row">
+          <span className="row-label">Move to folder</span>
+          <span className="row-value">
+            <select aria-label="Move to folder" value={context.note.folderId ?? ""} onChange={event => {
+              const note = context.note;
+              const folderId = event.target.value === "" ? null : Number(event.target.value);
+              setContext(null);
+              reveal(folderId);
+              // Flushed first: the workspace may hold an unsaved edit of this
+              // very note, and the reload after the move would show the stored
+              // text over the typed one.
+              void guard(async () => { await workspaceRef.current?.flush(); await setNoteFolder(note.id, folderId); });
+            }}>
+              <option value="">No folder</option>
+              {folders.map(folder => <option key={folder.id} value={folder.id}>{folder.name}</option>)}
+            </select>
+          </span>
+        </div>
+        </> : <button type="button" onClick={() => {
+          const { folder } = context;
+          setContext(null);
+          // Deleting a folder never deletes a note: the database sets the
+          // note's folder to null, so the confirmation says so.
+          if (!window.confirm(`Delete folder “${folder.name}”? Its notes are kept and become unfiled.`)) return;
+          void guard(async () => { await deleteFolder(folder.id); });
+        }}>Delete folder</button>}
       </div>, document.body)}
       <div className="notes-layout">
         <section className="notes-main" aria-label="Note editor">
@@ -262,16 +317,20 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote }: 
 
         <div className="notes-library-tools" role="toolbar" aria-label="Notes library tools">
           <button type="button" aria-label="New note" title="New note" onClick={() => { void newNote(); }}>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M14 3H4v18h16V9M14 3v6h6l-6-6ZM8 15h8m-4-4v8" /></svg>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 12V2.6C4 2.26863 4.26863 2 4.6 2H16.2515C16.4106 2 16.5632 2.06321 16.6757 2.17574L19.8243 5.32426C19.9368 5.43679 20 5.5894 20 5.74853V21.4C20 21.7314 19.7314 22 19.4 22H11" /><path d="M16 2V5.4C16 5.73137 16.2686 6 16.6 6H20" /><path d="M1.99219 19H4.99219M7.99219 19H4.99219M4.99219 19V16M4.99219 19V22" /></svg>
           </button>
           <button type="button" aria-label="Search notes" title="Search notes" aria-expanded={libraryTool === "search"} aria-controls="notes-library-tool-panel" onClick={() => setLibraryTool(value => value === "search" ? null : "search")}>
             <span className="notes-tool-search-icon" aria-hidden="true" />
           </button>
-          <button type="button" aria-label="Folders" title="Folders" aria-expanded={libraryTool === "folders"} aria-controls="notes-library-tool-panel" data-active={folderFilter !== null} onClick={() => setLibraryTool(value => value === "folders" ? null : "folders")}>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" aria-hidden="true"><path d="M3 7V4h6l3 3h9v13H3V7Zm0 3h18" /></svg>
-          </button>
           <button type="button" aria-label="New folder" title="New folder" aria-expanded={libraryTool === "new-folder"} aria-controls="notes-library-tool-panel" onClick={() => setLibraryTool(value => value === "new-folder" ? null : "new-folder")}>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 7V4h6l3 3h9v13H3V7Zm6 7h6m-3-3v6" /></svg>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M18 6H20M22 6H20M20 6V4M20 6V8" /><path d="M21.4 20H2.6C2.26863 20 2 19.7314 2 19.4V11H21.4C21.7314 11 22 11.2686 22 11.6V19.4C22 19.7314 21.7314 20 21.4 20Z" /><path d="M2 11V4.6C2 4.26863 2.26863 4 2.6 4H8.77805C8.92127 4 9.05977 4.05124 9.16852 4.14445L12.3315 6.85555C12.4402 6.94876 12.5787 7 12.722 7H14" /></svg>
+          </button>
+          {/* The two line icons touch the top and bottom of their box, so the strokes are let out of it. */}
+          <button type="button" aria-label="Expand all folders" title="Expand all folders" disabled={folders.length === 0} onClick={() => setCollapsed(new Set())}>
+            <svg viewBox="0 0 24 24" overflow="visible" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M18 2L6 2" /><path d="M18 22L6 22" /><path d="M12 14V19M12 19L15 16M12 19L9 16" /><path d="M12 10V5M12 5L15 8M12 5L9 8" /></svg>
+          </button>
+          <button type="button" aria-label="Collapse all folders" title="Collapse all folders" disabled={folders.length === 0} onClick={() => setCollapsed(new Set(folders.map(folder => folder.id)))}>
+            <svg viewBox="0 0 24 24" overflow="visible" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M18 2L6 2" /><path d="M18 22L6 22" /><path d="M12 5V10M12 10L15 7M12 10L9 7" /><path d="M12 19V14M12 14L15 17M12 14L9 17" /></svg>
           </button>
         </div>
         <div id="notes-library-tool-panel" ref={toolRef} onKeyDown={event => { if (event.key === "Escape") { setLibraryTool(null); document.querySelector<HTMLButtonElement>('.notes-library-tools button[aria-expanded="true"]')?.focus(); } }}>
@@ -284,14 +343,7 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote }: 
               void searchNotes(next, 20).then(value => { if (generation === searchGeneration.current) setHits(value); }).catch(fail);
             }} />
           </div>}
-          {libraryTool === "folders" && <div className="notes-tool-panel">
-            <select aria-label="Folder" value={folderFilter ?? ""} onChange={event => setFolderFilter(event.target.value === "" ? null : Number(event.target.value))}>
-              <option value="">All folders</option>
-              {folders.map(folder => <option key={folder.id} value={folder.id}>{folder.name}</option>)}
-            </select>
-            {folderFilter !== null && <button type="button" onClick={() => { void guard(async () => { await deleteFolder(folderFilter); setFolderFilter(null); }); }}>Delete folder</button>}
-          </div>}
-          {libraryTool === "new-folder" && <form className="notes-tool-panel" onSubmit={event => { event.preventDefault(); if (!folderName.trim()) return; void guard(async () => { await createFolder(folderName.trim()); setFolderName(""); setLibraryTool("folders"); }); }}>
+          {libraryTool === "new-folder" && <form className="notes-tool-panel" onSubmit={event => { event.preventDefault(); if (!folderName.trim()) return; void guard(async () => { await createFolder(folderName.trim()); setFolderName(""); setLibraryTool(null); }); }}>
             <input aria-label="Folder name" placeholder="Folder name" value={folderName} onChange={event => setFolderName(event.target.value)} />
             <button type="submit" disabled={!folderName.trim()}>Create folder</button>
           </form>}
@@ -315,24 +367,32 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote }: 
           </>
         )}
 
-        {hits !== null ? null : notes.length === 0 ? (
+        {hits !== null ? null : notes.length === 0 && folders.length === 0 ? (
           <p className="muted">
-            No notes in this folder. Create a note, record a meeting, or import a recording.
+            No notes yet. Create a note, record a meeting, or import a recording.
           </p>
         ) : (
-          <ul className="list">
-            {notes.map((note) => (
-              <li key={note.id}>
-                <button type="button" className={`notes-entry ${openNoteId === note.id ? "notes-entry-current" : ""}`} aria-current={openNoteId === note.id ? "page" : undefined} onClick={() => { void selectNote(note.id).catch(fail); }}
-                  onContextMenu={event => { event.preventDefault(); setContext({ note, x: event.clientX, y: event.clientY, anchor: event.currentTarget }); }}
-                  onKeyDown={event => { if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) { event.preventDefault(); const rect = event.currentTarget.getBoundingClientRect(); setContext({ note, x: rect.left, y: rect.bottom, anchor: event.currentTarget }); } }}
-                  aria-haspopup="dialog">
-                  <span className="notes-entry-title" title={note.title}>{note.title}</span>
-                  <time className="notes-entry-date" dateTime={note.createdAt ?? undefined}>{noteDate(note.createdAt)}</time>
-                </button>
-              </li>
-            ))}
-          </ul>
+          <>
+            {groups.unfiled.length > 0 && renderEntries(groups.unfiled)}
+            {groups.folders.map(({ folder, notes: filed }) => {
+              const open = !collapsed.has(folder.id);
+              return (
+                <section key={folder.id} className="notes-folder">
+                  <button type="button" className="notes-folder-toggle" aria-expanded={open} aria-controls={`notes-folder-${folder.id}`} aria-haspopup="dialog"
+                    onClick={() => setCollapsed(prev => { const next = new Set(prev); if (next.has(folder.id)) next.delete(folder.id); else next.add(folder.id); return next; })}
+                    onContextMenu={event => { event.preventDefault(); setContext({ kind: "folder", folder, x: event.clientX, y: event.clientY, anchor: event.currentTarget }); }}
+                    onKeyDown={event => { if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) { event.preventDefault(); const rect = event.currentTarget.getBoundingClientRect(); setContext({ kind: "folder", folder, x: rect.left, y: rect.bottom, anchor: event.currentTarget }); } }}>
+                    <svg className="notes-folder-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
+                    <span className="notes-folder-name" title={folder.name}>{folder.name}</span>
+                    <span className="notes-folder-count muted">{filed.length}</span>
+                  </button>
+                  <div id={`notes-folder-${folder.id}`} hidden={!open}>
+                    {filed.length ? renderEntries(filed) : <p className="muted notes-folder-empty">No notes in this folder.</p>}
+                  </div>
+                </section>
+              );
+            })}
+          </>
         )}
 
 

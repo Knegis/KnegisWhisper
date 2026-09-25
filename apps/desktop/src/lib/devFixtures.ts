@@ -1455,6 +1455,13 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
     }).slice(0, 20);
   },
   folders_list: () => folders,
+  notes_set_folder: (a) => {
+    const id = arg<number>(a, "id");
+    const folderId = arg<number | null>(a, "folderId") ?? null;
+    if (!notes.some((n) => n.id === id)) return false;
+    notes = notes.map((n) => (n.id === id ? { ...n, folderId } : n));
+    return true;
+  },
   folder_create: (a) => {
     const id = nextFolderId++;
     folders = [
