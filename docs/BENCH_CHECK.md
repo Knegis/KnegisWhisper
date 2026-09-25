@@ -6,7 +6,48 @@ that 787 passing tests had all missed**, and the one on 2026-08-26 found three m
 
 Maintained in place. When something here becomes false, edit it.
 
-## 2026-09-07 (latest) — KNEG-171: one word in an allow-list, and the panel seen for the first time
+## 2026-09-25 (latest) — KNEG-315: the meeting box is resizable and movable, and only its window styles have been measured
+
+Built and merged on `dev` (`2805b17`, `2948902`; merges `1946e4a`, `c90c953`). The Rust side was
+read from the running application; nothing has been dragged, resized or shared by a person yet.
+
+### Verified
+
+- **The window is built resizable, not maximizable, still non-activating and still excluded from
+  capture.** `target/debug/knegiswhisper-desktop.exe` at `1946e4a`, `KW_AUTOMATION_PROFILE` on a
+  disposable profile, windows enumerated by process id thirty seconds after launch:
+  `KnegisWhisper meeting` reads `WS_THICKFRAME` set, `WS_MAXIMIZEBOX` clear, `WS_EX_NOACTIVATE` set,
+  `WS_EX_TOPMOST` set, display affinity `0x11`. The update, overlay and language windows read exactly
+  as before (`WS_THICKFRAME` clear, affinity `0x11`). Table in `ENGINEERING_LOG.md` § 2026-09-25.
+- **Every gate on the merged tree**, default profile, this machine: 18 Contracts scripts and their
+  self-tests, `tsc`, `vite build`, 27 frontend tests, `cargo fmt`, workspace clippy with
+  `-D warnings`, the workspace test suite, the workspace build, and the Tauri IPC boundary suite
+  (397 passed, including the new `placement_commands_refuse_the_other_window_at_the_ipc_boundary`).
+- **The capability-audit self-test is green again**; it had been red on `dev` since KNEG-257.
+
+### Still unchecked, and needs a person at the machine
+
+1. **Drag it.** Start a `local-streaming` meeting from Settings > Meetings, put the caret in Notepad,
+   drag the panel by its text. Expect: it moves; the caret does not leave Notepad; Record/Stop still
+   click. This is the `WS_EX_NOACTIVATE` + `start_dragging` question, believed and not measured.
+2. **Resize from every edge and both bottom corners.** Expect the resize cursor at the edges, a
+   floor of 392×92, and above about 140 px of height the caption wrapping under a header row with the
+   newest words at the bottom. Check that the last few pixels of the Stop button still click.
+3. **Hide and show, then restart.** Stop the meeting, start another: the panel returns where it was
+   left, at the size it was left. Quit and relaunch: same.
+4. **Unplug the monitor it was left on** (or change resolution so it no longer fits): expect the
+   bottom-right default, not an off-screen window.
+5. **Reset notification window** on Settings > Meetings, once while the panel is visible and once
+   while it is hidden. Expect bottom-right at 392×92, and `meeting.notificationPlacement` absent in
+   `settings_keys` afterwards in both cases.
+6. **Share the screen from the client you actually use** (Teams, Zoom, a browser) with the panel
+   up, both a window share and a whole-screen share, and look at the receiving side. KNEG-60
+   measured the capture APIs, not any client.
+7. **Both themes.** Switch Windows between light and dark with the panel up: it should follow the
+   application (near-black `#181818` on dark, `#fdfdfd` on light), with the red dot and edge in both
+   and the amber fault line legible in both.
+
+## 2026-09-07 — KNEG-171: one word in an allow-list, and the panel seen for the first time
 
 Fixed and measured on `dev` after `bf85e18`, same machine and settings as the section below.
 `tauri dev` noticed the `tauri.conf.json` change, rebuilt in 50 s and relaunched the application

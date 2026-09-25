@@ -12,7 +12,87 @@ maintained in place rather than appended to, because its purpose is to be curren
 
 ---
 
-## 2026-09-15 (latest) — KNEG-258: the block handle could not drag, and the cause was a default nobody wrote
+## 2026-09-25 (latest) — KNEG-315: the meeting box becomes movable, resizable and themed, and two of the five findings were the orchestrator's own
+
+The owner asked for the meeting notification to be movable and resizable, to stay out of screen
+shares, and — mid-run — to match the application's colours and look. The first two were built by
+one Codex worker in two rounds (`2805b17`), the fourth by a second sequential worker (`2948902`),
+both merged `--no-ff` (`1946e4a`, `c90c953`). The third needed nothing: `apply_treatments` already
+sets `WDA_EXCLUDEFROMCAPTURE` and KNEG-60 measured it effective on 2026-09-07.
+
+### Choices, and the alternatives they beat
+
+- **Resize is the OS's, not ours.** tao 0.35's `WM_NCHITTEST` handler hit-tests the edges of any
+  undecorated window that is `resizable` and not maximized (`event_loop.rs:2178`), so the whole
+  feature on the Rust side is `.resizable(true)`, `.min_inner_size(392, 92)` and
+  `.maximizable(false)`. The alternative — a pointer-driven resize through a command, in the shape
+  of `persistent_overlay::overlay_drag` — would have needed a grip and could only grow the window
+  right and down, which for a bottom-right window is the wrong two directions.
+- **Move is Tauri's drag region, not the microphone button's hand-rolled drag.** `overlay_drag`
+  exists for docking, orientation and an input region the notification does not have. Tauri 2.11's
+  `drag.js` accepts `data-tauri-drag-region="deep"` and refuses to start a drag from a `BUTTON`, so
+  one attribute on the panel root covers every state without touching the buttons. **Believed,
+  not measured:** that the OS move loop works under `WS_EX_NOACTIVATE`. Nothing in the tree had
+  tried `start_dragging` on a non-activating window; the by-hand check is in `BENCH_CHECK.md`.
+- **A capability of its own, not a wider `notifications.json`.** `core:window:allow-start-dragging`
+  is granted by `capabilities/meeting-window.json` to the `meeting` window alone; the update
+  notification stays on `core:event:default`. `maximizable(false)` is why `internal_toggle_maximize`
+  is deliberately not granted: `drag.js` sends it on a double-click.
+- **The backend measures the window; the renderer sends nothing.** `meeting.notificationPlacement`
+  is written by two window-gated commands that read `outer_position`/`inner_size` themselves. The
+  panel only says *something moved*, 250 ms after the last `tauri://move` or `tauri://resize`.
+
+### Found in review, not by a test
+
+1. **Every programmatic placement re-saved itself.** `restore` runs on every show and `reset`
+   repositions a visible window; both fire move/resize events, and 250 ms later the panel asked the
+   backend to save the rectangle it had just been given. A first-run window therefore acquired a
+   saved placement after one show and stopped following the work area; a reset re-saved the default
+   it had just cleared. Fixed by recording the physical rectangle after each programmatic placement
+   and skipping a save whose rectangle equals it — exact, where a timer would have raced a user who
+   drags within the window. Round-two brief; the round-one brief had said such saves were
+   acceptable, so the finding was the orchestrator's as much as the worker's.
+2. **A cascade defect that no gate can see.** `.notify-live-expanded { display: none }` was declared
+   before `.notify-live { display: flex }` at equal specificity, so at 392×92 the expanded caption
+   rendered as a second flex item after the Stop button. CSS has no gate in this repository; reading
+   the file top to bottom is the evidence, and the repair brief asked the worker to write down which
+   rule wins in each case.
+3. **The theme worker reversed a documented decision because the brief told it to.** The brief asked
+   for a `--warn` token; the `:root` block carries a comment explaining why `--warn` was removed
+   from the theme. The worker replaced the comment rather than flagging the premise. The review
+   caught it because the diff deleted a comment; the fix keeps the amber as a panel-local light/dark
+   pair with a comment reconciling it, and restores the original comment verbatim. The same round
+   also deleted `.notify-empty { background: transparent }`, the rule that keeps a stranded render
+   invisible (KNEG-167). Lesson for briefs: a mapping that tells a worker what colour to add is not
+   licence to overwrite the comment explaining why it was taken away.
+
+### A Contracts gate that was already red on `dev`
+
+`tools/capability-audit/scan.test.mjs` asserted six window builders in the real tree; the tree had
+eight since KNEG-257's vocabulary IPC tests added two mock windows, and the KNEG-258 line-number
+assertion had drifted too. It failed at `c17cbec` before this work touched anything. Nobody saw it
+because the full CI cannot be dispatched (KNEG-276). The inventory refresh in `2805b17` fixes it.
+
+### Measured, from the built application
+
+`target/debug/knegiswhisper-desktop.exe` at `1946e4a` (Rust identical to `c90c953`), started with
+`KW_AUTOMATION_PROFILE` on a disposable profile, windows enumerated by process id and read with
+`GetWindowLongW` and `GetWindowDisplayAffinity` thirty seconds after launch:
+
+| window | `WS_THICKFRAME` | `WS_MAXIMIZEBOX` | `WS_EX_NOACTIVATE` | topmost | affinity |
+| --- | --- | --- | --- | --- | --- |
+| `KnegisWhisper meeting` | **yes** | **no** | yes | yes | `0x11` |
+| `KnegisWhisper update` | no | yes | yes | yes | `0x11` |
+| `KnegisWhisper overlay` | no | yes | yes | yes | `0x11` |
+| `Dictation languages` | no | yes | yes | yes | `0x11` |
+| `KnegisWhisper` (main) | yes | yes | no | no | `0x0` |
+
+So the builder flags took, the treatments still apply, and the other three panels are unchanged.
+Not measured: any of it under a real mouse — see `BENCH_CHECK.md` § 2026-09-25.
+
+---
+
+## 2026-09-15 — KNEG-258: the block handle could not drag, and the cause was a default nobody wrote
 
 Dragging a paragraph by its handle in the note editor did nothing. It had never worked: `NoteEditor.tsx`
 has exactly one commit and `tauri.conf.json` has never carried a drag-and-drop setting, so this was not
