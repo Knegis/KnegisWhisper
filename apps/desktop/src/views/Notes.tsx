@@ -151,7 +151,13 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote }: 
     const first = data.notes.at(0);
     if (first) { setRequestedNote(first); reveal(first.folderId); setOpenNoteId(first.id); onOpenNote?.(first.id); }
   }, [data, initialNoteId, openRequest, onOpenNote, reveal]);
-  const scrollToRequest = useRef<number | null>(null);
+  const mainRef = useRef<HTMLElement>(null);
+  // A note opens at its top. The pane outlives the note inside it, so on its own it keeps the
+  // previous note's offset, clamped against the new note's first layout before the editor has its
+  // content: measured on 2026-09-26 at 122px in a 480px window. An open request used to call
+  // scrollIntoView on the article instead, which parks it flush with the pane's edge, 21px past
+  // the top padding. Layout timing, so the reset lands before the first paint.
+  useLayoutEffect(() => { if (mainRef.current) mainRef.current.scrollTop = 0; }, [openNoteId, openRequest]);
   useEffect(() => {
     if (!openRequest) return;
     let cancelled = false;
@@ -160,16 +166,10 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote }: 
       const note = await getNote(openRequest.id);
       if (cancelled) return;
       if (!note) throw new Error("This note is no longer available.");
-      scrollToRequest.current = note.id;
       setRequestedNote(note); reveal(note.folderId); setQuery(""); setHits(null); setOpenNoteId(note.id);
     })().catch(e => { if (!cancelled) fail(e); });
     return () => { cancelled = true; };
   }, [openRequest, fail, reveal]);
-  useEffect(() => {
-    if (scrollToRequest.current !== openNoteId) return;
-    const element = document.getElementById(`note-detail-${openNoteId}`);
-    if (element) { element.scrollIntoView({ block: "start" }); scrollToRequest.current = null; }
-  }, [openNoteId, requestedNote, data]);
 
   const selectNote = async (id: number) => {
     await workspaceRef.current?.flush();
@@ -314,7 +314,7 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote }: 
         }}>Delete folder</button>}
       </div>, document.body)}
       <div className="notes-layout">
-        <section className="notes-main" aria-label="Note editor">
+        <section className="notes-main" aria-label="Note editor" ref={mainRef}>
         {openNote ? (
           <NoteWorkspace
             key={openNote.id}
