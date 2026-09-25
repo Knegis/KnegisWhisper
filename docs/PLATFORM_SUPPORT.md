@@ -108,6 +108,17 @@ takes focus moves the caret out of whatever the user is dictating into.
 Pluely does not implement this on Windows at all — its attempt is present in `window.rs` but
 commented out — so there is no reference implementation to copy.
 
+The meeting window follows the rule in `meeting_window.rs`: tao regenerates
+`GWL_EXSTYLE` from its `FOCUSABLE` flag on every show/hide, so durable
+non-activation starts with the builder's `focusable(false)`. `start` grants
+`set_focusable(true)` after showing the recording panel; `stop` and `cancel`
+revoke it with `set_focusable(false)` after hiding the window. It remains
+activatable through the transcribing strip. Revoking focusability on a visible
+window would run tao's `ShowWindow` path, which could activate it.
+`kw_platform::window::is_non_activating` supplies the read-back. The claim that
+show does not activate rests on tao 0.35.3's persisted `MARKER_DONT_FOCUS`,
+measured by reading its source; it has not yet been verified by instrument.
+
 ## Privacy overlay
 
 | Capability | Windows | macOS | Linux X11 | Linux Wayland |

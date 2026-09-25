@@ -19,7 +19,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import { collect, markEnabled, matchesWindowPattern, nativeDropWindows, securityCapabilities, violations } from "./scan.mjs";
+import { collect, EDITOR_HOSTS, markEnabled, matchesWindowPattern, nativeDropWindows, securityCapabilities, violations } from "./scan.mjs";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 // Historical four-window fixtures for KNEG-168/171.
@@ -77,7 +77,16 @@ test("the real tree is clean, and all parser inventories are live", () => {
   // KNEG-258: the editor is mounted in exactly one place, and the window that
   // hosts it has given Tauri's own drag and drop up so the handle can drag.
   assert.deepEqual(real.htmlDrag.sites, [{ file: "apps/desktop/src/components/NoteEditor.tsx", line: 68 }]);
-  assert.deepEqual(real.htmlDrag.windows, []);
+  assert.deepEqual(real.htmlDrag.windows, [
+    { label: "overlay", source: "apps/desktop/src-tauri/src/overlay.rs" },
+    { label: "dictation-languages", source: "apps/desktop/src-tauri/src/persistent_overlay.rs" },
+    { label: "update", source: "apps/desktop/src-tauri/src/update_window.rs" },
+  ]);
+  assert.deepEqual(real.editorHosts, EDITOR_HOSTS);
+  assert.deepEqual(real.builders.filter(({ file }) => ["meeting_window.rs", "overlay.rs", "update_window.rs", "persistent_overlay.rs"].some(name => file.endsWith(name)))
+    .filter(({ label, testOnly }) => !testOnly && ["meeting", "overlay", "update", "dictation-languages"].includes(label))
+    .map(({ label, dragDropDisabled }) => [label, dragDropDisabled]).sort(),
+    [["dictation-languages", false], ["meeting", true], ["overlay", false], ["update", false]]);
   assert.deepEqual(violations(real), []);
 });
 
@@ -270,6 +279,32 @@ test("rule G is quiet with no editor, and fires again when the key is taken off"
   );
 });
 
+test("rule G catches a Rust-built editor host missing the disabling call", () => {
+  const dir = mkdtempSync(join(tmpdir(), "capability-audit-rust-host-"));
+  try {
+    mkdirSync(join(dir, "apps/desktop/src-tauri/src"), { recursive: true });
+    writeFileSync(join(dir, "apps/desktop/src-tauri/tauri.conf.json"), JSON.stringify({ app: { windows: [] } }));
+    writeFileSync(join(dir, "apps/desktop/src-tauri/src/meeting_window.rs"),
+      'pub const LABEL: &str = "meeting";\nfn create() { WebviewWindowBuilder::new(app, LABEL, url).visible(false).build(); }');
+    const windows = nativeDropWindows(dir);
+    assert.deepEqual(windows, [{ label: "meeting", source: "apps/desktop/src-tauri/src/meeting_window.rs" }]);
+    const found = violations({ htmlDrag: { sites: [{ file: "NoteEditor.tsx", line: 1 }], windows }, editorHosts: { meeting: EDITOR_HOSTS.meeting } })
+      .filter(({ rule }) => rule.startsWith("G."));
+    assert.equal(found.length, 1);
+    assert.match(found[0].detail, /disable_drag_drop_handler/);
+    assert.match(found[0].detail, /meeting_window\.rs/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("rule H catches an editor host label that is no longer created", () => {
+  const real = collect(REPO_ROOT);
+  real.editorHosts = { ...EDITOR_HOSTS, gone: EDITOR_HOSTS.meeting };
+  const found = violations(real).filter(({ rule }) => rule.startsWith("H."));
+  assert.deepEqual(found.map(({ subject }) => subject), ["gone"]);
+});
+
 test("nativeDropWindows reads the default rather than the absence of the key", () => {
   // The whole defect is that leaving the key out is not neutral: tauri-utils
   // defaults it to true. A reader that only reported explicit `true` would
@@ -287,10 +322,10 @@ test("nativeDropWindows reads the default rather than the absence of the key", (
       rmSync(dir, { recursive: true, force: true });
     }
   };
-  assert.deepEqual(read({ label: "main" }), ["main"]);
-  assert.deepEqual(read({ label: "main", dragDropEnabled: true }), ["main"]);
+  assert.deepEqual(read({ label: "main" }), [{ label: "main", source: "apps/desktop/src-tauri/tauri.conf.json" }]);
+  assert.deepEqual(read({ label: "main", dragDropEnabled: true }), [{ label: "main", source: "apps/desktop/src-tauri/tauri.conf.json" }]);
   assert.deepEqual(read({ label: "main", dragDropEnabled: false }), []);
-  assert.deepEqual(read({ dragDropEnabled: true }), ["(unlabelled)"]);
+  assert.deepEqual(read({ dragDropEnabled: true }), [{ label: "(unlabelled)", source: "apps/desktop/src-tauri/tauri.conf.json" }]);
 });
 
 test("window matching supports plain labels, star globs, and literal regex characters", () => {

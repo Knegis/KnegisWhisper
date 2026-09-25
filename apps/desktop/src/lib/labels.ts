@@ -770,7 +770,7 @@ export function meetingOutcomeLabel(outcome: MeetingOutcome): string {
         `The recording is at ${outcome.recordingPath}.`,
       ].join(" ");
     case "cancelled":
-      return "Discarded. The recording was deleted.";
+      return "Discarded. The recording was deleted." + (outcome.noteId !== null ? " Your notes were kept as a note." : "");
     case "failed":
       return outcome.message;
   }
