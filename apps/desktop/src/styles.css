@@ -951,6 +951,49 @@ button.marked:hover:not(:disabled) {
   color: var(--muted);
 }
 
+/* Keep a renameable label in the row's text flow without button chrome. */
+button.transcript-speaker {
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  color: var(--muted);
+  cursor: pointer;
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+}
+
+button.transcript-speaker:hover,
+button.transcript-speaker:focus-visible {
+  color: var(--text);
+}
+
+/* The global button hover fill would turn an inline label into a separate box. */
+.transcript-rows button.transcript-speaker:hover:not(:disabled) { background: none; }
+
+/* The active row's filled band needs readable ink even when its label is focused. */
+.transcript-row-current button.transcript-speaker,
+.transcript-row-current button.transcript-speaker:hover:not(:disabled),
+.transcript-row-current button.transcript-speaker:focus-visible {
+  color: var(--band-ink);
+}
+
+/* Wrap on narrow notes while keeping the field and actions beside their label when space permits. */
+.transcript-rename {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin: 0.75rem 0 0;
+}
+
+/* Leave room to see a full first and last name while typing. */
+.transcript-rename input { min-width: 12rem; }
+/* The global button margin is for standalone actions, not controls in this form. */
+.transcript-rename button { margin-top: 0; }
+/* Errors stay below the controls so they do not squeeze the field. */
+.transcript-rename .error { flex-basis: 100%; }
+
 .recording-player {
   display: flex;
   flex-wrap: wrap;
