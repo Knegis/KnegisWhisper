@@ -48,11 +48,13 @@ test("the real tree is clean, and all parser inventories are live", () => {
     { identifier: "titlebar", enabled: true },
   ]);
   // Four production panels plus import, recording-deletion, vocabulary and placement IPC mock webviews.
-  assert.equal(real.builders.length, 10);
+  assert.equal(real.builders.length, 12);
   assert.deepEqual(
     real.builders.filter(({ kind }) => kind === "literal").map(({ file, arg }) => ({ file, arg })),
     [
       { file: "apps/desktop/src-tauri/src/media.rs", arg: "main" },
+      { file: "apps/desktop/src-tauri/src/meeting/draft.rs", arg: "main" },
+      { file: "apps/desktop/src-tauri/src/meeting/draft.rs", arg: "meeting" },
       { file: "apps/desktop/src-tauri/src/meeting_window.rs", arg: "main" },
       { file: "apps/desktop/src-tauri/src/recording_attach.rs", arg: "main" },
       { file: "apps/desktop/src-tauri/src/vocabulary.rs", arg: "main" },

@@ -212,6 +212,26 @@ pub fn set_non_activating(window: NativeWindow) -> Result<bool, PlatformError> {
     }
 }
 
+/// Read whether the native window currently refuses activation.
+pub fn is_non_activating(window: NativeWindow) -> Result<bool, PlatformError> {
+    if !window.is_valid() {
+        return Err(PlatformError::Window(
+            "the window has no native handle yet".to_owned(),
+        ));
+    }
+    #[cfg(target_os = "windows")]
+    {
+        windows_impl::is_non_activating(window)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = window;
+        Err(PlatformError::Unsupported(
+            "non-activating windows are implemented for Windows only so far".to_owned(),
+        ))
+    }
+}
+
 /// A description of the display server, used in honest `Unsupported` reasons.
 #[must_use]
 pub fn display_server_description() -> String {
@@ -268,6 +288,17 @@ mod windows_impl {
 
     fn hwnd(window: NativeWindow) -> HWND {
         HWND(window.0 as *mut core::ffi::c_void)
+    }
+
+    pub(super) fn is_non_activating(window: NativeWindow) -> Result<bool, PlatformError> {
+        let style = unsafe { GetWindowLongPtrW(hwnd(window), GWL_EXSTYLE) };
+        if style == 0 {
+            return Err(PlatformError::Window(
+                "GetWindowLongPtrW(GWL_EXSTYLE) returned 0; the handle is probably invalid"
+                    .to_owned(),
+            ));
+        }
+        Ok(style & (WS_EX_NOACTIVATE.0 as isize) != 0)
     }
 
     pub(super) fn work_area(window: NativeWindow) -> Result<WorkArea, PlatformError> {
@@ -437,6 +468,11 @@ mod tests {
     #[test]
     fn an_invalid_handle_cannot_be_made_non_activating() {
         assert!(set_non_activating(NativeWindow(0)).is_err());
+    }
+
+    #[test]
+    fn an_invalid_handle_cannot_report_non_activation() {
+        assert!(is_non_activating(NativeWindow(0)).is_err());
     }
 
     #[test]

@@ -1,6 +1,7 @@
 //! The meeting notification window.
 //!
-//! 392×92 by default and at minimum, content-protected, bottom-right until moved — the role settled in
+//! Compact offers are 392×92; the recording panel defaults to 440×560 and
+//! preserves its own placement. Both are content-protected. The role settled in
 //! `docs/PORTING_MATRIX.md`. It does two jobs in one window, which is why it is
 //! one window:
 //!
@@ -14,10 +15,14 @@
 //! the reason this window exists rather than a toast that disappears: something
 //! recording a room should be visible for the whole time it is doing it.
 //!
-//! It reuses [`crate::overlay::apply_treatments`] unchanged, so it reports the
-//! same `CaptureExclusion` / `NonActivating` evidence, read back from the real
-//! window rather than assumed. If exclusion fails on this platform the window
-//! still shows — a visible indicator that appears in a screen share is a privacy
+//! Startup reuses [`crate::overlay::apply_treatments`]. During a meeting,
+//! `start` grants activation after showing the panel; `stop` and `cancel` revoke
+//! it after hiding. Finishing stays activatable so the typed notes remain usable.
+//! Reading tao 0.35.3 showed that show/hide regenerates the extended style from
+//! its FOCUSABLE flag, so a raw style write cannot make activation durable.
+//! Milkdown's block handle needs Tauri's native drag handler disabled (KNEG-258);
+//! the capability audit's rule G cannot see Rust-built windows. If exclusion
+//! fails on this platform the window still shows — a visible indicator in a screen share is a privacy
 //! cost the user can be told about, while an invisible one is a recording nobody
 //! knows about.
 
@@ -32,10 +37,34 @@ use tauri::{
 /// The window label, and the fragment the frontend routes on.
 pub const LABEL: &str = "meeting";
 
-/// Default and minimum size from the porting matrix's window-role table.
-const WIDTH: f64 = 392.0;
-const HEIGHT: f64 = 92.0;
+const COMPACT: (f64, f64) = (392.0, 92.0);
+const PANEL: (f64, f64) = (440.0, 560.0);
+const PANEL_MIN: (f64, f64) = (392.0, 280.0);
 const PLACEMENT_KEY: &str = "meeting.notificationPlacement";
+
+/// The offer strip or the note-taking recording panel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Mode {
+    #[default]
+    Compact,
+    Panel,
+}
+
+impl Mode {
+    pub const fn size(self) -> (f64, f64) {
+        match self {
+            Self::Compact => COMPACT,
+            Self::Panel => PANEL,
+        }
+    }
+
+    pub const fn min_size(self) -> (f64, f64) {
+        match self {
+            Self::Compact => COMPACT,
+            Self::Panel => PANEL_MIN,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -49,6 +78,7 @@ struct SavedPlacement {
 
 #[derive(Debug, Default)]
 struct PlacementState {
+    mode: Mutex<Mode>,
     saved: Mutex<Option<SavedPlacement>>,
     programmatic: Mutex<Option<(i32, i32, u32, u32)>>,
     writes: tokio::sync::Mutex<()>,
@@ -87,22 +117,25 @@ pub fn create(app: &AppHandle) -> tauri::Result<WebviewWindow> {
     let window =
         WebviewWindowBuilder::new(app, LABEL, WebviewUrl::App("index.html#meeting".into()))
             .title("KnegisWhisper meeting")
-            .inner_size(WIDTH, HEIGHT)
-            .min_inner_size(WIDTH, HEIGHT)
+            .inner_size(COMPACT.0, COMPACT.1)
+            .min_inner_size(COMPACT.0, COMPACT.1)
             .resizable(true)
             .maximizable(false)
             .decorations(false)
             .transparent(true)
             .always_on_top(true)
             .skip_taskbar(true)
-            // Declarative half of not taking focus; `apply_treatments` adds the
-            // imperative half. A window that grabbed focus mid-meeting would take
-            // the caret out of whatever the user was typing in.
+            // tao regenerates GWL_EXSTYLE from FOCUSABLE on every show/hide;
+            // a raw WS_EX_NOACTIVATE write is lost at the next flag change.
+            .focusable(false)
             .focused(false)
+            // Milkdown's block handle needs native drag handling off (KNEG-258).
+            // Capability audit rule G cannot inspect Rust-built windows.
+            .disable_drag_drop_handler()
             .visible(false)
             .build()?;
 
-    restore(&window);
+    restore(&window, Mode::Compact);
     Ok(window)
 }
 
@@ -112,7 +145,15 @@ pub fn position(window: &WebviewWindow) {
 }
 
 fn position_for<R: Runtime>(window: &WebviewWindow<R>) {
-    crate::window_placement::bottom_right_for(window, WIDTH, HEIGHT, "meeting notification");
+    let mode = window
+        .app_handle()
+        .state::<PlacementState>()
+        .mode
+        .lock()
+        .map(|m| *m)
+        .unwrap_or_default();
+    let (width, height) = mode.size();
+    crate::window_placement::bottom_right_for(window, width, height, "meeting notification");
 }
 
 fn record_programmatic_placement<R: Runtime>(window: &WebviewWindow<R>) {
@@ -142,7 +183,11 @@ fn record_programmatic_placement<R: Runtime>(window: &WebviewWindow<R>) {
     }
 }
 
-fn restore(window: &WebviewWindow) {
+fn restore(window: &WebviewWindow, mode: Mode) {
+    let (min_width, min_height) = mode.min_size();
+    if let Err(error) = window.set_min_size(Some(LogicalSize::new(min_width, min_height))) {
+        tracing::warn!(%error, "could not set meeting notification minimum size");
+    }
     let app = window.app_handle();
     let saved = app
         .state::<PlacementState>()
@@ -154,7 +199,9 @@ fn restore(window: &WebviewWindow) {
             None
         });
     if let Some(saved) = saved.filter(|p| {
-        p.x.is_finite() && p.y.is_finite() && p.width.is_finite() && p.height.is_finite()
+        mode == Mode::Panel && {
+            p.x.is_finite() && p.y.is_finite() && p.width.is_finite() && p.height.is_finite()
+        }
     }) {
         match window.available_monitors() {
             Ok(monitors) => {
@@ -164,8 +211,10 @@ fn restore(window: &WebviewWindow) {
                 {
                     let scale = monitor.scale_factor();
                     if scale.is_finite() && scale > 0.0 {
-                        let size =
-                            LogicalSize::new(saved.width.max(WIDTH), saved.height.max(HEIGHT));
+                        let size = LogicalSize::new(
+                            saved.width.max(PANEL_MIN.0),
+                            saved.height.max(PANEL_MIN.1),
+                        );
                         let origin = monitor.position();
                         let placement = window.set_size(size).and_then(|()| {
                             window.set_position(PhysicalPosition::new(
@@ -206,10 +255,42 @@ pub async fn meeting_notification_placement_save<R: Runtime>(
     if window.label() != LABEL {
         return Err("Only the meeting window can save its placement".into());
     }
+    if *app
+        .state::<PlacementState>()
+        .mode
+        .lock()
+        .map_err(|error| error.to_string())?
+        != Mode::Panel
+    {
+        return Ok(());
+    }
     let state = app.state::<PlacementState>();
     let _guard = state.writes.lock().await;
-    if !window.is_visible().map_err(|error| error.to_string())? {
+    // Stop can switch to Compact while a debounced save waits on this lock.
+    if *state.mode.lock().map_err(|error| error.to_string())? != Mode::Panel {
         return Ok(());
+    }
+    let Some(placement) = save_placement(&app, &window).await? else {
+        return Ok(());
+    };
+    let db = app.state::<AppState>();
+    kw_storage::settings::set(db.db().pool(), PLACEMENT_KEY, &placement)
+        .await
+        .map_err(|error| error.to_string())?;
+    *state.saved.lock().map_err(|error| error.to_string())? = Some(placement);
+    Ok(())
+}
+
+// Both frontend saves and Stop use the command above. The settings audit reads
+// writer calls in command bodies, so measurement is shared here and the write
+// stays in that command.
+async fn save_placement<R: Runtime>(
+    app: &AppHandle<R>,
+    window: &WebviewWindow<R>,
+) -> Result<Option<SavedPlacement>, String> {
+    let state = app.state::<PlacementState>();
+    if !window.is_visible().map_err(|error| error.to_string())? {
+        return Ok(None);
     }
     let position = window.outer_position().map_err(|error| error.to_string())?;
     let outer_size = window.outer_size().map_err(|error| error.to_string())?;
@@ -219,7 +300,7 @@ pub async fn meeting_notification_placement_save<R: Runtime>(
         .map_err(|error| error.to_string())?
         == Some((position.x, position.y, outer_size.width, outer_size.height))
     {
-        return Ok(());
+        return Ok(None);
     }
     let monitor = window
         .current_monitor()
@@ -241,12 +322,16 @@ pub async fn meeting_notification_placement_save<R: Runtime>(
         width: f64::from(size.width) / scale,
         height: f64::from(size.height) / scale,
     };
-    let db = app.state::<AppState>();
-    kw_storage::settings::set(db.db().pool(), PLACEMENT_KEY, &placement)
-        .await
-        .map_err(|error| error.to_string())?;
-    *state.saved.lock().map_err(|error| error.to_string())? = Some(placement);
-    Ok(())
+    Ok(Some(placement))
+}
+
+/// Persist the last panel position before Stop switches to Compact.
+pub async fn remember_panel_placement(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window(LABEL) {
+        if let Err(error) = meeting_notification_placement_save(app.clone(), window).await {
+            tracing::warn!(%error, "could not remember meeting panel placement");
+        }
+    }
 }
 
 #[tauri::command]
@@ -269,6 +354,11 @@ pub async fn meeting_notification_placement_reset<R: Runtime>(
             .is_visible()
             .map_err(|error| error.to_string())?
         {
+            let mode = *state.mode.lock().map_err(|error| error.to_string())?;
+            let (min_width, min_height) = mode.min_size();
+            notification
+                .set_min_size(Some(LogicalSize::new(min_width, min_height)))
+                .map_err(|error| error.to_string())?;
             position_for(&notification);
             record_programmatic_placement(&notification);
         }
@@ -286,38 +376,45 @@ pub fn apply_treatments(window: &WebviewWindow) -> OverlayStatus {
     crate::overlay::apply_treatments(window)
 }
 
-/// Show or hide it.
+/// Apply capture exclusion without changing focusability.
+pub fn capture_exclusion(window: &WebviewWindow) -> kw_overlay::CaptureExclusion {
+    crate::overlay::capture_exclusion(window)
+}
+
+/// Show the window in its chosen mode.
 ///
 /// Failing to *show* it is logged as an error, because it is one: the window is
 /// the visible indicator that a meeting is being recorded, and a recording with
-/// no indicator is the thing the brief forbids. Failing to hide it is a warning.
-pub fn set_visible(app: &AppHandle, visible: bool) {
+/// no indicator is the thing the brief forbids.
+pub fn show(app: &AppHandle, mode: Mode) {
     let Some(window) = app.get_webview_window(LABEL) else {
-        if visible {
-            tracing::error!(
-                "there is no meeting notification window, so a recording meeting has no visible \
-                 indicator of its own"
-            );
-        }
+        tracing::error!("there is no meeting notification window, so a recording meeting has no visible indicator of its own");
         return;
     };
-
-    // Repositioned on the way up: a monitor may have been unplugged, or the
-    // resolution changed, since it was created.
-    if visible {
-        restore(&window);
+    match app.state::<PlacementState>().mode.lock() {
+        Ok(mut held) => *held = mode,
+        Err(error) => tracing::warn!(%error, "could not set meeting notification mode"),
     }
+    restore(&window, mode);
+    if let Err(error) = window.show() {
+        tracing::error!(%error, "could not show the meeting notification");
+    }
+}
 
-    let result = if visible {
-        window.show()
-    } else {
-        window.hide()
-    };
-    if let Err(err) = result {
-        if visible {
-            tracing::error!(error = %err, "could not show the meeting notification");
-        } else {
-            tracing::warn!(error = %err, "could not hide the meeting notification");
+/// Hide the meeting notification.
+pub fn hide(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window(LABEL) {
+        if let Err(error) = window.hide() {
+            tracing::warn!(%error, "could not hide the meeting notification");
+        }
+    }
+}
+
+/// Grant or revoke activation through tao's durable FOCUSABLE flag.
+pub fn set_activatable(app: &AppHandle, activatable: bool) {
+    if let Some(window) = app.get_webview_window(LABEL) {
+        if let Err(error) = window.set_focusable(activatable) {
+            tracing::warn!(%error, activatable, "could not change meeting notification activation");
         }
     }
 }
@@ -349,7 +446,7 @@ pub fn reconcile(app: &AppHandle, has_something_to_say: bool) {
         tracing::warn!(
             "a stranded meeting notification window was visible with nothing to render; hiding it"
         );
-        set_visible(app, false);
+        hide(app);
     }
 }
 
@@ -358,10 +455,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_default_and_minimum_size_are_the_ones_the_porting_matrix_settled() {
-        // 392x92 is the default and minimum in the window-role table.
-        assert!((WIDTH - 392.0).abs() < f64::EPSILON);
-        assert!((HEIGHT - 92.0).abs() < f64::EPSILON);
+    fn both_window_modes_keep_their_default_and_minimum_sizes() {
+        assert_eq!(Mode::Compact.size(), (392.0, 92.0));
+        assert_eq!(Mode::Compact.min_size(), (392.0, 92.0));
+        assert_eq!(Mode::Panel.size(), (440.0, 560.0));
+        assert_eq!(Mode::Panel.min_size(), (392.0, 280.0));
     }
 
     #[test]

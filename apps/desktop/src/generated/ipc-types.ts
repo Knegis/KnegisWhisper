@@ -765,7 +765,11 @@ promptOnDetect: boolean,
  * user can be told about, and no indicator at all is the thing the brief
  * forbids.
  */
-notificationExcluded: CaptureExclusion | null, };
+notificationExcluded: CaptureExclusion | null,
+/**
+ * Read back from the native window where supported.
+ */
+notificationActivatable: boolean | null, };
 
 /**
  * How a meeting ended.
@@ -800,7 +804,7 @@ transcriptIsPartials: boolean, } | { "outcome": "nothing-transcribed", recording
  * were produced. Keeping the count makes this successful provider work
  * visible instead of discarding it on the empty-transcript branch.
  */
-reconnects: number, } | { "outcome": "cancelled" } | { "outcome": "failed", message: string, };
+reconnects: number, } | { "outcome": "cancelled", noteId: number | null, } | { "outcome": "failed", message: string, };
 
 /**
  * An offer to record a meeting that appears to be happening.
