@@ -131,7 +131,7 @@ All `frame: false`.
 | Control panel | 1200×800 | opaque, normal, resizable |
 | Agent overlay | 420×300 | `transparent`, **`focusable: true`** |
 | Transcription preview | 460×132 | `focusable: false` |
-| Meeting notification | 392×92 | **content-protected** — "visible to user but out of screen shares". **Built.** `apps/desktop/src-tauri/src/meeting_window.rs`, reusing `overlay::apply_treatments` unchanged so it reports the same read-back evidence. Positioned bottom-right, which the dictation panel still does not do |
+| Meeting notification | 392×92 default and minimum | **content-protected** — "visible to user but out of screen shares". **Built.** `apps/desktop/src-tauri/src/meeting_window.rs`, reusing `overlay::apply_treatments` unchanged so it reports the same read-back evidence. Movable and resizable; placement is remembered per monitor and can be reset on Settings > Meetings to the default bottom-right position and size |
 | Update notification | 392×92 | **content-protected** — same rule as the meeting notification. **Built.** `apps/desktop/src-tauri/src/update_window.rs`, the same builder and `overlay::apply_treatments` unchanged, so it reports the same read-back evidence. Shown only once `updater.rs`'s explicit, user-triggered check finds a newer release; never on its own |
 
 Per-platform z-order policy from `setupAlwaysOnTop()`, worth copying exactly: macOS

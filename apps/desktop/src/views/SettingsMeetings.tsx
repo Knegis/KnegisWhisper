@@ -29,6 +29,7 @@ import {
   getMeetingProviders,
   getMeetingStatus,
   reviewMeetingConfig,
+  resetMeetingNotificationPlacement,
   setMeetingDetectLists,
   setMeetingLanguage,
   setMeetingPrompt,
@@ -116,6 +117,20 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
   const [review, setReview] = useState<ConfigReview | null>(null);
   /** Which diarization model is downloading, or null. */
   const [installing, setInstalling] = useState<string | null>(null);
+  const [resettingNotification, setResettingNotification] = useState(false);
+  const [notificationResetError, setNotificationResetError] = useState<string | null>(null);
+
+  const resetNotification = async () => {
+    setResettingNotification(true);
+    setNotificationResetError(null);
+    try {
+      await resetMeetingNotificationPlacement();
+    } catch (error) {
+      setNotificationResetError(String(error));
+    } finally {
+      setResettingNotification(false);
+    }
+  };
 
   useEffect(() => {
     const unlisteners: Array<() => void> = [];
@@ -442,6 +457,13 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
         </div>
 
         {outcome ? <p className="caveat">{meetingOutcomeLabel(outcome)}</p> : null}
+      </section>
+
+      <section>
+        <h2>Notification window</h2>
+        <p className="caveat">Drag the notification window to move it or resize it by an edge. Reset returns it to the bottom-right at its default size.</p>
+        <button type="button" disabled={resettingNotification} onClick={() => { void resetNotification(); }}>Reset notification window</button>
+        {notificationResetError ? <p className="error" role="alert">{notificationResetError}</p> : null}
       </section>
 
       {recording || Object.keys(live).length > 0 ? (

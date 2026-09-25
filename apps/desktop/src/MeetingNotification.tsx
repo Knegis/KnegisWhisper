@@ -1,7 +1,9 @@
 /**
  * The meeting notification window's contents.
  *
- * 392×92, content-protected, bottom-right. Two jobs in one window:
+ * 392×92 by default and at minimum, content-protected, bottom-right until moved.
+ * The user can drag or resize it, and its monitor-relative placement is remembered.
+ * Two jobs in one window:
  *
  * * **Offering to record**, when a meeting appears to be in progress. The offer
  *   says which application and which process gave it away, so somebody who
@@ -25,6 +27,7 @@
  */
 
 import { useEffect, useRef, useState } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import {
   dismissMeetingOffer,
@@ -33,6 +36,7 @@ import {
   onMeetingOutcome,
   onMeetingState,
   onMeetingTranscript,
+  saveMeetingNotificationPlacement,
   startMeeting,
   stopMeeting,
   type MeetingState,
@@ -65,6 +69,23 @@ export function MeetingNotification() {
       if (disposed) fn();
       else unlisteners.push(fn);
     };
+    let placementTimer: number | undefined;
+    const schedulePlacementSave = () => {
+      if (placementTimer !== undefined) window.clearTimeout(placementTimer);
+      placementTimer = window.setTimeout(() => {
+        placementTimer = undefined;
+        void saveMeetingNotificationPlacement().catch((err: unknown) => {
+          console.warn("Could not save meeting notification placement", err);
+        });
+      }, 250);
+    };
+    const notification = getCurrentWindow();
+    void notification.onMoved(schedulePlacementSave).then(keepListener).catch((err: unknown) => {
+      if (!disposed) console.warn("Could not listen for meeting notification moves", err);
+    });
+    void notification.onResized(schedulePlacementSave).then(keepListener).catch((err: unknown) => {
+      if (!disposed) console.warn("Could not listen for meeting notification resizes", err);
+    });
     // A hidden window survives between meetings. Refresh the runtime snapshot
     // on state transitions, and discard reads overtaken by a newer event/read.
     const refresh = () => {
@@ -136,6 +157,7 @@ export function MeetingNotification() {
     });
     return () => {
       disposed = true;
+      if (placementTimer !== undefined) window.clearTimeout(placementTimer);
       unlisteners.forEach((fn) => fn());
     };
   }, []);
@@ -159,7 +181,8 @@ export function MeetingNotification() {
 
   if (recording) {
     return (
-      <div className="notify notify-recording">
+      <div className="notify notify-recording" data-tauri-drag-region="deep" title="Drag to move">
+        <div className="notify-header">
         <span className="indicator indicator-recording" aria-hidden="true" />
         <span className="notify-body">
           <strong>Recording {clock(elapsed)}</strong>
@@ -196,13 +219,20 @@ export function MeetingNotification() {
         >
           Stop
         </button>
+        </div>
+        {notificationCaptureExcluded && liveTranscript ? (
+          <span className="notify-live notify-live-expanded">
+            <span dir="auto">{liveTranscript}</span>
+          </span>
+        ) : null}
       </div>
     );
   }
 
   if (state === "finishing") {
     return (
-      <div className="notify">
+      <div className="notify" data-tauri-drag-region="deep" title="Drag to move">
+        <div className="notify-header">
         <span className="indicator" aria-hidden="true" />
         <span className="notify-body">
           <strong>Transcribing</strong>
@@ -210,13 +240,15 @@ export function MeetingNotification() {
             the recording is being transcribed; this can take a while
           </span>
         </span>
+        </div>
       </div>
     );
   }
 
   if (offer) {
     return (
-      <div className="notify">
+      <div className="notify" data-tauri-drag-region="deep" title="Drag to move">
+        <div className="notify-header">
         <span className="indicator" aria-hidden="true" />
         <span className="notify-body">
           <strong>{offer.name} meeting in progress</strong>
@@ -244,25 +276,28 @@ export function MeetingNotification() {
         >
           Not now
         </button>
+        </div>
       </div>
     );
   }
 
   if (stateReadProblem && state === null) {
     return (
-      <div className="notify">
+      <div className="notify" data-tauri-drag-region="deep" title="Drag to move">
+        <div className="notify-header">
         <span className="indicator" aria-hidden="true" />
         <span className="notify-body">
           <strong>State unknown</strong>
           <span className="notify-detail notify-alert">{stateReadProblem}</span>
         </span>
+        </div>
       </div>
     );
   }
 
   // Nothing to say. The window is hidden in this state, so this is only what a
   // stray render would show — and an empty panel is better than a stale one.
-  return <div className="notify notify-empty" />;
+  return <div className="notify notify-empty" data-tauri-drag-region="deep" title="Drag to move" />;
 }
 
 /** Elapsed seconds as `m:ss`, or `h:mm:ss` once it has been an hour. */

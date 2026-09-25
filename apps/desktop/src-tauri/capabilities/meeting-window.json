@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "meeting-window",
+  "description": "Only the meeting notification can start a native window drag from its panel. Its event subscriptions remain in notifications.json; this grants only core:window:allow-start-dragging to meeting, while update stays on the narrower event capability. Toggle-maximize is deliberately absent because the notification must never maximize on a drag-region double-click.",
+  "windows": ["meeting"],
+  "permissions": ["core:window:allow-start-dragging"]
+}
