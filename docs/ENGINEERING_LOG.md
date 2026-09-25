@@ -12,7 +12,70 @@ maintained in place rather than appended to, because its purpose is to be curren
 
 ---
 
-## 2026-09-25 (latest) — KNEG-315: the meeting box becomes movable, resizable and themed, and two of the five findings were the orchestrator's own
+## 2026-09-25 (later, latest) — KNEG-298: the meeting box becomes a notes panel, and the focus rule turned out to be tao's, not ours
+
+The owner asked, with a Granola screenshot, for the meeting window to be a note surface during a
+meeting: the Notes section's Milkdown editor, and a toggle between *My notes* and the live
+*Transcript*. Four decisions were taken with the owner before any code: notes go into the meeting's
+own note; the box opens as the panel when recording starts; two views only; the window may take
+focus like a normal window while recording. Built as two sequential Codex workstreams — Rust
+foundation `3a0d0c4` (merge `9e5bd07`), frontend `81d7164` (merge `23fac71`).
+
+### Three facts that decided the design
+
+- **No note exists while a meeting records.** `keep` creates it after the whole-file pass with an
+  always-empty body, and nothing is persisted live. So typed notes are held by a `NotesDraft`
+  managed state, mirrored to `<recording>.notes.md` beside the WAV after every autosave, written
+  only by a command the meeting window may call, and consumed by `keep` as `NewNote.content`. A
+  note is now created when there are segments *or* notes; cancel keeps non-empty notes as a
+  notes-only note and `MeetingOutcome::Cancelled` carries the id. Nothing recovers an orphaned WAV
+  or sidecar after a crash — that predates this work for the WAV and is filed as KNEG-316.
+- **The raw non-activation treatment never survived a show on its own.** Read in tao 0.35.3
+  (`platform_impl/windows/window_state.rs`): `apply_diff` regenerates `GWL_STYLE`/`GWL_EXSTYLE`
+  from tao's own flags on every flag change, show and hide included, with `WS_EX_NOACTIVATE`
+  present iff `FOCUSABLE` is clear. The `WS_EX_NOACTIVATE` that `set_non_activating` wrote was
+  dropped by the next show and came back only because `status()` re-applied the full treatments on
+  every call. And the builder's `focused(false)` sets `MARKER_DONT_FOCUS`, which the stored flags
+  keep forever (the clear happens on a by-value copy), so every show of this window is
+  `SW_SHOWNOACTIVATE` — including the show `set_focusable(true)` triggers on a visible window. So
+  the durable form of non-activation is the builder's `focusable(false)`, activation is one
+  `set_focusable(true)` granted in `start` after the show, and it is revoked in `stop`/`cancel`
+  after the hide, never on a visible window. Finishing stays activatable for that reason. The
+  overlay already used `.focusable(false)` with a comment that named the symptom without the
+  mechanism; the mechanism is now written down.
+- **Milkdown's block handle needs the hosting window's Tauri drag-and-drop handler off** — the
+  KNEG-258 lesson again, this time for a Rust-built window (`.disable_drag_drop_handler()`), which
+  the capability audit's rule G could not see. Rule G now reads Rust builder chains and a declared
+  list of editor-hosting labels; rule H keeps that list attached to reality. The panel root stays
+  the drag region and the editor, transcript and tab bar opt out with `data-tauri-drag-region="false"`.
+
+### Found in review
+
+- The activation-mismatch warning treated the `Starting` phase as running, so every meeting start
+  would have logged a spurious warning while the Meetings screen polled status. One-line repair.
+- The frontend worker stopped with `wrong_premise` because one sentence of the brief's docs
+  section said "non-activating outside recording" while the Rust keeps the window activatable
+  through the transcribing strip. The worker was right and the wording was the orchestrator's.
+- Accepted with a note: `MeetingPanel.tsx` imports `clock` from `MeetingNotification.tsx`, which
+  imports the panel — a module cycle that works because the function is only called at render
+  time. `clock` belongs in `lib/`; a nit for the next pass.
+
+### Measured, and not
+
+From the owner's running dev instance after the Rust merge (`EnumWindows` by pid,
+`GetWindowLongW`, `GetWindowDisplayAffinity`): the idle meeting window reads `WS_THICKFRAME` set,
+`WS_MAXIMIZEBOX` clear, `WS_EX_NOACTIVATE` set, affinity `0x11`. That is the builder half of the
+rule. **Not measured:** the recording half — `set_focusable(true)` clearing the style after the show
+without activating, the panel opening at 440×560, typing, the transcript tab, block-handle drag —
+all of which need a meeting to be started and a person at the keyboard. The by-hand list is in
+`BENCH_CHECK.md` § 2026-09-25 (later). The `cargo build --workspace` gate reads exit 101 while the
+owner's instance runs because cargo cannot replace `knegiswhisper-desktop.exe`; the workspace built
+with the binary excluded and the desktop crate built as a library, and the running instance is
+itself the post-merge build.
+
+---
+
+## 2026-09-25 — KNEG-315: the meeting box becomes movable, resizable and themed, and two of the five findings were the orchestrator's own
 
 The owner asked for the meeting notification to be movable and resizable, to stay out of screen
 shares, and — mid-run — to match the application's colours and look. The first two were built by

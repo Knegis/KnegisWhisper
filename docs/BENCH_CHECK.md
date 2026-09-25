@@ -6,7 +6,50 @@ that 787 passing tests had all missed**, and the one on 2026-08-26 found three m
 
 Maintained in place. When something here becomes false, edit it.
 
-## 2026-09-25 (latest) — KNEG-315: the meeting box is resizable and movable, and only its window styles have been measured
+## 2026-09-25 (later, latest) — KNEG-298: the meeting panel exists, and only its idle window styles have been measured
+
+Built and merged on `dev` (`3a0d0c4`, `81d7164`; merges `9e5bd07`, `23fac71`). Every gate passes
+on the merged tree (Contracts, frontend with 34 tests, fmt, workspace clippy, workspace tests,
+the Tauri IPC suite with the two new window-gating tests, the workspace built with the desktop
+binary excluded because the owner's instance was running). Nothing below has been typed into,
+dragged or shared by a person.
+
+### Verified
+
+- **Idle window styles, from the running instance:** `KnegisWhisper meeting` reads `WS_THICKFRAME`
+  set, `WS_MAXIMIZEBOX` clear, `WS_EX_NOACTIVATE` set, affinity `0x11`, hidden. The builder's
+  `focusable(false)` holds the style on its own now; `status()` no longer re-applies it.
+- **The draft round trip at the IPC boundary:** `meeting_notes_update` and `meeting_notes_get`
+  refuse the main window and accept the meeting window (mock runtime); the sidecar is written
+  beside the WAV and read back (tempdir).
+- **Live transcript folding:** seven `node --test` cases over `lib/liveTranscript.ts`.
+
+### Still unchecked, and needs a person at the machine
+
+1. **Start a `local-streaming` meeting from Settings > Meetings.** Expect the box to open at
+   440×560 bottom-right (or where it was last left in panel mode), header on top, editor below,
+   *My notes | Transcript* at the bottom. Read `WS_EX_NOACTIVATE` on the window: it must be
+   **clear** now, affinity still `0x11`, and the foreground window must not have changed when the
+   panel appeared.
+2. **Type.** Notes appear in the editor; after a pause the sidecar `<stamp>.notes.md` beside the
+   WAV under the recording directory contains them.
+3. **Reload the panel webview mid-meeting** (Ctrl+R with the panel focused, or from devtools):
+   the editor re-seeds with what was typed, not empty.
+4. **Switch to Transcript** while speaking: rows appear, the open partial is muted, the list stays
+   at the bottom; switch back: the editor still holds the notes.
+5. **Drag the block handle** in the editor: the block moves; the window does not. Drag the header:
+   the window moves.
+6. **Stop.** The panel shrinks to the transcribing strip, still activatable; when the note is
+   saved, open it in Notes: *Your notes* holds what was typed, the transcript is the whole-file
+   pass. Then read `WS_EX_NOACTIVATE` again: set.
+7. **An offer while typing in Notepad** (join a real call): the caret stays in Notepad.
+8. **Typing in the panel does not trigger the dictation chord**; pressing Control+Super with the
+   panel focused dictates into the notes — record what happens.
+9. **Share the screen from your meeting client** with the panel up: absent on the receiving side.
+10. **Cancel a meeting with notes typed** (from the CLI or API): a *Meeting notes — …* note exists
+    with the text and the discarded-recording sentence.
+
+## 2026-09-25 — KNEG-315: the meeting box is resizable and movable, and only its window styles have been measured
 
 Built and merged on `dev` (`2805b17`, `2948902`; merges `1946e4a`, `c90c953`). The Rust side was
 read from the running application; nothing has been dragged, resized or shared by a person yet.
