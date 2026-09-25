@@ -1167,6 +1167,7 @@ const noteTranscriptRows = new Map<number, TranscriptRow[]>([
         startSeconds: 72,
         endSeconds: 86,
         speaker: "Anna",
+        speakerId: "speaker_0",
         text: "The localisation pass needs two more days.",
       },
       {
@@ -1174,6 +1175,7 @@ const noteTranscriptRows = new Map<number, TranscriptRow[]>([
         startSeconds: 88,
         endSeconds: 101,
         speaker: "Ravi",
+        speakerId: "speaker_1",
         text: "Then Thursday is the earliest honest date.",
       },
     ],
@@ -1190,7 +1192,7 @@ function fixtureImport(result: Omit<MediaImportResult, "noteId" | "recording" | 
   const segments = result.segments.length ? result.segments : [{ text: result.text, timestamp: 0, endTimestamp: durationSeconds }];
   notes.unshift({ id: noteId, title: "Imported fixture", content: "", noteType: "import", recordingDetails: null, enhancedContent: null, folderId: null, transcript: JSON.stringify(segments), participants: null, audioDurationSeconds: durationSeconds, createdAt: nowIso(), updatedAt: nowIso() });
   noteRecordings.set(noteId, recording);
-  noteTranscriptRows.set(noteId, segments.map((segment, index) => ({ index, text: segment.text, speaker: null, startSeconds: segment.timestamp, endSeconds: segment.endTimestamp })));
+  noteTranscriptRows.set(noteId, segments.map((segment, index) => ({ index, text: segment.text, speaker: null, speakerId: null, startSeconds: segment.timestamp, endSeconds: segment.endTimestamp })));
   const complete = { ...result, noteId, recording, retainedBytes: durationSeconds * 32000 + 44 };
   latestImportSnapshot = { operationId: `fixture-${noteId}`, stage: "succeeded", elapsedSeconds: 1, provider: result.provider, model: result.model, result: complete, error: null };
   return complete;

@@ -1035,7 +1035,12 @@ endSeconds: number | null,
  * anonymous segment -- one carrying no name, label or capture source --
  * which export leaves unlabelled for the same reason.
  */
-speaker: string | null, text: string, };
+speaker: string | null,
+/**
+ * The raw diarisation label a rename addresses; absent for typed names,
+ * capture sources, and anonymous segments without a label.
+ */
+speakerId: string | null, text: string, };
 
 /**
  * A recording attached to a note, as stored.

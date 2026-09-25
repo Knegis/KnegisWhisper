@@ -219,12 +219,11 @@ by a test.
   Dropping it would discard a column of the user's OpenWhispr data that a shipped sentence says is
   copied, to save a five-column table that costs nothing to keep.
 
-  **`speaker_mappings` has a candidate owner it did not have a week ago.** Diarization writes
-  `speaker_0` with the placeholder `Speaker 1` beside it, and
-  `kw_notes_core::transcript::speaker_name` already prefers a mapping over the placeholder
-  (`crates/notes-core/src/transcript.rs:127-129`), so `speaker_mappings` is exactly where a name a
-  person typed would live. No screen offers that rename and **nothing was built here** — the owner
-  is recorded so the next person past does not have to derive it again.
+  **`speaker_mappings` is owned by `kw_notes_core::speakers` (KNEG-318, 2026-09-25).**
+  The Transcript tab's rename writes one name per note and raw speaker id. Playback rows, all
+  desktop exports, the local API export, and the summary prompt and source-linked rows read that
+  note's mappings. `profile_id`, `speaker_profiles`, and `note_speaker_embeddings` remain
+  write-only pending KNEG-319.
 
   **`contacts` is in `COPY_PLAN` and not in `MUST_BE_EMPTY`, and that is deliberate.** The rule was
   exact and unwritten; it is now written on `MUST_BE_EMPTY` (`import.rs:224-241`) and pinned by

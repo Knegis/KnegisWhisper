@@ -14,6 +14,80 @@ use tauri::{AppHandle, Emitter, State};
 pub const SUMMARY_SETTINGS_KEY: &str = "reasoning.summaries";
 pub const SUMMARY_EVENT: &str = "note-summary-changed";
 
+/// Keep the stored segment indexes as source ids even when blank rows are
+/// omitted, so a summary link still points to the original passage.
+fn prompt_rows(
+    segments: &[kw_notes_core::transcript::Segment],
+    mappings: &BTreeMap<String, String>,
+) -> Vec<(String, String)> {
+    segments
+        .iter()
+        .enumerate()
+        .filter(|(_, segment)| !segment.text.trim().is_empty())
+        .map(|(i, segment)| {
+            let identified = segment
+                .speaker_name
+                .as_deref()
+                .is_some_and(|name| !segment.speaker_is_placeholder && !name.trim().is_empty())
+                || segment
+                    .speaker
+                    .as_deref()
+                    .is_some_and(|id| !id.trim().is_empty())
+                || matches!(segment.source.as_deref(), Some("mic" | "system"));
+            let speaker = if identified {
+                kw_notes_core::transcript::speaker_name(
+                    segment,
+                    mappings,
+                    &kw_notes_core::transcript::SpeakerLabels::default(),
+                )
+            } else {
+                "Unidentified".to_owned()
+            };
+            (format!("s{i}"), format!("{speaker}: {}", segment.text))
+        })
+        .collect()
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing
+)]
+mod speaker_tests {
+    use super::*;
+    use kw_notes_core::transcript::Segment;
+
+    #[test]
+    fn prompt_rows_use_note_names_and_number_unmapped_diarised_speakers() {
+        let segments = vec![
+            Segment {
+                text: "named".into(),
+                speaker: Some("speaker_1".into()),
+                speaker_name: Some("Speaker 2".into()),
+                speaker_is_placeholder: true,
+                ..Default::default()
+            },
+            Segment {
+                text: "unnamed".into(),
+                speaker: Some("speaker_0".into()),
+                speaker_name: Some("Speaker 1".into()),
+                speaker_is_placeholder: true,
+                ..Default::default()
+            },
+        ];
+        let mappings = BTreeMap::from([("speaker_1".into(), "Axel".into())]);
+        assert_eq!(
+            prompt_rows(&segments, &mappings),
+            [
+                ("s0".into(), "Axel: named".into()),
+                ("s1".into(), "Speaker 1: unnamed".into()),
+            ]
+        );
+    }
+}
+
 fn route(settings: &SummarySettings) -> Result<ChatRoute, String> {
     settings.validate()?;
     kw_reasoning_core::resolve_chat(
@@ -202,20 +276,10 @@ async fn generate(
     let segments: Vec<kw_notes_core::transcript::Segment> =
         serde_json::from_str(&job.source_transcript)
             .map_err(|_| "The saved transcript format is invalid.")?;
-    let rows: Vec<(String, String)> = segments
-        .iter()
-        .enumerate()
-        .filter(|(_, s)| !s.text.trim().is_empty())
-        .map(|(i, s)| {
-            let speaker = s
-                .speaker_name
-                .as_deref()
-                .filter(|_| !s.speaker_is_placeholder)
-                .or(s.speaker.as_deref())
-                .unwrap_or("Unidentified");
-            (format!("s{i}"), format!("{speaker}: {}", s.text))
-        })
-        .collect();
+    let mappings = kw_notes_core::speakers::mappings(state.db().pool(), job.note_id)
+        .await
+        .map_err(|_| "Could not read the note's speaker names.")?;
+    let rows = prompt_rows(&segments, &mappings);
     if rows.is_empty() {
         return Err("The saved transcript has no speech to summarize.".into());
     }
@@ -344,7 +408,7 @@ async fn generate(
             created_at: note.created_at,
             participants: job.source_participants.clone(),
         },
-        &BTreeMap::new(),
+        &mappings,
         &kw_notes_core::transcript::SpeakerLabels::default(),
     );
     let mut markdown = final_summary.markdown();
