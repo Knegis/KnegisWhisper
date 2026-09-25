@@ -1183,8 +1183,23 @@ pub(crate) async fn ensure_whisper(
 mod tests {
     use super::*;
 
+    /// A runtime whose PID records live in a directory of the test process's
+    /// own, never the application's.
+    ///
+    /// `LocalTranscription::new` points at the application's data directory,
+    /// and the reaper cannot tell a live server from a stale one by design: it
+    /// reads the record, confirms the process's command line, and terminates
+    /// it. So a test that reaped through the production directory terminated
+    /// the developer's running Whisper server, measured twice on 2026-09-25
+    /// (KNEG-320). One directory per test process is enough; nothing here
+    /// depends on the records being empty at the start of a test.
     fn local() -> LocalTranscription {
-        LocalTranscription::new(kw_network_policy::NetworkPolicy::new().unwrap()).unwrap()
+        static RECORDS: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
+        let records = RECORDS.get_or_init(|| tempfile::tempdir().unwrap());
+        let mut local =
+            LocalTranscription::new(kw_network_policy::NetworkPolicy::new().unwrap()).unwrap();
+        local.pids = PidStore::new(records.path());
+        local
     }
 
     async fn db() -> kw_storage::Db {
@@ -1805,8 +1820,18 @@ mod tests {
 
     #[tokio::test]
     async fn reaping_with_no_record_does_nothing_and_does_not_fail() {
-        // The first launch on a new machine.
+        // The first launch on a new machine -- which `local()` guarantees by
+        // giving the runtime a record directory of its own.
         local().reap_stale().await;
+    }
+
+    /// Pins the property `local()` exists for; see its doc comment for what
+    /// happened without it.
+    #[test]
+    fn test_runtimes_never_see_the_applications_pid_records() {
+        let production = PidStore::new(&paths::data_dir());
+        assert_ne!(local().pids.dir(), production.dir());
+        assert!(!local().pids.dir().starts_with(paths::data_dir()));
     }
 
     #[test]

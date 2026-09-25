@@ -12,7 +12,35 @@ maintained in place rather than appended to, because its purpose is to be curren
 
 ---
 
-## 2026-09-25 (fourth, latest) — KNEG-318 and KNEG-319: a speaker gets a name, and the voice-recognition spike says "not yet, and not that way"
+## 2026-09-25 (fifth, latest) — KNEG-320: `cargo test` killed the running application's Whisper server, twice
+
+The owner saw *Local model server exited … exited with exit code 1 after 90 seconds* on the
+Dictation page after the KNEG-318 run. The dev log had two of them, at 20:31:35Z and 21:11:11Z
+(the watcher polls every five seconds), each while `cargo test` ran on the main checkout and each
+about a minute after `tauri dev` had relaunched the application and it had pre-warmed its server.
+Exit code 1 is what `TerminateProcess` leaves. The application's own line — *the sidecar exited on
+its own; nothing asked it to stop* — was accurate: the application had not asked.
+
+The test `reaping_with_no_record_does_nothing_and_does_not_fail` in `local_model.rs` called
+`reap_stale` on a runtime built by the tests' `local()` helper, and that helper used
+`LocalTranscription::new`, whose PID store is the application's own `sidecar-pids` directory. On
+a machine where the application is running, that directory names the live server. The reaper
+read the record, confirmed the command line through `sysinfo`, and did what it is for. The test's
+comment said "the first launch on a new machine", which is the one condition a developer's
+machine never satisfies. The sibling native test had already solved this for itself with a
+`tempdir` store; the fix moves that into `local()` (one directory per test process, held in a
+`OnceLock`) so no test in the module can reach the application's records, and a test pins the
+property by comparing the two directories.
+
+Two things worth keeping: **the reaper cannot tell a live server from a stale one, by design**, so
+anything that runs it against the production directory from outside the application will kill
+the application's server — a second instance, a test, a tool; and a side effect that only shows
+on a developer's machine with the application open is invisible to CI by construction, which is
+why it survived every green run since the reaper landed.
+
+---
+
+## 2026-09-25 (fourth) — KNEG-318 and KNEG-319: a speaker gets a name, and the voice-recognition spike says "not yet, and not that way"
 
 The owner asked to say who "Speaker 1" is, and then whether the application could recognise the
 same voice in later meetings from a setting. The first is built (`19e97f3` Rust, merge
