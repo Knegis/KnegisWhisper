@@ -6,7 +6,35 @@ that 787 passing tests had all missed**, and the one on 2026-08-26 found three m
 
 Maintained in place. When something here becomes false, edit it.
 
-## 2026-09-25 (third, latest) — KNEG-317: the chosen meeting provider is saved, and only the round trip has been measured
+## 2026-09-25 (fourth, latest) — KNEG-318: speakers can be named, and only the round trip has been measured
+
+Built and merged on `dev` (`19e97f3`, `bf1566c`; merges `90a682d`, `2e6946d`).
+Every gate passes on the merged tree. Nothing below has been clicked by a person.
+
+### Verified
+
+- **Over mock IPC** (`tauri-test`): rows show `Speaker 1` with `speakerId: "speaker_0"`; a rename
+  to `Axel` shows in the rows and in a `txt` export with the placeholder gone; a second note's
+  suggestions list `Axel`; an empty name restores `Speaker 1`; a missing note is refused by name.
+- **In the notes core:** rename upserts, normalises whitespace and deletes on empty; a missing note
+  and a blank speaker id write nothing; deleting a note cascades; suggestions order, dedupe,
+  exclude and cap at 20; a mapping names playback rows and every export format; a typed name
+  hides the rename.
+- **The spike's measurements** are in `SPEAKER_RECOGNITION_SPIKE.md`, taken on this machine.
+
+### Still unchecked, and needs a person at the machine
+
+1. **Open a diarised note** (for example *DemoMeeting*, 2026-09-03) on the Transcript tab: each
+   `Speaker N` label is a dotted-underlined button; pressing it opens "Name for Speaker N" above
+   the list with the input focused; the row is not selected by that press.
+2. **Type a name and Save:** every row of that speaker shows the name; Export in each format shows
+   it; the summary's Generate, run afterwards, uses it.
+3. **Remove name** restores `Speaker N`; Escape and Cancel close the form without a change.
+4. **Suggestions:** on a note with calendar participants their names come first in the datalist;
+   a name used on another note appears after them; a name already on this note does not.
+5. **A meeting with no speaker labels** shows plain "You"/"Others" spans with no rename.
+
+## 2026-09-25 (third) — KNEG-317: the chosen meeting provider is saved, and only the round trip has been measured
 
 ### Verified
 
