@@ -1272,10 +1272,13 @@ label:has(> input[type="checkbox"]) {
 
 /* ------------------------------------------------- meeting notification */
 /*
- * 392x92 by default and at minimum, transparent window, so the panel paints itself. Wider than the
- * overlay because it carries three lines and up to two buttons, and it must stay
- * legible over a video call -- which is the one thing guaranteed to be behind
- * it.
+ * 392x92 by default and at minimum. Wider than the overlay because it carries
+ * three lines and up to two buttons.
+ *
+ * The transparent window needs the panel to paint an opaque background. The
+ * owner asked on 2026-09-25 for this panel to match the application, so it uses
+ * the theme tokens and follows the OS colour scheme like the main window. Over
+ * a video call in light mode, the panel is light too.
  */
 
 .notify {
@@ -1285,14 +1288,20 @@ label:has(> input[type="checkbox"]) {
   gap: 0.7rem;
   height: 100%;
   padding: 0 0.9rem;
-  background: rgba(18, 18, 22, 0.94);
-  color: #f4f4f5;
-  font-family: var(--font-mono);
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--faint);
+  font-family: var(--font-sans);
   font-size: 13px;
-  line-height: 16px;
-  letter-spacing: 0.5px;
-  text-transform: uppercase;
+  line-height: 1.4;
+  letter-spacing: normal;
+  text-transform: none;
   user-select: none;
+}
+
+/* The neutral dot belongs to these panels; the overlay keeps its own colour. */
+.notify .indicator:not(.indicator-recording) {
+  background: var(--muted);
 }
 
 /* A visual hint only: native edge hit-testing owns the resize gesture. */
@@ -1303,19 +1312,20 @@ label:has(> input[type="checkbox"]) {
   bottom: 5px;
   width: 10px;
   height: 10px;
-  background: repeating-linear-gradient(135deg, transparent 0 3px, rgba(244, 244, 245, 0.5) 3px 4px);
+  background: repeating-linear-gradient(135deg, transparent 0 3px, var(--muted) 3px 4px);
   clip-path: polygon(100% 0, 100% 100%, 0 100%);
   pointer-events: none;
-}
-
-/* Display contents keeps the original 392x92 row layout and spacing. */
-.notify-header {
-  display: contents;
 }
 
 /* Hidden by the window, not by CSS. This only shows through a stray render. */
 .notify-empty {
   background: transparent;
+  border-color: transparent;
+}
+
+/* Display contents keeps the original 392x92 row layout and spacing. */
+.notify-header {
+  display: contents;
 }
 
 .notify-body {
@@ -1327,10 +1337,20 @@ label:has(> input[type="checkbox"]) {
   min-width: 0;
 }
 
+/* The title carries the information, so its heading voice uses full-strength ink. */
+.notify-body strong {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 16px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  font-weight: 400;
+  color: var(--text);
+}
+
 .notify-detail {
-  color: #a1a1aa;
-  /* A process name or an error, so its casing is information -- the panel's
-   * uppercase is switched back off here. */
+  color: var(--muted);
+  /* A process name or an error keeps its original casing. */
   text-transform: none;
   /* A process name or an error can be long; the panel cannot grow. */
   overflow: hidden;
@@ -1339,9 +1359,8 @@ label:has(> input[type="checkbox"]) {
 }
 
 .notify-live {
-  /* Speech is authored content, so casing is information rather than panel
-   * chrome; it is brighter than the label below because it is live content. */
-  color: #d4d4d8;
+  /* Speech is content, so it uses full-strength ink and keeps its casing. */
+  color: var(--text);
   text-transform: none;
   display: flex;
   justify-content: flex-end;
@@ -1351,6 +1370,7 @@ label:has(> input[type="checkbox"]) {
 
 .notify-live-expanded {
   display: none;
+  color: var(--text);
 }
 
 .notify-live > span {
@@ -1361,31 +1381,9 @@ label:has(> input[type="checkbox"]) {
 }
 
 .notify button {
-  flex: none;
+  margin-top: 0;
   padding: 0.35rem 0.7rem;
-  border: 0;
-  background: #3f3f46;
-  color: #f4f4f5;
-  font: inherit;
-  cursor: pointer;
-}
-
-/*
- * The same fill swap as everything else marked. Hardcoded rather than
- * `var(--band)` because this panel does not follow the theme -- it floats over
- * a video call and keeps its own dark palette -- but it is the dark theme's
- * blue, so the gesture is the one the rest of the application uses.
- */
-/*
- * `:not(:disabled)` is here for specificity as much as for behaviour. Without
- * it this selector is (0,2,1) -- exactly what the generic `button:hover` below
- * scores -- and being the earlier of the two, it lost every time. The panel
- * then took `var(--band)` and followed the theme, which is the one thing it
- * must not do.
- */
-.notify button:hover:not(:disabled) {
-  background: #3d55ff;
-  color: #fdfdfd;
+  flex: none;
 }
 
 /*
@@ -1396,9 +1394,20 @@ label:has(> input[type="checkbox"]) {
  * true and is the one indicator the brief requires. Painting this line red too
  * would say the recording had failed, when the recording is the half that is
  * working.
+ * The theme dropped `--warn` because on the white page a caveat says the same
+ * thing structurally and a real problem is `--error`. On this panel the fault
+ * line sits beside a red recording edge, so it must not be red: amber alone
+ * says "the transcript stopped, the recording did not". This panel-local pair
+ * measures 10.64:1 on the dark background and 4.84:1 on the light background.
  */
 .notify-detail.notify-alert {
   color: #fbbf24;
+}
+
+@media (prefers-color-scheme: light) {
+  .notify-detail.notify-alert {
+    color: #a16207;
+  }
 }
 
 .notify-recording {
