@@ -1956,8 +1956,7 @@ button.microphone-language-toggle:hover:not(:disabled) { background: transparent
 #notes-titlebar-controls:not(:empty) { padding: 0 0.5rem; }
 .notes-library-tools { display: flex; align-items: center; gap: 6px; }
 .notes-library-tools button { display: flex; align-items: center; justify-content: center; width: calc(18px + 0.8rem); height: calc(18px + 0.8rem); padding: 0.4rem; margin: 0; border-radius: 2px; }
-.notes-library-tools svg, .notes-tool-search-icon { display: block; width: 18px; height: 18px; flex: 0 0 18px; }
-.notes-tool-search-icon { background: currentColor; mask: url('./assets/window/input-search.svg') center / contain no-repeat; }
+.notes-library-tools svg { display: block; width: 18px; height: 18px; flex: 0 0 18px; }
 .notes-library-tools button[aria-expanded="true"], .notes-library-tools button[data-active="true"] { background: var(--band); color: var(--band-ink); }
 .notes-tool-panel { display: flex; flex-direction: column; gap: 0.5rem; margin-top: 0.75rem; }
 /* A folder heading is a row, not a boxed button: a disclosure, the name, the count. Mono
