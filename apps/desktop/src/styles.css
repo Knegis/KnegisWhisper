@@ -1869,8 +1869,8 @@ button.microphone-language-toggle:hover:not(:disabled) { background: transparent
 .app-titlebar-buttons button:focus-visible { outline: 2px solid var(--band); outline-offset: -3px; }
 .window-icon { display: block; width: 20px; height: 20px; background: currentColor; mask-position: center; mask-size: contain; mask-repeat: no-repeat; pointer-events: none; }
 .window-icon-minimize { mask-image: url('./assets/window/minus.svg'); }
-.window-icon-maximize { mask-image: url('./assets/window/de-compress.svg'); }
-.window-icon-restore { mask-image: url('./assets/window/compress.svg'); }
+.window-icon-maximize { mask-image: url('./assets/window/enlarge.svg'); }
+.window-icon-restore { mask-image: url('./assets/window/reduce.svg'); }
 .window-icon-close { mask-image: url('./assets/window/xmark.svg'); }
 .window-control-error { position: fixed; top: var(--titlebar-height); right: 0; z-index: 1001; max-width: 32rem; padding: 12px; background: var(--bg); color: var(--text); border: 1px solid var(--faint); }
 
