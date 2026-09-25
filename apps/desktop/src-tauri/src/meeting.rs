@@ -4,7 +4,8 @@
 //! lives in Rust because the window can be closed to the tray mid-meeting, and
 //! the outcome is emitted rather than returned because there is nobody to return
 //! it to. What differs is that a meeting does not end: it produces transcript
-//! while it runs, and a recording longer than memory.
+//! while it runs, and a recording longer than memory. The draft of manually
+//! typed notes is held in Rust and becomes the produced note's body.
 //!
 //! # Where the pieces live
 //!
@@ -96,6 +97,7 @@
 //! instead, with the reason, so the limit is visible rather than felt as a bug.
 
 mod config;
+pub mod draft;
 mod notes;
 mod recorder;
 mod watcher;
@@ -323,6 +325,8 @@ pub struct MeetingStatus {
     /// user can be told about, and no indicator at all is the thing the brief
     /// forbids.
     pub notification_excluded: Option<CaptureExclusion>,
+    /// Read back from the native window where supported.
+    pub notification_activatable: Option<bool>,
 }
 
 /// An offer to record a meeting that appears to be happening.
@@ -401,7 +405,9 @@ pub enum MeetingOutcome {
         /// visible instead of discarding it on the empty-transcript branch.
         reconnects: u32,
     },
-    Cancelled,
+    Cancelled {
+        note_id: Option<i64>,
+    },
     Failed {
         message: String,
     },
@@ -450,6 +456,7 @@ pub struct MeetingRuntime {
     live: Arc<Mutex<Option<Live>>>,
     /// Detection state: what was last seen, and what has been offered.
     watch: Mutex<WatchState>,
+    notes: Arc<draft::NotesDraft>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -600,6 +607,7 @@ impl std::fmt::Debug for MeetingRuntime {
 
 impl MeetingRuntime {
     #[must_use]
+    #[allow(clippy::too_many_arguments)] // The runtime's injected resources each have separate ownership.
     pub fn new(
         app: AppHandle,
         db: Db,
@@ -608,6 +616,7 @@ impl MeetingRuntime {
         local: crate::local_model::SharedLocal,
         sherpa: crate::local_asr::Selection,
         stream: Arc<crate::sherpa_stream::SherpaStream>,
+        notes: Arc<draft::NotesDraft>,
     ) -> Self {
         Self {
             app,
@@ -620,6 +629,7 @@ impl MeetingRuntime {
             sherpa,
             stream,
             watch: Mutex::new(WatchState::default()),
+            notes,
         }
     }
 
@@ -671,14 +681,14 @@ impl MeetingRuntime {
                 if let Err(err) = self.app.emit(OFFER_EVENT, &offer) {
                     tracing::warn!(error = %err, "could not deliver the recording offer");
                 }
-                crate::meeting_window::set_visible(&self.app, true);
+                crate::meeting_window::show(&self.app, crate::meeting_window::Mode::Compact);
             }
             Transition::Withdraw(provider) => {
                 tracing::info!(%provider, "the meeting behind the recording offer ended");
                 if let Err(err) = self.app.emit(OFFER_EVENT, Option::<Offer>::None) {
                     tracing::warn!(error = %err, "could not withdraw the recording offer");
                 }
-                crate::meeting_window::set_visible(&self.app, false);
+                crate::meeting_window::hide(&self.app);
             }
             Transition::None => {}
         }
@@ -701,7 +711,7 @@ impl MeetingRuntime {
     /// the next call in a client that remains open.
     pub async fn dismiss(&self) {
         self.watch.lock().await.watcher.dismiss();
-        crate::meeting_window::set_visible(&self.app, false);
+        crate::meeting_window::hide(&self.app);
         if let Err(err) = self.app.emit(OFFER_EVENT, Option::<Offer>::None) {
             tracing::warn!(error = %err, "could not clear the recording offer");
         }
@@ -875,7 +885,8 @@ impl MeetingRuntime {
                     "meeting started"
                 );
                 self.emit_state(MeetingState::Recording);
-                crate::meeting_window::set_visible(&self.app, true);
+                crate::meeting_window::show(&self.app, crate::meeting_window::Mode::Panel);
+                crate::meeting_window::set_activatable(&self.app, true);
                 Ok(sources)
             }
             Err(err) => {
@@ -971,6 +982,8 @@ impl MeetingRuntime {
                 }
             };
 
+        self.notes.begin(&path);
+
         // The pump announces its own ending, which is the whole of KNEG-95's
         // fix: until now the failure was detected at second zero and reported
         // whenever the user happened to press Stop. What it must not announce
@@ -1046,6 +1059,8 @@ impl MeetingRuntime {
             let _ = self.lifecycle.lock().await.finished(generation);
             return Err("no meeting is being recorded".to_owned());
         };
+        let notes = self.notes.take();
+        self.notes.flush().await;
         let Live {
             provider_id,
             commands,
@@ -1057,13 +1072,24 @@ impl MeetingRuntime {
 
         self.emit_state(MeetingState::Finishing);
 
+        crate::meeting_window::remember_panel_placement(&self.app).await;
+        crate::meeting_window::show(&self.app, crate::meeting_window::Mode::Compact);
+
         let outcome = self
-            .finish_recording(&provider_id, &commands, pump, &recording_path, stream_lease)
+            .finish_recording(
+                &provider_id,
+                &commands,
+                pump,
+                &recording_path,
+                stream_lease,
+                notes,
+            )
             .await;
 
         if self.lifecycle.lock().await.finished(generation) {
             self.emit_state(MeetingState::Idle);
-            crate::meeting_window::set_visible(&self.app, false);
+            crate::meeting_window::hide(&self.app);
+            crate::meeting_window::set_activatable(&self.app, false);
             // Recording one Zoom call must not stop the next being offered,
             // even if Zoom never quit in between.
             self.watch.lock().await.watcher.forget(&provider_id);
@@ -1087,6 +1113,7 @@ impl MeetingRuntime {
         pump: tokio::task::JoinHandle<Result<MeetingTranscript, MeetingError>>,
         recording_path: &std::path::Path,
         stream_lease: Option<crate::sherpa_stream::StreamLease>,
+        notes: String,
     ) -> MeetingOutcome {
         let path = recording_path.display().to_string();
         let closed = close_recorder(commands);
@@ -1109,14 +1136,40 @@ impl MeetingRuntime {
             Ok(finished) => finished,
             Err(reason) => {
                 tracing::error!(provider = provider_id, %reason, "the recording could not be closed");
-                return MeetingOutcome::Failed {
-                    message: failed_message(&path, &reason),
-                };
+                let mut message = failed_message(&path, &reason);
+                if !notes.trim().is_empty() {
+                    let note = compose_note(
+                        meeting_title(), &notes, &[],
+                        "The recording could not be closed; this note holds only what was typed during the meeting.",
+                        0.0,
+                    );
+                    if let Some(note) = note {
+                        match kw_notes_core::notes::create(self.db.pool(), &note).await {
+                            Ok(_) => {
+                                draft::remove_sidecar(recording_path);
+                                message.push_str(" Your notes were saved as a note.");
+                            }
+                            Err(error) => {
+                                tracing::error!(%error, "could not save typed meeting notes after recording failure");
+                                message.push_str(&format!(
+                                    " Your typed notes are beside the recording at {}.",
+                                    draft::sidecar_path(recording_path).display()
+                                ));
+                            }
+                        }
+                    }
+                } else {
+                    draft::remove_sidecar(recording_path);
+                }
+                return MeetingOutcome::Failed { message };
             }
         };
 
         match live_transcript {
-            Ok(transcript) => self.keep(provider_id, finished, transcript, None).await,
+            Ok(transcript) => {
+                self.keep(provider_id, finished, transcript, None, &notes)
+                    .await
+            }
             Err(reason) => {
                 // Still `keep`, rather than returning here. The whole-file local
                 // pass has not run yet and it is what produces the saved note --
@@ -1130,6 +1183,7 @@ impl MeetingRuntime {
                     finished,
                     MeetingTranscript::default(),
                     Some(&reason),
+                    &notes,
                 )
                 .await
             }
@@ -1146,6 +1200,9 @@ impl MeetingRuntime {
             let _ = self.lifecycle.lock().await.finished(generation);
             return Err("no meeting is being recorded".to_owned());
         };
+        let notes = self.notes.take();
+        self.notes.flush().await;
+        let recording_path = live.recording_path.clone();
 
         let _ = live.commands.send(RecorderCommand::Cancel);
         let _ = live.cancel_pump.send(());
@@ -1155,10 +1212,45 @@ impl MeetingRuntime {
         self.release_stream(live.stream_lease).await;
         if self.lifecycle.lock().await.finished(generation) {
             self.emit_state(MeetingState::Idle);
-            crate::meeting_window::set_visible(&self.app, false);
+            crate::meeting_window::hide(&self.app);
+            crate::meeting_window::set_activatable(&self.app, false);
             self.watch.lock().await.watcher.forget(&live.provider_id);
 
-            if let Err(err) = self.app.emit(OUTCOME_EVENT, MeetingOutcome::Cancelled) {
+            let note_id = if notes.trim().is_empty() {
+                draft::remove_sidecar(&recording_path);
+                None
+            } else {
+                let note = kw_notes_core::notes::NewNote {
+                    title: format!(
+                        "Meeting notes — {}",
+                        chrono::Local::now().format("%Y-%m-%d %H:%M")
+                    ),
+                    content: notes.trim_end().to_owned(),
+                    recording_details: Some(
+                        "The recording was discarded before it was transcribed.".into(),
+                    ),
+                    note_type: Some("meeting".into()),
+                    folder_id: None,
+                    transcript: None,
+                    participants: None,
+                    audio_duration_seconds: None,
+                };
+                match kw_notes_core::notes::create(self.db.pool(), &note).await {
+                    Ok(id) => {
+                        draft::remove_sidecar(&recording_path);
+                        Some(id)
+                    }
+                    Err(error) => {
+                        tracing::error!(%error, "could not save typed notes from cancelled meeting");
+                        None
+                    }
+                }
+            };
+
+            if let Err(err) = self
+                .app
+                .emit(OUTCOME_EVENT, MeetingOutcome::Cancelled { note_id })
+            {
                 tracing::warn!(error = %err, "could not report the cancellation");
             }
         }
@@ -1191,10 +1283,30 @@ impl MeetingRuntime {
 
         // Asked of the window rather than remembered, so the screen reports what
         // the platform actually did rather than what was attempted at startup.
-        let notification_excluded = self
-            .app
-            .get_webview_window(crate::meeting_window::LABEL)
-            .map(|window| crate::meeting_window::apply_treatments(&window).capture_exclusion);
+        let window = self.app.get_webview_window(crate::meeting_window::LABEL);
+        let notification_excluded = window
+            .as_ref()
+            .map(crate::meeting_window::capture_exclusion);
+        let notification_activatable = window
+            .as_ref()
+            .and_then(crate::overlay::native_handle)
+            .and_then(|handle| {
+                kw_platform::window::is_non_activating(handle)
+                    .ok()
+                    .map(|n| !n)
+            });
+        // Starting is excluded: activation is granted after the window is shown
+        // at the end of start.
+        let running = matches!(phase, SessionPhase::Recording | SessionPhase::Finishing);
+        if let Some(actual) = notification_activatable {
+            if actual != running {
+                tracing::warn!(
+                    actual,
+                    running,
+                    "meeting notification activation differs from meeting state"
+                );
+            }
+        }
 
         if phase == SessionPhase::Finishing {
             MeetingStatus {
@@ -1209,6 +1321,7 @@ impl MeetingRuntime {
                 offer,
                 prompt_on_detect,
                 notification_excluded,
+                notification_activatable,
             }
         } else {
             match held.as_ref() {
@@ -1228,6 +1341,7 @@ impl MeetingRuntime {
                     offer,
                     prompt_on_detect,
                     notification_excluded,
+                    notification_activatable,
                 },
                 None => MeetingStatus {
                     state: MeetingState::Idle,
@@ -1241,6 +1355,7 @@ impl MeetingRuntime {
                     offer,
                     prompt_on_detect,
                     notification_excluded,
+                    notification_activatable,
                 },
             }
         }
@@ -1260,6 +1375,7 @@ impl MeetingRuntime {
         finished: Finished,
         transcript: MeetingTranscript,
         live_failure: Option<&str>,
+        notes: &str,
     ) -> MeetingOutcome {
         let path = finished.path.display().to_string();
 
@@ -1297,13 +1413,14 @@ impl MeetingRuntime {
             }
         };
 
-        if segments.is_empty() {
+        if segments.is_empty() && notes.trim().is_empty() {
             // The distinction this whole change exists for. An empty result used
             // to become `NothingTranscribed` whatever caused it, and that is
             // what a quiet room produces -- so a provider that rejected the
             // session and a room with nobody talking arrived on screen as the
             // same sentence. A provider that said something was wrong now says
             // it here instead.
+            draft::remove_sidecar(&finished.path);
             return match live_failure {
                 Some(reason) => MeetingOutcome::Failed {
                     message: failed_message(&path, reason),
@@ -1318,14 +1435,14 @@ impl MeetingRuntime {
         }
 
         let mut recording_details = String::new();
-        if from_partials {
+        if from_partials && !segments.is_empty() {
             recording_details.push_str(
                 "\n\n(The whole-recording pass did not complete, so this is the running \
                  transcript from during the meeting rather than a single pass over the \
                  finished audio.)",
             );
         }
-        if let Some(reason) = live_failure {
+        if let Some(reason) = live_failure.filter(|_| !segments.is_empty()) {
             // Said in the note rather than only in a log, for the same reason
             // `from_partials` is: a transcript that came about differently from
             // how the reader expects should say so. This one is the good case --
@@ -1362,22 +1479,25 @@ impl MeetingRuntime {
             finished.system_delivered,
         );
 
-        let note = kw_notes_core::notes::NewNote {
-            title: format!(
-                "Meeting — {}",
-                chrono::Local::now().format("%Y-%m-%d %H:%M")
-            ),
-            content: String::new(),
-            recording_details: Some(recording_details.trim().to_owned()),
-            note_type: Some("meeting".to_owned()),
-            folder_id: None,
-            transcript: serde_json::to_string(&segments).ok(),
-            participants: None,
-            audio_duration_seconds: Some(finished.duration_seconds),
+        if segments.is_empty() {
+            recording_details.push_str("\n\nNothing was transcribed from the recording; this note holds only what was typed during the meeting.");
+        }
+
+        let Some(note) = compose_note(
+            meeting_title(),
+            notes,
+            &segments,
+            recording_details.trim(),
+            finished.duration_seconds,
+        ) else {
+            return MeetingOutcome::Failed {
+                message: "The meeting note had no content".into(),
+            };
         };
 
         match kw_notes_core::notes::create(self.db.pool(), &note).await {
             Ok(note_id) => {
+                draft::remove_sidecar(&finished.path);
                 let recording_attached = attach_meeting_recording(
                     &self.db,
                     note_id,
@@ -1393,14 +1513,22 @@ impl MeetingRuntime {
                     recording_attached,
                     gaps: transcript.gaps,
                     reconnects: transcript.reconnects,
-                    transcript_is_partials: from_partials,
+                    transcript_is_partials: from_partials && !segments.is_empty(),
                 }
             }
             Err(err) => {
                 tracing::error!(error = %err, provider = provider_id, "could not save the meeting note");
                 MeetingOutcome::Failed {
                     message: format!(
-                        "The recording is at {path} but the note could not be saved: {err}"
+                        "The recording is at {path} but the note could not be saved: {err}{}",
+                        if notes.trim().is_empty() {
+                            String::new()
+                        } else {
+                            format!(
+                                " Your typed notes are beside the recording at {}.",
+                                draft::sidecar_path(&finished.path).display()
+                            )
+                        }
                     ),
                 }
             }
@@ -1505,6 +1633,37 @@ impl MeetingRuntime {
             }
         }
     }
+}
+
+fn meeting_title() -> String {
+    format!(
+        "Meeting — {}",
+        chrono::Local::now().format("%Y-%m-%d %H:%M")
+    )
+}
+
+fn compose_note(
+    title: String,
+    notes: &str,
+    segments: &[kw_notes_core::transcript::Segment],
+    recording_details: &str,
+    duration_seconds: f64,
+) -> Option<kw_notes_core::notes::NewNote> {
+    if notes.trim().is_empty() && segments.is_empty() {
+        return None;
+    }
+    Some(kw_notes_core::notes::NewNote {
+        title,
+        content: notes.trim_end().to_owned(),
+        recording_details: Some(recording_details.to_owned()),
+        note_type: Some("meeting".into()),
+        folder_id: None,
+        transcript: (!segments.is_empty())
+            .then(|| serde_json::to_string(segments).ok())
+            .flatten(),
+        participants: None,
+        audio_duration_seconds: Some(duration_seconds),
+    })
 }
 
 /// Preserve what each capture delivered in the note that outlives the session.
@@ -2111,6 +2270,18 @@ mod tests {
         assert_eq!(json["gaps"], 2);
         assert_eq!(json["reconnects"], 1);
         assert_eq!(json["transcriptIsPartials"], true);
+        let cancelled =
+            serde_json::to_value(MeetingOutcome::Cancelled { note_id: Some(9) }).unwrap();
+        assert_eq!(
+            cancelled,
+            serde_json::json!({"outcome": "cancelled", "noteId": 9})
+        );
+        let cancelled_without_note =
+            serde_json::to_value(MeetingOutcome::Cancelled { note_id: None }).unwrap();
+        assert_eq!(
+            cancelled_without_note,
+            serde_json::json!({"outcome": "cancelled", "noteId": null})
+        );
 
         let quiet = MeetingOutcome::NothingTranscribed {
             recording_path: "C:/quiet.wav".to_owned(),
@@ -2121,6 +2292,26 @@ mod tests {
         let json = serde_json::to_value(&quiet).unwrap();
         assert_eq!(json["outcome"], "nothing-transcribed");
         assert_eq!(json["reconnects"], 2);
+    }
+
+    #[test]
+    fn typed_notes_become_the_body_even_without_a_transcript() {
+        let note = compose_note("Meeting".into(), "typed\n", &[], "No transcript", 1.0).unwrap();
+        assert_eq!(note.content, "typed");
+        assert!(note.transcript.is_none());
+    }
+
+    #[test]
+    fn an_empty_meeting_produces_no_note() {
+        assert!(compose_note("Meeting".into(), "  ", &[], "", 0.0).is_none());
+    }
+
+    #[test]
+    fn a_transcript_only_meeting_keeps_an_empty_body_and_a_transcript() {
+        let segments = [segment("hello", 0.0, None)];
+        let note = compose_note("Meeting".into(), "", &segments, "", 1.0).unwrap();
+        assert_eq!(note.content, "");
+        assert!(note.transcript.is_some());
     }
 
     #[tokio::test]

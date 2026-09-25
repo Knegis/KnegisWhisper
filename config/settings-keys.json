@@ -204,7 +204,7 @@
       "reachable": true
     },
     "meeting.notificationPlacement": {
-      "what": "Saved logical size and monitor-relative position of the meeting notification window.",
+      "what": "Saved logical size and monitor-relative position of the meeting notification window's recording panel mode only.",
       "writtenBy": [
         "meeting_notification_placement_save",
         "meeting_notification_placement_reset"

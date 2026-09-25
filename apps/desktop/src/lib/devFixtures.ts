@@ -634,6 +634,7 @@ let meetingStatus: MeetingStatus = {
     state: "unsupported",
     reason: "this platform cannot exclude a window from screen capture",
   },
+  notificationActivatable: null,
 };
 
 let meetingLanguage = "en";
