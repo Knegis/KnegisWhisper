@@ -1,6 +1,6 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { attachNoteRecording, getNoteRecording, getNoteTranscriptRows, updateNote, type Note, type NoteUpdate } from "../lib/ipc";
+import { attachNoteRecording, getNoteRecording, getNoteSpeakerSuggestions, getNoteTranscriptRows, renameNoteSpeaker, updateNote, type Note, type NoteUpdate } from "../lib/ipc";
 import { useAutosave } from "../lib/useAutosave";
 import { transcriptToMarkdown } from "../lib/noteBody";
 import { message } from "../lib/useRefresh";
@@ -32,6 +32,7 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, { note: Note; reloa
   const [transcript, setTranscript] = useState<{
     rows: Awaited<ReturnType<typeof getNoteTranscriptRows>>;
     recording: Awaited<ReturnType<typeof getNoteRecording>>;
+    suggestions: string[];
   } | null>(null);
   const [transcriptError, setTranscriptError] = useState<string | null>(null);
   const [attaching, setAttaching] = useState(false);
@@ -73,12 +74,16 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, { note: Note; reloa
     });
     return () => { void registered.then(stop => stop()); };
   }, [flush]);
-  const loadTranscript = useCallback(async () => {
+  const loadTranscript = useCallback(async (rethrow = false) => {
     setTranscriptError(null);
     try {
-      const [rows, recording] = await Promise.all([getNoteTranscriptRows(note.id), getNoteRecording(note.id)]);
-      if (alive.current) setTranscript({ rows, recording });
-    } catch (cause) { if (alive.current) setTranscriptError(message(cause)); }
+      const [rows, recording, suggestions] = await Promise.all([getNoteTranscriptRows(note.id), getNoteRecording(note.id), getNoteSpeakerSuggestions(note.id)]);
+      if (alive.current) setTranscript({ rows, recording, suggestions });
+    } catch (cause) {
+      // A rename failure belongs in its open form; the initial load uses the tab error.
+      if (rethrow) throw cause;
+      if (alive.current) setTranscriptError(message(cause));
+    }
   }, [note.id]);
   useEffect(() => { void loadTranscript(); }, [loadTranscript]);
   const attachRecording = async () => {
@@ -165,7 +170,12 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, { note: Note; reloa
             {attachmentError && <p className="error" role="alert">{attachmentError}</p>}
           </div>}
           {transcript.rows.length ? <TranscriptPanel sourceRequest={value === "transcript" ? sourceRequest : null} rows={transcript.rows}
-            recording={transcript.recording} currentTime={currentTime} playing={playing} visible={tab === value} playInterval={playInterval} />
+            recording={transcript.recording} currentTime={currentTime} playing={playing} visible={tab === value} playInterval={playInterval}
+            suggestions={transcript.suggestions} onRename={async (speakerId, name) => {
+              await renameNoteSpeaker(note.id, speakerId, name);
+              // Rust resolves display names for both rows and export; reload those rows after each edit.
+              await loadTranscript(true);
+            }} />
             : <p className="muted">This note has no transcript.</p>}
         </>}
       </section>)}

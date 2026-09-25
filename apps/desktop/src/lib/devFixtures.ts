@@ -1181,6 +1181,7 @@ const noteTranscriptRows = new Map<number, TranscriptRow[]>([
     ],
   ],
 ]);
+const speakerNames = new Map<number, Map<string, string>>();
 
 let nextNoteId = 105;
 let nextFolderId = 4;
@@ -1419,6 +1420,39 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
   note_transcript_rows: (a) => {
     const id = arg<number>(a, "id");
     return typeof id === "number" ? noteTranscriptRows.get(id) ?? [] : [];
+  },
+  note_speaker_rename: (a) => {
+    const id = arg<number>(a, "id");
+    const speakerId = arg<string>(a, "speakerId");
+    const rawName = arg<string>(a, "name");
+    if (typeof id !== "number" || !notes.some(note => note.id === id)) throw new Error("there is no note with that id");
+    if (typeof speakerId !== "string" || !speakerId.trim()) throw new Error("a speaker id cannot be blank");
+    const name = (rawName ?? "").trim().replace(/\s+/g, " ");
+    const names = speakerNames.get(id) ?? new Map<string, string>();
+    if (name) names.set(speakerId, name);
+    else names.delete(speakerId);
+    speakerNames.set(id, names);
+    const speakerNumber = /^speaker_(\d+)$/.exec(speakerId)?.[1];
+    const display = name || (speakerNumber === undefined ? speakerId : `Speaker ${Number(speakerNumber) + 1}`);
+    noteTranscriptRows.set(id, (noteTranscriptRows.get(id) ?? []).map(row =>
+      row.speakerId === speakerId ? { ...row, speaker: display } : row,
+    ));
+  },
+  note_speaker_suggestions: (a) => {
+    const id = arg<number>(a, "id");
+    if (typeof id !== "number") return [];
+    const used = new Set((noteTranscriptRows.get(id) ?? []).map(row => row.speaker?.toLocaleLowerCase()).filter(name => name !== undefined));
+    const candidates = [
+      ...(id === 101 ? ["Anna Lind", "Erik Berg"] : []),
+      ...[...speakerNames].filter(([noteId]) => noteId !== id).flatMap(([, names]) => [...names.values()]),
+    ];
+    const seen = new Set<string>();
+    return candidates.filter(name => {
+      const key = name.toLocaleLowerCase();
+      if (used.has(key) || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    }).slice(0, 20);
   },
   folders_list: () => folders,
   folder_create: (a) => {

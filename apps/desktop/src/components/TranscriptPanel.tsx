@@ -1,6 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type FormEvent } from "react";
 
 import type { NoteRecording, TranscriptRow } from "../lib/ipc";
+import { normaliseSpeakerName, renameHeading, suggestionsFor } from "../lib/speakerNames";
+import { message } from "../lib/useRefresh";
 import { formatClock } from "./RecordingPlayer";
 
 type TranscriptPanelProps = {
@@ -11,12 +13,65 @@ type TranscriptPanelProps = {
   playing: boolean;
   visible: boolean;
   playInterval: (start: number, end: number | null) => void;
+  suggestions: readonly string[];
+  onRename: (speakerId: string, name: string) => Promise<void>;
 };
 
-export function TranscriptPanel({ sourceRequest, rows, recording, currentTime, playing, visible, playInterval }: TranscriptPanelProps) {
+type RenameTarget = { speakerId: string; current: string };
+
+function RenameForm({ target, suggestions, onRename, onClose }: {
+  target: RenameTarget;
+  suggestions: readonly string[];
+  onRename: TranscriptPanelProps["onRename"];
+  onClose: (speakerId: string) => void;
+}) {
+  const [value, setValue] = useState(target.current);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const datalistId = useId();
+  const heading = renameHeading(target.current);
+
+  const submitName = async (name: string) => {
+    if (saving) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await onRename(target.speakerId, name);
+      onClose(target.speakerId);
+    } catch (cause) {
+      setError(message(cause));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const onSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    void submitName(normaliseSpeakerName(value));
+  };
+
+  return <form className="transcript-rename" aria-label={heading} onSubmit={onSubmit}>
+    <label htmlFor={`${datalistId}-name`}>{heading}</label>
+    <input id={`${datalistId}-name`} type="text" list={datalistId} autoFocus maxLength={100}
+      value={value} onChange={event => setValue(event.target.value)} onKeyDown={event => {
+        if (event.key === "Escape") { event.preventDefault(); onClose(target.speakerId); }
+      }} />
+    <datalist id={datalistId}>
+      {suggestionsFor(target.current, suggestions).map(name => <option key={name} value={name} />)}
+    </datalist>
+    <button type="submit" disabled={saving || normaliseSpeakerName(value) === normaliseSpeakerName(target.current)}>Save</button>
+    <button type="button" disabled={saving} onClick={() => { void submitName(""); }}>Remove name</button>
+    <button type="button" disabled={saving} onClick={() => onClose(target.speakerId)}>Cancel</button>
+    {error && <p className="error" role="alert">{error}</p>}
+  </form>;
+}
+
+export function TranscriptPanel({ sourceRequest, rows, recording, currentTime, playing, visible, playInterval, suggestions, onRename }: TranscriptPanelProps) {
   const rowRefs = useRef(new Map<number, HTMLLIElement>());
   const [selected, setSelected] = useState<Set<number>>(() => new Set());
   const [anchor, setAnchor] = useState<number | null>(null);
+  const [renaming, setRenaming] = useState<RenameTarget | null>(null);
+  const closeRename = (speakerId: string) => setRenaming(previous => previous?.speakerId === speakerId ? null : previous);
 
   useEffect(() => {
     if (!sourceRequest || !visible) return;
@@ -86,6 +141,10 @@ export function TranscriptPanel({ sourceRequest, rows, recording, currentTime, p
           Play selection ({formatClock(selectionStart)}–{formatClock(shownEnd)})
         </button>
       ) : null}
+      {renaming && (
+        // Changing the target must re-seed the field and clear any error from the previous speaker.
+        <RenameForm key={renaming.speakerId} target={renaming} suggestions={suggestions} onRename={onRename} onClose={closeRename} />
+      )}
       <ol
         className="transcript-rows"
         role="listbox"
@@ -95,6 +154,7 @@ export function TranscriptPanel({ sourceRequest, rows, recording, currentTime, p
           const playable = row.startSeconds !== null;
           const isSelected = selected.has(row.index);
           const isActive = activeRow?.index === row.index;
+          const speakerId = row.speakerId;
           return (
             <li
               key={row.index}
@@ -133,7 +193,18 @@ export function TranscriptPanel({ sourceRequest, rows, recording, currentTime, p
               <span className="transcript-clock">
                 {row.startSeconds !== null ? formatClock(row.startSeconds) : "—"}
               </span>
-              {row.speaker ? <span className="transcript-speaker">{row.speaker}</span> : null}
+              {speakerId !== null ? (
+                <button type="button" className="transcript-speaker" aria-label={`Rename ${row.speaker ?? speakerId}`}
+                  onClick={event => {
+                    // The label sits inside a selectable option; its click must not toggle the row.
+                    event.stopPropagation();
+                    setRenaming({ speakerId, current: row.speaker ?? speakerId });
+                  }}
+                  onKeyDown={event => {
+                    // The option selects on Enter and Space, so keep those keys on this control.
+                    if (event.key === "Enter" || event.key === " ") event.stopPropagation();
+                  }}>{row.speaker ?? speakerId}</button>
+              ) : row.speaker ? <span className="transcript-speaker">{row.speaker}</span> : null}
               <span>{row.text}</span>
             </li>
           );

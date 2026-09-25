@@ -771,6 +771,16 @@ export async function getNoteTranscriptRows(
   return invoke<TranscriptRow[]>("note_transcript_rows", { id });
 }
 
+/** Name one diarised speaker of a note. An empty name removes the name; the rows go back to "Speaker N". */
+export async function renameNoteSpeaker(id: number, speakerId: string, name: string): Promise<void> {
+  return invoke("note_speaker_rename", { id, speakerId, name });
+}
+
+/** Names worth offering while typing: this note's calendar participants, then names used on other notes. */
+export async function getNoteSpeakerSuggestions(id: number): Promise<string[]> {
+  return invoke<string[]>("note_speaker_suggestions", { id });
+}
+
 /**
  * The URL an `<audio>` element plays a note's recording from.
  *
