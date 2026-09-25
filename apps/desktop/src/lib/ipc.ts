@@ -340,6 +340,8 @@ export async function getMeetingProviders(): Promise<MeetingProviderSummary[]> {
 export async function getMeetingStatus(): Promise<MeetingStatus> {
   return invoke<MeetingStatus>("meeting_status");
 }
+export async function saveMeetingNotificationPlacement(): Promise<void> { return invoke("meeting_notification_placement_save"); }
+export async function resetMeetingNotificationPlacement(): Promise<void> { return invoke("meeting_notification_placement_reset"); }
 
 /**
  * Start recording a meeting.
@@ -357,6 +359,8 @@ export async function startMeeting(
 export async function stopMeeting(): Promise<MeetingOutcome> {
   return invoke<MeetingOutcome>("meeting_stop");
 }
+export async function updateMeetingNotes(markdown: string): Promise<void> { return invoke("meeting_notes_update", { markdown }); }
+export async function getMeetingNotes(): Promise<string> { return invoke<string>("meeting_notes_get"); }
 
 export async function cancelMeeting(): Promise<void> {
   return invoke("meeting_cancel");
@@ -448,6 +452,20 @@ export async function getMeetingLanguage(): Promise<string> {
 
 export async function setMeetingLanguage(language: string): Promise<void> {
   return invoke("meeting_set_language", { language });
+}
+
+/**
+ * The provider chosen on the Meetings screen, or `null` before anybody has
+ * chosen one. Remembered across restarts; the offer's Record button uses it
+ * too, so the two ways into a meeting agree.
+ */
+export async function getMeetingProvider(): Promise<string | null> {
+  return invoke<string | null>("meeting_provider");
+}
+
+/** Rejects an id this build has no client for; the setting never holds one. */
+export async function setMeetingProvider(provider: string): Promise<void> {
+  return invoke("meeting_set_provider", { provider });
 }
 
 /** Terms to bias recognition towards. How many survive depends on the provider. */
@@ -702,6 +720,15 @@ export async function updateNote(
   return invoke<boolean>("notes_update", { id, request });
 }
 
+/**
+ * Move a note into a folder, or out of every folder with `null`. Returns
+ * whether the note existed. `updateNote` cannot unfile: its `folderId` is
+ * absent or set.
+ */
+export async function setNoteFolder(id: number, folderId: number | null): Promise<boolean> {
+  return invoke<boolean>("notes_set_folder", { id, folderId });
+}
+
 export async function deleteNote(id: number): Promise<boolean> {
   return invoke<boolean>("notes_delete", { id });
 }
@@ -751,6 +778,16 @@ export async function getNoteTranscriptRows(
   id: number,
 ): Promise<TranscriptRow[]> {
   return invoke<TranscriptRow[]>("note_transcript_rows", { id });
+}
+
+/** Name one diarised speaker of a note. An empty name removes the name; the rows go back to "Speaker N". */
+export async function renameNoteSpeaker(id: number, speakerId: string, name: string): Promise<void> {
+  return invoke("note_speaker_rename", { id, speakerId, name });
+}
+
+/** Names worth offering while typing: this note's calendar participants, then names used on other notes. */
+export async function getNoteSpeakerSuggestions(id: number): Promise<string[]> {
+  return invoke<string[]>("note_speaker_suggestions", { id });
 }
 
 /**

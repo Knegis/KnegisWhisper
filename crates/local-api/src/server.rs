@@ -333,8 +333,11 @@ async fn export_note(
             "editable notes export as markdown; use transcript=true for other formats",
         ));
     }
-    let note = get_note(State(state), Path(id)).await?.0.data;
-    let document = kw_notes_core::document::render(&note, format, params.transcript)
+    let note = get_note(State(state.clone()), Path(id)).await?.0.data;
+    let mappings = kw_notes_core::speakers::mappings(&state.pool, note.id)
+        .await
+        .map_err(|_| ApiError::internal())?;
+    let document = kw_notes_core::document::render(&note, format, params.transcript, &mappings)
         .map_err(|_| ApiError::validation("the stored transcript cannot be exported"))?;
     if params.transcript && document.segment_count == 0 {
         return Err(ApiError::validation(

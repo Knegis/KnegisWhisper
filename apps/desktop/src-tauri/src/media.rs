@@ -1391,7 +1391,7 @@ async fn save_import_job(
     };
     let note = kw_notes_core::notes::NewNote {
         title,
-        content: transcript.text.clone(),
+        content: String::new(),
         note_type: Some("import".to_owned()),
         transcript: Some(serde_json::to_string(&saved_segments).map_err(|e| {
             MediaImportError::Persistence {
@@ -2296,6 +2296,7 @@ mod retained_import_tests {
                 .unwrap()
                 .unwrap();
             assert_eq!(note.note_type, "import");
+            assert!(note.content.is_empty(), "personal notes start empty");
             let segments: serde_json::Value =
                 serde_json::from_str(note.transcript.as_deref().unwrap()).unwrap();
             assert_eq!(segments.as_array().unwrap().len(), 1);

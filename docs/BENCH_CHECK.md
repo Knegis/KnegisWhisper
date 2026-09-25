@@ -6,7 +6,138 @@ that 787 passing tests had all missed**, and the one on 2026-08-26 found three m
 
 Maintained in place. When something here becomes false, edit it.
 
-## 2026-09-07 (latest) — KNEG-171: one word in an allow-list, and the panel seen for the first time
+## 2026-09-25 (fourth, latest) — KNEG-318: speakers can be named, and only the round trip has been measured
+
+Built and merged on `dev` (`19e97f3`, `bf1566c`; merges `90a682d`, `2e6946d`).
+Every gate passes on the merged tree. Nothing below has been clicked by a person.
+
+### Verified
+
+- **Over mock IPC** (`tauri-test`): rows show `Speaker 1` with `speakerId: "speaker_0"`; a rename
+  to `Axel` shows in the rows and in a `txt` export with the placeholder gone; a second note's
+  suggestions list `Axel`; an empty name restores `Speaker 1`; a missing note is refused by name.
+- **In the notes core:** rename upserts, normalises whitespace and deletes on empty; a missing note
+  and a blank speaker id write nothing; deleting a note cascades; suggestions order, dedupe,
+  exclude and cap at 20; a mapping names playback rows and every export format; a typed name
+  hides the rename.
+- **The spike's measurements** are in `SPEAKER_RECOGNITION_SPIKE.md`, taken on this machine.
+
+### Still unchecked, and needs a person at the machine
+
+1. **Open a diarised note** (for example *DemoMeeting*, 2026-09-03) on the Transcript tab: each
+   `Speaker N` label is a dotted-underlined button; pressing it opens "Name for Speaker N" above
+   the list with the input focused; the row is not selected by that press.
+2. **Type a name and Save:** every row of that speaker shows the name; Export in each format shows
+   it; the summary's Generate, run afterwards, uses it.
+3. **Remove name** restores `Speaker N`; Escape and Cancel close the form without a change.
+4. **Suggestions:** on a note with calendar participants their names come first in the datalist;
+   a name used on another note appears after them; a name already on this note does not.
+5. **A meeting with no speaker labels** shows plain "You"/"Others" spans with no rename.
+
+## 2026-09-25 (third) — KNEG-317: the chosen meeting provider is saved, and only the round trip has been measured
+
+### Verified
+
+- **The setting round-trips over mock IPC** (`tauri-test`): `meeting_provider` reads `null` before
+  a choice, `meeting_set_provider` refuses an unknown id and leaves the key untouched, and `local`
+  reads back.
+- **The selection rule:** six `node --test` cases over `lib/meetingProvider.ts`.
+
+### Still unchecked, and needs a person at the machine
+
+1. **Pick the local provider under Settings > Meetings, quit, start again.** The select shows the
+   local provider. Then stop the model server and reopen the screen: a sentence names the local
+   provider as chosen and unusable, OpenAI Realtime is selected in its place, and starting the
+   server and reopening the screen brings the local provider back without anybody touching the
+   select.
+2. **Press Record on an offer** with a cloud provider chosen: the Status row on the Meetings screen
+   names that provider, not the local one.
+
+## 2026-09-25 (later) — KNEG-298: the meeting panel exists, and only its idle window styles have been measured
+
+Built and merged on `dev` (`3a0d0c4`, `81d7164`; merges `9e5bd07`, `23fac71`). Every gate passes
+on the merged tree (Contracts, frontend with 34 tests, fmt, workspace clippy, workspace tests,
+the Tauri IPC suite with the two new window-gating tests, the workspace built with the desktop
+binary excluded because the owner's instance was running). Nothing below has been typed into,
+dragged or shared by a person.
+
+### Verified
+
+- **Idle window styles, from the running instance:** `KnegisWhisper meeting` reads `WS_THICKFRAME`
+  set, `WS_MAXIMIZEBOX` clear, `WS_EX_NOACTIVATE` set, affinity `0x11`, hidden. The builder's
+  `focusable(false)` holds the style on its own now; `status()` no longer re-applies it.
+- **The draft round trip at the IPC boundary:** `meeting_notes_update` and `meeting_notes_get`
+  refuse the main window and accept the meeting window (mock runtime); the sidecar is written
+  beside the WAV and read back (tempdir).
+- **Live transcript folding:** seven `node --test` cases over `lib/liveTranscript.ts`.
+
+### Still unchecked, and needs a person at the machine
+
+1. **Start a `local-streaming` meeting from Settings > Meetings.** Expect the box to open at
+   440×560 bottom-right (or where it was last left in panel mode), header on top, editor below,
+   *My notes | Transcript* at the bottom. Read `WS_EX_NOACTIVATE` on the window: it must be
+   **clear** now, affinity still `0x11`, and the foreground window must not have changed when the
+   panel appeared.
+2. **Type.** Notes appear in the editor; after a pause the sidecar `<stamp>.notes.md` beside the
+   WAV under the recording directory contains them.
+3. **Reload the panel webview mid-meeting** (Ctrl+R with the panel focused, or from devtools):
+   the editor re-seeds with what was typed, not empty.
+4. **Switch to Transcript** while speaking: rows appear, the open partial is muted, the list stays
+   at the bottom; switch back: the editor still holds the notes.
+5. **Drag the block handle** in the editor: the block moves; the window does not. Drag the header:
+   the window moves.
+6. **Stop.** The panel shrinks to the transcribing strip, still activatable; when the note is
+   saved, open it in Notes: *Your notes* holds what was typed, the transcript is the whole-file
+   pass. Then read `WS_EX_NOACTIVATE` again: set.
+7. **An offer while typing in Notepad** (join a real call): the caret stays in Notepad.
+8. **Typing in the panel does not trigger the dictation chord**; pressing Control+Super with the
+   panel focused dictates into the notes — record what happens.
+9. **Share the screen from your meeting client** with the panel up: absent on the receiving side.
+10. **Cancel a meeting with notes typed** (from the CLI or API): a *Meeting notes — …* note exists
+    with the text and the discarded-recording sentence.
+
+## 2026-09-25 — KNEG-315: the meeting box is resizable and movable, and only its window styles have been measured
+
+Built and merged on `dev` (`2805b17`, `2948902`; merges `1946e4a`, `c90c953`). The Rust side was
+read from the running application; nothing has been dragged, resized or shared by a person yet.
+
+### Verified
+
+- **The window is built resizable, not maximizable, still non-activating and still excluded from
+  capture.** `target/debug/knegiswhisper-desktop.exe` at `1946e4a`, `KW_AUTOMATION_PROFILE` on a
+  disposable profile, windows enumerated by process id thirty seconds after launch:
+  `KnegisWhisper meeting` reads `WS_THICKFRAME` set, `WS_MAXIMIZEBOX` clear, `WS_EX_NOACTIVATE` set,
+  `WS_EX_TOPMOST` set, display affinity `0x11`. The update, overlay and language windows read exactly
+  as before (`WS_THICKFRAME` clear, affinity `0x11`). Table in `ENGINEERING_LOG.md` § 2026-09-25.
+- **Every gate on the merged tree**, default profile, this machine: 18 Contracts scripts and their
+  self-tests, `tsc`, `vite build`, 27 frontend tests, `cargo fmt`, workspace clippy with
+  `-D warnings`, the workspace test suite, the workspace build, and the Tauri IPC boundary suite
+  (397 passed, including the new `placement_commands_refuse_the_other_window_at_the_ipc_boundary`).
+- **The capability-audit self-test is green again**; it had been red on `dev` since KNEG-257.
+
+### Still unchecked, and needs a person at the machine
+
+1. **Drag it.** Start a `local-streaming` meeting from Settings > Meetings, put the caret in Notepad,
+   drag the panel by its text. Expect: it moves; the caret does not leave Notepad; Record/Stop still
+   click. This is the `WS_EX_NOACTIVATE` + `start_dragging` question, believed and not measured.
+2. **Resize from every edge and both bottom corners.** Expect the resize cursor at the edges, a
+   floor of 392×92, and above about 140 px of height the caption wrapping under a header row with the
+   newest words at the bottom. Check that the last few pixels of the Stop button still click.
+3. **Hide and show, then restart.** Stop the meeting, start another: the panel returns where it was
+   left, at the size it was left. Quit and relaunch: same.
+4. **Unplug the monitor it was left on** (or change resolution so it no longer fits): expect the
+   bottom-right default, not an off-screen window.
+5. **Reset notification window** on Settings > Meetings, once while the panel is visible and once
+   while it is hidden. Expect bottom-right at 392×92, and `meeting.notificationPlacement` absent in
+   `settings_keys` afterwards in both cases.
+6. **Share the screen from the client you actually use** (Teams, Zoom, a browser) with the panel
+   up, both a window share and a whole-screen share, and look at the receiving side. KNEG-60
+   measured the capture APIs, not any client.
+7. **Both themes.** Switch Windows between light and dark with the panel up: it should follow the
+   application (near-black `#181818` on dark, `#fdfdfd` on light), with the red dot and edge in both
+   and the amber fault line legible in both.
+
+## 2026-09-07 — KNEG-171: one word in an allow-list, and the panel seen for the first time
 
 Fixed and measured on `dev` after `bf85e18`, same machine and settings as the section below.
 `tauri dev` noticed the `tauri.conf.json` change, rebuilt in 50 s and relaunched the application

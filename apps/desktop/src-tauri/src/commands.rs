@@ -14,7 +14,7 @@ use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 
 use kw_notes_core::{
-    notes, recordings as note_recordings, transcript, NoteRecording, TranscriptRow,
+    notes, recordings as note_recordings, speakers, transcript, NoteRecording, TranscriptRow,
 };
 use kw_platform::hotkey::{self, Binding, HotkeyAction, HotkeyMode};
 use kw_provider_probe::{ProbeAudio, ProbeReport};
@@ -32,6 +32,114 @@ fn fail(context: &str, err: impl std::fmt::Display) -> String {
     // Deliberately not `{err:?}`: Debug on some error types is more verbose than
     // anything a user should read, and redaction is implemented on Display.
     format!("{context}: {err}")
+}
+
+#[cfg(all(test, feature = "tauri-test"))]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing
+)]
+mod speaker_ipc_tests {
+    use super::*;
+    use serde_json::{json, Value};
+    use tauri::WebviewWindow;
+
+    fn invoke(
+        window: &WebviewWindow<tauri::test::MockRuntime>,
+        command: &str,
+        body: Value,
+    ) -> Result<Value, Value> {
+        tauri::test::get_ipc_response(
+            window,
+            tauri::webview::InvokeRequest {
+                cmd: command.into(),
+                callback: tauri::ipc::CallbackFn(0),
+                error: tauri::ipc::CallbackFn(1),
+                url: window.url().unwrap(),
+                body: tauri::ipc::InvokeBody::Json(body),
+                headers: Default::default(),
+                invoke_key: tauri::test::INVOKE_KEY.into(),
+            },
+        )
+        .map(|response| response.deserialize().unwrap())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn renaming_a_speaker_updates_rows_exports_and_suggestions_over_ipc() {
+        let state = AppState::in_memory().await.unwrap();
+        let db = state.db().clone();
+        let transcript = json!([
+            {"text":"Hello", "timestamp":0.0, "speaker":"speaker_0", "speakerName":"Speaker 1", "speakerIsPlaceholder":true},
+            {"text":"Hi", "timestamp":3.0, "speaker":"speaker_1", "speakerName":"Speaker 2", "speakerIsPlaceholder":true}
+        ]).to_string();
+        let id = notes::create(
+            db.pool(),
+            &notes::NewNote {
+                title: "Meeting".into(),
+                transcript: Some(transcript),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let second = notes::create(
+            db.pool(),
+            &notes::NewNote {
+                title: "Second".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let app = tauri::test::mock_builder()
+            .manage(state)
+            .invoke_handler(tauri::generate_handler![
+                note_transcript_rows,
+                note_speaker_rename,
+                note_speaker_suggestions,
+                note_export
+            ])
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        let window = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .unwrap();
+
+        let rows = invoke(&window, "note_transcript_rows", json!({"id":id})).unwrap();
+        assert_eq!(rows[0]["speaker"], "Speaker 1");
+        assert_eq!(rows[0]["speakerId"], "speaker_0");
+        invoke(
+            &window,
+            "note_speaker_rename",
+            json!({"id":id,"speakerId":"speaker_0","name":"Axel"}),
+        )
+        .unwrap();
+        let rows = invoke(&window, "note_transcript_rows", json!({"id":id})).unwrap();
+        assert_eq!(rows[0]["speaker"], "Axel");
+        let exported = invoke(&window, "note_export", json!({"id":id,"format":"txt"})).unwrap();
+        assert!(exported["content"].as_str().unwrap().contains("Axel"));
+        assert!(!exported["content"].as_str().unwrap().contains("Speaker 1"));
+        let suggestions =
+            invoke(&window, "note_speaker_suggestions", json!({"id":second})).unwrap();
+        assert_eq!(suggestions[0], "Axel");
+        invoke(
+            &window,
+            "note_speaker_rename",
+            json!({"id":id,"speakerId":"speaker_0","name":" "}),
+        )
+        .unwrap();
+        let rows = invoke(&window, "note_transcript_rows", json!({"id":id})).unwrap();
+        assert_eq!(rows[0]["speaker"], "Speaker 1");
+        let missing = invoke(
+            &window,
+            "note_speaker_rename",
+            json!({"id":id+100,"speakerId":"speaker_0","name":"Axel"}),
+        )
+        .unwrap_err();
+        assert!(missing.to_string().contains("no note with that id"));
+    }
 }
 
 /* ------------------------------------------------------------------- settings */
@@ -1132,6 +1240,7 @@ pub async fn notes_create(state: State<'_, AppState>, request: NewNoteRequest) -
     notes::create(
         state.db().pool(),
         &notes::NewNote {
+            recording_details: None,
             title: request.title,
             content: request.content,
             note_type: request.note_type,
@@ -1168,6 +1277,50 @@ pub async fn notes_delete(state: State<'_, AppState>, id: i64) -> CmdResult<bool
     note_recordings::delete_with_recording(state.db().pool(), id, state.recording_directory())
         .await
         .map_err(|e| fail("could not delete the note", e))
+}
+
+/// Move a note into a folder, or out of every folder with `folderId: null`.
+///
+/// `notes_update` cannot express "no folder": its `folderId` is absent or
+/// set, as a partial update's should be. This is the one call that unfiles.
+#[tauri::command]
+pub async fn notes_set_folder(
+    state: State<'_, AppState>,
+    id: i64,
+    folder_id: Option<i64>,
+) -> CmdResult<bool> {
+    notes::set_folder(state.db().pool(), id, folder_id)
+        .await
+        .map_err(|e| fail("could not move the note", e))
+}
+
+/// A note's speaker name is one edit for every segment with that raw label.
+#[tauri::command]
+pub async fn note_speaker_rename(
+    state: State<'_, AppState>,
+    id: i64,
+    speaker_id: String,
+    name: String,
+) -> CmdResult<()> {
+    if speaker_id.trim().is_empty() {
+        return Err("a speaker id cannot be blank".to_owned());
+    }
+    speakers::rename(state.db().pool(), id, &speaker_id, &name)
+        .await
+        .map_err(|e| fail("could not rename the speaker", e))?
+        .then_some(())
+        .ok_or_else(|| "there is no note with that id".to_owned())
+}
+
+/// Offer note participants and previously used names while naming a speaker.
+#[tauri::command]
+pub async fn note_speaker_suggestions(
+    state: State<'_, AppState>,
+    id: i64,
+) -> CmdResult<Vec<String>> {
+    speakers::suggestions(state.db().pool(), id)
+        .await
+        .map_err(|e| fail("could not suggest speaker names", e))
 }
 
 /// The recording attached to a note, if it has one.
@@ -1290,14 +1443,15 @@ fn transcript_meta(note: &notes::Note) -> transcript::NoteMeta {
     }
 }
 
-/// Speaker names live in `speaker_mappings`, and this is empty because nothing
-/// renames a speaker yet -- not because nothing diarises. There is diarisation
-/// as of 2026-09-01: `meeting::notes` writes `speaker_0` with the placeholder
-/// `Speaker 1` beside it, and `transcript::speaker_name` renders that segment
-/// from its own label. The table would add a name a person typed, and no screen
-/// offers that, so falling through to the segment label or source is honest.
-fn transcript_mappings() -> std::collections::BTreeMap<String, String> {
-    std::collections::BTreeMap::new()
+/// The Transcript tab's rename writes these names (KNEG-318). An unnamed
+/// speaker still falls through to the segment's placeholder or capture source.
+async fn transcript_mappings(
+    db: &kw_storage::Db,
+    id: i64,
+) -> CmdResult<std::collections::BTreeMap<String, String>> {
+    speakers::mappings(db.pool(), id)
+        .await
+        .map_err(|e| fail("could not read the note's speaker names", e))
 }
 
 /// Load one note's transcript as playable, unmerged rows.
@@ -1311,11 +1465,12 @@ pub async fn note_transcript_rows(
         .map_err(|e| fail("could not read the note", e))?
         .ok_or_else(|| "there is no note with that id".to_owned())?;
     let segments = transcript_segments(&note)?;
+    let mappings = transcript_mappings(state.db(), id).await?;
 
     Ok(transcript::rows(
         &segments,
         &transcript_meta(&note),
-        &transcript_mappings(),
+        &mappings,
         &transcript::SpeakerLabels::default(),
     ))
 }
@@ -1331,7 +1486,8 @@ async fn render_export(
         .map_err(|e| fail("could not read the note", e))?
         .ok_or_else(|| "there is no note with that id".to_owned())?;
 
-    let document = kw_notes_core::document::render(&note, format, true)
+    let mappings = transcript_mappings(state.db(), id).await?;
+    let document = kw_notes_core::document::render(&note, format, true, &mappings)
         .map_err(|e| fail("the note's transcript is not a list of segments", e))?;
 
     Ok(ExportedTranscript {
@@ -1799,6 +1955,7 @@ mod tests {
     #[test]
     fn a_note_crosses_the_boundary_in_camel_case() {
         let note = notes::Note {
+            recording_details: None,
             id: 1,
             title: "Standup".to_owned(),
             content: "body".to_owned(),
@@ -1832,6 +1989,7 @@ mod tests {
                 "id",
                 "noteType",
                 "participants",
+                "recordingDetails",
                 "title",
                 "transcript",
                 "updatedAt",

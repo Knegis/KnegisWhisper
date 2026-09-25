@@ -103,6 +103,9 @@ pub struct TranscriptRow {
     /// anonymous segment -- one carrying no name, label or capture source --
     /// which export leaves unlabelled for the same reason.
     pub speaker: Option<String>,
+    /// The raw diarisation label a rename addresses; absent for typed names,
+    /// capture sources, and anonymous segments without a label.
+    pub speaker_id: Option<String>,
     pub text: String,
 }
 
@@ -423,6 +426,10 @@ pub fn rows(
         .zip(starts.iter().copied())
         .enumerate()
         .map(|(index, (segment, start_seconds))| {
+            let typed = segment
+                .speaker_name
+                .as_deref()
+                .is_some_and(|name| !segment.speaker_is_placeholder && !name.trim().is_empty());
             let own_end = segment
                 .end_timestamp
                 .filter(|end| end.is_finite() && start_seconds.is_some_and(|start| *end >= start));
@@ -434,6 +441,12 @@ pub fn rows(
                 start_seconds,
                 end_seconds,
                 speaker: identified_speaker(segment, mappings, labels),
+                speaker_id: segment
+                    .speaker
+                    .as_deref()
+                    .filter(|_| !typed)
+                    .filter(|id| !id.trim().is_empty())
+                    .map(str::to_owned),
                 text: segment.text.clone(),
             }
         })
@@ -760,8 +773,42 @@ mod tests {
         let rows = rows(&segments, &note(), &no_mappings(), &labels());
 
         assert_eq!(rows[0].speaker.as_deref(), Some("Speaker 1"));
+        assert_eq!(rows[0].speaker_id.as_deref(), Some("speaker_0"));
         assert_eq!(rows[1].speaker.as_deref(), Some("You"));
+        assert_eq!(rows[1].speaker_id, None);
         assert_eq!(rows[2].speaker, None);
+        assert_eq!(rows[2].speaker_id, None);
+    }
+
+    #[test]
+    fn typed_speaker_names_do_not_expose_a_renameable_label() {
+        let typed = Segment {
+            speaker_name: Some("Grace".to_owned()),
+            ..segment("typed", 0.0, Some("speaker_0"))
+        };
+        let placeholder = Segment {
+            speaker_is_placeholder: true,
+            ..typed.clone()
+        };
+
+        let rows = rows(&[typed, placeholder], &note(), &no_mappings(), &labels());
+        assert_eq!(rows[0].speaker.as_deref(), Some("Grace"));
+        assert_eq!(rows[0].speaker_id, None);
+        assert_eq!(rows[1].speaker_id.as_deref(), Some("speaker_0"));
+    }
+
+    #[test]
+    fn a_mapping_names_playback_rows_and_every_export_format() {
+        let segments = vec![segment("Hello", 0.0, Some("speaker_0"))];
+        let mappings = BTreeMap::from([("speaker_0".to_owned(), "Axel".to_owned())]);
+        let playback = rows(&segments, &note(), &mappings, &labels());
+        assert_eq!(playback[0].speaker.as_deref(), Some("Axel"));
+        assert_eq!(playback[0].speaker_id.as_deref(), Some("speaker_0"));
+        for format in Format::all() {
+            let output = export(format, &note(), &segments, &mappings, &labels());
+            assert!(output.contains("Axel"), "{format:?}: {output}");
+            assert!(!output.contains("Speaker 1"), "{format:?}: {output}");
+        }
     }
 
     #[test]

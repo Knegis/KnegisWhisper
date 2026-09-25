@@ -108,16 +108,38 @@ pub fn create(app: &AppHandle) -> tauri::Result<WebviewWindow> {
 /// Called after the window exists, because both need a native handle.
 #[must_use]
 pub fn apply_treatments(overlay: &WebviewWindow) -> OverlayStatus {
-    let handle = native_handle(overlay);
+    let capture_exclusion = capture_exclusion(overlay);
+    let non_activating = non_activation(overlay);
 
-    let capture_exclusion = match handle {
+    OverlayStatus {
+        created: true,
+        capture_exclusion,
+        non_activating,
+        recording_indicator_visible: crate::persistent_overlay::recording(overlay.app_handle())
+            && overlay.is_visible().unwrap_or(false),
+        display_server: window::display_server_description(),
+    }
+}
+
+/// Apply and read back capture exclusion without changing activation.
+#[must_use]
+pub fn capture_exclusion(overlay: &WebviewWindow) -> CaptureExclusion {
+    let result = match native_handle(overlay) {
         Some(h) => window::exclude_from_capture(h),
         None => CaptureExclusion::Failed {
             error: "the window has no native handle on this platform".to_owned(),
         },
     };
+    if !result.is_confirmed() {
+        tracing::info!(state = ?result, "the overlay is not confirmed to be excluded from screen capture");
+    }
+    result
+}
 
-    let non_activating = match handle {
+/// Apply and read back the overlay's non-activating style.
+#[must_use]
+pub fn non_activation(overlay: &WebviewWindow) -> NonActivating {
+    let result = match native_handle(overlay) {
         Some(h) => match window::set_non_activating(h) {
             Ok(true) => NonActivating::Active {
                 verified_by: "GetWindowLongPtrW(GWL_EXSTYLE) & WS_EX_NOACTIVATE",
@@ -137,38 +159,20 @@ pub fn apply_treatments(overlay: &WebviewWindow) -> OverlayStatus {
         },
     };
 
-    if !non_activating.is_confirmed() {
+    if !result.is_confirmed() {
         // The overlay taking focus would move the caret out of whatever the user
         // is dictating into, so this is a functional problem, not cosmetic.
         tracing::warn!(
-            state = ?non_activating,
+            state = ?result,
             "the overlay is not confirmed to refuse focus; it may steal the caret"
         );
     }
 
-    if !capture_exclusion.is_confirmed() {
-        // Worth a log line at info: it is a privacy-relevant limitation, not a
-        // detail.
-        tracing::info!(
-            state = ?capture_exclusion,
-            "the overlay is not confirmed to be excluded from screen capture"
-        );
-    }
-
-    OverlayStatus {
-        created: true,
-        capture_exclusion,
-        non_activating,
-        // Read, not assumed. A window that failed to show would otherwise
-        // report an indicator the user cannot see.
-        recording_indicator_visible: crate::persistent_overlay::recording(overlay.app_handle())
-            && overlay.is_visible().unwrap_or(false),
-        display_server: window::display_server_description(),
-    }
+    result
 }
 
 /// The OS window handle, where the platform has one we can use.
-fn native_handle(overlay: &WebviewWindow) -> Option<NativeWindow> {
+pub(crate) fn native_handle(overlay: &WebviewWindow) -> Option<NativeWindow> {
     #[cfg(target_os = "windows")]
     {
         overlay

@@ -1,0 +1,85 @@
+# Notes workspace
+
+Implemented on 2026-09-22 for [KNEG-297](https://linear.app/axelalbertkarlsson/issue/KNEG-297). Not pushed or release-validated.
+
+## Using Notes
+
+The title is a separate autosaved text field above **Notes / Transcript / Replay**.
+Notes opens by default, with personal Markdown notes first and an independently
+editable AI summary below. An empty personal note offers **Start from transcript**;
+this copies literal speech and available speaker labels without changing the source.
+
+Transcript shows the original rows and playback actions. Replay provides the full
+player, transcript and recording details. Audio continues across tabs through one
+player; compact controls remain available after playback starts. Leaving the note
+stops playback. Missing recordings offer the existing native WAV attachment flow.
+Summary references open Transcript, reveal the supporting row and play its interval
+when audio exists. Tabs support arrow keys, Home and End. At widths of 900px or less,
+the library initially collapses (and collapses when entering that width); its titlebar
+toggle can reopen it. Tabs wrap when necessary.
+
+Title, personal notes and summaries flush before tab changes, note changes and
+native window closure. A failed save retains the draft and prevents those transitions;
+retry remains available. Blank titles become “Untitled note”.
+
+## Data compatibility
+
+- New meetings and media imports, including API media imports, save an empty personal
+  note body. Transcript, recording and automatic summary scheduling are retained.
+- Recording-source facts and transcription warnings are saved separately as
+  `notes.recording_details`, returned as nullable `Note.recordingDetails`, and shown
+  read-only in Transcript and Replay. Update requests cannot edit this field.
+- Historical note bodies and OpenWhispr imports are preserved. A leading H1 matching
+  the stored title is hidden as the old editor title representation, and removed
+  from storage only on an explicit title/body edit. Opening a note does not write it.
+  Other headings are retained.
+- Migration `0006_note_workspace.sql` rebuilds FTS with a derived `transcript_text`
+  column in the index itself, rather than duplicating that projection in `notes`.
+  SQL triggers maintain it for all writers, including foreign imports and transcript
+  updates. Structured segment text is indexed; legacy plain text is retained for
+  search. Snippets prefer matching personal notes, then transcript text.
+- No new renderer command or user-editable transcript API was added. Existing note
+  exports and separate summary exports retain their behavior.
+
+## Verification
+
+Automated coverage includes storage migration backfill, body preservation, transcript
+search with empty personal notes, index update/deletion, note wire shape, empty import
+bodies, literal transcript copying and generated types. Frontend build/tests, affected
+Rust tests, strict Clippy and repository settings/command/capability audits passed.
+Counts: desktop Rust 388 passed / 4 ignored, notes 71, storage 66, local API 50,
+and frontend 27 passed. Native checks below are separate evidence.
+
+Native Windows WebView2 validation used a disposable profile and synthetic notes/audio:
+
+- Matching legacy title handling without writes on opening; explicit title/body save.
+- Literal transcript copy and three-tab navigation; blank titles and keyboard focus.
+- One audio instance continuing across tabs with compact controls.
+- Forced SQLite save failures blocking navigation; retry retaining drafts.
+- Forced failure on native close keeping the window open, followed by immediate
+  close persisting title and body edits (checked in SQLite).
+- Missing-recording/transcript states and a 720px viewport with every tab visible.
+- Existing synthetic-provider summary smoke: generation, edited-result retention,
+  cancellation and source navigation into Transcript.
+
+Reproduce only against a disposable native profile:
+
+```powershell
+$env:KW_AUTOMATION_PROFILE = Join-Path (Get-Location) 'target/notes-smoke/profile'
+$env:WEBVIEW2_USER_DATA_FOLDER = Join-Path (Get-Location) 'target/notes-smoke/webview-native'
+$env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = '--remote-debugging-port=9337'
+# Start Vite on 5183, then the debug desktop binary with these variables.
+# Optional summary regression, before closing the window:
+node tools/visual-check/summary-smoke.mjs --isolated-profile
+node tools/visual-check/notes-smoke.mjs --isolated-profile --close-window
+```
+
+The Notes smoke creates synthetic notes/audio and a temporary failure trigger only
+in `target/notes-smoke/profile`. Reports and screenshots are under `target/notes-smoke`.
+The summary smoke changes provider settings and uses a loopback synthetic provider.
+Never point either smoke at the normal app profile.
+
+Native file-dialog attachment/cancellation was not exercised in this pass. macOS,
+Linux, hosted CI and release validation remain unverified. Synthetic audio/provider
+checks do not establish real-meeting transcription or summary quality; KNEG-278's
+model-quality limitations still apply. Remaining checks are tracked on KNEG-297.

@@ -26,12 +26,15 @@ import {
   getMeetingDetectLists,
   getMeetingKeyterms,
   getMeetingLanguage,
+  getMeetingProvider,
   getMeetingProviders,
   getMeetingStatus,
   reviewMeetingConfig,
+  resetMeetingNotificationPlacement,
   setMeetingDetectLists,
   setMeetingLanguage,
   setMeetingPrompt,
+  setMeetingProvider,
   getDiarizationStatus,
   installDiarizationModel,
   setDiarizationEnabled,
@@ -63,6 +66,7 @@ import {
   microphoneValue,
   systemAudioValue,
 } from "../lib/labels";
+import { selectProvider } from "../lib/meetingProvider";
 import { useRefresh } from "../lib/useRefresh";
 
 /**
@@ -87,7 +91,7 @@ type Live = Partial<Record<TranscriptEvent["source"], string>>;
 
 export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () => void }) {
   const load = useCallback(async () => {
-    const [providers, status, language, keyterms, detect, diarization] =
+    const [providers, status, language, keyterms, detect, diarization, provider] =
       await Promise.all([
         getMeetingProviders(),
         getMeetingStatus(),
@@ -95,8 +99,9 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
         getMeetingKeyterms(),
         getMeetingDetectLists(),
         getDiarizationStatus(),
+        getMeetingProvider(),
       ]);
-    return { providers, status, language, keyterms, detect, diarization };
+    return { providers, status, language, keyterms, detect, diarization, provider };
   }, []);
 
   const { data, error, reload, guard } = useRefresh(load);
@@ -116,6 +121,20 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
   const [review, setReview] = useState<ConfigReview | null>(null);
   /** Which diarization model is downloading, or null. */
   const [installing, setInstalling] = useState<string | null>(null);
+  const [resettingNotification, setResettingNotification] = useState(false);
+  const [notificationResetError, setNotificationResetError] = useState<string | null>(null);
+
+  const resetNotification = async () => {
+    setResettingNotification(true);
+    setNotificationResetError(null);
+    try {
+      await resetMeetingNotificationPlacement();
+    } catch (error) {
+      setNotificationResetError(String(error));
+    } finally {
+      setResettingNotification(false);
+    }
+  };
 
   useEffect(() => {
     const unlisteners: Array<() => void> = [];
@@ -150,7 +169,14 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
   const usable = (data?.providers ?? []).filter(
     (p) => p.availability.state === "available",
   );
-  const selected = chosen ?? usable[0]?.id ?? null;
+  // The saved choice wins over the first usable provider, and a choice made
+  // on this visit wins over the saved one. `lib/meetingProvider.ts` says why
+  // the fallback never writes (KNEG-317).
+  const { selected, savedUnusable } = selectProvider(
+    chosen,
+    data?.provider ?? null,
+    usable.map((p) => p.id),
+  );
   const effectiveLanguage = languageDraft ?? data?.language ?? "";
   const effectiveKeytermsText = (data?.keyterms ?? []).join("\n");
 
@@ -200,6 +226,9 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
   // still held with a WAV still on disk.
   const recording = meetingIsLive(current);
   const selectedProvider = providers.find((p) => p.id === selected) ?? null;
+  const savedProvider = savedUnusable
+    ? (providers.find((p) => p.id === savedUnusable) ?? null)
+    : null;
   const keytermReview =
     review && selectedProvider
       ? keytermReviewLabel(review, selectedProvider.keyterms)
@@ -324,7 +353,13 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
             <select
               value={selected ?? ""}
               disabled={recording}
-              onChange={(e) => setChosen(e.target.value)}
+              onChange={(e) => {
+                const id = e.target.value;
+                setChosen(id);
+                // Saved on change rather than at Start, so a choice survives
+                // a restart even when no meeting was recorded after making it.
+                void guard(() => setMeetingProvider(id));
+              }}
             >
               {usable.map((p) => (
                 <option key={p.id} value={p.id}>
@@ -343,6 +378,15 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
             </label>
           </span>
         </div>
+
+        {savedUnusable ? (
+          <p className="caveat">
+            {savedProvider?.name ?? savedUnusable} was chosen last time but cannot be used right
+            now{savedProvider ? ` (${availabilityLabel(savedProvider.availability)})` : ""}
+            {selectedProvider ? `, so ${selectedProvider.name} is selected instead` : ""}. That
+            choice is kept until you pick another.
+          </p>
+        ) : null}
 
         {selectedProvider ? (
           <>
@@ -442,6 +486,13 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
         </div>
 
         {outcome ? <p className="caveat">{meetingOutcomeLabel(outcome)}</p> : null}
+      </section>
+
+      <section>
+        <h2>Notification window</h2>
+        <p className="caveat">Drag the notification window to move it or resize it by an edge. Reset returns it to the bottom-right at its default size.</p>
+        <button type="button" disabled={resettingNotification} onClick={() => { void resetNotification(); }}>Reset notification window</button>
+        {notificationResetError ? <p className="error" role="alert">{notificationResetError}</p> : null}
       </section>
 
       {recording || Object.keys(live).length > 0 ? (

@@ -281,6 +281,7 @@ pub fn run() -> anyhow::Result<()> {
             // demand: one created at the moment a meeting is detected would
             // appear a second late and, on Windows, would steal focus while its
             // webview initialised.
+            meeting_window::initialize(&handle);
             match meeting_window::create(&handle) {
                 Ok(window) => {
                     let status = meeting_window::apply_treatments(&window);
@@ -323,6 +324,8 @@ pub fn run() -> anyhow::Result<()> {
             // set does not hold. See `commands::DialogGrants`.
             app.manage(commands::DialogGrants::default());
 
+            let notes_draft = std::sync::Arc::new(meeting::draft::NotesDraft::default());
+            app.manage(std::sync::Arc::clone(&notes_draft));
             let meetings = std::sync::Arc::new(meeting::MeetingRuntime::new(
                 handle.clone(),
                 db.clone(),
@@ -332,6 +335,7 @@ pub fn run() -> anyhow::Result<()> {
                 // So the whole-recording pass uses the engine dictation uses.
                 asr.selection(),
                 std::sync::Arc::clone(&stream),
+                notes_draft,
             ));
             // Polls the process table while idle and offers to record a meeting
             // in progress. There is no path from it to `start` without a click.
@@ -449,10 +453,13 @@ pub fn run() -> anyhow::Result<()> {
             commands::notes_get,
             commands::notes_create,
             commands::notes_update,
+            commands::notes_set_folder,
             commands::notes_delete,
             commands::note_recording_get,
             commands::note_recording_attach_from_dialog,
             commands::note_transcript_rows,
+            commands::note_speaker_rename,
+            commands::note_speaker_suggestions,
             commands::folders_list,
             commands::folder_create,
             commands::folder_delete,
@@ -504,6 +511,10 @@ pub fn run() -> anyhow::Result<()> {
             media::media_import_video,
             meeting::meeting_providers,
             meeting::meeting_status,
+            meeting::draft::meeting_notes_update,
+            meeting::draft::meeting_notes_get,
+            meeting_window::meeting_notification_placement_save,
+            meeting_window::meeting_notification_placement_reset,
             meeting::meeting_start,
             meeting::meeting_stop,
             meeting::meeting_cancel,
@@ -513,6 +524,8 @@ pub fn run() -> anyhow::Result<()> {
             meeting::meeting_set_detect_lists,
             meeting::meeting_language,
             meeting::meeting_set_language,
+            meeting::meeting_provider,
+            meeting::meeting_set_provider,
             vocabulary::vocabulary_list,
             vocabulary::vocabulary_update,
             vocabulary::vocabulary_edit,

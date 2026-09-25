@@ -263,8 +263,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            applied, 5,
-            "initial, note recordings, automation, desktop origin, and summary migrations recorded exactly once"
+            applied, 6,
+            "initial, note recordings, automation, desktop origin, summary, and note workspace migrations recorded exactly once"
         );
         second.close().await;
     }
@@ -504,5 +504,50 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(left, 0);
+    }
+    #[tokio::test]
+    async fn workspace_migration_backfills_transcripts_without_changing_bodies() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::raw_sql(include_str!("../migrations/0001_initial.sql"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        for transcript in [
+            r#"[{"text":"migrationword"}]"#,
+            "legacyword",
+            r#"[null,12,"ignored",{"text":"mixedword"}]"#,
+        ] {
+            sqlx::query(
+                "INSERT INTO notes(title,content,transcript) VALUES ('Title','# Title body',?)",
+            )
+            .bind(transcript)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        sqlx::raw_sql(include_str!("../migrations/0006_note_workspace.sql"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        for word in ["migrationword", "legacyword", "mixedword"] {
+            let count: i64 =
+                sqlx::query_scalar("SELECT count(*) FROM notes_fts WHERE notes_fts MATCH ?")
+                    .bind(word)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            assert_eq!(count, 1);
+        }
+        let count: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM notes WHERE content='# Title body' AND recording_details IS NULL",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(count, 3);
     }
 }

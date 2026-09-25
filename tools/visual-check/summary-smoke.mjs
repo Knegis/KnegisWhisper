@@ -46,14 +46,16 @@ try{
  await new Promise(r=>setTimeout(r,1200));
  await cdp.evaluate(`Array.from(document.querySelectorAll('.notes-entry')).find(b=>b.querySelector('.notes-entry-title')?.textContent===${JSON.stringify(title)}).click()`);
  await new Promise(r=>setTimeout(r,900));
- await cdp.evaluate(`Array.from(document.querySelectorAll('[role="tab"]')).find(b=>b.textContent==='AI summary').click()`);
+ await cdp.evaluate(`Array.from(document.querySelectorAll('[role="tab"]')).find(b=>b.textContent==='Notes').click()`);
  await new Promise(r=>setTimeout(r,900));
- const text=await cdp.evaluate('document.body.innerText');assert.ok(text.includes('AI summary'));assert.ok(text.includes('User-edited closing remark.'));
+ const text=await cdp.evaluate('document.body.innerText');assert.ok(text.toLowerCase().includes('ai summary'));assert.ok(text.includes('User-edited closing remark.'));
  const source = await cdp.evaluate(`document.querySelector('.summary-pane a[href^="#summary-source-"]')?.textContent`);
  assert.equal(source, '00:00:00');
  await cdp.evaluate(`document.querySelector('.summary-pane a[href^="#summary-source-"]').click()`);
  await new Promise(r=>setTimeout(r,200));
+ assert.equal(await cdp.evaluate(`document.querySelector('[role="tab"][aria-selected="true"]').textContent`), 'Transcript');
+ assert.ok(await cdp.evaluate(`document.querySelector('[role="tabpanel"]:not([hidden]) .transcript-row-current') !== null`));
  await cdp.screenshot('target/summary-smoke/summary.png');
- await writeFile('target/summary-smoke/report.json',JSON.stringify({native:true,syntheticProvider:true,id,requests,tests:['automatic meeting enqueue','hierarchical long transcript','source references','editable separate summary','failed regeneration preserves edits','cancel','native summary tab'],text},null,2));
+ await writeFile('target/summary-smoke/report.json',JSON.stringify({native:true,syntheticProvider:true,id,requests,tests:['automatic meeting enqueue','hierarchical long transcript','source references','editable separate summary','failed regeneration preserves edits','cancel','native Notes summary section'],text},null,2));
  console.log(JSON.stringify({id,requests,status:'passed'}));
 }finally{server.close();await cdp.close();}

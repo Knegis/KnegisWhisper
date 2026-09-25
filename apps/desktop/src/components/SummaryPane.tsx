@@ -75,8 +75,8 @@ export const SummaryPane = forwardRef<SummaryPaneHandle, { noteId: number; visib
     {state?.outdated && <p className="warn">The transcript changed. Regenerate this summary to refresh its source links.</p>}
     {(error || state?.error) && <p className="error" role="alert">{error ?? state?.error}</p>}
     {notice && <p role="status">{notice}</p>}
-    {autosave.status === "failed" && <p className="error">Couldn’t save summary: {autosave.error} <button type="button" onClick={() => { void autosave.retry(); }}>Retry save</button></p>}
-    {visible && state?.content != null && <NoteEditor key={editorKey} noteId={noteId} summary initialContent={state.content} initialTitle="" onChange={content => {
+    {autosave.status === "failed" && <p className="error">Couldn’t save summary: {autosave.error} <button type="button" onClick={() => { void autosave.retry().catch(() => undefined); }}>Retry save</button></p>}
+    {state?.content != null && <NoteEditor key={editorKey} noteId={noteId} summary initialContent={state.content} onChange={content => {
       if (content === current.current?.content) return;
       editVersion.current += 1; dirty.current = true; autosave.schedule({ content });
     }} />}

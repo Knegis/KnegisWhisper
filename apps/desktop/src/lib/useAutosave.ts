@@ -33,6 +33,7 @@ export function useAutosave<T extends object>({
   const pendingRef = useRef<Partial<T> | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inFlightRef = useRef(false);
+  const failureRef = useRef<string | null>(null);
   const rerunRef = useRef(false);
   const activeSaveRef = useRef<Promise<void> | null>(null);
   const [status, setStatus] = useState<AutosaveStatus>("idle");
@@ -66,6 +67,7 @@ export function useAutosave<T extends object>({
     const active = (async () => {
       try {
         await saveRef.current(patch);
+        failureRef.current = null;
         if (pendingRef.current !== null || rerunRef.current) {
           inFlightRef.current = false;
           await run();
@@ -74,7 +76,8 @@ export function useAutosave<T extends object>({
         setStatus("saved");
       } catch (cause) {
         pendingRef.current = { ...patch, ...(pendingRef.current ?? {}) };
-        setError(message(cause));
+        failureRef.current = message(cause);
+        setError(failureRef.current);
         setStatus("failed");
       } finally {
         inFlightRef.current = false;
@@ -100,6 +103,7 @@ export function useAutosave<T extends object>({
   const flush = useCallback(async () => {
     clearTimer();
     await run();
+    if (failureRef.current !== null) throw new Error(failureRef.current);
   }, [clearTimer, run]);
 
   const retry = useCallback(async () => {
@@ -110,7 +114,7 @@ export function useAutosave<T extends object>({
   useEffect(() => {
     return () => {
       // React cleanup cannot await this; the pending edit still starts saving.
-      void flush();
+      void flush().catch(() => undefined);
     };
   }, [flush]);
 

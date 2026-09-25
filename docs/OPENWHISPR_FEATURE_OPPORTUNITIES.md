@@ -104,6 +104,7 @@ Sources:
 Improve speaker editing first: rename speakers and correct incorrectly merged or
 split identities within a meeting. This would make existing diarization more
 useful without depending on persistent voice recognition.
+Renaming per note landed 2026-09-25 (KNEG-318); merge and split have not; recognition across meetings is KNEG-319.
 
 OpenWhispr advertises voice recognition across meetings. Consider optional
 recognition of user-confirmed speakers later, after evaluating accuracy on real

@@ -13,6 +13,7 @@
 pub mod document;
 pub mod notes;
 pub mod recordings;
+pub mod speakers;
 pub mod transcript;
 
 pub use notes::{escape_query, search, Folder, NewNote, Note, NoteUpdate, SearchHit};

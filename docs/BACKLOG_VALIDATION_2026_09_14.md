@@ -75,12 +75,17 @@ exit. Deliberate termination validates detection/recovery only. KNEG-96 stays op
 ## Delivery gates
 
 Approve pushing the reviewed `dev` commits and dispatching the full **CI**
-workflow for that exact revision. Inspect Contracts, frontend, Windows, macOS,
+workflow for that exact revision. The push happened; as of 2026-09-20 the dispatch
+is waiting on the GitHub Actions minutes budget, recorded as KNEG-276, which blocks
+KNEG-42, 180, 220, 222, 227 and 255 in Linear. Inspect Contracts, frontend, Windows, macOS,
 Linux, and both macOS Whisper artifact results before closing their CI issues.
 Artifact publication is a separate approval; no release credentials or guessed
 catalog digests are introduced. KNEG-227 stays unverified on real desktops even
 if headless CI passes.
 
 Linear status updates succeeded. Automatic approval review rejected the detailed
-implementation comment as repository-information egress. This report preserves
-that evidence locally until approval to post the summary to the six Linear issues.
+implementation comment as repository-information egress. The summaries were posted
+to the six Linear issues on 2026-09-20: KNEG-42, KNEG-96, KNEG-227 and KNEG-255 as
+implementation summaries, and KNEG-254 and KNEG-256 as closing notes, since both had
+been moved to Done on 2026-09-15 without one. This report remains the source those
+posts cite. No hosted CI run for these commits was recorded as of that date.

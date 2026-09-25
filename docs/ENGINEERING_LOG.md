@@ -12,7 +12,295 @@ maintained in place rather than appended to, because its purpose is to be curren
 
 ---
 
-## 2026-09-15 (latest) — KNEG-258: the block handle could not drag, and the cause was a default nobody wrote
+## 2026-09-25 (sixth, latest) — KNEG-321: the notes sidebar groups by folder, and one call had to be added to make folders usable
+
+The owner asked for two icon swaps (new note, new folder), for the folder button to go, and for
+expand and collapse buttons beside new folder. The list was flat, so there was nothing for those
+two buttons to act on: the folder button had opened a filter (pick one folder, delete it), and
+that was the whole of what folders did. Agreed with the owner: the list groups notes under
+collapsible folder headings, unfiled notes first, the two buttons open or close every folder, and
+the filter goes.
+
+Two things fell out of reading the code:
+
+- **No screen could put a note into a folder.** `folderId` was used by the list filter and
+  nowhere else, so every folder was empty by construction. The note's right-click menu now has
+  *Move to folder*.
+- **No call could take a note out of one.** `notes_update` (and the notes core's `update`) reads
+  `folder_id: None` as "leave it alone", which is right for a partial update and leaves "no folder"
+  unsayable. `notes::set_folder` and `notes_set_folder` are the one place that can unfile, and
+  they leave `updated_at` alone because filing a note is not working on it.
+
+Collapsed state is session state, not a setting: a setting needs a key and a screen under the
+settings audit, and which folders were closed an hour ago is not worth that. Selecting a note by
+search, by a link from elsewhere, or by moving it opens its folder so the selection is never
+hidden. *Delete folder* lives on the heading's right-click menu and says that the notes are kept.
+The grouping is a pure function with four `node --test` cases. Not clicked by anyone yet.
+
+---
+
+## 2026-09-25 (fifth) — KNEG-320: `cargo test` killed the running application's Whisper server, twice
+
+The owner saw *Local model server exited … exited with exit code 1 after 90 seconds* on the
+Dictation page after the KNEG-318 run. The dev log had two of them, at 20:31:35Z and 21:11:11Z
+(the watcher polls every five seconds), each while `cargo test` ran on the main checkout and each
+about a minute after `tauri dev` had relaunched the application and it had pre-warmed its server.
+Exit code 1 is what `TerminateProcess` leaves. The application's own line — *the sidecar exited on
+its own; nothing asked it to stop* — was accurate: the application had not asked.
+
+The test `reaping_with_no_record_does_nothing_and_does_not_fail` in `local_model.rs` called
+`reap_stale` on a runtime built by the tests' `local()` helper, and that helper used
+`LocalTranscription::new`, whose PID store is the application's own `sidecar-pids` directory. On
+a machine where the application is running, that directory names the live server. The reaper
+read the record, confirmed the command line through `sysinfo`, and did what it is for. The test's
+comment said "the first launch on a new machine", which is the one condition a developer's
+machine never satisfies. The sibling native test had already solved this for itself with a
+`tempdir` store; the fix moves that into `local()` (one directory per test process, held in a
+`OnceLock`) so no test in the module can reach the application's records, and a test pins the
+property by comparing the two directories.
+
+Two things worth keeping: **the reaper cannot tell a live server from a stale one, by design**, so
+anything that runs it against the production directory from outside the application will kill
+the application's server — a second instance, a test, a tool; and a side effect that only shows
+on a developer's machine with the application open is invisible to CI by construction, which is
+why it survived every green run since the reaper landed.
+
+---
+
+## 2026-09-25 (fourth) — KNEG-318 and KNEG-319: a speaker gets a name, and the voice-recognition spike says "not yet, and not that way"
+
+The owner asked to say who "Speaker 1" is, and then whether the application could recognise the
+same voice in later meetings from a setting. The first is built (`19e97f3` Rust, merge
+`90a682d`; `bf1566c` frontend, merge `2e6946d`; two Codex workstreams, one
+repair round). The second was measured rather than built, and the numbers are in
+`SPEAKER_RECOGNITION_SPIKE.md`.
+
+### The rename: the table was waiting, and four readers had an empty map
+
+`speaker_mappings` had sat in the schema since the first migration with a documented
+"candidate owner" and no writer. `transcript::speaker_name` already preferred a mapping over the
+placeholder. So the work was a `speakers` module with three functions, a raw `speakerId` on every
+transcript row so a screen can address the rename, and the same map threaded through the four
+places that had been passing an empty one: playback rows, the five export formats in the desktop
+app *and* in the local API, and the summary prompt with its source-linked rows. Decided on the
+way:
+
+- **A rename is a note edit and lives beside the note**, one row per raw label, never a rewrite
+  of the segment JSON. An empty name deletes the row, so "Remove name" and "back to Speaker 1"
+  are the same operation.
+- **Suggestions are the note's calendar participants first, then names used on other notes**,
+  and never a name already on this note. No voice matching sits behind them; a suggestion is a
+  spelling, not an identity.
+- **`speakerId` is absent when a typed name already wins.** Found in review: round one set it for
+  every labelled segment, and an imported segment with a typed name would have offered a rename
+  that changed nothing. The doc comment was right and the code was made to match it.
+- **The summary prompt now reads `Speaker 1` for an unnamed diarised speaker** where it used to
+  read `speaker_0`, because it resolves through the same function the screen uses. A summary
+  that already exists is not regenerated by a rename; the next Generate uses the names.
+- **The label is the control.** In the Transcript tab the speaker label of a diarised row is a
+  button that opens one form above the list; capture-source rows ("You", "Others") keep a plain
+  span because they are not people.
+
+### The spike: route 2 is out on one fact, route 1 needs labelled voices
+
+Prepending a reference clip to a recording changed that recording's own cluster count in ten of
+twelve runs, so the "let the diarisation CLI do the matching" route would make every meeting's
+speaker turns depend on which voices are enrolled. Out. Embeddings from the CAM++ model the
+application already ships separate voices cleanly on diarisation turns (not on transcription
+segments, which was the first pass's own confound) and carry a voice across recordings made the
+same evening at 0.89–0.93 against unrelated voices at 0.81 or below — but the five single-voice
+recordings score like strangers against each other, and nobody has labelled who speaks in any of
+them. The threshold and the accuracy claim need a labelled set before a settings surface is
+built on them; that is the next step on KNEG-319 and it belongs to a person. The in-process route
+needs no new download: the archive already pinned for the `sherpa` sidecar carries
+`lib/sherpa-onnx-c-api.dll` with the speaker-embedding functions, and the installer only extracts
+`bin/` today.
+
+---
+
+## 2026-09-25 (third) — KNEG-317: the provider select remembered nothing, and the offer recorded with something else
+
+The owner reported that Settings > Meetings shows OpenAI Realtime selected on every start, whatever
+was picked before. The cause was one line: the select's value was `chosen ?? usable[0]?.id`, React
+state seeded from nothing, so the screen "set the meeting provider" (as `ui-surfaces.json` says) for
+exactly as long as the component lived. The same reading found the other half: the notification
+window's Record button started every offered meeting with a hard-coded `"local"`, so a person who
+had picked a cloud provider on the screen and pressed Record got a different one, and nothing on
+either surface said so.
+
+### What was decided
+
+- **One key, `meetings.provider`, written on change.** Saved when the select changes rather than at
+  Start, because the report is about a choice made and then not used — a person can pick the local
+  provider, start no meeting that day, and still expect it there tomorrow. The setter refuses an id
+  this build has no client for (`config::resolve_client`, the same sentence `start` gives), so the
+  key can never hold a provider that cannot be started.
+- **The fallback never writes.** A saved provider that cannot be used right now — the local one with
+  no model server running is the everyday case — is named on screen with its availability reason,
+  and the first usable provider is selected in its place without touching the setting. The
+  alternative, saving whatever the select ends up showing, would forget the choice on the first
+  start without the model server, which is the report again one day later. The rule is a pure
+  function in `lib/meetingProvider.ts` with six `node --test` cases, because the three inputs
+  (chosen now, saved earlier, usable at the moment) have an order of authority that a `??` chain in
+  a component would not state.
+- **The offer uses the saved provider too**, falling back to `local` only before anybody has chosen.
+  Not moved into Rust: `meeting_start` keeps its explicit `provider` argument, and the two callers
+  ask the same command for the same value.
+
+### Verified, and not
+
+The commands round-trip over mock IPC (`tauri-test`: absent reads as `null`, an unknown id is
+refused and leaves the key untouched, `local` reads back), the selection rule is tested, and every
+gate passes. Not measured: the select showing the saved provider after a restart of the built
+application, and `MeetingStatus.provider` naming the saved one after Record on an offer. Both are in
+`BENCH_CHECK.md` § 2026-09-25 (third).
+
+---
+
+## 2026-09-25 (later) — KNEG-298: the meeting box becomes a notes panel, and the focus rule turned out to be tao's, not ours
+
+The owner asked, with a Granola screenshot, for the meeting window to be a note surface during a
+meeting: the Notes section's Milkdown editor, and a toggle between *My notes* and the live
+*Transcript*. Four decisions were taken with the owner before any code: notes go into the meeting's
+own note; the box opens as the panel when recording starts; two views only; the window may take
+focus like a normal window while recording. Built as two sequential Codex workstreams — Rust
+foundation `3a0d0c4` (merge `9e5bd07`), frontend `81d7164` (merge `23fac71`).
+
+### Three facts that decided the design
+
+- **No note exists while a meeting records.** `keep` creates it after the whole-file pass with an
+  always-empty body, and nothing is persisted live. So typed notes are held by a `NotesDraft`
+  managed state, mirrored to `<recording>.notes.md` beside the WAV after every autosave, written
+  only by a command the meeting window may call, and consumed by `keep` as `NewNote.content`. A
+  note is now created when there are segments *or* notes; cancel keeps non-empty notes as a
+  notes-only note and `MeetingOutcome::Cancelled` carries the id. Nothing recovers an orphaned WAV
+  or sidecar after a crash — that predates this work for the WAV and is filed as KNEG-316.
+- **The raw non-activation treatment never survived a show on its own.** Read in tao 0.35.3
+  (`platform_impl/windows/window_state.rs`): `apply_diff` regenerates `GWL_STYLE`/`GWL_EXSTYLE`
+  from tao's own flags on every flag change, show and hide included, with `WS_EX_NOACTIVATE`
+  present iff `FOCUSABLE` is clear. The `WS_EX_NOACTIVATE` that `set_non_activating` wrote was
+  dropped by the next show and came back only because `status()` re-applied the full treatments on
+  every call. And the builder's `focused(false)` sets `MARKER_DONT_FOCUS`, which the stored flags
+  keep forever (the clear happens on a by-value copy), so every show of this window is
+  `SW_SHOWNOACTIVATE` — including the show `set_focusable(true)` triggers on a visible window. So
+  the durable form of non-activation is the builder's `focusable(false)`, activation is one
+  `set_focusable(true)` granted in `start` after the show, and it is revoked in `stop`/`cancel`
+  after the hide, never on a visible window. Finishing stays activatable for that reason. The
+  overlay already used `.focusable(false)` with a comment that named the symptom without the
+  mechanism; the mechanism is now written down.
+- **Milkdown's block handle needs the hosting window's Tauri drag-and-drop handler off** — the
+  KNEG-258 lesson again, this time for a Rust-built window (`.disable_drag_drop_handler()`), which
+  the capability audit's rule G could not see. Rule G now reads Rust builder chains and a declared
+  list of editor-hosting labels; rule H keeps that list attached to reality. The panel root stays
+  the drag region and the editor, transcript and tab bar opt out with `data-tauri-drag-region="false"`.
+
+### Found in review
+
+- The activation-mismatch warning treated the `Starting` phase as running, so every meeting start
+  would have logged a spurious warning while the Meetings screen polled status. One-line repair.
+- The frontend worker stopped with `wrong_premise` because one sentence of the brief's docs
+  section said "non-activating outside recording" while the Rust keeps the window activatable
+  through the transcribing strip. The worker was right and the wording was the orchestrator's.
+- Accepted with a note: `MeetingPanel.tsx` imports `clock` from `MeetingNotification.tsx`, which
+  imports the panel — a module cycle that works because the function is only called at render
+  time. `clock` belongs in `lib/`; a nit for the next pass.
+
+### Measured, and not
+
+From the owner's running dev instance after the Rust merge (`EnumWindows` by pid,
+`GetWindowLongW`, `GetWindowDisplayAffinity`): the idle meeting window reads `WS_THICKFRAME` set,
+`WS_MAXIMIZEBOX` clear, `WS_EX_NOACTIVATE` set, affinity `0x11`. That is the builder half of the
+rule. **Not measured:** the recording half — `set_focusable(true)` clearing the style after the show
+without activating, the panel opening at 440×560, typing, the transcript tab, block-handle drag —
+all of which need a meeting to be started and a person at the keyboard. The by-hand list is in
+`BENCH_CHECK.md` § 2026-09-25 (later). The `cargo build --workspace` gate reads exit 101 while the
+owner's instance runs because cargo cannot replace `knegiswhisper-desktop.exe`; the workspace built
+with the binary excluded and the desktop crate built as a library, and the running instance is
+itself the post-merge build.
+
+---
+
+## 2026-09-25 — KNEG-315: the meeting box becomes movable, resizable and themed, and two of the five findings were the orchestrator's own
+
+The owner asked for the meeting notification to be movable and resizable, to stay out of screen
+shares, and — mid-run — to match the application's colours and look. The first two were built by
+one Codex worker in two rounds (`2805b17`), the fourth by a second sequential worker (`2948902`),
+both merged `--no-ff` (`1946e4a`, `c90c953`). The third needed nothing: `apply_treatments` already
+sets `WDA_EXCLUDEFROMCAPTURE` and KNEG-60 measured it effective on 2026-09-07.
+
+### Choices, and the alternatives they beat
+
+- **Resize is the OS's, not ours.** tao 0.35's `WM_NCHITTEST` handler hit-tests the edges of any
+  undecorated window that is `resizable` and not maximized (`event_loop.rs:2178`), so the whole
+  feature on the Rust side is `.resizable(true)`, `.min_inner_size(392, 92)` and
+  `.maximizable(false)`. The alternative — a pointer-driven resize through a command, in the shape
+  of `persistent_overlay::overlay_drag` — would have needed a grip and could only grow the window
+  right and down, which for a bottom-right window is the wrong two directions.
+- **Move is Tauri's drag region, not the microphone button's hand-rolled drag.** `overlay_drag`
+  exists for docking, orientation and an input region the notification does not have. Tauri 2.11's
+  `drag.js` accepts `data-tauri-drag-region="deep"` and refuses to start a drag from a `BUTTON`, so
+  one attribute on the panel root covers every state without touching the buttons. **Believed,
+  not measured:** that the OS move loop works under `WS_EX_NOACTIVATE`. Nothing in the tree had
+  tried `start_dragging` on a non-activating window; the by-hand check is in `BENCH_CHECK.md`.
+- **A capability of its own, not a wider `notifications.json`.** `core:window:allow-start-dragging`
+  is granted by `capabilities/meeting-window.json` to the `meeting` window alone; the update
+  notification stays on `core:event:default`. `maximizable(false)` is why `internal_toggle_maximize`
+  is deliberately not granted: `drag.js` sends it on a double-click.
+- **The backend measures the window; the renderer sends nothing.** `meeting.notificationPlacement`
+  is written by two window-gated commands that read `outer_position`/`inner_size` themselves. The
+  panel only says *something moved*, 250 ms after the last `tauri://move` or `tauri://resize`.
+
+### Found in review, not by a test
+
+1. **Every programmatic placement re-saved itself.** `restore` runs on every show and `reset`
+   repositions a visible window; both fire move/resize events, and 250 ms later the panel asked the
+   backend to save the rectangle it had just been given. A first-run window therefore acquired a
+   saved placement after one show and stopped following the work area; a reset re-saved the default
+   it had just cleared. Fixed by recording the physical rectangle after each programmatic placement
+   and skipping a save whose rectangle equals it — exact, where a timer would have raced a user who
+   drags within the window. Round-two brief; the round-one brief had said such saves were
+   acceptable, so the finding was the orchestrator's as much as the worker's.
+2. **A cascade defect that no gate can see.** `.notify-live-expanded { display: none }` was declared
+   before `.notify-live { display: flex }` at equal specificity, so at 392×92 the expanded caption
+   rendered as a second flex item after the Stop button. CSS has no gate in this repository; reading
+   the file top to bottom is the evidence, and the repair brief asked the worker to write down which
+   rule wins in each case.
+3. **The theme worker reversed a documented decision because the brief told it to.** The brief asked
+   for a `--warn` token; the `:root` block carries a comment explaining why `--warn` was removed
+   from the theme. The worker replaced the comment rather than flagging the premise. The review
+   caught it because the diff deleted a comment; the fix keeps the amber as a panel-local light/dark
+   pair with a comment reconciling it, and restores the original comment verbatim. The same round
+   also deleted `.notify-empty { background: transparent }`, the rule that keeps a stranded render
+   invisible (KNEG-167). Lesson for briefs: a mapping that tells a worker what colour to add is not
+   licence to overwrite the comment explaining why it was taken away.
+
+### A Contracts gate that was already red on `dev`
+
+`tools/capability-audit/scan.test.mjs` asserted six window builders in the real tree; the tree had
+eight since KNEG-257's vocabulary IPC tests added two mock windows, and the KNEG-258 line-number
+assertion had drifted too. It failed at `c17cbec` before this work touched anything. Nobody saw it
+because the full CI cannot be dispatched (KNEG-276). The inventory refresh in `2805b17` fixes it.
+
+### Measured, from the built application
+
+`target/debug/knegiswhisper-desktop.exe` at `1946e4a` (Rust identical to `c90c953`), started with
+`KW_AUTOMATION_PROFILE` on a disposable profile, windows enumerated by process id and read with
+`GetWindowLongW` and `GetWindowDisplayAffinity` thirty seconds after launch:
+
+| window | `WS_THICKFRAME` | `WS_MAXIMIZEBOX` | `WS_EX_NOACTIVATE` | topmost | affinity |
+| --- | --- | --- | --- | --- | --- |
+| `KnegisWhisper meeting` | **yes** | **no** | yes | yes | `0x11` |
+| `KnegisWhisper update` | no | yes | yes | yes | `0x11` |
+| `KnegisWhisper overlay` | no | yes | yes | yes | `0x11` |
+| `Dictation languages` | no | yes | yes | yes | `0x11` |
+| `KnegisWhisper` (main) | yes | yes | no | no | `0x0` |
+
+So the builder flags took, the treatments still apply, and the other three panels are unchanged.
+Not measured: any of it under a real mouse — see `BENCH_CHECK.md` § 2026-09-25.
+
+---
+
+## 2026-09-15 — KNEG-258: the block handle could not drag, and the cause was a default nobody wrote
 
 Dragging a paragraph by its handle in the note editor did nothing. It had never worked: `NoteEditor.tsx`
 has exactly one commit and `tauri.conf.json` has never carried a drag-and-drop setting, so this was not

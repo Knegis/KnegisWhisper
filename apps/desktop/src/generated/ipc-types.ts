@@ -765,7 +765,11 @@ promptOnDetect: boolean,
  * user can be told about, and no indicator at all is the thing the brief
  * forbids.
  */
-notificationExcluded: CaptureExclusion | null, };
+notificationExcluded: CaptureExclusion | null,
+/**
+ * Read back from the native window where supported.
+ */
+notificationActivatable: boolean | null, };
 
 /**
  * How a meeting ended.
@@ -800,7 +804,7 @@ transcriptIsPartials: boolean, } | { "outcome": "nothing-transcribed", recording
  * were produced. Keeping the count makes this successful provider work
  * visible instead of discarding it on the empty-transcript branch.
  */
-reconnects: number, } | { "outcome": "cancelled" } | { "outcome": "failed", message: string, };
+reconnects: number, } | { "outcome": "cancelled", noteId: number | null, } | { "outcome": "failed", message: string, };
 
 /**
  * An offer to record a meeting that appears to be happening.
@@ -939,7 +943,7 @@ endpoints: number, } | { "state": "failed", mechanism: string, reason: string, }
 /**
  * A note, as listed.
  */
-export type Note = { id: number, title: string, content: string, noteType: string, enhancedContent: string | null, folderId: number | null, transcript: string | null, participants: string | null, audioDurationSeconds: number | null, createdAt: string | null, updatedAt: string | null, };
+export type Note = { id: number, title: string, content: string, recordingDetails: string | null, noteType: string, enhancedContent: string | null, folderId: number | null, transcript: string | null, participants: string | null, audioDurationSeconds: number | null, createdAt: string | null, updatedAt: string | null, };
 
 /**
  * A folder.
@@ -1031,7 +1035,12 @@ endSeconds: number | null,
  * anonymous segment -- one carrying no name, label or capture source --
  * which export leaves unlabelled for the same reason.
  */
-speaker: string | null, text: string, };
+speaker: string | null,
+/**
+ * The raw diarisation label a rename addresses; absent for typed names,
+ * capture sources, and anonymous segments without a label.
+ */
+speakerId: string | null, text: string, };
 
 /**
  * A recording attached to a note, as stored.

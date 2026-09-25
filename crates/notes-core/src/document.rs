@@ -1,6 +1,7 @@
 //! Shared note and transcript rendering without a file dialog.
 use crate::{notes::Note, transcript};
 use serde::Serialize;
+use std::collections::BTreeMap;
 #[derive(Debug, Serialize)]
 pub struct Document {
     pub filename: String,
@@ -24,6 +25,7 @@ pub fn render(
     note: &Note,
     format: transcript::Format,
     timed: bool,
+    mappings: &BTreeMap<String, String>,
 ) -> Result<Document, serde_json::Error> {
     if !timed {
         return Ok(Document {
@@ -50,7 +52,7 @@ pub fn render(
                 participants: note.participants.clone(),
             },
             &segments,
-            &Default::default(),
+            mappings,
             &transcript::SpeakerLabels::default(),
         ),
         segment_count: segments.len(),

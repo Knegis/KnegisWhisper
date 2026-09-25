@@ -876,7 +876,7 @@ button.marked:hover:not(:disabled) {
 
 .note-workspace {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 22rem;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--row-gap);
   align-items: start;
   margin-top: var(--row-gap);
@@ -950,6 +950,49 @@ button.marked:hover:not(:disabled) {
 .transcript-speaker {
   color: var(--muted);
 }
+
+/* Keep a renameable label in the row's text flow without button chrome. */
+button.transcript-speaker {
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  color: var(--muted);
+  cursor: pointer;
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+}
+
+button.transcript-speaker:hover,
+button.transcript-speaker:focus-visible {
+  color: var(--text);
+}
+
+/* The global button hover fill would turn an inline label into a separate box. */
+.transcript-rows button.transcript-speaker:hover:not(:disabled) { background: none; }
+
+/* The active row's filled band needs readable ink even when its label is focused. */
+.transcript-row-current button.transcript-speaker,
+.transcript-row-current button.transcript-speaker:hover:not(:disabled),
+.transcript-row-current button.transcript-speaker:focus-visible {
+  color: var(--band-ink);
+}
+
+/* Wrap on narrow notes while keeping the field and actions beside their label when space permits. */
+.transcript-rename {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin: 0.75rem 0 0;
+}
+
+/* Leave room to see a full first and last name while typing. */
+.transcript-rename input { min-width: 12rem; }
+/* The global button margin is for standalone actions, not controls in this form. */
+.transcript-rename button { margin-top: 0; }
+/* Errors stay below the controls so they do not squeeze the field. */
+.transcript-rename .error { flex-basis: 100%; }
 
 .recording-player {
   display: flex;
@@ -1272,31 +1315,60 @@ label:has(> input[type="checkbox"]) {
 
 /* ------------------------------------------------- meeting notification */
 /*
- * 392x92, transparent window, so the panel paints itself. Wider than the
- * overlay because it carries three lines and up to two buttons, and it must stay
- * legible over a video call -- which is the one thing guaranteed to be behind
- * it.
+ * 392x92 by default and at minimum. Wider than the overlay because it carries
+ * three lines and up to two buttons.
+ *
+ * The transparent window needs the panel to paint an opaque background. The
+ * owner asked on 2026-09-25 for this panel to match the application, so it uses
+ * the theme tokens and follows the OS colour scheme like the main window. Over
+ * a video call in light mode, the panel is light too.
  */
 
 .notify {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 0.7rem;
   height: 100%;
   padding: 0 0.9rem;
-  background: rgba(18, 18, 22, 0.94);
-  color: #f4f4f5;
-  font-family: var(--font-mono);
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--faint);
+  font-family: var(--font-sans);
   font-size: 13px;
-  line-height: 16px;
-  letter-spacing: 0.5px;
-  text-transform: uppercase;
+  line-height: 1.4;
+  letter-spacing: normal;
+  text-transform: none;
   user-select: none;
+}
+
+/* The neutral dot belongs to these panels; the overlay keeps its own colour. */
+.notify .indicator:not(.indicator-recording) {
+  background: var(--muted);
+}
+
+/* A visual hint only: native edge hit-testing owns the resize gesture. */
+.notify::after {
+  content: "";
+  position: absolute;
+  right: 5px;
+  bottom: 5px;
+  width: 10px;
+  height: 10px;
+  background: repeating-linear-gradient(135deg, transparent 0 3px, var(--muted) 3px 4px);
+  clip-path: polygon(100% 0, 100% 100%, 0 100%);
+  pointer-events: none;
 }
 
 /* Hidden by the window, not by CSS. This only shows through a stray render. */
 .notify-empty {
   background: transparent;
+  border-color: transparent;
+}
+
+/* Display contents keeps the original 392x92 row layout and spacing. */
+.notify-header {
+  display: contents;
 }
 
 .notify-body {
@@ -1308,10 +1380,20 @@ label:has(> input[type="checkbox"]) {
   min-width: 0;
 }
 
+/* The title carries the information, so its heading voice uses full-strength ink. */
+.notify-body strong {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 16px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  font-weight: 400;
+  color: var(--text);
+}
+
 .notify-detail {
-  color: #a1a1aa;
-  /* A process name or an error, so its casing is information -- the panel's
-   * uppercase is switched back off here. */
+  color: var(--muted);
+  /* A process name or an error keeps its original casing. */
   text-transform: none;
   /* A process name or an error can be long; the panel cannot grow. */
   overflow: hidden;
@@ -1319,50 +1401,10 @@ label:has(> input[type="checkbox"]) {
   white-space: nowrap;
 }
 
-.notify-live {
-  /* Speech is authored content, so casing is information rather than panel
-   * chrome; it is brighter than the label below because it is live content. */
-  color: #d4d4d8;
-  text-transform: none;
-  display: flex;
-  justify-content: flex-end;
-  overflow: hidden;
-  white-space: nowrap;
-}
-
-.notify-live > span {
-  /* Keep the live edge in view without reversing speech or guessing how many
-   * characters fit. Short captions still start at the normal left edge. */
-  flex: 0 0 auto;
-  min-width: 100%;
-}
-
 .notify button {
-  flex: none;
+  margin-top: 0;
   padding: 0.35rem 0.7rem;
-  border: 0;
-  background: #3f3f46;
-  color: #f4f4f5;
-  font: inherit;
-  cursor: pointer;
-}
-
-/*
- * The same fill swap as everything else marked. Hardcoded rather than
- * `var(--band)` because this panel does not follow the theme -- it floats over
- * a video call and keeps its own dark palette -- but it is the dark theme's
- * blue, so the gesture is the one the rest of the application uses.
- */
-/*
- * `:not(:disabled)` is here for specificity as much as for behaviour. Without
- * it this selector is (0,2,1) -- exactly what the generic `button:hover` below
- * scores -- and being the earlier of the two, it lost every time. The panel
- * then took `var(--band)` and followed the theme, which is the one thing it
- * must not do.
- */
-.notify button:hover:not(:disabled) {
-  background: #3d55ff;
-  color: #fdfdfd;
+  flex: none;
 }
 
 /*
@@ -1373,17 +1415,46 @@ label:has(> input[type="checkbox"]) {
  * true and is the one indicator the brief requires. Painting this line red too
  * would say the recording had failed, when the recording is the half that is
  * working.
+ * The theme dropped `--warn` because on the white page a caveat says the same
+ * thing structurally and a real problem is `--error`. On this panel the fault
+ * line sits beside a red recording edge, so it must not be red: amber alone
+ * says "the transcript stopped, the recording did not". This panel-local pair
+ * measures 10.64:1 on the dark background and 4.84:1 on the light background.
  */
 .notify-detail.notify-alert {
   color: #fbbf24;
 }
 
+@media (prefers-color-scheme: light) {
+  .notify-detail.notify-alert {
+    color: #a16207;
+  }
+}
+
 .notify-recording {
   /* A red edge, so "recording" reads at a glance and not only in words. An
-   * inset shadow rather than a border: the panel is 92px of fixed height and a
-   * border would take two of them from the content. */
+   * inset shadow rather than a border keeps the content size unchanged. */
   box-shadow: inset 0 0 0 1.5px rgba(239, 68, 68, 0.75);
 }
+
+/* The larger recording window gives notes and transcript their own body while
+ * compact offers and finishing retain the single-row strip. */
+.notify-panel { flex-direction: column; align-items: stretch; padding: 0.9rem; }
+.notify-panel .notify-header { display: flex; align-items: center; gap: 0.7rem; flex: none; }
+/* The body owns scrolling so the recording indicator and view tabs stay put;
+ * typed notes and transcript text must override the strip's no-selection rule. */
+.notify-panel-body { flex: 1; min-height: 0; overflow: auto; user-select: text; }
+.notify-panel-body > section[hidden] { display: none; }
+.notify-panel .note-editor-host, .notify-panel .note-editor, .notify-panel .milkdown .ProseMirror { min-height: 100%; }
+.notify-panel .transcript-rows { max-height: none; margin: 0; }
+/* Live rows have no playback control, and rows without a speaker let text use
+ * the space where that label would have sat. */
+.notify-panel .transcript-rows li { grid-template-columns: auto auto minmax(0, 1fr); }
+.notify-panel .transcript-rows li > [dir="auto"]:nth-child(2) { grid-column: 2 / -1; }
+.notify-tabs { flex: none; padding-top: 0.4rem; }
+/* Later shared tab rules set padding on the same element; the panel keeps its
+ * shorter gap without changing the full Notes workspace. */
+.notify-panel .notify-tabs { padding-top: 0.4rem; }
 
 /*
  * Text inputs and selects, which had never been styled at all: they kept the
@@ -1798,8 +1869,8 @@ button.microphone-language-toggle:hover:not(:disabled) { background: transparent
 .app-titlebar-buttons button:focus-visible { outline: 2px solid var(--band); outline-offset: -3px; }
 .window-icon { display: block; width: 20px; height: 20px; background: currentColor; mask-position: center; mask-size: contain; mask-repeat: no-repeat; pointer-events: none; }
 .window-icon-minimize { mask-image: url('./assets/window/minus.svg'); }
-.window-icon-maximize { mask-image: url('./assets/window/de-compress.svg'); }
-.window-icon-restore { mask-image: url('./assets/window/compress.svg'); }
+.window-icon-maximize { mask-image: url('./assets/window/enlarge.svg'); }
+.window-icon-restore { mask-image: url('./assets/window/reduce.svg'); }
 .window-icon-close { mask-image: url('./assets/window/xmark.svg'); }
 .window-control-error { position: fixed; top: var(--titlebar-height); right: 0; z-index: 1001; max-width: 32rem; padding: 12px; background: var(--bg); color: var(--text); border: 1px solid var(--faint); }
 
@@ -1885,10 +1956,22 @@ button.microphone-language-toggle:hover:not(:disabled) { background: transparent
 #notes-titlebar-controls:not(:empty) { padding: 0 0.5rem; }
 .notes-library-tools { display: flex; align-items: center; gap: 6px; }
 .notes-library-tools button { display: flex; align-items: center; justify-content: center; width: calc(18px + 0.8rem); height: calc(18px + 0.8rem); padding: 0.4rem; margin: 0; border-radius: 2px; }
-.notes-library-tools svg, .notes-tool-search-icon { display: block; width: 18px; height: 18px; flex: 0 0 18px; }
-.notes-tool-search-icon { background: currentColor; mask: url('./assets/window/input-search.svg') center / contain no-repeat; }
+.notes-library-tools svg { display: block; width: 18px; height: 18px; flex: 0 0 18px; }
 .notes-library-tools button[aria-expanded="true"], .notes-library-tools button[data-active="true"] { background: var(--band); color: var(--band-ink); }
 .notes-tool-panel { display: flex; flex-direction: column; gap: 0.5rem; margin-top: 0.75rem; }
+/* A folder heading is a row, not a boxed button: a disclosure, the name, the count. Mono
+ * uppercase like the other section labels, muted until pointed at, so the notes stay the
+ * loudest thing in the list. */
+.notes-folder { margin-top: 0.35rem; }
+.notes-library button.notes-folder-toggle { display: flex; align-items: center; gap: 0.4rem; width: 100%; margin: 0; padding: 0.45rem 0.35rem; text-align: left; font-family: var(--font-mono); font-size: 0.75rem; line-height: 16px; letter-spacing: 0.5px; text-transform: uppercase; color: var(--muted); }
+.notes-library button.notes-folder-toggle:hover, .notes-library button.notes-folder-toggle:focus-visible { color: var(--text); }
+.notes-folder-chevron { width: 14px; height: 14px; flex: 0 0 14px; transition: transform 120ms ease; }
+.notes-folder-toggle[aria-expanded="true"] .notes-folder-chevron { transform: rotate(90deg); }
+.notes-folder-name { min-width: 0; flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.notes-folder-count { flex: none; }
+/* Filed notes sit one step in from their heading; the unfiled list keeps the full width. */
+.notes-folder > div > .list { padding-left: 0.9rem; }
+.notes-folder-empty { margin: 0.2rem 0 0.4rem 1.25rem; font-size: 0.8rem; }
 
 /* Vocabulary uses the same compact controls and typography as the sidebar. */
 .vocabulary-add { display: flex; gap: .5rem; margin: 1rem 0; }
@@ -1913,3 +1996,23 @@ button.microphone-language-toggle:hover:not(:disabled) { background: transparent
 
 .summary-pane { margin: 0; padding: 0; }
 .summary-pane .ProseMirror h2 { font-size: 1.125rem; text-transform: none; letter-spacing: normal; margin: 1.5rem 0 .5rem; }
+
+/* The note owns a single player, regardless of the selected view. */
+.notes-main .note-detail-header input.note-title { width: 100%; min-width: 0; padding: .25rem 0; background: transparent; border: 0; font-family: var(--font-sans); font-size: 2rem; font-weight: 600; line-height: 1.3; }
+.note-detail-header { display: block; margin-bottom: 0; padding-bottom: 0; border-bottom: 0; }
+.note-section-heading { font-size: .85rem; font-weight: 600; color: var(--muted); margin: 1rem 0; }
+.note-workspace > section { min-width: 0; margin-top: 0; }
+.note-workspace [hidden], .note-workspace > [hidden] { display: none; }
+.note-mini-player { position: sticky; bottom: 0; grid-row: 3; padding: .75rem; background: var(--surface); border: 1px solid var(--faint); border-radius: .5rem; z-index: 3; }
+.note-full-player { grid-row: 1; }
+.recording-player { flex-wrap: wrap; }
+.recording-player input[type="range"] { min-width: 5rem; }
+.recording-details { margin-bottom: 1rem; color: var(--muted); }
+.recording-details p { white-space: pre-wrap; overflow-wrap: anywhere; }
+.note-workspace .transcript-rows { max-height: none; }
+.note-workspace .transcript-rows li { overflow-wrap: anywhere; }
+.start-from-transcript { margin-bottom: 1rem; }
+.note-tabs { flex-wrap: wrap; padding: 0 0 4px; }
+.note-prose > .note-section-heading:first-child { margin-top: .5rem; }
+.note-tabs > button { margin-top: 0; }
+.notes-main .note-workspace .note-editor, .notes-main .note-workspace .note-editor .milkdown .ProseMirror { min-height: 12rem; }

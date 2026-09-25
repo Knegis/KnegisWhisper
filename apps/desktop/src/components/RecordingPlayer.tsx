@@ -17,6 +17,7 @@ type RecordingPlayerProps = {
   noteId: number;
   onCurrentTime: (seconds: number) => void;
   onPlayingChange: (playing: boolean) => void;
+  compact?: boolean;
 };
 
 export function formatClock(seconds: number): string {
@@ -45,7 +46,7 @@ function mediaErrorMessage(error: MediaError | null): string {
 }
 
 export const RecordingPlayer = forwardRef<RecordingPlayerHandle, RecordingPlayerProps>(
-  function RecordingPlayer({ noteId, onCurrentTime, onPlayingChange }, ref) {
+  function RecordingPlayer({ noteId, onCurrentTime, onPlayingChange, compact = false }, ref) {
     const audioRef = useRef<HTMLAudioElement>(null);
     const intervalEndRef = useRef<number | null>(null);
     const frameRef = useRef<number | null>(null);
@@ -147,6 +148,7 @@ export const RecordingPlayer = forwardRef<RecordingPlayerHandle, RecordingPlayer
       audio.addEventListener("error", handleError);
       return () => {
         clearIntervalPlayback();
+        audio.pause();
         audio.removeEventListener("timeupdate", updateTime);
         audio.removeEventListener("loadedmetadata", updateDuration);
         audio.removeEventListener("durationchange", updateDuration);
@@ -167,7 +169,7 @@ export const RecordingPlayer = forwardRef<RecordingPlayerHandle, RecordingPlayer
     };
 
     return (
-      <div className="recording-player">
+      <div className={`recording-player${compact ? " recording-player-compact" : ""}`} aria-label="Recording player">
         {/* Browser dev fixtures intentionally have no recording server, so this
             error state is expected outside Tauri rather than hidden. */}
         <audio ref={audioRef} preload="metadata" src={recordingSrc(noteId)} className="recording-audio" />

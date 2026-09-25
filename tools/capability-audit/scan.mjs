@@ -41,8 +41,9 @@
  *      read because either can be set alone and they live in different files:
  *      the feature is what the compiler needs, the config flag is what the
  *      Tauri CLI derives its own feature list from and what the runtime reads.
- *   G. While the frontend mounts Milkdown's block handle, every window
- *      `tauri.conf.json` declares sets `dragDropEnabled` to false. The handle
+ *   G. While the frontend mounts Milkdown's block handle, each declared editor
+ *      host disables Tauri's drag handler: config windows set `dragDropEnabled`
+ *      to false and Rust builders call `.disable_drag_drop_handler()`. The handle
  *      moves a block by HTML5 drag and drop, and on Windows wry services
  *      Tauri's own drag and drop by calling `SetAllowExternalDrop(false)` and
  *      then `RevokeDragDrop` on the WebView2 child windows, registering a
@@ -53,6 +54,8 @@
  *      Tauri's own documentation for it reads: "Disabling it is required to
  *      use HTML5 drag and drop on the frontend on Windows." KNEG-258 was that
  *      default, and it was never written down anywhere in the tree.
+ *   H. Every declared editor host is a created window whose component still
+ *      imports NoteEditor. This keeps rule G's host list attached to reality.
  *
  * **Why rule F lives in this gate rather than a Rust test.** The Contracts job
  * runs on every push; the Rust job runs its macOS leg only on
@@ -77,11 +80,9 @@
  * nothing transparent — because `macOSPrivateApi` also sets the webview's
  * `fullScreenEnabled` preference, so it has a second legitimate reason to be on.
  *
- * Rule G reads the config windows only. The windows built in Rust carry their
- * own drag-and-drop setting through `WebviewWindowBuilder`, and none of them
- * hosts an editor; a future window that does would need the same call and this
- * gate would not ask for it. It reads one editor feature by name rather than
- * every way a page can set `draggable`, because naming the mechanism is what
+ * Rule G reads both configured windows and production Rust builder chains;
+ * the meeting builder hosts an editor and disables the native handler. It reads
+ * one editor feature by name rather than every way a page can set `draggable`, because naming the mechanism is what
  * makes the failure legible — a generic scan for `draggable` would fire on the
  * microphone overlay, which drags through pointer events and a Tauri command
  * instead and is unaffected either way.
@@ -102,6 +103,7 @@ const DESKTOP_MANIFEST = "apps/desktop/src-tauri/Cargo.toml";
 const FRONTEND_SOURCE = "apps/desktop/src";
 
 export const MANIFEST = "config/window-capabilities.json";
+export const EDITOR_HOSTS = { main: "apps/desktop/src/components/NoteWorkspace.tsx", meeting: "apps/desktop/src/components/MeetingPanel.tsx" };
 
 /** Return relative Rust source paths below `dir`, in stable order. */
 export function rustFiles(root, dir = join(root, RUST_SOURCE)) {
@@ -324,17 +326,23 @@ export function builderSites(root = REPO_ROOT) {
     const original = readFileSync(join(root, file), "utf8");
     const source = stripRustComments(original);
     const hasLabel = /\bpub\s+const\s+LABEL\s*:\s*&str\s*=\s*"(?:\\.|[^"\\])*"\s*;/.test(source);
+    const label = /\bpub\s+const\s+LABEL\s*:\s*&str\s*=\s*"((?:\\.|[^"\\])*)"\s*;/.exec(source)?.[1];
+    const testModule = /#\[cfg\([^\]]*\btest\b[^\]]*\)\]\s*(?:#\[[^\]]*\]\s*)*mod\s+\w+\s*\{/.exec(source)?.index ?? Infinity;
     for (const match of source.matchAll(/\bWebviewWindowBuilder::new\s*\(/g)) {
       const args = builderArguments(source, match.index + match[0].length);
       const raw = args[1]?.trim() ?? "";
       const literal = /^"((?:\\.|[^"\\])*)"$/.exec(raw);
       const arg = literal === null ? raw : JSON.parse(`"${literal[1]}"`);
       const kind = raw === "LABEL" && hasLabel ? "same-file LABEL" : literal !== null ? "literal" : "unresolved";
+      const chain = source.slice(match.index + match[0].length, source.indexOf(".build(", match.index + match[0].length));
       sites.push({
         file,
         line: source.slice(0, match.index).split("\n").length,
         arg,
         kind,
+        label: kind === "same-file LABEL" ? label : kind === "literal" ? arg : undefined,
+        dragDropDisabled: /\.disable_drag_drop_handler\s*\(/.test(chain),
+        testOnly: match.index > testModule,
       });
     }
   }
@@ -451,18 +459,17 @@ export function blockHandleSites(root = REPO_ROOT) {
 }
 
 /**
- * Windows declared by `tauri.conf.json` that still take Tauri's native drag and
- * drop, which is every window that does not set `dragDropEnabled` to false: the
- * key defaults to true in `tauri-utils`, so leaving it out is the same answer
- * as writing it in.
+ * Both window inventories that still take Tauri's native drag and drop. The
+ * config key defaults to true; a Rust builder needs the disabling call.
  */
 export function nativeDropWindows(root = REPO_ROOT) {
   const config = join(root, TAURI_CONFIG);
-  if (!existsSync(config)) return [];
-  const windows = JSON.parse(readFileSync(config, "utf8")).app?.windows ?? [];
-  return windows
+  const windows = existsSync(config) ? JSON.parse(readFileSync(config, "utf8")).app?.windows ?? [] : [];
+  return [...windows
     .filter((window) => window?.dragDropEnabled !== false)
-    .map((window) => (typeof window?.label === "string" ? window.label : "(unlabelled)"));
+    .map((window) => ({ label: typeof window?.label === "string" ? window.label : "(unlabelled)", source: TAURI_CONFIG })),
+    ...builderSites(root).filter((site) => !site.testOnly && !site.dragDropDisabled && site.label !== undefined)
+      .map((site) => ({ label: site.label, source: site.file }))];
 }
 
 /** Return every coverage, stale-config, stale-exemption, opaque-builder, disabled-file, macOS-transparency and native-drag violation. */
@@ -473,6 +480,8 @@ export function violations({
   exempt = {},
   transparency = { sites: [], cargoFeature: false, configFlag: false },
   htmlDrag = { sites: [], windows: [] },
+  editorHosts = {},
+  root = REPO_ROOT,
 }) {
   const found = [];
   const known = [...new Set(labels.map(({ label }) => label))];
@@ -564,10 +573,10 @@ export function violations({
 
   // Rule G. KNEG-258: the block handle's drag is HTML5 drag and drop, and
   // Tauri's own drag and drop takes the drop half of it away on Windows. One
-  // violation for the configuration, like rule F: the edit is the same key
-  // however many windows carry it.
+  // violation lists all affected editor hosts, each with its source file.
   const dragSites = htmlDrag.sites ?? [];
-  const nativeWindows = htmlDrag.windows ?? [];
+  const nativeWindows = (htmlDrag.windows ?? []).map((window) => typeof window === "string" ? { label: window, source: TAURI_CONFIG } : window)
+    .filter(({ label }) => Object.hasOwn(editorHosts, label) || Object.keys(editorHosts).length === 0);
   if (dragSites.length > 0 && nativeWindows.length > 0) {
     found.push({
       rule: "G. a window keeps Tauri's drag and drop while the page needs HTML5 drag and drop",
@@ -575,14 +584,22 @@ export function violations({
       detail:
         `Milkdown's block handle is mounted at ` +
         `${dragSites.map(({ file, line }) => `${file}:${line}`).join(", ")} and moves a block by HTML5 drag and drop, ` +
-        `but ${nativeWindows.map((label) => `"${label}"`).join(", ")} in ${TAURI_CONFIG} ` +
-        `does not set dragDropEnabled to false, and it defaults to true. ` +
+        `but ${nativeWindows.map(({ label, source }) => `"${label}" in ${source}`).join(", ")} ` +
+        `keeps Tauri's native drag handler. Config windows need dragDropEnabled: false; Rust builders need .disable_drag_drop_handler(). ` +
         `On Windows that makes wry revoke WebView2's own OLE drop target and register a file-drop-only one, ` +
         `so dragstart fires, no drop ever arrives, and the block springs back. ` +
-        `To fix, set "dragDropEnabled": false on the window. ` +
-        `That gives external file drops back to WebView2's default, which navigates the window to the dropped ` +
+        `Disabling native handling gives external file drops back to WebView2's default, which navigates the window to the dropped ` +
         `file — apps/desktop/src/main.tsx refuses those, and this rule is the reason it exists.`,
     });
+  }
+  // Rule H. The explicit host map must name both a created window and a real editor mount.
+  for (const [label, file] of Object.entries(editorHosts)) {
+    const source = join(root, file);
+    // Both editor hosts live in components/, where ./NoteEditor is relative to
+    // that directory; also accept a path written from a parent directory.
+    const importsEditor = existsSync(source) && /from\s+"(?:[./]*components\/|\.\/)NoteEditor(\.js)?"/.test(readFileSync(source, "utf8"));
+    if (known.includes(label) && importsEditor) continue;
+    found.push({ rule: "H. editor host is stale", subject: label, detail: `${file} must exist, import NoteEditor and belong to a created window label.` });
   }
   return found;
 }
@@ -598,6 +615,8 @@ export function collect(root = REPO_ROOT) {
     exempt,
     transparency: { sites: transparentSites(root), ...macosTransparency(root) },
     htmlDrag: { sites: blockHandleSites(root), windows: nativeDropWindows(root) },
+    editorHosts: EDITOR_HOSTS,
+    root,
   };
 }
 
