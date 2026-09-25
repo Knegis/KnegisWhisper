@@ -39,20 +39,24 @@ test("the real tree is clean, and all parser inventories are live", () => {
   const real = collect(REPO_ROOT);
   assert.deepEqual(real.labels.map(({ label }) => label).sort(), ["dictation-languages", "main", "meeting", "overlay", "update"]);
   assert.equal(new Set(real.labels.map(({ source }) => source)).size, 2);
-  assert.equal(real.capabilities.length, 3);
+  assert.equal(real.capabilities.length, 4);
   // KNEG-171: a file in capabilities/ is not a capability until security.capabilities names it.
   assert.deepEqual(real.capabilities.map(({ identifier, enabled }) => ({ identifier, enabled })), [
     { identifier: "default", enabled: true },
+    { identifier: "meeting-window", enabled: true },
     { identifier: "notifications", enabled: true },
     { identifier: "titlebar", enabled: true },
   ]);
-  // Four production panels plus the import and recording-deletion mock webviews.
-  assert.equal(real.builders.length, 6);
+  // Four production panels plus import, recording-deletion, vocabulary and placement IPC mock webviews.
+  assert.equal(real.builders.length, 10);
   assert.deepEqual(
     real.builders.filter(({ kind }) => kind === "literal").map(({ file, arg }) => ({ file, arg })),
     [
       { file: "apps/desktop/src-tauri/src/media.rs", arg: "main" },
+      { file: "apps/desktop/src-tauri/src/meeting_window.rs", arg: "main" },
       { file: "apps/desktop/src-tauri/src/recording_attach.rs", arg: "main" },
+      { file: "apps/desktop/src-tauri/src/vocabulary.rs", arg: "main" },
+      { file: "apps/desktop/src-tauri/src/vocabulary.rs", arg: "overlay" },
     ],
   );
   // KNEG-221: the four panel windows are transparent, and both halves of the
@@ -70,7 +74,7 @@ test("the real tree is clean, and all parser inventories are live", () => {
   assert.equal(real.transparency.configFlag, true);
   // KNEG-258: the editor is mounted in exactly one place, and the window that
   // hosts it has given Tauri's own drag and drop up so the handle can drag.
-  assert.deepEqual(real.htmlDrag.sites, [{ file: "apps/desktop/src/components/NoteEditor.tsx", line: 53 }]);
+  assert.deepEqual(real.htmlDrag.sites, [{ file: "apps/desktop/src/components/NoteEditor.tsx", line: 68 }]);
   assert.deepEqual(real.htmlDrag.windows, []);
   assert.deepEqual(violations(real), []);
 });
@@ -122,7 +126,7 @@ test("the allow-list reading: unset or empty enables every file, a list enables 
   assert.deepEqual(enabled(inline), ["default:true", "notifications:false", "drag:true"]);
   assert.match(inline[2].file, /tauri\.conf\.json/);
 
-  assert.deepEqual(securityCapabilities(REPO_ROOT), ["default", "notifications", "titlebar"]);
+  assert.deepEqual(securityCapabilities(REPO_ROOT), ["default", "notifications", "meeting-window", "titlebar"]);
   assert.equal(securityCapabilities(resolve(REPO_ROOT, "tools")), null);
 });
 

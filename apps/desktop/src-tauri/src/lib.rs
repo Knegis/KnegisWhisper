@@ -281,6 +281,7 @@ pub fn run() -> anyhow::Result<()> {
             // demand: one created at the moment a meeting is detected would
             // appear a second late and, on Windows, would steal focus while its
             // webview initialised.
+            meeting_window::initialize(&handle);
             match meeting_window::create(&handle) {
                 Ok(window) => {
                     let status = meeting_window::apply_treatments(&window);
@@ -504,6 +505,8 @@ pub fn run() -> anyhow::Result<()> {
             media::media_import_video,
             meeting::meeting_providers,
             meeting::meeting_status,
+            meeting_window::meeting_notification_placement_save,
+            meeting_window::meeting_notification_placement_reset,
             meeting::meeting_start,
             meeting::meeting_stop,
             meeting::meeting_cancel,

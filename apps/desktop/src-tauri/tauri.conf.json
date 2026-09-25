@@ -35,6 +35,7 @@
       "capabilities": [
         "default",
         "notifications",
+        "meeting-window",
         "titlebar"
       ]
     },

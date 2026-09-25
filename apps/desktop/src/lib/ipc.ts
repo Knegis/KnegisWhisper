@@ -340,6 +340,8 @@ export async function getMeetingProviders(): Promise<MeetingProviderSummary[]> {
 export async function getMeetingStatus(): Promise<MeetingStatus> {
   return invoke<MeetingStatus>("meeting_status");
 }
+export async function saveMeetingNotificationPlacement(): Promise<void> { return invoke("meeting_notification_placement_save"); }
+export async function resetMeetingNotificationPlacement(): Promise<void> { return invoke("meeting_notification_placement_reset"); }
 
 /**
  * Start recording a meeting.

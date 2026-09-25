@@ -6,7 +6,7 @@
 //! pixels so negative origins and mixed-DPI monitor coordinates remain intact.
 
 use kw_platform::window::WorkArea;
-use tauri::{LogicalSize, PhysicalPosition, WebviewWindow};
+use tauri::{LogicalSize, PhysicalPosition, PhysicalSize, Runtime, WebviewWindow};
 
 /// UI-space gap from the usable desktop edge.
 const MARGIN: f64 = 24.0;
@@ -19,6 +19,15 @@ enum Anchor {
 
 /// Put a notification at the bottom-right of its monitor's usable area.
 pub(crate) fn bottom_right(window: &WebviewWindow, width: f64, height: f64, role: &'static str) {
+    bottom_right_for(window, width, height, role);
+}
+
+pub(crate) fn bottom_right_for<R: Runtime>(
+    window: &WebviewWindow<R>,
+    width: f64,
+    height: f64,
+    role: &'static str,
+) {
     place(window, width, height, Anchor::BottomRight, role);
 }
 
@@ -27,7 +36,13 @@ pub(crate) fn bottom_center(window: &WebviewWindow, width: f64, height: f64, rol
     place(window, width, height, Anchor::BottomCenter, role);
 }
 
-fn place(window: &WebviewWindow, width: f64, height: f64, anchor: Anchor, role: &'static str) {
+fn place<R: Runtime>(
+    window: &WebviewWindow<R>,
+    width: f64,
+    height: f64,
+    anchor: Anchor,
+    role: &'static str,
+) {
     if let Err(err) = window.set_size(LogicalSize::new(width, height)) {
         tracing::debug!(error = %err, role, "could not set the window size");
     }
@@ -56,7 +71,7 @@ fn place(window: &WebviewWindow, width: f64, height: f64, anchor: Anchor, role: 
         return;
     };
 
-    let Some(area) = resolved_work_area(window, role) else {
+    let Some(area) = resolved_work_area_for(window, role) else {
         return;
     };
     let Some(position) = anchored_position(
@@ -138,7 +153,63 @@ fn anchored_position(
     ))
 }
 
+/// Keep a restored window in the current usable area after monitor changes.
+pub(crate) fn clamp_into_work_area(window: &WebviewWindow, role: &'static str) {
+    let result = (|| -> tauri::Result<()> {
+        let position = window.outer_position()?;
+        let size = window.outer_size()?;
+        let scale = window.scale_factor()?;
+        if !scale.is_finite() || scale <= 0.0 {
+            tracing::warn!(scale, role, "the window reported an invalid scale factor");
+            return Ok(());
+        }
+        let Some(area) = resolved_work_area(window, role) else {
+            return Ok(());
+        };
+        let (x, y, width, height) =
+            bounded_position(area, position.x, position.y, size.width, size.height);
+        if width != size.width || height != size.height {
+            window.set_size(PhysicalSize::new(width, height))?;
+        }
+        if x != position.x || y != position.y {
+            window.set_position(PhysicalPosition::new(x, y))?;
+        }
+        Ok(())
+    })();
+    if let Err(err) = result {
+        tracing::warn!(error = %err, role, "could not clamp the window into the work area");
+    }
+}
+
+fn bounded_position(
+    area: WorkArea,
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+) -> (i32, i32, u32, u32) {
+    let area_width = area.right.saturating_sub(area.left) as u32;
+    let area_height = area.bottom.saturating_sub(area.top) as u32;
+    let width = width.min(area_width);
+    let height = height.min(area_height);
+    let max_x = i64::from(area.right) - i64::from(width);
+    let max_y = i64::from(area.bottom) - i64::from(height);
+    (
+        i64::from(x).clamp(i64::from(area.left), max_x) as i32,
+        i64::from(y).clamp(i64::from(area.top), max_y) as i32,
+        width,
+        height,
+    )
+}
+
 pub(crate) fn resolved_work_area(window: &WebviewWindow, role: &'static str) -> Option<WorkArea> {
+    resolved_work_area_for(window, role)
+}
+
+fn resolved_work_area_for<R: Runtime>(
+    window: &WebviewWindow<R>,
+    role: &'static str,
+) -> Option<WorkArea> {
     #[cfg(target_os = "windows")]
     {
         match window
@@ -160,7 +231,7 @@ pub(crate) fn resolved_work_area(window: &WebviewWindow, role: &'static str) -> 
     monitor_bounds(window, role)
 }
 
-fn monitor_bounds(window: &WebviewWindow, role: &'static str) -> Option<WorkArea> {
+fn monitor_bounds<R: Runtime>(window: &WebviewWindow<R>, role: &'static str) -> Option<WorkArea> {
     let monitor = match window.current_monitor() {
         Ok(Some(monitor)) => monitor,
         Ok(None) => {
@@ -249,5 +320,59 @@ mod tests {
         };
         assert!(anchored_position(area, 392, 92, 24, Anchor::BottomRight).is_none());
         assert!(physical_metrics(0.0, 92.0, 1.0).is_none());
+    }
+
+    #[test]
+    fn a_window_already_inside_the_work_area_does_not_move() {
+        assert_eq!(
+            bounded_position(MEASURED_WORK_AREA, 100, 200, 392, 92),
+            (100, 200, 392, 92)
+        );
+    }
+
+    #[test]
+    fn each_edge_is_clamped_independently() {
+        assert_eq!(
+            bounded_position(MEASURED_WORK_AREA, -5, 200, 392, 92),
+            (0, 200, 392, 92)
+        );
+        assert_eq!(
+            bounded_position(MEASURED_WORK_AREA, 100, -5, 392, 92),
+            (100, 0, 392, 92)
+        );
+        assert_eq!(
+            bounded_position(MEASURED_WORK_AREA, 1200, 200, 392, 92),
+            (888, 200, 392, 92)
+        );
+        assert_eq!(
+            bounded_position(MEASURED_WORK_AREA, 100, 700, 392, 92),
+            (100, 660, 392, 92)
+        );
+    }
+
+    #[test]
+    fn a_window_larger_than_the_work_area_shrinks_to_fit() {
+        assert_eq!(
+            bounded_position(MEASURED_WORK_AREA, 100, 200, 2000, 1000),
+            (0, 0, 1280, 752)
+        );
+    }
+
+    #[test]
+    fn a_negative_origin_is_preserved_when_clamping() {
+        let area = WorkArea {
+            left: -1280,
+            top: -200,
+            right: 0,
+            bottom: 552,
+        };
+        assert_eq!(
+            bounded_position(area, -1400, -300, 392, 92),
+            (-1280, -200, 392, 92)
+        );
+        assert_eq!(
+            bounded_position(area, -100, 500, 392, 92),
+            (-392, 460, 392, 92)
+        );
     }
 }
