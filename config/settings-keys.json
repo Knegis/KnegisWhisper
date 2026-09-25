@@ -228,6 +228,14 @@
       "ui": "Settings > Meetings",
       "reachable": true
     },
+    "meetings.provider": {
+      "what": "The meeting provider chosen on the Meetings screen. Remembered across restarts; the notification window's Record button starts an offered meeting with it too.",
+      "writtenBy": [
+        "meeting_set_provider"
+      ],
+      "ui": "Settings > Meetings",
+      "reachable": true
+    },
     "calendar.google.clientId": {
       "what": "The OAuth client ID the user registers themselves. There is no embedded client; the screen says why.",
       "writtenBy": [

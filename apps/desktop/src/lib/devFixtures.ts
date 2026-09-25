@@ -638,6 +638,7 @@ let meetingStatus: MeetingStatus = {
 };
 
 let meetingLanguage = "en";
+let meetingProvider: string | null = null;
 let meetingKeyterms = ["Nordbank", "KnegisWhisper", "WASAPI", "Realtek"];
 
 let detectLists: Lists = {
@@ -1639,6 +1640,11 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
   meeting_language: () => meetingLanguage,
   meeting_set_language: (a) => {
     meetingLanguage = arg<string>(a, "language") ?? meetingLanguage;
+    return null;
+  },
+  meeting_provider: () => meetingProvider,
+  meeting_set_provider: (a) => {
+    meetingProvider = arg<string>(a, "provider") ?? meetingProvider;
     return null;
   },
   vocabulary_delete: (a) => { const id = arg<number>(a, "id") ?? 0; removedVocabulary = meetingKeyterms[id - 1] ?? null; meetingKeyterms.splice(id - 1, 1); return null; },

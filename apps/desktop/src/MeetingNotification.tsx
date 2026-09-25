@@ -36,6 +36,7 @@ import {
   dismissMeetingOffer,
   getMeetingStatus,
   getMeetingNotes,
+  getMeetingProvider,
   onMeetingOffer,
   onMeetingOutcome,
   onMeetingState,
@@ -50,7 +51,11 @@ import { meetingIsLive, offerReason } from "./lib/labels";
 import { MeetingPanel } from "./components/MeetingPanel";
 import { emptyLiveTranscript, foldTranscriptEvent, liveRows, type LiveTranscript } from "./lib/liveTranscript";
 
-/** Which provider a detected application should be recorded with. */
+/**
+ * Which provider a detected application is recorded with before anybody has
+ * chosen one under Settings > Meetings. Once somebody has, that choice is
+ * used here too, so the offer and the screen agree (KNEG-317).
+ */
 const RECORD_WITH = "local";
 
 export function MeetingNotification() {
@@ -224,12 +229,14 @@ export function MeetingNotification() {
           type="button"
           onClick={() => {
             setProblem(null);
-            void startMeeting(RECORD_WITH, true).catch((err: unknown) => {
-              // Shown here rather than swallowed. The most likely cause is no
-              // local model server running, and being told that beats a button
-              // that does nothing.
-              setProblem(String(err));
-            });
+            void getMeetingProvider()
+              .then((saved) => startMeeting(saved ?? RECORD_WITH, true))
+              .catch((err: unknown) => {
+                // Shown here rather than swallowed. The most likely cause is no
+                // local model server running, and being told that beats a button
+                // that does nothing.
+                setProblem(String(err));
+              });
           }}
         >
           Record

@@ -162,6 +162,10 @@ const LISTS_KEY: &str = "meetings.detect";
 /// Settings key: the language to give the provider, or the empty string for
 /// automatic detection where the provider supports it.
 const LANGUAGE_KEY: &str = "meetings.language";
+/// Settings key: the provider the Meetings screen last chose, so the choice
+/// outlives the screen. Absent until somebody picks one; the screen and the
+/// offer's Record button fall back to their own defaults until then.
+const PROVIDER_KEY: &str = "meetings.provider";
 /// Settings key: terms to bias recognition towards.
 #[cfg(test)]
 const KEYTERMS_KEY: &str = "meetings.keyterms";
@@ -2113,6 +2117,42 @@ pub async fn meeting_set_language(
         .map_err(|e| format!("could not save the language setting: {e}"))
 }
 
+/// The provider the Meetings screen last chose, or `None` before anybody has.
+///
+/// Read by the screen to seed its select and by the notification window when
+/// an offer's Record button is pressed, so the two ways into a meeting agree
+/// on the provider. Before this key existed the screen fell back to the first
+/// usable provider on every mount and the offer always recorded with the local
+/// one, so a choice of the local provider was forgotten by the next start
+/// (KNEG-317).
+#[tauri::command]
+pub async fn meeting_provider(
+    state: State<'_, crate::state::AppState>,
+) -> Result<Option<String>, String> {
+    let saved: Option<String> = kw_storage::settings::get(state.db().pool(), PROVIDER_KEY)
+        .await
+        .map_err(|e| format!("could not read the provider setting: {e}"))?;
+    Ok(saved.filter(|id| !id.trim().is_empty()))
+}
+
+/// Remember `provider` as the chosen one.
+///
+/// Refuses an id this build has no client for, with the same sentence `start`
+/// would give, so the setting can never hold a provider that cannot be
+/// started. A provider that is unusable right now (no model server running,
+/// no key stored) is still accepted: that is a state of the machine, not of
+/// the choice, and the screen says so instead of forgetting it.
+#[tauri::command]
+pub async fn meeting_set_provider(
+    state: State<'_, crate::state::AppState>,
+    provider: String,
+) -> Result<(), String> {
+    config::resolve_client(&provider)?;
+    kw_storage::settings::set(state.db().pool(), PROVIDER_KEY, &provider)
+        .await
+        .map_err(|e| format!("could not save the provider setting: {e}"))
+}
+
 /// Terms to bias recognition towards. How many a provider actually uses
 /// depends on its cap -- see [`meeting_review_config`].
 #[tauri::command]
@@ -2439,5 +2479,80 @@ mod cancellation_tests {
         let (tx, rx) = oneshot::channel::<()>();
         drop(tx);
         assert_eq!(until_cancelled(async { 42 }, rx).await, Some(42));
+    }
+}
+
+#[cfg(all(test, feature = "tauri-test"))]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing
+)]
+mod provider_setting_tests {
+    use super::*;
+    use serde_json::{json, Value};
+
+    fn invoke(
+        window: &tauri::WebviewWindow<tauri::test::MockRuntime>,
+        command: &str,
+        body: Value,
+    ) -> Result<Value, Value> {
+        tauri::test::get_ipc_response(
+            window,
+            tauri::webview::InvokeRequest {
+                cmd: command.into(),
+                callback: tauri::ipc::CallbackFn(0),
+                error: tauri::ipc::CallbackFn(1),
+                url: window.url().unwrap(),
+                body: tauri::ipc::InvokeBody::Json(body),
+                headers: Default::default(),
+                invoke_key: tauri::test::INVOKE_KEY.into(),
+            },
+        )
+        .map(|response| response.deserialize().unwrap())
+    }
+
+    // Driven over mock IPC rather than by calling the functions, because the
+    // property that matters is the one the screen sees: the value it saved is
+    // the value it gets back, and a bad id changes nothing.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_chosen_provider_round_trips_and_an_unknown_one_is_refused() {
+        let state = crate::state::AppState::in_memory().await.unwrap();
+        let app = tauri::test::mock_builder()
+            .manage(state)
+            .invoke_handler(tauri::generate_handler![
+                meeting_provider,
+                meeting_set_provider
+            ])
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        let main = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .unwrap();
+
+        // Nothing chosen yet: the screen and the offer use their own defaults.
+        assert_eq!(
+            invoke(&main, "meeting_provider", json!({})).unwrap(),
+            Value::Null
+        );
+
+        let err = invoke(
+            &main,
+            "meeting_set_provider",
+            json!({"provider": "not-a-real-provider"}),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("no meeting client"), "{err}");
+        assert_eq!(
+            invoke(&main, "meeting_provider", json!({})).unwrap(),
+            Value::Null
+        );
+
+        invoke(&main, "meeting_set_provider", json!({"provider": "local"})).unwrap();
+        assert_eq!(
+            invoke(&main, "meeting_provider", json!({})).unwrap(),
+            json!("local")
+        );
     }
 }

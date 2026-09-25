@@ -454,6 +454,20 @@ export async function setMeetingLanguage(language: string): Promise<void> {
   return invoke("meeting_set_language", { language });
 }
 
+/**
+ * The provider chosen on the Meetings screen, or `null` before anybody has
+ * chosen one. Remembered across restarts; the offer's Record button uses it
+ * too, so the two ways into a meeting agree.
+ */
+export async function getMeetingProvider(): Promise<string | null> {
+  return invoke<string | null>("meeting_provider");
+}
+
+/** Rejects an id this build has no client for; the setting never holds one. */
+export async function setMeetingProvider(provider: string): Promise<void> {
+  return invoke("meeting_set_provider", { provider });
+}
+
 /** Terms to bias recognition towards. How many survive depends on the provider. */
 export async function getMeetingKeyterms(): Promise<string[]> {
   return invoke<string[]>("meeting_keyterms");

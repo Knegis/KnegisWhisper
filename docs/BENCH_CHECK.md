@@ -6,7 +6,26 @@ that 787 passing tests had all missed**, and the one on 2026-08-26 found three m
 
 Maintained in place. When something here becomes false, edit it.
 
-## 2026-09-25 (later, latest) — KNEG-298: the meeting panel exists, and only its idle window styles have been measured
+## 2026-09-25 (third, latest) — KNEG-317: the chosen meeting provider is saved, and only the round trip has been measured
+
+### Verified
+
+- **The setting round-trips over mock IPC** (`tauri-test`): `meeting_provider` reads `null` before
+  a choice, `meeting_set_provider` refuses an unknown id and leaves the key untouched, and `local`
+  reads back.
+- **The selection rule:** six `node --test` cases over `lib/meetingProvider.ts`.
+
+### Still unchecked, and needs a person at the machine
+
+1. **Pick the local provider under Settings > Meetings, quit, start again.** The select shows the
+   local provider. Then stop the model server and reopen the screen: a sentence names the local
+   provider as chosen and unusable, OpenAI Realtime is selected in its place, and starting the
+   server and reopening the screen brings the local provider back without anybody touching the
+   select.
+2. **Press Record on an offer** with a cloud provider chosen: the Status row on the Meetings screen
+   names that provider, not the local one.
+
+## 2026-09-25 (later) — KNEG-298: the meeting panel exists, and only its idle window styles have been measured
 
 Built and merged on `dev` (`3a0d0c4`, `81d7164`; merges `9e5bd07`, `23fac71`). Every gate passes
 on the merged tree (Contracts, frontend with 34 tests, fmt, workspace clippy, workspace tests,

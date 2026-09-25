@@ -12,7 +12,46 @@ maintained in place rather than appended to, because its purpose is to be curren
 
 ---
 
-## 2026-09-25 (later, latest) — KNEG-298: the meeting box becomes a notes panel, and the focus rule turned out to be tao's, not ours
+## 2026-09-25 (third, latest) — KNEG-317: the provider select remembered nothing, and the offer recorded with something else
+
+The owner reported that Settings > Meetings shows OpenAI Realtime selected on every start, whatever
+was picked before. The cause was one line: the select's value was `chosen ?? usable[0]?.id`, React
+state seeded from nothing, so the screen "set the meeting provider" (as `ui-surfaces.json` says) for
+exactly as long as the component lived. The same reading found the other half: the notification
+window's Record button started every offered meeting with a hard-coded `"local"`, so a person who
+had picked a cloud provider on the screen and pressed Record got a different one, and nothing on
+either surface said so.
+
+### What was decided
+
+- **One key, `meetings.provider`, written on change.** Saved when the select changes rather than at
+  Start, because the report is about a choice made and then not used — a person can pick the local
+  provider, start no meeting that day, and still expect it there tomorrow. The setter refuses an id
+  this build has no client for (`config::resolve_client`, the same sentence `start` gives), so the
+  key can never hold a provider that cannot be started.
+- **The fallback never writes.** A saved provider that cannot be used right now — the local one with
+  no model server running is the everyday case — is named on screen with its availability reason,
+  and the first usable provider is selected in its place without touching the setting. The
+  alternative, saving whatever the select ends up showing, would forget the choice on the first
+  start without the model server, which is the report again one day later. The rule is a pure
+  function in `lib/meetingProvider.ts` with six `node --test` cases, because the three inputs
+  (chosen now, saved earlier, usable at the moment) have an order of authority that a `??` chain in
+  a component would not state.
+- **The offer uses the saved provider too**, falling back to `local` only before anybody has chosen.
+  Not moved into Rust: `meeting_start` keeps its explicit `provider` argument, and the two callers
+  ask the same command for the same value.
+
+### Verified, and not
+
+The commands round-trip over mock IPC (`tauri-test`: absent reads as `null`, an unknown id is
+refused and leaves the key untouched, `local` reads back), the selection rule is tested, and every
+gate passes. Not measured: the select showing the saved provider after a restart of the built
+application, and `MeetingStatus.provider` naming the saved one after Record on an offer. Both are in
+`BENCH_CHECK.md` § 2026-09-25 (third).
+
+---
+
+## 2026-09-25 (later) — KNEG-298: the meeting box becomes a notes panel, and the focus rule turned out to be tao's, not ours
 
 The owner asked, with a Granola screenshot, for the meeting window to be a note surface during a
 meeting: the Notes section's Milkdown editor, and a toggle between *My notes* and the live

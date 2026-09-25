@@ -521,6 +521,8 @@ pub fn run() -> anyhow::Result<()> {
             meeting::meeting_set_detect_lists,
             meeting::meeting_language,
             meeting::meeting_set_language,
+            meeting::meeting_provider,
+            meeting::meeting_set_provider,
             vocabulary::vocabulary_list,
             vocabulary::vocabulary_update,
             vocabulary::vocabulary_edit,
