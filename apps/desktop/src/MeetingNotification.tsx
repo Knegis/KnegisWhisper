@@ -1,8 +1,11 @@
 /**
  * The meeting notification window's contents.
  *
- * 392×92 by default and at minimum, content-protected, bottom-right until moved.
- * The user can drag or resize it, and its monitor-relative placement is remembered.
+ * Compact offers and finishing use 392×92; recording opens the 440×560 panel.
+ * The panel hosts the typed-notes draft and reads it back after a webview reload.
+ * Its editor and tabs opt out of Tauri's deep drag region, leaving the header
+ * as the drag surface. The transcript tab shows live text only when capture
+ * exclusion was read back as active.
  * Two jobs in one window:
  *
  * * **Offering to record**, when a meeting appears to be in progress. The offer
@@ -15,8 +18,8 @@
  * "Content-protected" means out of screen shares and never hidden from the
  * person at the keyboard — the same rule as `Overlay.tsx`.
  *
- * Like the overlay, it renders Rust's state and keeps none of its own. Recording
- * is a fact the runtime owns; this window asks and listens.
+ * Rust owns whether the meeting records. This window asks and listens for that
+ * state while keeping only the editor view, autosave and live transcript rows.
  *
  * Two states put the panel in its recording form, not one. A meeting whose
  * provider has died is still a meeting recording a room, so the indicator stays
@@ -26,24 +29,26 @@
  * which is the thing the brief forbids.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import {
   dismissMeetingOffer,
   getMeetingStatus,
+  getMeetingNotes,
   onMeetingOffer,
   onMeetingOutcome,
   onMeetingState,
   onMeetingTranscript,
   saveMeetingNotificationPlacement,
   startMeeting,
-  stopMeeting,
   type MeetingState,
   type Offer,
   type Sources,
 } from "./lib/ipc";
 import { meetingIsLive, offerReason } from "./lib/labels";
+import { MeetingPanel } from "./components/MeetingPanel";
+import { emptyLiveTranscript, foldTranscriptEvent, liveRows, type LiveTranscript } from "./lib/liveTranscript";
 
 /** Which provider a detected application should be recorded with. */
 const RECORD_WITH = "local";
@@ -53,17 +58,20 @@ export function MeetingNotification() {
   const [offer, setOffer] = useState<Offer | null>(null);
   const [sources, setSources] = useState<Sources | null>(null);
   const [elapsed, setElapsed] = useState(0);
-  const [liveTranscript, setLiveTranscript] = useState<string | null>(null);
+  const [session, setSession] = useState(0);
+  const [notes, setNotes] = useState<string | null>(null);
+  const [transcript, setTranscript] = useState<LiveTranscript>(emptyLiveTranscript);
   const [notificationCaptureExcluded, setNotificationCaptureExcluded] =
     useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const [stateReadProblem, setStateReadProblem] = useState<string | null>(null);
-  const notificationCaptureExcludedRef = useRef(false);
 
   useEffect(() => {
     let disposed = false;
     let revision = 0;
     let currentState: MeetingState | null = null;
+    let captureExcluded = false;
+    let notesReady = false;
     const unlisteners: Array<() => void> = [];
     const keepListener = (fn: () => void) => {
       if (disposed) fn();
@@ -80,6 +88,17 @@ export function MeetingNotification() {
       }, 250);
     };
     const notification = getCurrentWindow();
+    const enterState = (next: MeetingState) => {
+      const entering = meetingIsLive(next) && (currentState === null || !meetingIsLive(currentState));
+      currentState = next;
+      setState(next);
+      if (entering) {
+        setSession((value) => value + 1);
+        setNotes(null);
+        setTranscript(emptyLiveTranscript());
+        notesReady = false;
+      }
+    };
     void notification.onMoved(schedulePlacementSave).then(keepListener).catch((err: unknown) => {
       if (!disposed) console.warn("Could not listen for meeting notification moves", err);
     });
@@ -93,16 +112,23 @@ export function MeetingNotification() {
       void getMeetingStatus()
         .then((status) => {
           if (disposed || requested !== revision) return;
-          currentState = status.state;
-          setState(status.state);
+          enterState(status.state);
+          if (meetingIsLive(status.state) && !notesReady) {
+            void getMeetingNotes().then((draft) => {
+              if (disposed || requested !== revision || !currentState || !meetingIsLive(currentState)) return;
+              notesReady = true;
+              setNotes(draft);
+            }).catch((err: unknown) => {
+              if (!disposed && requested === revision) setProblem(String(err));
+            });
+          }
           setOffer(status.offer);
           setSources(status.sources);
           setElapsed(status.elapsedSeconds);
           setStateReadProblem(null);
           const excluded = status.notificationExcluded?.state === "active";
-          notificationCaptureExcludedRef.current = excluded;
+          captureExcluded = excluded;
           setNotificationCaptureExcluded(excluded);
-          if (!excluded || status.state !== "recording") setLiveTranscript(null);
         })
         .catch((err: unknown) => {
           if (!disposed && requested === revision) setStateReadProblem(String(err));
@@ -111,20 +137,10 @@ export function MeetingNotification() {
 
     const subscriptions = [
       onMeetingState((next) => {
-        currentState = next;
-        setState(next);
+        enterState(next);
         if (!meetingIsLive(next)) {
           setSources(null);
           setElapsed(0);
-        }
-        // A caption is a claim that words are still arriving. Failure states keep
-        // recording visible, but must not leave its last partial looking live.
-        if (
-          !meetingIsLive(next) ||
-          next === "recording-without-transcript" ||
-          next === "stalled"
-        ) {
-          setLiveTranscript(null);
         }
         refresh();
       }).then(keepListener),
@@ -134,19 +150,11 @@ export function MeetingNotification() {
         setOffer(next);
         refresh();
       }).then(keepListener),
-      // Replaced rather than appended: every event is a partial, and overlapping
-      // provider windows would repeat words were their text accumulated.
       onMeetingTranscript((event) => {
-        if (
-          currentState === "recording" &&
-          notificationCaptureExcludedRef.current &&
-          event.text.trim().length > 0
-        ) {
-          setLiveTranscript(event.text);
-        }
+        if (currentState === "recording" && captureExcluded) setTranscript((previous) => foldTranscriptEvent(previous, event));
       }).then(keepListener),
       onMeetingOutcome(() => {
-        setLiveTranscript(null);
+        setTranscript(emptyLiveTranscript());
       }).then(keepListener),
     ];
     // Subscribe before reading so a transition between the two is not lost.
@@ -168,6 +176,7 @@ export function MeetingNotification() {
   // union does not break a `===`, so this window would have gone on compiling
   // and stopped offering Stop. See the note on that function.
   const recording = state !== null && meetingIsLive(state);
+  const rows = useMemo(() => liveRows(transcript), [transcript]);
 
   // Counted here rather than asked for every second: the runtime owns the
   // session and the clock, and one command a second to render a timer would be
@@ -180,59 +189,16 @@ export function MeetingNotification() {
   }, [recording]);
 
   if (recording) {
-    return (
-      <div className="notify notify-recording" data-tauri-drag-region="deep" title="Drag to move">
-        <div className="notify-header">
-        <span className="indicator indicator-recording" aria-hidden="true" />
-        <span className="notify-body">
-          <strong>Recording {clock(elapsed)}</strong>
-          {/*
-           * The provider's own sentence is too long for 392x92 and lives on
-           * Settings > Meetings, which has room for it. What belongs here is
-           * the fact, in the fewest words that stay true: the recording is
-           * fine, the live transcript is not.
-           */}
-          <span
-            className={
-              transcriptEnded || stalled
-                ? "notify-detail notify-alert"
-                : "notify-detail"
-            }
-          >
-            {stalled
-              ? "recording stopped — press Stop to keep what was captured"
-              : transcriptEnded
-                ? "live transcript stopped — still recording"
-                : whoIsRecorded(sources)}
-          </span>
-          {notificationCaptureExcluded && liveTranscript ? (
-            <span className="notify-live">
-              <span dir="auto">{liveTranscript}</span>
-            </span>
-          ) : null}
-        </span>
-        <button
-          type="button"
-          onClick={() => {
-            void stopMeeting().catch((err: unknown) => setProblem(String(err)));
-          }}
-        >
-          Stop
-        </button>
-        </div>
-        {notificationCaptureExcluded && liveTranscript ? (
-          <span className="notify-live notify-live-expanded">
-            <span dir="auto">{liveTranscript}</span>
-          </span>
-        ) : null}
-      </div>
-    );
+    return <MeetingPanel session={session} elapsed={elapsed}
+      detail={stalled ? "recording stopped — press Stop to keep what was captured" : transcriptEnded ? "live transcript stopped — still recording" : whoIsRecorded(sources)}
+      alert={transcriptEnded || stalled} transcriptAllowed={notificationCaptureExcluded}
+      rows={rows} initialNotes={notes} onProblem={setProblem} />;
   }
 
   if (state === "finishing") {
     return (
-      <div className="notify" data-tauri-drag-region="deep" title="Drag to move">
-        <div className="notify-header">
+      <div className="notify" data-tauri-drag-region="deep">
+        <div className="notify-header" title="Drag to move">
         <span className="indicator" aria-hidden="true" />
         <span className="notify-body">
           <strong>Transcribing</strong>
@@ -247,8 +213,8 @@ export function MeetingNotification() {
 
   if (offer) {
     return (
-      <div className="notify" data-tauri-drag-region="deep" title="Drag to move">
-        <div className="notify-header">
+      <div className="notify" data-tauri-drag-region="deep">
+        <div className="notify-header" title="Drag to move">
         <span className="indicator" aria-hidden="true" />
         <span className="notify-body">
           <strong>{offer.name} meeting in progress</strong>
@@ -283,8 +249,8 @@ export function MeetingNotification() {
 
   if (stateReadProblem && state === null) {
     return (
-      <div className="notify" data-tauri-drag-region="deep" title="Drag to move">
-        <div className="notify-header">
+      <div className="notify" data-tauri-drag-region="deep">
+        <div className="notify-header" title="Drag to move">
         <span className="indicator" aria-hidden="true" />
         <span className="notify-body">
           <strong>State unknown</strong>
@@ -297,11 +263,11 @@ export function MeetingNotification() {
 
   // Nothing to say. The window is hidden in this state, so this is only what a
   // stray render would show — and an empty panel is better than a stale one.
-  return <div className="notify notify-empty" data-tauri-drag-region="deep" title="Drag to move" />;
+  return <div className="notify notify-empty" data-tauri-drag-region="deep" />;
 }
 
 /** Elapsed seconds as `m:ss`, or `h:mm:ss` once it has been an hour. */
-function clock(seconds: number): string {
+export function clock(seconds: number): string {
   const whole = Math.max(0, Math.floor(seconds));
   const s = whole % 60;
   const m = Math.floor(whole / 60) % 60;

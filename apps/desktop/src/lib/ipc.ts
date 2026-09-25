@@ -359,6 +359,8 @@ export async function startMeeting(
 export async function stopMeeting(): Promise<MeetingOutcome> {
   return invoke<MeetingOutcome>("meeting_stop");
 }
+export async function updateMeetingNotes(markdown: string): Promise<void> { return invoke("meeting_notes_update", { markdown }); }
+export async function getMeetingNotes(): Promise<string> { return invoke<string>("meeting_notes_get"); }
 
 export async function cancelMeeting(): Promise<void> {
   return invoke("meeting_cancel");
