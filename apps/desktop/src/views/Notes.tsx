@@ -73,6 +73,19 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote }: 
   const searchGeneration = useRef(0);
   const toolRef = useRef<HTMLDivElement>(null);
   useEffect(() => { toolRef.current?.querySelector<HTMLInputElement | HTMLSelectElement>("input, select")?.focus(); }, [libraryTool]);
+  // A press anywhere but the open panel closes it, as the context menu closes. The two buttons that
+  // open the panels are left to their own click handlers: this runs on pointerdown, before click,
+  // and closing here first would make the button's toggle reopen what it was pressed to close.
+  useEffect(() => {
+    if (!libraryTool) return;
+    const outside = (event: PointerEvent) => {
+      const target = event.target instanceof Element ? event.target : null;
+      if (toolRef.current?.contains(target) || target?.closest('[aria-controls="notes-library-tool-panel"]')) return;
+      setLibraryTool(null);
+    };
+    document.addEventListener("pointerdown", outside);
+    return () => document.removeEventListener("pointerdown", outside);
+  }, [libraryTool]);
   const [libraryExpanded, setLibraryExpanded] = useState(() => !window.matchMedia("(max-width: 900px)").matches);
   const [libraryPeek, setLibraryPeek] = useState(false);
   useEffect(() => {
