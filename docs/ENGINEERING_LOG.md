@@ -12,7 +12,48 @@ maintained in place rather than appended to, because its purpose is to be curren
 
 ---
 
-## 2026-09-25 (sixth, latest) — KNEG-321: the notes sidebar groups by folder, and one call had to be added to make folders usable
+## 2026-09-26 (first, latest) — KNEG-322 to KNEG-325: a day of sidebar and editor asks, and two things the worktree found
+
+A sequence of small owner requests on the notes view, each shipped as it came, and two defects
+that were only visible because the work moved into a git worktree.
+
+- **KNEG-322, a note opened a little way down.** Two mechanisms, both measured in headless Edge
+  against the fixtures: the pane outlives the note inside it and clamped the previous note's
+  offset against the new note's first layout (122px in a 480px window), and an open request from
+  the title bar search scrolled the article into view at "start", which parks it flush with the
+  pane's edge past the padding (21px). One layout effect now puts the pane at the top when the
+  open note or the request changes; the scroll-into-view effect is gone.
+- **KNEG-324, tooltips.** Windows' title bubble replaced by one `Tooltips` component in the main
+  window: it lifts the `title` out of the attribute while the pointer is on the element, so the
+  browser never draws its own, and puts it back afterwards. The arrow is two clipped triangles,
+  not a rotated bordered square: at 150% scaling the square's hairlines anti-aliased and its base
+  met the box with notches, seen by the owner and then at 8x over the DevTools port. Positions
+  are snapped to device pixels. The meeting panel and the overlay keep native tooltips by design.
+- **KNEG-325, the sidebar.** Notes drag into folders (the browser's own drag, a private payload
+  type the file-drop guard ignores, a "No folder" strip while a filed note is in the air, the same
+  move as the right-click menu). Folders come first; their headings are set like note titles and
+  lose the count; entries are one line with the creation time as the tooltip; every gap in the
+  list is 0.3rem, after a measurement found the folder-to-first-note gap three times that because
+  of a default list margin nobody had reset.
+- **Marked text in the editor** is Milkdown's control grey (`--crepe-color-hover`), the same for
+  `::selection`, a block-selected paragraph and a pressed list row, after two rounds with the
+  owner over which of Crepe's colours they meant (the band at 40%, then the grey).
+- **KNEG-323, found by the worktree.** The dev app would not start from a fresh worktree: sqlx
+  refused the database because migration 6 was recorded with a CRLF checksum. The main checkout's
+  working copy of `0006_note_workspace.sql` carries CRLF despite `.gitattributes`, git normalises
+  on compare so it reads as clean, and the running app had applied those bytes. Repaired on the
+  owner's machine (row updated to the LF checksum, file rewritten); the guard test is still to do.
+- **Running the dev app from a worktree** also hit cmd.exe's PATH limit: this machine's PATH is
+  6.5k characters of repeated blocks, npm adds a `.bin` entry per ancestor at every layer, and
+  `tauri dev` spawns a second npm layer; from four directories deeper that crossed 8191 and the
+  nested npm could not find `vite`. Deduplicating PATH for the launch fixed it; the build shares
+  the main checkout's target directory.
+
+Nothing above has been dragged with a real pointer; see the bench check.
+
+---
+
+## 2026-09-25 (sixth) — KNEG-321: the notes sidebar groups by folder, and one call had to be added to make folders usable
 
 The owner asked for two icon swaps (new note, new folder), for the folder button to go, and for
 expand and collapse buttons beside new folder. The list was flat, so there was nothing for those
