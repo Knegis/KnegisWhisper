@@ -2016,3 +2016,20 @@ button.microphone-language-toggle:hover:not(:disabled) { background: transparent
 .note-prose > .note-section-heading:first-child { margin-top: .5rem; }
 .note-tabs > button { margin-top: 0; }
 .notes-main .note-workspace .note-editor, .notes-main .note-workspace .note-editor .milkdown .ProseMirror { min-height: 12rem; }
+
+/* The window's one tooltip (components/Tooltip.tsx): the page's own background
+ * and text, the site blue as a hairline, and an arrow at whatever it names. */
+.tooltip { position: fixed; z-index: 1200; max-width: 20rem; padding: 4px 8px; border: 1px solid var(--band); border-radius: 4px; background: var(--bg); color: var(--text); font-family: var(--font-sans); font-size: 0.8rem; font-weight: 400; line-height: 1.35; box-shadow: 0 4px 12px #0002; pointer-events: none; white-space: pre-line; overflow-wrap: anywhere; }
+/* The arrow is two clipped triangles, the blue one a hair taller than the one in the page colour,
+ * rather than a rotated bordered square: at 150% scaling the square's rotated hairlines came out
+ * anti-aliased and its base met the box's border with visible notches. The inner triangle also
+ * paints over the box's border for the width of the base, so the outline runs unbroken from the
+ * box up the arrow and back. */
+.tooltip-arrow { position: absolute; width: 12px; height: 7px; transform: translateX(-50%); }
+.tooltip-arrow::before, .tooltip-arrow::after { content: ""; position: absolute; left: 0; width: 12px; height: 7px; clip-path: polygon(50% 0, 100% 100%, 0 100%); }
+.tooltip-arrow::before { top: 0; background: var(--band); }
+.tooltip-arrow::after { top: 1.5px; background: var(--bg); }
+.tooltip[data-side="below"] .tooltip-arrow { top: -7px; }
+.tooltip[data-side="above"] .tooltip-arrow { bottom: -7px; }
+.tooltip[data-side="above"] .tooltip-arrow::before, .tooltip[data-side="above"] .tooltip-arrow::after { clip-path: polygon(50% 100%, 100% 0, 0 0); }
+.tooltip[data-side="above"] .tooltip-arrow::after { top: -1.5px; }
