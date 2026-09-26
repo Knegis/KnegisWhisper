@@ -51,6 +51,7 @@ import { installIdleScrollbars } from "./lib/idleScrollbars";
 import { useRefresh } from "./lib/useRefresh";
 import { MeetingNotification } from "./MeetingNotification";
 import { Overlay } from "./Overlay";
+import { Tooltips } from "./components/Tooltip";
 import { UpdateNotification } from "./UpdateNotification";
 import { DiagnosticsView } from "./views/Diagnostics";
 import { DictationView } from "./views/Dictation";
@@ -281,7 +282,7 @@ function MainWindow() {
   useEffect(installIdleScrollbars, []);
   const [sidebarExpanded, setSidebarExpanded] = useState(true);
   const toggleSidebar = () => setSidebarExpanded(expanded => !expanded);
-  return <Shell sidebarExpanded={sidebarExpanded} onExpandSidebar={() => setSidebarExpanded(true)} onToggleSidebar={toggleSidebar} />;
+  return <><Shell sidebarExpanded={sidebarExpanded} onExpandSidebar={() => setSidebarExpanded(true)} onToggleSidebar={toggleSidebar} /><Tooltips /></>;
 }
 
 export default function App() {

@@ -9,7 +9,7 @@ const note = (id: number, folderId: number | null): Note => ({
 });
 const folder = (id: number, name: string): Folder => ({ id, name, isDefault: false, sortOrder: id });
 
-test("unfiled notes come first and keep their order, then every folder in order", () => {
+test("unfiled notes keep their order, and every folder is listed in order", () => {
   const groups = groupNotesByFolder(
     [note(1, 2), note(2, null), note(3, 1), note(4, null), note(5, 2)],
     [folder(1, "Work"), folder(2, "Home")],

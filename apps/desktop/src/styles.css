@@ -848,6 +848,14 @@ button.marked:hover:not(:disabled) {
   --crepe-font-code: var(--font-mono);
   --crepe-base-font-size: 14px;
 }
+/* Marked text and a block-selected row (the drag handle pressed, before it moves) take the grey
+ * Milkdown uses for its own pressed and hovered controls -- the handle, the slash menu rows --
+ * rather than Crepe's default, which is the selected colour: here the site blue, solid under
+ * marked text and under a selected list row, which swallowed the text. The owner chose the grey
+ * on 2026-09-26. `--crepe-color-hover` is `--control` in both themes. */
+.note-editor .milkdown .ProseMirror *::selection { background: var(--crepe-color-hover); }
+.note-editor .milkdown .ProseMirror *::-moz-selection { background: var(--crepe-color-hover); }
+.note-editor .milkdown .ProseMirror .ProseMirror-selectednode, .note-editor .milkdown .ProseMirror li.ProseMirror-selectednode { background: var(--crepe-color-hover); }
 
 .note-detail-header input[aria-label="Title"] {
   min-width: min(20rem, 100%);
@@ -1931,7 +1939,7 @@ button.microphone-language-toggle:hover:not(:disabled) { background: transparent
 .notes-library .row { display: flex; flex-direction: column; gap: 0.35rem; padding: 0.6rem 0; }
 .notes-library .row-value { min-width: 0; width: 100%; }
 .notes-library input, .notes-library select { min-width: 0; max-width: 100%; width: 100%; }
-.notes-library .list { padding: 0; list-style: none; }
+.notes-library .list { margin: 0; padding: 0; list-style: none; }
 .notes-library .list > li { padding: 0.75rem 0; border-bottom: 1px solid var(--faint); }
 .notes-library .list > li > .muted { display: block; font-size: 0.75rem; overflow-wrap: anywhere; margin: 0.4rem 0; }
 .notes-library button { border-radius: 2px; }
@@ -1943,10 +1951,9 @@ button.microphone-language-toggle:hover:not(:disabled) { background: transparent
 @media (max-width: 44rem) { .notes-view { --notes-rail: min(17rem, 45vw); } .notes-library { top: 0; } }
 
 .notes-library .list > li { display: block; padding: 0.15rem 0; border: 0; }
-.notes-library button.notes-entry { padding: 0.6rem 0.7rem; }
+/* One line per note: the title, with the creation time in the tooltip rather than under it. */
+.notes-library button.notes-entry { padding: 0.35rem 0.7rem; }
 .notes-entry-title { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-family: var(--font-sans); font-size: 1rem; font-weight: 400; line-height: 1.4; }
-.notes-entry-date { display: block; margin-top: 0.2rem; font-family: var(--font-mono); font-size: 0.75rem; line-height: 1.3; color: var(--muted); }
-.notes-entry-current .notes-entry-date, .notes-entry:hover .notes-entry-date { color: inherit; opacity: 0.8; }
 .notes-context-menu { position: fixed; z-index: 1100; width: 15rem; max-width: calc(100vw - 16px); max-height: calc(100vh - 16px); overflow: auto; padding: 0.35rem; background: var(--bg); color: var(--text); border: 1px solid var(--faint); border-radius: 2px; box-shadow: 0 6px 18px #0002; }
 .notes-context-menu > button { display: block; width: 100%; margin: 0; padding: 0.5rem 0.65rem; text-align: left; border-radius: 2px; }
 .notes-context-menu .row { display: flex; flex-direction: column; gap: 0.35rem; padding: 0.5rem 0.65rem; }
@@ -1959,19 +1966,28 @@ button.microphone-language-toggle:hover:not(:disabled) { background: transparent
 .notes-library-tools svg { display: block; width: 18px; height: 18px; flex: 0 0 18px; }
 .notes-library-tools button[aria-expanded="true"], .notes-library-tools button[data-active="true"] { background: var(--band); color: var(--band-ink); }
 .notes-tool-panel { display: flex; flex-direction: column; gap: 0.5rem; margin-top: 0.75rem; }
-/* A folder heading is a row, not a boxed button: a disclosure, the name, the count. Mono
- * uppercase like the other section labels, muted until pointed at, so the notes stay the
- * loudest thing in the list. */
-.notes-folder { margin-top: 0.35rem; }
-.notes-library button.notes-folder-toggle { display: flex; align-items: center; gap: 0.4rem; width: 100%; margin: 0; padding: 0.45rem 0.35rem; text-align: left; font-family: var(--font-mono); font-size: 0.75rem; line-height: 16px; letter-spacing: 0.5px; text-transform: uppercase; color: var(--muted); }
+/* A folder heading is a row, not a boxed button: a disclosure and the name. The name is set
+ * exactly like a note's title (same face, size and leading), muted until pointed at, so the
+ * disclosure and the colour are what tell a folder from a note. */
+/* One vertical rhythm for the whole list: a note row and a folder row each carry 0.15rem above
+ * and below (the list item's padding, the heading's margin) and the same 0.35rem inside, so the
+ * gap is the same between two notes, between a folder and its notes, and between folders. */
+.notes-folder { margin: 0; }
+.notes-library button.notes-folder-toggle { display: flex; align-items: center; gap: 0.4rem; width: 100%; margin: 0.15rem 0; padding: 0.35rem 0.35rem; text-align: left; font-family: var(--font-sans); font-size: 1rem; font-weight: 400; line-height: 1.4; color: var(--muted); }
 .notes-library button.notes-folder-toggle:hover, .notes-library button.notes-folder-toggle:focus-visible { color: var(--text); }
 .notes-folder-chevron { width: 14px; height: 14px; flex: 0 0 14px; transition: transform 120ms ease; }
 .notes-folder-toggle[aria-expanded="true"] .notes-folder-chevron { transform: rotate(90deg); }
 .notes-folder-name { min-width: 0; flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.notes-folder-count { flex: none; }
 /* Filed notes sit one step in from their heading; the unfiled list keeps the full width. */
 .notes-folder > div > .list { padding-left: 0.9rem; }
-.notes-folder-empty { margin: 0.2rem 0 0.4rem 1.25rem; font-size: 0.8rem; }
+.notes-folder-empty { margin: 0.15rem 0 0.15rem 1.25rem; font-size: 0.8rem; }
+/* Filing by drag: the note in the air fades, the group under the pointer gets the site blue as
+ * an outline, and a "No folder" strip appears at the top while a filed note is being dragged,
+ * so taking a note out of a folder has somewhere to land even when nothing is unfiled. */
+.notes-library button.notes-entry[data-dragging] { opacity: 0.45; }
+.notes-folder[data-drop-target] { outline: 1px solid var(--band); outline-offset: 2px; border-radius: 2px; }
+.notes-drop-unfiled { margin: 0.15rem 0; padding: 0.35rem 0.35rem; border: 1px dashed var(--faint); border-radius: 2px; font-family: var(--font-mono); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); text-align: center; }
+.notes-drop-unfiled[data-drop-target] { border-style: solid; border-color: var(--band); color: var(--band); }
 
 /* Vocabulary uses the same compact controls and typography as the sidebar. */
 .vocabulary-add { display: flex; gap: .5rem; margin: 1rem 0; }
@@ -2016,3 +2032,20 @@ button.microphone-language-toggle:hover:not(:disabled) { background: transparent
 .note-prose > .note-section-heading:first-child { margin-top: .5rem; }
 .note-tabs > button { margin-top: 0; }
 .notes-main .note-workspace .note-editor, .notes-main .note-workspace .note-editor .milkdown .ProseMirror { min-height: 12rem; }
+
+/* The window's one tooltip (components/Tooltip.tsx): the page's own background
+ * and text, the site blue as a hairline, and an arrow at whatever it names. */
+.tooltip { position: fixed; z-index: 1200; max-width: 20rem; padding: 4px 8px; border: 1px solid var(--band); border-radius: 4px; background: var(--bg); color: var(--text); font-family: var(--font-sans); font-size: 0.8rem; font-weight: 400; line-height: 1.35; box-shadow: 0 4px 12px #0002; pointer-events: none; white-space: pre-line; overflow-wrap: anywhere; }
+/* The arrow is two clipped triangles, the blue one a hair taller than the one in the page colour,
+ * rather than a rotated bordered square: at 150% scaling the square's rotated hairlines came out
+ * anti-aliased and its base met the box's border with visible notches. The inner triangle also
+ * paints over the box's border for the width of the base, so the outline runs unbroken from the
+ * box up the arrow and back. */
+.tooltip-arrow { position: absolute; width: 12px; height: 7px; transform: translateX(-50%); }
+.tooltip-arrow::before, .tooltip-arrow::after { content: ""; position: absolute; left: 0; width: 12px; height: 7px; clip-path: polygon(50% 0, 100% 100%, 0 100%); }
+.tooltip-arrow::before { top: 0; background: var(--band); }
+.tooltip-arrow::after { top: 1.5px; background: var(--bg); }
+.tooltip[data-side="below"] .tooltip-arrow { top: -7px; }
+.tooltip[data-side="above"] .tooltip-arrow { bottom: -7px; }
+.tooltip[data-side="above"] .tooltip-arrow::before, .tooltip[data-side="above"] .tooltip-arrow::after { clip-path: polygon(50% 100%, 100% 0, 0 0); }
+.tooltip[data-side="above"] .tooltip-arrow::after { top: -1.5px; }

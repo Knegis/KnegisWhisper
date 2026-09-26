@@ -6,7 +6,33 @@ that 787 passing tests had all missed**, and the one on 2026-08-26 found three m
 
 Maintained in place. When something here becomes false, edit it.
 
-## 2026-09-25 (fourth, latest) — KNEG-318: speakers can be named, and only the round trip has been measured
+## 2026-09-26 (first, latest) — KNEG-322, KNEG-324, KNEG-325: sidebar and tooltip work, measured in headless Edge and partly seen in the window
+
+Built on `worktree-frontend` from `dev` at `b31bf0e`. Gates pass on the branch.
+
+### Verified
+
+- **In the running Tauri window** (WebView2, 150% scaling, over the DevTools port): the tooltip's
+  arrow geometry after the clip-path change, at 8x; the owner saw the tooltips, the folder order,
+  the one-line entries, the spacing and the selection colour on screen and asked for each
+  adjustment in turn.
+- **In headless Edge against the fixtures:** tooltip hover, press, Tab, Escape and attribute
+  restore; a note opened five ways lands at the top at two window heights (KNEG-322); drag and
+  drop with synthetic events (file, unfile via the strip, same-folder no-op, a file drag refused);
+  every gap between sidebar rows at 0.3rem; a block-selected list row, a block-selected paragraph
+  and a text selection all computing to the control grey.
+
+### Still unchecked, and needs a person at the machine
+
+1. **Drag a note with the mouse** onto a folder heading, onto a collapsed folder, onto the "No
+   folder" strip, and onto its own folder; the outline follows the pointer and the strip only
+   appears for a filed note.
+2. **Open a long note** from the sidebar after scrolling another one, and from the title bar
+   search: the pane starts at the top with its padding intact.
+3. **Tooltips in the dark theme**, and on a button near the bottom of the window (the box should
+   flip above it).
+
+## 2026-09-25 (fourth) — KNEG-318: speakers can be named, and only the round trip has been measured
 
 Built and merged on `dev` (`19e97f3`, `bf1566c`; merges `90a682d`, `2e6946d`).
 Every gate passes on the merged tree. Nothing below has been clicked by a person.

@@ -13,6 +13,7 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  type DragEvent as ReactDragEvent,
 } from "react";
 
 import { createPortal } from "react-dom";
@@ -38,6 +39,7 @@ import {
   type SearchHit,
 } from "../lib/ipc";
 import { groupNotesByFolder } from "../lib/noteGroups";
+import { carriesNote, draggedNoteId, folderChange, NOTE_DRAG_TYPE } from "../lib/noteDrag";
 import { useRefresh } from "../lib/useRefresh";
 
 function noteDate(value: string | null) {
@@ -185,6 +187,40 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote }: 
     await selectNote(id);
   });
 
+  // Filing by drag and drop, and by the right-click menu, through one move.
+  // `drag` is the note in the air, whose folder decides whether the "No folder"
+  // strip is offered; `dropTarget` is the group under the pointer: a folder id,
+  // null for the strip, undefined for none.
+  const [drag, setDrag] = useState<{ noteId: number; folderId: number | null } | null>(null);
+  const [dropTarget, setDropTarget] = useState<number | null | undefined>(undefined);
+  const moveNote = useCallback((note: Note, folderId: number | null) => {
+    reveal(folderId);
+    // Flushed first: the workspace may hold an unsaved edit of this very note,
+    // and the reload after the move would show the stored text over the typed one.
+    void guard(async () => { await workspaceRef.current?.flush(); await setNoteFolder(note.id, folderId); });
+  }, [guard, reveal]);
+  const dropHandlers = (target: number | null) => ({
+    onDragOver: (event: ReactDragEvent<HTMLElement>) => {
+      if (!carriesNote(event.dataTransfer.types)) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "move";
+      setDropTarget(target);
+    },
+    onDragLeave: (event: ReactDragEvent<HTMLElement>) => {
+      if (event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)) return;
+      setDropTarget(current => (current === target ? undefined : current));
+    },
+    onDrop: (event: ReactDragEvent<HTMLElement>) => {
+      const id = draggedNoteId(event.dataTransfer);
+      if (id === null) return;
+      event.preventDefault();
+      setDropTarget(undefined);
+      setDrag(null);
+      const note = data?.notes.find(item => item.id === id);
+      if (note && folderChange(note.folderId, target)) moveNote(note, target);
+    },
+  });
+
   if (!data) {
     return (
       <div className="view">
@@ -202,11 +238,13 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote }: 
       {entries.map((note) => (
         <li key={note.id}>
           <button type="button" className={`notes-entry ${openNoteId === note.id ? "notes-entry-current" : ""}`} aria-current={openNoteId === note.id ? "page" : undefined} onClick={() => { void selectNote(note.id).catch(fail); }}
+            draggable data-dragging={drag?.noteId === note.id || undefined}
+            onDragStart={event => { event.dataTransfer.setData(NOTE_DRAG_TYPE, String(note.id)); event.dataTransfer.effectAllowed = "move"; setDrag({ noteId: note.id, folderId: note.folderId }); }}
+            onDragEnd={() => { setDrag(null); setDropTarget(undefined); }}
             onContextMenu={event => { event.preventDefault(); setContext({ kind: "note", note, x: event.clientX, y: event.clientY, anchor: event.currentTarget }); }}
             onKeyDown={event => { if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) { event.preventDefault(); const rect = event.currentTarget.getBoundingClientRect(); setContext({ kind: "note", note, x: rect.left, y: rect.bottom, anchor: event.currentTarget }); } }}
-            aria-haspopup="dialog">
-            <span className="notes-entry-title" title={note.title}>{note.title}</span>
-            <time className="notes-entry-date" dateTime={note.createdAt ?? undefined}>{noteDate(note.createdAt)}</time>
+            aria-haspopup="dialog" title={noteDate(note.createdAt)}>
+            <span className="notes-entry-title">{note.title}</span>
           </button>
         </li>
       ))}
@@ -293,11 +331,7 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote }: 
               const note = context.note;
               const folderId = event.target.value === "" ? null : Number(event.target.value);
               setContext(null);
-              reveal(folderId);
-              // Flushed first: the workspace may hold an unsaved edit of this
-              // very note, and the reload after the move would show the stored
-              // text over the typed one.
-              void guard(async () => { await workspaceRef.current?.flush(); await setNoteFolder(note.id, folderId); });
+              moveNote(note, folderId);
             }}>
               <option value="">No folder</option>
               {folders.map(folder => <option key={folder.id} value={folder.id}>{folder.name}</option>)}
@@ -386,18 +420,16 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote }: 
           </p>
         ) : (
           <>
-            {groups.unfiled.length > 0 && renderEntries(groups.unfiled)}
             {groups.folders.map(({ folder, notes: filed }) => {
               const open = !collapsed.has(folder.id);
               return (
-                <section key={folder.id} className="notes-folder">
+                <section key={folder.id} className="notes-folder" data-drop-target={dropTarget === folder.id || undefined} {...dropHandlers(folder.id)}>
                   <button type="button" className="notes-folder-toggle" aria-expanded={open} aria-controls={`notes-folder-${folder.id}`} aria-haspopup="dialog"
                     onClick={() => setCollapsed(prev => { const next = new Set(prev); if (next.has(folder.id)) next.delete(folder.id); else next.add(folder.id); return next; })}
                     onContextMenu={event => { event.preventDefault(); setContext({ kind: "folder", folder, x: event.clientX, y: event.clientY, anchor: event.currentTarget }); }}
                     onKeyDown={event => { if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) { event.preventDefault(); const rect = event.currentTarget.getBoundingClientRect(); setContext({ kind: "folder", folder, x: rect.left, y: rect.bottom, anchor: event.currentTarget }); } }}>
                     <svg className="notes-folder-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
                     <span className="notes-folder-name" title={folder.name}>{folder.name}</span>
-                    <span className="notes-folder-count muted">{filed.length}</span>
                   </button>
                   <div id={`notes-folder-${folder.id}`} hidden={!open}>
                     {filed.length ? renderEntries(filed) : <p className="muted notes-folder-empty">No notes in this folder.</p>}
@@ -405,6 +437,12 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote }: 
                 </section>
               );
             })}
+            {/* The strip sits just above the unfiled notes, below the folders: a note dragged out
+                of a folder starts above it, so its appearance moves nothing under the pointer. */}
+            {drag && drag.folderId !== null && folders.length > 0 && (
+              <div className="notes-drop-unfiled" data-drop-target={dropTarget === null || undefined} {...dropHandlers(null)}>No folder</div>
+            )}
+            {groups.unfiled.length > 0 && renderEntries(groups.unfiled)}
           </>
         )}
 
