@@ -13,6 +13,8 @@
 
 use kw_audio_core::wav;
 use kw_meeting_core::AudioSource;
+use kw_network_policy::NetworkPolicy;
+use kw_transcription_core::local::WhisperServer;
 
 /// Mono `f32` as the 16-bit PCM a provider takes.
 ///
@@ -51,13 +53,38 @@ pub(super) fn segment(
 
 /// What one pass over the finished recording produced.
 ///
-/// `timings` is empty when the engine returned none -- a whisper server started
-/// with `--no-timestamps` does exactly that -- which is a state the note has to
-/// be able to describe rather than a failure.
+/// `timings` is empty when the engine returned none. Whisper answers that way
+/// to a plain `json` request, which is what the pass sent until 2026-09-26
+/// (KNEG-326), and an engine may report no timings at all -- so it is a state
+/// the note has to be able to describe rather than a failure.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct WholePass {
     pub(super) text: String,
     pub(super) timings: Vec<kw_transcription_core::local::TimedSegment>,
+}
+
+/// The whisper server the whole-recording pass talks to, when whisper is the
+/// local engine.
+///
+/// `.timed()`, because the note needs cues: a speaker label attaches to a
+/// span, and a transcript row's clock and playback come from the same timings.
+/// Until 2026-09-26 (KNEG-326) this was built bare in `meeting.rs`, so the
+/// request asked for `json`, whisper answered one string, and every meeting
+/// saved on a whisper engine with speaker labels on reported that the pass
+/// "returned no timings" -- after the diarizer had run and found nothing to
+/// attach its turns to. Media import had paid for timings since 2026-08-31;
+/// the meeting pass never asked. About 45% more wall clock on the pass,
+/// measured in `local.rs`'s module doc.
+///
+/// Here rather than inline in `meeting.rs` so a test can pin it: nothing in a
+/// running application can be asked what it sent, which is how the bare server
+/// went unnoticed for 25 days.
+pub(super) fn whisper_for_note(
+    policy: NetworkPolicy,
+    port: u16,
+    model: Option<String>,
+) -> WhisperServer {
+    WhisperServer::new(policy, port, model).timed()
 }
 
 /// Turn one pass into note segments, with speaker labels where they were asked
@@ -215,10 +242,22 @@ mod tests {
     }
 
     #[test]
+    fn the_whole_recording_pass_asks_whisper_for_timings() {
+        // KNEG-326. Bare, the request is `json`, whisper answers one string,
+        // and `labelled` writes "returned no timings" on every whisper meeting
+        // with speaker labels on. The default is the cheap one for dictation's
+        // sake, so the meeting pass has to say otherwise, here.
+        let policy = kw_network_policy::NetworkPolicy::new().unwrap();
+        assert!(whisper_for_note(policy, 8178, None).asks_for_timings());
+    }
+
+    #[test]
     fn a_pass_with_no_timings_is_still_one_readable_segment() {
-        // A whisper server started with `--no-timestamps` produces this, and it
-        // is the shape every meeting note had before timings were kept. It must
-        // keep working, unlabelled, rather than becoming an error.
+        // Whisper produces this when asked for `json` rather than
+        // `verbose_json` -- which the meeting pass did until 2026-09-26
+        // (KNEG-326) -- and it is the shape every meeting note had before
+        // timings were kept. It must keep working, unlabelled, rather than
+        // becoming an error.
         let pass = WholePass {
             text: "  the whole thing  ".to_owned(),
             timings: Vec::new(),

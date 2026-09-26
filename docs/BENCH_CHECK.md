@@ -6,7 +6,30 @@ that 787 passing tests had all missed**, and the one on 2026-08-26 found three m
 
 Maintained in place. When something here becomes false, edit it.
 
-## 2026-09-26 (first, latest) — KNEG-322, KNEG-324, KNEG-325: sidebar and tooltip work, measured in headless Edge and partly seen in the window
+## 2026-09-26 (second, latest) — KNEG-326: the meeting pass asks whisper for timings, and only the request has been pinned
+
+Built on `worktree-frontend` from `dev` at `5e498c6`.
+
+### Verified
+
+- **By test:** `whisper_for_note` asks for timings (`asks_for_timings()` on the server it
+  builds); the transcription crate's 153 unit tests pass with the new accessor; the meeting
+  notes module's tests pass with the new one.
+- **By reading the owner's database and log** on 2026-09-26: dictation on `whisper-server`
+  `base`, no sherpa model selected, `local-streaming` for meetings, speaker labels on. Three
+  meetings ran that afternoon with no failure logged from the whole-recording pass or the
+  diarizer, and each note carried the "returned no timings" sentence. That is the state the fix
+  addresses; the fixed build has not recorded a meeting yet.
+
+### Still unchecked, and needs a person at the machine
+
+1. **A meeting on the fixed build** with speaker labels on and whisper as the local engine: the
+   note should carry `Speaker N` labels and timed rows (clocks in the Transcript tab, row
+   playback) and no "no timings" sentence. Note how much longer *Stop and transcribe* takes.
+2. **Whether the labels are right**, which is KNEG-125 and needs two people.
+3. **The same meeting with speaker labels off**: no sentence, and the timed rows still there.
+
+## 2026-09-26 (first) — KNEG-322, KNEG-324, KNEG-325: sidebar and tooltip work, measured in headless Edge and partly seen in the window
 
 Built on `worktree-frontend` from `dev` at `b31bf0e`. Gates pass on the branch.
 
