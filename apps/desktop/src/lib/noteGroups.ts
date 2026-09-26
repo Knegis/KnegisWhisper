@@ -1,6 +1,6 @@
 /**
- * The notes sidebar's grouping: unfiled notes first, then one group per
- * folder.
+ * The notes sidebar's grouping: one group per folder, and the unfiled notes.
+ * The view decides the order on screen (folders first, since 2026-09-26).
  *
  * Pure so the order can be tested without a screen. Both inputs keep the
  * order they arrive in — notes as the list command returns them (most
