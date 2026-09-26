@@ -417,12 +417,31 @@ impl WhisperServer {
     /// put the question to five implementors, four of which cannot answer it.
     ///
     /// Off by default, so a caller gets the cheap answer unless it says
-    /// otherwise. Dictation and meetings want one line of text; media import
-    /// wants cues, and pays for them. The measurement is in the module doc.
+    /// otherwise. Dictation wants one line of text. Media import and the
+    /// meeting's whole-recording pass want cues -- subtitles for the one,
+    /// speaker labels and timed rows for the other -- and pay for them. The
+    /// measurement is in the module doc.
+    ///
+    /// This doc said "dictation and meetings want one line of text" until
+    /// 2026-09-26, and the meeting pass was built bare to match. It had needed
+    /// timings since speaker labels landed on 2026-09-01, and on a whisper
+    /// engine they never attached (KNEG-326).
     #[must_use]
     pub const fn timed(mut self) -> Self {
         self.timed = true;
         self
+    }
+
+    /// Whether requests will ask for per-utterance timings.
+    ///
+    /// Read-only, for a caller's test to pin what it asked for. The meeting
+    /// pass needs it: nothing in a running application can be asked whether it
+    /// sent `verbose_json`, and building the server bare produced a note that
+    /// said the pass "returned no timings" for every meeting on a whisper
+    /// engine before anyone noticed.
+    #[must_use]
+    pub const fn asks_for_timings(&self) -> bool {
+        self.timed
     }
 
     #[must_use]

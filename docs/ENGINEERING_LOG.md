@@ -12,7 +12,44 @@ maintained in place rather than appended to, because its purpose is to be curren
 
 ---
 
-## 2026-09-26 (first, latest) — KNEG-322 to KNEG-325: a day of sidebar and editor asks, and two things the worktree found
+## 2026-09-26 (second, latest) — KNEG-326: speaker labels never attached on a whisper engine, and the note's own sentence pointed the wrong way
+
+The owner asked why every meeting on the streaming model ended with "Speaker labels were asked
+for and not applied: the transcription pass returned no timings". It was not the streaming model.
+
+- **The note is not built from the live provider.** Whatever ran during the meeting, the saved
+  transcript is a second pass over the finished WAV through the *dictation* engine, and the live
+  events are only that pass's fallback. With no sherpa model selected for dictation (cleared on
+  2026-09-17 when a whisper model was chosen; one local engine at a time), the pass ran on
+  `whisper-server` with `base`.
+- **Whisper only sends timings when asked.** `WhisperServer` requests `json` unless built with
+  `.timed()`, which switches to `verbose_json`; media import has done that since 2026-08-31.
+  `transcribe_whole` built the server bare, so whisper answered one string, `timings` was empty,
+  the diarizer ran anyway, and `labelled` had nothing to attach its turns to. Every whisper
+  meeting with the setting on since 2026-09-01 got the sentence; only a Parakeet engine, whose
+  CLI prints onsets unasked, ever produced labels.
+- **The explanation in the code was stale.** The match arm's comment and KNEG-124's closing note
+  both said `Text` "still arrives from a server started with `--no-timestamps`". That flag had
+  gone on 2026-08-31; `Text` arrived because the request asked for it. `timed()`'s own doc said
+  "dictation and meetings want one line of text", written the day before speaker labels needed
+  timings. All three corrected, KNEG-124 by a comment rather than a rewrite.
+- **The fix is one call, put where a test can see it.** `notes::whisper_for_note` builds the
+  server `.timed()`, and a unit test pins it through a new read-only `asks_for_timings()` on
+  `WhisperServer`. Nothing in a running application can be asked what it sent, which is how a
+  bare constructor went 25 days unnoticed. The pass costs about 45% more wall clock on whisper
+  (measured 2026-08-31), which media import already pays, and a whisper meeting note now gets
+  timed rows as well as labels.
+- **What the correlation was.** The streaming model was chosen on 2026-09-25 and the three
+  meetings of 2026-09-26 all ran on it. The same sentence would have appeared that day on the
+  `local` whisper provider or on a cloud provider.
+
+Not measured: whether `base`'s `verbose_json` segments are fine-grained enough for `assign` to
+attribute usefully (KNEG-124 left that open; it still is). Not run: a meeting on the fixed build.
+See the bench check.
+
+---
+
+## 2026-09-26 (first) — KNEG-322 to KNEG-325: a day of sidebar and editor asks, and two things the worktree found
 
 A sequence of small owner requests on the notes view, each shipped as it came, and two defects
 that were only visible because the work moved into a git worktree.
