@@ -848,6 +848,14 @@ button.marked:hover:not(:disabled) {
   --crepe-font-code: var(--font-mono);
   --crepe-base-font-size: 14px;
 }
+/* Marked text and a block-selected row (the drag handle pressed, before it moves) take the grey
+ * Milkdown uses for its own pressed and hovered controls -- the handle, the slash menu rows --
+ * rather than Crepe's default, which is the selected colour: here the site blue, solid under
+ * marked text and under a selected list row, which swallowed the text. The owner chose the grey
+ * on 2026-09-26. `--crepe-color-hover` is `--control` in both themes. */
+.note-editor .milkdown .ProseMirror *::selection { background: var(--crepe-color-hover); }
+.note-editor .milkdown .ProseMirror *::-moz-selection { background: var(--crepe-color-hover); }
+.note-editor .milkdown .ProseMirror .ProseMirror-selectednode, .note-editor .milkdown .ProseMirror li.ProseMirror-selectednode { background: var(--crepe-color-hover); }
 
 .note-detail-header input[aria-label="Title"] {
   min-width: min(20rem, 100%);
