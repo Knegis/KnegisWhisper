@@ -106,7 +106,7 @@ use config::{
     draft_config, resolve_client, resolve_corti_scope, resolve_key_ref, resolve_provider_config,
 };
 
-use notes::{labelled, pcm_bytes, segment, WholePass};
+use notes::{labelled, pcm_bytes, segment, whisper_for_note, WholePass};
 pub use recorder::Delivered;
 use recorder::{spawn_recorder, Drained, Finished, RecorderCommand, RecorderEnd};
 use watcher::{Transition, WatchState};
@@ -1603,9 +1603,7 @@ impl MeetingRuntime {
                 .read()
                 .map_err(|_| "the local model could not be read".to_owned())?
                 .clone();
-            port.map(|port| {
-                kw_transcription_core::local::WhisperServer::new(self.policy.clone(), port, model)
-            })
+            port.map(|port| whisper_for_note(self.policy.clone(), port, model))
         };
 
         let engine = crate::dictation::local_engine(&self.sherpa, whisper)?.ok_or_else(|| {
@@ -1620,9 +1618,13 @@ impl MeetingRuntime {
             // no worse without them. Until 2026-09-01 both arms collapsed to
             // one string, with a comment saying this pass "is not asked for
             // timings" -- true then, and the reason speaker labels had nothing
-            // to attach to. `Text` still arrives from a server started with
-            // `--no-timestamps`, so an empty `timings` is an ordinary state
-            // rather than a fault, and `labelled` says so on the note.
+            // to attach to. Until 2026-09-26 it was still not asked for them
+            // on whisper: the server was built bare, so the request said
+            // `json` and `Text` came back every time (KNEG-326; see
+            // `whisper_for_note`). `Text` remains a possible answer from an
+            // engine that reports no timings, so an empty `timings` stays an
+            // ordinary state rather than a fault, and `labelled` says so on
+            // the note.
             Inference::Timed { text, segments } if !text.trim().is_empty() => Ok(Some(WholePass {
                 text,
                 timings: segments,
