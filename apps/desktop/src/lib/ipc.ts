@@ -973,6 +973,17 @@ export async function setInputDevice(device: string | null): Promise<void> {
 }
 
 /**
+ * The microphone the next recording will use, or `null` for the system
+ * default. Read back so the screen can show the choice rather than assume
+ * one -- the select was uncontrolled and showed "System default" whatever
+ * was chosen. The choice itself still lives only in memory and is forgotten
+ * on restart; that is KNEG-341, not fixed here.
+ */
+export async function getInputDevice(): Promise<string | null> {
+  return invoke<string | null>("dictation_device");
+}
+
+/**
  * Whether this platform can put text at the cursor at all.
  *
  * Asked up front so the UI can say so, rather than the user discovering it at

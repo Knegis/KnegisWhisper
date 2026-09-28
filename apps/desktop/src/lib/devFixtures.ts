@@ -1572,6 +1572,7 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
   dictation_cancel: () => ({ outcome: "cancelled" }) satisfies Outcome,
   input_devices: () => INPUT_DEVICES,
   dictation_set_device: () => null,
+  dictation_device: () => null,
   insertion_supported: () => true,
   dictation_route: () => ROUTE,
   dictation_use_local: () => null,
@@ -1815,6 +1816,12 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
     detectLists = arg<Lists>(a, "lists") ?? detectLists;
     return null;
   },
+
+  /* window */
+  // `TitleBar` asks this on mount for every screen; unstubbed it threw on
+  // load and covered the page in the "no stub" toast before anyone got to
+  // look at anything else.
+  "plugin:window|is_maximized": () => false,
 };
 
 /* ------------------------------------------------------------ dev console */
