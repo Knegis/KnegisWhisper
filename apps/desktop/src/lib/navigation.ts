@@ -1,53 +1,57 @@
 /**
  * The navigation tree, and the `ViewId` union derived from it.
  *
- * This was a flat `VIEWS` array of thirteen entries inside `App.tsx`. Thirteen
- * peers in one list is a list with no shape: `Providers`, `Transcription` and
- * `Intelligence` configure the application, `Local API`, `CLI` and `MCP` expose
- * it to other programs, and `Dictation` is what it is actually for -- and none
- * of that was visible, because every one of them was one indistinguishable row
- * in the same column.
+ * # Three jobs, not thirteen screens
  *
- * So there are two groups now, `Settings` and `Developer`, and four top-level
- * destinations. Every one of the thirteen screens survives with the label it
- * already shipped; the only two new user-visible strings in the change are the
- * group names.
+ * The rail answers one question: what is this application for. That is three
+ * things -- `Dictation`, `Meetings`, `Notes` -- and everything else is either
+ * configuring one of those three (`Settings`) or exposing the application to
+ * another program (`Developer`). A flat list of thirteen peers, which is what
+ * this was before grouping, cannot say that; every screen read as equally
+ * important because every screen was one indistinguishable row in the same
+ * column.
  *
  * # Where each screen went, and why
  *
  * - **Calendar is Settings, not Developer.** It is an OAuth client-ID paste, a
  *   connect and a sync -- configuring an account, which is what the rest of
  *   Settings is.
- * - **Local models is Settings, not Developer**, which is not the obvious
- *   answer: it sits beside `CLI` and `MCP` in the request that prompted this,
- *   and it is the screen that installs a llama.cpp build. It is filed here
- *   because `config/ui-surfaces.json` calls its surface
- *   `settings.intelligence.local` and files it directly under
- *   `Settings > Intelligence`. A rail that disagreed with the config
+ * - **Local text models is Settings, not Developer**, which is not the
+ *   obvious answer: it is the screen that installs a llama.cpp build, which
+ *   sounds machine-facing. It is filed here because `config/ui-surfaces.json`
+ *   calls its surface `settings.intelligence.local` and files it directly
+ *   under `Settings > Intelligence`. A rail that disagreed with the config
  *   describing the same screen would be a second, quieter answer to "where
  *   does this live". It is also a user action -- install a model, pick one --
  *   rather than a developer one.
+ * - **Vocabulary is Settings, not top-level.** It is a dictionary that
+ *   Transcription and Meetings both read, not a job of its own the way
+ *   Dictation, Meetings and Notes are -- a colleague reaches it to fix how a
+ *   name gets spelled, which is configuration, not a destination.
  * - **Developer is the four machine-facing surfaces**: an HTTP API on
  *   loopback, a CLI binary, an MCP stdio server, and the diagnostics dump.
  *   What they have in common is that their audience is another program.
- * - **Notes and Upload stay top-level peers** rather than becoming a third
- *   group. `Notes.tsx`'s own heading is `Notes`, so a group would have had to
- *   contain a child of the same name, and neither screen is a setting or a
- *   developer surface.
+ * - **Import is an inner view of Notes, not a rail entry.** It has no job of
+ *   its own -- it exists to put a recording into the writing space Notes
+ *   already is -- so it is reached from Notes' own toolbar and empty state
+ *   (`INNER_VIEWS` below) rather than sitting beside it in the rail as a
+ *   fourth top-level peer.
  *
- * # The order, which is the old order
+ * # The Settings order (Design decision 7)
  *
- * The flat list carried this argument for its order, and it is still the
- * argument: "what someone needs first: a key is useless without a shortcut to
- * dictate with, and both are useless without knowing where the audio goes."
- * That was an ordering of the *setup* path, and the setup path is now the
- * `Settings` group -- in the same relative order, Providers before
- * Transcription before Intelligence, with Shortcuts and then Meetings ahead of
- * all three since the shortcut editor moved there out of Dictation and the
- * meeting configuration out of Meetings. Grouping did not overturn the
- * reasoning; it moved the place where it applies.
+ * Shortcuts and Meetings settings come first, ahead of the three provider/
+ * transcription/model screens, because the shortcut editor moved out of
+ * Dictation and the meeting configuration out of Meetings -- a colleague
+ * who came from either task screen to change a setting should find it near
+ * the top, not after screens that configure a different job entirely.
+ * Vocabulary follows, then Transcription, Intelligence and Local text models
+ * keep the old setup-path order ("a key is useless without a shortcut to
+ * dictate with, and both are useless without knowing where the audio goes"),
+ * and Providers moves down next to Calendar -- both are account-level
+ * connections a colleague visits rarely, once either is already configured
+ * once.
  *
- * # The ids are unchanged
+ * # The ids are mostly unchanged
  *
  * Every destination the flat array had keeps the id it used there --
  * `meetings` is still the rail's Meetings, which now opens the recording task
@@ -55,10 +59,13 @@
  * because the shortcut editor and the meeting configuration had no screen of
  * their own until they moved out of Dictation and Meetings; the second is not
  * called `meetings` because that id is taken, and the unique-id test is the
- * only thing that would catch the clash. The ids are internal -- the names
- * that have to stay stable are the surface ids in `config/ui-surfaces.json`,
- * and those live on the components, not here -- but keeping them identical
- * means `onGoToProviders` and the error boundary's reset target keep working
+ * only thing that would catch the clash. `notes-upload` is the one id that
+ * left `NAV` entirely, for `INNER_VIEWS` below -- it is still a `ViewId` and
+ * still the id `App.tsx`'s switch renders, but it is no longer a destination
+ * the rail lists on its own. The ids are internal -- the names that have to
+ * stay stable are the surface ids in `config/ui-surfaces.json`, and those
+ * live on the components, not here -- but keeping them identical means
+ * `onGoToProviders` and the error boundary's reset target keep working
  * without a translation table between two sets of names for one screen.
  */
 
@@ -78,18 +85,17 @@ export const NAV = [
   { id: "dictation", label: "Dictation" },
   { id: "meetings", label: "Meetings" },
   { id: "notes", label: "Notes" },
-  { id: "vocabulary", label: "Vocabulary" },
-  { id: "notes-upload", label: "Upload" },
   {
     id: "settings",
     label: "Settings",
     children: [
       { id: "shortcuts", label: "Shortcuts" },
       { id: "meeting-settings", label: "Meetings" },
-      { id: "providers", label: "Providers" },
+      { id: "vocabulary", label: "Vocabulary" },
       { id: "transcription", label: "Transcription" },
-      { id: "intelligence", label: "Intelligence" },
-      { id: "local-llm", label: "Local models" },
+      { id: "intelligence", label: "Cleanup & summaries" },
+      { id: "local-llm", label: "Local text models" },
+      { id: "providers", label: "Providers" },
       { id: "calendar", label: "Calendar" },
     ],
   },
@@ -103,6 +109,19 @@ export const NAV = [
       { id: "diagnostics", label: "Diagnostics" },
     ],
   },
+] as const;
+
+/**
+ * A screen reached from inside another screen rather than from the rail.
+ *
+ * `notes-upload` is still a `ViewId` -- `App.tsx`'s switch still has a case
+ * for it, and `PAGES` still carries its title -- but it is not one of `NAV`'s
+ * destinations, so `Sidebar.tsx` never lists it and `groupOf` never opens a
+ * group for it. `parent` is the rail entry that should read as current while
+ * an inner view is open; `railIdOf` below is what reads it.
+ */
+export const INNER_VIEWS = [
+  { id: "notes-upload", label: "Import audio or video", parent: "notes" },
 ] as const;
 
 export type NavEntry = (typeof NAV)[number];
@@ -128,9 +147,11 @@ type LeavesOf<E> = E extends { readonly children: readonly (infer C)[] }
  *
  * This is the reason the tree is the single source: `App.tsx`'s view switch is
  * exhaustive over `ViewId`, so a nav entry added here without a branch there is
- * a compile error instead of a rail item that opens a blank window.
+ * a compile error instead of a rail item that opens a blank window. The union
+ * includes `INNER_VIEWS`' ids too -- `notes-upload` is a screen the switch must
+ * render even though the rail never lists it as a destination.
  */
-export type ViewId = LeavesOf<NavEntry>["id"];
+export type ViewId = LeavesOf<NavEntry>["id"] | (typeof INNER_VIEWS)[number]["id"];
 
 /**
  * Dictation, because that is what the application is for.
@@ -195,4 +216,17 @@ export function groupOf(view: ViewId): string | null {
     }
   }
   return null;
+}
+
+/**
+ * The rail entry that should read as current while `view` is showing.
+ *
+ * An inner view is not in `NAV`, so comparing it against the rail directly
+ * would mark nothing -- `Sidebar.tsx` compares `railIdOf(view)` instead of
+ * `view` for exactly this reason. For every other `ViewId` this is the
+ * identity function: a screen that is already a rail entry reads as itself.
+ */
+export function railIdOf(view: ViewId): ViewId {
+  const inner = INNER_VIEWS.find((entry) => entry.id === view);
+  return inner ? inner.parent : view;
 }

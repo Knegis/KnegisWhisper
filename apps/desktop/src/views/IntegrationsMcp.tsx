@@ -1,8 +1,8 @@
 /**
- * Integrations > MCP — the exact stdio command line for
+ * Developer > MCP — the exact stdio command line for
  * `tools/knegiswhisper-mcp`, and the one fact that matters most about it:
  * this server has no backend of its own. It is a second front end over the
- * same local HTTP API `Integrations > API` starts and `Integrations > CLI`
+ * same local HTTP API `Developer > API` starts and `Developer > CLI`
  * talks to — one tool per route, using the CLI's own client and
  * discovery-file reader rather than a second implementation of either. So it
  * can only do anything while this application is running, and the screen
@@ -17,7 +17,7 @@
  *
  * The binary's location is a real filesystem check, next to this running
  * application and then on `PATH` — reported as not found rather than assumed
- * present, the same discipline `Integrations > CLI` applies to
+ * present, the same discipline `Developer > CLI` applies to
  * `knegiswhisper` itself.
  */
 

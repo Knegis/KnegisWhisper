@@ -48,7 +48,7 @@ export const PAGES = {
     intro: "Names and terms that help transcription spell them right.",
   },
   "notes-upload": {
-    title: "Upload",
+    title: "Import audio or video",
     intro: "Turn a recording into a note with a transcript.",
   },
   shortcuts: {
@@ -68,11 +68,11 @@ export const PAGES = {
     intro: "Choose where speech becomes text: on this computer or with a cloud service.",
   },
   intelligence: {
-    title: "Intelligence",
+    title: "Cleanup & summaries",
     intro: "Tidy dictated text and summarise meetings with an AI model.",
   },
   "local-llm": {
-    title: "Local models",
+    title: "Local text models",
     intro: "Run an AI text model on this computer for cleanup and summaries.",
   },
   calendar: {

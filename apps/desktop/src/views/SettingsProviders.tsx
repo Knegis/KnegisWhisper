@@ -290,7 +290,7 @@ export function SettingsProviders() {
             {enterprise.map((s) => s.name).join(", ")} use organisation
             credentials — a region and a key pair, or an endpoint and a
             deployment — rather than a single API key, so they are configured on
-            the Intelligence screen where those fields are.
+            the Cleanup &amp; summaries screen where those fields are.
           </p>
           <Row
             label="Stored here"

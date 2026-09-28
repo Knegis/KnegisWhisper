@@ -19,7 +19,7 @@ import { LanguagePopup } from "./components/LanguagePopup";
  * In-memory history tracks pages and individual notes within the main window.
  *
  * The list of screens is no longer here. `lib/navigation.ts` holds the tree —
- * four top-level destinations plus the `Settings` and `Developer` groups — and
+ * three top-level destinations plus the `Settings` and `Developer` groups — and
  * `components/Sidebar.tsx` renders it. Two things follow from that split:
  *
  *   - **`ViewId` is derived from the tree**, so the switch below is exhaustive
@@ -203,8 +203,8 @@ function Shell({ sidebarExpanded, onExpandSidebar, onToggleSidebar }: { sidebarE
   const openNote = useCallback((id: number) => navigate({ type: "visit", destination: { view: "notes", noteId: id } }), []);
 
   // Both groups start closed. Dictation is a top-level destination, so the
-  // opening rail is four screens and two sections -- shorter than the thirteen
-  // flat rows it replaced, which was the point.
+  // opening rail is three screens and two sections -- shorter than the
+  // thirteen flat rows it replaced, which was the point.
   const [openGroups, setOpenGroups] = useState<ReadonlySet<string>>(
     () => new Set(),
   );

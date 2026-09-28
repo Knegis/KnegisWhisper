@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { NAV, DEFAULT_VIEW, childrenOf, groupOf, isGroup } from "../src/lib/navigation.js";
+import { NAV, INNER_VIEWS, DEFAULT_VIEW, childrenOf, groupOf, isGroup, railIdOf } from "../src/lib/navigation.js";
 
-const topLevel = ["dictation", "meetings", "notes", "vocabulary", "notes-upload"];
+const topLevel = ["dictation", "meetings", "notes"];
 const groups = {
-  settings: ["shortcuts", "meeting-settings", "providers", "transcription", "intelligence", "local-llm", "calendar"],
+  settings: ["shortcuts", "meeting-settings", "vocabulary", "transcription", "intelligence", "local-llm", "providers", "calendar"],
   developer: ["api", "cli", "mcp", "diagnostics"],
 };
 
@@ -19,7 +19,7 @@ test("the rail retains the intended destinations, grouping, and order", () => {
 
 test("every destination has one unique id, distinct from every group id", () => {
   const leaves = NAV.flatMap((entry) => isGroup(entry) ? [...childrenOf(entry)] : [entry]);
-  assert.equal(leaves.length, 16);
+  assert.equal(leaves.length, 15);
   const ids = [...leaves.map((leaf) => leaf.id), ...NAV.filter(isGroup).map((group) => group.id)];
   assert.equal(new Set(ids).size, ids.length);
   assert.equal(DEFAULT_VIEW, "dictation");
@@ -36,6 +36,20 @@ test("group lookup opens the destination's actual group and leaves top-level vie
   assert.equal(groupOf("providers"), "settings");
   assert.equal(groupOf("shortcuts"), "settings");
   assert.equal(groupOf("meeting-settings"), "settings");
+  assert.equal(groupOf("vocabulary"), "settings");
   assert.equal(groupOf("meetings"), null);
   assert.equal(groupOf("diagnostics"), "developer");
+});
+
+test("an inner view's id does not collide with any nav id", () => {
+  const leaves = NAV.flatMap((entry) => isGroup(entry) ? [...childrenOf(entry)] : [entry]);
+  const navIds = [...leaves.map((leaf) => leaf.id), ...NAV.filter(isGroup).map((group) => group.id)];
+  for (const inner of INNER_VIEWS) {
+    assert.ok(!navIds.includes(inner.id), `${inner.id} collides with a nav id`);
+  }
+});
+
+test("railIdOf maps an inner view to its parent, and leaves a rail id alone", () => {
+  assert.equal(railIdOf("notes-upload"), "notes");
+  assert.equal(railIdOf("vocabulary"), "vocabulary");
 });

@@ -1,8 +1,8 @@
 /**
- * Integrations > CLI — where `knegiswhisper` is, where it looks for the
+ * Developer > CLI — where `knegiswhisper` is, where it looks for the
  * running application, and the real state of the file that lets it in.
  *
- * The one thing this screen exists to get right after `Integrations > API`
+ * The one thing this screen exists to get right after `Developer > API`
  * got it wrong: the discovery file's permissions are shown as the actual
  * state and its evidence, never as a boolean. A bench check found that the
  * backend's own `Permissions::is_as_expected()` returned `true` for
