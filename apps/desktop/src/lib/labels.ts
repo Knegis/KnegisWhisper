@@ -722,10 +722,16 @@ export function keytermReviewLabel(
  * control. Found the first time a provider with `language_detection: false` was
  * actually selected by a person -- `corti-realtime` has had the flag since the
  * client landed and nobody had ever reached the screen with it chosen.
+ *
+ * It then said "Fill in the Language field above" until the recording moved to
+ * its own page (KNEG-334), which put the sentence in two places: under the
+ * Language field on Settings > Meetings, where "above" was right, and folded
+ * under the Meetings page's "Needs setup", which has no field at all and whose
+ * button opens the one on Settings > Meetings. So it no longer says where.
  */
 export function languageRequiredWarning(review: ConfigReview): string | null {
   return review.languageRequired
-    ? "This provider cannot detect the language on its own. Fill in the Language field above " +
+    ? "This provider cannot detect the language on its own. Fill in the meeting language " +
         '(for example "en"), or starting will be refused.'
     : null;
 }

@@ -42,16 +42,21 @@
  * dictate with, and both are useless without knowing where the audio goes."
  * That was an ordering of the *setup* path, and the setup path is now the
  * `Settings` group -- in the same relative order, Providers before
- * Transcription before Intelligence, with Shortcuts ahead of all three since
- * the shortcut editor moved there out of Dictation. Grouping did not overturn
- * the reasoning; it moved the place where it applies.
+ * Transcription before Intelligence, with Shortcuts and then Meetings ahead of
+ * all three since the shortcut editor moved there out of Dictation and the
+ * meeting configuration out of Meetings. Grouping did not overturn the
+ * reasoning; it moved the place where it applies.
  *
  * # The ids are unchanged
  *
- * Every screen the flat array had keeps the id it used there; `shortcuts` is
- * new, because the shortcut editor had no screen of its own until it moved
- * out of Dictation. The ids are internal -- the names that have to stay
- * stable are the surface ids in `config/ui-surfaces.json`,
+ * Every destination the flat array had keeps the id it used there --
+ * `meetings` is still the rail's Meetings, which now opens the recording task
+ * rather than its configuration. `shortcuts` and `meeting-settings` are new,
+ * because the shortcut editor and the meeting configuration had no screen of
+ * their own until they moved out of Dictation and Meetings; the second is not
+ * called `meetings` because that id is taken, and the unique-id test is the
+ * only thing that would catch the clash. The ids are internal -- the names
+ * that have to stay stable are the surface ids in `config/ui-surfaces.json`,
  * and those live on the components, not here -- but keeping them identical
  * means `onGoToProviders` and the error boundary's reset target keep working
  * without a translation table between two sets of names for one screen.
@@ -80,6 +85,7 @@ export const NAV = [
     label: "Settings",
     children: [
       { id: "shortcuts", label: "Shortcuts" },
+      { id: "meeting-settings", label: "Meetings" },
       { id: "providers", label: "Providers" },
       { id: "transcription", label: "Transcription" },
       { id: "intelligence", label: "Intelligence" },
@@ -176,7 +182,8 @@ export function childrenOf(group: NavGroup): readonly [NavLeaf, ...NavLeaf[]] {
  *
  * This exists so that arriving at a screen opens the group holding it, however
  * you arrived. Screens navigate sideways -- Dictation's Change buttons open
- * Shortcuts and Transcription, and Transcription and Intelligence both offer
+ * Shortcuts and Transcription, Meetings' opens its settings under Settings,
+ * and Transcription and Intelligence both offer
  * "go to Providers" -- and the error boundary sends you to Diagnostics, which
  * lives under `Developer`. Without this, any of those would leave the rail
  * showing a collapsed group and no marked item at all.

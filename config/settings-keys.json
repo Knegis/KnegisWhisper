@@ -229,7 +229,7 @@
       "reachable": true
     },
     "meetings.provider": {
-      "what": "The meeting provider chosen on the Meetings screen. Remembered across restarts; the notification window's Record button starts an offered meeting with it too.",
+      "what": "The meeting provider chosen on Settings > Meetings. Remembered across restarts; the Meetings page starts a meeting with it, and the notification window's Record button starts an offered meeting with it too.",
       "writtenBy": [
         "meeting_set_provider"
       ],

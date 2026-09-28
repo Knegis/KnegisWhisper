@@ -163,9 +163,10 @@ const LISTS_KEY: &str = "meetings.detect";
 /// Settings key: the language to give the provider, or the empty string for
 /// automatic detection where the provider supports it.
 const LANGUAGE_KEY: &str = "meetings.language";
-/// Settings key: the provider the Meetings screen last chose, so the choice
-/// outlives the screen. Absent until somebody picks one; the screen and the
-/// offer's Record button fall back to their own defaults until then.
+/// Settings key: the provider last chosen on Settings > Meetings, so the choice
+/// outlives the screen. Absent until somebody picks one; the two meeting
+/// screens and the offer's Record button fall back to their own defaults until
+/// then.
 const PROVIDER_KEY: &str = "meetings.provider";
 /// Settings key: terms to bias recognition towards.
 #[cfg(test)]
@@ -1172,8 +1173,9 @@ impl MeetingRuntime {
     /// `watch.forget`. The runtime was idle and the screen still said
     /// "Recording", with nothing left to press: `guard` in `useRefresh.ts` does
     /// not reload when a mutation throws, so the frontend stayed on `finishing`,
-    /// where `SettingsMeetings.tsx` renders no Stop or Discard and disables
-    /// Start. Only restarting the application cleared it.
+    /// where the meeting screen (then `SettingsMeetings.tsx`, now
+    /// `views/Meetings.tsx`) renders no Stop or Discard and disables Start.
+    /// Only restarting the application cleared it.
     ///
     /// A failure is an outcome now, not an early return -- `MeetingOutcome::
     /// Failed`, naming the WAV, which is already on disk by the time any of this
@@ -2258,11 +2260,13 @@ pub async fn meeting_set_language(
         .map_err(|e| format!("could not save the language setting: {e}"))
 }
 
-/// The provider the Meetings screen last chose, or `None` before anybody has.
+/// The provider last chosen on Settings > Meetings, or `None` before anybody
+/// has.
 ///
-/// Read by the screen to seed its select and by the notification window when
-/// an offer's Record button is pressed, so the two ways into a meeting agree
-/// on the provider. Before this key existed the screen fell back to the first
+/// Read by that screen to seed its select, by the Meetings page to say who
+/// will transcribe and to start with, and by the notification window when an
+/// offer's Record button is pressed, so the ways into a meeting agree on the
+/// provider. Before this key existed the screen fell back to the first
 /// usable provider on every mount and the offer always recorded with the local
 /// one, so a choice of the local provider was forgotten by the next start
 /// (KNEG-317).

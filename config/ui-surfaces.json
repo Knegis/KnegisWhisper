@@ -42,7 +42,13 @@
       "surfaceId": "settings.meetings",
       "component": "apps/desktop/src/views/SettingsMeetings.tsx",
       "built": true,
-      "note": "Shared recognition hints are managed in Vocabulary. Sets the meeting provider, the prompt-on-detect switch, the language hint, and the allow and deny lists deciding which applications count as a meeting. The lists were the fourth capability found honoured by the backend with no way in, and the first found by tools/settings-audit/scan.mjs rather than by a person reading a screen (KNEG-114); they are edited under the list of running applications, because the name to type is the one each detection there reports."
+      "note": "Shared recognition hints are managed in Vocabulary. Sets the meeting provider, the prompt-on-detect switch, the language hint, and the allow and deny lists deciding which applications count as a meeting. The lists were the fourth capability found honoured by the backend with no way in, and the first found by tools/settings-audit/scan.mjs rather than by a person reading a screen (KNEG-114); they are edited under the list of running applications, because the name to type is the one each detection there reports. Since KNEG-334 this is the settings page only, filed under Settings in the rail: the recording task moved to the Meetings surface below, and this screen also resets the notification window's placement and switches speaker labels on. The provider is saved on change and the language when its field is left or Enter is pressed, because Start is on the Meetings page now and MeetingRuntime::start reads both from the database; both fields are disabled while a meeting is live."
+    },
+    "Meetings": {
+      "surfaceId": "meetings.record",
+      "component": "apps/desktop/src/views/Meetings.tsx",
+      "built": true,
+      "note": "The recording task: whether a meeting can be recorded (lib/readiness.ts), Start/Stop/Discard, whether the other participants are captured, the live transcript and interrupted recordings. Provider, language and detection are set on Settings > Meetings."
     },
     "Settings > Shortcuts": {
       "surfaceId": "settings.shortcuts",

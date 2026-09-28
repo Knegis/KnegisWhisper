@@ -494,9 +494,9 @@ export async function setMeetingLanguage(language: string): Promise<void> {
 }
 
 /**
- * The provider chosen on the Meetings screen, or `null` before anybody has
- * chosen one. Remembered across restarts; the offer's Record button uses it
- * too, so the two ways into a meeting agree.
+ * The provider chosen on Settings > Meetings, or `null` before anybody has
+ * chosen one. Remembered across restarts; the Meetings page's Start and the
+ * offer's Record button both use it, so the ways into a meeting agree.
  */
 export async function getMeetingProvider(): Promise<string | null> {
   return invoke<string | null>("meeting_provider");

@@ -61,6 +61,7 @@ import { IntegrationsApi } from "./views/IntegrationsApi";
 import { IntegrationsCalendar } from "./views/IntegrationsCalendar";
 import { IntegrationsCli } from "./views/IntegrationsCli";
 import { IntegrationsMcp } from "./views/IntegrationsMcp";
+import { Meetings } from "./views/Meetings";
 import { Vocabulary } from "./views/Vocabulary";
 import { Notes } from "./views/Notes";
 import { NotesUpload } from "./views/NotesUpload";
@@ -147,6 +148,8 @@ function renderView(
     case "shortcuts":
       return <SettingsShortcuts hook={diagnostics.modifierOnlyShortcuts} />;
     case "meetings":
+      return <Meetings onGoTo={select} />;
+    case "meeting-settings":
       return <SettingsMeetings onGoToVocabulary={() => select("vocabulary")} />;
     case "notes":
       return <Notes openRequest={searchNoteRequest} onOpenNote={openImportedNote} onImport={() => select("notes-upload")} />;
@@ -210,7 +213,8 @@ function Shell({ sidebarExpanded, onExpandSidebar, onToggleSidebar }: { sidebarE
    * Go to a screen, and make sure it is visible in the rail.
    *
    * Every route to a screen comes through here -- a rail press, Dictation's
-   * `onGoTo`, either `onGoToProviders`, and the error boundary's reset -- so a
+   * and Meetings' `onGoTo`, either `onGoToProviders`, both
+   * `onGoToVocabulary`, and the error boundary's reset -- so a
    * screen inside a collapsed group can never be current-but-hidden. Opening
    * is one-way on purpose: it never closes the group you just left, because a
    * rail that reshuffled itself on every navigation is harder to use than one

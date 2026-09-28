@@ -49,6 +49,7 @@ import type {
   SidecarStatus,
   SyncOutcome,
   Diagnostics,
+  DiarizationStatus,
   ExportedTranscript,
   Folder,
   Format,
@@ -656,6 +657,26 @@ let meetingKeyterms = ["Nordbank", "KnegisWhisper", "WASAPI", "Realtek"];
 let detectLists: Lists = {
   allow: ["webex.exe", "bluejeans.exe"],
   block: ["Teams.exe"],
+};
+
+/*
+ * Settings > Meetings reads this in its first load, and with no stub that load
+ * threw, so the screen rendered nothing but the error -- in dev mode it never
+ * could, before or after the recording moved to its own page. A fresh
+ * profile's answer: neither model and no runtime, the state that shows the
+ * Install buttons and the blocker line. The two models are the registry's
+ * (`generated/providers.ts`).
+ */
+const DIARIZATION: DiarizationStatus = {
+  availability: { state: "installable" },
+  cliInstalled: false,
+  models: [
+    { id: "sherpa-onnx-pyannote-segmentation-3-0", name: "Pyannote Segmentation 3.0", role: "segmentation", sizeMb: 6.6, installed: false },
+    { id: "3dspeaker-campplus-en", name: "CAM++ Speaker Embedding (English)", role: "embedding", sizeMb: 28.2, installed: false },
+  ],
+  enabled: false,
+  ready: false,
+  modelsDir: "C:\\ProgramData\\KnegisWhisper\\models\\diarization",
 };
 
 /* -------------------------------------------------------------- dictation */
@@ -1823,6 +1844,7 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
     }) satisfies UpdateCheckResult,
   update_dismiss: () => null,
 
+  diarization_status: () => DIARIZATION,
   meeting_detect_lists: () => detectLists,
   meeting_set_detect_lists: (a) => {
     detectLists = arg<Lists>(a, "lists") ?? detectLists;

@@ -688,9 +688,10 @@ section {
 
 /*
  * A row whose only child is the value -- a lone control with nothing to label
- * it, like the Start recording button on Meetings -- still belongs in the value
- * column. Without this it falls into track 1 and starts at the page edge, a
- * couple of hundred pixels left of every other control on the screen.
+ * it, like Calendar's Connect, or its Sync now and Disconnect -- still belongs
+ * in the value column. Without this it falls into track 1 and starts at the
+ * page edge, a couple of hundred pixels left of every other control on the
+ * screen.
  */
 .row > .row-value:only-child {
   grid-column: 2;
@@ -1846,9 +1847,13 @@ section > button {
  * Except one that follows the primary button, which is not standing on its
  * own: its neighbour positions it, as in a row of controls. The rule above
  * pulled it back over the primary's fill, so Dictation's Discard read as
- * "Stop and transcribeDiscard". The gap is `.controls`' own.
+ * "Stop and transcribeDiscard". The gap is `.controls`' own. The same holds
+ * for the button after that one -- Meetings' "Stop recording anyway", beside
+ * Stop and Discard -- which the rule above would otherwise pull back over
+ * Discard's hover area.
  */
-section > button.primary + button {
+section > button.primary + button,
+section > button.primary + button + button {
   margin-left: 0.5rem;
 }
 

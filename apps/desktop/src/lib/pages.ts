@@ -22,6 +22,12 @@ export type Page = { title: string; intro: string };
  * top of its own content would be telling a colleague there are two screens
  * where there is one. Renaming both together is Tasks 6-8's job, not this one's.
  *
+ * One exception, for the opposite reason: `meeting-settings` is "Meetings" in
+ * the rail, where it sits inside Settings and cannot be mistaken for anything
+ * else, and "Meeting settings" here, because a header reading "Meetings" on
+ * both it and the recording page would be telling a colleague there is one
+ * screen where there are two.
+ *
  * `satisfies` rather than a `: Record<ViewId, Page | null>` annotation: it
  * still checks every key against `ViewId` -- so a screen added to the rail
  * without an entry here is a compile error -- without widening this constant's
@@ -48,6 +54,10 @@ export const PAGES = {
   shortcuts: {
     title: "Shortcuts",
     intro: "Choose the keys that start dictation and the other actions.",
+  },
+  "meeting-settings": {
+    title: "Meeting settings",
+    intro: "Choose how meetings are transcribed, detected and labelled.",
   },
   providers: {
     title: "Providers",

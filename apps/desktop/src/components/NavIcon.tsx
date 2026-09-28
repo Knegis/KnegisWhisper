@@ -4,7 +4,7 @@ export function NavIcon({ id }: { id: string }) {
     dictation: "voice", notes: "text", "notes-upload": "upload", developer: "code", cli: "terminal",
     providers: "git-branch", intelligence: "flare", calendar: "calendar-arrow-up",
     transcription: "align-left", diagnostics: "square-wave",
-    meetings: "user-plus", "local-llm": "tv",
+    meetings: "user-plus", "meeting-settings": "user-plus", "local-llm": "tv",
   };
   if (supplied[id]) return <span aria-hidden="true" className={`nav-icon nav-icon-${supplied[id]}`} />;
   const paths: Record<string, string> = {
