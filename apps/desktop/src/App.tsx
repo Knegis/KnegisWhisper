@@ -146,7 +146,7 @@ function renderView(
     case "meetings":
       return <SettingsMeetings onGoToVocabulary={() => select("vocabulary")} />;
     case "notes":
-      return <Notes openRequest={searchNoteRequest} onOpenNote={openImportedNote} />;
+      return <Notes openRequest={searchNoteRequest} onOpenNote={openImportedNote} onImport={() => select("notes-upload")} />;
     case "vocabulary":
       return <Vocabulary />;
     case "notes-upload":

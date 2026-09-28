@@ -2,6 +2,7 @@ import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useSta
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { attachNoteRecording, getNoteRecording, getNoteSpeakerSuggestions, getNoteTranscriptRows, renameNoteSpeaker, updateNote, type Note, type NoteUpdate } from "../lib/ipc";
 import { useAutosave } from "../lib/useAutosave";
+import { saveStatusText } from "../lib/saveStatus";
 import { transcriptToMarkdown } from "../lib/noteBody";
 import { message } from "../lib/useRefresh";
 import { NoteEditor } from "./NoteEditor";
@@ -130,6 +131,7 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, { note: Note; reloa
         const value = event.target.value; draft.current.title = value; setTitle(value);
         autosave.schedule({ title: value.trim() || "Untitled note", content: draft.current.content });
       }} onBlur={normalizeTitle} />
+      {saveStatusText(autosave.status) ? <p className="save-status" role="status" aria-live="polite">{saveStatusText(autosave.status)}</p> : null}
       {autosave.status === "failed" && <p className="save-status error" role="alert">Couldn't save: {autosave.error} <button type="button" onClick={() => { void autosave.retry().catch(() => undefined); }}>Retry save</button></p>}
     </header>
     <div className="summary-tabs note-tabs" role="tablist" aria-label="Note view">

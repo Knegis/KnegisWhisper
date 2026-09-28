@@ -2100,10 +2100,17 @@ button.microphone-language-toggle:hover:not(:disabled) { background: transparent
 
 #notes-titlebar-controls { display: flex; align-items: center; }
 #notes-titlebar-controls:not(:empty) { padding: 0 0.5rem; }
-.notes-library-tools { display: flex; align-items: center; gap: 6px; }
+.notes-library-tools { display: flex; flex-direction: column; align-items: stretch; gap: 0.6rem; }
+.notes-library-actions { display: flex; align-items: center; gap: 6px; }
 .notes-library-tools button { display: flex; align-items: center; justify-content: center; width: calc(18px + 0.8rem); height: calc(18px + 0.8rem); padding: 0.4rem; margin: 0; border-radius: 2px; }
+/* The two labelled actions carry a visible word alongside their icon, so they size to their
+ * content instead of the icon-only square the rule above sets for the rest of the toolbar. */
+.notes-library-tools button.labelled { width: auto; padding: 0.4rem 0.6rem; display: inline-flex; gap: 0.4rem; }
 .notes-library-tools svg { display: block; width: 18px; height: 18px; flex: 0 0 18px; }
 .notes-library-tools button[aria-expanded="true"], .notes-library-tools button[data-active="true"] { background: var(--band); color: var(--band-ink); }
+.notes-library-list-header { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
+.notes-library-list-header h2 { margin: 0; }
+.notes-library-folder-tools { display: flex; align-items: center; gap: 6px; }
 .notes-tool-panel { display: flex; flex-direction: column; gap: 0.5rem; margin-top: 0.75rem; }
 /* A folder heading is a row, not a boxed button: a disclosure and the name. The name is set
  * exactly like a note's title (same face, size and leading), muted until pointed at, so the
