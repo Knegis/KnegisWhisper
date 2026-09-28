@@ -495,8 +495,10 @@ export async function setMeetingLanguage(language: string): Promise<void> {
 
 /**
  * The provider chosen on Settings > Meetings, or `null` before anybody has
- * chosen one. Remembered across restarts; the Meetings page's Start and the
- * offer's Record button both use it, so the ways into a meeting agree.
+ * chosen one. Remembered across restarts. Rust does not read it at start --
+ * `startMeeting` is given a provider -- so the callers read it: the Meetings
+ * page passes it when it can be used, and the offer's Record button passes it
+ * as it is, so the ways into a meeting agree once a usable one is saved.
  */
 export async function getMeetingProvider(): Promise<string | null> {
   return invoke<string | null>("meeting_provider");

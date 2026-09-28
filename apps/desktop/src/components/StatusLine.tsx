@@ -2,7 +2,9 @@ import type { Readiness } from "../lib/readiness";
 import { LearnMore } from "./LearnMore";
 
 /**
- * The machine-voice line that opens Dictation (Task 6) and Meetings (Task 7):
+ * The machine-voice line that opens Dictation (Task 6) and Meetings (Task 7)
+ * while no session is under way -- both pages leave it out once one has
+ * started, since "will starting work?" is no longer the question:
  * "Ready", with an optional caution underneath that never blocks anything, or
  * "Needs setup", with the one problem, the one button that fixes it, and the
  * detail -- when there is one -- folded under a {@link LearnMore} disclosure

@@ -8,17 +8,20 @@
  * (`views/Meetings.tsx`), which reads what is set here and sets none of it.
  *
  * That split puts one obligation on this screen: whatever it shows has to be
- * saved before anybody can press Start. `MeetingRuntime::start` reads the
- * provider and the language from the database, and Start is now a page away,
- * so the provider is saved on change and the language when its field is left
- * or Enter is pressed. There is no later moment to save them in -- the save
- * that used to run just before Start went with the button.
+ * saved before anybody can press Start, because Start is now a page away and
+ * reads both back rather than being handed them. Rust reads the language from
+ * the database when the meeting starts (`start_live`); the provider is the one
+ * the Meetings page reads back from `meetings.provider` and passes to
+ * `meeting_start`. So the provider is saved on change and the language when
+ * its field is left or Enter is pressed. There is no later moment to save them
+ * in -- the save that used to run just before Start went with the button.
  *
  * And one from the other direction: a meeting can start while this screen is
- * open -- from the notification window or a hotkey -- so it follows
- * `onMeetingState` and disables the provider and the language while a meeting
- * is live, rather than showing fields for settings the running meeting has
- * already read.
+ * open -- from the notification window -- so it follows `onMeetingState` and
+ * disables the provider and the language while a meeting is live, rather than
+ * showing fields for settings the running meeting has already been started
+ * with. (The meeting hotkey starts nothing yet: `shortcuts.rs` dispatches it
+ * as "Meeting capture is not built yet.")
  *
  * Two things this screen refuses to do.
  *

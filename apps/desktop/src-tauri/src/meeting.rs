@@ -2264,9 +2264,11 @@ pub async fn meeting_set_language(
 /// has.
 ///
 /// Read by that screen to seed its select, by the Meetings page to say who
-/// will transcribe and to start with, and by the notification window when an
-/// offer's Record button is pressed, so the ways into a meeting agree on the
-/// provider. Before this key existed the screen fell back to the first
+/// will transcribe and to pass to `meeting_start`, and by the notification
+/// window when an offer's Record button is pressed, so the ways into a meeting
+/// agree on the provider once a usable one has been saved. Nothing here reads
+/// it at start: `meeting_start` is given its provider by the caller. Before
+/// this key existed the screen fell back to the first
 /// usable provider on every mount and the offer always recorded with the local
 /// one, so a choice of the local provider was forgotten by the next start
 /// (KNEG-317).

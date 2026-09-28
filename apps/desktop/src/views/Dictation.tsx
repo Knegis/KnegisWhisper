@@ -142,10 +142,16 @@ export function DictationView({
       {error ? <p className="error">{error}</p> : null}
 
       <section data-surface="dictation.task" aria-label="Dictation">
-        <StatusLine
-          readiness={dictationReadiness({ route, hotkeys, canInsert })}
-          onFix={onGoTo}
-        />
+        {/* Only while no dictation is under way. Readiness answers "will
+            starting work?", which means nothing once one has started --
+            "Ready" over a recording, or over text being typed, reads as a
+            claim about the session. The Status row speaks for it instead. */}
+        {mic.recording || mic.busy ? null : (
+          <StatusLine
+            readiness={dictationReadiness({ route, hotkeys, canInsert })}
+            onFix={onGoTo}
+          />
+        )}
         {/* Off on a broken route: the backend resolves the route only at Stop
             and cancels on failure (`toggle`, src-tauri/src/dictation.rs), so
             Start would record words that are then thrown away. A missing

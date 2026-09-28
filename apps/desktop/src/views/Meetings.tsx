@@ -11,9 +11,11 @@
  *
  * Nothing on this page writes a setting. The provider and the language are
  * read here, never chosen: Settings > Meetings saves the provider on change and
- * the language when its field is left or Enter is pressed, and
- * `MeetingRuntime::start` reads both from the database -- so what this page
- * previews is what Start will use, with no save of its own to race.
+ * the language when its field is left or Enter is pressed. Rust reads the
+ * language from the database when the meeting starts (`start_live`); the
+ * provider is the one this page read back from `meetings.provider` and passes
+ * to `meeting_start` itself. So what this page previews is what Start will
+ * use, with no save of its own to race.
  *
  * Two things it refuses to do, carried over from the screen it came out of.
  *
@@ -26,9 +28,10 @@
  * and that is what the Status row shows.
  *
  * Meeting state arrives from Rust by event as well as by read: a meeting can
- * be started from the notification window or a hotkey whether or not this page
- * is open, so it reads the live state when it mounts and follows the events
- * after that.
+ * be started from the notification window whether or not this page is open,
+ * so it reads the live state when it mounts and follows the events after
+ * that. (The meeting hotkey starts nothing yet -- `shortcuts.rs` dispatches
+ * it as "Meeting capture is not built yet.")
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -114,9 +117,9 @@ export function Meetings({
       // -- the same thing the outcome listener below does, for the same reason.
       // Both failure states, because both put a sentence on screen and a state
       // that arrived without one would render the caveat empty. And
-      // `recording`, because a meeting started from the notification window or
-      // a hotkey while this page is open brings its provider and its sources
-      // only on `MeetingStatus` too -- without the read, "Transcribed by" would
+      // `recording`, because a meeting started from the notification window
+      // while this page is open brings its provider and its sources only on
+      // `MeetingStatus` too -- without the read, "Transcribed by" would
       // name this page's choice rather than the one actually in use, and that
       // row is where this page says whether the audio leaves this computer.
       if (
@@ -147,17 +150,22 @@ export function Meetings({
     (p) => p.availability.state === "available",
   );
   // No `chosen`: nothing is chosen on this page. The saved choice wins over
-  // the first usable provider, exactly as on Settings > Meetings, so both
-  // screens -- and the notification's Record button, which reads the same
-  // saved key -- name the same provider. `lib/meetingProvider.ts` says why the
-  // fallback never writes (KNEG-317).
+  // the first usable provider, exactly as on Settings > Meetings, so the two
+  // screens name the same provider, and this page passes it to `meeting_start`
+  // itself -- Rust does not read `meetings.provider` at start. The
+  // notification's Record button reads the same key but not through this
+  // fallback: it passes the saved id as it is, or `local` when nothing is
+  // saved (`RECORD_WITH`), which is why a meeting it started is named from
+  // `status.provider` below. `lib/meetingProvider.ts` says why the fallback
+  // never writes (KNEG-317).
   const { selected, savedUnusable } = selectProvider(
     null,
     data?.provider ?? null,
     usable.map((p) => p.id),
   );
   // The saved language, not a draft: this page has no field, and the review
-  // has to describe what `start` will read back from the database.
+  // has to describe the language `start_live` will read back from the
+  // database.
   const review = useMeetingReview(
     selected,
     data?.language ?? "",
@@ -210,7 +218,14 @@ export function Meetings({
       {error ? <p className="error">{error}</p> : null}
 
       <section data-surface="meetings.record" aria-label="Meeting">
-        <StatusLine readiness={readiness} onFix={onGoTo} />
+        {/* Only while no meeting is under way. Readiness answers "will
+            starting work?", which means nothing once one has started or is
+            being transcribed -- "Ready" above "The recording stopped
+            unexpectedly" was two answers on one screen. The Status row and
+            the caveats below speak for a running meeting instead. */}
+        {recording || current === "finishing" ? null : (
+          <StatusLine readiness={readiness} onFix={onGoTo} />
+        )}
         {stalled ? (
           /*
            * A different sentence from the one below, because a different thing
