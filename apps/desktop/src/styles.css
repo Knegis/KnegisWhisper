@@ -452,6 +452,38 @@ h2,
  */
 .sidebar button.nav-child {
   padding-left: 1.7rem;
+  /*
+   * `flex-start`, not the inherited `center`. A wrapped label (below) is taller
+   * than the icon, and centering an item against a box taller than itself is
+   * exactly what makes it drift toward the middle of both lines instead of
+   * sitting next to the first one. Scoped to `.nav-child` rather than
+   * `.sidebar button` because only a child can be long enough to wrap --
+   * Dictation, Meetings, Notes, Settings and Developer never do -- so nothing
+   * else's icon moves.
+   */
+  align-items: flex-start;
+}
+
+/*
+ * Rail labels wrap inside their own fill instead of overflowing it.
+ *
+ * `.sidebar button` sets `white-space: nowrap` for the row as a whole, which
+ * is right for the button but wrong for its longest label: "Cleanup &
+ * summaries" is wider than the child button that carries it, so the current
+ * and hover fill -- painted on the `<button>`, not on the page -- stopped
+ * eleven pixels before the text did. Widening `--nav-col` would fix the
+ * symptom by moving every other measurement in the shell; renaming the label
+ * was the owner's call to make, not this rule's. Letting the label itself
+ * wrap is the one change that touches neither. It is scoped to `.nav-label`
+ * rather than reversed on `.sidebar button` so a short label -- everything but
+ * the two long Settings children -- never wraps, because there is never a
+ * reason for it to.
+ *
+ * The retracted rail is untouched: `.shell-sidebar-retracted .nav-label` sets
+ * `display: none`, and a display:none element has no box to wrap.
+ */
+.sidebar .nav-label {
+  white-space: normal;
 }
 
 /*
