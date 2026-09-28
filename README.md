@@ -24,9 +24,9 @@ checking and an update popup are not available merely because the app builds.
 | Dictation | Global shortcuts, toggle and hold-to-talk, local Whisper/Parakeet and configured cloud routes. On Windows, modifier-only toggles such as `Control+Super` activate after all chord keys are released; an additional key cancels the gesture. |
 | Meetings | Microphone and system-audio recording, live transcription, detection/recording offers and a notification panel. Windows WASAPI capture and local/OpenAI Realtime transcription have been exercised. Other cloud meeting providers and some detection/notification scenarios still need live validation. |
 | Notes | Independent title and Notes / Transcript / Replay tabs. Personal Markdown notes precede AI summaries; empty notes can start from the transcript. Playback continues across tabs. Folders, transcript-aware full-text search and txt/md/json/srt/vtt export remain available. See [Notes workspace](docs/NOTES_WORKSPACE.md). |
-| Meeting summaries | Optional automatic/manual summaries with an independent model, editable prose, transcript references, chunked processing and retry/cancel. Configure Settings > Intelligence. See [implementation and validation](docs/MEETING_SUMMARIES.md) for model-quality limits. |
+| Meeting summaries | Optional automatic/manual summaries with an independent model, editable prose, transcript references, chunked processing and retry/cancel. Configure Settings > Cleanup & summaries. See [implementation and validation](docs/MEETING_SUMMARIES.md) for model-quality limits. |
 | Recording ownership | Older notes can attach an explicitly selected PCM16 mono/stereo WAV through a native dialog. The source is copied and preserved. Desktop and API note deletion share recording cleanup. Meeting attachment failure keeps the note and WAV and displays recovery guidance. |
-| Upload | Local audio/video is converted with ffmpeg, transcribed and saved with retained audio for playback. UI and API imports share one active slot, with no queue. Progress survives navigation; job metadata survives restart, while unfinished jobs become failed rather than resuming. URL import remains disabled. OpenWhispr database import is a separate flow. |
+| Import | Local audio/video is converted with ffmpeg, transcribed and saved with retained audio for playback. UI and API imports share one active slot, with no queue. Progress survives navigation; job metadata survives restart, while unfinished jobs become failed rather than resuming. URL import remains disabled. OpenWhispr database import is a separate flow. |
 | Local inference | Whisper and Parakeet for dictation/import, local meeting routes including streaming models, and llama.cpp for dictation cleanup. Long Parakeet inputs can crash the current offline runtime; see the findings below. Whisper uses serialized on-demand recovery, without automatically replaying a submitted transcription. |
 | API, CLI and MCP | Opt-in loopback API, CLI and a stdio MCP server with 23 tools: notes, dictionary, history search, file transcription jobs, meeting recording, status and model discovery. Discovery permissions are verified before serving; detected permission widening revokes the token and stops service. Repair is attempted once, followed by explicit retry. |
 | Calendars and diarization | Google/Microsoft public-client PKCE flows and speaker-diarization controls are built. Calendar account round trips and real-meeting speaker accuracy still need validation. Apple Calendar is not implemented. |
@@ -60,19 +60,22 @@ that time; they are not a claim that previously completed work is still missing.
 
 ## Find things in the app
 
-- **Dictation, Meetings, Notes, Upload** are top-level destinations.
-- **Settings:** Providers, Transcription, Intelligence, Local models and Calendar.
+- **Dictation, Meetings, Notes** are top-level destinations. Import audio or video is reached
+  from Notes, not from the rail.
+- **Settings:** Shortcuts, Meetings, Vocabulary, Transcription, Cleanup & summaries, Local text
+  models, Providers and Calendar.
 - **Developer:** Local API, CLI, MCP and Diagnostics.
 
-Select the transcription provider/model in **Settings > Transcription**. Upload uses that
-route; **Meetings** has its own provider selection. Converted import audio stays until its
-note is deleted, while the selected source file stays intact.
+Select the transcription provider/model in **Settings > Transcription**. Import audio or video
+uses that route; **Settings > Meetings** has its own provider selection. Converted import audio
+stays until its note is deleted, while the selected source file stays intact.
 
 For a first local dictation, install the server/model from **Settings > Transcription**,
-select the local route, then configure the shortcut in **Dictation**. For cloud transcription,
-add credentials in **Settings > Providers**, then select that provider in **Transcription**.
-**Settings > Intelligence** configures optional dictation cleanup; **Local models** manages
-local LLMs. A local transcription route with cloud cleanup still sends text to that provider.
+select the local route, then configure the shortcut in **Settings > Shortcuts**. For cloud
+transcription, add credentials in **Settings > Providers**, then select that provider in
+**Transcription**. **Settings > Cleanup & summaries** configures optional dictation cleanup;
+**Local text models** manages local LLMs. A local transcription route with cloud cleanup still
+sends text to that provider.
 
 ## Local API, CLI and MCP
 

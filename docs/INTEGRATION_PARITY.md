@@ -85,8 +85,7 @@ On success the gate prints what is declared unreachable, grouped by surface — 
 actually printed, not restated by hand:
 
 ```
-8 integrations are declared unreachable:
-  Settings > Transcription > Local      4  (surface built)
+4 integrations are declared unreachable:
   Settings > Transcription              1  (surface built)
   Settings > Meetings                   1  (surface built)
   Integrations > Calendar               1  (surface built)

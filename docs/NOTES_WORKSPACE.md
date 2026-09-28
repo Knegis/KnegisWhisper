@@ -30,13 +30,13 @@ retry remains available. Blank titles become “Untitled note”.
 During a recording, **My notes** in the meeting panel is a separate editor from
 the live **Transcript**. The editor autosaves to memory and a `.notes.md` sidecar
 beside the WAV. The panel's Stop action flushes its draft before ending the meeting.
-Stop and Discard in Settings ask the meeting window to flush and acknowledge the
+Stop and Discard in Meetings ask the meeting window to flush and acknowledge the
 draft first; a reported save failure keeps the recording open and shows an error.
-If the panel cannot respond, Settings offers **Stop recording anyway** so a broken
+If the panel cannot respond, Meetings offers **Stop recording anyway** so a broken
 window cannot leave capture running. It warns that the newest edit may be missing.
 Typed notes become the saved note body even if transcription fails. Discarding a
 recording keeps nonempty typed notes as a notes-only meeting note. An interrupted
-WAV and its notes sidecar can be recovered from Settings > Meetings (KNEG-316).
+WAV and its notes sidecar can be recovered from Meetings (KNEG-316).
 
 ## Data compatibility
 

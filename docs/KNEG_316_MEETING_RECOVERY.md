@@ -2,7 +2,7 @@
 
 An interrupted meeting can leave a WAV in the application's `meetings` directory
 without a `note_recordings` row. Personal notes may also be in the matching
-`.notes.md` sidecar. **Settings > Meetings > Interrupted recordings** lists these
+`.notes.md` sidecar. **Meetings > Interrupted recordings** lists these
 files while no meeting is running and offers recovery one recording at a time.
 Nothing is transcribed or saved until the user chooses **Recover recording**.
 

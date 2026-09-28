@@ -16,7 +16,8 @@ test("every renderer snippet is syntactically valid JavaScript", () => {
     snippets.focusState(),
     snippets.meetingSnapshot(),
     snippets.invoke("meeting_status"),
-    snippets.selectMeetingProvider("local streaming", true),
+    snippets.selectMeetingProvider("local streaming"),
+    snippets.startMeetingRecording(true),
     snippets.meetingProviderValue("local streaming"),
     snippets.clickStop(),
   ];
