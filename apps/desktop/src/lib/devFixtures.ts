@@ -1605,6 +1605,8 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
   /* meetings */
   meeting_providers: () => MEETING_PROVIDERS,
   meeting_status: () => meetingStatus,
+  meeting_recoverable_recordings: () => [],
+  meeting_recover_recording: () => { throw new Error("No interrupted recordings in the fixture profile"); },
   meeting_start: (a) => {
     const wantsSystemAudio = arg<boolean>(a, "systemAudio") ?? false;
     const sources: Sources = {

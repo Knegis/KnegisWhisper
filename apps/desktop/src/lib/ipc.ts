@@ -84,6 +84,7 @@ import type {
   MediaImportSource,
   MediaSidecar,
   MeetingOutcome,
+  RecoverableRecording,
   MeetingProviderSummary,
   MeetingState,
   MeetingStatus,
@@ -200,6 +201,7 @@ export type {
   MediaImportSource,
   MediaSidecar,
   MeetingOutcome,
+  RecoverableRecording,
   MeetingProviderSummary,
   MeetingState,
   MeetingStatus,
@@ -339,6 +341,12 @@ export async function getMeetingProviders(): Promise<MeetingProviderSummary[]> {
 
 export async function getMeetingStatus(): Promise<MeetingStatus> {
   return invoke<MeetingStatus>("meeting_status");
+}
+export async function getRecoverableRecordings(): Promise<RecoverableRecording[]> {
+  return invoke<RecoverableRecording[]>("meeting_recoverable_recordings");
+}
+export async function recoverMeetingRecording(storageKey: string): Promise<MeetingOutcome> {
+  return invoke<MeetingOutcome>("meeting_recover_recording", { storageKey });
 }
 export async function saveMeetingNotificationPlacement(): Promise<void> { return invoke("meeting_notification_placement_save"); }
 export async function resetMeetingNotificationPlacement(): Promise<void> { return invoke("meeting_notification_placement_reset"); }

@@ -806,6 +806,8 @@ transcriptIsPartials: boolean, } | { "outcome": "nothing-transcribed", recording
  */
 reconnects: number, } | { "outcome": "cancelled", noteId: number | null, } | { "outcome": "failed", message: string, };
 
+export type RecoverableRecording = { storageKey: string, hasNotes: boolean, };
+
 /**
  * An offer to record a meeting that appears to be happening.
  */

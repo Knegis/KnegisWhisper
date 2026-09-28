@@ -147,7 +147,7 @@ pub fn run() -> anyhow::Result<()> {
             // startup with a readable message rather than leaving every command
             // erroring later.
             let state = tauri::async_runtime::block_on(AppState::open())
-                .context("could not open the database")?;
+                .map_err(|error| anyhow::anyhow!("could not open the database: {error:#}"))?;
 
             let bindings = tauri::async_runtime::block_on(commands::load_bindings(&state))
                 .map_err(|e| anyhow::anyhow!(e))
@@ -511,6 +511,8 @@ pub fn run() -> anyhow::Result<()> {
             media::media_import_video,
             meeting::meeting_providers,
             meeting::meeting_status,
+            meeting::meeting_recoverable_recordings,
+            meeting::meeting_recover_recording,
             meeting::draft::meeting_notes_update,
             meeting::draft::meeting_notes_get,
             meeting_window::meeting_notification_placement_save,

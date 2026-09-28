@@ -104,6 +104,17 @@ pub async fn create_with_recording(
     create_with_recording_job(pool, note, key, duration, original, None).await
 }
 
+/// Save a recovered meeting and its application-owned WAV in one transaction.
+/// A failed attachment must not leave a second, unattached note on retry.
+pub async fn create_meeting_with_recording(
+    pool: &SqlitePool,
+    note: &NewNote,
+    key: &str,
+    duration: f64,
+) -> Result<(i64, crate::recordings::NoteRecording), StorageError> {
+    create_with_recording_on(pool, note, key, duration, None, None).await
+}
+
 /// A completed import and its durable job reference commit together.
 pub async fn create_with_recording_job(
     pool: &SqlitePool,
@@ -113,11 +124,22 @@ pub async fn create_with_recording_job(
     original: &str,
     job: Option<&str>,
 ) -> Result<(i64, crate::recordings::NoteRecording), StorageError> {
+    create_with_recording_on(pool, note, key, duration, Some(original), job).await
+}
+
+async fn create_with_recording_on(
+    pool: &SqlitePool,
+    note: &NewNote,
+    key: &str,
+    duration: f64,
+    original: Option<&str>,
+    job: Option<&str>,
+) -> Result<(i64, crate::recordings::NoteRecording), StorageError> {
     let mut tx = pool.begin().await?;
     let id = create_on(&mut *tx, note).await?;
     crate::summary::enqueue_automatic(&mut tx, id).await?;
     let recording =
-        crate::recordings::attach_on(&mut *tx, id, key, Some(duration), Some(original)).await?;
+        crate::recordings::attach_on(&mut *tx, id, key, Some(duration), original).await?;
     if let Some(job) = job {
         let changed = sqlx::query("UPDATE import_jobs SET stage = 'succeeded', note_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND stage = 'saving'")
             .bind(id).bind(job).execute(&mut *tx).await?;

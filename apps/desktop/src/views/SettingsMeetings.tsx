@@ -29,6 +29,8 @@ import {
   getMeetingProvider,
   getMeetingProviders,
   getMeetingStatus,
+  getRecoverableRecordings,
+  recoverMeetingRecording,
   reviewMeetingConfig,
   resetMeetingNotificationPlacement,
   setMeetingDetectLists,
@@ -91,7 +93,7 @@ type Live = Partial<Record<TranscriptEvent["source"], string>>;
 
 export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () => void }) {
   const load = useCallback(async () => {
-    const [providers, status, language, keyterms, detect, diarization, provider] =
+    const [providers, status, language, keyterms, detect, diarization, provider, recoverable] =
       await Promise.all([
         getMeetingProviders(),
         getMeetingStatus(),
@@ -100,8 +102,9 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
         getMeetingDetectLists(),
         getDiarizationStatus(),
         getMeetingProvider(),
+        getRecoverableRecordings(),
       ]);
-    return { providers, status, language, keyterms, detect, diarization, provider };
+    return { providers, status, language, keyterms, detect, diarization, provider, recoverable };
   }, []);
 
   const { data, error, reload, guard } = useRefresh(load);
@@ -112,6 +115,9 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
   const [sources, setSources] = useState<Sources | null>(null);
   const [live, setLive] = useState<Live>({});
   const [outcome, setOutcome] = useState<MeetingOutcome | null>(null);
+  const [recoveringKey, setRecoveringKey] = useState<string | null>(null);
+  const [recoveryError, setRecoveryError] = useState<string | null>(null);
+  const [recoveryOutcome, setRecoveryOutcome] = useState<MeetingOutcome | null>(null);
   // `null` means "not yet touched" -- the loaded, saved value is shown until
   // the user types something, the same idea `chosen` already uses for the
   // provider select.
@@ -487,6 +493,41 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
 
         {outcome ? <p className="caveat">{meetingOutcomeLabel(outcome)}</p> : null}
       </section>
+
+      {(data.recoverable.length > 0 || recoveryError || recoveryOutcome) && (
+        <section>
+          <h2>Interrupted recordings</h2>
+          <p className="caveat">These recordings are not attached to a saved note. Recover uses the local whole-recording transcriber and saves any notes typed during the meeting. The audio may end abruptly.</p>
+          {data.recoverable.map((candidate) => (
+            <div className="row" key={candidate.storageKey}>
+              <span className="row-label">{candidate.storageKey}</span>
+              <span className="row-value controls">
+                {candidate.hasNotes && <span className="muted">Typed notes found</span>}
+                <button
+                  type="button"
+                  disabled={recording || current === "finishing" || recoveringKey !== null}
+                  onClick={() => {
+                    setRecoveringKey(candidate.storageKey);
+                    setRecoveryError(null);
+                    setRecoveryOutcome(null);
+                    void recoverMeetingRecording(candidate.storageKey)
+                      .then(async (result) => {
+                        setRecoveryOutcome(result);
+                        await reload();
+                      })
+                      .catch((cause: unknown) => setRecoveryError(String(cause)))
+                      .finally(() => setRecoveringKey(null));
+                  }}
+                >
+                  {recoveringKey === candidate.storageKey ? "Recovering…" : "Recover recording"}
+                </button>
+              </span>
+            </div>
+          ))}
+          {recoveryOutcome && <p className="caveat">{meetingOutcomeLabel(recoveryOutcome)}</p>}
+          {recoveryError && <p className="error" role="alert">{recoveryError}</p>}
+        </section>
+      )}
 
       <section>
         <h2>Notification window</h2>

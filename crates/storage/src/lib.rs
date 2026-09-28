@@ -229,6 +229,26 @@ mod tests {
     use super::*;
     use sqlx::Executor as _;
 
+    #[test]
+    fn checked_in_migrations_have_lf_line_endings() {
+        let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("migrations");
+        let mut checked = 0;
+        for entry in std::fs::read_dir(directory).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_none_or(|extension| extension != "sql") {
+                continue;
+            }
+            checked += 1;
+            let bytes = std::fs::read(&path).unwrap();
+            assert!(
+                !bytes.contains(&b'\r'),
+                "{} contains CR bytes; sqlx checksums migration bytes, so normalize it to LF",
+                path.display()
+            );
+        }
+        assert!(checked > 0, "no SQL migrations were checked");
+    }
+
     async fn db() -> Db {
         Db::open_in_memory()
             .await
