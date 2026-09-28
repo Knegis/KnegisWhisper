@@ -44,6 +44,7 @@ import type {
   RecheckOutcome,
   RefreshOutcome,
   RelocatedCredential,
+  SessionState,
   ShortcutHookStatus,
   SidecarFreshness,
   Sources,
@@ -260,6 +261,32 @@ export function outcomeLabel(outcome: DictationOutcome): string {
       return "Cancelled.";
     case "failed":
       return outcome.message;
+  }
+}
+
+/**
+ * What the dictation session is doing right now, in three words or fewer.
+ *
+ * An exhaustive switch with the same `never` guard [`meetingStateLabel`] and
+ * [`freshnessLabel`] use, for the same reason: `SessionState` is a plain
+ * string union, so a fifth state added there would satisfy every `===`
+ * comparison this application already has and would still fall through here
+ * without the guard, rendering nothing rather than failing to build.
+ */
+export function sessionStateLabel(state: SessionState): string {
+  switch (state) {
+    case "idle":
+      return "Not recording";
+    case "recording":
+      return "Recording";
+    case "transcribing":
+      return "Transcribing…";
+    case "inserting":
+      return "Typing the text…";
+    default: {
+      const unhandled: never = state;
+      return unhandled;
+    }
   }
 }
 
