@@ -306,7 +306,11 @@ export function NotesUpload({ onOpenNote }: { onOpenNote: (id: number) => void }
 
       <section>
         <h2>Import from OpenWhispr</h2>
-        <p className="muted">Copies your existing OpenWhispr data into this application.</p>
+        <p className="muted">
+          Copies your notes, transcriptions and related records from
+          OpenWhispr into this application; some OpenWhispr-only data is left
+          behind.
+        </p>
         <LearnMore>
           <p>
             Copies an existing OpenWhispr <code>transcriptions.db</code> into
