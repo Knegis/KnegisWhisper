@@ -23,6 +23,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Row } from "../components/Row";
 import {
   cancelMeeting,
+  flushMeetingPanelNotes,
   getMeetingDetectLists,
   getMeetingKeyterms,
   getMeetingLanguage,
@@ -115,6 +116,7 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
   const [sources, setSources] = useState<Sources | null>(null);
   const [live, setLive] = useState<Live>({});
   const [outcome, setOutcome] = useState<MeetingOutcome | null>(null);
+  const [notesFlushFailed, setNotesFlushFailed] = useState(false);
   const [recoveringKey, setRecoveringKey] = useState<string | null>(null);
   const [recoveryError, setRecoveryError] = useState<string | null>(null);
   const [recoveryOutcome, setRecoveryOutcome] = useState<MeetingOutcome | null>(null);
@@ -146,7 +148,7 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
     const unlisteners: Array<() => void> = [];
     void onMeetingState((next) => {
       setState(next);
-      if (next === "idle") setSources(null);
+      if (next === "idle") { setSources(null); setNotesFlushFailed(false); }
       // The state event carries the state and nothing else, and the sentence
       // explaining it lives on `MeetingStatus`. Reloading is how it gets here
       // -- the same thing the outcome listener below does, for the same reason.
@@ -453,6 +455,9 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
                   type="button"
                   onClick={() => {
                     void guard(async () => {
+                      try { await flushMeetingPanelNotes(); }
+                      catch (cause) { setNotesFlushFailed(true); throw cause; }
+                      setNotesFlushFailed(false);
                       setOutcome(await stopMeeting());
                     });
                   }}
@@ -462,11 +467,19 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
                 <button
                   type="button"
                   onClick={() => {
-                    void guard(cancelMeeting);
+                    void guard(async () => {
+                      try { await flushMeetingPanelNotes(); }
+                      catch (cause) { setNotesFlushFailed(true); throw cause; }
+                      setNotesFlushFailed(false);
+                      await cancelMeeting();
+                    });
                   }}
                 >
                   Discard
                 </button>
+                {notesFlushFailed && <button type="button" onClick={() => {
+                  void guard(async () => { setOutcome(await stopMeeting()); setNotesFlushFailed(false); });
+                }}>Stop recording anyway</button>}
               </>
             ) : (
               <button
@@ -490,6 +503,8 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
             )}
           </span>
         </div>
+
+        {recording && notesFlushFailed && <p className="caveat">The meeting panel could not confirm its latest note save. Stopping anyway keeps the recording and any notes already received by the app; the most recent edit may be missing.</p>}
 
         {outcome ? <p className="caveat">{meetingOutcomeLabel(outcome)}</p> : null}
       </section>

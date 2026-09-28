@@ -1,6 +1,10 @@
 # Notes workspace
 
-Implemented on 2026-09-22 for [KNEG-297](https://linear.app/axelalbertkarlsson/issue/KNEG-297). Not pushed or release-validated.
+Implemented on 2026-09-22 for [KNEG-297](https://linear.app/axelalbertkarlsson/issue/KNEG-297).
+Recording-time personal notes followed in
+[KNEG-298](https://linear.app/axelalbertkarlsson/issue/KNEG-298) and
+[KNEG-300](https://linear.app/axelalbertkarlsson/issue/KNEG-300). Release
+validation remains open.
 
 ## Using Notes
 
@@ -10,8 +14,9 @@ editable AI summary below. An empty personal note offers **Start from transcript
 this copies literal speech and available speaker labels without changing the source.
 
 Transcript shows the original rows and playback actions. Replay provides the full
-player, transcript and recording details. Audio continues across tabs through one
-player; compact controls remain available after playback starts. Leaving the note
+player and recording details without repeating the transcript. Audio continues
+across tabs through one player; compact controls remain available after playback
+starts. Leaving the note
 stops playback. Missing recordings offer the existing native WAV attachment flow.
 Summary references open Transcript, reveal the supporting row and play its interval
 when audio exists. Tabs support arrow keys, Home and End. At widths of 900px or less,
@@ -22,17 +27,31 @@ Title, personal notes and summaries flush before tab changes, note changes and
 native window closure. A failed save retains the draft and prevents those transitions;
 retry remains available. Blank titles become “Untitled note”.
 
+During a recording, **My notes** in the meeting panel is a separate editor from
+the live **Transcript**. The editor autosaves to memory and a `.notes.md` sidecar
+beside the WAV. The panel's Stop action flushes its draft before ending the meeting.
+Stop and Discard in Settings ask the meeting window to flush and acknowledge the
+draft first; a reported save failure keeps the recording open and shows an error.
+If the panel cannot respond, Settings offers **Stop recording anyway** so a broken
+window cannot leave capture running. It warns that the newest edit may be missing.
+Typed notes become the saved note body even if transcription fails. Discarding a
+recording keeps nonempty typed notes as a notes-only meeting note. An interrupted
+WAV and its notes sidecar can be recovered from Settings > Meetings (KNEG-316).
+
 ## Data compatibility
 
-- New meetings and media imports, including API media imports, save an empty personal
-  note body. Transcript, recording and automatic summary scheduling are retained.
+- New meetings save the typed personal notes, or an empty body if none were typed.
+  Media imports, including API imports, start with an empty personal-note body.
+  Transcript, recording and automatic summary scheduling stay separate.
 - Recording-source facts and transcription warnings are saved separately as
   `notes.recording_details`, returned as nullable `Note.recordingDetails`, and shown
   read-only in Transcript and Replay. Update requests cannot edit this field.
 - Historical note bodies and OpenWhispr imports are preserved. A leading H1 matching
   the stored title is hidden as the old editor title representation, and removed
   from storage only on an explicit title/body edit. Opening a note does not write it.
-  Other headings are retained.
+  Other headings are retained. A historical body may mix transcript text, warnings
+  and authored notes; no automatic migration attempts to guess which text belongs
+  to whom. The stored transcript is still shown independently in Transcript.
 - Migration `0006_note_workspace.sql` rebuilds FTS with a derived `transcript_text`
   column in the index itself, rather than duplicating that projection in `notes`.
   SQL triggers maintain it for all writers, including foreign imports and transcript
@@ -78,6 +97,17 @@ The Notes smoke creates synthetic notes/audio and a temporary failure trigger on
 in `target/notes-smoke/profile`. Reports and screenshots are under `target/notes-smoke`.
 The summary smoke changes provider settings and uses a loopback synthetic provider.
 Never point either smoke at the normal app profile.
+
+On 2026-09-28, a second disposable native WebView2 profile checked the
+main-to-meeting save request and acknowledgement, rejection on a synthetic save
+failure, and a synthetic saved note with separate authored content, transcript and
+player-only Replay view. The report and screenshot are under
+`target/kneg300-native2/`. The app and dev server were stopped afterward. This
+did not record a real meeting or exercise the editor's Stop/Discard sequence with
+live audio; those KNEG-300 acceptance checks remain for a real meeting session.
+The current frontend passed typecheck, build, 56 tests and the capability audit;
+12 meeting composition/lifecycle tests and three notes-sidecar tests passed in
+Rust. `git diff --check` passed.
 
 Native file-dialog attachment/cancellation was not exercised in this pass. macOS,
 Linux, hosted CI and release validation remain unverified. Synthetic audio/provider

@@ -21,7 +21,7 @@
  */
 
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { emitTo, listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 import type {
   Accelerator,
@@ -369,6 +369,37 @@ export async function stopMeeting(): Promise<MeetingOutcome> {
 }
 export async function updateMeetingNotes(markdown: string): Promise<void> { return invoke("meeting_notes_update", { markdown }); }
 export async function getMeetingNotes(): Promise<string> { return invoke<string>("meeting_notes_get"); }
+
+type MeetingNotesFlush = { requestId: string; error: string | null };
+let nextMeetingNotesFlush = 0;
+
+/** Settings can stop or discard a meeting while the other window has an unsaved edit. */
+export async function flushMeetingPanelNotes(): Promise<void> {
+  if (!("__TAURI_INTERNALS__" in window)) return;
+  const requestId = `${Date.now()}-${++nextMeetingNotesFlush}`;
+  let receive!: (reply: MeetingNotesFlush) => void;
+  const reply = new Promise<MeetingNotesFlush>(resolve => { receive = resolve; });
+  const unlisten = await listen<MeetingNotesFlush>("meeting-notes-flushed", event => {
+    if (event.payload.requestId === requestId) receive(event.payload);
+  });
+  const timeout = window.setTimeout(() => receive({ requestId, error: "The meeting panel did not confirm that your notes were saved. Try again." }), 5000);
+  try {
+    await emitTo("meeting", "meeting-notes-flush", { requestId });
+    const result = await reply;
+    if (result.error) throw new Error(result.error);
+  } finally {
+    window.clearTimeout(timeout);
+    unlisten();
+  }
+}
+
+export async function onMeetingNotesFlush(handler: (requestId: string) => void): Promise<UnlistenFn> {
+  return listen<{ requestId: string }>("meeting-notes-flush", event => handler(event.payload.requestId));
+}
+
+export async function confirmMeetingNotesFlush(requestId: string, error: string | null): Promise<void> {
+  return emitTo("main", "meeting-notes-flushed", { requestId, error } satisfies MeetingNotesFlush);
+}
 
 export async function cancelMeeting(): Promise<void> {
   return invoke("meeting_cancel");
