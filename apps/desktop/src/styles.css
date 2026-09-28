@@ -155,7 +155,7 @@
 
   color-scheme: light dark;
   font-family: var(--font-sans);
-  font-size: 14px;
+  font-size: 15px;
   line-height: 1.5;
 }
 
@@ -474,11 +474,12 @@ h2,
 /*
  * The section you are in, which is a different claim from the screen you are on.
  *
- * A group header takes the ink colour and **not** the fill. There is exactly one
- * filled element on screen at a time and it is the current leaf -- that is the
- * pattern `.sidebar button.nav-current` and `button.marked` both follow, and
- * filling the header as well would put two "this one" marks in one column and
- * make neither mean anything.
+ * A group header takes the ink colour and **not** the fill. `--band` marks one
+ * thing per screen: what is true now -- the current nav item
+ * (`.sidebar button.nav-current`) or a marked control (`button.marked`) -- or,
+ * failing that, the one thing to do next (`button.primary`), and never both.
+ * Filling the header as well would put a second "this one" mark in the same
+ * column and make neither reading mean anything.
  */
 .sidebar button.nav-group-open {
   color: var(--text);
@@ -522,6 +523,97 @@ h2 {
   margin: 0 0 0.75rem;
   font-weight: 400;
   color: var(--muted);
+}
+
+/* Falls back to bold without this -- Switzer ships one weight, 400, and a
+ * browser asked for a heavier one than that counterfeits it by smearing the
+ * 400, which is exactly what this file elsewhere spends a comment warning
+ * against. */
+h3 {
+  margin: 1.5rem 0 0.5rem;
+  font-size: 1.0667rem;
+  font-weight: 400;
+}
+
+/*
+ * Page header, disclosure and status line: the furniture around a screen's
+ * `h1`, shared by every top-level view so a colleague sees the same shape on
+ * Dictation, Transcription and everywhere else.
+ *
+ * `.page-intro` is the one sentence saying what the screen is for; `.learn-
+ * more` is the rest, folded under a `<details>` so a screen for a colleague
+ * who isn't technical leads with the short version and lets anyone go looking
+ * for more. `.status-line` is the machine-voice line that opens Dictation and
+ * Transcription -- 13px/16px tracked ProFontWindows, the same spec as the
+ * sidebar and every other string reporting on the machine rather than
+ * addressing the person -- and `.status-needs-setup` is `.caveat` worn by that
+ * line's "nothing is wired up yet" state, which needs the caveat's mark but
+ * not its own top margin, since `.status-line` already carries one.
+ */
+.page-header {
+  margin: 0 0 2.25rem;
+}
+
+.page-header h1 {
+  font-size: 1.75rem;
+  line-height: 1.2;
+}
+
+.page-intro {
+  margin: 0.4rem 0 0;
+  color: var(--muted);
+  max-width: 60ch;
+}
+
+.learn-more {
+  margin: 0.5rem 0 0;
+  max-width: 76ch;
+}
+
+.learn-more > summary {
+  cursor: pointer;
+  color: var(--muted);
+  width: fit-content;
+  list-style: none;
+}
+
+.learn-more > summary::-webkit-details-marker {
+  display: none;
+}
+
+.learn-more > summary::before {
+  content: "+ ";
+}
+
+.learn-more[open] > summary::before {
+  content: "− ";
+}
+
+.learn-more > summary:hover {
+  color: var(--text);
+}
+
+.learn-more > summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.learn-more-body {
+  margin-top: 0.5rem;
+  color: var(--muted);
+}
+
+.learn-more-body > p {
+  margin: 0.4rem 0 0;
+}
+
+.status-line {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 16px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  margin: 0 0 0.75rem;
 }
 
 /*
@@ -621,29 +713,36 @@ section {
 }
 
 /*
- * Machine voice, but not uppercase: this carries paths, reasons and error
- * strings, and their casing is information.
- */
-/*
- * `max-width` in `ch`, because this column got wider and prose does not want
- * all of it.
+ * Prose, not machine voice: this carries the paragraph a settings screen
+ * writes about itself -- "the per-user location contains a space or a
+ * non-ASCII character, which the native speech binaries cannot read" -- and an
+ * explanation is prose regardless of what it explains. The mono face stays,
+ * scoped to `.row-detail code`, for the handful of strings inside these
+ * paragraphs whose characters are the point -- a path, a key, a literal the
+ * reader might need to type back.
  *
- * At the 60rem shell this replaced, the value track was 46 - 14 - 1.5 = 30.5rem,
- * which is about 68 characters of ProFontWindows at 13px. 76ch is therefore
- * slightly wider than what shipped rather than a lot wider -- the point is to
- * stop a four-line reason becoming a two-line one 115 characters across, which
- * is what an uncapped 68rem column would do. `<pre>`, `.list`, the `.row` grid
- * itself and `.note-workspace` are deliberately left uncapped: those carry data
- * and layout, where the extra width is the whole gain.
+ * `max-width` is still in `ch`, because this column got wider and prose does
+ * not want all of it: 76ch stops a four-line reason becoming a two-line one
+ * wrapping most of the window. `<pre>`, `.list`, the `.row` grid itself and
+ * `.note-workspace` are deliberately left uncapped: those carry data and
+ * layout, where the extra width is the whole gain.
+ *
+ * `font-style: normal` because the markup reaching this class is `<em>` --
+ * chosen for the semantic emphasis, not for the browser's default italic,
+ * which upright Switzer has no italic cut to render anyway.
  */
 .row-detail {
   max-width: 76ch;
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   color: var(--muted);
-  font-size: 13px;
-  line-height: 16px;
-  letter-spacing: 0.5px;
+  font-size: 0.9333rem;
+  line-height: 1.45;
+  letter-spacing: normal;
   font-style: normal;
+}
+
+.row-detail code {
+  font-family: var(--font-mono);
 }
 
 /* The same measure for a section's own prose, which is Switzer rather than
@@ -665,8 +764,8 @@ section > .muted {
  * is where the hand is.
  */
 .status-slot {
-  /* Two lines of `.row-detail`, whose line-height is 16px. */
-  min-height: 32px;
+  /* Two lines of `.row-detail`, whose line-height is 1.45em. */
+  min-height: calc(2 * 1.45em);
   margin: 0.75rem 0 0;
 }
 
@@ -691,7 +790,14 @@ section > .muted {
   border-left: 2px solid var(--accent);
   background: var(--wash);
   color: var(--text);
-  font-size: 0.8125rem;
+  font-size: 0.9375rem;
+}
+
+/* `.status-line`'s caveat state -- same mark, with the top margin zeroed,
+ * because `.status-line` already opens the gap above it and stacking both
+ * would double it. */
+.status-needs-setup {
+  margin-top: 0;
 }
 
 /*
@@ -1657,17 +1763,19 @@ option:checked:hover {
 }
 
 /*
- * Unfilled at rest; the fill arrives under the pointer.
+ * Unfilled at rest; the fill arrives under the pointer -- unless the button is
+ * `.primary`, where it is there from the start.
  *
  * This is the site's own gesture rather than a departure from it: knegis.com
  * gives its links no resting chrome at all and paints them only on hover. A
  * screen of settings is mostly things you are reading, and a grey box drawn
- * around every button competed with the values they act on.
+ * around every ordinary button competed with the values they act on.
  *
- * The blue is not gone, it is just no longer spent on hover. It marks the one
- * thing that is currently true -- the screen you are on -- and a hover state
- * painted the same colour made "you are here" and "your pointer is here"
- * indistinguishable.
+ * `--band` is spent on one claim per screen -- what is true now, or, failing
+ * that, the one thing to do next -- made by `button.marked` or
+ * `button.primary` below and never by a hover state. An ordinary button's own
+ * hover is the neutral `--control` wash instead, so "your pointer is here"
+ * never gets read as either of those.
  */
 button {
   margin-top: 0.75rem;
@@ -1682,6 +1790,28 @@ button {
 button:hover:not(:disabled) {
   background: var(--control);
   color: var(--text);
+}
+
+/*
+ * The one thing to do next, filled from the start rather than on hover -- the
+ * other half of the rule above. At most one per screen, and never on a screen
+ * that already shows `button.marked`: that screen's "one thing" is state
+ * already in effect, not a press still waiting to happen, and the two fills
+ * would make competing claims in the same colour.
+ */
+button.primary {
+  background: var(--band);
+  color: var(--band-ink);
+}
+
+button.primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--band) 88%, var(--band-ink));
+  color: var(--band-ink);
+}
+
+section > button.primary,
+.controls button.primary {
+  margin-left: 0;
 }
 
 /*
@@ -2006,7 +2136,8 @@ button.microphone-language-toggle:hover:not(:disabled) { background: transparent
 .note-prose, .summary-pane { min-width: 0; flex: 1; }
 .note-prose[hidden], .summary-pane[hidden] { display: none; }
 .summary-tabs { display: flex; gap: 8px; padding: 12px 0; }
-.summary-tabs [aria-selected="true"] { color: #0015ff; border-bottom: 2px solid currentColor; }
+.summary-tabs [role="tab"] { color: var(--muted); }
+.summary-tabs [aria-selected="true"] { color: var(--text); border-bottom: 2px solid var(--band); }
 .summary-toolbar { display: flex; flex-wrap: wrap; gap: 8px; padding-block: 8px; }
 .summary-pane > .muted, .summary-pane > .warn, .summary-pane > .error { padding-inline: 12px; }
 
