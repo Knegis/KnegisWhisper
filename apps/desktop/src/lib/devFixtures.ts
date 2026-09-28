@@ -201,7 +201,19 @@ const BINDINGS: Binding[] = [
 ];
 
 const HOTKEYS: HotkeyReport = {
-  registrations: [],
+  // One report, for dictation, because it is the one a screen reads a verdict
+  // from: `dictationReadiness` asks whether any dictation result is live. This
+  // was empty, and an empty list reads as "Needs setup" -- which the real
+  // backend never sends for a registrable binding, since `register_all`
+  // reports every binding in every mode (see `lib/readiness.ts`). The other
+  // four are left out rather than guessed at; nothing renders them unless the
+  // portal is on, and it is off here.
+  registrations: [
+    {
+      action: "dictation",
+      results: [{ state: "registered", accelerator: "Control+Shift+D" }],
+    },
+  ],
   portalSupported: false,
   portalEnabled: false,
   bindings: BINDINGS,

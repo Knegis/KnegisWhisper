@@ -44,11 +44,17 @@
       "built": true,
       "note": "Shared recognition hints are managed in Vocabulary. Sets the meeting provider, the prompt-on-detect switch, the language hint, and the allow and deny lists deciding which applications count as a meeting. The lists were the fourth capability found honoured by the backend with no way in, and the first found by tools/settings-audit/scan.mjs rather than by a person reading a screen (KNEG-114); they are edited under the list of running applications, because the name to type is the one each detection there reports."
     },
-    "Dictation > Shortcuts": {
-      "surfaceId": "dictation.shortcuts",
+    "Settings > Shortcuts": {
+      "surfaceId": "settings.shortcuts",
+      "component": "apps/desktop/src/views/SettingsShortcuts.tsx",
+      "built": true,
+      "note": "Binds an accelerator to each of the five hotkey actions and writes hotkey.<action>, and since 2026-09-01 (KNEG-64) picks toggle or hold-to-talk per action and writes hotkey.<action>.mode. Moved here from the Dictation page (KNEG-334), and the evidence moved with it: Last fired and Last dictation result sit under the editor, so binding a key and seeing whether anything handled it are still on one screen -- the first bench check could not tell \"the hotkey did nothing\" from \"the hotkey saved nothing\". The Dictation page shows the last result as well and links here to change its shortcut. The accelerator field also takes Mouse4 and Mouse5, which go to the WH_MOUSE_LL hook; the mode selector ships as toggle for every action and the screen says why holding is offered rather than defaulted. Four of the five actions have no handler; commands::hotkeys reports that as an UnhandledAction rather than letting a bound key look wired."
+    },
+    "Dictation": {
+      "surfaceId": "dictation.task",
       "component": "apps/desktop/src/views/Dictation.tsx",
       "built": true,
-      "note": "Binds an accelerator to each of the five hotkey actions and writes hotkey.<action>, and since 2026-09-01 (KNEG-64) picks toggle or hold-to-talk per action and writes hotkey.<action>.mode. Binding a key and seeing whether anything handled it are on one screen deliberately -- the first bench check could not tell \"the hotkey did nothing\" from \"the hotkey saved nothing\". The accelerator field also takes Mouse4 and Mouse5, which go to the WH_MOUSE_LL hook; the mode selector ships as toggle for every action and the screen says why holding is offered rather than defaulted. Four of the five actions have no handler; commands::hotkeys reports that as an UnhandledAction rather than letting a bound key look wired."
+      "note": "The dictation task: whether it will work (lib/readiness.ts), the Start button, and the shortcut, microphone and route it will use -- the microphone chosen in place, the shortcut and the route each with a link to where it is changed. The shortcut editor is on Settings > Shortcuts."
     },
     "Dictation > History": {
       "surfaceId": "dictation.history",

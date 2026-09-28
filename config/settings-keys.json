@@ -61,7 +61,7 @@
       "writtenBy": [
         "hotkey_set"
       ],
-      "ui": "Dictation > Shortcuts",
+      "ui": "Settings > Shortcuts",
       "reachable": true
     },
     "hotkey.chat-agent": {
@@ -69,7 +69,7 @@
       "writtenBy": [
         "hotkey_set"
       ],
-      "ui": "Dictation > Shortcuts",
+      "ui": "Settings > Shortcuts",
       "reachable": true
     },
     "hotkey.voice-agent": {
@@ -77,7 +77,7 @@
       "writtenBy": [
         "hotkey_set"
       ],
-      "ui": "Dictation > Shortcuts",
+      "ui": "Settings > Shortcuts",
       "reachable": true
     },
     "hotkey.translation": {
@@ -85,7 +85,7 @@
       "writtenBy": [
         "hotkey_set"
       ],
-      "ui": "Dictation > Shortcuts",
+      "ui": "Settings > Shortcuts",
       "reachable": true
     },
     "hotkey.meeting": {
@@ -93,7 +93,7 @@
       "writtenBy": [
         "hotkey_set"
       ],
-      "ui": "Dictation > Shortcuts",
+      "ui": "Settings > Shortcuts",
       "reachable": true
     },
     "hotkey.dictation.mode": {
@@ -101,7 +101,7 @@
       "writtenBy": [
         "hotkey_set_mode"
       ],
-      "ui": "Dictation > Shortcuts",
+      "ui": "Settings > Shortcuts",
       "reachable": true
     },
     "hotkey.chat-agent.mode": {
@@ -109,7 +109,7 @@
       "writtenBy": [
         "hotkey_set_mode"
       ],
-      "ui": "Dictation > Shortcuts",
+      "ui": "Settings > Shortcuts",
       "reachable": true
     },
     "hotkey.voice-agent.mode": {
@@ -117,7 +117,7 @@
       "writtenBy": [
         "hotkey_set_mode"
       ],
-      "ui": "Dictation > Shortcuts",
+      "ui": "Settings > Shortcuts",
       "reachable": true
     },
     "hotkey.translation.mode": {
@@ -125,7 +125,7 @@
       "writtenBy": [
         "hotkey_set_mode"
       ],
-      "ui": "Dictation > Shortcuts",
+      "ui": "Settings > Shortcuts",
       "reachable": true
     },
     "hotkey.meeting.mode": {
@@ -133,7 +133,7 @@
       "writtenBy": [
         "hotkey_set_mode"
       ],
-      "ui": "Dictation > Shortcuts",
+      "ui": "Settings > Shortcuts",
       "reachable": true
     },
     "transcription.route": {
@@ -289,7 +289,7 @@
       "writtenBy": [
         "hotkey_set_portal"
       ],
-      "ui": "Dictation > Shortcuts",
+      "ui": "Settings > Shortcuts",
       "reachable": true
     },
     "reasoning.summaries": {

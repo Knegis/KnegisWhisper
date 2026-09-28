@@ -9,6 +9,7 @@ export function NavIcon({ id }: { id: string }) {
   if (supplied[id]) return <span aria-hidden="true" className={`nav-icon nav-icon-${supplied[id]}`} />;
   const paths: Record<string, string> = {
     vocabulary: "M12 5v15M3 4c4-1 6 0 9 1 3-1 5-2 9-1v15c-4-1-6 0-9 1-3-1-5-2-9-1V4Z",
+    shortcuts: "M3 7h18v10H3zM7 11h.01M11 11h.01M15 11h.01M8 14h8",
     settings: "M4 7h6m4 0h6M4 17h10m4 0h2M10 4v6m4 4v6",
     api: "m9 6-6 6 6 6m6-12 6 6-6 6",
     mcp: "M4 4h6v6H4V4Zm10 10h6v6h-6v-6ZM7 10v7h7m3-3V7h-7",

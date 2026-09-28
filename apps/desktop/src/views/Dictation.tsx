@@ -1,11 +1,19 @@
 /**
- * Shortcuts, dictation, and what came of it.
+ * Dictation: the task, and what came of it.
  *
- * The three belong on one screen because they are one loop: bind a key, press
- * it, read the result. Splitting them would put the evidence that dictation
- * worked on a different page from the control that started it, which is how the
- * first bench check ended up unable to tell "the hotkey did nothing" from "the
- * hotkey saved nothing".
+ * The page leads with whether dictation will work (`lib/readiness.ts`), the
+ * one button that starts it, and the shortcut, microphone and route it will
+ * use -- each with a way to the place it is changed. The shortcut editor is
+ * on Settings > Shortcuts.
+ *
+ * That split had to keep the loop this page used to hold on one screen: bind
+ * a key, press it, read the result. Putting the evidence that dictation worked
+ * on a different page from the control that started it is how the first bench
+ * check ended up unable to tell "the hotkey did nothing" from "the hotkey saved
+ * nothing". So the evidence travels with each half rather than staying behind
+ * with one of them: this page shows the last result under the button that
+ * started it, and Settings > Shortcuts shows *Last fired* and *Last dictation
+ * result* under the editor.
  *
  * Dictation state arrives from Rust by event rather than being tracked here: the
  * hotkey works while this window is hidden, so the window cannot be the thing
@@ -14,9 +22,10 @@
 
 import { useCallback, useEffect, useState } from "react";
 
+import { LearnMore } from "../components/LearnMore";
 import { LocalServerHealth } from "../components/LocalServerHealth";
 import { Row } from "../components/Row";
-import { ShortcutRecorder } from "../components/ShortcutRecorder";
+import { StatusLine } from "../components/StatusLine";
 import {
   cancelDictation,
   clearHistory,
@@ -25,110 +34,70 @@ import {
   getHistory,
   getHistoryEnabled,
   getHotkeys,
-  getSetting,
-  setHotkeyPortal,
+  getInputDevice,
   getInputDevices,
   getKeepRawText,
   isInsertionSupported,
   onDictationOutcome,
   onDictationState,
-  onHotkey,
   setHistoryEnabled,
-  setHotkey,
-  setHotkeyMode,
   setInputDevice,
   setKeepRawText,
   toggleDictation,
-  type Binding,
-  type HotkeyMode,
-  type ShortcutHookStatus,
-  type UnhandledAction,
+  type SessionState,
 } from "../lib/ipc";
-import {
-  acceleratorLabel,
-  acceleratorText,
-  changeLabel,
-  hotkeyModeLabel,
-  outcomeLabel,
-} from "../lib/labels";
+import { acceleratorText, outcomeLabel, sessionStateLabel } from "../lib/labels";
+import { microphoneState } from "../lib/microphone";
+import type { ViewId } from "../lib/navigation";
+import { dictationReadiness } from "../lib/readiness";
 import { useRefresh } from "../lib/useRefresh";
 
 export function DictationView({
-  hook,
+  onGoTo,
 }: {
-  /**
-   * Whether modifier-only shortcuts work here, from diagnostics.
-   *
-   * A prop rather than a second `getDiagnostics()` call: the shell already has
-   * it, and two reads of the same fact are two chances to disagree.
-   */
-  hook: ShortcutHookStatus;
+  /** Where the status line's fix and each Change button take you. */
+  onGoTo: (id: ViewId) => void;
 }) {
   const load = useCallback(async () => {
     const [
       hotkeys,
       session,
       devices,
+      device,
       canInsert,
       route,
       history,
       historyOn,
       keepRaw,
-      portalPreference,
     ] = await Promise.all([
       getHotkeys(),
       getDictationState(),
       getInputDevices(),
+      getInputDevice(),
       isInsertionSupported(),
       getDictationRoute(),
       getHistory(20),
       getHistoryEnabled(),
       getKeepRawText(),
-      getSetting("hotkey.usePortal"),
     ]);
     return {
       hotkeys,
       session,
       devices,
+      device,
       canInsert,
       route,
       history,
       historyOn,
       keepRaw,
-      portalPreference: portalPreference === true,
     };
   }, []);
 
   const { data, error, reload, guard } = useRefresh(load);
 
-  useEffect(() => {
-    if (!data?.hotkeys.portalEnabled) return;
-    const timer = window.setInterval(() => void reload(), 3000);
-    return () => window.clearInterval(timer);
-  }, [data?.hotkeys.portalEnabled, reload]);
-
   /** Live session state, which arrives by event between reads. */
-  const [session, setSession] = useState<string | null>(null);
-  const [lastHotkey, setLastHotkey] = useState<string | null>(null);
+  const [session, setSession] = useState<SessionState | null>(null);
   const [lastOutcome, setLastOutcome] = useState<string | null>(null);
-  const [draftKeys, setDraftKeys] = useState<Record<string, string>>({});
-  const [captureBusy, setCaptureBusy] = useState(false);
-  /** Per-action outcome of the last Set press, so the control is never silent. */
-  const [hotkeyResult, setHotkeyResult] = useState<Record<string, string>>({});
-
-  // Proves the hotkey path end to end: the shortcut fires in Rust and the event
-  // arrives here.
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    void onHotkey((fired) => {
-      setLastHotkey(
-        `${fired.action} (${fired.accelerator}) at ${new Date().toLocaleTimeString()}`,
-      );
-    }).then((fn) => {
-      unlisten = fn;
-    });
-    return () => unlisten?.();
-  }, []);
 
   useEffect(() => {
     const unlisteners: Array<() => void> = [];
@@ -141,53 +110,6 @@ export function DictationView({
     return () => unlisteners.forEach((fn) => fn());
   }, [reload]);
 
-  /**
-   * Save one action's accelerator and say what happened.
-   *
-   * Every path reports something. An empty field, a refusal by the platform, and
-   * a working shortcut are three different outcomes and the row names which one
-   * it was — an earlier version of this control had a fourth, silence, which is
-   * the only unacceptable one.
-   */
-  const applyHotkey = (b: Binding) => {
-    const typed = (draftKeys[b.action] ?? acceleratorText(b)).trim();
-    if (!typed) {
-      setHotkeyResult((prev) => ({
-        ...prev,
-        [b.action]: "Type an accelerator first, for example Control+Shift+D.",
-      }));
-      return;
-    }
-    void guard(async () => {
-      // A single comma-separated string, matching `hotkey_set`: one action can
-      // have several accelerators.
-      const change = await setHotkey(b.action, typed);
-      setHotkeyResult((prev) => ({ ...prev, [b.action]: changeLabel(change) }));
-      // Drop the draft so the field goes back to mirroring what is stored.
-      setDraftKeys((prev) => {
-        const next = { ...prev };
-        delete next[b.action];
-        return next;
-      });
-    });
-  };
-
-  /**
-   * Switch one action between toggling and being held.
-   *
-   * Takes effect immediately, like the accelerator does, and reports through the
-   * same row: the backend re-registers everything and hands back the same
-   * `HotkeyChange`, so "saved but nothing was registered" cannot happen silently
-   * for a mode change any more than it can for a key.
-   */
-  const applyMode = (b: Binding, mode: HotkeyMode) => {
-    void guard(async () => {
-      const change = await setHotkeyMode(b.action, mode);
-      setHotkeyResult((prev) => ({ ...prev, [b.action]: changeLabel(change) }));
-      await reload();
-    });
-  };
-
   if (!data) {
     return (
       <div className="view">
@@ -196,244 +118,47 @@ export function DictationView({
     );
   }
 
-  const { hotkeys, devices, canInsert, route, history, historyOn, keepRaw } =
+  const { hotkeys, devices, device, canInsert, route, history, historyOn, keepRaw } =
     data;
-  // Keyed by action, because that is the shape of the fact: nothing handles the
-  // chat agent, whatever it happens to be bound to.
-  const unhandled = new Map<string, string>(
-    hotkeys.unhandled.map((u: UnhandledAction) => [u.action, u.reason]),
-  );
   const state = session ?? data.session;
-  const recording = state === "recording";
+  // The floating microphone's own reading of the session, reused rather than
+  // re-derived, so the two buttons cannot disagree -- and so Start is off
+  // while a dictation is still transcribing or being typed, which this button
+  // alone used to allow (KNEG-342).
+  const mic = microphoneState(state, false);
+  const recording = mic.recording;
+  const dictationBinding = hotkeys.bindings.find((b) => b.action === "dictation");
+  const shortcut = dictationBinding ? acceleratorText(dictationBinding) : "";
+  // A microphone chosen earlier and unplugged since. Listed as itself rather
+  // than letting the select fall back to "System default", which would read as
+  // a choice nobody made. The recording itself does fall back to the default
+  // -- `Capture::start` in crates/audio-core/src/capture.rs asks for the device
+  // by name and takes the default when it is gone -- so the row says that too.
+  const missingDevice =
+    device !== null && !devices.some((d) => d.name === device) ? device : null;
 
   return (
     <div className="view">
-      {route.isLocal ? <LocalServerHealth /> : null}
       {error ? <p className="error">{error}</p> : null}
 
-      <section data-surface="dictation.shortcuts">
-        <h2>Shortcuts</h2>
-        {hotkeys.portalSupported && (
-          <div className="field">
-            <label>
-              <input type="checkbox" checked={data.portalPreference}
-                onChange={(event) => { const enabled = event.target.checked; void guard(async () => {
-                  await setHotkeyPortal(enabled); await reload();
-                }); }} />
-              Use desktop portal for shortcuts
-            </label>
-            <p className="muted">Opt-in preview. Restart the application after changing this setting. The desktop may ask you to approve or change the shortcut.</p>
-            {data.portalPreference !== hotkeys.portalEnabled && <p role="status">Restart required to apply this change.</p>}
-          </div>
-        )}
-        {hotkeys.portalEnabled && hotkeys.registrations.map((report) => (
-          <div key={report.action} className="row-detail">
-            {report.results.map((result, index) => <p key={index}>
-              {result.accelerator}: {result.state === "portal"
-                ? `Desktop shortcut: ${result.granted ?? "see desktop shortcut settings"}`
-                : result.state === "registered" ? "Registered using the fallback shortcut service."
-                : result.state === "hooked" ? "Keyboard hook active."
-                : result.reason}
-            </p>)}
-          </div>
-        ))}
-        {hotkeys.bindings.map((b) => (
-          <div key={b.action} className="row">
-            <span className="row-label">{b.action}</span>
-            <span className="row-value">
-              {/*
-                First, and ahead of the accelerator, because it outranks anything
-                the accelerator could say. Four of these five actions used to
-                register a real system shortcut and then do nothing whatsoever
-                when pressed — and the row showed a tidy `Control+Shift+Space`
-                with no problem beside it, which is the interface agreeing that
-                it worked.
-              */}
-              {unhandled.has(b.action) ? (
-                <em className="row-detail warn">{unhandled.get(b.action)}</em>
-              ) : null}
-              {b.accelerators.length === 0 ? (
-                <em className="row-detail">none configured</em>
-              ) : (
-                b.accelerators.map((a, i) => {
-                  const label = acceleratorLabel(a, hook);
-                  return (
-                    <span key={`${b.action}-${i}`}>
-                      <code>{label.text}</code>
-                      {label.problem ? (
-                        <em className="row-detail warn">{label.problem}</em>
-                      ) : null}
-                    </span>
-                  );
-                })
-              )}
-              {/*
-                Prefilled with what is actually configured, not a placeholder. A
-                placeholder reading `Control+Shift+D` is indistinguishable from a typed
-                value, so the field looked filled, the button was disabled for being
-                empty, and pressing it did nothing and said nothing. That cost a real
-                bench check.
-              */}
-              <input
-                aria-label={`accelerator for ${b.action}`}
-                disabled={captureBusy}
-                value={draftKeys[b.action] ?? acceleratorText(b)}
-                onChange={(e) => {
-                  setDraftKeys((prev) => ({
-                    ...prev,
-                    [b.action]: e.target.value,
-                  }));
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") applyHotkey(b);
-                }}
-              />
-              <ShortcutRecorder disabled={captureBusy || hotkeys.portalEnabled}
-                onBusy={setCaptureBusy}
-                onCaptured={value => {
-                  setDraftKeys(prev => ({ ...prev, [b.action]: value }));
-                  setHotkeyResult(prev => ({ ...prev, [b.action]: "Shortcut recorded. Press Set to save." }));
-                }}
-                onError={message => setHotkeyResult(prev => ({ ...prev, [b.action]: message }))} />
-              {/* Never disabled: a control that silently does nothing is the defect. */}
-              <button type="button" disabled={captureBusy} onClick={() => applyHotkey(b)}>
-                Set
-              </button>
-              {/*
-                Toggle or hold, per action. The shipped default is Toggle for
-                every one of them and deliberately stays that way: holding is
-                one of the answers to the prefix problem the caution below
-                describes (KNEG-115), and making it the default would settle
-                that question by accident. The option exists; the decision does
-                not come from here.
-              */}
-              <select
-                aria-label={`mode for ${b.action}`}
-                disabled={captureBusy}
-                value={b.mode}
-                onChange={(e) => applyMode(b, e.target.value as HotkeyMode)}
-              >
-                {(["toggle", "hold"] as const).map((m) => (
-                  <option key={m} value={m}>
-                    {hotkeyModeLabel(m).text}
-                  </option>
-                ))}
-              </select>
-              <em className="row-detail">{hotkeyModeLabel(b.mode).detail}</em>
-              {hotkeyResult[b.action] ? (
-                <em className="row-detail">{hotkeyResult[b.action]}</em>
-              ) : null}
-            </span>
-          </div>
-        ))}
-        {hotkeys.conflicts.length > 0 ? (
-          <p className="caveat">
-            {hotkeys.conflicts
-              .map(
-                (c) => `${c.accelerator} is claimed by ${c.actions.join(" and ")}`,
-              )
-              .join("; ")}
-            .
-          </p>
-        ) : null}
-        {/*
-          A third category, warn-coloured rather than filed under the caveats
-          below, because it is the only thing on this screen that says a hotkey
-          which *works* will also do something you did not ask for. Binding
-          `Control+Alt` on a Nordic or German layout starts a dictation every
-          time you type `@` — the keys Windows sends for AltGr are the chord,
-          and nothing downstream can tell the two apart. See KNEG-37.
-        */}
-        {hotkeys.cautions.map((c, i) => (
-          <p className="caveat warn" key={`caution-${i}`}>
-            <strong>{c.action}:</strong> {c.reason}
-          </p>
-        ))}
-        {lastHotkey ? <Row label="Last fired" value={lastHotkey} /> : null}
-        {hotkeys.unhandled.length > 0 ? (
-          <p className="caveat">
-            {hotkeys.unhandled.length} of {hotkeys.bindings.length} actions have
-            nothing behind them yet. Their shortcuts are still saved, and they
-            are deliberately not registered with the system — so those keys stay
-            free for the applications that do something with them.
-          </p>
-        ) : null}
-        <p className="caveat">
-          A shortcut takes effect as soon as you set it. The dictation default,{" "}
-          <code>Control+Super</code>, is two modifiers and no key, which no
-          cross-platform shortcut API can register.{" "}
-          {hook.state === "available"
-            ? `It works here anyway, through ${hook.mechanism} — and unlike a registered shortcut it does not take the keys away from anything else, so Windows still does whatever it does with them.`
-            : "It therefore does nothing here and has to be changed. Try Control+Shift+D."}
-        </p>
-        <p className="caveat">
-          The same hooks watch the two side buttons on a mouse: type{" "}
-          <code>Mouse4</code> or <code>Mouse5</code> as the accelerator. Left,
-          right and middle are deliberately refused — the click is not
-          swallowed, so binding one would start this action on every click in
-          every application while the click still went through.
-        </p>
-      </section>
-
-      <section>
-        <h2>Dictation</h2>
-        <Row
-          label="Session"
-          value={state}
-          detail={recording ? "the overlay is visible" : undefined}
+      <section data-surface="dictation.task" aria-label="Dictation">
+        <StatusLine
+          readiness={dictationReadiness({ route, hotkeys, canInsert })}
+          onFix={onGoTo}
         />
-        <Row
-          label="Text insertion"
-          value={
-            canInsert === null
-              ? "checking…"
-              : canInsert
-                ? "Supported"
-                : "Not supported here"
-          }
-          detail={
-            canInsert === false
-              ? "dictations are transcribed and kept in history, but cannot be typed at the cursor"
-              : undefined
-          }
-        />
-        <Row
-          label="Route"
-          value={route.problem ? "Not usable" : route.destination}
-          detail={
-            route.problem
-              ? route.problem
-              : route.leavesDevice
-                ? "audio leaves this machine"
-                : "audio stays on this machine"
-          }
-        />
-        {lastOutcome ? <Row label="Last result" value={lastOutcome} /> : null}
-        <div className="row">
-          <span className="row-label">Microphone</span>
-          <span className="row-value">
-            <select
-              onChange={(e) => {
-                void guard(() => setInputDevice(e.target.value || null));
-              }}
-            >
-              <option value="">System default</option>
-              {devices.map((d) => (
-                <option key={d.name} value={d.name}>
-                  {d.name}
-                  {d.isDefault ? " (default)" : ""}
-                </option>
-              ))}
-            </select>
-          </span>
-        </div>
         <button
           type="button"
+          className="primary"
+          disabled={mic.disabled}
           onClick={() => {
             void guard(toggleDictation);
           }}
         >
-          {recording ? "Stop and transcribe" : "Start dictation"}
+          {recording
+            ? "Stop and transcribe"
+            : mic.busy
+              ? sessionStateLabel(state)
+              : "Start dictation"}
         </button>
         {recording ? (
           <button
@@ -445,6 +170,85 @@ export function DictationView({
             Discard
           </button>
         ) : null}
+
+        <div className="row">
+          <span className="row-label">Shortcut</span>
+          <span className="row-value controls">
+            {shortcut ? <code>{shortcut}</code> : <span>none set</span>}
+            <button type="button" onClick={() => onGoTo("shortcuts")}>
+              Change
+            </button>
+          </span>
+        </div>
+        <div className="row">
+          <span className="row-label">Microphone</span>
+          <span className="row-value controls">
+            {/* Controlled by what the backend reports, not by the last click:
+                `guard` re-reads after the change, and `getInputDevice` is what
+                brings the choice back. Uncontrolled, this read "System default"
+                whatever had been chosen (KNEG-340). */}
+            <select
+              aria-label="Microphone"
+              value={device ?? ""}
+              onChange={(e) => {
+                const next = e.target.value || null;
+                void guard(() => setInputDevice(next));
+              }}
+            >
+              {missingDevice !== null ? (
+                <option value={missingDevice}>{missingDevice} (not connected)</option>
+              ) : null}
+              <option value="">System default</option>
+              {devices.map((d) => (
+                <option key={d.name} value={d.name}>
+                  {d.name}
+                  {d.isDefault ? " (default)" : ""}
+                </option>
+              ))}
+            </select>
+            {missingDevice !== null ? (
+              <em className="row-detail">
+                Not connected, so dictation uses the system default until it is
+                plugged back in.
+              </em>
+            ) : null}
+          </span>
+        </div>
+        {/* The privacy fact, so it is on the row rather than behind anything:
+            whether this dictation's audio leaves this computer. `leavesDevice`
+            decides the sentence rather than `isLocal`, because it is the field
+            that answers that question; `isLocal` only names the engine. A
+            route with a problem has no destination to describe -- the status
+            line above says what to do, and carries the problem itself. */}
+        <div className="row">
+          <span className="row-label">Transcription</span>
+          <span className="row-value controls">
+            <span>
+              {route.problem
+                ? "Not set up"
+                : route.isLocal
+                  ? "On this computer"
+                  : route.destination}
+            </span>
+            {route.problem ? null : (
+              <em className="row-detail">
+                {route.leavesDevice
+                  ? `Audio is sent to ${route.destination}`
+                  : "Audio stays on this computer"}
+              </em>
+            )}
+            <button type="button" onClick={() => onGoTo("transcription")}>
+              Change
+            </button>
+          </span>
+        </div>
+        <Row
+          label="Status"
+          value={sessionStateLabel(state)}
+          detail={recording ? "the overlay is visible" : undefined}
+        />
+        {lastOutcome ? <Row label="Last result" value={lastOutcome} /> : null}
+        {route.isLocal ? <LocalServerHealth /> : null}
       </section>
 
       <section data-surface="dictation.history">
@@ -474,15 +278,24 @@ export function DictationView({
             </label>
             {/* This and Clear history are a stop and a delete, and they sound
                 alike enough that the difference has to be said rather than
-                discovered. Both sentences name the other control, so whichever
+                discovered. The row says what the switch is doing now in one
+                sentence; the difference is one press away under Learn more,
+                and both of its sentences name the other control, so whichever
                 state the switch is in the user is told where the other half is.
                 Neither counts anything: the list below is capped at twenty, so
                 a number here would be a number about the wrong set. */}
             <em className="row-detail">
               {historyOn
-                ? "Switching this off stops new entries and deletes nothing — Clear history is the control that removes what is already saved."
-                : "Nothing new is being saved. Switching this off never deletes anything — what was saved before is still in the list until Clear history removes it."}
+                ? "Switching this off stops new entries."
+                : "Nothing new is being saved."}
             </em>
+            <LearnMore>
+              <p>
+                {historyOn
+                  ? "Switching this off deletes nothing — Clear history is the control that removes what is already saved."
+                  : "Switching this off never deletes anything — what was saved before is still in the list until Clear history removes it."}
+              </p>
+            </LearnMore>
           </span>
         </div>
 
@@ -513,13 +326,14 @@ export function DictationView({
             {/* Said plainly because this is a privacy choice, not a
                 preference: switching it on stores a second copy of what was
                 said. The reason to want it is that a row carrying both is the
-                only proof cleanup did anything on that dictation. */}
+                only proof cleanup did anything on that dictation. One
+                sentence in every state, like the switch above. */}
             <em className="row-detail">
               {!historyOn
                 ? "No entries are being saved, so there is nothing for a second version to go on."
                 : keepRaw
                   ? "Two copies of what you said are stored on rows cleanup altered."
-                  : "Only the final text is stored. Switch this on to see what cleanup changed."}
+                  : "Only the final text is stored; switch this on to see what cleanup changed."}
             </em>
           </span>
         </div>

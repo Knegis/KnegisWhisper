@@ -42,13 +42,16 @@
  * dictate with, and both are useless without knowing where the audio goes."
  * That was an ordering of the *setup* path, and the setup path is now the
  * `Settings` group -- in the same relative order, Providers before
- * Transcription before Intelligence. Grouping did not overturn the reasoning;
- * it moved the place where it applies.
+ * Transcription before Intelligence, with Shortcuts ahead of all three since
+ * the shortcut editor moved there out of Dictation. Grouping did not overturn
+ * the reasoning; it moved the place where it applies.
  *
  * # The ids are unchanged
  *
- * All thirteen are the ids the flat array used. They are internal -- the names
- * that have to stay stable are the surface ids in `config/ui-surfaces.json`,
+ * Every screen the flat array had keeps the id it used there; `shortcuts` is
+ * new, because the shortcut editor had no screen of its own until it moved
+ * out of Dictation. The ids are internal -- the names that have to stay
+ * stable are the surface ids in `config/ui-surfaces.json`,
  * and those live on the components, not here -- but keeping them identical
  * means `onGoToProviders` and the error boundary's reset target keep working
  * without a translation table between two sets of names for one screen.
@@ -59,7 +62,7 @@
  *
  * `as const` with **no type annotation**, and both halves of that are
  * load-bearing. The literal types are what let `ViewId` below be exactly the
- * thirteen leaf ids -- excluding `settings` and `developer`, which are group
+ * leaf ids -- excluding `settings` and `developer`, which are group
  * headers and not destinations. And a `readonly` tuple is what makes
  * `group.children[0]` a real element type: this project compiles with
  * `noUncheckedIndexedAccess`, under which indexing an *array* yields
@@ -76,6 +79,7 @@ export const NAV = [
     id: "settings",
     label: "Settings",
     children: [
+      { id: "shortcuts", label: "Shortcuts" },
       { id: "providers", label: "Providers" },
       { id: "transcription", label: "Transcription" },
       { id: "intelligence", label: "Intelligence" },
@@ -127,7 +131,7 @@ export type ViewId = LeavesOf<NavEntry>["id"];
  *
  * `satisfies` rather than a `: ViewId` annotation so the constant keeps its
  * literal type while still being checked against the union -- a typo here is a
- * compile error either way, but the annotation would widen it to all thirteen.
+ * compile error either way, but the annotation would widen it to every leaf id.
  */
 export const DEFAULT_VIEW = "dictation" satisfies ViewId;
 
@@ -171,10 +175,11 @@ export function childrenOf(group: NavGroup): readonly [NavLeaf, ...NavLeaf[]] {
  * The group a screen sits inside, or `null` for a top-level destination.
  *
  * This exists so that arriving at a screen opens the group holding it, however
- * you arrived. Two screens navigate sideways -- Transcription and Intelligence
- * both offer "go to Providers" -- and the error boundary sends you to
- * Diagnostics, which lives under `Developer`. Without this, any of those three
- * would leave the rail showing a collapsed group and no marked item at all.
+ * you arrived. Screens navigate sideways -- Dictation's Change buttons open
+ * Shortcuts and Transcription, and Transcription and Intelligence both offer
+ * "go to Providers" -- and the error boundary sends you to Diagnostics, which
+ * lives under `Developer`. Without this, any of those would leave the rail
+ * showing a collapsed group and no marked item at all.
  */
 export function groupOf(view: ViewId): string | null {
   for (const entry of NAV) {

@@ -45,6 +45,10 @@ export const PAGES = {
     title: "Upload",
     intro: "Turn a recording into a note with a transcript.",
   },
+  shortcuts: {
+    title: "Shortcuts",
+    intro: "Choose the keys that start dictation and the other actions.",
+  },
   providers: {
     title: "Providers",
     intro: "API keys for cloud services. You only need one if you use a cloud service.",

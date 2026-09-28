@@ -4,7 +4,7 @@ import { NAV, DEFAULT_VIEW, childrenOf, groupOf, isGroup } from "../src/lib/navi
 
 const topLevel = ["dictation", "meetings", "notes", "vocabulary", "notes-upload"];
 const groups = {
-  settings: ["providers", "transcription", "intelligence", "local-llm", "calendar"],
+  settings: ["shortcuts", "providers", "transcription", "intelligence", "local-llm", "calendar"],
   developer: ["api", "cli", "mcp", "diagnostics"],
 };
 
@@ -19,7 +19,7 @@ test("the rail retains the intended destinations, grouping, and order", () => {
 
 test("every destination has one unique id, distinct from every group id", () => {
   const leaves = NAV.flatMap((entry) => isGroup(entry) ? [...childrenOf(entry)] : [entry]);
-  assert.equal(leaves.length, 14);
+  assert.equal(leaves.length, 15);
   const ids = [...leaves.map((leaf) => leaf.id), ...NAV.filter(isGroup).map((group) => group.id)];
   assert.equal(new Set(ids).size, ids.length);
   assert.equal(DEFAULT_VIEW, "dictation");
@@ -34,5 +34,6 @@ test("group lookup opens the destination's actual group and leaves top-level vie
     }
   }
   assert.equal(groupOf("providers"), "settings");
+  assert.equal(groupOf("shortcuts"), "settings");
   assert.equal(groupOf("diagnostics"), "developer");
 });

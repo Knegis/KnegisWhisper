@@ -68,6 +68,7 @@ import { SettingsMeetings } from "./views/SettingsMeetings";
 import { SettingsIntelligence } from "./views/SettingsIntelligence";
 import { SettingsIntelligenceLocal } from "./views/SettingsIntelligenceLocal";
 import { SettingsProviders } from "./views/SettingsProviders";
+import { SettingsShortcuts } from "./views/SettingsShortcuts";
 import { SettingsTranscription } from "./views/SettingsTranscription";
 
 /**
@@ -142,7 +143,9 @@ function renderView(
 ): ReactNode {
   switch (view) {
     case "dictation":
-      return <DictationView hook={diagnostics.modifierOnlyShortcuts} />;
+      return <DictationView onGoTo={select} />;
+    case "shortcuts":
+      return <SettingsShortcuts hook={diagnostics.modifierOnlyShortcuts} />;
     case "meetings":
       return <SettingsMeetings onGoToVocabulary={() => select("vocabulary")} />;
     case "notes":
@@ -206,12 +209,12 @@ function Shell({ sidebarExpanded, onExpandSidebar, onToggleSidebar }: { sidebarE
   /*
    * Go to a screen, and make sure it is visible in the rail.
    *
-   * Every route to a screen comes through here -- a rail press, either
-   * `onGoToProviders`, and the error boundary's reset -- so a screen inside a
-   * collapsed group can never be current-but-hidden. Opening is one-way on
-   * purpose: it never closes the group you just left, because a rail that
-   * reshuffled itself on every navigation is harder to use than one that only
-   * grows.
+   * Every route to a screen comes through here -- a rail press, Dictation's
+   * `onGoTo`, either `onGoToProviders`, and the error boundary's reset -- so a
+   * screen inside a collapsed group can never be current-but-hidden. Opening
+   * is one-way on purpose: it never closes the group you just left, because a
+   * rail that reshuffled itself on every navigation is harder to use than one
+   * that only grows.
    */
   const select = useCallback((id: ViewId) => {
     navigate({ type: "visit", destination: { view: id } });
