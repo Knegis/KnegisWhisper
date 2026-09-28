@@ -36,5 +36,5 @@ attempted on 2026-09-28 with a synthetic unfinished WAV and sidecar, both by
 launching the debug binary and through `tauri:dev`. The process opened a window
 but stalled before `Db::open`; the isolated database was never created and
 WebView2 did not expose its debug port. The processes and Vite server were
-stopped. The Settings button and recovery path remain to be exercised in a
+stopped. The Meetings button and Recover recording path remain to be exercised in a
 functioning native session.
