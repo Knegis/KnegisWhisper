@@ -398,6 +398,21 @@ pub fn run() -> anyhow::Result<()> {
             let live = registrations.iter().filter(|r| r.is_live()).count();
             tracing::info!(live, total = registrations.len(), "hotkeys registered");
 
+            // Tauri creates configured windows before calling this setup hook.
+            // Open the dashboard only after its commands have all their state:
+            // Dictation calls `hotkeys` as soon as its webview loads.
+            let main = app
+                .config()
+                .app
+                .windows
+                .iter()
+                .find(|window| window.label == "main")
+                .ok_or_else(|| anyhow::anyhow!("main window is missing from the configuration"))?;
+            tauri::WebviewWindowBuilder::from_config(&handle, main)
+                .context("could not configure the main window")?
+                .build()
+                .context("could not create the main window")?;
+
             Ok(())
         })
         .on_window_event(|window, event| {
