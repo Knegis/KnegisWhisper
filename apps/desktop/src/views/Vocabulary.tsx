@@ -34,7 +34,6 @@ export function Vocabulary() {
   const saveEdit = () => act(async () => { if (editing === null) return; await editVocabulary(editing, editText); setEditing(null); });
   return <div className="view vocabulary-view" data-surface="vocabulary">
     <section>
-      <h2>Vocabulary</h2>
       <p>Add names, words and phrases you want transcription to recognize. Saved terms apply automatically where supported.</p>
       <p className="muted">Hints do not guarantee spelling or train the model. Keep the list focused on important names and terminology. Local Whisper keeps them on this device. Supported cloud providers receive applicable terms. Changes apply to the next dictation request or new meeting.</p>
       {error && <p role="alert" className="error">{error}</p>}

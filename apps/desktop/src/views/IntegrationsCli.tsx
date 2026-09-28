@@ -47,7 +47,6 @@ export function IntegrationsCli() {
       {status.blockedReason ? <p className="error" role="alert">{status.blockedReason}</p> : null}
 
       <section data-surface="integrations.cli">
-        <h2>CLI</h2>
         <p className="muted">
           <code>{status.binaryName}</code> is a compiled command-line client over
           the same local API as this settings window — notes, transcripts, the
@@ -72,7 +71,7 @@ export function IntegrationsCli() {
           detail={
             status.localApiRunning
               ? undefined
-              : "the discovery file above does not exist while this is off — see Integrations > API"
+              : "the discovery file above does not exist while this is off — see Developer > Local API"
           }
         />
       </section>

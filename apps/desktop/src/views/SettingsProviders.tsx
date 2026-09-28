@@ -212,7 +212,6 @@ export function SettingsProviders() {
       {error ? <p className="error">{error}</p> : null}
 
       <section>
-        <h2>Providers</h2>
         <p className="muted">
           Keys go straight into this machine's credential store —{" "}
           <strong>never</strong> into the database, a settings row, or a log

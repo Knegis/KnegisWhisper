@@ -212,7 +212,6 @@ export function NotesUpload({ onOpenNote }: { onOpenNote: (id: number) => void }
       {error ? <p className="error">{error}</p> : null}
 
       <section data-surface="notes.upload">
-        <h2>Upload</h2>
         <p className="muted">
           Turn a recording into a note using whichever
           transcription provider Settings &gt; Transcription already points

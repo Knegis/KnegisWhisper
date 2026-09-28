@@ -46,7 +46,6 @@ export function IntegrationsApi() {
       {api.blockedReason ? <p className="error" role="alert">{api.blockedReason}</p> : null}
 
       <section data-surface="integrations.api">
-        <h2>Local API</h2>
         <Row
           label="State"
           value={

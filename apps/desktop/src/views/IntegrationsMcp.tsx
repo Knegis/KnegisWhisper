@@ -55,14 +55,13 @@ export function IntegrationsMcp() {
       {status.blockedReason ? <p className="error" role="alert">{status.blockedReason}</p> : null}
 
       <section data-surface="integrations.mcp">
-        <h2>MCP</h2>
         <p className="muted">
           <code>{status.binaryName}</code> is a stdio MCP server exposing this
           application's notes, transcripts and dictionary — one tool per local
           API route, with no backend of its own. It must be run by an MCP
           client, and it does nothing at all unless this application is
           running: every tool call is a request to the same local API that{" "}
-          <code>Integrations &gt; API</code> starts.
+          <code>Developer &gt; Local API</code> starts.
         </p>
 
         <Row label="Binary" value={location.text} detail={location.detail} />
@@ -82,7 +81,7 @@ export function IntegrationsMcp() {
           detail={
             status.localApiRunning
               ? undefined
-              : "every tool call will fail until this application is running — see Integrations > API"
+              : "every tool call will fail until this application is running — see Developer > Local API"
           }
         />
 

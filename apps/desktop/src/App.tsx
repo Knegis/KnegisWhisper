@@ -1,7 +1,7 @@
 import { TitleBar } from "./components/TitleBar";
 import { LanguagePopup } from "./components/LanguagePopup";
 /**
- * The shell: a rail, a view, and an error boundary. Nothing else.
+ * The shell: a rail, a page header, a view, and an error boundary. Nothing else.
  *
  * This file was 1037 lines holding every screen the application had, which is
  * how four UI surfaces came to live in one component. Splitting it was the
@@ -42,10 +42,12 @@ import { LanguagePopup } from "./components/LanguagePopup";
 
 import { Component, useCallback, useEffect, useMemo, useReducer, useState, type ReactNode } from "react";
 
+import { PageHeader } from "./components/PageHeader";
 import { Sidebar } from "./components/Sidebar";
 import { getDiagnostics, type Diagnostics } from "./lib/ipc";
 import { groupOf, type ViewId } from "./lib/navigation";
 import { defaultDestination, initialHistory, navigationHistory } from "./lib/navigationHistory";
+import { PAGES } from "./lib/pages";
 import { currentSurface } from "./lib/surface";
 import { installIdleScrollbars } from "./lib/idleScrollbars";
 import { useRefresh } from "./lib/useRefresh";
@@ -188,6 +190,9 @@ function Shell({ sidebarExpanded, onExpandSidebar, onToggleSidebar }: { sidebarE
   const [history, navigate] = useReducer(navigationHistory, initialHistory);
   const destination = history.entries[history.index] ?? defaultDestination;
   const view = destination.view;
+  // A local variable, because TypeScript does not narrow a repeated
+  // `PAGES[view]`.
+  const page = PAGES[view];
   const searchNoteRequest = useMemo(() => destination.noteId === undefined ? null : { id: destination.noteId }, [destination]);
   const openNote = useCallback((id: number) => navigate({ type: "visit", destination: { view: "notes", noteId: id } }), []);
 
@@ -264,6 +269,7 @@ function Shell({ sidebarExpanded, onExpandSidebar, onToggleSidebar }: { sidebarE
       />
 
       <div className="content">
+        {page ? <PageHeader page={page} /> : null}
         {/* `select` rather than `setView`, so landing on Diagnostics opens the
             Developer group that holds it. */}
         <ViewBoundary view={view} onReset={() => select("diagnostics")}>
