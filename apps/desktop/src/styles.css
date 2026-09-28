@@ -802,6 +802,11 @@ section > .muted {
   font-size: 0.9375rem;
 }
 
+/* Switzer ships at 400 only, so bold here is faked; this also un-bolds the Meetings and Intelligence caveat lead-ins, deliberately. */
+.caveat strong {
+  font-weight: 400;
+}
+
 /* `.status-line`'s caveat state -- same mark, with the top margin zeroed,
  * because `.status-line` already opens the gap above it and stacking both
  * would double it. */

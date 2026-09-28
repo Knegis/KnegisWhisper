@@ -146,10 +146,14 @@ export function DictationView({
           readiness={dictationReadiness({ route, hotkeys, canInsert })}
           onFix={onGoTo}
         />
+        {/* Off on a broken route: the backend resolves the route only at Stop
+            and cancels on failure (`toggle`, src-tauri/src/dictation.rs), so
+            Start would record words that are then thrown away. A missing
+            shortcut does not disable it -- the button needs none. */}
         <button
           type="button"
           className="primary"
-          disabled={mic.disabled}
+          disabled={mic.disabled || (!recording && route.problem !== null)}
           onClick={() => {
             void guard(toggleDictation);
           }}
@@ -278,23 +282,19 @@ export function DictationView({
             </label>
             {/* This and Clear history are a stop and a delete, and they sound
                 alike enough that the difference has to be said rather than
-                discovered. The row says what the switch is doing now in one
-                sentence; the difference is one press away under Learn more,
-                and both of its sentences name the other control, so whichever
-                state the switch is in the user is told where the other half is.
-                Neither counts anything: the list below is capped at twenty, so
+                discovered -- so the one visible sentence says it in both
+                states: switching this off deletes nothing. It is a retention
+                fact, and a retention fact is never folded. Only the pointer to
+                the control that does delete sits under Learn more. Neither
+                sentence counts anything: the list below is capped at twenty, so
                 a number here would be a number about the wrong set. */}
             <em className="row-detail">
               {historyOn
-                ? "Switching this off stops new entries."
-                : "Nothing new is being saved."}
+                ? "Switching this off stops new entries; it deletes nothing."
+                : "Nothing new is being saved; what was saved before stays until you clear it."}
             </em>
             <LearnMore>
-              <p>
-                {historyOn
-                  ? "Switching this off deletes nothing — Clear history is the control that removes what is already saved."
-                  : "Switching this off never deletes anything — what was saved before is still in the list until Clear history removes it."}
-              </p>
+              <p>Clear history is the control that removes what is already saved.</p>
             </LearnMore>
           </span>
         </div>
