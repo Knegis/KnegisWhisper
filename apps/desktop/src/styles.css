@@ -139,12 +139,20 @@
    * 68rem is that number. Wider would only stretch prose past a readable
    * measure; the cap on `.row-detail` below exists for the same reason.
    *
-   * What this is worth, stated honestly: in the default 1000px window the
-   * content pane goes from 736px to about 728px, which is a wash, because the
-   * 60rem cap this replaced was already nearly the whole window. The gain is at
-   * every size above that. The pane used to be 736px on a 4K display -- frozen
-   * by the cap, not by the window -- and now grows to 1088px, about +48% on a
-   * maximised 1920px screen.
+   * What this is worth, remeasured at the current 15px root (measured in
+   * headless Edge against dev fixtures, not in the Tauri window): in the
+   * default 1000x720 window `.content` renders 805px wide, short of the
+   * 1020px cap -- the window and the rail are what limit it there, not
+   * `--content-max`. The two-column 60rem shell this replaced no longer
+   * exists to measure, but the same arithmetic gives its pane as
+   * 900 - 45 (1.5rem padding, both sides) - 180 (a 12rem sidebar) - 30 (a
+   * 2rem gap) = 645px, unchanging with the window because its cap engaged
+   * well below 1000px. So the gain is real now at every size, not only above
+   * the old cap: +160px (about +25%) in the default window, growing to
+   * +375px (about +58%) once a window is wide enough that `--content-max`,
+   * not the window, is what stops it -- 1215px (`--content-max` +
+   * `--nav-col`) and up, which is why a maximised 1920x1080 screen measures
+   * exactly the 1020px cap.
    */
   --nav-col: 13rem;
   --content-max: 68rem;
@@ -254,10 +262,11 @@ h2,
  *
  * This was a two-column grid capped at 60rem and centred, which had one
  * measurable consequence: with a 12rem sidebar and a 2rem gap the content pane
- * was 736px wide in the default 1000px window **and 736px wide on a 4K
- * display**. The cap was what limited it, not the window, so removing the cap is
- * where the extra width comes from -- see `--content-max` for the arithmetic and
- * for what it is actually worth.
+ * was 645px wide in the default 1000x720 window **and 645px wide on a 4K
+ * display** (both, at today's 15px root -- the shell is gone, so this is
+ * worked out rather than measured). The cap was what limited it, not the
+ * window, so removing the cap is where the extra width comes from -- see
+ * `--content-max` for the arithmetic and for what it is actually worth.
  *
  * `.shell` is no longer a grid and no longer positions anything. The rail is out
  * of flow, so all this does is reserve its width; `.content` carries the padding
