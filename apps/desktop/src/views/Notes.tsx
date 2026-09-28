@@ -75,9 +75,10 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
   const searchGeneration = useRef(0);
   const toolRef = useRef<HTMLDivElement>(null);
   useEffect(() => { toolRef.current?.querySelector<HTMLInputElement | HTMLSelectElement>("input, select")?.focus(); }, [libraryTool]);
-  // A press anywhere but the open panel closes it, as the context menu closes. The two buttons that
-  // open the panels are left to their own click handlers: this runs on pointerdown, before click,
-  // and closing here first would make the button's toggle reopen what it was pressed to close.
+  // A press anywhere but the open panel closes it, as the context menu closes. The New folder
+  // button that opens it is left to its own click handler: this runs on pointerdown, before
+  // click, and closing here first would make the button's toggle reopen what it was pressed to
+  // close.
   useEffect(() => {
     if (!libraryTool) return;
     const outside = (event: PointerEvent) => {
