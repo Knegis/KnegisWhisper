@@ -30,7 +30,7 @@
  * what every sidebar that has sections does, and `view` is untouched by it.
  */
 
-import { childrenOf, isGroup, NAV, type ViewId } from "../lib/navigation";
+import { childrenOf, isGroup, NAV, railIdOf, srSuffixOf, type ViewId } from "../lib/navigation";
 import { NavIcon } from "./NavIcon";
 
 export function Sidebar({
@@ -48,6 +48,11 @@ export function Sidebar({
   onToggleGroup: (id: string) => void;
   onExpand: () => void;
 }) {
+  // `view` can be an inner view (`notes-upload`) that never appears in `NAV`
+  // -- comparing against it directly would mark nothing, so every comparison
+  // below uses the rail entry it belongs to instead.
+  const current = railIdOf(view);
+
   return (
     <nav className="sidebar" aria-label="Main navigation">
       <div id="sidebar-navigation">
@@ -58,8 +63,8 @@ export function Sidebar({
                 <li key={entry.id}>
                   <button
                     type="button"
-                    className={entry.id === view ? "nav-current" : undefined}
-                    aria-current={entry.id === view ? "page" : undefined}
+                    className={entry.id === current ? "nav-current" : undefined}
+                    aria-current={entry.id === current ? "page" : undefined}
                     aria-label={entry.label}
                     title={!expanded ? entry.label : undefined}
                     onClick={() => onSelect(entry.id)}
@@ -82,7 +87,7 @@ export function Sidebar({
                  */}
                 <button
                   type="button"
-                  className={`nav-group ${open ? "nav-group-open" : ""} ${!expanded && children.some(child => child.id === view) ? "nav-current" : ""}`}
+                  className={`nav-group ${open ? "nav-group-open" : ""} ${!expanded && children.some(child => child.id === current) ? "nav-current" : ""}`}
                   aria-label={entry.label}
                   title={!expanded ? entry.label : undefined}
                   aria-expanded={expanded && open}
@@ -100,14 +105,14 @@ export function Sidebar({
                         <button
                           type="button"
                           className={
-                            child.id === view
+                            child.id === current
                               ? "nav-child nav-current"
                               : "nav-child"
                           }
-                          aria-current={child.id === view ? "page" : undefined}
+                          aria-current={child.id === current ? "page" : undefined}
                           onClick={() => onSelect(child.id)}
                         >
-                          <NavIcon id={child.id} /><span className="nav-label">{child.label}</span>
+                          <NavIcon id={child.id} /><span className="nav-label">{child.label}{srSuffixOf(child) ? <span className="sr-only">{srSuffixOf(child)}</span> : null}</span>
                         </button>
                       </li>
                     ))}

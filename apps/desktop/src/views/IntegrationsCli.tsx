@@ -1,8 +1,8 @@
 /**
- * Integrations > CLI — where `knegiswhisper` is, where it looks for the
+ * Developer > CLI — where `knegiswhisper` is, where it looks for the
  * running application, and the real state of the file that lets it in.
  *
- * The one thing this screen exists to get right after `Integrations > API`
+ * The one thing this screen exists to get right after `Developer > Local API`
  * got it wrong: the discovery file's permissions are shown as the actual
  * state and its evidence, never as a boolean. A bench check found that the
  * backend's own `Permissions::is_as_expected()` returned `true` for
@@ -47,7 +47,6 @@ export function IntegrationsCli() {
       {status.blockedReason ? <p className="error" role="alert">{status.blockedReason}</p> : null}
 
       <section data-surface="integrations.cli">
-        <h2>CLI</h2>
         <p className="muted">
           <code>{status.binaryName}</code> is a compiled command-line client over
           the same local API as this settings window — notes, transcripts, the
@@ -72,7 +71,7 @@ export function IntegrationsCli() {
           detail={
             status.localApiRunning
               ? undefined
-              : "the discovery file above does not exist while this is off — see Integrations > API"
+              : "the discovery file above does not exist while this is off — see Developer > Local API"
           }
         />
       </section>

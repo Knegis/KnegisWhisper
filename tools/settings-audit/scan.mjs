@@ -52,7 +52,7 @@
  *
  * **What it does not check.** That a key changes behaviour, that the screen's
  * control is correct, or that anything is wired behind the setting -- the
- * hotkey keys are writable from Dictation > Shortcuts and four of the five
+ * hotkey keys are writable from Settings > Shortcuts and four of the five
  * actions still have no handler, which `commands::hotkeys` reports separately.
  * This gate answers one question: can a user change the value at all.
  *

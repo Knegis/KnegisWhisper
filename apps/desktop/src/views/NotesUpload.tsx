@@ -33,6 +33,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { importActive, importProgressText, pollImport } from "../lib/importProgress";
+import { LearnMore } from "../components/LearnMore";
 import { Row } from "../components/Row";
 import {
   getDictationRoute,
@@ -212,15 +213,6 @@ export function NotesUpload({ onOpenNote }: { onOpenNote: (id: number) => void }
       {error ? <p className="error">{error}</p> : null}
 
       <section data-surface="notes.upload">
-        <h2>Upload</h2>
-        <p className="muted">
-          Turn a recording into a note using whichever
-          transcription provider Settings &gt; Transcription already points
-          at. Nothing here has a transcription provider of its own — a failed
-          transcription here is the same failure a dictation would show, for
-          the same reason.
-        </p>
-
         <Row
           label="Transcription goes to"
           value={route.problem ? "Nowhere usable" : route.destination}
@@ -228,19 +220,29 @@ export function NotesUpload({ onOpenNote }: { onOpenNote: (id: number) => void }
             route.problem
               ? route.problem
               : route.leavesDevice
-                ? "audio leaves this machine"
-                : "audio stays on this machine"
+                ? "audio leaves this computer"
+                : "audio stays on this computer"
           }
         />
+        <LearnMore>
+          <p>
+            This uses whichever transcription provider Settings &gt;
+            Transcription already points at. Nothing here has a transcription
+            provider of its own — a failed transcription here is the same
+            failure a dictation would show, for the same reason.
+          </p>
+        </LearnMore>
 
         <h3>Sidecars</h3>
-        <p className="muted">
-          Audio and video are converted to 16 kHz mono WAV with ffmpeg. It is
-          downloaded on demand, the same way the local transcription server
-          is on Settings &gt; Transcription &gt; Local.
-        </p>
         {sidecarRow("ffmpeg", ffmpeg, () => installMediaImportSidecar("ffmpeg"))}
         {progress ? <Row label="Progress" value={progress} /> : null}
+        <LearnMore>
+          <p>
+            Audio and video are converted to 16 kHz mono WAV with ffmpeg. It
+            is downloaded on demand, the same way the local transcription
+            server is on Settings &gt; Transcription &gt; Local.
+          </p>
+        </LearnMore>
 
         <p className="muted">Converted audio is retained for playback until you delete its note. Your original file is preserved.</p>
         <h3>Audio or video file</h3>
@@ -272,6 +274,7 @@ export function NotesUpload({ onOpenNote }: { onOpenNote: (id: number) => void }
         ) : null}
         <button
           type="button"
+          className="primary"
           disabled={!localPick || !ffmpegReady || mediaBusy}
           onClick={() => {
             void runLocalImport();
@@ -304,17 +307,25 @@ export function NotesUpload({ onOpenNote }: { onOpenNote: (id: number) => void }
       <section>
         <h2>Import from OpenWhispr</h2>
         <p className="muted">
-          Copies an existing OpenWhispr <code>transcriptions.db</code> into
-          this application: notes, transcriptions, folders, snippets, custom
-          actions, agent conversations, speaker profiles and calendar events.
+          Copies your notes, transcriptions and related records from
+          OpenWhispr into this application; some OpenWhispr-only data is left
+          behind.
         </p>
-        <p className="caveat">
-          The source file is opened read-only and is never written to.
-          Nothing this import does can change or corrupt your existing
-          OpenWhispr install — if anything about the result looks wrong,
-          nothing has been lost from the source, and it is safe to delete
-          this application's database and try again.
-        </p>
+        <LearnMore>
+          <p>
+            Copies an existing OpenWhispr <code>transcriptions.db</code> into
+            this application: notes, transcriptions, folders, snippets,
+            custom actions, agent conversations, speaker profiles and
+            calendar events.
+          </p>
+          <p>
+            The source file is opened read-only and is never written to.
+            Nothing this import does can change or corrupt your existing
+            OpenWhispr install — if anything about the result looks wrong,
+            nothing has been lost from the source, and it is safe to delete
+            this application's database and try again.
+          </p>
+        </LearnMore>
 
         <div className="row">
           <span className="row-label">Database file</span>

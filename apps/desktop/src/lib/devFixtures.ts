@@ -49,6 +49,7 @@ import type {
   SidecarStatus,
   SyncOutcome,
   Diagnostics,
+  DiarizationStatus,
   ExportedTranscript,
   Folder,
   Format,
@@ -201,7 +202,19 @@ const BINDINGS: Binding[] = [
 ];
 
 const HOTKEYS: HotkeyReport = {
-  registrations: [],
+  // One report, for dictation, because it is the one a screen reads a verdict
+  // from: `dictationReadiness` asks whether any dictation result is live. This
+  // was empty, and an empty list reads as "Needs setup" -- which the real
+  // backend never sends for a registrable binding, since `register_all`
+  // reports every binding in every mode (see `lib/readiness.ts`). The other
+  // four are left out rather than guessed at; nothing renders them unless the
+  // portal is on, and it is off here.
+  registrations: [
+    {
+      action: "dictation",
+      results: [{ state: "registered", accelerator: "Control+Shift+D" }],
+    },
+  ],
   portalSupported: false,
   portalEnabled: false,
   bindings: BINDINGS,
@@ -644,6 +657,26 @@ let meetingKeyterms = ["Nordbank", "KnegisWhisper", "WASAPI", "Realtek"];
 let detectLists: Lists = {
   allow: ["webex.exe", "bluejeans.exe"],
   block: ["Teams.exe"],
+};
+
+/*
+ * Settings > Meetings reads this in its first load, and with no stub that load
+ * threw, so the screen rendered nothing but the error -- in dev mode it never
+ * could, before or after the recording moved to its own page. A fresh
+ * profile's answer: neither model and no runtime, the state that shows the
+ * Install buttons and the blocker line. The two models are the registry's
+ * (`generated/providers.ts`).
+ */
+const DIARIZATION: DiarizationStatus = {
+  availability: { state: "installable" },
+  cliInstalled: false,
+  models: [
+    { id: "sherpa-onnx-pyannote-segmentation-3-0", name: "Pyannote Segmentation 3.0", role: "segmentation", sizeMb: 6.6, installed: false },
+    { id: "3dspeaker-campplus-en", name: "CAM++ Speaker Embedding (English)", role: "embedding", sizeMb: 28.2, installed: false },
+  ],
+  enabled: false,
+  ready: false,
+  modelsDir: "C:\\ProgramData\\KnegisWhisper\\models\\diarization",
 };
 
 /* -------------------------------------------------------------- dictation */
@@ -1572,6 +1605,7 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
   dictation_cancel: () => ({ outcome: "cancelled" }) satisfies Outcome,
   input_devices: () => INPUT_DEVICES,
   dictation_set_device: () => null,
+  dictation_device: () => null,
   insertion_supported: () => true,
   dictation_route: () => ROUTE,
   dictation_use_local: () => null,
@@ -1810,11 +1844,18 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
     }) satisfies UpdateCheckResult,
   update_dismiss: () => null,
 
+  diarization_status: () => DIARIZATION,
   meeting_detect_lists: () => detectLists,
   meeting_set_detect_lists: (a) => {
     detectLists = arg<Lists>(a, "lists") ?? detectLists;
     return null;
   },
+
+  /* window */
+  // `TitleBar` asks this on mount for every screen; unstubbed it threw on
+  // load and covered the page in the "no stub" toast before anyone got to
+  // look at anything else.
+  "plugin:window|is_maximized": () => false,
 };
 
 /* ------------------------------------------------------------ dev console */

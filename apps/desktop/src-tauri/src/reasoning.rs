@@ -247,7 +247,8 @@ fn dispatch_for(
                 // request would be refused rather than sent to a dead port, and
                 // saying "not running" points at the screen that starts it.
                 ReasoningDispatch::NeedsSidecar {
-                    reason: "no local model is running. Start one under Local models.".to_owned(),
+                    reason: "no local model is running. Start one under Settings > Local text models."
+                        .to_owned(),
                 }
             }
         }
@@ -285,7 +286,7 @@ fn describe(
                     } else {
                         Some(
                             "no local model is running, so cleanup will leave the transcript as \
-                             it is until one is started under Local models"
+                             it is until one is started under Settings > Local text models"
                                 .to_owned(),
                         )
                     },

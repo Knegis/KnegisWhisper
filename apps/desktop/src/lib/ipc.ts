@@ -494,9 +494,11 @@ export async function setMeetingLanguage(language: string): Promise<void> {
 }
 
 /**
- * The provider chosen on the Meetings screen, or `null` before anybody has
- * chosen one. Remembered across restarts; the offer's Record button uses it
- * too, so the two ways into a meeting agree.
+ * The provider chosen on Settings > Meetings, or `null` before anybody has
+ * chosen one. Remembered across restarts. Rust does not read it at start --
+ * `startMeeting` is given a provider -- so the callers read it: the Meetings
+ * page passes it when it can be used, and the offer's Record button passes it
+ * as it is, so the ways into a meeting agree once a usable one is saved.
  */
 export async function getMeetingProvider(): Promise<string | null> {
   return invoke<string | null>("meeting_provider");
@@ -970,6 +972,17 @@ export async function getInputDevices(): Promise<InputDevice[]> {
 
 export async function setInputDevice(device: string | null): Promise<void> {
   return invoke<void>("dictation_set_device", { device });
+}
+
+/**
+ * The microphone the next recording will use, or `null` for the system
+ * default. Read back so the screen can show the choice rather than assume
+ * one -- the select was uncontrolled and showed "System default" whatever
+ * was chosen. The choice itself still lives only in memory and is forgotten
+ * on restart; that is KNEG-341, not fixed here.
+ */
+export async function getInputDevice(): Promise<string | null> {
+  return invoke<string | null>("dictation_device");
 }
 
 /**

@@ -96,7 +96,7 @@ impl MicRecorder {
         }
     }
 
-    fn preferred_device(&self) -> Option<String> {
+    pub(crate) fn preferred_device(&self) -> Option<String> {
         self.device.read().ok().and_then(|held| held.clone())
     }
 
@@ -746,6 +746,12 @@ impl DictationRuntime {
         self.recorder.set_device(device);
     }
 
+    /// The input device the next recording will use.
+    #[must_use]
+    pub fn device(&self) -> Option<String> {
+        self.recorder.preferred_device()
+    }
+
     /// Read the stored route configuration.
     async fn route_settings(&self) -> kw_transcription_core::RouteSettings {
         // A missing or unreadable setting means "never configured", which the
@@ -1044,6 +1050,14 @@ pub fn dictation_set_device(
 ) -> Result<(), String> {
     runtime.set_device(device);
     Ok(())
+}
+
+/// The microphone the next recording will use, or `None` for the system default.
+/// Read back so the screen can show the choice rather than assume one -- the
+/// select was uncontrolled and showed "System default" whatever was chosen.
+#[tauri::command]
+pub fn dictation_device(runtime: tauri::State<'_, Arc<DictationRuntime>>) -> Option<String> {
+    runtime.device()
 }
 
 /// Whether text insertion works on this platform at all.
@@ -1464,5 +1478,13 @@ mod tests {
         let recorder = MicRecorder::spawn();
         recorder.cancel().await;
         recorder.cancel().await;
+    }
+
+    #[test]
+    fn the_chosen_device_reads_back() {
+        let recorder = MicRecorder::spawn();
+        assert_eq!(recorder.preferred_device(), None);
+        recorder.set_device(Some("USB mic".to_owned()));
+        assert_eq!(recorder.preferred_device(), Some("USB mic".to_owned()));
     }
 }

@@ -1,7 +1,31 @@
 /**
- * Settings > Meetings.
+ * Settings > Meetings: how meetings are transcribed, detected and labelled.
  *
- * Three things this screen refuses to do.
+ * The provider, the language and the vocabulary a meeting will use, the
+ * notification window, which applications count as a meeting, speaker labels,
+ * and every provider this build describes. The recording itself -- Start,
+ * Stop, the live transcript, interrupted recordings -- is on the Meetings page
+ * (`views/Meetings.tsx`), which reads what is set here and sets none of it.
+ *
+ * That split puts one obligation on this screen: whatever it shows has to be
+ * saved before anybody can press Start, because Start is now a page away and
+ * reads both back rather than being handed them. Rust reads the language from
+ * the database when the meeting starts (`start_live`); the provider is the one
+ * the Meetings page reads back from `meetings.provider` and passes to
+ * `meeting_start`. So the provider is saved on change -- or, when the saved one
+ * cannot be used, by the Use button under the caveat that says so -- and the
+ * language when its field is left or Enter is pressed. There is no later
+ * moment to save them in -- the save that used to run just before Start went
+ * with the button.
+ *
+ * And one from the other direction: a meeting can start while this screen is
+ * open -- from the notification window -- so it follows `onMeetingState` and
+ * disables the provider and the language while a meeting is live, rather than
+ * showing fields for settings the running meeting has already been started
+ * with. (The meeting hotkey starts nothing yet: `shortcuts.rs` dispatches it
+ * as "Meeting capture is not built yet.")
+ *
+ * Two things this screen refuses to do.
  *
  * It does not decide which providers can be used — that comes from Rust, along
  * with the reason each one cannot. A screen that worked it out for itself would
@@ -12,89 +36,50 @@
  * It does not say "streaming" about the local provider. It is repeated short
  * passes over a local model, about three seconds behind the room, and the name it
  * is given here is the name Rust gives it.
- *
- * It does not report a meeting as recording both sources when it is recording
- * one. `Sources` comes back from `meeting_start` saying what actually opened, and
- * that is what is shown.
  */
 
 import { useCallback, useEffect, useState } from "react";
 
+import { LearnMore } from "../components/LearnMore";
 import { Row } from "../components/Row";
 import {
-  cancelMeeting,
-  flushMeetingPanelNotes,
+  getDiarizationStatus,
   getMeetingDetectLists,
   getMeetingKeyterms,
   getMeetingLanguage,
   getMeetingProvider,
   getMeetingProviders,
   getMeetingStatus,
-  getRecoverableRecordings,
-  recoverMeetingRecording,
-  reviewMeetingConfig,
+  installDiarizationModel,
+  onMeetingState,
   resetMeetingNotificationPlacement,
+  setDiarizationEnabled,
   setMeetingDetectLists,
   setMeetingLanguage,
   setMeetingPrompt,
   setMeetingProvider,
-  getDiarizationStatus,
-  installDiarizationModel,
-  setDiarizationEnabled,
-  onMeetingOutcome,
-  onMeetingState,
-  onMeetingTranscript,
-  startMeeting,
-  stopMeeting,
-  type ConfigReview,
-  type MeetingOutcome,
   type MeetingState,
-  type Sources,
-  type TranscriptEvent,
 } from "../lib/ipc";
 import {
   availabilityLabel,
   captureExclusionLabel,
+  detectedLabel,
   diarizationBlocker,
   diarizationRoleDetail,
-  meetingIsLive,
-  meetingStateLabel,
-  detectedLabel,
   keytermLabel,
   keytermReviewLabel,
   languageRequiredWarning,
-  meetingOutcomeLabel,
-  sourcesLabel,
+  meetingIsLive,
   microphoneDetail,
   microphoneValue,
-  systemAudioValue,
 } from "../lib/labels";
 import { selectProvider } from "../lib/meetingProvider";
+import { onePerLine, useMeetingReview } from "../lib/useMeetingReview";
 import { useRefresh } from "../lib/useRefresh";
-
-/**
- * One entry per line, trimmed, with blank lines dropped.
- *
- * Shared by the keyterms field and by both detection lists, because all three
- * are the same thing on screen and are normalised the same way in Rust: keyterms
- * by `normalize_keyterms`, the lists by `kw_platform::meeting_detect::detect`,
- * which trims every entry and skips the empty ones. One parser rather than
- * three is what keeps a stray blank line from meaning something different in
- * one of them.
- */
-function onePerLine(text: string): string[] {
-  return text
-    .split("\n")
-    .map((k) => k.trim())
-    .filter((k) => k.length > 0);
-}
-
-/** The newest partial per source, which is what a partial means. */
-type Live = Partial<Record<TranscriptEvent["source"], string>>;
 
 export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () => void }) {
   const load = useCallback(async () => {
-    const [providers, status, language, keyterms, detect, diarization, provider, recoverable] =
+    const [providers, status, language, keyterms, detect, diarization, provider] =
       await Promise.all([
         getMeetingProviders(),
         getMeetingStatus(),
@@ -103,30 +88,21 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
         getMeetingDetectLists(),
         getDiarizationStatus(),
         getMeetingProvider(),
-        getRecoverableRecordings(),
       ]);
-    return { providers, status, language, keyterms, detect, diarization, provider, recoverable };
+    return { providers, status, language, keyterms, detect, diarization, provider };
   }, []);
 
   const { data, error, reload, guard } = useRefresh(load);
 
+  /** Live meeting state, which arrives by event between reads. */
   const [state, setState] = useState<MeetingState | null>(null);
   const [chosen, setChosen] = useState<string | null>(null);
-  const [wantSystem, setWantSystem] = useState(true);
-  const [sources, setSources] = useState<Sources | null>(null);
-  const [live, setLive] = useState<Live>({});
-  const [outcome, setOutcome] = useState<MeetingOutcome | null>(null);
-  const [notesFlushFailed, setNotesFlushFailed] = useState(false);
-  const [recoveringKey, setRecoveringKey] = useState<string | null>(null);
-  const [recoveryError, setRecoveryError] = useState<string | null>(null);
-  const [recoveryOutcome, setRecoveryOutcome] = useState<MeetingOutcome | null>(null);
   // `null` means "not yet touched" -- the loaded, saved value is shown until
   // the user types something, the same idea `chosen` already uses for the
   // provider select.
   const [languageDraft, setLanguageDraft] = useState<string | null>(null);
   const [allowDraft, setAllowDraft] = useState<string | null>(null);
   const [blockDraft, setBlockDraft] = useState<string | null>(null);
-  const [review, setReview] = useState<ConfigReview | null>(null);
   /** Which diarization model is downloading, or null. */
   const [installing, setInstalling] = useState<string | null>(null);
   const [resettingNotification, setResettingNotification] = useState(false);
@@ -144,36 +120,30 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
     }
   };
 
+  // Only the state, and only so the provider and the language can be
+  // disabled while a meeting is live. The meeting's own events -- the
+  // transcript, the outcome -- are the Meetings page's; nothing on this screen
+  // changes when a meeting ends. `disposed` because `listen` resolves after
+  // the effect returns, and a screen left before it did would otherwise keep
+  // its listener for the rest of the session.
   useEffect(() => {
-    const unlisteners: Array<() => void> = [];
+    let disposed = false;
+    let stop: (() => void) | undefined;
     void onMeetingState((next) => {
-      setState(next);
-      if (next === "idle") { setSources(null); setNotesFlushFailed(false); }
-      // The state event carries the state and nothing else, and the sentence
-      // explaining it lives on `MeetingStatus`. Reloading is how it gets here
-      // -- the same thing the outcome listener below does, for the same reason.
-      // Both failure states, because both put a sentence on screen and a state
-      // that arrived without one would render the caveat empty.
-      if (next === "recording-without-transcript" || next === "stalled") {
-        void reload();
-      }
-    }).then((fn) => unlisteners.push(fn));
-    // Replaced rather than appended: every event is a partial, and the windows
-    // that produce them overlap by two seconds, so appending would repeat words.
-    void onMeetingTranscript((event) => {
-      setLive((prev) => ({ ...prev, [event.source]: event.text }));
-    }).then((fn) => unlisteners.push(fn));
-    void onMeetingOutcome((result) => {
-      setOutcome(result);
-      setLive({});
-      void reload();
-    }).then((fn) => unlisteners.push(fn));
-    return () => unlisteners.forEach((fn) => fn());
-  }, [reload]);
+      if (!disposed) setState(next);
+    }).then((unlisten) => {
+      if (disposed) unlisten();
+      else stop = unlisten;
+    });
+    return () => {
+      disposed = true;
+      stop?.();
+    };
+  }, []);
 
   // Computed defensively before `data` is known to have loaded, and reused
-  // below once it has, so this effect can sit above the loading guard rather
-  // than after it -- a hook cannot be called only on some renders.
+  // below once it has, so the review hook can sit above the loading guard
+  // rather than after it -- a hook cannot be called only on some renders.
   const usable = (data?.providers ?? []).filter(
     (p) => p.availability.state === "available",
   );
@@ -187,28 +157,7 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
   );
   const effectiveLanguage = languageDraft ?? data?.language ?? "";
   const effectiveKeytermsText = (data?.keyterms ?? []).join("\n");
-
-  useEffect(() => {
-    if (!selected) {
-      setReview(null);
-      return;
-    }
-    let cancelled = false;
-    void reviewMeetingConfig(
-      selected,
-      effectiveLanguage,
-      onePerLine(effectiveKeytermsText),
-    )
-      .then((result) => {
-        if (!cancelled) setReview(result);
-      })
-      .catch(() => {
-        if (!cancelled) setReview(null);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [selected, effectiveLanguage, effectiveKeytermsText]);
+  const review = useMeetingReview(selected, effectiveLanguage, effectiveKeytermsText);
 
   if (!data) {
     return (
@@ -221,18 +170,10 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
   const { providers, status, detect, diarization } = data;
   const effectiveAllowText = allowDraft ?? detect.allow.join("\n");
   const effectiveBlockText = blockDraft ?? detect.block.join("\n");
-  const current = state ?? status.state;
-  // A meeting whose provider died is still recording, so every control that
-  // asks "is a session running" must keep saying yes: Stop and Discard have to
-  // stay on screen, and Start has to stay off it. This was the whole shape of
-  // the bug `stop` had -- a screen with no working button on it.
-  const transcriptEnded = current === "recording-without-transcript";
-  const stalled = current === "stalled";
-  // Asked of `meetingIsLive` rather than compared here. A state added to the
-  // union does not break a `===`, so when `stalled` arrived this screen kept
-  // compiling and would have offered "Start recording" for a session that was
-  // still held with a WAV still on disk.
-  const recording = meetingIsLive(current);
+  // Asked of `meetingIsLive`, the same question the Meetings page asks before
+  // it offers Start, so the two screens cannot disagree about whether a
+  // meeting is running.
+  const recording = meetingIsLive(state ?? status.state);
   const selectedProvider = providers.find((p) => p.id === selected) ?? null;
   const savedProvider = savedUnusable
     ? (providers.find((p) => p.id === savedUnusable) ?? null)
@@ -243,14 +184,16 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
       : null;
   const languageWarning = review ? languageRequiredWarning(review) : null;
 
-  // Persist exactly the values the review above just described, so a saved
-  // setting can never lag behind what the screen showed. Awaited before
-  // `startMeeting`, and not left to an on-blur save that a click straight
-  // from the keyterms field might outrun — `MeetingRuntime::start` reads
-  // these from the database, and a preview describing a configuration it
-  // will not use is the defect this task exists to close.
-  const persistLanguageAndKeyterms = async () => {
-    await setMeetingLanguage(effectiveLanguage.trim());
+  // Persist exactly the value the review above just described, so a saved
+  // setting can never lag behind what the screen showed. On blur and on
+  // Enter, because Start is on the Meetings page now and there is no save
+  // right before it any more: `MeetingRuntime::start` reads the language from
+  // the database, and a preview describing a configuration it will not use is
+  // the defect this used to be awaited before `startMeeting` to close.
+  // Nothing typed is nothing to save -- the field is showing the saved value.
+  const saveLanguage = () => {
+    if (languageDraft === null) return;
+    void guard(() => setMeetingLanguage(effectiveLanguage.trim()));
   };
 
   // Both lists go in one write because they are one setting: `meetings.detect`
@@ -275,78 +218,6 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
       {error ? <p className="error">{error}</p> : null}
 
       <section data-surface="settings.meetings">
-        <h2>Meetings</h2>
-
-        <Row
-          label="Status"
-          value={meetingStateLabel(current)}
-          detail={
-            recording
-              ? sourcesLabel(sources ?? status.sources)
-              : current === "finishing"
-                ? "this runs over the whole recording and can take a while on a long meeting"
-                : undefined
-          }
-        />
-        {stalled ? (
-          /*
-           * A different sentence from the one below, because a different thing
-           * has happened: there the recording continues and the transcript
-           * does not, here neither does. The one instruction that matters is
-           * the same in both — press Stop — because that is what turns what
-           * was captured into a note.
-           */
-          <p className="caveat warn">
-            <strong>The recording stopped unexpectedly.</strong>{" "}
-            {status.transcriptFailure ??
-              "The recording thread ended without saying why."}{" "}
-            Nothing further is being captured. Stop will still transcribe what
-            was recorded before it stopped, and Discard will throw it away.
-          </p>
-        ) : null}
-        {transcriptEnded ? (
-          /*
-           * The provider's own sentence, which is why `MeetingError::
-           * ProviderFault` carries which of the two sockets died: "the
-           * connection failed" would send someone looking at their network.
-           *
-           * Marked rather than red-texted, the same split `.caveat.warn` was
-           * introduced for: nothing here has failed in a way that needs
-           * repairing right now. The recording is running and the note will
-           * still be produced -- from the whole-file pass, which reads the
-           * complete audio and does not depend on the provider that died.
-           */
-          <p className="caveat warn">
-            <strong>The live transcript stopped.</strong>{" "}
-            {status.transcriptFailure ??
-              "The transcription task ended without saying why."}{" "}
-            Recording continues, and Stop will still transcribe the whole
-            recording — the saved note comes from that pass, not from the
-            lines below.
-          </p>
-        ) : null}
-        <Row
-          label="System audio"
-          value={systemAudioValue(status.systemAudio)}
-          detail={
-            status.systemAudio.state === "available"
-              ? `${status.systemAudio.mechanism} — ${status.systemAudio.device}`
-              : status.systemAudio.reason
-          }
-        />
-        {/*
-          * Reported next to system audio because it is the same kind of fact
-          * and the same kind of trap: where this is anything but "Watching",
-          * every "not in a call" further down is an absence of evidence rather
-          * than evidence of absence, and the user is the only one who can tell
-          * that from the screen.
-          */}
-        <Row
-          label="Microphone activity"
-          value={microphoneValue(status.microphone)}
-          detail={microphoneDetail(status.microphone)}
-        />
-
         {usable.length === 0 ? (
           <p className="caveat">
             No meeting provider can be used yet. The local one needs a model
@@ -355,17 +226,29 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
           </p>
         ) : null}
 
+        {/* Said, not left to a greyed-out field: a control that stops
+            responding with no reason on screen is the button that silently
+            does nothing. */}
+        {recording ? (
+          <p className="caveat">
+            A meeting is being recorded, so the provider and the language
+            can't be changed until it ends.
+          </p>
+        ) : null}
+
         <div className="row">
           <span className="row-label">Provider</span>
           <span className="row-value controls">
             <select
+              aria-label="Meeting provider"
               value={selected ?? ""}
               disabled={recording}
               onChange={(e) => {
                 const id = e.target.value;
                 setChosen(id);
                 // Saved on change rather than at Start, so a choice survives
-                // a restart even when no meeting was recorded after making it.
+                // a restart even when no meeting was recorded after making it
+                // -- and so the Meetings page, which reads it back, names it.
                 void guard(() => setMeetingProvider(id));
               }}
             >
@@ -375,25 +258,37 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
                 </option>
               ))}
             </select>
-            <label>
-              <input
-                type="checkbox"
-                checked={wantSystem}
-                disabled={recording || status.systemAudio.state !== "available"}
-                onChange={(e) => setWantSystem(e.target.checked)}
-              />
-              Record what the other participants say
-            </label>
           </span>
         </div>
 
+        {/* The Meetings page holds Start back while this is showing, and its
+            "Choose a provider" comes here. The select above cannot answer it
+            on its own: it already shows the fallback, and choosing the option
+            a select already shows fires no change, so with one usable
+            provider there would be nothing to press. The button is that
+            choice, made explicitly -- the fallback is never saved by itself,
+            because it can be the opposite privacy choice from the saved one. */}
         {savedUnusable ? (
-          <p className="caveat">
-            {savedProvider?.name ?? savedUnusable} was chosen last time but cannot be used right
-            now{savedProvider ? ` (${availabilityLabel(savedProvider.availability)})` : ""}
-            {selectedProvider ? `, so ${selectedProvider.name} is selected instead` : ""}. That
-            choice is kept until you pick another.
-          </p>
+          <>
+            <p className="caveat">
+              {savedProvider?.name ?? savedUnusable} was chosen last time but cannot be used right
+              now{savedProvider ? ` (${availabilityLabel(savedProvider.availability)})` : ""}
+              {selectedProvider ? `, so ${selectedProvider.name} is selected instead` : ""}. That
+              choice is kept until you pick another.
+            </p>
+            {selectedProvider && !recording ? (
+              <button
+                type="button"
+                onClick={() => {
+                  const id = selectedProvider.id;
+                  setChosen(id);
+                  void guard(() => setMeetingProvider(id));
+                }}
+              >
+                {`Use ${selectedProvider.name}`}
+              </button>
+            ) : null}
+          </>
         ) : null}
 
         {selectedProvider ? (
@@ -402,7 +297,7 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
               {selectedProvider.summary}.{" "}
               {selectedProvider.audioLeavesDevice
                 ? "Audio is sent to this provider."
-                : "Audio stays on this machine."}
+                : "Audio stays on this computer."}
             </p>
 
             <div className="row">
@@ -415,8 +310,9 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
                   value={effectiveLanguage}
                   disabled={recording}
                   onChange={(e) => setLanguageDraft(e.target.value)}
-                  onBlur={() => {
-                    void guard(persistLanguageAndKeyterms);
+                  onBlur={saveLanguage}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.nativeEvent.isComposing) saveLanguage();
                   }}
                 />
               </span>
@@ -431,9 +327,10 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
             {/*
              * `validate` computed this, not a re-implementation here — see
              * `kw_meeting_core::validate`. Shown for the fields above as
-             * they are edited. Saved when a field is left, and saved again
-             * right before "Start recording" runs, so what is displayed can
-             * never lag behind what gets persisted.
+             * they are edited, and saved as each is left: the provider on
+             * change, the language on blur or Enter. Start is on the
+             * Meetings page, which reads the saved values back, so what is
+             * displayed here is what gets persisted before it can be used.
              */}
             {keytermReview ? (
               <Row
@@ -446,126 +343,22 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
             {languageWarning ? <p className="caveat">{languageWarning}</p> : null}
           </>
         ) : null}
-
-        <div className="row">
-          <span className="row-value controls">
-            {recording ? (
-              <>
-                <button
-                  type="button"
-                  onClick={() => {
-                    void guard(async () => {
-                      try { await flushMeetingPanelNotes(); }
-                      catch (cause) { setNotesFlushFailed(true); throw cause; }
-                      setNotesFlushFailed(false);
-                      setOutcome(await stopMeeting());
-                    });
-                  }}
-                >
-                  Stop and transcribe
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    void guard(async () => {
-                      try { await flushMeetingPanelNotes(); }
-                      catch (cause) { setNotesFlushFailed(true); throw cause; }
-                      setNotesFlushFailed(false);
-                      await cancelMeeting();
-                    });
-                  }}
-                >
-                  Discard
-                </button>
-                {notesFlushFailed && <button type="button" onClick={() => {
-                  void guard(async () => { setOutcome(await stopMeeting()); setNotesFlushFailed(false); });
-                }}>Stop recording anyway</button>}
-              </>
-            ) : (
-              <button
-                type="button"
-                disabled={selected === null || current === "finishing"}
-                onClick={() => {
-                  if (selected === null) return;
-                  void guard(async () => {
-                    // Saved here rather than trusted to an on-blur that a
-                    // click straight out of the keyterms field would outrun:
-                    // this is what the review just above was describing, so
-                    // it is what `start` must read.
-                    await persistLanguageAndKeyterms();
-                    setOutcome(null);
-                    setSources(await startMeeting(selected, wantSystem));
-                  });
-                }}
-              >
-                Start recording
-              </button>
-            )}
-          </span>
-        </div>
-
-        {recording && notesFlushFailed && <p className="caveat">The meeting panel could not confirm its latest note save. Stopping anyway keeps the recording and any notes already received by the app; the most recent edit may be missing.</p>}
-
-        {outcome ? <p className="caveat">{meetingOutcomeLabel(outcome)}</p> : null}
       </section>
-
-      {(data.recoverable.length > 0 || recoveryError || recoveryOutcome) && (
-        <section>
-          <h2>Interrupted recordings</h2>
-          <p className="caveat">These recordings are not attached to a saved note. Recover uses the local whole-recording transcriber and saves any notes typed during the meeting. The audio may end abruptly.</p>
-          {data.recoverable.map((candidate) => (
-            <div className="row" key={candidate.storageKey}>
-              <span className="row-label">{candidate.storageKey}</span>
-              <span className="row-value controls">
-                {candidate.hasNotes && <span className="muted">Typed notes found</span>}
-                <button
-                  type="button"
-                  disabled={recording || current === "finishing" || recoveringKey !== null}
-                  onClick={() => {
-                    setRecoveringKey(candidate.storageKey);
-                    setRecoveryError(null);
-                    setRecoveryOutcome(null);
-                    void recoverMeetingRecording(candidate.storageKey)
-                      .then(async (result) => {
-                        setRecoveryOutcome(result);
-                        await reload();
-                      })
-                      .catch((cause: unknown) => setRecoveryError(String(cause)))
-                      .finally(() => setRecoveringKey(null));
-                  }}
-                >
-                  {recoveringKey === candidate.storageKey ? "Recovering…" : "Recover recording"}
-                </button>
-              </span>
-            </div>
-          ))}
-          {recoveryOutcome && <p className="caveat">{meetingOutcomeLabel(recoveryOutcome)}</p>}
-          {recoveryError && <p className="error" role="alert">{recoveryError}</p>}
-        </section>
-      )}
 
       <section>
         <h2>Notification window</h2>
-        <p className="caveat">Drag the notification window to move it or resize it by an edge. Reset returns it to the bottom-right at its default size.</p>
         <button type="button" disabled={resettingNotification} onClick={() => { void resetNotification(); }}>Reset notification window</button>
+        <LearnMore>
+          <p>Drag the notification window to move it or resize it by an edge. Reset returns it to the bottom-right at its default size.</p>
+        </LearnMore>
         {notificationResetError ? <p className="error" role="alert">{notificationResetError}</p> : null}
       </section>
 
-      {recording || Object.keys(live).length > 0 ? (
-        <section>
-          <h2>Live transcript</h2>
-          <p className="caveat">
-            {transcriptEnded
-              ? "These are the last lines the provider sent before the live transcription stopped. Nothing further will appear here, and the transcript that gets saved comes from one pass over the whole recording when the meeting ends."
-              : "Each line is the most recent few seconds, replaced as it is revised. The transcript that gets saved comes from one pass over the whole recording when the meeting ends, so it will read better than this."}
-          </p>
-          <Row label="You" value={live.mic ?? "—"} />
-          <Row label="Everyone else" value={live.system ?? "—"} />
-        </section>
-      ) : null}
-
       <section>
         <h2>Detection</h2>
+        {/* Visible, not folded: "nothing is ever recorded without you pressing
+            a button" is the promise this whole section is built around. The
+            matching rules further down are the explanation, and those are. */}
         <p className="caveat">
           Meeting applications that are running. Nothing is ever recorded without
           you pressing a button — when a meeting is detectably in progress, a
@@ -590,6 +383,19 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
             </label>
           </span>
         </div>
+        {/*
+          * Reported here, above the applications it is evidence about: where
+          * this is anything but "Watching", every "not in a call" further down
+          * is an absence of evidence rather than evidence of absence, and the
+          * user is the only one who can tell that from the screen. It used to
+          * sit beside the system-audio row, as the same kind of fact; that row
+          * went to the Meetings page with the checkbox it decides.
+          */}
+        <Row
+          label="Microphone activity"
+          value={microphoneValue(status.microphone)}
+          detail={microphoneDetail(status.microphone)}
+        />
         {status.detected.length === 0 ? (
           <p className="muted">No meeting application is running.</p>
         ) : (
@@ -640,15 +446,17 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
             />
           </span>
         </div>
-        <p className="caveat">
-          Names are matched against the running program's own filename, not its
-          window title, and capitalisation does not matter — the name each
-          detection above is reported by is the one to copy. A name in the second
-          list is never offered even when this application recognises it on its
-          own, which is how a false positive is silenced without waiting for a
-          release. A program you list yourself is reported as running, never as
-          being in a call: only you know whether it is.
-        </p>
+        <LearnMore>
+          <p>
+            Names are matched against the running program's own filename, not its
+            window title, and capitalisation does not matter — the name each
+            detection above is reported by is the one to copy. A name in the second
+            list is never offered even when this application recognises it on its
+            own, which is how a false positive is silenced without waiting for a
+            release. A program you list yourself is reported as running, never as
+            being in a call: only you know whether it is.
+          </p>
+        </LearnMore>
         {status.notificationExcluded ? (
           <Row
             label="The recording window"
@@ -660,14 +468,21 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
 
       <section>
         <h2>Speaker labels</h2>
+        {/* What it does stays visible; what a label does and does not mean is
+            folded. The two measured caveats are not: they are what switching
+            this on costs, and what it gets wrong. */}
         <p className="caveat">
           A second pass over the finished recording, grouping the voices in it so
-          each passage of the saved note says who was speaking. It answers how
-          many voices and when, never <em>who</em> — a label is{" "}
-          <code>Speaker 1</code>, it means nothing outside this one recording, and
-          the same person is <code>Speaker 1</code> in one meeting and{" "}
-          <code>Speaker 3</code> in the next.
+          each passage of the saved note says who was speaking.
         </p>
+        <LearnMore>
+          <p>
+            It answers how many voices and when, never <em>who</em> — a label is{" "}
+            <code>Speaker 1</code>, it means nothing outside this one recording, and
+            the same person is <code>Speaker 1</code> in one meeting and{" "}
+            <code>Speaker 3</code> in the next.
+          </p>
+        </LearnMore>
         <p className="caveat warn">
           Measured on this machine: the pass costs about 8% of the meeting’s
           length, so an hour-long recording adds roughly five minutes to Stop and
@@ -740,28 +555,35 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
             </li>
           ))}
         </ul>
-        <p className="caveat">
-          Both are needed and neither works alone. The first one installed brings
-          the sherpa runtime with it — the same runtime{" "}
-          <code>Settings &gt; Transcription &gt; Local</code> uses, so if you already have a local model
-          it is already there.
-        </p>
+        {/* Folded: which half is missing is already on the Status row above,
+            in `diarizationBlocker`'s words. This is why, and where the runtime
+            comes from. */}
+        <LearnMore summary="About the two models">
+          <p>
+            Both are needed and neither works alone. The first one installed brings
+            the sherpa runtime with it — the same runtime{" "}
+            <code>Settings &gt; Transcription &gt; Local</code> uses, so if you already have a local model
+            it is already there.
+          </p>
+        </LearnMore>
       </section>
 
       <section>
-        <h2>Providers</h2>
-        <p className="caveat">
-          Every provider this application knows the wire details for. A provider
-          with no client is listed rather than hidden, so the reason is visible.
-        </p>
+        <h2>All meeting providers</h2>
+        <LearnMore>
+          <p>
+            Every provider this application knows the wire details for. A provider
+            with no client is listed rather than hidden, so the reason is visible.
+          </p>
+        </LearnMore>
         {providers.map((p) => (
           <div key={p.id} className="row">
             <span className="row-label">{p.name}</span>
             <span className="row-value">
               <code>
                 {p.audioLeavesDevice
-                  ? "audio leaves this machine"
-                  : "audio stays here"}
+                  ? "audio leaves this computer"
+                  : "audio stays on this computer"}
               </code>
               <em className="row-detail">{availabilityLabel(p.availability)}</em>
               <em className="row-detail">{keytermLabel(p.keyterms)}</em>

@@ -4,7 +4,7 @@ Implemented on 2026-09-20. Tracking: [KNEG-278](https://linear.app/axelalbertkar
 
 ## Use
 
-In Settings > Intelligence > Meeting summaries, select a provider/model and save.
+In Settings > Cleanup & summaries > Meeting summaries, select a provider/model and save.
 Automatic generation is off by default. Enable it to summarize newly saved meetings
 and completed audio/video imports, including imports submitted through the local API.
 Turning it off cancels queued automatic jobs; already-running jobs have a Cancel action.

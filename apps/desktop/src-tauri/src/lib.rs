@@ -494,6 +494,7 @@ pub fn run() -> anyhow::Result<()> {
             persistent_overlay::overlay_message,
             dictation::dictation_cancel,
             dictation::dictation_set_device,
+            dictation::dictation_device,
             dictation::input_devices,
             dictation::insertion_supported,
             local_model::local_model_status,

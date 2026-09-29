@@ -1,9 +1,9 @@
 /**
- * Integrations > API — the local HTTP server, off by default.
+ * Developer > Local API — the local HTTP server, off by default.
  *
  * The permissions line is a read of the file, not an assumption about it, and
  * it is rendered through the same `DiscoveryPermissions` state and the same
- * `discoveryPermissionsLabel` in `lib/labels.ts` that `Integrations > CLI`
+ * `discoveryPermissionsLabel` in `lib/labels.ts` that `Developer > CLI`
  * uses — one vocabulary for one file, on both screens that describe it.
  *
  * This screen used to warn only when a boolean `discoveryPermissionsAsExpected`
@@ -12,7 +12,7 @@
  * verified. So the screen reassured on exactly the state a bench check found
  * two extra trustees able to read on a real machine. The boolean is gone;
  * `InheritedFromProfile` now gets the same honest sentence and caveat here
- * that it gets on `Integrations > CLI`. See docs/BENCH_CHECK.md, 2026-08-26
+ * that it gets on `Developer > CLI`. See docs/BENCH_CHECK.md, 2026-08-26
  * finding 2.
  */
 
@@ -46,7 +46,6 @@ export function IntegrationsApi() {
       {api.blockedReason ? <p className="error" role="alert">{api.blockedReason}</p> : null}
 
       <section data-surface="integrations.api">
-        <h2>Local API</h2>
         <Row
           label="State"
           value={

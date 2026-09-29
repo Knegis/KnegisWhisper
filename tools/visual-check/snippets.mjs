@@ -29,6 +29,25 @@ export function clickText(selector, text) {
   `);
 }
 
+/**
+ * Opens a rail group -- `Settings`, `Developer` -- only if it is closed.
+ *
+ * A group header is a toggle, so a bare `clickText` on it closes a group that
+ * something earlier left open, and the child click after it finds nothing.
+ * This is the guard `shell-rail.mjs` writes out by hand before its own
+ * header clicks, as one snippet.
+ */
+export function openGroup(label) {
+  return source(`
+    const header = [...document.querySelectorAll('nav.sidebar button.nav-group')]
+      .find((item) => item.textContent.trim() === ${JSON.stringify(label)});
+    if (!header) throw new Error('Could not find group ' + ${JSON.stringify(label)});
+    const wasOpen = header.getAttribute('aria-expanded') === 'true';
+    if (!wasOpen) header.click();
+    return { label: ${JSON.stringify(label)}, wasOpen };
+  `);
+}
+
 export function railGeometry() {
   return source(`
     const rail = document.querySelector('nav.sidebar');
@@ -216,7 +235,13 @@ export function invoke(command, args = undefined) {
   `);
 }
 
-export function selectMeetingProvider(label, systemAudio) {
+/**
+ * Sets the meeting provider. Since KNEG-334 this select lives on
+ * Settings > Meetings, not on the Meetings task page, so it no longer also
+ * handles the participants checkbox or the Start button -- those are a
+ * separate screen now, and `startMeetingRecording` below drives them.
+ */
+export function selectMeetingProvider(label) {
   return source(`
     const wanted = ${JSON.stringify(label)}.toLowerCase();
     const select = [...document.querySelectorAll('select')].find((item) =>
@@ -230,6 +255,17 @@ export function selectMeetingProvider(label, systemAudio) {
     );
     select.value = option.value;
     select.dispatchEvent(new Event('change', { bubbles: true }));
+    return { provider: option.textContent.trim() };
+  `);
+}
+
+/**
+ * Ticks or unticks the participants checkbox and presses Start recording, on
+ * the Meetings task page -- the other half of what `selectMeetingProvider`
+ * used to do in one place before the provider select moved to Settings.
+ */
+export function startMeetingRecording(systemAudio) {
+  return source(`
     const checkbox = [...document.querySelectorAll('input[type="checkbox"]')]
       .find((item) =>
         item.closest('label')?.textContent.includes('other participants')
@@ -241,7 +277,7 @@ export function selectMeetingProvider(label, systemAudio) {
       .find((item) => item.textContent.trim() === 'Start recording');
     if (!start) throw new Error('Start recording button is missing');
     start.click();
-    return { provider: option.textContent.trim(), systemAudio: checkbox.checked };
+    return { systemAudio: checkbox.checked };
   `);
 }
 

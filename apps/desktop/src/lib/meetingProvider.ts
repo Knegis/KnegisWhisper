@@ -1,5 +1,8 @@
 /**
- * Which meeting provider the Meetings screen should show as selected.
+ * Which meeting provider the two meeting screens should show as selected:
+ * Settings > Meetings, in its select, and the Meetings page, as the provider
+ * that will transcribe. The Meetings page passes no `chosen` -- it has no
+ * select -- so the two agree on everything but a choice being made right now.
  *
  * Three inputs, in order of authority: what the person chose on this visit to
  * the screen, what was saved on an earlier one (`meetings.provider`), and the
