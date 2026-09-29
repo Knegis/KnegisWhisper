@@ -245,38 +245,36 @@ const HOTKEYS: HotkeyReport = {
 
 /* --------------------------------------------------------------- providers */
 
+/*
+ * Four of the registry's seven transcription providers, which is all
+ * `providers` lists: Deepgram and AssemblyAI were here, and are meeting
+ * streaming providers with no entry in `transcription` -- so Rust never lists
+ * them here, and `probe_configured`, which walks the same list, never tests
+ * them. Mistral took their place in KNEG-363 as a stored key whose test fails.
+ */
 const PROVIDERS: ProviderSummary[] = [
   {
     id: "openai",
     name: "OpenAI",
-    credentialSlot: "provider:openai",
+    credentialSlot: "openai",
     configured: true,
     modelCount: 3,
     models: ["whisper-1", "gpt-4o-transcribe", "gpt-4o-mini-transcribe"],
     dispatch: { state: "ready" },
   },
   {
-    id: "deepgram",
-    name: "Deepgram",
-    credentialSlot: "provider:deepgram",
+    id: "mistral",
+    name: "Mistral",
+    credentialSlot: "mistral",
     configured: true,
-    modelCount: 2,
-    models: ["nova-3", "nova-2"],
-    dispatch: { state: "ready" },
-  },
-  {
-    id: "assemblyai",
-    name: "AssemblyAI",
-    credentialSlot: "provider:assemblyai",
-    configured: false,
-    modelCount: 2,
-    models: ["universal", "universal-streaming"],
+    modelCount: 1,
+    models: ["voxtral-mini-latest"],
     dispatch: { state: "ready" },
   },
   {
     id: "groq",
     name: "Groq",
-    credentialSlot: "provider:groq",
+    credentialSlot: "groq",
     configured: false,
     modelCount: 1,
     models: ["whisper-large-v3-turbo"],
@@ -288,7 +286,7 @@ const PROVIDERS: ProviderSummary[] = [
   {
     id: "corti",
     name: "Corti",
-    credentialSlot: "provider:corti",
+    credentialSlot: "corti",
     configured: false,
     modelCount: 1,
     models: ["premier"],
@@ -299,57 +297,42 @@ const PROVIDERS: ProviderSummary[] = [
   },
 ];
 
+/*
+ * Twelve of the registry's twenty slots, in its order, with its slot ids,
+ * names, kinds, `usedFor` and `feature` (`config/provider-registry.json`,
+ * `credentials`). The ids used to be `provider:openai` and the like, which no
+ * registry slot is: `PROVIDERS[].credentialSlot` above and the probe's
+ * provider ids below are matched against these, so the three change together
+ * or a row cannot find its dispatch or its test (KNEG-363).
+ *
+ * `stored` is invented, and `provider_credential_set` below moves it, so a
+ * key saved on Providers flips its row. One `usedFor` is invented too: Groq
+ * is `["transcription", "reasoning"]` in the registry and is speech alone
+ * here, because `PROVIDERS` above invents a missing Groq client and a slot
+ * with another use keeps its + (`lib/providerRows.ts`) -- this is the fixture
+ * that shows "Not supported yet".
+ */
 const CREDENTIAL_SLOTS: CredentialSlotStatus[] = [
-  {
-    slot: "provider:openai",
-    name: "OpenAI API key",
-    kind: "provider",
-    usedFor: ["transcription", "cleanup", "meeting transcription"],
-    feature: null,
-    stored: true,
-  },
-  {
-    slot: "provider:deepgram",
-    name: "Deepgram API key",
-    kind: "provider",
-    usedFor: ["transcription", "meeting transcription"],
-    feature: null,
-    stored: true,
-  },
-  {
-    slot: "provider:assemblyai",
-    name: "AssemblyAI API key",
-    kind: "provider",
-    usedFor: ["transcription"],
-    feature: null,
-    stored: false,
-  },
-  {
-    slot: "provider:groq",
-    name: "Groq API key",
-    kind: "provider",
-    usedFor: ["transcription"],
-    feature: null,
-    stored: false,
-  },
-  {
-    slot: "custom:cleanup-endpoint",
-    name: "Self-hosted cleanup endpoint key",
-    kind: "custom-endpoint",
-    usedFor: ["cleanup"],
-    feature: "Intelligence",
-    stored: false,
-  },
-  {
-    slot: "enterprise:bedrock",
-    name: "AWS Bedrock",
-    kind: "enterprise",
-    usedFor: ["cleanup"],
-    feature: "Intelligence",
-    stored: true,
-  },
+  { slot: "openai", name: "OpenAI", kind: "provider", usedFor: ["transcription", "reasoning"], feature: null, stored: true },
+  { slot: "anthropic", name: "Anthropic", kind: "provider", usedFor: ["reasoning"], feature: null, stored: false },
+  { slot: "groq", name: "Groq", kind: "provider", usedFor: ["transcription"], feature: null, stored: false },
+  { slot: "mistral", name: "Mistral", kind: "provider", usedFor: ["transcription"], feature: null, stored: true },
+  { slot: "corti", name: "Corti", kind: "provider", usedFor: ["transcription", "reasoning"], feature: null, stored: false },
+  { slot: "note-formatting-custom", name: "Note formatting", kind: "custom-endpoint", usedFor: [], feature: "note-formatting", stored: false },
+  { slot: "translation-custom", name: "Translation", kind: "custom-endpoint", usedFor: [], feature: "translation", stored: true },
+  { slot: "bedrock", name: "AWS Bedrock", kind: "enterprise", usedFor: [], feature: "bedrock", stored: true },
+  { slot: "azure", name: "Azure OpenAI", kind: "enterprise", usedFor: [], feature: "azure", stored: false },
+  { slot: "vertex", name: "GCP Vertex AI", kind: "enterprise", usedFor: [], feature: "vertex", stored: true },
+  { slot: "assemblyai", name: "AssemblyAI", kind: "provider", usedFor: [], feature: null, stored: false },
+  { slot: "deepgram", name: "Deepgram", kind: "provider", usedFor: [], feature: null, stored: true },
 ];
 
+/*
+ * Only providers `PROVIDERS` lists, because `probe_configured` walks the same
+ * registry list: the Deepgram and AssemblyAI results that were here are ones
+ * Rust cannot send. One pass (OpenAI), one failure (Mistral), and the two
+ * kinds of skip.
+ */
 const PROBE_REPORT: ProbeReport = {
   results: [
     {
@@ -366,12 +349,7 @@ const PROBE_REPORT: ProbeReport = {
       },
     },
     {
-      provider: "deepgram",
-      kind: "catalog",
-      outcome: { outcome: "pass", detail: "12 models listed in 180 ms" },
-    },
-    {
-      provider: "deepgram",
+      provider: "mistral",
       kind: "voice",
       outcome: {
         outcome: "fail",
@@ -379,7 +357,7 @@ const PROBE_REPORT: ProbeReport = {
       },
     },
     {
-      provider: "assemblyai",
+      provider: "corti",
       kind: "catalog",
       outcome: { outcome: "skipped", reason: "no-credential" },
     },
@@ -421,7 +399,7 @@ const REASONING: ReasoningStatus = {
     {
       id: "openai",
       name: "OpenAI",
-      credentialSlot: "provider:openai",
+      credentialSlot: "openai",
       configured: true,
       enterprise: false,
       dispatch: { state: "ready" },
@@ -445,7 +423,7 @@ const REASONING: ReasoningStatus = {
     {
       id: "anthropic",
       name: "Anthropic",
-      credentialSlot: "provider:anthropic",
+      credentialSlot: "anthropic",
       configured: false,
       enterprise: false,
       dispatch: {
@@ -1349,9 +1327,22 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
   },
 
   /* providers */
-  providers: () => PROVIDERS,
-  credential_slots: () => CREDENTIAL_SLOTS,
-  provider_credential_set: () => null,
+  // Copies, as a serialised reply would be: the setter below moves these, and
+  // a screen must not see its last read change underneath it.
+  providers: () => PROVIDERS.map((p) => ({ ...p })),
+  credential_slots: () => CREDENTIAL_SLOTS.map((s) => ({ ...s })),
+  // Remembered, so a key saved on Providers flips its row to "Key saved" and
+  // Clear flips it back. An empty value deletes, as it does in Rust; the value
+  // itself is dropped here, since nothing can read one back anyway.
+  provider_credential_set: (a) => {
+    const id = arg<string>(a, "slot");
+    const stored = (arg<string>(a, "value") ?? "").trim() !== "";
+    const slot = CREDENTIAL_SLOTS.find((s) => s.slot === id);
+    if (!slot) throw new Error(`${JSON.stringify(id)} is not a credential slot this application uses`);
+    slot.stored = stored;
+    for (const p of PROVIDERS) if (p.credentialSlot === id) p.configured = stored;
+    return null;
+  },
   provider_credential_present: (a) =>
     CREDENTIAL_SLOTS.find((s) => s.slot === arg<string>(a, "slot"))?.stored ??
     false,
@@ -1624,7 +1615,7 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
         },
       ],
       relocatedCredentials: [
-        { sourceTable: "settings", account: "openai", slot: "provider:openai" },
+        { sourceTable: "settings", account: "openai", slot: "openai" },
       ],
       absentTables: ["dictation_presets"],
       ftsRows: 128,

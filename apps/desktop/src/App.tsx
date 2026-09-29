@@ -50,6 +50,9 @@ import { LanguagePopup } from "./components/LanguagePopup";
  * task hero says what Dictation and Meetings are for, and a note's own title
  * is the heading on Notes. Notes > Upload is the one page with no panel; it
  * keeps its `PageHeader`, and the title bar draws no panel toggle for it.
+ * Providers keeps a `PageHeader` too, but draws it itself: its search field
+ * and Test connections sit in the header, and what they hold is the page's
+ * own state, so this file leaves its copy out for that one view.
  *
  * # The error boundary
  *
@@ -179,7 +182,7 @@ function renderView(
     case "notes-upload":
       return <NotesUpload onOpenNote={openNote} />;
     case "providers":
-      return <SettingsProviders />;
+      return <SettingsProviders onGoTo={select} />;
     case "transcription":
       return (
         <SettingsTranscription onGoToProviders={() => select("providers")} onGoToVocabulary={() => select("vocabulary")} />
@@ -227,7 +230,7 @@ function Shell({ panelCollapsed, onTogglePanel }: { panelCollapsed: boolean; onT
    * Go to a screen.
    *
    * Every route to a screen comes through here -- a rail press, a Settings
-   * panel press, Dictation's and Meetings' `onGoTo`, either
+   * panel press, Dictation's, Meetings' and Providers' `onGoTo`, either
    * `onGoToProviders`, both `onGoToVocabulary`, and the error boundary's
    * reset. Nothing else has to happen on arrival: the rail's mark and the
    * panel's are both derived from `view`.
@@ -294,9 +297,10 @@ function Shell({ panelCollapsed, onTogglePanel }: { panelCollapsed: boolean; onT
   // and no `PageHeader`.
   if (view === "dictation" || view === "meetings" || view === "notes") return frame(boundary);
 
+  // Providers draws its own header, with its search and Test connections in it.
   const content = (
     <div className="content">
-      {page ? <PageHeader page={page} /> : null}
+      {page && view !== "providers" ? <PageHeader page={page} /> : null}
       {boundary}
     </div>
   );

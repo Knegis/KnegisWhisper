@@ -5,8 +5,10 @@
  * before:
  *
  *   1. Cards and the window card are the only boxes, at 4px. Everything else
- *      still takes its separation from whitespace and fill rather than an
- *      outline, the way the site does -- but this file no longer claims
+ *      still takes its separation from whitespace, rules and fill rather than
+ *      an outline, the way the site does -- except a control the Kit edges at
+ *      1px: `button.secondary`, and the fields and selects of a settings page
+ *      (`# Settings pages`, near the end). This file no longer claims
  *      `border-radius` never appears; it follows the Kit corner scale instead:
  *      0 on flat regions (rows, rules, panels), 2px on controls (buttons,
  *      chips, inputs, keys), 4px on cards and the window card, and nothing
@@ -136,6 +138,13 @@
   --band-wash: rgb(61 85 255 / 16%);
   --rec: #ff7b7b;
   --card-shadow: none;
+  /*
+   * The 1px edge of a control that has one -- `button.secondary`, and a
+   * settings page's fields and selects. `--rule` here; a step darker than
+   * `--rule` in light, where `#e1e1e6` on paper is too faint to find a field
+   * by.
+   */
+  --edge: #2e2e33;
 
   /*
    * The row grid, as tokens because two other rules have to agree with it
@@ -229,6 +238,7 @@
     --band-wash: #eef0ff;
     --rec: #c02626;
     --card-shadow: 0 1px 2px rgb(24 24 32 / 4%), 0 12px 32px rgb(24 24 32 / 5%);
+    --edge: #cfd0d6;
   }
 }
 
@@ -777,10 +787,11 @@ h3 {
  * The horizontal padding is gone with the fill it used to sit inside: 1.5rem of
  * inset against an invisible edge is an indent with nothing to indent from, and
  * it pushed every section out of line with the `h1` above it.
- * The separation is the margin now, which is why the margin grew.
+ * The separation is the margin now, which is why the margin grew -- to the
+ * Kit's 40px, in px so it does not move with the root size.
  */
 section {
-  margin-top: 2.75rem;
+  margin-top: 40px;
   padding: 0;
   background: var(--surface);
 }
@@ -797,8 +808,9 @@ section {
 /*
  * A rule between rows, which is a different thing from a box around one: it
  * separates two pieces of data from each other rather than fencing the pair off
- * from the page. `--faint` is the site's own value for exactly this weight of
- * mark.
+ * from the page. `--rule`, the Kit's weight for a line between rows -- it was
+ * `--faint`, the site's value, which is the same grey in light and a shade
+ * lighter in dark.
  */
 /*
  * A grid, not `justify-content: space-between`.
@@ -820,8 +832,9 @@ section {
   grid-template-columns: var(--label-col) minmax(0, 1fr);
   gap: var(--row-gap);
   align-items: baseline;
-  padding: 0.55rem 0;
-  border-top: 1px solid var(--faint);
+  /* The Kit's 14px, in px for the same reason `section`'s 40px is. */
+  padding: 14px 0;
+  border-top: 1px solid var(--rule);
 }
 
 .row:first-of-type {
@@ -1003,7 +1016,7 @@ section > .muted {
   flex-wrap: wrap;
   gap: 0.4rem;
   padding: 0.5rem 0;
-  border-bottom: 1px solid var(--faint);
+  border-bottom: 1px solid var(--rule);
 }
 
 .list li:last-child {
@@ -1761,6 +1774,10 @@ label:has(> input[type="checkbox"]) {
  * border and their own width while every field around them lost both, and the
  * inconsistency read as a rendering glitch rather than as a missing selector.
  * Naming what is *not* a text field cannot go stale the same way.
+ *
+ * A settings page's fields and selects take the Kit's 36px, 1px edge and 2px
+ * corner instead, on the page colour (`# Settings pages`, near the end); these
+ * rules still hold everywhere else.
  */
 input:not([type="checkbox"]):not([type="radio"]),
 select {
@@ -1958,6 +1975,8 @@ button {
   margin-top: 0.75rem;
   padding: 0.45rem 0.9rem;
   border: 0;
+  /* The Kit's control corner, which a filled hover or a `.secondary` edge shows. */
+  border-radius: 2px;
   background: transparent;
   color: var(--text);
   font: inherit;
@@ -1988,12 +2007,14 @@ button.primary:hover:not(:disabled) {
 
 /*
  * The Kit's secondary button: an action beside the primary one that is not
- * the next thing to do -- Meetings' Discard and "Record this call". Edged
- * rather than filled, so it cannot be read as the primary, and its hover
- * darkens the edge instead of washing the fill.
+ * the next thing to do -- Meetings' Discard and "Record this call",
+ * Providers' Test connections, Change and Clear. Edged rather than filled, so
+ * it cannot be read as the primary, and its hover darkens the edge instead of
+ * washing the fill. The edge is `--edge`: `#cfd0d6` in light, `--rule`'s
+ * value in dark.
  */
 button.secondary {
-  border: 1px solid var(--rule);
+  border: 1px solid var(--edge);
   background: var(--bg);
 }
 
@@ -2273,11 +2294,18 @@ button.notes-folder-toggle:hover:not(:disabled) { background: var(--selected); }
 .notes-context-menu .row { display: flex; flex-direction: column; gap: 0.35rem; padding: 0.5rem 0.65rem; }
 .notes-context-menu select { width: 100%; min-width: 0; }
 
-/* Vocabulary: a compact add row, and a ruled list of the words themselves. */
+/*
+ * Vocabulary: a compact add row, and a ruled list of the words themselves --
+ * the settings rows' treatment, a `--rule` under each and a row as tall as a
+ * `.row` of one line (14px, a 22.5px line, 14px), which here holds a 36px
+ * field or button. The buttons lose `button`'s top margin, which put Edit and
+ * Delete below the word beside them.
+ */
 .vocabulary-add { display: flex; gap: .5rem; margin: 1rem 0; }
 .vocabulary-add input { flex: 1; min-width: 0; max-width: 32rem; }
 .vocabulary-list { list-style: none; padding: 0; max-width: 48rem; }
-.vocabulary-list li { display: flex; align-items: center; gap: .5rem; padding: .4rem 0; border-bottom: 1px solid var(--faint); }
+.vocabulary-list li { display: flex; align-items: center; gap: .5rem; min-height: 51px; padding: 7px 0; border-bottom: 1px solid var(--rule); }
+.vocabulary-list button { margin: 0; }
 .vocabulary-word, .vocabulary-list input { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .vocabulary-support { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr)); gap: 1rem; }
 .vocabulary-usage details { max-height: 14rem; overflow: auto; overflow-wrap: anywhere; }
@@ -2291,7 +2319,8 @@ button.notes-folder-toggle:hover:not(:disabled) { background: var(--selected); }
 .note-prose, .summary-pane { min-width: 0; flex: 1; }
 .note-prose[hidden], .summary-pane[hidden] { display: none; }
 .summary-tabs { display: flex; gap: 8px; padding: 12px 0; }
-.summary-tabs [role="tab"] { color: var(--muted); }
+/* Square: the underline is a rule, and `button`'s 2px corner would round its ends. */
+.summary-tabs [role="tab"] { color: var(--muted); border-radius: 0; }
 .summary-tabs [aria-selected="true"] { color: var(--text); border-bottom: 2px solid var(--band); }
 .summary-toolbar { display: flex; flex-wrap: wrap; gap: 8px; padding-block: 8px; }
 .summary-pane > .muted, .summary-pane > .warn, .summary-pane > .error { padding-inline: 12px; }
@@ -2362,3 +2391,121 @@ button.note-topbar-button { flex: none; display: flex; align-items: center; just
 .tooltip[data-side="above"] .tooltip-arrow { bottom: -7px; }
 .tooltip[data-side="above"] .tooltip-arrow::before, .tooltip[data-side="above"] .tooltip-arrow::after { clip-path: polygon(50% 100%, 100% 0, 0 0); }
 .tooltip[data-side="above"] .tooltip-arrow::after { top: -1.5px; }
+
+/*
+ * # Settings pages
+ *
+ * The settings and developer screens in the Kit (KNEG-363), done in CSS alone:
+ * every page keeps its markup, and these rules reach it through the classes
+ * they already share. `section`'s 40px, `.row`'s 14px and `--rule`, and
+ * `button`'s 2px corner are set where those rules are, above; what is here is
+ * scoped to `.content`, the column these screens (and Notes > Upload) render
+ * in, so Notes' title field, the task pages' chips and the list panels keep
+ * their own. Last in the file because a scoped rule and an unscoped one of
+ * equal specificity are decided by order.
+ *
+ * - **A section label** keeps the machine voice and gains a `--rule` under
+ *   it. Only a bare `h2`: every `h2` with a class -- a hero heading, a panel
+ *   label -- has its own rule set.
+ * - **Fields and selects** are 36px, with a 1px `--edge` and the 2px corner,
+ *   on the page colour rather than the `--control` fill, as the canvas draws
+ *   them. `:not()` with a list, so the rule is exactly as specific as the
+ *   unscoped one it follows and a page's own field rule (Providers' search)
+ *   can still outrank it. A select keeps its hover and focus fill.
+ * - **A checkbox** is a 16px square filled `--band` when checked: the native
+ *   control, sized, with `accent-color` -- not `appearance: none` -- so it
+ *   keeps the platform's own check, focus ring hook and disabled look, and
+ *   reads as a checkbox to everything that reads one.
+ */
+.content h2:not([class]) { padding-bottom: 8px; border-bottom: 1px solid var(--rule); }
+
+.content input:not([type="checkbox"], [type="radio"], [type="range"]),
+.content select {
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--edge);
+  border-radius: 2px;
+}
+.content input:not([type="checkbox"], [type="radio"], [type="range"]) { background: var(--bg); }
+.content textarea { padding: 6px 10px; border: 1px solid var(--edge); border-radius: 2px; background: var(--bg); color: var(--text); }
+/* `flex: none`: beside a label long enough to wrap, a flex item's box shrank to 14px wide. */
+.content input[type="checkbox"] { flex: none; width: 16px; height: 16px; margin: 0; accent-color: var(--band); }
+/*
+ * Fields stacked one `.controls` each -- an enterprise connector's four on
+ * Cleanup & summaries -- sat 2px apart, which was a gap between two fills and
+ * is a doubled line between two edges. 8px, so each reads as its own field.
+ */
+.content .row-value > .controls + .controls { margin-top: 6px; }
+/*
+ * A path breaks where it has to. The discovery file's
+ * `C:\Users\...\local-api.json` is one unbroken word, and on Local API, CLI
+ * and MCP it pushed `.split-main` 9px wider than the page at 1000x720 --
+ * a sideways scroll on three screens (measured in headless Edge against dev
+ * fixtures, not in the Tauri window).
+ */
+.content .row-value, .content .row-detail { overflow-wrap: anywhere; }
+/* Vocabulary's omitted terms: Switzer has no bold for `strong` to use, so the browser counterfeited one. */
+.vocabulary-usage strong { font-weight: 400; }
+
+/*
+ * Providers (`views/SettingsProviders.tsx`): the header's search and Test
+ * connections, the filter tabs, the lock line, and the rows in two columns
+ * where the page has the width -- one below about 816px of column, which is
+ * the default 1000x720 window with the Settings panel open.
+ *
+ * A row is the canvas': a 44px tile, the name over its purposes, and one
+ * thing on the right -- "Key saved" and Change, a +, or "Not supported yet".
+ * Its form, its result line and any detail sit under the name, in the same
+ * track. The tile is 2px, not the canvas' 3px: the Kit has no 3px step, and a
+ * tile is a key-sized mark rather than a card.
+ */
+.page-header-actions { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 16px 24px; }
+.page-heading { flex: 1 1 18rem; min-width: 0; }
+.page-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-left: auto; padding-top: 2px; }
+.page-actions > button { height: 36px; margin: 0; padding: 0 14px; white-space: nowrap; }
+.providers > .page-header { margin-bottom: 26px; }
+/* `width` as well as the basis: without it the header sized this box by the input's default 20ch and wrapped Test connections under it. */
+.providers-search { position: relative; display: flex; flex: 0 1 300px; width: 300px; min-width: 12rem; }
+.providers-search > .icon { position: absolute; left: 11px; top: 10px; color: var(--muted); pointer-events: none; }
+.content .providers-search input { width: 100%; min-width: 0; padding-left: 34px; }
+
+.providers-tabs { display: flex; flex-wrap: wrap; gap: 4px; }
+.providers-tabs > [role="tab"] { height: 32px; margin: 0; padding: 0 12px; color: var(--muted); font-size: 14px; }
+.providers-tabs > [role="tab"]:hover:not(:disabled),
+.providers-tabs > [role="tab"][aria-selected="true"] { background: var(--selected); color: var(--text); }
+
+.providers-lock, .providers-line { max-width: 76ch; margin: 18px 0 0; font-size: 13.5px; line-height: 20px; color: var(--muted); }
+.providers-lock { display: flex; align-items: flex-start; gap: 8px; }
+.providers-lock > .icon { margin-top: 3px; }
+/* Under the lock line's words, not its icon: 14px of icon and the 8px gap. */
+.providers-line { margin-top: 4px; padding-left: 22px; }
+.providers-line[role="status"] { color: var(--text); }
+.providers-tests { display: flex; flex-direction: column; gap: 8px; max-width: 76ch; margin-top: 14px; }
+.providers-tests > .caveat, .providers-tests > .learn-more, .providers-failure { margin: 0; }
+
+.providers-group { margin-top: 28px; }
+.providers-group > h2 { margin-bottom: 0; }
+.providers-note { max-width: 76ch; margin: 10px 0 2px; font-size: 13.5px; line-height: 20px; }
+.provider-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 24rem), 1fr)); column-gap: 48px; align-items: start; margin: 0; padding: 0; list-style: none; }
+.provider-row { display: grid; grid-template-columns: 44px minmax(0, 1fr) auto; align-items: center; gap: 6px 14px; min-width: 0; padding: 14px 0; border-bottom: 1px solid var(--rule); }
+.provider-tile { width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; border: 1px solid var(--rule); border-radius: 2px; background: var(--panel); color: var(--text); font: 18px/1 var(--font-mono); }
+.provider-tile-local { border-color: var(--band); background: var(--band); color: var(--band-ink); }
+.provider-text { display: flex; flex-direction: column; align-items: flex-start; min-width: 0; }
+.provider-name { font-size: 15px; line-height: 22px; overflow-wrap: anywhere; }
+.provider-purposes { font-size: 13px; line-height: 19px; color: var(--muted); }
+.provider-row-unsupported .provider-name, .provider-row-unsupported .provider-tile { color: var(--muted); }
+.provider-actions { display: flex; align-items: center; gap: 10px; justify-self: end; }
+.provider-state { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; line-height: 19px; color: var(--text); white-space: nowrap; }
+.provider-state > .icon { color: var(--band); }
+.provider-state-failed { color: var(--error); }
+.provider-unsupported { padding-right: 8px; font: 12px/16px var(--font-mono); letter-spacing: .5px; text-transform: uppercase; color: var(--muted); white-space: nowrap; }
+button.provider-add { display: flex; align-items: center; justify-content: center; width: 36px; height: 36px; margin: 0; padding: 0; }
+button.provider-add[aria-expanded="true"] { background: var(--selected); }
+button.provider-change { height: 30px; margin: 0; padding: 0 10px; font-size: 13px; }
+/* Blue words, so the text-safe blue: `--band` is 3.3:1 on the dark card. */
+button.provider-link { margin: 0; padding: 0; background: none; color: var(--band-text); font-size: 13px; line-height: 19px; text-align: left; }
+button.provider-link:hover:not(:disabled) { background: none; color: var(--band-text); text-decoration: underline; text-underline-offset: 2px; }
+.provider-detail, .provider-form { grid-column: 2 / -1; margin: 0; }
+.provider-form { margin-top: 4px; }
+.providers-empty { margin-top: 28px; }
+.providers > .learn-more { margin-top: 32px; }
