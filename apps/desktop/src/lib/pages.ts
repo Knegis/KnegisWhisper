@@ -27,7 +27,8 @@ export type Page = { title: string; intro: string };
  * Dictation's shortcut (`views/Dictation.tsx`), and Meetings' "Record a
  * meeting and get a transcript you can turn into notes." as the canvas'
  * "You get a transcript and a summary, saved to Notes." under "Record a
- * meeting" (`views/Meetings.tsx`).
+ * meeting" -- without "and a summary" while automatic summaries are off
+ * (`views/Meetings.tsx`).
  *
  * Every title is the screen's current label in `lib/navigation.ts` -- the one
  * the rail or the Settings panel shows -- not a new name: a screen that read

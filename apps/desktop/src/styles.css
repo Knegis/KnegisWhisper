@@ -93,6 +93,8 @@
    */
   --band: #3d55ff;
   --band-ink: #fdfdfd;
+  /* Blue for text, which `--band` is not: #3d55ff is 3.3:1 on this `--bg`, #8c9aff is 6.9:1 (R20). */
+  --band-text: #8c9aff;
   --accent: #fde800;
   /*
    * There is no `--warn`. It was `#9a5b00` in light, which is the brown that
@@ -209,6 +211,8 @@
      * 8.09:1 for the text sitting on it. */
     --band: #0015ff;
     --band-ink: #fdfdfd;
+    /* The same blue as `--band` here: #0015ff on paper already reads at 8:1 as text. */
+    --band-text: #0015ff;
     --accent: #1803ff;
     --error: #c02626;
 
@@ -574,7 +578,7 @@ button.control-copy { display: inline-flex; align-items: center; gap: 6px; heigh
 .live-row:last-child { border-bottom: 0; }
 .live-time { font: 12px/23px var(--font-mono); color: var(--muted); font-variant-numeric: tabular-nums; }
 .live-speaker { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
-.live-speaker-you { color: var(--band); }
+.live-speaker-you { color: var(--band-text); }
 .live-text { overflow-wrap: anywhere; }
 /* A line still being heard: muted, and ending where the next word will go. */
 .live-row-open .live-text { color: var(--muted); }

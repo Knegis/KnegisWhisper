@@ -114,9 +114,18 @@ import { useRefresh } from "../lib/useRefresh";
 
 /**
  * The sentence that was this page's `PageHeader` intro (`lib/pages.ts`), now
- * the hero's line under "Record a meeting".
+ * the hero's line under "Record a meeting" -- and it promises a summary only
+ * when one will come. A saved meeting is summarised by itself only while
+ * automatic summaries are on (`enqueue_automatic`,
+ * `crates/notes-core/src/summary.rs:96-106`), and they are off by default
+ * (`SummarySettings::default`, `:21-33`); with them off a summary is
+ * something to ask for in Notes, not something you get (R19).
  */
-const INTRO = "You get a transcript and a summary, saved to Notes.";
+function intro(summariesOn: boolean): string {
+  return summariesOn
+    ? "You get a transcript and a summary, saved to Notes."
+    : "You get a transcript, saved to Notes.";
+}
 
 /**
  * The microphone chip's `title`. Static because the recorder always opens the
@@ -651,7 +660,7 @@ export function Meetings({
         heading="Record a meeting"
         sub={
           <>
-            <p>{INTRO}</p>
+            <p>{intro(summaries.enabled)}</p>
             {readiness.caution ? <p className="hero-note">{readiness.caution}</p> : null}
           </>
         }
@@ -663,7 +672,7 @@ export function Meetings({
         heading="Record a meeting"
         sub={
           <>
-            <p>{INTRO}</p>
+            <p>{intro(summaries.enabled)}</p>
             <p className="hero-note">{readiness.problem}</p>
           </>
         }
@@ -691,14 +700,15 @@ export function Meetings({
                 <span className="call-card-title">{call.name} is in a call</span>
                 <span className="call-card-detail">Detected just now. Nothing is recorded until you start.</span>
               </span>
-              {/* Held back exactly as Start is (ruling R9), and recording the
-                  other participants whenever this computer can: a call is
-                  what the card is about. */}
+              {/* Held back exactly as Start is (ruling R9), and recording
+                  what the "Other participants" chip below says, as Start
+                  does (R21): the card is a quicker way to the same start,
+                  not a second choice about who is recorded. */}
               <button
                 type="button"
                 className="secondary"
                 disabled={startBlocked || selected === null}
-                onClick={() => start(systemAudioAvailable)}
+                onClick={() => start(wantSystem && systemAudioAvailable)}
               >
                 Record this call
               </button>
