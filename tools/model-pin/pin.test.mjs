@@ -32,6 +32,7 @@ import { join } from "node:path";
 
 import {
   args,
+  compareAsset,
   githubAssetTargets,
   hfRepos,
   measureFile,
@@ -488,6 +489,49 @@ test("githubAssetTargets reads the committed sherpa pins", () => {
 
 test("githubAssetTargets survives a registry with no models at all", () => {
   assert.deepEqual(githubAssetTargets({}), []);
+});
+
+const asset = { id: "m", repo: "o/r", tag: "tag", name: "m.onnx", sha256: "a".repeat(64), sizeBytes: 123 };
+
+test("compareAsset passes an asset whose stated digest and size match", () => {
+  // GitHub states `sha256:<hex>`, and nothing promises the case.
+  assert.deepEqual(compareAsset(asset, { digest: `sha256:${"A".repeat(64)}`, size: 123 }), {
+    wrong: [],
+    note: null,
+  });
+});
+
+test("compareAsset fails a stated digest that disagrees, and a stated size that does", () => {
+  const { wrong, note } = compareAsset(asset, { digest: `sha256:${"b".repeat(64)}`, size: 124 });
+  assert.equal(wrong.length, 2, wrong.join("\n"));
+  assert.match(wrong[0], /committed a{64}, stated b{64}/);
+  assert.match(wrong[1], /committed 123 bytes, stated 124/);
+  assert.equal(note, null);
+});
+
+test("compareAsset notes a missing digest rather than failing on it (KNEG-358)", () => {
+  // The two diarization models were uploaded in October 2024, before GitHub
+  // stated digests, and the API returns `digest: null` for both. Failing on
+  // that turned the weekly job red every week from 2026-09-07 for a reason
+  // that cannot clear.
+  const { wrong, note } = compareAsset(asset, { digest: null, size: 123, updated_at: "2024-10-08T12:54:10Z" });
+  assert.deepEqual(wrong, []);
+  assert.match(note, /^m: the release API states no digest for this asset, uploaded 2024-10-08/);
+});
+
+test("compareAsset still compares the size of an asset with no digest", () => {
+  // The note is about the digest only. Size is what GitHub still states, and
+  // it is the one cheap check these assets have left.
+  const { wrong, note } = compareAsset(asset, { size: 99 });
+  assert.deepEqual(wrong, ["m: committed 123 bytes, stated 99"]);
+  assert.ok(note, "the missing digest is still noted beside the failure");
+});
+
+test("compareAsset fails an asset that is no longer in its release", () => {
+  assert.deepEqual(compareAsset(asset, undefined), {
+    wrong: ["m: m.onnx is no longer in o/r tag"],
+    note: null,
+  });
 });
 
 test("the committed registry still carries every k2-fsa asset as a GitHub asset", () => {
