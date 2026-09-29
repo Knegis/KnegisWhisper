@@ -37,19 +37,16 @@
  *   (`INNER_VIEWS` below) rather than sitting beside it in the rail as a
  *   fourth top-level peer.
  *
- * # The Settings order (Design decision 7)
+ * # The Settings order
  *
- * Shortcuts and Meetings settings come first, ahead of the three provider/
- * transcription/model screens, because the shortcut editor moved out of
- * Dictation and the meeting configuration out of Meetings -- a colleague
- * who came from either task screen to change a setting should find it near
- * the top, not after screens that configure a different job entirely.
- * Vocabulary follows, then Transcription, Intelligence and Local text models
- * keep the old setup-path order ("a key is useless without a shortcut to
- * dictate with, and both are useless without knowing where the audio goes"),
- * and Providers moves down next to Calendar -- both are account-level
- * connections a colleague visits rarely, once either is already configured
- * once.
+ * The settings for the three jobs come first -- Shortcuts (Dictation's),
+ * Meetings, and Vocabulary, which dictation and meetings both read -- and
+ * the setup screens after them: Transcription, Cleanup & summaries, Local
+ * text models. A colleague who came from a task page to change something
+ * about that task finds it near the top.
+ *
+ * Providers moves down, next to Calendar, because API keys are only needed
+ * for cloud services, and local-first use needs none.
  *
  * # The ids are mostly unchanged
  *

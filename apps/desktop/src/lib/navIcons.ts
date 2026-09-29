@@ -13,7 +13,8 @@
  *
  * An id appears in at most one of the two -- `NavIcon` checks `SUPPLIED`
  * first and falls back to `PATHS`, so a later addition to the wrong map would
- * silently never render, and the test above would catch neither.
+ * silently never render, and `tests/navIcons.test.ts`, which only checks that
+ * every id has an entry in one map or the other, would catch neither.
  */
 export const SUPPLIED: Record<string, string> = {
   dictation: "voice", notes: "text", "notes-upload": "upload", developer: "code", cli: "terminal",

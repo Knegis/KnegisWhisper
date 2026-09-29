@@ -525,12 +525,14 @@ h2,
 /*
  * The section you are in, which is a different claim from the screen you are on.
  *
- * A group header takes the ink colour and **not** the fill. `--band` marks one
- * thing per screen: what is true now -- the current nav item
- * (`.sidebar button.nav-current`) or a marked control (`button.marked`) -- or,
- * failing that, the one thing to do next (`button.primary`), and never both.
- * Filling the header as well would put a second "this one" mark in the same
- * column and make neither reading mean anything.
+ * A group header takes the ink colour and **not** the fill. In the rail,
+ * `--band` marks one thing: the screen you are on
+ * (`.sidebar button.nav-current`). The page beside it spends it on at most one
+ * more -- a marked control (`button.marked`) for what is in effect now, or the
+ * one thing to do next (`button.primary`), never both on one page, since the
+ * two would make competing claims in the same colour. Filling the header as
+ * well would put a second "this one" mark in the rail's column and make
+ * neither reading mean anything.
  */
 .sidebar button.nav-group-open {
   color: var(--text);
@@ -595,11 +597,11 @@ h3 {
  * more` is the rest, folded under a `<details>` so a screen for a colleague
  * who isn't technical leads with the short version and lets anyone go looking
  * for more. `.status-line` is the machine-voice line that opens Dictation and
- * Transcription -- 13px/16px tracked ProFontWindows, the same spec as the
+ * Meetings -- 13px/16px tracked ProFontWindows, the same spec as the
  * sidebar and every other string reporting on the machine rather than
  * addressing the person -- and `.status-needs-setup` is `.caveat` worn by that
  * line's "nothing is wired up yet" state, which needs the caveat's mark but
- * not its own top margin, since `.status-line` already carries one.
+ * not its top margin (see the rule itself, below `.caveat`).
  */
 .page-header {
   margin: 0 0 2.25rem;
@@ -1857,11 +1859,11 @@ option:checked:hover {
  * screen of settings is mostly things you are reading, and a grey box drawn
  * around every ordinary button competed with the values they act on.
  *
- * `--band` is spent on one claim per screen -- what is true now, or, failing
- * that, the one thing to do next -- made by `button.marked` or
- * `button.primary` below and never by a hover state. An ordinary button's own
- * hover is the neutral `--control` wash instead, so "your pointer is here"
- * never gets read as either of those.
+ * Beside the rail's mark for the screen you are on, `--band` is spent on at
+ * most one claim per page -- what is true now, or, failing that, the one thing
+ * to do next -- made by `button.marked` or `button.primary` below and never by
+ * a hover state. An ordinary button's own hover is the neutral `--control`
+ * wash instead, so "your pointer is here" never gets read as either of those.
  */
 button {
   margin-top: 0.75rem;

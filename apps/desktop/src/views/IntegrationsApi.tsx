@@ -1,5 +1,5 @@
 /**
- * Developer > API — the local HTTP server, off by default.
+ * Developer > Local API — the local HTTP server, off by default.
  *
  * The permissions line is a read of the file, not an assumption about it, and
  * it is rendered through the same `DiscoveryPermissions` state and the same

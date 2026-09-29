@@ -2,7 +2,7 @@
  * Developer > CLI — where `knegiswhisper` is, where it looks for the
  * running application, and the real state of the file that lets it in.
  *
- * The one thing this screen exists to get right after `Developer > API`
+ * The one thing this screen exists to get right after `Developer > Local API`
  * got it wrong: the discovery file's permissions are shown as the actual
  * state and its evidence, never as a boolean. A bench check found that the
  * backend's own `Permissions::is_as_expected()` returned `true` for

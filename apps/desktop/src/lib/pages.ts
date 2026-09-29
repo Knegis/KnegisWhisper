@@ -13,14 +13,16 @@ export type Page = { title: string; intro: string };
 /**
  * One entry per screen the rail can reach, `notes` excepted.
  *
- * `notes` is `null` rather than a page with an empty intro: `Notes.tsx`'s own
- * heading already says "Notes", and TitleBarSearch lives above it, so a second
- * title here would be the duplicate this whole change exists to remove.
+ * `notes` is `null` rather than a page with an empty intro: the Notes screen is
+ * the writing space itself -- the library down one side, and at the top of the
+ * other the open note's own title field, or "Your writing space" when no note
+ * is open. A page title above that would push the note down to name a screen
+ * the rail already marks as current.
  *
  * Every title is the rail's current label for that screen (`lib/navigation.ts`),
  * not a new name -- a screen that read one thing in the rail and another at the
  * top of its own content would be telling a colleague there are two screens
- * where there is one. Renaming both together is Tasks 6-8's job, not this one's.
+ * where there is one. A rename changes both together.
  *
  * One exception, for the opposite reason: `meeting-settings` is "Meetings" in
  * the rail, where it sits inside Settings and cannot be mistaken for anything
