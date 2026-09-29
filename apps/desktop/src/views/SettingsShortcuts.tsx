@@ -14,12 +14,16 @@
  *
  * What someone has to see stays on the screen: a conflict, a caution, each
  * row's own problem line, the portal's restart notice, and a modifier-only
- * default that does nothing on this computer. Why the shortcuts behave the way
- * they do -- the actions with nothing behind them, the `Control+Super` default,
- * the mouse buttons -- is folded under "About these shortcuts".
+ * default that does nothing on this computer. A problem line is red because
+ * it is a failure; a binding that works and is worth a word -- a hooked chord,
+ * a watched mouse button -- says so in one plain sentence instead, with the
+ * hook that makes it work under its own Learn more. Why the shortcuts behave
+ * the way they do -- the actions with nothing behind them, the
+ * `Control+Super` default, the mouse buttons -- is folded under "About these
+ * shortcuts".
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 
 import { LearnMore } from "../components/LearnMore";
 import { Row } from "../components/Row";
@@ -218,13 +222,33 @@ export function SettingsShortcuts({
               ) : (
                 b.accelerators.map((a, i) => {
                   const label = acceleratorLabel(a, hook);
+                  // No "works" note for an action nothing handles: its
+                  // accelerators are not offered to the platform at all --
+                  // not registered and not hooked (`register_all`,
+                  // src-tauri/src/shortcuts.rs) -- so the sentence would be
+                  // false, and the red line above already says why.
+                  const note = unhandled.has(b.action) ? null : label.note;
+                  // A fragment, not a wrapping span: each line becomes its
+                  // own item in `.row-value`'s column, so the key and the
+                  // sentence about it get the column's gap between them
+                  // instead of running together ("Control+SuperUses only…").
+                  // Red only for a failure; a binding that works and is worth
+                  // a word says so plainly, with the mechanism folded.
                   return (
-                    <span key={`${b.action}-${i}`}>
+                    <Fragment key={`${b.action}-${i}`}>
                       <code>{label.text}</code>
                       {label.problem ? (
                         <em className="row-detail warn">{label.problem}</em>
                       ) : null}
-                    </span>
+                      {note ? (
+                        <>
+                          <em className="row-detail">{note.text}</em>
+                          <LearnMore>
+                            <p>{note.more}</p>
+                          </LearnMore>
+                        </>
+                      ) : null}
+                    </Fragment>
                   );
                 })
               )}
@@ -335,12 +359,19 @@ export function SettingsShortcuts({
           <Row label="Last dictation result" value={lastOutcome} />
         ) : null}
         <LearnMore summary="About these shortcuts">
+          {/* The verb follows the count -- "1 of 5 actions has", "2 of 5
+              actions have" -- and the sentence after it is worded so that it
+              reads the same for one action as for several. */}
           {hotkeys.unhandled.length > 0 ? (
             <p>
-              {hotkeys.unhandled.length} of {hotkeys.bindings.length} actions have
-              nothing behind them yet. Their shortcuts are still saved, and they
-              are deliberately not registered with the system — so those keys stay
-              free for the applications that do something with them.
+              {`${hotkeys.unhandled.length} of ${hotkeys.bindings.length} ${
+                hotkeys.bindings.length === 1 ? "action" : "actions"
+              } ${hotkeys.unhandled.length === 1 ? "has" : "have"} nothing behind ${
+                hotkeys.unhandled.length === 1 ? "it" : "them"
+              } yet.`}{" "}
+              A shortcut for an action with nothing behind it is still saved,
+              and deliberately not registered with the system — so its keys
+              stay free for the applications that do something with them.
             </p>
           ) : null}
           <p>
