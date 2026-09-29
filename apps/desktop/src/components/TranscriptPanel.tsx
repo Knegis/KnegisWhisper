@@ -7,6 +7,14 @@ import { formatClock } from "./RecordingPlayer";
 
 type TranscriptPanelProps = {
   sourceRequest?: { index: number; nonce: number } | null;
+  /**
+   * Called once `sourceRequest` has been shown (its row selected and scrolled
+   * to), so the owner can clear it. A request that stayed set would be
+   * applied again by a panel mounted afresh -- a wide window moving the
+   * transcript into its column -- or by new rows after a speaker rename,
+   * and would select an old summary source nobody just asked for.
+   */
+  onSourceShown?: () => void;
   rows: TranscriptRow[];
   recording: NoteRecording | null;
   currentTime: number;
@@ -66,7 +74,7 @@ function RenameForm({ target, suggestions, onRename, onClose }: {
   </form>;
 }
 
-export function TranscriptPanel({ sourceRequest, rows, recording, currentTime, playing, visible, playInterval, suggestions, onRename }: TranscriptPanelProps) {
+export function TranscriptPanel({ sourceRequest, onSourceShown, rows, recording, currentTime, playing, visible, playInterval, suggestions, onRename }: TranscriptPanelProps) {
   const rowRefs = useRef(new Map<number, HTMLLIElement>());
   const [selected, setSelected] = useState<Set<number>>(() => new Set());
   const [anchor, setAnchor] = useState<number | null>(null);
@@ -79,7 +87,8 @@ export function TranscriptPanel({ sourceRequest, rows, recording, currentTime, p
     if (!row) return;
     setSelected(new Set([row.index])); setAnchor(row.index);
     rowRefs.current.get(row.index)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
-  }, [sourceRequest, rows, visible]);
+    onSourceShown?.();
+  }, [sourceRequest, rows, visible, onSourceShown]);
 
   const activeRow = useMemo(() => {
     if (!playing) return null;

@@ -1,4 +1,4 @@
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { attachNoteRecording, getNoteRecording, getNoteSpeakerSuggestions, getNoteTranscriptRows, renameNoteSpeaker, updateNote, type Note, type NoteUpdate } from "../lib/ipc";
 import { useAutosave } from "../lib/useAutosave";
@@ -10,7 +10,7 @@ import { message } from "../lib/useRefresh";
 import { Icon } from "./Icon";
 import { NoteEditor } from "./NoteEditor";
 import { SummaryPane, type SummaryPaneHandle } from "./SummaryPane";
-import { RecordingPlayer, type RecordingPlayerHandle } from "./RecordingPlayer";
+import { RecordingPlayer, type PlayerPosition, type RecordingPlayerHandle } from "./RecordingPlayer";
 import { TranscriptPanel } from "./TranscriptPanel";
 
 export type NoteWorkspaceHandle = { flush: () => Promise<void> };
@@ -29,6 +29,48 @@ const TAB_LABELS: Record<Tab, string> = { notes: "Notes", transcript: "Transcrip
 const WIDE = "(min-width: 1280px)";
 
 /**
+ * What a switch between the two layouts carries across; see `NoteWorkspace`.
+ * `anchor` is the reading position; `reading`, a plain offset down the note,
+ * is kept for when the anchor itself was inside something that remounted.
+ */
+type Flip = {
+  anchor: { element: Element; offset: number } | null;
+  reading: number;
+  player: PlayerPosition | null;
+  focus: "notes-tab" | "selected-tab" | null;
+};
+
+/**
+ * What the reader is looking at: the element at `edge`, the top of the note's
+ * scroller, and how far below the edge it starts. Found the way scroll
+ * anchoring finds its anchor -- the first child that reaches past the edge,
+ * then the first of that one's children that does -- so hidden tab panels,
+ * which have no height, are passed over. It stops at a block whose children
+ * are inline: `<code>` inside a paragraph moves to another line when the
+ * column changes width, and anchoring on it would move the paragraph.
+ *
+ * An element rather than a pixel offset, because the note does not remount
+ * when the layout switches, it reflows: the same offset lands on different
+ * text in a column of a different width, and by the time the media listener
+ * runs the old layout has already reflowed at the new one.
+ */
+function readingAnchor(body: HTMLElement, edge: number): Flip["anchor"] {
+  let element: Element = body;
+  for (;;) {
+    const next: Element | undefined = [...element.children].find(child => {
+      if (getComputedStyle(child).display === "inline") return false;
+      const rect = child.getBoundingClientRect();
+      return rect.height > 0 && rect.bottom > edge;
+    });
+    if (!next) break;
+    element = next;
+  }
+  return element === body ? null : { element, offset: element.getBoundingClientRect().top - edge };
+}
+/** What remounts when the width is crossed, so that focus inside it would fall to `<body>`. */
+const MOVING = '.note-side, .note-mini-player, .note-full-player, [role="tabpanel"][id$="-panel-transcript"]';
+
+/**
  * One open note: its top bar, its title and meta row, and the Notes /
  * Transcript / Replay tabs.
  *
@@ -44,11 +86,25 @@ const WIDE = "(min-width: 1280px)";
  * three tab ids stay the same in both layouts -- the hidden tab keeps its
  * button and its (empty) panel, so no `aria-controls` points at nothing.
  *
- * The player and the transcript each have one parent per layout, so crossing
- * the width mounts them afresh: playback stops there, and a selection of
- * transcript rows is dropped. `playing` is cleared with them, because the old
- * player pauses on unmount after its listeners have gone and would never say
- * so.
+ * **Crossing the width** -- maximising the 1000px window, or snapping it to
+ * half a screen -- mounts the player and the transcript afresh, because each
+ * has one parent per layout. What the reader was doing is carried across
+ * (`Flip`), taken in the media listener before React renders and put back in
+ * the new layout:
+ *
+ * - the reading position -- the element at the top of the scroller that is
+ *   going (`.notes-main`, or the note's own column when wide), as recorded
+ *   after its last scroll -- placed at the same offset in the one that takes
+ *   over;
+ * - the player's time, speed and interval end, playing again if it was
+ *   (`RecordingPlayer`'s `position` and `resume`);
+ * - focus, if it was on something that goes: the Transcript tab hands it
+ *   to Notes, and anything inside the transcript or the player hands it to
+ *   the selected tab.
+ *
+ * A summary source is shown once and then cleared (`onSourceShown`), so the
+ * new transcript does not select it again. A selection of rows, or a speaker
+ * rename left open, does not survive the switch.
  */
 export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
   note: Note;
@@ -83,17 +139,112 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
   const attachmentPending = useRef(false);
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
 
+  const articleRef = useRef<HTMLElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
   const [wide, setWide] = useState(() => window.matchMedia(WIDE).matches);
+  // The layout on screen, which the media listener reads: by the time it runs, `query.matches`
+  // already describes the width being moved to.
+  const renderedWide = useRef(wide);
+  const flip = useRef<Flip | null>(null);
+  // How far down the note the reader is, in either layout. Narrower than the width the note
+  // scrolls in `Notes.tsx`' `.notes-main`, below any notice above it; wide, in its own column.
+  const readingOffset = useCallback((inWide: boolean) => {
+    const body = bodyRef.current;
+    if (!body) return 0;
+    if (inWide) return body.scrollTop;
+    const main = body.closest<HTMLElement>(".notes-main");
+    return main ? main.getBoundingClientRect().top - body.getBoundingClientRect().top : 0;
+  }, []);
+  // The reading position as of the note's last scroll, kept up to date rather than measured when
+  // the width is crossed: by the time the media listener runs, the old layout has already reflowed
+  // at the new width, and Chromium's own scroll anchoring has moved it to suit that half-way
+  // layout. An ordinary resize that reflows the note scrolls it too, through that anchoring, so it
+  // is recorded like any other scroll.
+  const lastReading = useRef<Pick<Flip, "anchor" | "reading">>({ anchor: null, reading: 0 });
+  useEffect(() => {
+    const main = articleRef.current?.closest<HTMLElement>(".notes-main");
+    if (!main) return;
+    let frame = 0;
+    const record = () => {
+      frame = 0;
+      const body = bodyRef.current;
+      if (!body) return;
+      const scroller = renderedWide.current ? body : main;
+      lastReading.current = { anchor: readingAnchor(body, scroller.getBoundingClientRect().top), reading: readingOffset(renderedWide.current) };
+    };
+    // Recorded a frame later, never in the event. Animation-frame callbacks run after media-query
+    // change events in a rendering update, so a scroll that the crossing itself caused is recorded
+    // after the listener has already taken the reading from before it.
+    const scrolled = (event: Event) => {
+      if (event.target !== main && event.target !== bodyRef.current) return;
+      if (!frame) frame = requestAnimationFrame(record);
+    };
+    main.addEventListener("scroll", scrolled, { capture: true, passive: true });
+    return () => { main.removeEventListener("scroll", scrolled, { capture: true }); cancelAnimationFrame(frame); };
+  }, [readingOffset]);
   useEffect(() => {
     const query = window.matchMedia(WIDE);
     const change = () => {
+      // Overwritten on every change, not only the first: two changes before a render leave the
+      // layout where it was, and the next real switch must not carry a stale snapshot.
+      const article = articleRef.current;
+      const active = document.activeElement;
+      flip.current = {
+        ...lastReading.current,
+        player: playerRef.current?.position() ?? null,
+        focus: active?.id === `note-${note.id}-tab-transcript` ? "notes-tab"
+          : active instanceof Element && article?.contains(active) && active.closest(MOVING) ? "selected-tab"
+          : null,
+      };
       setWide(query.matches);
-      setPlaying(false);
       if (query.matches) setTab(current => current === "transcript" ? "notes" : current);
     };
     query.addEventListener("change", change);
     return () => query.removeEventListener("change", change);
-  }, []);
+  }, [note.id, readingOffset]);
+  // The reading position and focus, before the new layout is painted.
+  useLayoutEffect(() => {
+    renderedWide.current = wide;
+    const carried = flip.current;
+    const body = bodyRef.current;
+    const main = body?.closest<HTMLElement>(".notes-main");
+    if (!carried || !body || !main) return;
+    // `.notes-main` stops scrolling in the wide layout, but an element with `overflow: hidden`
+    // keeps an offset it was given, and would hold the note up out of sight.
+    if (wide) main.scrollTop = 0;
+    const scroller = wide ? body : main;
+    const anchor = carried.anchor;
+    if (anchor && body.contains(anchor.element) && anchor.element.getClientRects().length > 0) {
+      scroller.scrollTop += anchor.element.getBoundingClientRect().top - scroller.getBoundingClientRect().top - anchor.offset;
+    } else if (wide) {
+      body.scrollTop = carried.reading;
+    } else {
+      main.scrollTop += body.getBoundingClientRect().top - main.getBoundingClientRect().top + carried.reading;
+    }
+    const article = articleRef.current;
+    const active = document.activeElement;
+    // The Transcript tab goes to `display: none`, which does not always move focus off it at
+    // once; anything else that remounted has already dropped focus to `<body>`.
+    if (carried.focus === "notes-tab") document.getElementById(`note-${note.id}-tab-notes`)?.focus();
+    else if (carried.focus === "selected-tab" && (active === document.body || !article?.contains(active))) {
+      article?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')?.focus();
+    }
+  }, [wide, note.id]);
+  // Playback, once the new player has mounted and subscribed to its audio, so that its play and
+  // pause events reach `onPlayingChange`. A task later rather than in this effect: in development,
+  // StrictMode mounts the new player a second time, and the unmount in between pauses its audio,
+  // which in a headless probe rejected a resume made here with "The play() request was
+  // interrupted by a call to pause()". In a production build the wait is one task.
+  useEffect(() => {
+    const carried = flip.current;
+    if (!carried) return;
+    flip.current = null;
+    setPlaying(false);
+    const from = carried.player;
+    if (!from) return;
+    const timer = setTimeout(() => playerRef.current?.resume(from), 0);
+    return () => clearTimeout(timer);
+  }, [wide]);
   const shown: readonly Tab[] = wide ? TABS.filter(value => value !== "transcript") : TABS;
 
   const save = useCallback(async (patch: Partial<Patch>) => {
@@ -158,6 +309,7 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
       if (focus) document.getElementById(`note-${note.id}-tab-${next}`)?.focus();
     } catch (cause) { setError(message(cause)); }
   };
+  const clearSource = useCallback(() => setSourceRequest(null), []);
   const playInterval = useCallback((start: number, end: number | null) => {
     setPlaybackStarted(true); playerRef.current?.playInterval(start, end);
   }, []);
@@ -185,7 +337,7 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
   const { date, minutes, participants } = noteMeta(note, []);
   const recordingDetails = note.recordingDetails && <details className="recording-details" open><summary>Recording details</summary><p>{note.recordingDetails}</p></details>;
   const transcriptBody = transcriptError ? <p className="error" role="alert">{transcriptError} <button type="button" onClick={() => { void loadTranscript(); }}>Retry</button></p> : !transcript ? <p role="status">Loading transcript and recording…</p> : transcript.rows.length ?
-    <TranscriptPanel sourceRequest={sourceRequest} rows={transcript.rows}
+    <TranscriptPanel sourceRequest={sourceRequest} onSourceShown={clearSource} rows={transcript.rows}
       recording={transcript.recording} currentTime={currentTime} playing={playing} visible={wide || tab === "transcript"} playInterval={playInterval}
       suggestions={transcript.suggestions} onRename={async (speakerId, name) => {
         await renameNoteSpeaker(note.id, speakerId, name);
@@ -197,8 +349,8 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
     ? <RecordingPlayer ref={playerRef} noteId={note.id} onCurrentTime={setCurrentTime} onPlayingChange={onPlayingChange} compact={wide || tab !== "replay"} />
     : null;
 
-  return <article id={`note-detail-${note.id}`} className={wide ? "note-detail note-detail-wide" : "note-detail"} aria-label={title}>
-    <div className="note-body">
+  return <article ref={articleRef} id={`note-detail-${note.id}`} className={wide ? "note-detail note-detail-wide" : "note-detail"} aria-label={title}>
+    <div className="note-body" ref={bodyRef}>
       <div className="note-topbar">
         <p className="note-crumb">
           {folderName === null ? null : <><span>{folderName}</span><span className="note-crumb-rule" aria-hidden="true">/</span></>}

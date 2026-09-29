@@ -9,8 +9,22 @@ import {
 
 import { recordingSrc } from "../lib/ipc";
 
+/**
+ * Where a player is: its time, the end of the interval it is playing to (or
+ * `null`), whether it is playing, and its speed.
+ */
+export type PlayerPosition = { time: number; end: number | null; playing: boolean; rate: number };
+
 export type RecordingPlayerHandle = {
   playInterval: (start: number, end: number | null) => void;
+  /**
+   * `position` and `resume` hand playback from one player to the next. A note
+   * mounts a new player when a wide window moves it into the transcript
+   * column, or back (`NoteWorkspace.tsx`). `position` is read from the old
+   * player before it goes, and the new one resumes from it.
+   */
+  position: () => PlayerPosition | null;
+  resume: (from: PlayerPosition) => void;
 };
 
 type RecordingPlayerProps = {
@@ -110,6 +124,33 @@ export const RecordingPlayer = forwardRef<RecordingPlayerHandle, RecordingPlayer
           audio.currentTime = start;
           setCurrentTime(start);
           onCurrentTime(start);
+          intervalEndRef.current = end;
+          void play().then((started) => {
+            if (started) beginIntervalCheck();
+            else clearIntervalPlayback();
+          });
+        },
+        position: () => {
+          const audio = audioRef.current;
+          if (audio === null) return null;
+          return { time: audio.currentTime, end: intervalEndRef.current, playing: !audio.paused, rate: audio.playbackRate };
+        },
+        resume: ({ time, end, playing: wasPlaying, rate }) => {
+          const audio = audioRef.current;
+          if (audio === null) return;
+          clearIntervalPlayback();
+          audio.playbackRate = rate;
+          setSpeed(String(rate));
+          // A player that has only just mounted has not read its file's metadata yet. A seek made
+          // before then holds only where the engine keeps a default start position, so it is made
+          // again once the metadata is in; playback cannot begin before that.
+          audio.currentTime = time;
+          if (audio.readyState < HTMLMediaElement.HAVE_METADATA) {
+            audio.addEventListener("loadedmetadata", () => { audio.currentTime = time; }, { once: true });
+          }
+          setCurrentTime(time);
+          onCurrentTime(time);
+          if (!wasPlaying) return;
           intervalEndRef.current = end;
           void play().then((started) => {
             if (started) beginIntervalCheck();
