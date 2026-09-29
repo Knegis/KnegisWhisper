@@ -21,7 +21,7 @@
  */
 
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { emitTo, listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 import type {
   Accelerator,
@@ -84,6 +84,7 @@ import type {
   MediaImportSource,
   MediaSidecar,
   MeetingOutcome,
+  RecoverableRecording,
   MeetingProviderSummary,
   MeetingState,
   MeetingStatus,
@@ -200,6 +201,7 @@ export type {
   MediaImportSource,
   MediaSidecar,
   MeetingOutcome,
+  RecoverableRecording,
   MeetingProviderSummary,
   MeetingState,
   MeetingStatus,
@@ -340,6 +342,12 @@ export async function getMeetingProviders(): Promise<MeetingProviderSummary[]> {
 export async function getMeetingStatus(): Promise<MeetingStatus> {
   return invoke<MeetingStatus>("meeting_status");
 }
+export async function getRecoverableRecordings(): Promise<RecoverableRecording[]> {
+  return invoke<RecoverableRecording[]>("meeting_recoverable_recordings");
+}
+export async function recoverMeetingRecording(storageKey: string): Promise<MeetingOutcome> {
+  return invoke<MeetingOutcome>("meeting_recover_recording", { storageKey });
+}
 export async function saveMeetingNotificationPlacement(): Promise<void> { return invoke("meeting_notification_placement_save"); }
 export async function resetMeetingNotificationPlacement(): Promise<void> { return invoke("meeting_notification_placement_reset"); }
 
@@ -361,6 +369,37 @@ export async function stopMeeting(): Promise<MeetingOutcome> {
 }
 export async function updateMeetingNotes(markdown: string): Promise<void> { return invoke("meeting_notes_update", { markdown }); }
 export async function getMeetingNotes(): Promise<string> { return invoke<string>("meeting_notes_get"); }
+
+type MeetingNotesFlush = { requestId: string; error: string | null };
+let nextMeetingNotesFlush = 0;
+
+/** Settings can stop or discard a meeting while the other window has an unsaved edit. */
+export async function flushMeetingPanelNotes(): Promise<void> {
+  if (!("__TAURI_INTERNALS__" in window)) return;
+  const requestId = `${Date.now()}-${++nextMeetingNotesFlush}`;
+  let receive!: (reply: MeetingNotesFlush) => void;
+  const reply = new Promise<MeetingNotesFlush>(resolve => { receive = resolve; });
+  const unlisten = await listen<MeetingNotesFlush>("meeting-notes-flushed", event => {
+    if (event.payload.requestId === requestId) receive(event.payload);
+  });
+  const timeout = window.setTimeout(() => receive({ requestId, error: "The meeting panel did not confirm that your notes were saved. Try again." }), 5000);
+  try {
+    await emitTo("meeting", "meeting-notes-flush", { requestId });
+    const result = await reply;
+    if (result.error) throw new Error(result.error);
+  } finally {
+    window.clearTimeout(timeout);
+    unlisten();
+  }
+}
+
+export async function onMeetingNotesFlush(handler: (requestId: string) => void): Promise<UnlistenFn> {
+  return listen<{ requestId: string }>("meeting-notes-flush", event => handler(event.payload.requestId));
+}
+
+export async function confirmMeetingNotesFlush(requestId: string, error: string | null): Promise<void> {
+  return emitTo("main", "meeting-notes-flushed", { requestId, error } satisfies MeetingNotesFlush);
+}
 
 export async function cancelMeeting(): Promise<void> {
   return invoke("meeting_cancel");
@@ -455,9 +494,11 @@ export async function setMeetingLanguage(language: string): Promise<void> {
 }
 
 /**
- * The provider chosen on the Meetings screen, or `null` before anybody has
- * chosen one. Remembered across restarts; the offer's Record button uses it
- * too, so the two ways into a meeting agree.
+ * The provider chosen on Settings > Meetings, or `null` before anybody has
+ * chosen one. Remembered across restarts. Rust does not read it at start --
+ * `startMeeting` is given a provider -- so the callers read it: the Meetings
+ * page passes it when it can be used, and the offer's Record button passes it
+ * as it is, so the ways into a meeting agree once a usable one is saved.
  */
 export async function getMeetingProvider(): Promise<string | null> {
   return invoke<string | null>("meeting_provider");
@@ -931,6 +972,17 @@ export async function getInputDevices(): Promise<InputDevice[]> {
 
 export async function setInputDevice(device: string | null): Promise<void> {
   return invoke<void>("dictation_set_device", { device });
+}
+
+/**
+ * The microphone the next recording will use, or `null` for the system
+ * default. Read back so the screen can show the choice rather than assume
+ * one -- the select was uncontrolled and showed "System default" whatever
+ * was chosen. The choice itself still lives only in memory and is forgotten
+ * on restart; that is KNEG-341, not fixed here.
+ */
+export async function getInputDevice(): Promise<string | null> {
+  return invoke<string | null>("dictation_device");
 }
 
 /**

@@ -147,7 +147,7 @@ pub fn run() -> anyhow::Result<()> {
             // startup with a readable message rather than leaving every command
             // erroring later.
             let state = tauri::async_runtime::block_on(AppState::open())
-                .context("could not open the database")?;
+                .map_err(|error| anyhow::anyhow!("could not open the database: {error:#}"))?;
 
             let bindings = tauri::async_runtime::block_on(commands::load_bindings(&state))
                 .map_err(|e| anyhow::anyhow!(e))
@@ -398,6 +398,21 @@ pub fn run() -> anyhow::Result<()> {
             let live = registrations.iter().filter(|r| r.is_live()).count();
             tracing::info!(live, total = registrations.len(), "hotkeys registered");
 
+            // Tauri creates configured windows before calling this setup hook.
+            // Open the dashboard only after its commands have all their state:
+            // Dictation calls `hotkeys` as soon as its webview loads.
+            let main = app
+                .config()
+                .app
+                .windows
+                .iter()
+                .find(|window| window.label == "main")
+                .ok_or_else(|| anyhow::anyhow!("main window is missing from the configuration"))?;
+            tauri::WebviewWindowBuilder::from_config(&handle, main)
+                .context("could not configure the main window")?
+                .build()
+                .context("could not create the main window")?;
+
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -479,6 +494,7 @@ pub fn run() -> anyhow::Result<()> {
             persistent_overlay::overlay_message,
             dictation::dictation_cancel,
             dictation::dictation_set_device,
+            dictation::dictation_device,
             dictation::input_devices,
             dictation::insertion_supported,
             local_model::local_model_status,
@@ -511,6 +527,8 @@ pub fn run() -> anyhow::Result<()> {
             media::media_import_video,
             meeting::meeting_providers,
             meeting::meeting_status,
+            meeting::meeting_recoverable_recordings,
+            meeting::meeting_recover_recording,
             meeting::draft::meeting_notes_update,
             meeting::draft::meeting_notes_get,
             meeting_window::meeting_notification_placement_save,

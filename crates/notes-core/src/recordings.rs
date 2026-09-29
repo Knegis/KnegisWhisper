@@ -181,6 +181,15 @@ pub async fn get(pool: &SqlitePool, note_id: i64) -> Result<Option<NoteRecording
     .await?)
 }
 
+/// Bare names of all recordings already owned by notes.
+pub async fn storage_keys(pool: &SqlitePool) -> Result<Vec<String>, StorageError> {
+    Ok(
+        sqlx::query_scalar("SELECT storage_key FROM note_recordings")
+            .fetch_all(pool)
+            .await?,
+    )
+}
+
 /// Detach a recording and return the row that named its file.
 pub async fn detach(
     pool: &SqlitePool,

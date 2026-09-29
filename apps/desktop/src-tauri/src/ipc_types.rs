@@ -189,6 +189,7 @@ fn render() -> String {
             crate::meeting::Delivered,
             crate::meeting::MeetingStatus,
             crate::meeting::MeetingOutcome,
+            crate::meeting::recovery::RecoverableRecording,
             crate::meeting::Offer,
             kw_platform::meeting_detect::CallSignal,
             kw_platform::meeting_detect::Detected,

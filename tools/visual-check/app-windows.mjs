@@ -118,14 +118,27 @@ async function commandStatus(ctx) {
 async function commandStart(ctx) {
   const main = await targetClient(ctx.options.port, "main");
   try {
+    // The provider select lives on Settings > Meetings since KNEG-334, not on
+    // the Meetings task page that starts the recording, so both routes visit
+    // Settings first. Opened only if closed: the header is a toggle, and a
+    // Settings group left open by an earlier run would otherwise be closed
+    // here. The child reads "Meetings" on screen and "Meetings settings" in
+    // its text -- a visually hidden suffix, so it is not named the same as
+    // the top-level entry -- and `clickText` compares `textContent`, so it
+    // is found by the full name. That also keeps the bare "Meetings" clicks
+    // below on the top-level entry.
+    await main.cdp.evaluate(snippets.openGroup("Settings"));
+    await delay(100);
+    await main.cdp.evaluate(snippets.clickText("nav.sidebar .nav-child", "Meetings settings"));
+    await delay(100);
     if (ctx.options.via === "invoke") {
       // Resolve the displayed label to the live option value instead of
       // guessing an IPC provider identifier that a product owner can rename.
-      await main.cdp.evaluate(snippets.clickText("nav.sidebar button", "Meetings"));
-      await delay(100);
       const provider = await main.cdp.evaluate(
         snippets.meetingProviderValue(ctx.options.providerLabel),
       );
+      await main.cdp.evaluate(snippets.clickText("nav.sidebar button", "Meetings"));
+      await delay(100);
       await main.cdp.evaluate(
         snippets.invoke("meeting_start", {
           provider,
@@ -133,13 +146,14 @@ async function commandStart(ctx) {
         }),
       );
     } else {
+      await main.cdp.evaluate(
+        snippets.selectMeetingProvider(ctx.options.providerLabel),
+      );
+      await delay(100);
       await main.cdp.evaluate(snippets.clickText("nav.sidebar button", "Meetings"));
       await delay(100);
       await main.cdp.evaluate(
-        snippets.selectMeetingProvider(
-          ctx.options.providerLabel,
-          ctx.options.systemAudio,
-        ),
+        snippets.startMeetingRecording(ctx.options.systemAudio),
       );
     }
     const live = await pollMeeting(main.cdp, "recording", ctx.options.timeout);

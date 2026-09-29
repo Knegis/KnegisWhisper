@@ -1,6 +1,6 @@
-import { useCallback, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { clock } from "../MeetingNotification";
-import { stopMeeting, updateMeetingNotes } from "../lib/ipc";
+import { confirmMeetingNotesFlush, onMeetingNotesFlush, stopMeeting, updateMeetingNotes } from "../lib/ipc";
 import type { LiveRow } from "../lib/liveTranscript";
 import { useAutosave } from "../lib/useAutosave";
 import { NoteEditor } from "./NoteEditor";
@@ -32,6 +32,20 @@ export function MeetingPanel({ session, elapsed, detail, alert, transcriptAllowe
     if (patch.content !== undefined) await updateMeetingNotes(patch.content);
   }, []);
   const autosave = useAutosave<{ content: string }>({ save });
+  useEffect(() => {
+    let active = true;
+    let unlisten: (() => void) | undefined;
+    void onMeetingNotesFlush(requestId => {
+      void (async () => {
+        let error: string | null = null;
+        try { await autosave.flush(); }
+        catch (cause) { error = String(cause); }
+        if (active) await confirmMeetingNotesFlush(requestId, error);
+      })().catch(cause => { if (active) onProblem(String(cause)); });
+    }).then(stop => { if (active) unlisten = stop; else stop(); })
+      .catch(cause => { if (active) onProblem(String(cause)); });
+    return () => { active = false; unlisten?.(); };
+  }, [autosave.flush, onProblem]);
   const switchTab = (next: Tab, focus = false) => {
     setTab(next);
     if (focus) tabs.current[next]?.focus();

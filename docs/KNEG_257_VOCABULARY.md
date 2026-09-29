@@ -1,6 +1,6 @@
 # Shared vocabulary validation (KNEG-257)
 
-Implemented on 17 September 2026. Vocabulary is a top-level sidebar page. The dictionary is the single source for local Whisper dictation and supported meeting integrations; legacy meeting keyterms migrate transactionally on database open. CLI/API dictionary routes retain their wire formats. Meeting keyterm commands now read/replace the shared dictionary for compatibility; the former setting is retained only as migration input.
+Implemented on 17 September 2026. Vocabulary is a Settings page, not a top-level destination. The dictionary is the single source for local Whisper dictation and supported meeting integrations; legacy meeting keyterms migrate transactionally on database open. CLI/API dictionary routes retain their wire formats. Meeting keyterm commands now read/replace the shared dictionary for compatibility; the former setting is retained only as migration input.
 
 ## Request contract
 

@@ -2,6 +2,7 @@ import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useSta
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { attachNoteRecording, getNoteRecording, getNoteSpeakerSuggestions, getNoteTranscriptRows, renameNoteSpeaker, updateNote, type Note, type NoteUpdate } from "../lib/ipc";
 import { useAutosave } from "../lib/useAutosave";
+import { saveStatusText } from "../lib/saveStatus";
 import { transcriptToMarkdown } from "../lib/noteBody";
 import { message } from "../lib/useRefresh";
 import { NoteEditor } from "./NoteEditor";
@@ -130,6 +131,8 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, { note: Note; reloa
         const value = event.target.value; draft.current.title = value; setTitle(value);
         autosave.schedule({ title: value.trim() || "Untitled note", content: draft.current.content });
       }} onBlur={normalizeTitle} />
+      {/* Always rendered, and holding its line when it has nothing to say: rendering it only with text is what made the first keystroke push the tabs and the editor down under the caret. A live region that is already in the page is also the one screen readers announce reliably. */}
+      <p className="save-status" role="status" aria-live="polite">{saveStatusText(autosave.status)}</p>
       {autosave.status === "failed" && <p className="save-status error" role="alert">Couldn't save: {autosave.error} <button type="button" onClick={() => { void autosave.retry().catch(() => undefined); }}>Retry save</button></p>}
     </header>
     <div className="summary-tabs note-tabs" role="tablist" aria-label="Note view">
@@ -159,26 +162,29 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, { note: Note; reloa
       {transcript?.recording && <div className={tab === "replay" ? "note-full-player" : "note-mini-player"} hidden={tab !== "replay" && !playbackStarted}>
         <RecordingPlayer ref={playerRef} noteId={note.id} onCurrentTime={setCurrentTime} onPlayingChange={onPlayingChange} compact={tab !== "replay"} />
       </div>}
-      {(["transcript", "replay"] as const).map(value => <section key={value} id={`note-${note.id}-panel-${value}`} role="tabpanel"
-        aria-labelledby={`note-${note.id}-tab-${value}`} hidden={tab !== value}>
+      <section id={`note-${note.id}-panel-transcript`} role="tabpanel"
+        aria-labelledby={`note-${note.id}-tab-transcript`} hidden={tab !== "transcript"}>
         {note.recordingDetails && <details className="recording-details" open><summary>Recording details</summary><p>{note.recordingDetails}</p></details>}
-        {transcriptError ? <p className="error" role="alert">{transcriptError} <button type="button" onClick={() => { void loadTranscript(); }}>Retry</button></p> : !transcript ? <p role="status">Loading transcript and recording…</p> : <>
-          {!transcript.recording && value === "replay" && <div className="recording-empty">
-            <p>This note has no recording attached. Select its original recording to replay it. A copy is saved; your original stays in place.</p>
-            <button type="button" disabled={attaching} onClick={() => { void attachRecording(); }}>{attaching ? "Attaching…" : "Attach recording…"}</button>
-            <p className="muted">16-bit PCM WAV, mono or stereo.</p>
-            {attachmentError && <p className="error" role="alert">{attachmentError}</p>}
-          </div>}
-          {transcript.rows.length ? <TranscriptPanel sourceRequest={value === "transcript" ? sourceRequest : null} rows={transcript.rows}
-            recording={transcript.recording} currentTime={currentTime} playing={playing} visible={tab === value} playInterval={playInterval}
+        {transcriptError ? <p className="error" role="alert">{transcriptError} <button type="button" onClick={() => { void loadTranscript(); }}>Retry</button></p> : !transcript ? <p role="status">Loading transcript and recording…</p> : transcript.rows.length ?
+          <TranscriptPanel sourceRequest={sourceRequest} rows={transcript.rows}
+            recording={transcript.recording} currentTime={currentTime} playing={playing} visible={tab === "transcript"} playInterval={playInterval}
             suggestions={transcript.suggestions} onRename={async (speakerId, name) => {
               await renameNoteSpeaker(note.id, speakerId, name);
               // Rust resolves display names for both rows and export; reload those rows after each edit.
               await loadTranscript(true);
             }} />
-            : <p className="muted">This note has no transcript.</p>}
-        </>}
-      </section>)}
+          : <p className="muted">This note has no transcript.</p>}
+      </section>
+      <section id={`note-${note.id}-panel-replay`} role="tabpanel"
+        aria-labelledby={`note-${note.id}-tab-replay`} hidden={tab !== "replay"}>
+        {note.recordingDetails && <details className="recording-details" open><summary>Recording details</summary><p>{note.recordingDetails}</p></details>}
+        {transcriptError ? <p className="error" role="alert">{transcriptError} <button type="button" onClick={() => { void loadTranscript(); }}>Retry</button></p> : !transcript ? <p role="status">Loading recording…</p> : !transcript.recording && <div className="recording-empty">
+          <p>This note has no recording attached. Select its original recording to replay it. A copy is saved; your original stays in place.</p>
+          <button type="button" disabled={attaching} onClick={() => { void attachRecording(); }}>{attaching ? "Attaching…" : "Attach recording…"}</button>
+          <p className="muted">16-bit PCM WAV, mono or stereo.</p>
+          {attachmentError && <p className="error" role="alert">{attachmentError}</p>}
+        </div>}
+      </section>
     </div>
   </article>;
 });

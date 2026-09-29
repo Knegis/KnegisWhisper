@@ -63,6 +63,7 @@ try {
   assert.equal((await invoke('notes_get', { id })).transcript, transcript);
   results.push('literal transcript copy into separate notes; three-tab navigation');
   await tab('replay');
+  assert.equal(await cdp.evaluate(`document.querySelector('#note-${id}-panel-replay .transcript') === null`), true);
   await waitFor(`document.querySelector('audio')?.readyState >= 1`);
   assert.equal(await cdp.evaluate(`document.querySelectorAll('audio').length`), 1);
   await click('.recording-player > button');

@@ -481,7 +481,7 @@ async fn step(
             llm.running_port().ok_or("The local model stopped.")?
         } else {
             llm.stop().await;
-            crate::local_llm::start_and_watch(llm,app.clone(),&settings.model).await.map_err(|_|"Could not start the selected local model. Install it in Local models and retry.")?
+            crate::local_llm::start_and_watch(llm,app.clone(),&settings.model).await.map_err(|_|"Could not start the selected local model. Install it in Settings > Local text models and retry.")?
         };
         let result = Chat::new(state.policy(), state.credentials())
             .with_local_port(Some(port))

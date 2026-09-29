@@ -1,7 +1,7 @@
 import { TitleBar } from "./components/TitleBar";
 import { LanguagePopup } from "./components/LanguagePopup";
 /**
- * The shell: a rail, a view, and an error boundary. Nothing else.
+ * The shell: a rail, a page header, a view, and an error boundary. Nothing else.
  *
  * This file was 1037 lines holding every screen the application had, which is
  * how four UI surfaces came to live in one component. Splitting it was the
@@ -19,7 +19,7 @@ import { LanguagePopup } from "./components/LanguagePopup";
  * In-memory history tracks pages and individual notes within the main window.
  *
  * The list of screens is no longer here. `lib/navigation.ts` holds the tree —
- * four top-level destinations plus the `Settings` and `Developer` groups — and
+ * three top-level destinations plus the `Settings` and `Developer` groups — and
  * `components/Sidebar.tsx` renders it. Two things follow from that split:
  *
  *   - **`ViewId` is derived from the tree**, so the switch below is exhaustive
@@ -42,10 +42,12 @@ import { LanguagePopup } from "./components/LanguagePopup";
 
 import { Component, useCallback, useEffect, useMemo, useReducer, useState, type ReactNode } from "react";
 
+import { PageHeader } from "./components/PageHeader";
 import { Sidebar } from "./components/Sidebar";
 import { getDiagnostics, type Diagnostics } from "./lib/ipc";
 import { groupOf, type ViewId } from "./lib/navigation";
 import { defaultDestination, initialHistory, navigationHistory } from "./lib/navigationHistory";
+import { PAGES } from "./lib/pages";
 import { currentSurface } from "./lib/surface";
 import { installIdleScrollbars } from "./lib/idleScrollbars";
 import { useRefresh } from "./lib/useRefresh";
@@ -59,6 +61,7 @@ import { IntegrationsApi } from "./views/IntegrationsApi";
 import { IntegrationsCalendar } from "./views/IntegrationsCalendar";
 import { IntegrationsCli } from "./views/IntegrationsCli";
 import { IntegrationsMcp } from "./views/IntegrationsMcp";
+import { Meetings } from "./views/Meetings";
 import { Vocabulary } from "./views/Vocabulary";
 import { Notes } from "./views/Notes";
 import { NotesUpload } from "./views/NotesUpload";
@@ -66,6 +69,7 @@ import { SettingsMeetings } from "./views/SettingsMeetings";
 import { SettingsIntelligence } from "./views/SettingsIntelligence";
 import { SettingsIntelligenceLocal } from "./views/SettingsIntelligenceLocal";
 import { SettingsProviders } from "./views/SettingsProviders";
+import { SettingsShortcuts } from "./views/SettingsShortcuts";
 import { SettingsTranscription } from "./views/SettingsTranscription";
 
 /**
@@ -140,11 +144,15 @@ function renderView(
 ): ReactNode {
   switch (view) {
     case "dictation":
-      return <DictationView hook={diagnostics.modifierOnlyShortcuts} />;
+      return <DictationView onGoTo={select} />;
+    case "shortcuts":
+      return <SettingsShortcuts hook={diagnostics.modifierOnlyShortcuts} />;
     case "meetings":
+      return <Meetings onGoTo={select} />;
+    case "meeting-settings":
       return <SettingsMeetings onGoToVocabulary={() => select("vocabulary")} />;
     case "notes":
-      return <Notes openRequest={searchNoteRequest} onOpenNote={openImportedNote} />;
+      return <Notes openRequest={searchNoteRequest} onOpenNote={openImportedNote} onImport={() => select("notes-upload")} />;
     case "vocabulary":
       return <Vocabulary />;
     case "notes-upload":
@@ -188,12 +196,15 @@ function Shell({ sidebarExpanded, onExpandSidebar, onToggleSidebar }: { sidebarE
   const [history, navigate] = useReducer(navigationHistory, initialHistory);
   const destination = history.entries[history.index] ?? defaultDestination;
   const view = destination.view;
+  // A local variable, because TypeScript does not narrow a repeated
+  // `PAGES[view]`.
+  const page = PAGES[view];
   const searchNoteRequest = useMemo(() => destination.noteId === undefined ? null : { id: destination.noteId }, [destination]);
   const openNote = useCallback((id: number) => navigate({ type: "visit", destination: { view: "notes", noteId: id } }), []);
 
   // Both groups start closed. Dictation is a top-level destination, so the
-  // opening rail is four screens and two sections -- shorter than the thirteen
-  // flat rows it replaced, which was the point.
+  // opening rail is three screens and two sections -- shorter than the
+  // thirteen flat rows it replaced, which was the point.
   const [openGroups, setOpenGroups] = useState<ReadonlySet<string>>(
     () => new Set(),
   );
@@ -201,12 +212,13 @@ function Shell({ sidebarExpanded, onExpandSidebar, onToggleSidebar }: { sidebarE
   /*
    * Go to a screen, and make sure it is visible in the rail.
    *
-   * Every route to a screen comes through here -- a rail press, either
-   * `onGoToProviders`, and the error boundary's reset -- so a screen inside a
-   * collapsed group can never be current-but-hidden. Opening is one-way on
-   * purpose: it never closes the group you just left, because a rail that
-   * reshuffled itself on every navigation is harder to use than one that only
-   * grows.
+   * Every route to a screen comes through here -- a rail press, Dictation's
+   * and Meetings' `onGoTo`, either `onGoToProviders`, both
+   * `onGoToVocabulary`, and the error boundary's reset -- so a
+   * screen inside a collapsed group can never be current-but-hidden. Opening
+   * is one-way on purpose: it never closes the group you just left, because a
+   * rail that reshuffled itself on every navigation is harder to use than one
+   * that only grows.
    */
   const select = useCallback((id: ViewId) => {
     navigate({ type: "visit", destination: { view: id } });
@@ -264,6 +276,7 @@ function Shell({ sidebarExpanded, onExpandSidebar, onToggleSidebar }: { sidebarE
       />
 
       <div className="content">
+        {page ? <PageHeader page={page} /> : null}
         {/* `select` rather than `setView`, so landing on Diagnostics opens the
             Developer group that holds it. */}
         <ViewBoundary view={view} onReset={() => select("diagnostics")}>

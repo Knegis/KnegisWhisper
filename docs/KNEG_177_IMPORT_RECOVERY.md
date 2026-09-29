@@ -1,6 +1,6 @@
 # KNEG-177: desktop import recovery
 
-When the app stops during a desktop audio/video import, Upload now restores an
+When the app stops during a desktop audio/video import, the Import audio or video screen now restores an
 `Import interrupted` notice with instructions to choose the file again and select
 `Import and transcribe`. The notice survives further restarts until another
 desktop import is attempted. It does not display an invented elapsed duration.
@@ -45,13 +45,13 @@ provider was used. The production frontend build also passed; this native check
 used the worktree's Vite frontend in the real Tauri application.
 
 1. Selected a generated 600-second WAV through the Windows file picker and
-   pressed Upload's `Import and transcribe` button.
+   pressed the Import audio or video screen's `Import and transcribe` button.
 2. Measured operation `b75f4d16-b845-4c25-be89-ffc9d484c149` transcribing through
    local/tiny at 9.72 seconds, then forcibly terminated only the verified
    disposable application process.
 3. Restarted the same profile. The actual `media_import_snapshot` returned the
    same ID with stage `interrupted`, no result, and file-reselection guidance.
-   Visually inspected Upload: the notice was fully visible, the picker was
+   Visually inspected the Import audio or video screen: the notice was fully visible, the picker was
    enabled and `Import and transcribe` was disabled until selection.
 4. The import scratch directory was empty. Source SHA-256 was unchanged:
    `4981A821F0D381E156D880AA289CC2244D009E0DAC607F57D585B0B7BD7FC920`.

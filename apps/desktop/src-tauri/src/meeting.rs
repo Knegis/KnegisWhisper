@@ -100,6 +100,7 @@ mod config;
 pub mod draft;
 mod notes;
 mod recorder;
+pub mod recovery;
 mod watcher;
 
 use config::{
@@ -162,9 +163,10 @@ const LISTS_KEY: &str = "meetings.detect";
 /// Settings key: the language to give the provider, or the empty string for
 /// automatic detection where the provider supports it.
 const LANGUAGE_KEY: &str = "meetings.language";
-/// Settings key: the provider the Meetings screen last chose, so the choice
-/// outlives the screen. Absent until somebody picks one; the screen and the
-/// offer's Record button fall back to their own defaults until then.
+/// Settings key: the provider last chosen on Settings > Meetings, so the choice
+/// outlives the screen. Absent until somebody picks one; the two meeting
+/// screens and the offer's Record button fall back to their own defaults until
+/// then.
 const PROVIDER_KEY: &str = "meetings.provider";
 /// Settings key: terms to bias recognition towards.
 #[cfg(test)]
@@ -524,6 +526,15 @@ impl SessionLifecycle {
         if self.phase != SessionPhase::Recording {
             return Err("no meeting is being recorded");
         }
+        self.phase = SessionPhase::Finishing;
+        Ok(self.generation)
+    }
+
+    fn begin_recovery(&mut self) -> Result<u64, &'static str> {
+        if self.phase != SessionPhase::Idle {
+            return Err("finish the current meeting before recovering a recording");
+        }
+        self.generation = self.generation.wrapping_add(1);
         self.phase = SessionPhase::Finishing;
         Ok(self.generation)
     }
@@ -900,6 +911,119 @@ impl MeetingRuntime {
         }
     }
 
+    /// List only files with no saved recording relation, while idle.
+    pub async fn recoverable_recordings(
+        &self,
+    ) -> Result<Vec<recovery::RecoverableRecording>, String> {
+        if !self.lifecycle.lock().await.may_poll() {
+            return Ok(Vec::new());
+        }
+        recovery::scan(&self.db, &crate::recordings::recording_dir()).await
+    }
+
+    /// Recover one interrupted recording using the normal whole-file engine.
+    pub async fn recover_recording(&self, storage_key: &str) -> Result<MeetingOutcome, String> {
+        let generation = self
+            .lifecycle
+            .lock()
+            .await
+            .begin_recovery()
+            .map_err(str::to_owned)?;
+        let result = self.recover_recording_inner(storage_key).await;
+        let _ = self.lifecycle.lock().await.finished(generation);
+        result
+    }
+
+    async fn recover_recording_inner(&self, storage_key: &str) -> Result<MeetingOutcome, String> {
+        let directory = crate::recordings::recording_dir();
+        let path = kw_notes_core::recordings::resolve(&directory, storage_key)
+            .filter(|path| path.extension().is_some_and(|ext| ext == "wav"))
+            .ok_or("Invalid meeting recording name")?;
+        recovery::scan(&self.db, &directory)
+            .await?
+            .into_iter()
+            .find(|candidate| candidate.storage_key == storage_key)
+            .ok_or("This recording is no longer available for recovery")?;
+        let sidecar = draft::sidecar_path(&path);
+        let notes = match std::fs::symlink_metadata(&sidecar) {
+            Ok(metadata) if metadata.is_file() => {
+                std::fs::read_to_string(&sidecar).map_err(|error| {
+                    format!(
+                        "Could not read typed notes at {}: {error}",
+                        sidecar.display()
+                    )
+                })?
+            }
+            Ok(_) => {
+                return Err(format!(
+                    "Typed notes at {} are not a regular file",
+                    sidecar.display()
+                ))
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(error) => {
+                return Err(format!(
+                    "Could not inspect typed notes at {}: {error}",
+                    sidecar.display()
+                ))
+            }
+        };
+        let duration = kw_audio_core::wav::recover_interrupted(&path).map_err(|error| {
+            format!(
+                "Could not recover the recording at {}: {error}. Typed notes, if any, remain at {}",
+                path.display(),
+                sidecar.display()
+            )
+        })?;
+        let (segments, speaker_note, transcription_error) = match self.transcribe_whole(&path).await
+        {
+            Ok(Some(pass)) => {
+                let (segments, speaker_note) = self.with_speakers(pass, &path).await;
+                (segments, speaker_note, None)
+            }
+            Ok(None) => (Vec::new(), None, None),
+            Err(error) => (Vec::new(), None, Some(error)),
+        };
+        if segments.is_empty() && notes.trim().is_empty() {
+            return Err(format!(
+                "No note was saved from {}: {}. The recording remains available for another attempt.",
+                path.display(),
+                transcription_error.unwrap_or_else(|| "no speech was transcribed and there were no typed notes".into())
+            ));
+        }
+        let mut details = "Recovered after an interrupted meeting. The recording may end abruptly, and the original capture-source details are unavailable.".to_owned();
+        if let Some(error) = transcription_error {
+            details.push_str(&format!(
+                " The whole-recording transcription failed: {error}. Typed notes were preserved."
+            ));
+        } else if segments.is_empty() {
+            details.push_str(" Nothing was transcribed; this note contains the typed notes.");
+        }
+        if let Some(speaker_note) = speaker_note {
+            details.push_str(&format!(" {speaker_note}"));
+        }
+        let note = compose_note(meeting_title(), &notes, &segments, &details, duration)
+            .ok_or("The recovered meeting had no content")?;
+        let (note_id, _) = kw_notes_core::notes::create_meeting_with_recording(
+            self.db.pool(), &note, storage_key, duration,
+        )
+        .await
+        .map_err(|error| format!(
+            "Could not save the recovered meeting: {error}. The recording remains at {} and typed notes remain at {}",
+            path.display(), sidecar.display()
+        ))?;
+        draft::remove_sidecar(&path);
+        Ok(MeetingOutcome::Saved {
+            note_id,
+            duration_seconds: duration,
+            recording_path: path.display().to_string(),
+            recording_attached: true,
+            gaps: 0,
+            reconnects: 0,
+            transcript_is_partials: false,
+        })
+    }
+
     /// Build and publish the live resources after `start` reserves a generation.
     async fn start_live(&self, provider_id: &str, system_audio: bool) -> Result<Sources, String> {
         let mut held = self.live.lock().await;
@@ -973,8 +1097,9 @@ impl MeetingRuntime {
         }
 
         let path = crate::recordings::recording_dir().join(format!(
-            "{}.wav",
-            chrono::Utc::now().format("%Y%m%d-%H%M%S")
+            "{}-{}.wav",
+            chrono::Utc::now().format("%Y%m%d-%H%M%S"),
+            uuid::Uuid::new_v4()
         ));
         let (audio, commands, sources, recorder_end) =
             match spawn_recorder(path.clone(), system_audio) {
@@ -1048,8 +1173,9 @@ impl MeetingRuntime {
     /// `watch.forget`. The runtime was idle and the screen still said
     /// "Recording", with nothing left to press: `guard` in `useRefresh.ts` does
     /// not reload when a mutation throws, so the frontend stayed on `finishing`,
-    /// where `SettingsMeetings.tsx` renders no Stop or Discard and disables
-    /// Start. Only restarting the application cleared it.
+    /// where the meeting screen (then `SettingsMeetings.tsx`, now
+    /// `views/Meetings.tsx`) renders no Stop or Discard and disables Start.
+    /// Only restarting the application cleared it.
     ///
     /// A failure is an outcome now, not an early return -- `MeetingOutcome::
     /// Failed`, naming the WAV, which is already on disk by the time any of this
@@ -2042,6 +2168,21 @@ pub async fn meeting_status(
 }
 
 #[tauri::command]
+pub async fn meeting_recoverable_recordings(
+    runtime: State<'_, Arc<MeetingRuntime>>,
+) -> Result<Vec<recovery::RecoverableRecording>, String> {
+    runtime.recoverable_recordings().await
+}
+
+#[tauri::command]
+pub async fn meeting_recover_recording(
+    runtime: State<'_, Arc<MeetingRuntime>>,
+    storage_key: String,
+) -> Result<MeetingOutcome, String> {
+    runtime.recover_recording(&storage_key).await
+}
+
+#[tauri::command]
 pub async fn meeting_start(
     runtime: State<'_, Arc<MeetingRuntime>>,
     provider: String,
@@ -2119,11 +2260,15 @@ pub async fn meeting_set_language(
         .map_err(|e| format!("could not save the language setting: {e}"))
 }
 
-/// The provider the Meetings screen last chose, or `None` before anybody has.
+/// The provider last chosen on Settings > Meetings, or `None` before anybody
+/// has.
 ///
-/// Read by the screen to seed its select and by the notification window when
-/// an offer's Record button is pressed, so the two ways into a meeting agree
-/// on the provider. Before this key existed the screen fell back to the first
+/// Read by that screen to seed its select, by the Meetings page to say who
+/// will transcribe and to pass to `meeting_start`, and by the notification
+/// window when an offer's Record button is pressed, so the ways into a meeting
+/// agree on the provider once a usable one has been saved. Nothing here reads
+/// it at start: `meeting_start` is given its provider by the caller. Before
+/// this key existed the screen fell back to the first
 /// usable provider on every mount and the offer always recorded with the local
 /// one, so a choice of the local provider was forgotten by the next start
 /// (KNEG-317).
@@ -2251,6 +2396,18 @@ mod tests {
             Err("a meeting is already starting, recording, or finishing")
         );
         assert_eq!(lifecycle.phase, SessionPhase::Finishing);
+    }
+
+    #[test]
+    fn recovery_reserves_the_meeting_slot_until_it_finishes() {
+        let mut lifecycle = SessionLifecycle::default();
+        let recovery = lifecycle.begin_recovery().unwrap();
+        assert!(!lifecycle.may_poll());
+        assert!(lifecycle.begin_start().is_err());
+        assert!(lifecycle.begin_recovery().is_err());
+        assert!(lifecycle.finished(recovery));
+        assert!(lifecycle.may_poll());
+        assert!(lifecycle.begin_start().is_ok());
     }
 
     #[test]

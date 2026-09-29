@@ -246,13 +246,12 @@ export async function runShellRail(options) {
     await click(cdp, "nav.sidebar button", "Notes");
     await waitFor(
       cdp,
-      [
-        "Boolean([...document.querySelectorAll('button')]",
-        ".find((b) => b.textContent.trim() === 'Open note'))",
-      ].join(""),
-      "an Open note button",
+      "Boolean(document.querySelector('.notes-entry'))",
+      "a notes-entry row",
     );
-    await click(cdp, ".content button", "Open note");
+    // Notes opens from its library rows, not a button of its own -- there is
+    // no "Open note" control to click by text.
+    await cdp.evaluate("document.querySelector('.notes-entry')?.click(); true");
     await waitFor(
       cdp,
       "Boolean(document.querySelector('.note-workspace'))",
@@ -270,7 +269,7 @@ export async function runShellRail(options) {
       expectation: "one computed grid track at 1000px and two at 1400px",
       matches: grid1000.tracks === 1 && grid1400.tracks === 2,
       screenshots: [shot6a, shot6b],
-      note: "The fixture note was opened through its visible Open note button.",
+      note: "The fixture note was opened by clicking its notes-entry row in the library.",
     });
 
     await viewport(cdp, 1000, 720);
@@ -283,8 +282,8 @@ export async function runShellRail(options) {
     );
     if (settingsOpen) await click(cdp, "nav.sidebar button", "Settings");
     await click(cdp, "nav.sidebar button", "Settings");
-    await click(cdp, "nav.sidebar .nav-child", "Intelligence");
-    const arrivedAtIntelligence = await cdp.evaluate(snippets.sidewaysState());
+    await click(cdp, "nav.sidebar .nav-child", "Cleanup & summaries");
+    const arrivedAtCleanup = await cdp.evaluate(snippets.sidewaysState());
     await click(cdp, "nav.sidebar button", "Settings");
     const sidewaysCollapsedBefore = await cdp.evaluate(snippets.sidewaysState());
     const providerButton = await cdp.evaluate(
@@ -295,7 +294,7 @@ export async function runShellRail(options) {
       ].join(""),
     );
     if (!providerButton) {
-      throw new Error("Intelligence did not expose its Providers navigation button");
+      throw new Error("Cleanup & summaries did not expose its Providers navigation button");
     }
     await cdp.evaluate(`(() => {
       [...document.querySelectorAll('.content button')]
@@ -314,7 +313,7 @@ export async function runShellRail(options) {
       id: "7",
       claim: "Sideways navigation opens the group holding its target.",
       measured: {
-        arrivedAtIntelligence,
+        arrivedAtCleanup,
         collapsedBeforeProvidersButton: sidewaysCollapsedBefore,
         afterProvidersButton: sidewaysOpen,
         afterCollapse: sidewaysCollapsed,
@@ -327,8 +326,8 @@ export async function runShellRail(options) {
       ].join(" "),
       matches: sidewaysCollapsedBefore.expanded === "false"
         && sidewaysCollapsedBefore.current === null
-        && sidewaysCollapsedBefore.heading === arrivedAtIntelligence.heading
-        && arrivedAtIntelligence.current === "Intelligence"
+        && sidewaysCollapsedBefore.heading === arrivedAtCleanup.heading
+        && arrivedAtCleanup.current === "Cleanup & summaries"
         && sidewaysOpen.current === "Providers"
         && sidewaysOpen.expanded === "true"
         && sidewaysCollapsed.current === null

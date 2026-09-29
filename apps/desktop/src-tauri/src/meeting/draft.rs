@@ -1,7 +1,7 @@
 //! Typed meeting notes live in memory and beside the WAV for crash durability.
 //!
-//! The `.notes.md` sidecar is not recovered automatically after a crash, just
-//! as an orphan WAV is not. It is session data, not a settings key.
+//! An interrupted meeting's `.notes.md` sidecar can be recovered from Settings
+//! > Meetings with its orphan WAV. It is session data, not a settings key.
 
 use std::{
     path::{Path, PathBuf},

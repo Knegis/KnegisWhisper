@@ -139,12 +139,20 @@
    * 68rem is that number. Wider would only stretch prose past a readable
    * measure; the cap on `.row-detail` below exists for the same reason.
    *
-   * What this is worth, stated honestly: in the default 1000px window the
-   * content pane goes from 736px to about 728px, which is a wash, because the
-   * 60rem cap this replaced was already nearly the whole window. The gain is at
-   * every size above that. The pane used to be 736px on a 4K display -- frozen
-   * by the cap, not by the window -- and now grows to 1088px, about +48% on a
-   * maximised 1920px screen.
+   * What this is worth, remeasured at the current 15px root (measured in
+   * headless Edge against dev fixtures, not in the Tauri window): in the
+   * default 1000x720 window `.content` renders 805px wide, short of the
+   * 1020px cap -- the window and the rail are what limit it there, not
+   * `--content-max`. The two-column 60rem shell this replaced no longer
+   * exists to measure, but the same arithmetic gives its pane as
+   * 900 - 45 (1.5rem padding, both sides) - 180 (a 12rem sidebar) - 30 (a
+   * 2rem gap) = 645px, unchanging with the window because its cap engaged
+   * well below 1000px. So the gain is real now at every size, not only above
+   * the old cap: +160px (about +25%) in the default window, growing to
+   * +375px (about +58%) once a window is wide enough that `--content-max`,
+   * not the window, is what stops it -- 1215px (`--content-max` +
+   * `--nav-col`) and up, which is why a maximised 1920x1080 screen measures
+   * exactly the 1020px cap.
    */
   --nav-col: 13rem;
   --content-max: 68rem;
@@ -155,7 +163,7 @@
 
   color-scheme: light dark;
   font-family: var(--font-sans);
-  font-size: 14px;
+  font-size: 15px;
   line-height: 1.5;
 }
 
@@ -254,10 +262,11 @@ h2,
  *
  * This was a two-column grid capped at 60rem and centred, which had one
  * measurable consequence: with a 12rem sidebar and a 2rem gap the content pane
- * was 736px wide in the default 1000px window **and 736px wide on a 4K
- * display**. The cap was what limited it, not the window, so removing the cap is
- * where the extra width comes from -- see `--content-max` for the arithmetic and
- * for what it is actually worth.
+ * was 645px wide in the default 1000x720 window **and 645px wide on a 4K
+ * display** (both, at today's 15px root -- the shell is gone, so this is
+ * worked out rather than measured). The cap was what limited it, not the
+ * window, so removing the cap is where the extra width comes from -- see
+ * `--content-max` for the arithmetic and for what it is actually worth.
  *
  * `.shell` is no longer a grid and no longer positions anything. The rail is out
  * of flow, so all this does is reserve its width; `.content` carries the padding
@@ -443,6 +452,48 @@ h2,
  */
 .sidebar button.nav-child {
   padding-left: 1.7rem;
+  /*
+   * `flex-start`, not the inherited `center`. A wrapped label (below) is taller
+   * than the icon, and centering an item against a box taller than itself is
+   * exactly what makes it drift toward the middle of both lines instead of
+   * sitting next to the first one. Scoped to `.nav-child` rather than
+   * `.sidebar button` because only a child can be long enough to wrap --
+   * Dictation, Meetings, Notes, Settings and Developer never do -- so nothing
+   * else's icon moves.
+   */
+  align-items: flex-start;
+}
+
+/*
+ * Rail labels wrap inside their own fill instead of overflowing it.
+ *
+ * `.sidebar button` sets `white-space: nowrap` for the row as a whole, which
+ * is right for the button but wrong for its longest label: "Cleanup &
+ * summaries" is wider than the child button that carries it, so the current
+ * and hover fill -- painted on the `<button>`, not on the page -- stopped
+ * eleven pixels before the text did. Widening `--nav-col` would fix the
+ * symptom by moving every other measurement in the shell; renaming the label
+ * was the owner's call to make, not this rule's. Letting the label itself
+ * wrap is the one change that touches neither. It is scoped to `.nav-label`
+ * rather than reversed on `.sidebar button` so a short label -- everything but
+ * the two long Settings children -- never wraps, because there is never a
+ * reason for it to.
+ *
+ * The retracted rail is untouched: `.shell-sidebar-retracted .nav-label` sets
+ * `display: none`, and a display:none element has no box to wrap.
+ *
+ * `flex-grow: 1` gives the label the whole of the space after the icon rather
+ * than a box sized to its text. It was added to keep "Local text models" on
+ * one line, and measured it does not: that space is 113px at 15px `:root`, and
+ * "Local text models" is 119px on one line ("Cleanup & summaries" 133px), so
+ * both still wrap -- a flex item can grow into free space, not past it. Before
+ * `white-space: normal` it sat on one line only by running 6px into the
+ * button's 9px of right padding. No `min-width: 0` either: it would only let
+ * the label shrink below its widest word, which is not what stops it fitting.
+ */
+.sidebar .nav-label {
+  white-space: normal;
+  flex-grow: 1;
 }
 
 /*
@@ -474,11 +525,14 @@ h2,
 /*
  * The section you are in, which is a different claim from the screen you are on.
  *
- * A group header takes the ink colour and **not** the fill. There is exactly one
- * filled element on screen at a time and it is the current leaf -- that is the
- * pattern `.sidebar button.nav-current` and `button.marked` both follow, and
- * filling the header as well would put two "this one" marks in one column and
- * make neither mean anything.
+ * A group header takes the ink colour and **not** the fill. In the rail,
+ * `--band` marks one thing: the screen you are on
+ * (`.sidebar button.nav-current`). The page beside it spends it on at most one
+ * more -- a marked control (`button.marked`) for what is in effect now, or the
+ * one thing to do next (`button.primary`), never both on one page, since the
+ * two would make competing claims in the same colour. Filling the header as
+ * well would put a second "this one" mark in the rail's column and make
+ * neither reading mean anything.
  */
 .sidebar button.nav-group-open {
   color: var(--text);
@@ -522,6 +576,97 @@ h2 {
   margin: 0 0 0.75rem;
   font-weight: 400;
   color: var(--muted);
+}
+
+/* Falls back to bold without this -- Switzer ships one weight, 400, and a
+ * browser asked for a heavier one than that counterfeits it by smearing the
+ * 400, which is exactly what this file elsewhere spends a comment warning
+ * against. */
+h3 {
+  margin: 1.5rem 0 0.5rem;
+  font-size: 1.0667rem;
+  font-weight: 400;
+}
+
+/*
+ * Page header, disclosure and status line: the furniture around a screen's
+ * `h1`, shared by every top-level view so a colleague sees the same shape on
+ * Dictation, Transcription and everywhere else.
+ *
+ * `.page-intro` is the one sentence saying what the screen is for; `.learn-
+ * more` is the rest, folded under a `<details>` so a screen for a colleague
+ * who isn't technical leads with the short version and lets anyone go looking
+ * for more. `.status-line` is the machine-voice line that opens Dictation and
+ * Meetings -- 13px/16px tracked ProFontWindows, the same spec as the
+ * sidebar and every other string reporting on the machine rather than
+ * addressing the person -- and `.status-needs-setup` is `.caveat` worn by that
+ * line's "nothing is wired up yet" state, which needs the caveat's mark but
+ * not its top margin (see the rule itself, below `.caveat`).
+ */
+.page-header {
+  margin: 0 0 2.25rem;
+}
+
+.page-header h1 {
+  font-size: 1.75rem;
+  line-height: 1.2;
+}
+
+.page-intro {
+  margin: 0.4rem 0 0;
+  color: var(--muted);
+  max-width: 60ch;
+}
+
+.learn-more {
+  margin: 0.5rem 0 0;
+  max-width: 76ch;
+}
+
+.learn-more > summary {
+  cursor: pointer;
+  color: var(--muted);
+  width: fit-content;
+  list-style: none;
+}
+
+.learn-more > summary::-webkit-details-marker {
+  display: none;
+}
+
+.learn-more > summary::before {
+  content: "+ ";
+}
+
+.learn-more[open] > summary::before {
+  content: "− ";
+}
+
+.learn-more > summary:hover {
+  color: var(--text);
+}
+
+.learn-more > summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.learn-more-body {
+  margin-top: 0.5rem;
+  color: var(--muted);
+}
+
+.learn-more-body > p {
+  margin: 0.4rem 0 0;
+}
+
+.status-line {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 16px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  margin: 0 0 0.75rem;
 }
 
 /*
@@ -587,9 +732,10 @@ section {
 
 /*
  * A row whose only child is the value -- a lone control with nothing to label
- * it, like the Start recording button on Meetings -- still belongs in the value
- * column. Without this it falls into track 1 and starts at the page edge, a
- * couple of hundred pixels left of every other control on the screen.
+ * it, like Calendar's Connect, or its Sync now and Disconnect -- still belongs
+ * in the value column. Without this it falls into track 1 and starts at the
+ * page edge, a couple of hundred pixels left of every other control on the
+ * screen.
  */
 .row > .row-value:only-child {
   grid-column: 2;
@@ -621,29 +767,36 @@ section {
 }
 
 /*
- * Machine voice, but not uppercase: this carries paths, reasons and error
- * strings, and their casing is information.
- */
-/*
- * `max-width` in `ch`, because this column got wider and prose does not want
- * all of it.
+ * Prose, not machine voice: this carries the paragraph a settings screen
+ * writes about itself -- "the per-user location contains a space or a
+ * non-ASCII character, which the native speech binaries cannot read" -- and an
+ * explanation is prose regardless of what it explains. The mono face stays,
+ * scoped to `.row-detail code`, for the handful of strings inside these
+ * paragraphs whose characters are the point -- a path, a key, a literal the
+ * reader might need to type back.
  *
- * At the 60rem shell this replaced, the value track was 46 - 14 - 1.5 = 30.5rem,
- * which is about 68 characters of ProFontWindows at 13px. 76ch is therefore
- * slightly wider than what shipped rather than a lot wider -- the point is to
- * stop a four-line reason becoming a two-line one 115 characters across, which
- * is what an uncapped 68rem column would do. `<pre>`, `.list`, the `.row` grid
- * itself and `.note-workspace` are deliberately left uncapped: those carry data
- * and layout, where the extra width is the whole gain.
+ * `max-width` is still in `ch`, because this column got wider and prose does
+ * not want all of it: 76ch stops a four-line reason becoming a two-line one
+ * wrapping most of the window. `<pre>`, `.list`, the `.row` grid itself and
+ * `.note-workspace` are deliberately left uncapped: those carry data and
+ * layout, where the extra width is the whole gain.
+ *
+ * `font-style: normal` because the markup reaching this class is `<em>` --
+ * chosen for the semantic emphasis, not for the browser's default italic,
+ * which upright Switzer has no italic cut to render anyway.
  */
 .row-detail {
   max-width: 76ch;
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   color: var(--muted);
-  font-size: 13px;
-  line-height: 16px;
-  letter-spacing: 0.5px;
+  font-size: 0.9333rem;
+  line-height: 1.45;
+  letter-spacing: normal;
   font-style: normal;
+}
+
+.row-detail code {
+  font-family: var(--font-mono);
 }
 
 /* The same measure for a section's own prose, which is Switzer rather than
@@ -665,8 +818,8 @@ section > .muted {
  * is where the hand is.
  */
 .status-slot {
-  /* Two lines of `.row-detail`, whose line-height is 16px. */
-  min-height: 32px;
+  /* Two lines of `.row-detail`, whose line-height is 1.45em. */
+  min-height: calc(2 * 1.45em);
   margin: 0.75rem 0 0;
 }
 
@@ -691,7 +844,41 @@ section > .muted {
   border-left: 2px solid var(--accent);
   background: var(--wash);
   color: var(--text);
-  font-size: 0.8125rem;
+  font-size: 0.9375rem;
+}
+
+/* Switzer ships at 400 only, so bold here is faked; this also un-bolds the Meetings and Cleanup & summaries caveat lead-ins, deliberately. */
+.caveat strong {
+  font-weight: 400;
+}
+
+/* `.status-line`'s caveat state -- same mark, with the top margin zeroed.
+ * The box stands where the Ready line would, first in its section, and
+ * `.status-line` has only a bottom margin, so the Ready line sits flush with
+ * the section's top; the caveat's own 0.75rem above would put Needs setup
+ * lower than Ready. The `.status-line` inside the box keeps its bottom margin,
+ * which is the gap between "Needs setup" and the problem sentence. */
+.status-needs-setup {
+  margin-top: 0;
+}
+
+/*
+ * The fix button lines its label up with the problem sentence above it.
+ *
+ * `section > button` does that for a button standing in a section, by giving
+ * back the button's 0.9rem of left padding in the margin -- and it does not
+ * reach this one, which is the box's child, not the section's. So the label
+ * sat 0.9rem inside the sentence: the box's padding, then the button's own.
+ * Plain, the button takes its left padding down to the box's 0.75rem and
+ * gives that back, so the label lands on the sentence and the hover fill
+ * stops at the inner edge of the bar rather than painting over it. Filled
+ * (`button.primary`, when the page's Start is held back and this is the one
+ * thing to do next), it keeps its padding and its fill starts on the text
+ * column, the way `section > button.primary` does.
+ */
+.status-needs-setup > button:not(.primary) {
+  margin-left: -0.75rem;
+  padding-left: 0.75rem;
 }
 
 /*
@@ -868,7 +1055,14 @@ button.marked:hover:not(:disabled) {
   border: 0;
 }
 
+/*
+ * One line held whether or not there is anything to say, the same reason
+ * `.status-slot` holds two: "Saving…" appearing on the first keystroke used
+ * to push the tabs and the editor down under the caret. 1.5em is `:root`'s
+ * line-height, which this paragraph inherits.
+ */
 .save-status {
+  min-height: 1.5em;
   color: var(--muted);
 }
 
@@ -1657,17 +1851,19 @@ option:checked:hover {
 }
 
 /*
- * Unfilled at rest; the fill arrives under the pointer.
+ * Unfilled at rest; the fill arrives under the pointer -- unless the button is
+ * `.primary`, where it is there from the start.
  *
  * This is the site's own gesture rather than a departure from it: knegis.com
  * gives its links no resting chrome at all and paints them only on hover. A
  * screen of settings is mostly things you are reading, and a grey box drawn
- * around every button competed with the values they act on.
+ * around every ordinary button competed with the values they act on.
  *
- * The blue is not gone, it is just no longer spent on hover. It marks the one
- * thing that is currently true -- the screen you are on -- and a hover state
- * painted the same colour made "you are here" and "your pointer is here"
- * indistinguishable.
+ * Beside the rail's mark for the screen you are on, `--band` is spent on at
+ * most one claim per page -- what is true now, or, failing that, the one thing
+ * to do next -- made by `button.marked` or `button.primary` below and never by
+ * a hover state. An ordinary button's own hover is the neutral `--control`
+ * wash instead, so "your pointer is here" never gets read as either of those.
  */
 button {
   margin-top: 0.75rem;
@@ -1685,6 +1881,28 @@ button:hover:not(:disabled) {
 }
 
 /*
+ * The one thing to do next, filled from the start rather than on hover -- the
+ * other half of the rule above. At most one per screen, and never on a screen
+ * that already shows `button.marked`: that screen's "one thing" is state
+ * already in effect, not a press still waiting to happen, and the two fills
+ * would make competing claims in the same colour.
+ */
+button.primary {
+  background: var(--band);
+  color: var(--band-ink);
+}
+
+button.primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--band) 88%, var(--band-ink));
+  color: var(--band-ink);
+}
+
+section > button.primary,
+.controls button.primary {
+  margin-left: 0;
+}
+
+/*
  * A button standing on its own lines its label up with the text above it.
  *
  * The padding is what the hover fill needs in order to have room around the
@@ -1696,6 +1914,20 @@ button:hover:not(:disabled) {
  */
 section > button {
   margin-left: -0.9rem;
+}
+
+/*
+ * Except one that follows the primary button, which is not standing on its
+ * own: its neighbour positions it, as in a row of controls. The rule above
+ * pulled it back over the primary's fill, so Dictation's Discard read as
+ * "Stop and transcribeDiscard". The gap is `.controls`' own. The same holds
+ * for the button after that one -- Meetings' "Stop recording anyway", beside
+ * Stop and Discard -- which the rule above would otherwise pull back over
+ * Discard's hover area.
+ */
+section > button.primary + button,
+section > button.primary + button + button {
+  margin-left: 0.5rem;
 }
 
 button:focus-visible {
@@ -1961,10 +2193,17 @@ button.microphone-language-toggle:hover:not(:disabled) { background: transparent
 
 #notes-titlebar-controls { display: flex; align-items: center; }
 #notes-titlebar-controls:not(:empty) { padding: 0 0.5rem; }
-.notes-library-tools { display: flex; align-items: center; gap: 6px; }
+.notes-library-tools { display: flex; flex-direction: column; align-items: stretch; gap: 0.6rem; }
+.notes-library-actions { display: flex; align-items: center; gap: 6px; }
 .notes-library-tools button { display: flex; align-items: center; justify-content: center; width: calc(18px + 0.8rem); height: calc(18px + 0.8rem); padding: 0.4rem; margin: 0; border-radius: 2px; }
+/* The two labelled actions carry a visible word alongside their icon, so they size to their
+ * content instead of the icon-only square the rule above sets for the rest of the toolbar. */
+.notes-library-tools button.labelled { width: auto; padding: 0.4rem 0.6rem; display: inline-flex; gap: 0.4rem; }
 .notes-library-tools svg { display: block; width: 18px; height: 18px; flex: 0 0 18px; }
 .notes-library-tools button[aria-expanded="true"], .notes-library-tools button[data-active="true"] { background: var(--band); color: var(--band-ink); }
+.notes-library-list-header { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
+.notes-library-list-header h2 { margin: 0; }
+.notes-library-folder-tools { display: flex; align-items: center; gap: 6px; }
 .notes-tool-panel { display: flex; flex-direction: column; gap: 0.5rem; margin-top: 0.75rem; }
 /* A folder heading is a row, not a boxed button: a disclosure and the name. The name is set
  * exactly like a note's title (same face, size and leading), muted until pointed at, so the
@@ -2006,7 +2245,8 @@ button.microphone-language-toggle:hover:not(:disabled) { background: transparent
 .note-prose, .summary-pane { min-width: 0; flex: 1; }
 .note-prose[hidden], .summary-pane[hidden] { display: none; }
 .summary-tabs { display: flex; gap: 8px; padding: 12px 0; }
-.summary-tabs [aria-selected="true"] { color: #0015ff; border-bottom: 2px solid currentColor; }
+.summary-tabs [role="tab"] { color: var(--muted); }
+.summary-tabs [aria-selected="true"] { color: var(--text); border-bottom: 2px solid var(--band); }
 .summary-toolbar { display: flex; flex-wrap: wrap; gap: 8px; padding-block: 8px; }
 .summary-pane > .muted, .summary-pane > .warn, .summary-pane > .error { padding-inline: 12px; }
 

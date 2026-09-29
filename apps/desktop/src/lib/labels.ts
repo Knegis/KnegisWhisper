@@ -44,6 +44,7 @@ import type {
   RecheckOutcome,
   RefreshOutcome,
   RelocatedCredential,
+  SessionState,
   ShortcutHookStatus,
   SidecarFreshness,
   Sources,
@@ -109,6 +110,16 @@ export function nonActivatingLabel(n: NonActivating): Stated {
 /**
  * What one accelerator reads as, and what is wrong with it if anything.
  *
+ * Two kinds of sentence, kept apart because the screen draws them apart.
+ * `problem` is only ever a failure -- this accelerator does nothing here --
+ * and Settings > Shortcuts sets it in `.row-detail.warn`, which is red because
+ * every string reaching it is one. `note` is for an accelerator that works and
+ * is worth a word: `text` is the one plain sentence that stays on screen,
+ * `more` the mechanism, for a Learn more. They used to be one field, so the
+ * shipped Windows default -- `Control+Super`, a hooked chord that works --
+ * came up red, naming `WH_KEYBOARD_LL`, on the same screen as a Dictation page
+ * that said Ready.
+ *
  * `hook` is the platform's answer about modifier-only chords, from
  * `Diagnostics.modifierOnlyShortcuts`. It is a parameter rather than a hardcoded
  * sentence because the honest text differs by platform: this file said
@@ -118,7 +129,8 @@ export function nonActivatingLabel(n: NonActivating): Stated {
  * asserting a Rust one.
  *
  * `undefined` means the answer is not known yet — diagnostics has not loaded —
- * and the caveat says that rather than guessing either way.
+ * and the note says that rather than guessing either way. Not knowing is not
+ * a failure, so it is never a `problem`.
  */
 export function acceleratorLabel(
   a: Accelerator,
@@ -126,37 +138,69 @@ export function acceleratorLabel(
 ): {
   text: string;
   problem: string | null;
+  note: { text: string; more: string } | null;
 } {
   switch (a.kind) {
     case "standard":
-      return { text: a.accelerator, problem: null };
+      return { text: a.accelerator, problem: null, note: null };
     case "modifier-only":
-      return {
-        text: a.accelerator,
-        problem:
-          hook === undefined
-            ? "Uses only modifier keys. Whether that works here is still being checked."
-            : hook.state === "available"
-              ? `Uses only modifier keys, so it runs through ${hook.mechanism} rather than the system shortcut register. It works, and other applications still see the same keys.`
-              : `Uses only modifier keys, which does nothing here. ${hook.reason}`,
-      };
+      if (hook === undefined) {
+        return {
+          text: a.accelerator,
+          problem: null,
+          note: {
+            text: "Whether this works on this computer is still being checked.",
+            more: "It uses only modifier keys, which no cross-platform shortcut API can register.",
+          },
+        };
+      }
+      return hook.state === "available"
+        ? {
+            text: a.accelerator,
+            problem: null,
+            note: {
+              text: "Works on this computer.",
+              more: `It uses only modifier keys, so it runs through ${hook.mechanism} rather than the system shortcut register, and other applications still see the same keys.`,
+            },
+          }
+        : {
+            text: a.accelerator,
+            problem: `Uses only modifier keys, which does nothing on this computer. ${hook.reason}`,
+            note: null,
+          };
     // A third mechanism, so a third case, and it must not borrow the
     // modifier-only sentence. A hooked chord takes nothing away from anything
     // else; a hooked mouse button leaves the click going Back in every browser
     // on the machine, and that is the part a user needs before pressing it
-    // rather than after.
+    // rather than after -- so it is in the note's visible sentence, and only
+    // the hook's name is folded.
     case "mouse-button":
-      return {
-        text: a.accelerator,
-        problem:
-          hook === undefined
-            ? "A mouse button. Whether that works here is still being checked."
-            : hook.state === "available"
-              ? `A mouse button, watched by ${hook.mechanism}. The click is not swallowed, so wherever the pointer is that button still does ${a.alsoDoes}.`
-              : `A mouse button, which does nothing here. ${hook.reason}`,
-      };
+      if (hook === undefined) {
+        return {
+          text: a.accelerator,
+          problem: null,
+          note: {
+            text: "Whether this works on this computer is still being checked.",
+            more: "It is a mouse button, which needs the same hook as a modifier-only shortcut.",
+          },
+        };
+      }
+      return hook.state === "available"
+        ? {
+            text: a.accelerator,
+            problem: null,
+            note: {
+              text: `Works on this computer, and the button still does ${a.alsoDoes} wherever the pointer is.`,
+              more: `It is watched by ${hook.mechanism}, which does not swallow the click.`,
+            },
+          }
+        : {
+            text: a.accelerator,
+            problem: `A mouse button, which does nothing on this computer. ${hook.reason}`,
+            note: null,
+          };
     case "invalid":
-      return { text: a.input, problem: a.reason };
+      return { text: a.input, problem: a.reason, note: null };
   }
 }
 
@@ -260,6 +304,32 @@ export function outcomeLabel(outcome: DictationOutcome): string {
       return "Cancelled.";
     case "failed":
       return outcome.message;
+  }
+}
+
+/**
+ * What the dictation session is doing right now, in three words or fewer.
+ *
+ * An exhaustive switch with the same `never` guard [`meetingStateLabel`] and
+ * [`freshnessLabel`] use, for the same reason: `SessionState` is a plain
+ * string union, so a fifth state added there would satisfy every `===`
+ * comparison this application already has and would still fall through here
+ * without the guard, rendering nothing rather than failing to build.
+ */
+export function sessionStateLabel(state: SessionState): string {
+  switch (state) {
+    case "idle":
+      return "Not recording";
+    case "recording":
+      return "Recording";
+    case "transcribing":
+      return "Transcribing…";
+    case "inserting":
+      return "Typing the text…";
+    default: {
+      const unhandled: never = state;
+      return unhandled;
+    }
   }
 }
 
@@ -695,10 +765,16 @@ export function keytermReviewLabel(
  * control. Found the first time a provider with `language_detection: false` was
  * actually selected by a person -- `corti-realtime` has had the flag since the
  * client landed and nobody had ever reached the screen with it chosen.
+ *
+ * It then said "Fill in the Language field above" until the recording moved to
+ * its own page (KNEG-334), which put the sentence in two places: under the
+ * Language field on Settings > Meetings, where "above" was right, and folded
+ * under the Meetings page's "Needs setup", which has no field at all and whose
+ * button opens the one on Settings > Meetings. So it no longer says where.
  */
 export function languageRequiredWarning(review: ConfigReview): string | null {
   return review.languageRequired
-    ? "This provider cannot detect the language on its own. Fill in the Language field above " +
+    ? "This provider cannot detect the language on its own. Fill in the meeting language " +
         '(for example "en"), or starting will be refused.'
     : null;
 }

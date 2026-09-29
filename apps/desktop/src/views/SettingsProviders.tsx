@@ -212,7 +212,6 @@ export function SettingsProviders() {
       {error ? <p className="error">{error}</p> : null}
 
       <section>
-        <h2>Providers</h2>
         <p className="muted">
           Keys go straight into this machine's credential store —{" "}
           <strong>never</strong> into the database, a settings row, or a log
@@ -291,7 +290,7 @@ export function SettingsProviders() {
             {enterprise.map((s) => s.name).join(", ")} use organisation
             credentials — a region and a key pair, or an endpoint and a
             deployment — rather than a single API key, so they are configured on
-            the Intelligence screen where those fields are.
+            the Cleanup &amp; summaries screen where those fields are.
           </p>
           <Row
             label="Stored here"

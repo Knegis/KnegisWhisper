@@ -24,7 +24,7 @@
 //! [`header`], so there is one description of the layout rather than two.
 
 use std::fs;
-use std::io::{self, Seek as _, SeekFrom, Write as _};
+use std::io::{self, Read as _, Seek as _, SeekFrom, Write as _};
 use std::path::Path;
 
 /// The sample rate every model here expects.
@@ -205,8 +205,8 @@ pub fn wrap_pcm(pcm: &[u8], sample_rate: u32, channels: u16) -> Vec<u8> {
 /// The header carries two lengths that are unknown until the last frame, so both
 /// are written as zero and patched by [`WavWriter::finish`]. A file left behind
 /// by a crash therefore has a zero-length `data` chunk, which every decoder
-/// reads as an empty recording. That is the right failure: a meeting recording
-/// that was cut short must not present as a complete one.
+/// reads as an empty recording until the user explicitly recovers it with
+/// [`recover_interrupted`]. A cut-short meeting must not appear complete.
 ///
 /// Mono, 16-bit, at whatever rate it is given — the same format everything
 /// downstream accepts, so a caller downmixes and resamples before appending.
@@ -223,7 +223,12 @@ impl WavWriter {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
-        let mut file = fs::File::create(path)?;
+        // An unfinished meeting may already live at this name. Never replace
+        // its audio while starting a new recording.
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)?;
         file.write_all(&header(0, sample_rate, 1))?;
 
         Ok(Self {
@@ -277,6 +282,50 @@ impl WavWriter {
 
         Ok(self.samples)
     }
+}
+
+/// Finish the header of a meeting WAV left open by process termination.
+///
+/// Accept only the exact format written by `WavWriter`. A normal, already
+/// finished file is accepted too: the process may have died after `finish` and
+/// before its note was committed. No sample bytes are changed.
+pub fn recover_interrupted(path: &Path) -> io::Result<f64> {
+    let mut file = fs::OpenOptions::new().read(true).write(true).open(path)?;
+    let len = file.metadata()?.len();
+    let data_len = len.checked_sub(HEADER_LEN as u64).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "the recording has no WAV header",
+        )
+    })?;
+    if data_len % 2 != 0 || data_len > u64::from(u32::MAX - 36) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "the recording has an incomplete sample or exceeds WAV's size limit",
+        ));
+    }
+    let data_len = u32::try_from(data_len).map_err(io::Error::other)?;
+    let expected = header(data_len, TARGET_SAMPLE_RATE, 1);
+    let mut actual = [0; HEADER_LEN];
+    file.read_exact(&mut actual)?;
+    let riff = u32::from_le_bytes(actual[4..8].try_into().map_err(io::Error::other)?);
+    let data = u32::from_le_bytes(actual[40..44].try_into().map_err(io::Error::other)?);
+    if actual[..4] != expected[..4]
+        || actual[8..40] != expected[8..40]
+        || riff != 36 && riff != 36 + data_len
+        || data != 0 && data != data_len
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "the recording is not an application-owned 16 kHz mono PCM WAV",
+        ));
+    }
+    if riff != 36 + data_len || data != data_len {
+        file.seek(SeekFrom::Start(0))?;
+        file.write_all(&expected)?;
+        file.sync_all()?;
+    }
+    Ok(f64::from(data_len) / (f64::from(TARGET_SAMPLE_RATE) * 2.0))
 }
 
 /// Prepare captured audio for transcription: mono, 16 kHz, WAV.
@@ -533,6 +582,44 @@ mod tests {
             std::fs::read(&path).unwrap(),
             encode_wav(&samples, TARGET_SAMPLE_RATE)
         );
+    }
+
+    #[test]
+    fn interrupted_wav_recovers_only_its_header() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("interrupted.wav");
+        let samples = [0.25, -0.25, 0.5];
+        let mut writer = WavWriter::create(&path, TARGET_SAMPLE_RATE).unwrap();
+        writer.append(&samples).unwrap();
+        drop(writer);
+        assert_eq!(recover_interrupted(&path).unwrap(), 3.0 / 16_000.0);
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            encode_wav(&samples, TARGET_SAMPLE_RATE)
+        );
+        assert_eq!(recover_interrupted(&path).unwrap(), 3.0 / 16_000.0);
+    }
+
+    #[test]
+    fn recovery_refuses_other_audio_and_does_not_change_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("foreign.wav");
+        let bytes = encode_wav(&[0.5], 8_000);
+        std::fs::write(&path, &bytes).unwrap();
+        assert!(recover_interrupted(&path).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    }
+
+    #[test]
+    fn starting_a_writer_never_overwrites_an_interrupted_recording() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("meeting.wav");
+        let mut first = WavWriter::create(&path, TARGET_SAMPLE_RATE).unwrap();
+        first.append(&[0.5]).unwrap();
+        drop(first);
+        let before = std::fs::read(&path).unwrap();
+        assert!(WavWriter::create(&path, TARGET_SAMPLE_RATE).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), before);
     }
 
     #[test]
