@@ -1,5 +1,10 @@
 #!/usr/bin/env node
-/** Runs repeatable rail and responsive-layout measurements against dev fixtures. */
+/**
+ * Runs repeatable rail, list-panel and title-bar measurements against dev
+ * fixtures: the 68px rail and its one current entry, the Settings panel and
+ * its Developer section, the title bar's panel toggle, the 720x520 minimum
+ * window, keyboard focus, and Ctrl+K.
+ */
 import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,6 +18,7 @@ const delay = (ms) => new Promise((resolveDelay) => setTimeout(resolveDelay, ms)
 const isMain = process.argv[1]
   && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 
+/** A screenshot clip for a measured rectangle, in page coordinates. */
 export function clipRail({ rect, scrollX = 0, scrollY = 0 }) {
   return {
     x: rect.left + scrollX,
@@ -22,29 +28,49 @@ export function clipRail({ rect, scrollX = 0, scrollY = 0 }) {
   };
 }
 
+const TOGGLE = '.app-titlebar button[aria-controls="list-panel"]';
+const RAIL_ITEM = "nav.rail .rail-item";
+const PANEL_ITEM = ".list-panel .panel-item";
+
 const screenshot = async (cdp, out, name, options) => {
   await cdp.screenshot(resolve(out, name), options);
   return name;
 };
 
-const numberEqual = (a, b, epsilon = 0.5) =>
-  Math.abs(Number.parseFloat(a) - Number.parseFloat(b)) <= epsilon;
-
 async function waitFor(cdp, expression, description, timeout = 8_000) {
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
-    if (await cdp.evaluate(expression)) return;
+    try {
+      if (await cdp.evaluate(expression)) return;
+    } catch {
+      // Between two documents during a reload there is no context to evaluate in.
+    }
     await delay(100);
   }
   throw new Error(`Timed out waiting for ${description}`);
 }
 
-async function click(cdp, selector, text) {
-  return cdp.evaluate(snippets.clickText(selector, text));
+/** Reloads the page and resolves once the new document has loaded. */
+async function reload(cdp, timeout = 15_000) {
+  let off = () => {};
+  let timer;
+  const loaded = new Promise((resolveLoad, reject) => {
+    timer = setTimeout(() => reject(new Error("Timed out waiting for the reload")), timeout);
+    off = cdp.on("Page.loadEventFired", () => resolveLoad());
+  });
+  try {
+    await cdp.send("Page.reload", { ignoreCache: true });
+    await loaded;
+  } finally {
+    clearTimeout(timer);
+    off();
+  }
 }
 
-async function geometry(cdp) {
-  return cdp.evaluate(snippets.railGeometry());
+async function click(cdp, selector, text) {
+  const result = await cdp.evaluate(snippets.clickText(selector, text));
+  await delay(100);
+  return result;
 }
 
 async function viewport(cdp, width, height) {
@@ -55,6 +81,41 @@ async function viewport(cdp, width, height) {
     mobile: false,
   });
   await delay(150);
+}
+
+async function key(cdp, { key: name, code, keyCode, modifiers = 0 }) {
+  await cdp.send("Input.dispatchKeyEvent", {
+    type: "rawKeyDown",
+    key: name,
+    code,
+    windowsVirtualKeyCode: keyCode,
+    modifiers,
+  });
+  await cdp.send("Input.dispatchKeyEvent", {
+    type: "keyUp",
+    key: name,
+    code,
+    windowsVirtualKeyCode: keyCode,
+    modifiers,
+  });
+}
+
+/** Waits for the shell, then removes the fixture banner unless asked not to. */
+async function ready(cdp, options) {
+  await waitFor(
+    cdp,
+    "Boolean(document.querySelector('nav.rail') && document.querySelector('.card .content'))",
+    "the fixture shell",
+  );
+  if (options.keepFixtureBanner) {
+    return {
+      existed: Boolean(
+        await cdp.evaluate("document.querySelector('[data-dev-fixtures=\"banner\"]')"),
+      ),
+      kept: true,
+    };
+  }
+  return { ...(await cdp.evaluate(snippets.removeFixtureBanner())), kept: false };
 }
 
 export async function runShellRail(options) {
@@ -68,335 +129,204 @@ export async function runShellRail(options) {
     cdp = await connectCdp(browser.target.webSocketDebuggerUrl);
     await cdp.send("Page.enable");
     await viewport(cdp, 1000, 720);
-    await waitFor(
-      cdp,
-      "Boolean(document.querySelector('nav.sidebar') && document.querySelector('.content'))",
-      "the fixture shell",
-    );
+    // The panel's collapsed state is read from the window width once, at
+    // start-up, so the 1000x720 measurements begin from a load at that width.
+    await reload(cdp);
+    const banner = await ready(cdp, options);
 
-    const bannerResult = options.keepFixtureBanner
-      ? {
-          existed: Boolean(
-            await cdp.evaluate(
-              "document.querySelector('[data-dev-fixtures=\"banner\"]')",
-            ),
-          ),
-          kept: true,
-        }
-      : {
-          ...(await cdp.evaluate(snippets.removeFixtureBanner())),
-          kept: false,
-        };
-    const initial = await geometry(cdp);
+    const initial = await cdp.evaluate(snippets.railState());
     const report = createReport({
       url: options.url,
       edgeVersion: browser.version.Browser ?? browser.version,
       remBasis: initial.rem,
-      fixtureBannerRemoved: !options.keepFixtureBanner && bannerResult.existed,
+      fixtureBannerRemoved: !options.keepFixtureBanner && banner.existed,
       timestamp: new Date().toISOString(),
       measurementScope: "measured in headless Edge against dev fixtures, not in the Tauri window",
     });
 
-    // The comparison after scrolling makes this a behaviour measurement, not
-    // just an interpretation of the fixed CSS declaration.
-    await click(cdp, "nav.sidebar button", "Settings");
-    await click(cdp, "nav.sidebar .nav-child", "Providers");
-    const beforeScroll = await geometry(cdp);
-    await cdp.evaluate("document.scrollingElement.scrollTo(0, 600); true");
-    await delay(100);
-    const afterScroll = await geometry(cdp);
     const shot1 = await screenshot(cdp, out, "01-rail.png", {
-      clip: clipRail(afterScroll),
+      clip: clipRail(initial),
       scale: 2,
     });
     addCheck(report, {
       id: "1",
-      claim: "The rail is pinned to the left edge and stays put while content scrolls.",
-      measured: {
-        beforeScroll,
-        afterScroll,
-        unchanged: beforeScroll.rect.left === afterScroll.rect.left
-          && beforeScroll.rect.top === afterScroll.rect.top,
-      },
-      expectation: [
-        "fixed, left 0, top 0, shell padding-left equals rail width,",
-        "and an unchanged rectangle after scroll",
-      ].join(" "),
-      matches: beforeScroll.position === "fixed"
-        && beforeScroll.rect.left === 0
-        && beforeScroll.rect.top === 0
-        && numberEqual(beforeScroll.shellPaddingLeft, beforeScroll.rect.width)
-        && beforeScroll.rect.left === afterScroll.rect.left
-        && beforeScroll.rect.top === afterScroll.rect.top,
+      claim: "The rail is 68px wide and marks exactly one entry current.",
+      measured: initial,
+      expectation: "nav.rail width 68px; exactly one .rail-item[aria-current=page]",
+      matches: initial.rect.width === 68 && initial.current.length === 1,
       screenshots: [shot1],
-      note: [
-        "Measured after navigating to the long Providers screen and setting",
-        "document.scrollingElement to 600px.",
-      ].join(" "),
+      note: "Measured on the opening screen, before any navigation.",
     });
-    await cdp.evaluate("window.scrollTo(0, 0); true");
 
-    // Reset the state so the closed/open comparison covers both headers rather
-    // than a remembered state.
-    await click(cdp, "nav.sidebar button", "Settings");
-    const groupsClosed = await cdp.evaluate(snippets.groupState());
-    const shot2a = await screenshot(cdp, out, "02-groups-closed.png", {
-      clip: clipRail(await geometry(cdp)),
-      scale: 2,
-    });
-    await click(cdp, "nav.sidebar button", "Settings");
-    await click(cdp, "nav.sidebar button", "Developer");
-    const groupsOpen = await cdp.evaluate(snippets.groupState());
-    const shot2b = await screenshot(cdp, out, "02-groups-open.png", {
-      clip: clipRail(await geometry(cdp)),
-      scale: 2,
-    });
+    await click(cdp, RAIL_ITEM, "Settings");
+    const settings = await cdp.evaluate(snippets.panelState());
+    const shot2 = await screenshot(cdp, out, "02-settings-panel.png");
     addCheck(report, {
       id: "2",
-      claim: "Settings and Developer show a trailing + when closed and - when open.",
-      measured: { closed: groupsClosed, open: groupsOpen },
-      expectation: [
-        "pseudo-element content changes from + to -;",
-        "character appearance is human-reviewed",
-      ].join(" "),
-      matches: null,
-      screenshots: [shot2a, shot2b],
-      note: [
-        "The computed pseudo-element values and font availability are measured.",
-        "A person judges whether the glyph is visibly a character rather than a box.",
-      ].join(" "),
+      claim: "The rail's Settings opens a list panel listing Providers under Settings and a Developer section.",
+      measured: settings,
+      expectation: ".list-panel visible, an item reading Providers, a .panel-label reading Developer",
+      matches: settings.visible
+        && settings.items.includes("Providers")
+        && settings.labels.includes("Developer"),
+      screenshots: [shot2],
+      note: "Reached by clicking the rail's Settings from the opening screen.",
     });
-    const groupLayoutMatches = [
-      groupsClosed.settings,
-      groupsClosed.developer,
-      groupsOpen.settings,
-      groupsOpen.developer,
-    ].every((group) =>
-      group.display === "flex" && group.justifyContent === "space-between"
-    );
+
+    await click(cdp, PANEL_ITEM, "Providers");
+    const providers = {
+      panel: await cdp.evaluate(snippets.panelState()),
+      rail: await cdp.evaluate(snippets.railState()),
+      heading: await cdp.evaluate(snippets.pageHeading()),
+    };
+    const shot3 = await screenshot(cdp, out, "03-providers.png");
     addCheck(report, {
       id: "3",
-      claim: "A collapsed group reads as a section, not a screen.",
-      measured: {
-        settings: groupsClosed.settings,
-        developer: groupsClosed.developer,
-      },
-      expectation: "nav-group uses display:flex and justify-content:space-between",
-      matches: groupLayoutMatches,
-      screenshots: [shot2a, shot2b],
-      note: "This check reuses the group-state clips.",
+      claim: "Choosing Providers marks exactly one panel item, and the rail still marks Settings.",
+      measured: providers,
+      expectation: "one .panel-item[aria-current] reading Providers; rail current is Settings alone",
+      matches: providers.panel.current.length === 1
+        && providers.panel.current[0] === "Providers"
+        && providers.rail.current.length === 1
+        && providers.rail.current[0] === "Settings",
+      screenshots: [shot3],
+      note: `The page heading read ${JSON.stringify(providers.heading)} after the click.`,
     });
 
-    await click(cdp, "nav.sidebar button", "Developer");
-    await click(cdp, "nav.sidebar .nav-child", "Providers");
-    const current = await cdp.evaluate(snippets.railCurrent());
-    const shot4 = await screenshot(cdp, out, "04-child-current.png", {
-      clip: clipRail(await geometry(cdp)),
-      scale: 2,
-    });
-    const rem = Number.parseFloat(initial.rem);
-    const transparent = (value) =>
-      value === "rgba(0, 0, 0, 0)" || value === "transparent";
+    const beforeToggle = await cdp.evaluate(snippets.panelToggle());
+    await cdp.evaluate(snippets.clickSelector(TOGGLE));
+    await delay(100);
+    const collapsed = {
+      panel: await cdp.evaluate(snippets.panelState()),
+      toggle: await cdp.evaluate(snippets.panelToggle()),
+    };
+    const shot4a = await screenshot(cdp, out, "04-panel-hidden.png");
+    await cdp.evaluate(snippets.clickSelector(TOGGLE));
+    await delay(100);
+    const restored = {
+      panel: await cdp.evaluate(snippets.panelState()),
+      toggle: await cdp.evaluate(snippets.panelToggle()),
+    };
+    const shot4b = await screenshot(cdp, out, "04-panel-restored.png");
     addCheck(report, {
       id: "4",
-      claim: "Children are indented; exactly one filled mark.",
-      measured: current,
+      claim: "The title bar's toggle hides the list panel, and a second press restores it.",
+      measured: { beforeToggle, collapsed, restored },
       expectation: [
-        `child left padding ${1.7 * rem}px,`,
-        `top-level horizontal padding ${0.6 * rem}px,`,
-        "one filled current leaf, Settings open with text colour and transparent fill",
+        "after one press .list-panel is not rendered and the toggle reads Show list,",
+        "aria-expanded false; after the second it is rendered again, Hide list, true",
       ].join(" "),
-      matches: numberEqual(current.childPaddingLeft, 1.7 * rem)
-        && numberEqual(current.topPaddingLeft, 0.6 * rem)
-        && current.filled.length === 1
-        && current.current?.text === "Providers"
-        && current.current?.className.includes("nav-child")
-        && current.settings?.color === current.settings?.text
-        && transparent(current.settings?.background),
-      screenshots: [shot4],
-      note: "The count excludes transparent button backgrounds and the sidebar's own background.",
+      matches: beforeToggle.expanded === "true"
+        && !collapsed.panel.visible
+        && collapsed.toggle.label === "Show list"
+        && collapsed.toggle.expanded === "false"
+        && restored.panel.visible
+        && restored.toggle.label === "Hide list"
+        && restored.toggle.expanded === "true",
+      screenshots: [shot4a, shot4b],
+      note: "Visibility is the computed display and width, not the hidden attribute alone.",
     });
 
-    await viewport(cdp, 1000, 720);
-    const content1000 = await cdp.evaluate(snippets.contentMeasure());
-    const shot5a = await screenshot(cdp, out, "05-content-1000.png");
-    await viewport(cdp, 1920, 1080);
-    const content1920 = await cdp.evaluate(snippets.contentMeasure());
-    const shot5b = await screenshot(cdp, out, "05-content-1920.png");
+    // The minimum window: a fresh load at 720x520, because the panel's
+    // starting state is decided by the width at start-up.
+    await viewport(cdp, 720, 520);
+    await reload(cdp);
+    await ready(cdp, options);
+    await click(cdp, RAIL_ITEM, "Settings");
+    const narrow = {
+      panel: await cdp.evaluate(snippets.panelState()),
+      toggle: await cdp.evaluate(snippets.panelToggle()),
+      overflow: await cdp.evaluate(snippets.overflowState()),
+    };
+    const shot5 = await screenshot(cdp, out, "05-minimum-720x520.png");
     addCheck(report, {
       id: "5",
-      claim: "The content is wider.",
-      measured: { at1000: content1000, at1920: content1920 },
+      claim: "At 720x520 the list panel starts hidden and nothing scrolls sideways.",
+      measured: narrow,
       expectation: [
-        "KNEG-161's quoted large-screen figure assumes a 16px rem;",
-        "this application measures 68rem from its live root font size,",
-        "so the 1920 width must equal computed max-width while the 1000",
-        "width is smaller.",
+        "after a load at 720x520 and a press on Settings, .list-panel is not rendered;",
+        "document.scrollingElement.scrollWidth <= innerWidth",
       ].join(" "),
-      matches: numberEqual(content1920.width, content1920.maxWidth)
-        && content1000.width < Number.parseFloat(content1000.maxWidth),
-      screenshots: [shot5a, shot5b],
+      matches: narrow.panel.present
+        && !narrow.panel.visible
+        && narrow.overflow.scrollWidth <= narrow.overflow.innerWidth,
+      screenshots: [shot5],
       note: [
-        "No historical pixel figure is used as an assertion;",
-        "the live rem basis is recorded in the header.",
+        "The card's own .split-main widths are recorded too, since the root does not",
+        "scroll in the main window and the page scrolls inside the card.",
       ].join(" "),
     });
 
     await viewport(cdp, 1000, 720);
-    await click(cdp, "nav.sidebar button", "Notes");
-    await waitFor(
-      cdp,
-      "Boolean(document.querySelector('.notes-entry'))",
-      "a notes-entry row",
-    );
-    // Notes opens from its library rows, not a button of its own -- there is
-    // no "Open note" control to click by text.
-    await cdp.evaluate("document.querySelector('.notes-entry')?.click(); true");
-    await waitFor(
-      cdp,
-      "Boolean(document.querySelector('.note-workspace'))",
-      "an opened note",
-    );
-    const grid1000 = await cdp.evaluate(snippets.notesGrid());
-    const shot6a = await screenshot(cdp, out, "06-notes-1000.png");
-    await viewport(cdp, 1400, 900);
-    const grid1400 = await cdp.evaluate(snippets.notesGrid());
-    const shot6b = await screenshot(cdp, out, "06-notes-1400.png");
-    addCheck(report, {
-      id: "6",
-      claim: "Notes shows the transcript beside the editor above 80rem.",
-      measured: { at1000: grid1000, at1400: grid1400 },
-      expectation: "one computed grid track at 1000px and two at 1400px",
-      matches: grid1000.tracks === 1 && grid1400.tracks === 2,
-      screenshots: [shot6a, shot6b],
-      note: "The fixture note was opened by clicking its notes-entry row in the library.",
-    });
-
-    await viewport(cdp, 1000, 720);
-    const settingsOpen = await cdp.evaluate(
-      [
-        "[...document.querySelectorAll('button.nav-group')]",
-        ".find((b) => b.textContent.trim() === 'Settings')",
-        "?.getAttribute('aria-expanded') === 'true'",
-      ].join(""),
-    );
-    if (settingsOpen) await click(cdp, "nav.sidebar button", "Settings");
-    await click(cdp, "nav.sidebar button", "Settings");
-    await click(cdp, "nav.sidebar .nav-child", "Cleanup & summaries");
-    const arrivedAtCleanup = await cdp.evaluate(snippets.sidewaysState());
-    await click(cdp, "nav.sidebar button", "Settings");
-    const sidewaysCollapsedBefore = await cdp.evaluate(snippets.sidewaysState());
-    const providerButton = await cdp.evaluate(
-      [
-        "[...document.querySelectorAll('.content button')]",
-        ".find((b) => /providers/i.test(b.textContent))",
-        "?.textContent ?? null",
-      ].join(""),
-    );
-    if (!providerButton) {
-      throw new Error("Cleanup & summaries did not expose its Providers navigation button");
-    }
-    await cdp.evaluate(`(() => {
-      [...document.querySelectorAll('.content button')]
-        .find((button) => /providers/i.test(button.textContent))
-        .click();
-    })()`);
-    await delay(100);
-    const sidewaysOpen = await cdp.evaluate(snippets.sidewaysState());
-    await click(cdp, "nav.sidebar button", "Settings");
-    const sidewaysCollapsed = await cdp.evaluate(snippets.sidewaysState());
-    const shot7 = await screenshot(cdp, out, "07-sideways.png", {
-      clip: clipRail(await geometry(cdp)),
-      scale: 2,
-    });
-    addCheck(report, {
-      id: "7",
-      claim: "Sideways navigation opens the group holding its target.",
-      measured: {
-        arrivedAtCleanup,
-        collapsedBeforeProvidersButton: sidewaysCollapsedBefore,
-        afterProvidersButton: sidewaysOpen,
-        afterCollapse: sidewaysCollapsed,
-      },
-      expectation: [
-        "collapsing Settings keeps the same screen heading and clears the current",
-        "rail item; pressing the Providers button opens Settings and marks Providers",
-        "current; after the final collapse no rail item is current while Providers",
-        "heads the content",
-      ].join(" "),
-      matches: sidewaysCollapsedBefore.expanded === "false"
-        && sidewaysCollapsedBefore.current === null
-        && sidewaysCollapsedBefore.heading === arrivedAtCleanup.heading
-        && arrivedAtCleanup.current === "Cleanup & summaries"
-        && sidewaysOpen.current === "Providers"
-        && sidewaysOpen.expanded === "true"
-        && sidewaysCollapsed.current === null
-        && /Providers/i.test(sidewaysCollapsed.heading ?? ""),
-      screenshots: [shot7],
-      note: [
-        "No dev-fixture switch was found that deliberately throws a screen render,",
-        "so the error-boundary Diagnostics route is not measured.",
-      ].join(" "),
-    });
-
-    await click(cdp, "nav.sidebar button", "Settings");
-    await cdp.evaluate("document.querySelector('nav.sidebar button')?.focus(); true");
+    await reload(cdp);
+    await ready(cdp, options);
+    await cdp.evaluate(snippets.blurActive());
     const focused = [];
-    for (let i = 0; i < 20; i += 1) {
-      await cdp.send("Input.dispatchKeyEvent", {
-        type: "rawKeyDown",
-        key: "Tab",
-        code: "Tab",
-        windowsVirtualKeyCode: 9,
-      });
-      await cdp.send("Input.dispatchKeyEvent", {
-        type: "keyUp",
-        key: "Tab",
-        code: "Tab",
-        windowsVirtualKeyCode: 9,
-      });
+    for (let i = 0; i < 30; i += 1) {
+      await key(cdp, { key: "Tab", code: "Tab", keyCode: 9 });
       const state = await cdp.evaluate(snippets.focusState());
       if (state) focused.push(state);
+      const railReached = new Set(
+        focused.filter((item) => item.kind === "rail").map((item) => item.text),
+      );
+      if (railReached.size === 4 && focused.some((item) => item.kind === "search")) break;
     }
-    await cdp.evaluate(
-      [
-        "[...document.querySelectorAll('nav.sidebar button.nav-group')]",
-        ".find((b) => b.textContent.trim() === 'Settings').focus(); true",
-      ].join(""),
-    );
-    const shot8 = await screenshot(cdp, out, "08-focus.png", {
-      clip: clipRail(await geometry(cdp)),
+    await cdp.evaluate(`(() => {
+      [...document.querySelectorAll('nav.rail .rail-item')]
+        .find((item) => item.textContent.trim() === 'Settings')?.focus();
+    })()`);
+    const shot6 = await screenshot(cdp, out, "06-focus.png", {
+      clip: { x: 0, y: 0, width: 520, height: 300 },
       scale: 2,
     });
-    const leaf = await cdp.evaluate(`(() => {
-      const current = document.querySelector('nav.sidebar [aria-current="page"]');
-      return current
-        ? {
-            className: current.className,
-            groupCurrent: document.querySelectorAll(
-              'nav.sidebar .nav-group[aria-current]',
-            ).length,
-          }
-        : null;
-    })()`);
+    const reached = focused.filter((item) => item.kind === "rail" || item.kind === "search");
+    const railTexts = new Set(reached.filter((item) => item.kind === "rail").map((item) => item.text));
     addCheck(report, {
-      id: "8",
-      claim: "Keyboard focus is visible on every rail button; aria-current lands on the leaf.",
-      measured: { focused, current: leaf },
+      id: "6",
+      claim: "Tab reaches every rail entry and the search field, each drawing a 2px outline.",
+      measured: { focused },
       expectation: [
-        "every recorded rail button has a non-none outline,",
-        "current Providers is nav-child, and no nav-group has aria-current",
+        "the four rail entries and input[role=combobox] each receive focus from Tab,",
+        "each with a 2px outline whose style is not none",
       ].join(" "),
-      matches: focused.length > 0
-        && focused.every(
-          (item) => item.outlineStyle !== "none" && item.outlineWidth !== "0px",
-        )
-        && leaf?.className.includes("nav-child")
-        && leaf?.groupCurrent === 0,
-      screenshots: [shot8],
+      matches: railTexts.size === 4
+        && reached.some((item) => item.kind === "search")
+        && reached.every((item) => item.outlineWidth === "2px" && item.outlineStyle !== "none"),
+      screenshots: [shot6],
       note: [
-        "Tab was dispatched up to 20 times from the first rail button;",
-        "only states reached by those Tab presses inside the rail are recorded.",
+        "Tab was dispatched from the document body, up to 30 times, stopping once",
+        "all four rail entries and the search field had been reached.",
+      ].join(" "),
+    });
+
+    await cdp.evaluate(snippets.blurActive());
+    const beforeShortcut = await cdp.evaluate(snippets.searchState());
+    await key(cdp, { key: "k", code: "KeyK", keyCode: 75, modifiers: 2 });
+    await delay(100);
+    const afterShortcut = await cdp.evaluate(snippets.searchState());
+    await cdp.send("Input.insertText", { text: "meeting" });
+    await delay(400);
+    const typed = await cdp.evaluate(snippets.searchState());
+    const shot7 = await screenshot(cdp, out, "07-search.png");
+    await key(cdp, { key: "Escape", code: "Escape", keyCode: 27 });
+    await delay(100);
+    const afterEscape = await cdp.evaluate(snippets.searchState());
+    addCheck(report, {
+      id: "7",
+      claim: "Ctrl+K focuses the search field.",
+      measured: { beforeShortcut, afterShortcut, typed, afterEscape },
+      expectation: [
+        "input[role=combobox] is the active element after Ctrl+K and not before;",
+        "Escape then empties it and moves focus away",
+      ].join(" "),
+      matches: !beforeShortcut.focused
+        && afterShortcut.focused
+        && !afterEscape.focused
+        && afterEscape.value === "",
+      screenshots: [shot7],
+      note: [
+        "The Escape half is the field's other shortcut, measured in the same pass;",
+        "the screenshot is taken after typing \"meeting\", with the results open.",
       ].join(" "),
     });
 

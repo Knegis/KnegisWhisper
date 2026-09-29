@@ -1,4 +1,4 @@
-const surfaces = ".sidebar, .notes-main, .notes-library, .notes-view .transcript-rows";
+const surfaces = ".list-panel, .notes-main, .notes-library, .notes-view .transcript-rows";
 
 /** Reveal native scrollbars during scrolling or while pointing at their track. */
 export function installIdleScrollbars(): () => void {

@@ -29,112 +29,122 @@ export function clickText(selector, text) {
   `);
 }
 
-/**
- * Opens a rail group -- `Settings`, `Developer` -- only if it is closed.
- *
- * A group header is a toggle, so a bare `clickText` on it closes a group that
- * something earlier left open, and the child click after it finds nothing.
- * This is the guard `shell-rail.mjs` writes out by hand before its own
- * header clicks, as one snippet.
- */
-export function openGroup(label) {
+/** Clicks the first element matching `selector`, whatever its text. */
+export function clickSelector(selector) {
   return source(`
-    const header = [...document.querySelectorAll('nav.sidebar button.nav-group')]
-      .find((item) => item.textContent.trim() === ${JSON.stringify(label)});
-    if (!header) throw new Error('Could not find group ' + ${JSON.stringify(label)});
-    const wasOpen = header.getAttribute('aria-expanded') === 'true';
-    if (!wasOpen) header.click();
-    return { label: ${JSON.stringify(label)}, wasOpen };
+    const element = document.querySelector(${JSON.stringify(selector)});
+    if (!element) throw new Error('Could not find ' + ${JSON.stringify(selector)});
+    element.click();
+    return { clicked: ${JSON.stringify(selector)} };
   `);
 }
 
-export function railGeometry() {
+/** The rail's box, its entries, and which of them read as current. */
+export function railState() {
   return source(`
-    const rail = document.querySelector('nav.sidebar');
-    const shell = document.querySelector('.shell');
-    if (!rail || !shell) throw new Error('Shell rail is missing');
+    const rail = document.querySelector('nav.rail');
+    if (!rail) throw new Error('The rail is missing');
     const rect = rail.getBoundingClientRect();
-    const style = getComputedStyle(rail);
     return {
-      position: style.position,
       rect: {
         left: rect.left,
         top: rect.top,
         width: rect.width,
         height: rect.height,
       },
-      scrollX: window.scrollX,
-      scrollY: window.scrollY,
-      shellPaddingLeft: getComputedStyle(shell).paddingLeft,
+      items: [...rail.querySelectorAll('.rail-item')]
+        .map((item) => item.textContent.trim()),
+      current: [...rail.querySelectorAll('.rail-item[aria-current="page"]')]
+        .map((item) => item.textContent.trim()),
       rem: getComputedStyle(document.documentElement).fontSize,
     };
   `);
 }
 
-export function groupState() {
+/**
+ * Whether the list panel is on screen, and what it lists. `visible` is the
+ * rendered answer -- computed display and width -- not the `hidden`
+ * attribute alone, because a stylesheet can outrank that attribute.
+ */
+export function panelState() {
   return source(`
-    const read = (label) => {
-      const button = [...document.querySelectorAll('button.nav-group')]
-        .find((item) => item.textContent.trim() === label);
-      if (!button) throw new Error('Missing group ' + label);
-      const style = getComputedStyle(button);
-      return {
-        label,
-        content: getComputedStyle(button, '::after').content,
-        expanded: button.getAttribute('aria-expanded'),
-        display: style.display,
-        justifyContent: style.justifyContent,
-        fontFamily: style.fontFamily,
-        color: style.color,
-        background: style.backgroundColor,
-      };
-    };
+    const panel = document.querySelector('.list-panel');
+    if (!panel) {
+      return { present: false, visible: false, hidden: null, labels: [], items: [], current: [] };
+    }
+    const style = getComputedStyle(panel);
+    const rect = panel.getBoundingClientRect();
     return {
-      settings: read('Settings'),
-      developer: read('Developer'),
-      fontLoaded: document.fonts.check('13px ProFontWindows'),
+      present: true,
+      hidden: panel.hidden,
+      display: style.display,
+      width: rect.width,
+      visible: style.display !== 'none' && rect.width > 0,
+      title: panel.querySelector('.panel-title')?.textContent.trim() ?? null,
+      labels: [...panel.querySelectorAll('.panel-label')]
+        .map((item) => item.textContent.trim()),
+      items: [...panel.querySelectorAll('.panel-item')]
+        .map((item) => item.textContent.trim()),
+      current: [...panel.querySelectorAll('.panel-item[aria-current]')]
+        .map((item) => item.textContent.trim()),
     };
   `);
 }
 
-export function railCurrent() {
+/** The title bar's list-panel toggle: its name and what it says it controls. */
+export function panelToggle() {
   return source(`
-    const resolveColor = (token) => {
-      const probe = document.createElement('span');
-      probe.style.color = 'var(' + token + ')';
-      document.body.append(probe);
-      const color = getComputedStyle(probe).color;
-      probe.remove();
-      return color;
-    };
-    const rail = document.querySelector('nav.sidebar');
-    const sidebarBackground = getComputedStyle(rail).backgroundColor;
-    const buttons = [...rail.querySelectorAll('button')];
-    const filled = buttons.filter((button) => {
-      const background = getComputedStyle(button).backgroundColor;
-      return background !== 'rgba(0, 0, 0, 0)'
-        && background !== 'transparent'
-        && background !== sidebarBackground;
-    });
-    const current = rail.querySelector('[aria-current="page"]');
-    const settings = [...rail.querySelectorAll('.nav-group')]
-      .find((item) => item.textContent.trim() === 'Settings');
-    const child = rail.querySelector('.nav-child');
+    const toggle = document.querySelector('.app-titlebar button[aria-controls="list-panel"]');
+    if (!toggle) throw new Error('The list-panel toggle is missing');
     return {
-      childPaddingLeft: child ? getComputedStyle(child).paddingLeft : null,
-      topPaddingLeft: getComputedStyle(buttons[0]).paddingLeft,
-      filled: filled.map((item) => item.textContent.trim()),
-      current: current
-        ? { text: current.textContent.trim(), className: current.className }
-        : null,
-      settings: settings
-        ? {
-            color: getComputedStyle(settings).color,
-            background: getComputedStyle(settings).backgroundColor,
-            text: resolveColor('--text'),
-          }
-        : null,
+      label: toggle.getAttribute('aria-label'),
+      expanded: toggle.getAttribute('aria-expanded'),
     };
+  `);
+}
+
+/** The heading of the page in the card, which says which screen is open. */
+export function pageHeading() {
+  return source(`
+    return document.querySelector('.card .page-header h1')?.textContent.trim() ?? null;
+  `);
+}
+
+/** Horizontal overflow of the document and of the card's scrolling main area. */
+export function overflowState() {
+  return source(`
+    const main = document.querySelector('.card .split-main');
+    return {
+      innerWidth: window.innerWidth,
+      scrollWidth: document.scrollingElement.scrollWidth,
+      mainClientWidth: main?.clientWidth ?? null,
+      mainScrollWidth: main?.scrollWidth ?? null,
+    };
+  `);
+}
+
+/** The title bar search field: whether it has focus, its value, its popup. */
+export function searchState() {
+  return source(`
+    const input = document.querySelector('input[role="combobox"]');
+    if (!input) throw new Error('The search field is missing');
+    const rect = input.getBoundingClientRect();
+    return {
+      focused: document.activeElement === input,
+      value: input.value,
+      placeholder: input.placeholder,
+      width: rect.width,
+      expanded: input.getAttribute('aria-expanded'),
+      popup: Boolean(document.querySelector('.titlebar-search-popup')),
+    };
+  `);
+}
+
+/** Moves focus to the document body, so the next Tab starts from the top. */
+export function blurActive() {
+  return source(`
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+    return document.activeElement === document.body;
   `);
 }
 
@@ -166,30 +176,23 @@ export function notesGrid() {
   `);
 }
 
-export function sidewaysState() {
-  return source(`
-    const current = document.querySelector('nav.sidebar [aria-current="page"]');
-    const settings = [...document.querySelectorAll('button.nav-group')]
-      .find((item) => item.textContent.trim() === 'Settings');
-    const heading = document.querySelector('.content h1, .content h2');
-    return {
-      current: current ? current.textContent.trim() : null,
-      expanded: settings?.getAttribute('aria-expanded') ?? null,
-      heading: heading?.textContent.trim() ?? null,
-    };
-  `);
-}
-
+/**
+ * Where keyboard focus is, and the outline it draws. `kind` says which part of
+ * the shell holds it, so a Tab walk can be read back as "reached the rail".
+ */
 export function focusState() {
   return source(`
     const active = document.activeElement;
-    if (!(active instanceof HTMLButtonElement) || !active.closest('nav.sidebar')) {
-      return null;
-    }
+    if (!(active instanceof HTMLElement) || active === document.body) return null;
     const style = getComputedStyle(active);
+    const kind = active.matches('nav.rail .rail-item') ? 'rail'
+      : active.matches('input[role="combobox"]') ? 'search'
+      : active.closest('.list-panel') ? 'panel'
+      : active.closest('.app-titlebar') ? 'titlebar'
+      : 'page';
     return {
-      text: active.textContent.trim(),
-      classList: [...active.classList],
+      kind,
+      text: active.getAttribute('aria-label') ?? active.textContent.trim(),
       outlineStyle: style.outlineStyle,
       outlineWidth: style.outlineWidth,
       outlineColor: style.outlineColor,

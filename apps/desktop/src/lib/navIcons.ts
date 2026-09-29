@@ -1,8 +1,9 @@
 /**
- * The rail's icon for every id `lib/navigation.ts` produces: the three
- * top-level leaves, the two group headers (`settings`, `developer`), every
- * child under them, and `notes-upload`, the one inner view the rail itself
- * never lists but `NavIcon` still has to draw when it reads as current.
+ * The icon for every id `lib/navigation.ts` produces: the three top-level
+ * leaves and `settings`, which the rail draws; `developer`, the other group
+ * header; every child under the two groups, which the Settings panel draws;
+ * and `notes-upload`, the one inner view, which neither lists but which a
+ * `NavIconId` has to cover because it is a `ViewId`.
  *
  * `NavIconId` rather than a plain `string` key, so a leaf, group or inner-view
  * id added to `navigation.ts` without a matching entry here is a compile

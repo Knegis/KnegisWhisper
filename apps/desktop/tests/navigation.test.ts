@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { NAV, INNER_VIEWS, DEFAULT_VIEW, childrenOf, groupOf, isGroup, railIdOf, srSuffixOf } from "../src/lib/navigation.js";
+import { NAV, INNER_VIEWS, DEFAULT_VIEW, RAIL, SETTINGS_HOME, SETTINGS_PANEL, childrenOf, groupOf, isGroup, railOf, srSuffixOf } from "../src/lib/navigation.js";
 
 const topLevel = ["dictation", "meetings", "notes"];
 const groups = {
@@ -8,7 +8,7 @@ const groups = {
   developer: ["api", "cli", "mcp", "diagnostics"],
 };
 
-test("the rail retains the intended destinations, grouping, and order", () => {
+test("the tree retains the intended destinations, grouping, and order", () => {
   assert.deepEqual(NAV.filter((entry) => !isGroup(entry)).map((entry) => entry.id), topLevel);
   assert.deepEqual(NAV.filter(isGroup).map((group) => group.id), Object.keys(groups));
   for (const group of NAV.filter(isGroup)) {
@@ -25,7 +25,7 @@ test("every destination has one unique id, distinct from every group id", () => 
   assert.equal(DEFAULT_VIEW, "dictation");
 });
 
-test("group lookup opens the destination's actual group and leaves top-level views alone", () => {
+test("group lookup finds the destination's actual group and leaves top-level views alone", () => {
   for (const entry of NAV) {
     if (isGroup(entry)) {
       for (const child of childrenOf(entry)) assert.equal(groupOf(child.id), entry.id);
@@ -49,9 +49,39 @@ test("an inner view's id does not collide with any nav id", () => {
   }
 });
 
-test("railIdOf maps an inner view to its parent, and leaves a rail id alone", () => {
-  assert.equal(railIdOf("notes-upload"), "notes");
-  assert.equal(railIdOf("vocabulary"), "vocabulary");
+test("the rail is the three jobs and Settings, in that order", () => {
+  assert.deepEqual(RAIL, ["dictation", "meetings", "notes", "settings"]);
+});
+
+test("railOf maps every view to the rail entry that reads as current", () => {
+  assert.equal(railOf("notes-upload"), "notes");
+  assert.equal(railOf("dictation"), "dictation");
+  // A top-level leaf is its own rail entry.
+  for (const entry of NAV) if (!isGroup(entry)) assert.equal(railOf(entry.id), entry.id);
+  // Both groups live in the Settings panel, Developer included.
+  for (const group of NAV.filter(isGroup)) {
+    for (const child of childrenOf(group)) assert.equal(railOf(child.id), "settings", child.id);
+  }
+});
+
+test("the Settings panel lists both groups, Developer under its own heading", () => {
+  assert.deepEqual(SETTINGS_PANEL, [
+    { group: "settings", heading: null },
+    { group: "developer", heading: "Developer" },
+  ]);
+  // Every group NAV has, in NAV's order, so a group added there cannot be
+  // left out of the only panel that lists group children.
+  assert.deepEqual(SETTINGS_PANEL.map((section) => section.group), NAV.filter(isGroup).map((group) => group.id));
+  // The heading is the group's own label, not a second name for it.
+  const developer = NAV.filter(isGroup).find((group) => group.id === "developer");
+  assert.equal(SETTINGS_PANEL[1].heading, developer?.label);
+});
+
+test("SETTINGS_HOME is a Settings child, so the rail's Settings opens a screen", () => {
+  const settings = NAV.filter(isGroup).find((group) => group.id === "settings");
+  assert.ok(settings);
+  assert.ok(childrenOf(settings).some((child) => child.id === SETTINGS_HOME));
+  assert.equal(railOf(SETTINGS_HOME), "settings");
 });
 
 test("the Settings child Meetings is named apart from the top-level Meetings, and only it", () => {

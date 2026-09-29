@@ -16,9 +16,23 @@ node tools/visual-check/shell-rail.mjs
 It needs Node 22, Microsoft Edge, and the Vite dev server at the loopback URL
 used by the application. `--edge`, `--url`, `--port`, `--out`, and
 `--keep-fixture-banner` are available; `--help` prints the full usage. The
-tool measures all eight KNEG-161 rail claims: pinned geometry on scroll,
-disclosure glyph states and layout, current-child marking, content width using
-the live rem basis, Notes grid tracks, sideways navigation, and keyboard focus.
+tool measures seven shell claims (KNEG-363):
+
+1. `nav.rail` is 68px wide and exactly one `.rail-item[aria-current=page]`
+   exists.
+2. The rail's Settings shows `.list-panel`, listing Providers and a Developer
+   label.
+3. Choosing Providers leaves exactly one panel item with `aria-current`, and
+   the rail still marks Settings.
+4. The title bar's toggle hides `.list-panel`, and a second press restores it.
+5. After a load at 720x520, `.list-panel` starts hidden and
+   `document.scrollingElement.scrollWidth <= innerWidth`.
+6. Tab reaches every rail entry and the search field, each with a 2px outline.
+7. Ctrl+K focuses `input[role=combobox]` (and Escape empties it and leaves).
+
+"Hidden" is measured as the computed display and width, not the `hidden`
+attribute alone. The 720x520 check reloads at that size, because the panel's
+starting state is read from the window width once, at start-up.
 
 The report explicitly says: **measured in headless Edge against dev fixtures,
 not in the Tauri window**. The ordinary browser dev page invents IPC results.

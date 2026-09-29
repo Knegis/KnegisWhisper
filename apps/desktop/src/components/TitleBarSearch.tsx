@@ -1,6 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { searchNotes, type SearchHit } from "../lib/ipc";
+import { Icon } from "./Icon";
 
+/**
+ * The title bar's search field: always drawn, focused by Ctrl+K (Cmd+K), and
+ * cleared and left by Escape. It searches notes -- meetings among them, since
+ * a recorded meeting is a note -- and nothing else, which is why the field
+ * says "notes and meetings" and not dictations. `open` is whether the results
+ * popup shows, not whether the field does.
+ */
 export function TitleBarSearch({ onOpenNote }: { onOpenNote: (id: number) => void }) {
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
@@ -21,7 +29,6 @@ export function TitleBarSearch({ onOpenNote }: { onOpenNote: (id: number) => voi
     document.addEventListener("keydown", shortcut);
     return () => { document.removeEventListener("pointerdown", outside); document.removeEventListener("keydown", shortcut); };
   }, []);
-  useEffect(() => { if (open) { input.current?.focus(); input.current?.select(); } }, [open]);
   useEffect(() => {
     let cancelled = false;
     setHits([]); setActive(0); setError(null);
@@ -35,21 +42,23 @@ export function TitleBarSearch({ onOpenNote }: { onOpenNote: (id: number) => voi
     return () => { cancelled = true; window.clearTimeout(timer); };
   }, [query, open]);
   const choose = (hit: SearchHit) => { onOpenNote(hit.id); setOpen(false); input.current?.blur(); };
-  return <div className="titlebar-search" data-expanded={open} ref={root} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false); }}>
-    {!open && <button type="button" className="titlebar-search-trigger" aria-label="Open search" title="Search notes (Ctrl+K)" aria-expanded={false} onClick={() => setOpen(true)}><span className="titlebar-search-icon" aria-hidden="true" /></button>}
-    {open && <><span className="titlebar-search-icon" aria-hidden="true" />
-    <input ref={input} type="search" role="combobox" aria-label="Search notes" placeholder="Search notes" title="Search notes (Ctrl+K)"
+  // No `title` on the field: the trailing hint already says Ctrl+K, and the
+  // window's tooltip would open under the field exactly where the results do.
+  return <div className="titlebar-search" ref={root} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false); }}>
+    <Icon name="search" size={15} />
+    <input ref={input} type="search" role="combobox" aria-label="Search notes and meetings" placeholder="Search notes and meetings" aria-keyshortcuts="Control+K Meta+K"
       value={query} aria-expanded={open} aria-controls="titlebar-search-results" aria-autocomplete="list"
       aria-activedescendant={open && hits[active] ? `titlebar-hit-${hits[active].id}` : undefined}
       onFocus={() => setOpen(true)} onChange={event => { setQuery(event.target.value); setHits([]); setLoading(!!event.target.value.trim()); setOpen(true); }}
       onKeyDown={event => {
-        if (event.key === "Escape") { event.preventDefault(); setOpen(false); input.current?.blur(); }
+        if (event.key === "Escape") { event.preventDefault(); setQuery(""); setOpen(false); input.current?.blur(); }
         if (event.key === "ArrowDown" || event.key === "ArrowUp") {
           event.preventDefault(); setOpen(true);
           setActive(value => hits.length ? (value + (event.key === "ArrowDown" ? 1 : -1) + hits.length) % hits.length : 0);
         }
         if (event.key === "Enter" && open && hits[active]) { event.preventDefault(); choose(hits[active]); }
-      }} /></>}
+      }} />
+    <span className="titlebar-search-key" aria-hidden="true">CTRL K</span>
     {open && <div className="titlebar-search-popup">
       <div className="titlebar-search-status" role="status">{!query.trim() ? "Search note titles and content" : loading ? "Searching?" : error ? "Search unavailable" : hits.length ? `${hits.length} result${hits.length === 1 ? "" : "s"}` : "No matching notes"}</div>
       {error && <p className="error" role="alert">{error}</p>}

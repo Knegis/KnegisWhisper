@@ -1,7 +1,9 @@
 import { TitleBar } from "./components/TitleBar";
 import { LanguagePopup } from "./components/LanguagePopup";
 /**
- * The shell: a rail, a page header, a view, and an error boundary. Nothing else.
+ * The shell: a title bar, a rail, and a card holding the page -- with a list
+ * panel beside it on the pages that have one -- plus an error boundary.
+ * Nothing else.
  *
  * This file was 1037 lines holding every screen the application had, which is
  * how four UI surfaces came to live in one component. Splitting it was the
@@ -19,18 +21,32 @@ import { LanguagePopup } from "./components/LanguagePopup";
  * In-memory history tracks pages and individual notes within the main window.
  *
  * The list of screens is no longer here. `lib/navigation.ts` holds the tree —
- * three top-level destinations plus the `Settings` and `Developer` groups — and
- * `components/Sidebar.tsx` renders it. Two things follow from that split:
+ * three top-level destinations plus the `Settings` and `Developer` groups —
+ * and the four-entry rail drawn from it. `components/Rail.tsx` renders the
+ * rail and `components/SettingsPanel.tsx` lists both groups' screens. Two
+ * things follow from that split:
  *
  *   - **`ViewId` is derived from the tree**, so the switch below is exhaustive
- *     over exactly the entries the rail can reach. Adding a nav entry without a
- *     branch here is a compile error rather than a rail item that opens a blank
- *     window, which is what the old chain of ternaries did.
- *   - **The rail holds no state.** There are two pieces of navigation state --
- *     the current view and which groups are open -- and both live here, so
- *     `select` below can open the group holding a screen whatever route
- *     arrived at it. `Sidebar.tsx` records why a group header discloses rather
- *     than navigates.
+ *     over exactly the screens the rail and the Settings panel can reach.
+ *     Adding a nav entry without a branch here is a compile error rather than
+ *     an item that opens a blank window, which is what the old chain of
+ *     ternaries did.
+ *   - **Neither the rail nor the panel holds state.** Navigation state is the
+ *     history below, and which screen reads as current is derived from it:
+ *     `railOf(view)` for the rail, `view` itself in the panel. Nothing has to
+ *     be opened to show where you are -- every settings screen is always
+ *     listed in the panel -- so a sideways "go to Providers" or the error
+ *     boundary's jump to Diagnostics marks its target without any help.
+ *
+ * # The card
+ *
+ * Every page sits in one card beside the rail. A settings or developer screen
+ * gets `SplitView` with the shared `SettingsPanel`; the title bar's toggle
+ * collapses that panel, and the collapsed state reaches it through
+ * `PanelCollapsed` rather than props. Dictation, Meetings and Notes will each
+ * render their own `SplitView`, because they own their panel's data; until
+ * they do, they render in the card as they did before it, under their
+ * `PageHeader` -- Notes still full-bleed, with its own library.
  *
  * # The error boundary
  *
@@ -40,12 +56,14 @@ import { LanguagePopup } from "./components/LanguagePopup";
  * died.
  */
 
-import { Component, useCallback, useEffect, useMemo, useReducer, useState, type ReactNode } from "react";
+import { Component, useCallback, useEffect, useMemo, useReducer, useRef, useState, type ReactNode } from "react";
 
 import { PageHeader } from "./components/PageHeader";
-import { Sidebar } from "./components/Sidebar";
+import { Rail } from "./components/Rail";
+import { SettingsPanel } from "./components/SettingsPanel";
+import { PanelCollapsed, SplitView } from "./components/SplitView";
 import { getDiagnostics, type Diagnostics } from "./lib/ipc";
-import { groupOf, type ViewId } from "./lib/navigation";
+import { railOf, SETTINGS_HOME, type ViewId } from "./lib/navigation";
 import { defaultDestination, initialHistory, navigationHistory } from "./lib/navigationHistory";
 import { PAGES } from "./lib/pages";
 import { currentSurface } from "./lib/surface";
@@ -186,7 +204,7 @@ function renderView(
   }
 }
 
-function Shell({ sidebarExpanded, onExpandSidebar, onToggleSidebar }: { sidebarExpanded: boolean; onExpandSidebar: () => void; onToggleSidebar: () => void }) {
+function Shell({ panelCollapsed, onTogglePanel }: { panelCollapsed: boolean; onTogglePanel: () => void }) {
   const load = useCallback(() => getDiagnostics(), []);
   const { data: diagnostics, error } = useRefresh(load);
 
@@ -202,56 +220,49 @@ function Shell({ sidebarExpanded, onExpandSidebar, onToggleSidebar }: { sidebarE
   const searchNoteRequest = useMemo(() => destination.noteId === undefined ? null : { id: destination.noteId }, [destination]);
   const openNote = useCallback((id: number) => navigate({ type: "visit", destination: { view: "notes", noteId: id } }), []);
 
-  // Both groups start closed. Dictation is a top-level destination, so the
-  // opening rail is three screens and two sections -- shorter than the
-  // thirteen flat rows it replaced, which was the point.
-  const [openGroups, setOpenGroups] = useState<ReadonlySet<string>>(
-    () => new Set(),
-  );
-
   /*
-   * Go to a screen, and make sure it is visible in the rail.
+   * Go to a screen.
    *
-   * Every route to a screen comes through here -- a rail press, Dictation's
-   * and Meetings' `onGoTo`, either `onGoToProviders`, both
-   * `onGoToVocabulary`, and the error boundary's reset -- so a
-   * screen inside a collapsed group can never be current-but-hidden. Opening
-   * is one-way on purpose: it never closes the group you just left, because a
-   * rail that reshuffled itself on every navigation is harder to use than one
-   * that only grows.
+   * Every route to a screen comes through here -- a rail press, a Settings
+   * panel press, Dictation's and Meetings' `onGoTo`, either
+   * `onGoToProviders`, both `onGoToVocabulary`, and the error boundary's
+   * reset. Nothing else has to happen on arrival: the rail's mark and the
+   * panel's are both derived from `view`.
    */
   const select = useCallback((id: ViewId) => {
     navigate({ type: "visit", destination: { view: id } });
   }, []);
 
+  /*
+   * The settings screen the rail's Settings reopens: the last one visited
+   * this session, or Shortcuts before any has been. A ref, not state -- only
+   * the rail's click reads it, so a change has nothing to re-render -- and
+   * written after each navigation rather than during render, whatever route
+   * the navigation took (back and forward included).
+   */
+  const lastSettings = useRef<ViewId>(SETTINGS_HOME);
   useEffect(() => {
-    const group = groupOf(view);
-    if (group !== null) {
-      setOpenGroups((prev) => (prev.has(group) ? prev : new Set(prev).add(group)));
-    }
+    if (railOf(view) === "settings") lastSettings.current = view;
   }, [view]);
 
-  const toggleGroup = useCallback((id: string) => {
-    setOpenGroups((prev) => {
-      const next = new Set(prev);
-      // `delete` reports whether it removed anything, so this is one lookup
-      // rather than a `has` followed by a branch.
-      if (!next.delete(id)) next.add(id);
-      return next;
-    });
-  }, []);
-
-  const titlebar = <TitleBar sidebarExpanded={sidebarExpanded} onToggleSidebar={onToggleSidebar} onOpenNote={openNote}
+  const titlebar = <TitleBar panelCollapsed={panelCollapsed} onTogglePanel={onTogglePanel} onOpenNote={openNote}
     canGoBack={history.index > 0} canGoForward={history.index < history.entries.length - 1}
     onBack={() => navigate({ type: "back" })} onForward={() => navigate({ type: "forward" })} />;
 
+  // The rail needs nothing from diagnostics, so it is drawn from the first
+  // frame and does not jump in when the first read lands; only the card waits.
+  const frame = (card: ReactNode) => (
+    <>{titlebar}<PanelCollapsed.Provider value={panelCollapsed}>
+      <div className="frame">
+        <Rail view={view} lastSettings={lastSettings} onSelect={select} />
+        <main className="card">{card}</main>
+      </div>
+    </PanelCollapsed.Provider></>
+  );
+
   if (!diagnostics) {
-    // No rail yet, so no rail column to reserve: `.shell-bare` cancels the
-    // `padding-left` that holds the fixed rail's width, and the message goes
-    // inside `.content` so it keeps the page's own padding in both states.
-    // Without that it would sit 13rem in from the left with nothing beside it.
-    return (
-      <>{titlebar}<main className="shell shell-bare">
+    return frame(
+      <div className="split-main">
         <div className="content">
           <h1>KnegisWhisper</h1>
           {error ? (
@@ -260,32 +271,36 @@ function Shell({ sidebarExpanded, onExpandSidebar, onToggleSidebar }: { sidebarE
             <p className="muted">Loading…</p>
           )}
         </div>
-      </main></>
+      </div>,
     );
   }
 
-  return (
-    <>{titlebar}<main className={sidebarExpanded ? "shell" : "shell shell-sidebar-retracted"}>
-      <Sidebar
-        expanded={sidebarExpanded}
-        onExpand={onExpandSidebar}
-        view={view}
-        openGroups={openGroups}
-        onSelect={select}
-        onToggleGroup={toggleGroup}
-      />
-
-      <div className="content">
-        {page ? <PageHeader page={page} /> : null}
-        {/* `select` rather than `setView`, so landing on Diagnostics opens the
-            Developer group that holds it. */}
-        <ViewBoundary view={view} onReset={() => select("diagnostics")}>
-          {renderView(view, diagnostics, select, searchNoteRequest, openNote)}
-        </ViewBoundary>
-      </div>
-    </main></>
+  const content = (
+    <div className="content">
+      {page ? <PageHeader page={page} /> : null}
+      <ViewBoundary view={view} onReset={() => select("diagnostics")}>
+        {renderView(view, diagnostics, select, searchNoteRequest, openNote)}
+      </ViewBoundary>
+    </div>
   );
+
+  // Every settings and developer screen shares one panel. Notes fills the
+  // card by itself (`.content:has(.notes-view)`), library included. The rest
+  // -- `notes-upload`, and Dictation and Meetings until they draw their own
+  // panel -- scroll in `.split-main` as a split with no panel beside it: the
+  // card clips its overflow, so the page cannot scroll the card itself.
+  if (railOf(view) === "settings") {
+    return frame(
+      <SplitView label="Settings sections" panel={<SettingsPanel view={view} onSelect={select} />}>
+        {content}
+      </SplitView>,
+    );
+  }
+  return frame(view === "notes" ? content : <div className="split-main">{content}</div>);
 }
+
+/** The width at and below which the list panel starts, and falls, collapsed. */
+const NARROW = "(max-width: 900px)";
 
 /**
  * Four windows are served by one bundle, routed through `currentSurface()`. One
@@ -293,9 +308,20 @@ function Shell({ sidebarExpanded, onExpandSidebar, onToggleSidebar }: { sidebarE
  */
 function MainWindow() {
   useEffect(installIdleScrollbars, []);
-  const [sidebarExpanded, setSidebarExpanded] = useState(true);
-  const toggleSidebar = () => setSidebarExpanded(expanded => !expanded);
-  return <><Shell sidebarExpanded={sidebarExpanded} onExpandSidebar={() => setSidebarExpanded(true)} onToggleSidebar={toggleSidebar} /><Tooltips /></>;
+  // Collapsed from the start at 900px and below, and collapsed again whenever
+  // the window narrows past that -- the rule Notes' own library already
+  // follows. At the 720x520 minimum, rail and panel together would leave the
+  // page about 372px. Widening never reopens it: the panel only reappears when
+  // someone asks for it.
+  const [panelCollapsed, setPanelCollapsed] = useState(() => window.matchMedia(NARROW).matches);
+  useEffect(() => {
+    const narrow = window.matchMedia(NARROW);
+    const collapse = () => { if (narrow.matches) setPanelCollapsed(true); };
+    narrow.addEventListener("change", collapse);
+    return () => narrow.removeEventListener("change", collapse);
+  }, []);
+  const togglePanel = useCallback(() => setPanelCollapsed(collapsed => !collapsed), []);
+  return <><Shell panelCollapsed={panelCollapsed} onTogglePanel={togglePanel} /><Tooltips /></>;
 }
 
 export default function App() {
