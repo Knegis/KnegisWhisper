@@ -89,6 +89,10 @@ import type {
   Transcription,
   UpdateCheckResult,
 } from "../generated/ipc-types";
+// `OverlayPreferences` is hand-written in `ipc.ts`, not generated: Rust's
+// `persistent_overlay::Snapshot` has no `ts_rs` derive. A type-only import, so
+// this stays below the wrappers as the module doc above requires.
+import type { OverlayPreferences } from "./ipc";
 
 /* ------------------------------------------------------------- capabilities */
 
@@ -638,6 +642,22 @@ let meetingProvider: string | null = null;
  * Meetings panel's Interrupted section and its Recover button can be seen.
  */
 let recoverable: RecoverableRecording[] = [];
+
+/*
+ * The Windows-only floating microphone, off until Settings > Dictation turns
+ * it on -- `overlay_preferences`'s Rust default. `#overlay` is its own page
+ * load in a plain browser, so a toggle flipped from the main window's tab
+ * would not reach it; `kw.overlayFloating()` flips it from inside that tab
+ * instead, over the same `overlay-preferences` event Rust emits.
+ */
+let overlayPreferences: OverlayPreferences = {
+  supported: true,
+  enabled: false,
+  vertical: false,
+};
+
+/** The meeting panel's typed-notes draft, read back after a webview reload. */
+let meetingNotes = "";
 
 /*
  * The Meetings page reads this in its first load, for the control bar's line
@@ -1645,6 +1665,22 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
   dictation_local_language: () => ["sv"],
   dictation_set_local_language: () => null,
 
+  /* overlay */
+  overlay_preferences: () => overlayPreferences,
+  overlay_preferences_set: (a) => {
+    overlayPreferences = {
+      ...overlayPreferences,
+      enabled: arg<boolean>(a, "enabled") ?? overlayPreferences.enabled,
+    };
+    void emit("overlay-preferences", overlayPreferences);
+    return overlayPreferences;
+  },
+  overlay_position_reset: () => null,
+  // The floating microphone's drag gesture and its message/language-menu
+  // visibility. Both are fire-and-forget from `Overlay.tsx`'s point of view.
+  overlay_drag: () => null,
+  overlay_message: () => null,
+
   /* local transcription */
   sherpa_status: () => SHERPA,
   sherpa_install_model: () => null,
@@ -1673,6 +1709,13 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
   /* meetings */
   meeting_providers: () => MEETING_PROVIDERS,
   meeting_status: () => meetingStatus,
+  meeting_notes_get: () => meetingNotes,
+  meeting_notes_update: (a) => {
+    meetingNotes = arg<string>(a, "markdown") ?? meetingNotes;
+    return null;
+  },
+  meeting_notification_placement_save: () => null,
+  meeting_notification_placement_reset: () => null,
   meeting_recoverable_recordings: () => recoverable,
   meeting_recover_recording: (a) => {
     const key = arg<string>(a, "storageKey");
@@ -1928,6 +1971,23 @@ const devConsole = {
   dictationState(state: SessionState) {
     void emit("dictation-state", state);
   },
+  /**
+   * `#overlay` is its own page load, so the checkbox on Settings > Dictation
+   * in a different tab cannot reach it. This flips the same
+   * `overlay-preferences` event Rust would, so `#overlay` can be seen in its
+   * floating-microphone mode instead of only the label one.
+   */
+  overlayFloating(enabled = true, vertical = false) {
+    overlayPreferences = { ...overlayPreferences, enabled, vertical };
+    void emit("overlay-preferences", overlayPreferences);
+  },
+  /**
+   * A failed dictation, so `.microphone-error` -- the floating microphone's
+   * own error banner -- can be seen without a real transcription failure.
+   */
+  dictationFailed(message = "No response from the transcription service.") {
+    void emit("dictation-outcome", { outcome: "failed", message, historyId: null } satisfies Outcome);
+  },
   meetingState(state: MeetingState) {
     // The failure sentence travels with the state rather than being a second
     // thing to remember to set: either failure state with an empty detail line
@@ -2102,6 +2162,8 @@ export function installDevFixtures(): void {
       "Try:      kw.dictationState('recording')",
       "          kw.offer()",
       "          kw.meetingState('recording')",
+      "          kw.overlayFloating()",
+      "          kw.dictationFailed()",
     ].join("\n  "),
   );
 }

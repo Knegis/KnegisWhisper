@@ -1563,12 +1563,13 @@ label:has(> input[type="checkbox"]) {
 /* ------------------------------------------------------------------ overlay */
 /*
  * The overlay window is transparent, so the panel paints its own background.
- * It must stay legible over anything behind it -- a dark editor or a white
- * document -- so it carries its own contrast rather than inheriting. That is
- * why it is absent from the theme blocks above and keeps its own colours here.
+ * It now follows the theme tokens and the OS colour scheme, the same decision
+ * this redesign makes for `.notify` below: the card's own 1px rule and shadow
+ * give it a legible edge over anything behind it, so it no longer has to carry
+ * a fixed dark background of its own to stay readable regardless of theme.
  *
- * The square corners are the site's; the typeface is the one it uses for a
- * wordmark, which is what this is.
+ * The square corners are the site's -- 4px, the window card's own value; the
+ * typeface is the one it uses for a wordmark, which is what this is.
  */
 
 .overlay {
@@ -1577,23 +1578,33 @@ label:has(> input[type="checkbox"]) {
   gap: 0.6rem;
   height: 100%;
   padding: 0 1rem;
-  background: rgba(18, 18, 22, 0.92);
-  color: #f4f4f5;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  box-shadow: var(--card-shadow);
   /* The overlay must never intercept a click meant for the window beneath. */
   user-select: none;
 }
 
+/*
+ * The status mark the rest of the Kit uses: a filled 7px `--band` square at
+ * rest, a round 8px `--rec` dot -- the one round mark the Kit allows -- while
+ * recording. `.notify` below overrides the resting fill to `--muted`, since
+ * nothing there is claiming "ready".
+ */
 .indicator {
-  width: 0.7rem;
-  height: 0.7rem;
-  /* A dot, not a rounded box -- the one radius the restyle keeps. */
-  border-radius: 50%;
+  width: 7px;
+  height: 7px;
   flex: none;
-  background: #6b7280;
+  background: var(--band);
 }
 
 .indicator-recording {
-  background: #ef4444;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--rec);
   animation: pulse 1.4s ease-in-out infinite;
 }
 
@@ -1637,7 +1648,7 @@ label:has(> input[type="checkbox"]) {
   padding: 0 0.9rem;
   background: var(--bg);
   color: var(--text);
-  border: 1px solid var(--faint);
+  border: 1px solid var(--rule);
   font-family: var(--font-sans);
   font-size: 13px;
   line-height: 1.4;
@@ -1646,7 +1657,8 @@ label:has(> input[type="checkbox"]) {
   user-select: none;
 }
 
-/* The neutral dot belongs to these panels; the overlay keeps its own colour. */
+/* The neutral square belongs to these panels: nothing here is claiming
+ * "ready", so it is `--muted` rather than `--band`. */
 .notify .indicator:not(.indicator-recording) {
   background: var(--muted);
 }
@@ -1738,7 +1750,7 @@ label:has(> input[type="checkbox"]) {
 .notify-recording {
   /* A red edge, so "recording" reads at a glance and not only in words. An
    * inset shadow rather than a border keeps the content size unchanged. */
-  box-shadow: inset 0 0 0 1.5px rgba(239, 68, 68, 0.75);
+  box-shadow: inset 0 0 0 1.5px var(--rec);
 }
 
 /* The larger recording window gives notes and transcript their own body while
@@ -2109,7 +2121,7 @@ button:disabled {
 /* Persistent dictation control: native window retains WS_EX_NOACTIVATE. */
 .microphone-overlay { height: 100%; overflow: clip; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; padding: 0; gap: 6px; user-select: none; }
 /* Keep the hit target and layout fixed as the visible pill expands. */
-.floating-microphone { position: relative; display: flex; align-items: center; justify-content: center; width: 52px; height: 32px; min-height: 32px; padding: 0; flex-shrink: 0; border-radius: 1px; background: transparent; color: white; box-shadow: none; border: 0; cursor: pointer; touch-action: none; }
+.floating-microphone { position: relative; display: flex; align-items: center; justify-content: center; width: 52px; height: 32px; min-height: 32px; padding: 0; flex-shrink: 0; border-radius: 2px; background: transparent; color: white; box-shadow: none; border: 0; cursor: pointer; touch-action: none; }
 button.floating-microphone:hover:not(:disabled) { background: transparent; color: white; border-color: transparent; box-shadow: none; }
 .floating-microphone:focus-visible { outline: 2px solid #858985; outline-offset: 2px; }
 .floating-microphone[aria-disabled="true"] { cursor: progress; }
@@ -2119,7 +2131,7 @@ button.floating-microphone:hover:not(:disabled) { background: transparent; color
 .microphone-spinner { position: relative; display: block; width: 18px; height: 18px; border: 2px solid #8888; border-top-color: currentColor; border-radius: 50%; animation: microphone-spin 1s linear infinite; }
 @keyframes microphone-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .microphone-spinner { animation: none; } .microphone-controls::before, .microphone-glyph { transition: none; } }
-.microphone-error { display: flex; gap: 6px; align-items: flex-start; padding: 8px; background: var(--bg); color: var(--text, #eee); font-size: 12px; width: 100%; max-height: 72px; overflow: auto; border-radius: 8px; box-shadow: 0 2px 6px #0005; }
+.microphone-error { display: flex; gap: 6px; align-items: flex-start; padding: 8px; background: var(--bg); color: var(--text, #eee); font-size: 12px; width: 100%; max-height: 72px; overflow: auto; border-radius: 4px; box-shadow: 0 2px 6px #0005; }
 .microphone-error span { flex: 1; overflow-wrap: anywhere; }
 .microphone-error button { padding: 0 4px; min-height: 20px; }
 .microphone-status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
@@ -2157,7 +2169,7 @@ button.microphone-language-toggle:hover:not(:disabled) { background: transparent
 .is-vertical .microphone-language-toggle span { transform: rotate(90deg); }
 
 /* One animated surface, with separate dictation and language hit targets. */
-.microphone-controls::before { content: ""; position: absolute; left: 48px; top: 48px; width: 32px; height: 6px; border-radius: 1px; background: #858985; --surface-shift: 0px; --surface-angle: 0deg; transform: translate(-50%, -50%) rotate(var(--surface-angle)) translateX(var(--surface-shift)); transition: width 160ms ease, height 160ms ease, transform 160ms ease, background-color 160ms ease; pointer-events: none; }
+.microphone-controls::before { content: ""; position: absolute; left: 48px; top: 48px; width: 32px; height: 6px; border-radius: 2px; background: #858985; --surface-shift: 0px; --surface-angle: 0deg; transform: translate(-50%, -50%) rotate(var(--surface-angle)) translateX(var(--surface-shift)); transition: width 160ms ease, height 160ms ease, transform 160ms ease, background-color 160ms ease; pointer-events: none; }
 .is-vertical .microphone-controls::before { --surface-angle: 90deg; }
 .microphone-controls:has(.floating-microphone[data-expanded="true"])::before { width: 68px; height: 28px; --surface-shift: 8px; border-radius: 2px; background: #303430; }
 .microphone-controls:is(:hover, .hold-hover, :has(:focus-visible))::before { width: 68px; height: 28px; --surface-shift: 8px; border-radius: 2px; background: #303430; }
