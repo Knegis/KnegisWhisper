@@ -2507,5 +2507,8 @@ button.provider-link { margin: 0; padding: 0; background: none; color: var(--ban
 button.provider-link:hover:not(:disabled) { background: none; color: var(--band-text); text-decoration: underline; text-underline-offset: 2px; }
 .provider-detail, .provider-form { grid-column: 2 / -1; margin: 0; }
 .provider-form { margin-top: 4px; }
+/* A row's slot and feature ids, folded: under the form, or on its own for a row with none. */
+.provider-tech { grid-column: 2 / -1; font-size: 13px; line-height: 19px; }
+.provider-tech .learn-more { margin: 0; }
 .providers-empty { margin-top: 28px; }
 .providers > .learn-more { margin-top: 32px; }

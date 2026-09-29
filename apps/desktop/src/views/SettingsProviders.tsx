@@ -38,7 +38,10 @@
  * A row's key form opens under the row from its + or its Change, one row at a
  * time: opening another closes the first without saving, and what was typed
  * in it goes with it. Save is enabled once something is typed, and the typed
- * value is dropped the moment it is stored.
+ * value is dropped the moment it is stored. The slot's id, its uses and its
+ * feature are under Technical details in that form, or on their own for a row
+ * that has none; and which keys a Test connections press sends is said in
+ * the open, above the lists.
  */
 
 import { useCallback, useEffect, useState, type KeyboardEvent, type ReactNode } from "react";
@@ -253,6 +256,21 @@ export function SettingsProviders({ onGoTo }: { onGoTo: (id: ViewId) => void }) 
     const formId = `provider-form-${row.slot}`;
     const isOpen = open === row.slot;
     const reason = reasonOf(row.slot);
+    // The slot's own ids, from the data: behind a disclosure, because ids move
+    // behind Learn more rather than being deleted. In the form, or on its own
+    // for a row that has no form.
+    const technical = (
+      <div className="provider-tech">
+        <LearnMore summary="Technical details">
+          <p>
+            slot <code>{slot.slot}</code>
+            {slot.usedFor.length > 0 ? ` · used for ${slot.usedFor.join(" and ")}` : ""}
+            {slot.feature ? ` · ${slot.feature}` : ""}
+          </p>
+          {row.unsupported && reason ? <p>{reason}</p> : null}
+        </LearnMore>
+      </div>
+    );
     return (
       <li key={row.slot} className={`provider-row${row.unsupported && !row.stored ? " provider-row-unsupported" : ""}`}>
         {tile(row)}
@@ -309,6 +327,7 @@ export function SettingsProviders({ onGoTo }: { onGoTo: (id: ViewId) => void }) 
             ) : null}
           </span>
         ) : null}
+        {isOpen || (row.unsupported && !row.stored) ? technical : null}
       </li>
     );
   };
@@ -401,10 +420,16 @@ export function SettingsProviders({ onGoTo }: { onGoTo: (id: ViewId) => void }) 
 
       <p className="providers-lock">
         <Icon name="lock" size={14} />
-        A saved key sends nothing by itself. Audio or text goes to a provider only when you choose it under Transcription or Cleanup &amp; summaries.
+        A saved key sends nothing by itself. Audio or text goes to a provider only when you choose it under Transcription, Meetings or Cleanup &amp; summaries.
       </p>
       <p className="providers-line">
-        Test connections is the only thing on this page that reaches the network, and only when you press it: it sends a real request with each saved key.
+        Test connections is the only thing on this page that reaches the network, and only when you press it: it sends a real request with each saved speech-to-text key.
+      </p>
+      {/* Who a press would send to, named -- it is data leaving this computer, so it is never folded away. */}
+      <p className="providers-line providers-ready">
+        {testable.length === 0
+          ? "Ready to test: nothing yet. Save a key for a speech-to-text provider first."
+          : `Ready to test: ${testable.map((s) => s.name).join(", ")}.`}
       </p>
 
       {testNote ? <p className="providers-line" role="status">{testNote}</p> : null}
