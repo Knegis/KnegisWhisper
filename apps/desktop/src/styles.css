@@ -393,7 +393,7 @@ h2,
 .panel-foot .learn-more-body button { margin: 0 0 0 -8px; padding: 4px 8px; border-radius: 2px; }
 
 /*
- * A task page (`views/Dictation.tsx`, and Meetings next): the hero centred in
+ * A task page (`views/Dictation.tsx`, `views/Meetings.tsx`): the hero centred in
  * whatever height the main area has, the control bar at its foot. `.task` is
  * at least the height of `.split-main`, which is stretched to the card and so
  * has a definite height for the 100% to resolve against; a window short
@@ -470,6 +470,12 @@ kbd { display: inline-block; border: 1px solid var(--rule); border-bottom-width:
 .chip-chevron { display: flex; color: var(--muted); }
 .chip[aria-pressed="true"], .chip[aria-pressed="true"]:hover:not(:disabled) { background: var(--band-wash); }
 /*
+ * A chip that states what is in effect rather than offering to change it
+ * (`Chip` with neither `onClick` nor `pressed`): a `span`, so no hover fill
+ * and no pointer that promises a press.
+ */
+.chip-static { cursor: default; }
+/*
  * The select keeps its own value and picker arrow; the microphone icon sits
  * over its left padding and lets presses through, the way the title bar's
  * search icon does. A ring on keyboard focus, which the generic select rule
@@ -522,6 +528,87 @@ button.control-copy { display: inline-flex; align-items: center; gap: 6px; heigh
 .control-row > .chip { margin-left: -9px; }
 .control-row > button:not(.chip) { height: 38px; margin: 0; padding: 0 14px; border-radius: 2px; font-size: 14.5px; white-space: nowrap; }
 .control-row > button.control-start { display: inline-flex; align-items: center; gap: 9px; padding: 0 16px; }
+/* The body's gap spaces its children; a caveat's or a disclosure's own top margin would double it. */
+.control-body > .caveat, .control-body > .learn-more { margin: 0; }
+/* Meetings' Start carries the recording mark, the one round shape the Kit allows. */
+.start-dot { width: 10px; height: 10px; flex-shrink: 0; border-radius: 50%; background: currentColor; }
+
+/*
+ * Meetings' call card (`views/Meetings.tsx`): under the hero while a meeting
+ * application is in a call. A card, so the Kit's 4px corner and a `--rule`
+ * edge; 580px as the canvas draws it, and never wider than the column at
+ * the 720px minimum window.
+ */
+.call-card { width: min(580px, 100%); display: flex; flex-wrap: wrap; align-items: center; gap: 14px; margin-top: 36px; padding: 14px 14px 14px 16px; border: 1px solid var(--rule); border-radius: 4px; background: var(--bg); text-align: left; }
+.call-card-icon { width: 40px; height: 40px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; border-radius: 2px; background: var(--selected); color: var(--text); }
+/* With the list panel open at 720px the card is about 300px: the button goes under the text rather than squeezing it to a word a line. */
+.call-card-text { flex: 1 1 200px; min-width: 0; display: flex; flex-direction: column; }
+.call-card-title { font-size: 15px; line-height: 22px; color: var(--text); overflow-wrap: anywhere; }
+.call-card-detail { font-size: 13px; line-height: 19px; color: var(--muted); }
+.call-card > button { flex-shrink: 0; height: 36px; margin: 0 0 0 auto; padding: 0 14px; border-radius: 2px; font-size: 14px; white-space: nowrap; }
+@media (max-height: 640px) { .call-card { margin-top: 20px; } }
+
+/*
+ * Meetings while a meeting runs: the state and its clock over a rule, the
+ * live lines filling what is left, and the bar at the foot. The column is
+ * exactly the main area's height so the lines scroll inside it rather than
+ * pushing the bar out of sight; once the transcript is down to 160px -- a
+ * short window with a long caveat -- the main area scrolls instead.
+ */
+.meeting-live { height: 100%; display: flex; flex-direction: column; margin: 0; background: none; }
+.live-head { padding: 22px 28px 18px; border-bottom: 1px solid var(--rule); }
+.live-status { display: flex; align-items: center; gap: 8px; margin: 0; font: 12px/16px var(--font-mono); letter-spacing: .5px; text-transform: uppercase; color: var(--rec); }
+.live-clock { color: var(--text); font-variant-numeric: tabular-nums; }
+.rec-dot { width: 8px; height: 8px; flex-shrink: 0; border-radius: 50%; background: var(--rec); }
+.live-title { margin: 8px 0 0; font-family: var(--font-sans); font-size: 28px; line-height: 36px; letter-spacing: -0.3px; text-transform: none; color: var(--text); }
+.live-sub { margin: 2px 0 0; font-size: 13.5px; line-height: 20px; color: var(--muted); overflow-wrap: anywhere; }
+.live-caveats { display: flex; flex-direction: column; gap: 10px; padding: 14px 28px 0; }
+.live-caveats > .caveat, .live-caveats > .error { margin: 0; }
+.live-transcript { flex: 1; min-height: 160px; display: flex; flex-direction: column; padding: 18px 28px 0; }
+.live-label { margin: 0 0 6px; font: 12px/16px var(--font-mono); letter-spacing: .5px; text-transform: uppercase; color: var(--muted); }
+.live-note { margin: 0 0 8px; max-width: 76ch; font-size: 13px; line-height: 18px; color: var(--muted); }
+/* A rule on top, so a line scrolled half out of the list reads as cut by its edge rather than as running into the note. */
+.live-rows { flex: 1; min-height: 0; overflow-y: auto; margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--faint); }
+/* The canvas' three columns: clock, speaker, words. */
+.live-row { display: grid; grid-template-columns: 76px 72px minmax(0, 1fr); column-gap: 14px; padding: 11px 0; border-bottom: 1px solid var(--faint); font-size: 15px; line-height: 23px; }
+.live-row:last-child { border-bottom: 0; }
+.live-time { font: 12px/23px var(--font-mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+.live-speaker { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.live-speaker-you { color: var(--band); }
+.live-text { overflow-wrap: anywhere; }
+/* A line still being heard: muted, and ending where the next word will go. */
+.live-row-open .live-text { color: var(--muted); }
+.live-caret { display: inline-block; width: 2px; height: 18px; margin-left: 3px; background: var(--band); vertical-align: -3px; }
+.live-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 12px 16px 12px 20px; border-top: 1px solid var(--rule); background: var(--strip); }
+/* One line, the chips ellipsising as the control bar's do, so a narrow window keeps its height for the lines. */
+.live-chips { display: flex; flex: 0 1 auto; align-items: center; gap: 2px; min-width: 0; margin-left: -9px; }
+.live-bar > .control-privacy { padding-left: 0; }
+.live-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.live-actions > button { display: inline-flex; align-items: center; gap: 8px; height: 38px; margin: 0; padding: 0 14px; border-radius: 2px; font-size: 14.5px; white-space: nowrap; }
+.live-actions > button.primary { gap: 9px; padding: 0 16px; }
+/* A short window gives the live lines what the canvas' spacing would spend on margins. */
+@media (max-height: 640px) {
+  .live-head { padding: 12px 20px 10px; }
+  .live-title { margin-top: 4px; font-size: 22px; line-height: 28px; }
+  .live-caveats { padding: 10px 20px 0; }
+  .live-transcript { padding: 10px 20px 0; }
+  .live-row { padding: 7px 0; }
+  .live-bar { padding: 8px 12px 8px 16px; }
+}
+
+/*
+ * Rows the Meetings panel carries besides `PanelItem`s. The Now row's meta is
+ * `--rec` with the round dot, as the hero draws recording. An Interrupted row
+ * is not a button, because Recover inside it is; its marker is the hollow
+ * square Needs setup uses -- `--text`, not orange (decision 6).
+ */
+.panel-rec { display: inline-flex; align-items: center; gap: 6px; color: var(--rec); font-variant-numeric: tabular-nums; }
+.panel-rec > .rec-dot { width: 7px; height: 7px; }
+.panel-row { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; padding: 7px 12px; }
+.panel-row-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; color: var(--text); }
+.mark-hollow { width: 7px; height: 7px; flex-shrink: 0; border: 1px solid var(--text); }
+button.panel-inline { height: 24px; margin: 0 0 0 4px; padding: 0 8px; border: 1px solid var(--rule); border-radius: 2px; background: var(--bg); font-size: 12.5px; line-height: 18px; }
+button.panel-inline:hover:not(:disabled) { border-color: var(--muted); background: var(--bg); }
 
 /*
  * One column below the width where two would leave neither usable.
@@ -604,20 +691,16 @@ h3 {
 }
 
 /*
- * Page header, disclosure and status line: the furniture around a screen's
- * `h1`, shared by the screens that have a `PageHeader` so a colleague sees the
- * same shape on Meetings, Transcription and everywhere else. Dictation has a
- * task hero instead (`.hero-*`, above), whose status carries the same states.
+ * Page header and disclosure: the furniture around a screen's `h1`, shared
+ * by the screens that have a `PageHeader` so a colleague sees the same shape
+ * on Transcription, Providers and everywhere else. Dictation and Meetings
+ * have a task hero instead (`.hero-*`, above), whose status says whether the
+ * task is ready -- the job the status line under Meetings' header did before.
  *
  * `.page-intro` is the one sentence saying what the screen is for; `.learn-
  * more` is the rest, folded under a `<details>` so a screen for a colleague
  * who isn't technical leads with the short version and lets anyone go looking
- * for more. `.status-line` is the machine-voice line that opens
- * Meetings -- 13px/16px tracked ProFontWindows, the same spec as every
- * other string reporting on the machine rather than addressing the
- * person -- and `.status-needs-setup` is `.caveat` worn by that
- * line's "nothing is wired up yet" state, which needs the caveat's mark but
- * not its top margin (see the rule itself, below `.caveat`).
+ * for more.
  */
 .page-header {
   margin: 0 0 2.25rem;
@@ -675,15 +758,6 @@ h3 {
 
 .learn-more-body > p {
   margin: 0.4rem 0 0;
-}
-
-.status-line {
-  font-family: var(--font-mono);
-  font-size: 13px;
-  line-height: 16px;
-  letter-spacing: 0.5px;
-  text-transform: uppercase;
-  margin: 0 0 0.75rem;
 }
 
 /*
@@ -867,35 +941,6 @@ section > .muted {
 /* Switzer ships at 400 only, so bold here is faked; this also un-bolds the Meetings and Cleanup & summaries caveat lead-ins, deliberately. */
 .caveat strong {
   font-weight: 400;
-}
-
-/* `.status-line`'s caveat state -- same mark, with the top margin zeroed.
- * The box stands where the Ready line would, first in its section, and
- * `.status-line` has only a bottom margin, so the Ready line sits flush with
- * the section's top; the caveat's own 0.75rem above would put Needs setup
- * lower than Ready. The `.status-line` inside the box keeps its bottom margin,
- * which is the gap between "Needs setup" and the problem sentence. */
-.status-needs-setup {
-  margin-top: 0;
-}
-
-/*
- * The fix button lines its label up with the problem sentence above it.
- *
- * `section > button` does that for a button standing in a section, by giving
- * back the button's 0.9rem of left padding in the margin -- and it does not
- * reach this one, which is the box's child, not the section's. So the label
- * sat 0.9rem inside the sentence: the box's padding, then the button's own.
- * Plain, the button takes its left padding down to the box's 0.75rem and
- * gives that back, so the label lands on the sentence and the hover fill
- * stops at the inner edge of the bar rather than painting over it. Filled
- * (`button.primary`, when the page's Start is held back and this is the one
- * thing to do next), it keeps its padding and its fill starts on the text
- * column, the way `section > button.primary` does.
- */
-.status-needs-setup > button:not(.primary) {
-  margin-left: -0.75rem;
-  padding-left: 0.75rem;
 }
 
 /*
@@ -1913,6 +1958,22 @@ button.primary {
 button.primary:hover:not(:disabled) {
   background: color-mix(in srgb, var(--band) 88%, var(--band-ink));
   color: var(--band-ink);
+}
+
+/*
+ * The Kit's secondary button: an action beside the primary one that is not
+ * the next thing to do -- Meetings' Discard and "Record this call". Edged
+ * rather than filled, so it cannot be read as the primary, and its hover
+ * darkens the edge instead of washing the fill.
+ */
+button.secondary {
+  border: 1px solid var(--rule);
+  background: var(--bg);
+}
+
+button.secondary:hover:not(:disabled) {
+  border-color: var(--muted);
+  background: var(--bg);
 }
 
 section > button.primary,

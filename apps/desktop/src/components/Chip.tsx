@@ -13,10 +13,18 @@ import { Icon } from "./Icon";
  * `className="chip"` on a `<select>` rather than this component, because a
  * select already is the control.
  *
+ * A chip with neither `onClick` nor `pressed` is not a control at all but a
+ * statement of what is in effect -- Meetings' "Default microphone", which the
+ * page cannot change, and every chip in its live view, where nothing can be
+ * changed until the meeting ends. That one is a `span.chip.chip-static`:
+ * drawn like the others so the strip reads as one row, but not a button, so
+ * it is not in the tab order and does not offer a press that does nothing.
+ *
  * The label ellipsises inside the chip's 260px cap, so `title` defaults to the
  * whole label: "Microphone Array (Realtek(R) Audio)" still reads in full under
  * the pointer at the 720px minimum window. A caller with something better to
- * say there -- Meetings' reason the toggle is off -- passes its own.
+ * say there -- Meetings' reason the toggle is off -- passes its own, on a
+ * static chip as on a button.
  */
 export function Chip({
   icon,
@@ -35,6 +43,16 @@ export function Chip({
   disabled?: boolean;
   title?: string;
 }) {
+  const content = (
+    <>
+      <Icon name={icon} size={16} />
+      <span className="chip-label">{label}</span>
+      {chevron ? <span className="chip-chevron"><Icon name="chevronDown" size={14} /></span> : null}
+    </>
+  );
+  if (onClick === undefined && pressed === undefined) {
+    return <span className="chip chip-static" title={title ?? label}>{content}</span>;
+  }
   return (
     <button
       type="button"
@@ -44,9 +62,7 @@ export function Chip({
       disabled={disabled}
       title={title ?? label}
     >
-      <Icon name={icon} size={16} />
-      <span className="chip-label">{label}</span>
-      {chevron ? <span className="chip-chevron"><Icon name="chevronDown" size={14} /></span> : null}
+      {content}
     </button>
   );
 }

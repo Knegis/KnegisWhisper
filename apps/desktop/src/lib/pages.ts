@@ -11,8 +11,8 @@ import type { ViewId } from "./navigation.js";
 export type Page = { title: string; intro: string };
 
 /**
- * One entry per screen the rail or the Settings panel can reach, `dictation`
- * and `notes` excepted.
+ * One entry per screen the rail or the Settings panel can reach, `dictation`,
+ * `meetings` and `notes` excepted.
  *
  * `notes` is `null` rather than a page with an empty intro: the Notes screen is
  * the writing space itself -- the library down one side, and at the top of the
@@ -20,11 +20,14 @@ export type Page = { title: string; intro: string };
  * is open. A page title above that would push the note down to name a screen
  * the rail already marks as current.
  *
- * `dictation` is `null` because its page is a task hero, which already says
- * what the page is for: the panel beside it is titled "Dictation", and the
- * intro sentence that used to sit here -- "Speak, and your words are typed
- * where your cursor is." -- moved into the hero under the shortcut
- * (`views/Dictation.tsx`). `meetings` follows when its own hero lands.
+ * `dictation` and `meetings` are `null` because each page is a task hero,
+ * which already says what the page is for, beside a list panel titled with
+ * the page's name. The intro sentences that used to sit here moved into the
+ * heroes: "Speak, and your words are typed where your cursor is." under
+ * Dictation's shortcut (`views/Dictation.tsx`), and Meetings' "Record a
+ * meeting and get a transcript you can turn into notes." as the canvas'
+ * "You get a transcript and a summary, saved to Notes." under "Record a
+ * meeting" (`views/Meetings.tsx`).
  *
  * Every title is the screen's current label in `lib/navigation.ts` -- the one
  * the rail or the Settings panel shows -- not a new name: a screen that read
@@ -45,10 +48,7 @@ export type Page = { title: string; intro: string };
  */
 export const PAGES = {
   dictation: null,
-  meetings: {
-    title: "Meetings",
-    intro: "Record a meeting and get a transcript you can turn into notes.",
-  },
+  meetings: null,
   notes: null,
   vocabulary: {
     title: "Vocabulary",

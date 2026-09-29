@@ -13,10 +13,10 @@
  * bare string literal type, generic per caller, rather than a fixed page name:
  * each page's union names only the pages its own fixes go to -- Dictation's
  * `"transcription" | "shortcuts"`, Meetings' `"transcription" |
- * "meeting-settings"`. That is what lets each page's own
- * `onGoTo: (id: ViewId) => void` type-check as `onFix` with no cast: the
- * check that every fix target is a real page happens at the page that passes
- * `onGoTo`, where both types are in view, rather than being assumed here.
+ * "meeting-settings"`. That is what lets each page hand `fix.view` to its own
+ * `onGoTo: (id: ViewId) => void` with no cast: the check that every fix
+ * target is a real page happens at the page that calls `onGoTo`, where both
+ * types are in view, rather than being assumed here.
  */
 
 import type {

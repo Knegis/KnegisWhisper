@@ -47,7 +47,6 @@ import type {
   SessionState,
   ShortcutHookStatus,
   SidecarFreshness,
-  Sources,
   SyncOutcome,
   SystemAudioSupport,
   TokenStatus,
@@ -777,20 +776,6 @@ export function languageRequiredWarning(review: ConfigReview): string | null {
     ? "This provider cannot detect the language on its own. Fill in the meeting language " +
         '(for example "en"), or starting will be refused.'
     : null;
-}
-
-/** Which captures a running meeting actually opened. */
-export function sourcesLabel(s: Sources | null): string {
-  if (!s) return "";
-  if (s.microphone && s.systemAudio) {
-    return "your microphone and what the other participants say";
-  }
-  if (s.microphone) {
-    return s.systemAudioReason
-      ? `your microphone only — ${s.systemAudioReason}`
-      : "your microphone only";
-  }
-  return "nothing is being recorded";
 }
 
 /** How a meeting ended, in one line. */

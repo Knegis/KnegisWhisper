@@ -78,10 +78,12 @@ import type {
   ProbeReport,
   ProviderSummary,
   ReasoningStatus,
+  RecoverableRecording,
   RouteReport,
   SearchHit,
   SessionState,
   Sources,
+  SummarySettings,
   TranscriptEvent,
   TranscriptRow,
   Transcription,
@@ -652,6 +654,30 @@ let meetingStatus: MeetingStatus = {
 
 let meetingLanguage = "en";
 let meetingProvider: string | null = null;
+
+/*
+ * Empty, as a fresh profile has none; `kw.interrupted()` adds one, so the
+ * Meetings panel's Interrupted section and its Recover button can be seen.
+ */
+let recoverable: RecoverableRecording[] = [];
+
+/*
+ * The Meetings page reads this in its first load, for the control bar's line
+ * about where an automatic summary sends the transcript, and Cleanup &
+ * summaries reads and writes it. Rust's `SummarySettings::default()`
+ * (`crates/notes-core/src/summary.rs`): off, no provider, no model -- so the
+ * line is absent until Cleanup & summaries turns summaries on.
+ */
+let summarySettings: SummarySettings = {
+  enabled: false,
+  provider: "",
+  model: "",
+  selfHostedUrl: null,
+  enterprise: false,
+  language: "match",
+  contextBudget: 8192,
+};
+
 let meetingKeyterms = ["Nordbank", "KnegisWhisper", "WASAPI", "Realtek"];
 
 let detectLists: Lists = {
@@ -1656,8 +1682,25 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
   /* meetings */
   meeting_providers: () => MEETING_PROVIDERS,
   meeting_status: () => meetingStatus,
-  meeting_recoverable_recordings: () => [],
-  meeting_recover_recording: () => { throw new Error("No interrupted recordings in the fixture profile"); },
+  meeting_recoverable_recordings: () => recoverable,
+  meeting_recover_recording: (a) => {
+    const key = arg<string>(a, "storageKey");
+    if (!recoverable.some((r) => r.storageKey === key)) {
+      throw new Error("No interrupted recordings in the fixture profile");
+    }
+    recoverable = recoverable.filter((r) => r.storageKey !== key);
+    return {
+      outcome: "saved",
+      noteId: 101,
+      durationSeconds: 1847,
+      recordingPath:
+        "C:\\Users\\dev\\AppData\\Roaming\\KnegisWhisper\\recordings\\" + (key ?? ""),
+      gaps: 0,
+      reconnects: 0,
+      transcriptIsPartials: false,
+      recordingAttached: true,
+    } satisfies MeetingOutcome;
+  },
   meeting_start: (a) => {
     const wantsSystemAudio = arg<boolean>(a, "systemAudio") ?? false;
     const sources: Sources = {
@@ -1731,6 +1774,11 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
       ...meetingStatus,
       promptOnDetect: arg<boolean>(a, "enabled") ?? false,
     };
+    return null;
+  },
+  summary_settings_get: () => summarySettings,
+  summary_settings_set: (a) => {
+    summarySettings = arg<SummarySettings>(a, "settings") ?? summarySettings;
     return null;
   },
   meeting_language: () => meetingLanguage,
@@ -1912,14 +1960,24 @@ const devConsole = {
     };
     void emit("meeting-state", state);
   },
-  transcript(text: string, isFinal = true) {
+  /** `extra` overrides the rest, e.g. `{ source: "system", speaker: null, timestamp: 641 }`. */
+  transcript(text: string, isFinal = true, extra: Partial<TranscriptEvent> = {}) {
     void emit("meeting-transcript", {
       text,
       isFinal,
       timestamp: meetingStatus.elapsedSeconds,
       speaker: "Anna",
       source: "mic",
+      ...extra,
     } satisfies TranscriptEvent);
+  },
+  /**
+   * An interrupted recording, as an earlier session would leave one. Read
+   * when the Meetings page next loads, so open it (or leave and come back)
+   * after calling this.
+   */
+  interrupted(storageKey = "20260901-101500-3f2a9c1e.wav", hasNotes = true) {
+    recoverable = [...recoverable.filter((r) => r.storageKey !== storageKey), { storageKey, hasNotes }];
   },
   offer(name = "Zoom") {
     const next: Offer = {

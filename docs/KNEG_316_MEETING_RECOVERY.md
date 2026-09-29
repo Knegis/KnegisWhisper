@@ -2,9 +2,10 @@
 
 An interrupted meeting can leave a WAV in the application's `meetings` directory
 without a `note_recordings` row. Personal notes may also be in the matching
-`.notes.md` sidecar. **Meetings > Interrupted recordings** lists these
-files while no meeting is running and offers recovery one recording at a time.
-Nothing is transcribed or saved until the user chooses **Recover recording**.
+`.notes.md` sidecar. The **Interrupted** section of the Meetings page's list
+panel lists these files while no meeting is running and offers recovery one
+recording at a time. Nothing is transcribed or saved until the user presses
+**Recover** on a row.
 
 Recovery checks that the WAV is still a regular, unattached file in the owned
 directory. A WAV left open by `WavWriter` has zero lengths in its header; the
@@ -36,5 +37,5 @@ attempted on 2026-09-28 with a synthetic unfinished WAV and sidecar, both by
 launching the debug binary and through `tauri:dev`. The process opened a window
 but stalled before `Db::open`; the isolated database was never created and
 WebView2 did not expose its debug port. The processes and Vite server were
-stopped. The Meetings button and Recover recording path remain to be exercised in a
-functioning native session.
+stopped. The Meetings page's Recover button and the recovery path remain to be
+exercised in a functioning native session.

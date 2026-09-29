@@ -263,24 +263,30 @@ export function selectMeetingProvider(label) {
 }
 
 /**
- * Ticks or unticks the participants checkbox and presses Start recording, on
- * the Meetings task page -- the other half of what `selectMeetingProvider`
- * used to do in one place before the provider select moved to Settings.
+ * Presses or releases the "Other participants" chip and presses Start
+ * recording, on the Meetings task page -- the other half of what
+ * `selectMeetingProvider` used to do in one place before the provider select
+ * moved to Settings. The chip replaced a checkbox (KNEG-363); it is a toggle
+ * button, read by `aria-pressed`, and disabled where system audio cannot be
+ * captured. 50ms pass between the two presses so Start runs with the chip's
+ * new state rather than the one React had before it re-rendered -- a timer
+ * rather than a frame, because a hidden window may never draw one.
  */
 export function startMeetingRecording(systemAudio) {
   return source(`
-    const checkbox = [...document.querySelectorAll('input[type="checkbox"]')]
-      .find((item) =>
-        item.closest('label')?.textContent.includes('other participants')
-          || item.parentElement?.textContent.includes('other participants'),
-      );
-    if (!checkbox) throw new Error('System-audio checkbox is missing');
-    if (checkbox.checked !== ${JSON.stringify(systemAudio)}) checkbox.click();
-    const start = [...document.querySelectorAll('button')]
-      .find((item) => item.textContent.trim() === 'Start recording');
-    if (!start) throw new Error('Start recording button is missing');
-    start.click();
-    return { systemAudio: checkbox.checked };
+    return (async () => {
+      const chip = [...document.querySelectorAll('button.chip')]
+        .find((item) => item.textContent.trim() === 'Other participants');
+      if (!chip) throw new Error('Other participants chip is missing');
+      const pressed = () => chip.getAttribute('aria-pressed') === 'true';
+      if (pressed() !== ${JSON.stringify(systemAudio)} && !chip.disabled) chip.click();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const start = [...document.querySelectorAll('button')]
+        .find((item) => item.textContent.trim() === 'Start recording');
+      if (!start) throw new Error('Start recording button is missing');
+      start.click();
+      return { systemAudio: pressed() };
+    })();
   `);
 }
 
