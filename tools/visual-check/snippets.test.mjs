@@ -7,6 +7,7 @@ test("every renderer snippet is syntactically valid JavaScript", () => {
   const values = [
     snippets.removeFixtureBanner(),
     snippets.clickText("button", "Settings"),
+    snippets.openGroup("Settings"),
     snippets.railGeometry(),
     snippets.groupState(),
     snippets.railCurrent(),

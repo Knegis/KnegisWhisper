@@ -30,7 +30,7 @@
  * what every sidebar that has sections does, and `view` is untouched by it.
  */
 
-import { childrenOf, isGroup, NAV, railIdOf, type ViewId } from "../lib/navigation";
+import { childrenOf, isGroup, NAV, railIdOf, srSuffixOf, type ViewId } from "../lib/navigation";
 import { NavIcon } from "./NavIcon";
 
 export function Sidebar({
@@ -112,7 +112,7 @@ export function Sidebar({
                           aria-current={child.id === current ? "page" : undefined}
                           onClick={() => onSelect(child.id)}
                         >
-                          <NavIcon id={child.id} /><span className="nav-label">{child.label}</span>
+                          <NavIcon id={child.id} /><span className="nav-label">{child.label}{srSuffixOf(child) ? <span className="sr-only">{srSuffixOf(child)}</span> : null}</span>
                         </button>
                       </li>
                     ))}

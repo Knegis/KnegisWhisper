@@ -90,7 +90,11 @@ export const NAV = [
     label: "Settings",
     children: [
       { id: "shortcuts", label: "Shortcuts" },
-      { id: "meeting-settings", label: "Meetings" },
+      // Visually "Meetings", like the top-level entry above; to a screen
+      // reader "Meetings settings", so two buttons in one list do not share a
+      // name. The suffix follows the visible label, so the name still
+      // contains it (WCAG 2.5.3, label in name).
+      { id: "meeting-settings", label: "Meetings", srSuffix: " settings" },
       { id: "vocabulary", label: "Vocabulary" },
       { id: "transcription", label: "Transcription" },
       { id: "intelligence", label: "Cleanup & summaries" },
@@ -178,6 +182,22 @@ export function isGroup(entry: NavEntry): entry is NavGroup {
 
 /** A destination: an entry that selects a screen rather than a group. */
 export type NavLeaf = { readonly id: ViewId; readonly label: string };
+
+/**
+ * Text a screen reader hears after a leaf's `label` and nobody sees, or
+ * `null` for the leaves that carry none -- every one but `meeting-settings`
+ * today.
+ *
+ * Read with `in` rather than declared as an optional field on `NavLeaf`.
+ * Adding `srSuffix?: string` there was tried, and it changes what
+ * `NAV.flatMap` infers: a leaf without an optional property is not a strict
+ * subtype of one with it, so the flattened list stopped being `NavLeaf[]` and
+ * every caller that flattens the tree -- the navigation tests among them --
+ * would need a type argument to say what it already meant.
+ */
+export function srSuffixOf(leaf: NavLeaf): string | null {
+  return "srSuffix" in leaf && typeof leaf.srSuffix === "string" ? leaf.srSuffix : null;
+}
 
 /**
  * A group's children as one non-empty tuple type, rather than as the union of

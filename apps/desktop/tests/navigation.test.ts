@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { NAV, INNER_VIEWS, DEFAULT_VIEW, childrenOf, groupOf, isGroup, railIdOf } from "../src/lib/navigation.js";
+import { NAV, INNER_VIEWS, DEFAULT_VIEW, childrenOf, groupOf, isGroup, railIdOf, srSuffixOf } from "../src/lib/navigation.js";
 
 const topLevel = ["dictation", "meetings", "notes"];
 const groups = {
@@ -52,4 +52,15 @@ test("an inner view's id does not collide with any nav id", () => {
 test("railIdOf maps an inner view to its parent, and leaves a rail id alone", () => {
   assert.equal(railIdOf("notes-upload"), "notes");
   assert.equal(railIdOf("vocabulary"), "vocabulary");
+});
+
+test("the Settings child Meetings is named apart from the top-level Meetings, and only it", () => {
+  const leaves = NAV.flatMap((entry) => isGroup(entry) ? [...childrenOf(entry)] : [entry]);
+  const withSuffix = leaves.filter((leaf) => srSuffixOf(leaf) !== null);
+  assert.deepEqual(withSuffix.map((leaf) => leaf.id), ["meeting-settings"]);
+  const child = leaves.find((leaf) => leaf.id === "meeting-settings");
+  assert.ok(child);
+  // The visible label is unchanged, and the accessible name contains it.
+  assert.equal(child.label, "Meetings");
+  assert.equal(`${child.label}${srSuffixOf(child) ?? ""}`, "Meetings settings");
 });

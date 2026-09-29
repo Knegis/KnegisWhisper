@@ -481,9 +481,19 @@ h2,
  *
  * The retracted rail is untouched: `.shell-sidebar-retracted .nav-label` sets
  * `display: none`, and a display:none element has no box to wrap.
+ *
+ * `flex-grow: 1` gives the label the whole of the space after the icon rather
+ * than a box sized to its text. It was added to keep "Local text models" on
+ * one line, and measured it does not: that space is 113px at 15px `:root`, and
+ * "Local text models" is 119px on one line ("Cleanup & summaries" 133px), so
+ * both still wrap -- a flex item can grow into free space, not past it. Before
+ * `white-space: normal` it sat on one line only by running 6px into the
+ * button's 9px of right padding. No `min-width: 0` either: it would only let
+ * the label shrink below its widest word, which is not what stops it fitting.
  */
 .sidebar .nav-label {
   white-space: normal;
+  flex-grow: 1;
 }
 
 /*
@@ -1043,7 +1053,14 @@ button.marked:hover:not(:disabled) {
   border: 0;
 }
 
+/*
+ * One line held whether or not there is anything to say, the same reason
+ * `.status-slot` holds two: "Saving…" appearing on the first keystroke used
+ * to push the tabs and the editor down under the caret. 1.5em is `:root`'s
+ * line-height, which this paragraph inherits.
+ */
 .save-status {
+  min-height: 1.5em;
   color: var(--muted);
 }
 

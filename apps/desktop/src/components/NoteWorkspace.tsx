@@ -131,7 +131,8 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, { note: Note; reloa
         const value = event.target.value; draft.current.title = value; setTitle(value);
         autosave.schedule({ title: value.trim() || "Untitled note", content: draft.current.content });
       }} onBlur={normalizeTitle} />
-      {saveStatusText(autosave.status) ? <p className="save-status" role="status" aria-live="polite">{saveStatusText(autosave.status)}</p> : null}
+      {/* Always rendered, and holding its line when it has nothing to say: rendering it only with text is what made the first keystroke push the tabs and the editor down under the caret. A live region that is already in the page is also the one screen readers announce reliably. */}
+      <p className="save-status" role="status" aria-live="polite">{saveStatusText(autosave.status)}</p>
       {autosave.status === "failed" && <p className="save-status error" role="alert">Couldn't save: {autosave.error} <button type="button" onClick={() => { void autosave.retry().catch(() => undefined); }}>Retry save</button></p>}
     </header>
     <div className="summary-tabs note-tabs" role="tablist" aria-label="Note view">

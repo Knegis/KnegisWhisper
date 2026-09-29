@@ -120,11 +120,16 @@ async function commandStart(ctx) {
   try {
     // The provider select lives on Settings > Meetings since KNEG-334, not on
     // the Meetings task page that starts the recording, so both routes visit
-    // Settings first. ".nav-child" scopes the click there -- the top-level
-    // rail entry and the Settings child are both labelled "Meetings".
-    await main.cdp.evaluate(snippets.clickText("nav.sidebar button", "Settings"));
+    // Settings first. Opened only if closed: the header is a toggle, and a
+    // Settings group left open by an earlier run would otherwise be closed
+    // here. The child reads "Meetings" on screen and "Meetings settings" in
+    // its text -- a visually hidden suffix, so it is not named the same as
+    // the top-level entry -- and `clickText` compares `textContent`, so it
+    // is found by the full name. That also keeps the bare "Meetings" clicks
+    // below on the top-level entry.
+    await main.cdp.evaluate(snippets.openGroup("Settings"));
     await delay(100);
-    await main.cdp.evaluate(snippets.clickText("nav.sidebar .nav-child", "Meetings"));
+    await main.cdp.evaluate(snippets.clickText("nav.sidebar .nav-child", "Meetings settings"));
     await delay(100);
     if (ctx.options.via === "invoke") {
       // Resolve the displayed label to the live option value instead of
