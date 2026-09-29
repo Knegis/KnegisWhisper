@@ -148,30 +148,76 @@ export function blurActive() {
   `);
 }
 
-export function contentMeasure() {
-  return source(`
-    const content = document.querySelector('.content');
-    if (!content) throw new Error('Content is missing');
-    const rect = content.getBoundingClientRect();
-    const style = getComputedStyle(content);
-    return {
-      width: rect.width,
-      maxWidth: style.maxWidth,
-      rem: getComputedStyle(document.documentElement).fontSize,
-    };
-  `);
-}
-
+/**
+ * The open note's layout: the grid tracks of its article (`.note-detail` --
+ * one, or two with the transcript column beside it), which of its tabs are
+ * rendered, and the transcript column's width when there is one. A tab
+ * counts as rendered by its computed display, not its `hidden` attribute.
+ */
 export function notesGrid() {
   return source(`
-    const workspace = document.querySelector('.note-workspace');
-    if (!workspace) throw new Error('Note workspace did not open');
-    const columns = getComputedStyle(workspace).gridTemplateColumns;
+    const detail = document.querySelector('.note-detail');
+    if (!detail) throw new Error('No note is open');
+    const columns = getComputedStyle(detail).gridTemplateColumns;
+    const side = detail.querySelector('.note-side');
     return {
       columns,
       tracks: columns === 'none'
         ? 0
         : columns.split(/\\s+(?![^()]*\\))/).filter(Boolean).length,
+      tabs: [...detail.querySelectorAll('[role="tab"]')]
+        .filter((tab) => getComputedStyle(tab).display !== 'none')
+        .map((tab) => tab.textContent.trim()),
+      sideWidth: side ? side.getBoundingClientRect().width : null,
+    };
+  `);
+}
+
+/**
+ * Whether every tab sits inside `.notes-main`, horizontally: the same
+ * comparison `notes-smoke.mjs` makes at 720x520 in the native window. Also
+ * `.notes-main`'s own widths, since it is the note's scroller and would be
+ * what scrolled sideways if the note did not fit.
+ */
+export function notesTabsContained() {
+  return source(`
+    const main = document.querySelector('.notes-main');
+    if (!main) throw new Error('.notes-main is missing');
+    const bounds = main.getBoundingClientRect();
+    const tabs = [...document.querySelectorAll('[role="tab"]')];
+    return {
+      mainClientWidth: main.clientWidth,
+      mainScrollWidth: main.scrollWidth,
+      count: tabs.length,
+      contained: tabs.every((tab) => {
+        const rect = tab.getBoundingClientRect();
+        return rect.left >= bounds.left && rect.right <= bounds.right;
+      }),
+    };
+  `);
+}
+
+/**
+ * A note's row in the library, found by its exact title as the smoke scripts
+ * find it (`.notes-entry` holding `.notes-entry-title`), and whether that
+ * title is cut off with an ellipsis rather than wrapping or overflowing.
+ */
+export function notesEntry(title) {
+  return source(`
+    const wanted = ${JSON.stringify(title)};
+    const entry = [...document.querySelectorAll('.list-panel .notes-entry')]
+      .find((item) => item.querySelector('.notes-entry-title')?.textContent === wanted);
+    if (!entry) throw new Error('No library row is titled ' + wanted);
+    const text = entry.querySelector('.notes-entry-title');
+    const style = getComputedStyle(text);
+    return {
+      clientWidth: text.clientWidth,
+      scrollWidth: text.scrollWidth,
+      textOverflow: style.textOverflow,
+      whiteSpace: style.whiteSpace,
+      ellipsised: text.scrollWidth > text.clientWidth
+        && style.textOverflow === 'ellipsis'
+        && style.whiteSpace === 'nowrap',
     };
   `);
 }

@@ -176,36 +176,41 @@ export function TranscriptPanel({ sourceRequest, rows, recording, currentTime, p
                 selectRow(row, event.shiftKey);
               }}
             >
-              {recording && playable ? (
-                <button
-                  type="button"
-                  aria-label={`Play transcript row ${row.index + 1}`}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    if (row.startSeconds !== null) {
-                      playInterval(row.startSeconds, row.endSeconds);
-                    }
-                  }}
-                >
-                  Play
-                </button>
-              ) : null}
-              <span className="transcript-clock">
-                {row.startSeconds !== null ? formatClock(row.startSeconds) : "—"}
+              {/* Who and when on one line, what was said under it. Play sits at the end of the
+                  first line, so a row's text starts at the same x whether it can be played or not. */}
+              <span className="transcript-row-head">
+                {speakerId !== null ? (
+                  <button type="button" className="transcript-speaker" aria-label={`Rename ${row.speaker ?? speakerId}`}
+                    onClick={event => {
+                      // The label sits inside a selectable option; its click must not toggle the row.
+                      event.stopPropagation();
+                      setRenaming({ speakerId, current: row.speaker ?? speakerId });
+                    }}
+                    onKeyDown={event => {
+                      // The option selects on Enter and Space, so keep those keys on this control.
+                      if (event.key === "Enter" || event.key === " ") event.stopPropagation();
+                    }}>{row.speaker ?? speakerId}</button>
+                ) : row.speaker ? <span className="transcript-speaker">{row.speaker}</span> : null}
+                <span className="transcript-clock">
+                  {row.startSeconds !== null ? formatClock(row.startSeconds) : "—"}
+                </span>
+                {recording && playable ? (
+                  <button
+                    type="button"
+                    className="transcript-play"
+                    aria-label={`Play transcript row ${row.index + 1}`}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      if (row.startSeconds !== null) {
+                        playInterval(row.startSeconds, row.endSeconds);
+                      }
+                    }}
+                  >
+                    Play
+                  </button>
+                ) : null}
               </span>
-              {speakerId !== null ? (
-                <button type="button" className="transcript-speaker" aria-label={`Rename ${row.speaker ?? speakerId}`}
-                  onClick={event => {
-                    // The label sits inside a selectable option; its click must not toggle the row.
-                    event.stopPropagation();
-                    setRenaming({ speakerId, current: row.speaker ?? speakerId });
-                  }}
-                  onKeyDown={event => {
-                    // The option selects on Enter and Space, so keep those keys on this control.
-                    if (event.key === "Enter" || event.key === " ") event.stopPropagation();
-                  }}>{row.speaker ?? speakerId}</button>
-              ) : row.speaker ? <span className="transcript-speaker">{row.speaker}</span> : null}
-              <span>{row.text}</span>
+              <span className="transcript-text">{row.text}</span>
             </li>
           );
         })}

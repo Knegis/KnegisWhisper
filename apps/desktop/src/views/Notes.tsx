@@ -1,7 +1,19 @@
-import { Icon } from "../components/Icon";
-import { NoteWorkspace, type NoteWorkspaceHandle } from "../components/NoteWorkspace";
 /**
- * Notes > Export.
+ * Notes: the library in the list panel, and the open note beside it.
+ *
+ * The library is the panel `SplitView` draws on every page: New note and
+ * Import, search, the folders with their notes indented under them, and the
+ * notes in no folder. The title bar's list toggle shows and hides it, as it
+ * does every other page's panel. While the library was a column on the right
+ * of this page it had a toggle of its own, portalled into the title bar, and
+ * a peek that opened it when the pointer reached the window's right edge;
+ * both went with the column.
+ *
+ * Notes > Export (`data-surface="notes.export"`) is reached two ways -- a
+ * note's right-click menu in the library, and the open note's top bar --
+ * and both run `exportNote`, so there is one Export… and one "Written to".
+ * That line and any failure sit at the top of the note rather than in the
+ * panel, where a collapsed panel would hide them.
  *
  * Two states that look alike and are not: `hits === null` means nobody has
  * searched, and `hits === []` means somebody searched and nothing matched.
@@ -19,8 +31,12 @@ import {
 
 import { createPortal } from "react-dom";
 
+import { Icon } from "../components/Icon";
+import { NoteWorkspace, type NoteWorkspaceHandle } from "../components/NoteWorkspace";
+import { PanelAction, PanelHeader, PanelItem, PanelSection } from "../components/Panel";
 import { formatClock } from "../components/RecordingPlayer";
 import { Row } from "../components/Row";
+import { SplitView } from "../components/SplitView";
 import {
   createFolder,
   createNote,
@@ -40,6 +56,8 @@ import {
   type SearchHit,
 } from "../lib/ipc";
 import { parseStoredTime } from "../lib/dayGroups";
+import { recentMeta } from "../lib/meetingView";
+import { noteMeta } from "../lib/noteMeta";
 import { groupNotesByFolder } from "../lib/noteGroups";
 import { carriesNote, draggedNoteId, folderChange, NOTE_DRAG_TYPE } from "../lib/noteDrag";
 import { useRefresh } from "../lib/useRefresh";
@@ -76,6 +94,7 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
   const [folderName, setFolderName] = useState("");
   const searchGeneration = useRef(0);
   const toolRef = useRef<HTMLDivElement>(null);
+  const newFolderButton = useRef<HTMLButtonElement>(null);
   useEffect(() => { toolRef.current?.querySelector<HTMLInputElement | HTMLSelectElement>("input, select")?.focus(); }, [libraryTool]);
   // A press anywhere but the open panel closes it, as the context menu closes. The New folder
   // button that opens it is left to its own click handler: this runs on pointerdown, before
@@ -91,39 +110,8 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
     document.addEventListener("pointerdown", outside);
     return () => document.removeEventListener("pointerdown", outside);
   }, [libraryTool]);
-  const [libraryExpanded, setLibraryExpanded] = useState(() => !window.matchMedia("(max-width: 900px)").matches);
-  const [libraryPeek, setLibraryPeek] = useState(false);
-  useEffect(() => {
-    const narrow = window.matchMedia("(max-width: 900px)");
-    const collapse = () => { if (narrow.matches) { setLibraryExpanded(false); setLibraryPeek(false); } };
-    narrow.addEventListener("change", collapse);
-    return () => narrow.removeEventListener("change", collapse);
-  }, []);
-  const libraryVisible = libraryExpanded || libraryPeek;
-  useEffect(() => {
-    if (libraryExpanded) return;
-    let closeTimer: ReturnType<typeof setTimeout> | undefined;
-    const cancelClose = () => { clearTimeout(closeTimer); closeTimer = undefined; };
-    const closeSoon = () => {
-      if (!closeTimer) closeTimer = setTimeout(() => { setLibraryPeek(false); closeTimer = undefined; }, 250);
-    };
-    const move = (event: PointerEvent) => {
-      if (event.pointerType !== "mouse") return;
-      const target = event.target instanceof Element ? event.target : null;
-      if (context || target?.closest('.notes-library, .notes-library-toggle, .notes-context-menu')) { cancelClose(); return; }
-      if (event.clientX >= window.innerWidth - 8 && event.clientY >= 38) {
-        cancelClose(); setLibraryPeek(true);
-      } else {
-        closeSoon();
-      }
-    };
-    const leave = () => { if (!context) closeSoon(); };
-    document.addEventListener("pointermove", move);
-    document.documentElement.addEventListener("pointerleave", leave);
-    return () => { cancelClose(); document.removeEventListener("pointermove", move); document.documentElement.removeEventListener("pointerleave", leave); };
-  }, [libraryExpanded, context]);
 
-  // Which folders are closed in the sidebar. Session state on purpose: a
+  // Which folders are closed in the library. Session state on purpose: a
   // setting would need a settings key and a screen, and a folder closed an
   // hour ago is not a preference worth that.
   const [collapsed, setCollapsed] = useState<Set<number>>(() => new Set());
@@ -161,7 +149,9 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
   // previous note's offset, clamped against the new note's first layout before the editor has its
   // content: measured on 2026-09-26 at 122px in a 480px window. An open request used to call
   // scrollIntoView on the article instead, which parks it flush with the pane's edge, 21px past
-  // the top padding. Layout timing, so the reset lands before the first paint.
+  // the top padding. Layout timing, so the reset lands before the first paint. In a window wide
+  // enough for the transcript column the note scrolls inside its own article instead, which is
+  // keyed by note and so starts at the top by itself.
   useLayoutEffect(() => { if (mainRef.current) mainRef.current.scrollTop = 0; }, [openNoteId, openRequest]);
   useEffect(() => {
     if (!openRequest) return;
@@ -189,6 +179,25 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
     const id = await createNote({ title: "Untitled note", content: "" });
     await selectNote(id);
   });
+  // The one Export…, for the right-click menu and the open note's top bar alike. Flushed first,
+  // as selecting, moving and deleting are: the top bar's button sits just above the editor, and
+  // a file written from the stored text would miss whatever was typed in the last moment.
+  const exportNote = (id: number) => {
+    void guard(async () => {
+      await workspaceRef.current?.flush();
+      const path = await exportNoteToFile(id, exportFormat);
+      // `null` is a cancelled dialog, not a failure. Saying
+      // "exported" for it would be a lie about a file that does
+      // not exist.
+      setExportedTo(path);
+    });
+  };
+  // A note's menu, at the pointer for a right-click and under the button otherwise: the
+  // keyboard's menu key, Shift+F10, and the open note's More.
+  const openNoteMenu = (note: Note, anchor: HTMLButtonElement, at?: { x: number; y: number }) => {
+    const rect = anchor.getBoundingClientRect();
+    setContext({ kind: "note", note, x: at?.x ?? rect.left, y: at?.y ?? rect.bottom, anchor });
+  };
 
   // Filing by drag and drop, and by the right-click menu, through one move.
   // `drag` is the note in the air, whose folder decides whether the "No folder"
@@ -226,56 +235,155 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
 
   if (!data) {
     return (
-      <div className="view">
-        {error ? <p className="error">{error}</p> : <p className="muted">Loading…</p>}
-      </div>
+      <SplitView label="Notes library" panel={<PanelHeader title="Notes" />}>
+        <section className="notes-main" aria-label="Note editor">
+          <div className="notes-notices">{error ? <p className="error">{error}</p> : <p className="muted">Loading…</p>}</div>
+        </section>
+      </SplitView>
     );
   }
 
-  const titlebarControls = document.getElementById("notes-titlebar-controls");
   const { notes, folders } = data;
   const openNote = notes.find((note) => note.id === openNoteId) ?? (requestedNote?.id === openNoteId ? requestedNote : null);
   const groups = groupNotesByFolder(notes, folders);
-  const renderEntries = (entries: readonly Note[]) => (
-    <ul className="list">
-      {entries.map((note) => (
-        <li key={note.id}>
-          <button type="button" className={`notes-entry ${openNoteId === note.id ? "notes-entry-current" : ""}`} aria-current={openNoteId === note.id ? "page" : undefined} onClick={() => { void selectNote(note.id).catch(fail); }}
-            draggable data-dragging={drag?.noteId === note.id || undefined}
-            onDragStart={event => { event.dataTransfer.setData(NOTE_DRAG_TYPE, String(note.id)); event.dataTransfer.effectAllowed = "move"; setDrag({ noteId: note.id, folderId: note.folderId }); }}
-            onDragEnd={() => { setDrag(null); setDropTarget(undefined); }}
-            onContextMenu={event => { event.preventDefault(); setContext({ kind: "note", note, x: event.clientX, y: event.clientY, anchor: event.currentTarget }); }}
-            onKeyDown={event => { if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) { event.preventDefault(); const rect = event.currentTarget.getBoundingClientRect(); setContext({ kind: "note", note, x: rect.left, y: rect.bottom, anchor: event.currentTarget }); } }}
-            aria-haspopup="dialog" title={noteDate(note.createdAt)}>
-            <span className="notes-entry-title">{note.title}</span>
-          </button>
-        </li>
-      ))}
-    </ul>
+  const now = new Date();
+  const renderEntry = (note: Note) => {
+    // The Meetings list's meta line, "26 Aug · 31 min", so a meeting reads the same in both panels.
+    const meta = recentMeta(note.createdAt, note.audioDurationSeconds, now);
+    return (
+      <PanelItem key={note.id} className="notes-entry" titleClassName="notes-entry-title"
+        title={note.title} {...(meta === "" ? {} : { meta })} current={openNoteId === note.id}
+        // The title, which a long one loses to the ellipsis, and the full creation time the meta line shortens.
+        tooltip={`${note.title}\n${noteDate(note.createdAt)}`}
+        onClick={() => { void selectNote(note.id).catch(fail); }}
+        draggable data-dragging={drag?.noteId === note.id || undefined}
+        onDragStart={event => { event.dataTransfer.setData(NOTE_DRAG_TYPE, String(note.id)); event.dataTransfer.effectAllowed = "move"; setDrag({ noteId: note.id, folderId: note.folderId }); }}
+        onDragEnd={() => { setDrag(null); setDropTarget(undefined); }}
+        onContextMenu={event => { event.preventDefault(); openNoteMenu(note, event.currentTarget, { x: event.clientX, y: event.clientY }); }}
+        onKeyDown={event => { if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) { event.preventDefault(); openNoteMenu(note, event.currentTarget); } }}
+        aria-haspopup="dialog" />
+    );
+  };
+
+  const panel = (
+    <>
+      <PanelHeader title="Notes" />
+      <div className="panel-surface" data-surface="notes.export">
+        <PanelSection label={null}>
+          <PanelAction icon="newNote" label="New note" onClick={() => { void newNote(); }} />
+          <PanelAction icon="import" label="Import audio or video" onClick={onImport} />
+        </PanelSection>
+        <label className="panel-search">
+          <Icon name="search" size={15} />
+          <input type="search" aria-label="Search notes and meetings" placeholder="Search notes and meetings" value={query} onChange={event => {
+            const next = event.target.value;
+            setQuery(next);
+            const generation = ++searchGeneration.current;
+            if (!next.trim()) { setHits(null); return; }
+            void searchNotes(next, 20).then(value => { if (generation === searchGeneration.current) setHits(value); }).catch(fail);
+          }} />
+        </label>
+
+        {hits === null ? null : hits.length === 0 ? (
+          <p className="panel-note">{`Nothing matches "${query}"`}</p>
+        ) : (
+          <PanelSection label={`${hits.length} match${hits.length === 1 ? "" : "es"}`}>
+            {hits.map((hit) => (
+              <PanelItem key={hit.id} className="notes-hit" title={hit.title} meta={hit.snippet} tooltip={hit.title}
+                current={openNoteId === hit.id} onClick={() => { void selectNote(hit.id).catch(fail); }} />
+            ))}
+          </PanelSection>
+        )}
+
+        {hits !== null ? null : (
+          <>
+            <div className="panel-section">
+              <div className="notes-folders-head">
+                <h2 className="panel-label">Folders</h2>
+                <button ref={newFolderButton} type="button" className="panel-tool" aria-label="New folder" title="New folder" aria-expanded={libraryTool === "new-folder"} aria-controls="notes-library-tool-panel" onClick={() => setLibraryTool(value => value === "new-folder" ? null : "new-folder")}>
+                  <Icon name="folderPlus" size={16} />
+                </button>
+                <button type="button" className="panel-tool" aria-label="Expand all folders" title="Expand all folders" disabled={folders.length === 0} onClick={() => setCollapsed(new Set())}>
+                  <Icon name="expandAll" size={16} />
+                </button>
+                <button type="button" className="panel-tool" aria-label="Collapse all folders" title="Collapse all folders" disabled={folders.length === 0} onClick={() => setCollapsed(new Set(folders.map(folder => folder.id)))}>
+                  <Icon name="collapseAll" size={16} />
+                </button>
+              </div>
+              <div id="notes-library-tool-panel" ref={toolRef} onKeyDown={event => { if (event.key === "Escape") { setLibraryTool(null); newFolderButton.current?.focus(); } }}>
+                {libraryTool === "new-folder" && <form className="notes-tool-panel" onSubmit={event => { event.preventDefault(); if (!folderName.trim()) return; void guard(async () => { await createFolder(folderName.trim()); setFolderName(""); setLibraryTool(null); }); }}>
+                  <input aria-label="Folder name" placeholder="Folder name" value={folderName} onChange={event => setFolderName(event.target.value)} />
+                  <button type="submit" disabled={!folderName.trim()}>Create folder</button>
+                </form>}
+              </div>
+              {notes.length === 0 && folders.length === 0 ? (
+                <p className="panel-note">
+                  No notes yet. Create a note, record a meeting, or import a recording.
+                </p>
+              ) : (
+                <div className="panel-list">
+                  {groups.folders.map(({ folder, notes: filed }) => {
+                    const open = !collapsed.has(folder.id);
+                    return (
+                      <section key={folder.id} className="notes-folder" data-drop-target={dropTarget === folder.id || undefined} {...dropHandlers(folder.id)}>
+                        <button type="button" className="notes-folder-toggle" aria-expanded={open} aria-controls={`notes-folder-${folder.id}`} aria-haspopup="dialog"
+                          onClick={() => setCollapsed(prev => { const next = new Set(prev); if (next.has(folder.id)) next.delete(folder.id); else next.add(folder.id); return next; })}
+                          onContextMenu={event => { event.preventDefault(); setContext({ kind: "folder", folder, x: event.clientX, y: event.clientY, anchor: event.currentTarget }); }}
+                          onKeyDown={event => { if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) { event.preventDefault(); const rect = event.currentTarget.getBoundingClientRect(); setContext({ kind: "folder", folder, x: rect.left, y: rect.bottom, anchor: event.currentTarget }); } }}>
+                          <Icon name={open ? "chevronDown" : "chevronRight"} size={12} />
+                          <Icon name="folder" size={16} />
+                          <span className="notes-folder-name" title={folder.name}>{folder.name}</span>
+                          <span className="notes-folder-count"><span className="sr-only">, </span>{filed.length}<span className="sr-only">{filed.length === 1 ? " note" : " notes"}</span></span>
+                        </button>
+                        <div id={`notes-folder-${folder.id}`} className="notes-folder-notes" hidden={!open}>
+                          {filed.length ? filed.map(renderEntry) : <p className="notes-folder-empty">No notes in this folder.</p>}
+                        </div>
+                      </section>
+                    );
+                  })}
+                  {/* The strip sits just above the unfiled notes, below the folders: a note dragged out
+                      of a folder starts above it, so its appearance moves nothing under the pointer. */}
+                  {drag && drag.folderId !== null && folders.length > 0 && (
+                    <div className="notes-drop-unfiled" data-drop-target={dropTarget === null || undefined} {...dropHandlers(null)}>No folder</div>
+                  )}
+                </div>
+              )}
+            </div>
+            {groups.unfiled.length > 0 && <PanelSection label="Not in a folder">{groups.unfiled.map(renderEntry)}</PanelSection>}
+          </>
+        )}
+      </div>
+    </>
   );
 
   return (
-    <div className={`view notes-view ${libraryVisible ? "" : "notes-library-collapsed"}`}>
-      {error ? <p className="error">{error}</p> : null}
-
-      {titlebarControls && createPortal(<>
-            <button type="button" className="notes-library-toggle" aria-label={libraryExpanded ? "Collapse notes sidebar" : "Expand notes sidebar"} title={libraryExpanded ? "Collapse notes sidebar" : "Expand notes sidebar"} aria-expanded={libraryVisible} aria-controls="notes-library-content" onClick={() => { setLibraryPeek(false); setLibraryExpanded(value => !value); }}>
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="M3 3H21V21H3Z M14.5 3V21"/><path d={libraryExpanded ? "M17 10L19 12L17 14" : "M19 10L17 12L19 14"}/></svg>
-            </button>
-      </>, titlebarControls)}
+    <SplitView label="Notes library" panel={panel}>
+      <section className="notes-main" aria-label="Note editor" ref={mainRef}>
+        {error || exportedTo ? (
+          <div className="notes-notices">
+            {error ? <p className="error">{error}</p> : null}
+            {exportedTo ? <Row label="Written to" value={exportedTo} /> : null}
+          </div>
+        ) : null}
+        {openNote ? (
+          <NoteWorkspace
+            key={openNote.id}
+            ref={workspaceRef}
+            note={openNote}
+            reload={reload}
+            folderName={noteMeta(openNote, folders).folder}
+            onExport={() => exportNote(openNote.id)}
+            onMore={anchor => openNoteMenu(openNote, anchor)}
+          />
+        ) : <div className="notes-empty"><h3>Your writing space</h3><p className="muted">Choose a note or meeting from the sidebar, or start a new note.</p><button type="button" className="primary" onClick={() => { void newNote(); }}>New note</button> <button type="button" onClick={onImport}>Import audio or video</button></div>}
+      </section>
       {context && createPortal(<div ref={contextRef} className="notes-context-menu" role="dialog" aria-label={context.kind === "note" ? `Actions for ${context.note.title}` : `Actions for folder ${context.folder.name}`} style={{ left: context.x, top: context.y }} onContextMenu={event => event.preventDefault()} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) setContext(null); }}>
         {context.kind === "note" ? <>
                 <button
                   type="button"
                   onClick={() => {
                     setContext(null);
-                    void guard(async () => {
-                      const path = await exportNoteToFile(context.note.id, exportFormat);
-                      // `null` is a cancelled dialog, not a failure. Saying
-                      // "exported" for it would be a lie about a file that does
-                      // not exist.
-                      setExportedTo(path);
-                    });
+                    exportNote(context.note.id);
                   }}
                 >
                   Export…
@@ -350,119 +458,6 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
           void guard(async () => { await deleteFolder(folder.id); });
         }}>Delete folder</button>}
       </div>, document.body)}
-      <div className="notes-layout">
-        <section className="notes-main" aria-label="Note editor" ref={mainRef}>
-        {openNote ? (
-          <NoteWorkspace
-            key={openNote.id}
-            ref={workspaceRef}
-            note={openNote}
-            reload={reload}
-          />
-        ) : <div className="notes-empty"><h3>Your writing space</h3><p className="muted">Choose a note or meeting from the sidebar, or start a new note.</p><button type="button" className="primary" onClick={() => { void newNote(); }}>New note</button> <button type="button" onClick={onImport}>Import audio or video</button></div>}
-
-        </section>
-        <aside className="notes-library" aria-label="Notes and meetings">
-          <section id="notes-library-content" data-surface="notes.export" hidden={!libraryVisible}>
-
-        <div className="notes-library-tools" role="toolbar" aria-label="Notes library tools">
-          <div className="notes-library-actions">
-            <button type="button" className="labelled" onClick={() => { void newNote(); }}>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 12V2.6C4 2.26863 4.26863 2 4.6 2H16.2515C16.4106 2 16.5632 2.06321 16.6757 2.17574L19.8243 5.32426C19.9368 5.43679 20 5.5894 20 5.74853V21.4C20 21.7314 19.7314 22 19.4 22H11" /><path d="M16 2V5.4C16 5.73137 16.2686 6 16.6 6H20" /><path d="M1.99219 19H4.99219M7.99219 19H4.99219M4.99219 19V16M4.99219 19V22" /></svg>
-              <span>New note</span>
-            </button>
-            <button type="button" className="labelled" onClick={onImport}>
-              <Icon name="import" />
-              <span>Import</span>
-            </button>
-          </div>
-          <input type="search" aria-label="Search notes and meetings" placeholder="Search notes and meetings" value={query} onChange={event => {
-            const next = event.target.value;
-            setQuery(next);
-            const generation = ++searchGeneration.current;
-            if (!next.trim()) { setHits(null); return; }
-            void searchNotes(next, 20).then(value => { if (generation === searchGeneration.current) setHits(value); }).catch(fail);
-          }} />
-          <div className="notes-library-list-header">
-            <h2>Folders</h2>
-            <div className="notes-library-folder-tools">
-              <button type="button" aria-label="New folder" title="New folder" aria-expanded={libraryTool === "new-folder"} aria-controls="notes-library-tool-panel" onClick={() => setLibraryTool(value => value === "new-folder" ? null : "new-folder")}>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M18 6H20M22 6H20M20 6V4M20 6V8" /><path d="M21.4 20H2.6C2.26863 20 2 19.7314 2 19.4V11H21.4C21.7314 11 22 11.2686 22 11.6V19.4C22 19.7314 21.7314 20 21.4 20Z" /><path d="M2 11V4.6C2 4.26863 2.26863 4 2.6 4H8.77805C8.92127 4 9.05977 4.05124 9.16852 4.14445L12.3315 6.85555C12.4402 6.94876 12.5787 7 12.722 7H14" /></svg>
-              </button>
-              {/* The two line icons touch the top and bottom of their box, so the strokes are let out of it. */}
-              <button type="button" aria-label="Expand all folders" title="Expand all folders" disabled={folders.length === 0} onClick={() => setCollapsed(new Set())}>
-                <svg viewBox="0 0 24 24" overflow="visible" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M18 2L6 2" /><path d="M18 22L6 22" /><path d="M12 14V19M12 19L15 16M12 19L9 16" /><path d="M12 10V5M12 5L15 8M12 5L9 8" /></svg>
-              </button>
-              <button type="button" aria-label="Collapse all folders" title="Collapse all folders" disabled={folders.length === 0} onClick={() => setCollapsed(new Set(folders.map(folder => folder.id)))}>
-                <svg viewBox="0 0 24 24" overflow="visible" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M18 2L6 2" /><path d="M18 22L6 22" /><path d="M12 5V10M12 10L15 7M12 10L9 7" /><path d="M12 19V14M12 14L15 17M12 14L9 17" /></svg>
-              </button>
-            </div>
-          </div>
-        </div>
-        <div id="notes-library-tool-panel" ref={toolRef} onKeyDown={event => { if (event.key === "Escape") { setLibraryTool(null); document.querySelector<HTMLButtonElement>('.notes-library-tools button[aria-expanded="true"]')?.focus(); } }}>
-          {libraryTool === "new-folder" && <form className="notes-tool-panel" onSubmit={event => { event.preventDefault(); if (!folderName.trim()) return; void guard(async () => { await createFolder(folderName.trim()); setFolderName(""); setLibraryTool(null); }); }}>
-            <input aria-label="Folder name" placeholder="Folder name" value={folderName} onChange={event => setFolderName(event.target.value)} />
-            <button type="submit" disabled={!folderName.trim()}>Create folder</button>
-          </form>}
-        </div>
-
-        {hits === null ? null : (
-          <>
-            <h3>
-              {hits.length === 0
-                ? `Nothing matches "${query}"`
-                : `${hits.length} match${hits.length === 1 ? "" : "es"}`}
-            </h3>
-            <ul className="list">
-              {hits.map((hit) => (
-                <li key={hit.id}>
-                  <button type="button" onClick={() => { void selectNote(hit.id).catch(fail); }}>{hit.title}</button>
-                  <span className="muted"> {hit.snippet}</span>
-                </li>
-              ))}
-            </ul>
-          </>
-        )}
-
-        {hits !== null ? null : notes.length === 0 && folders.length === 0 ? (
-          <p className="muted">
-            No notes yet. Create a note, record a meeting, or import a recording.
-          </p>
-        ) : (
-          <>
-            {groups.folders.map(({ folder, notes: filed }) => {
-              const open = !collapsed.has(folder.id);
-              return (
-                <section key={folder.id} className="notes-folder" data-drop-target={dropTarget === folder.id || undefined} {...dropHandlers(folder.id)}>
-                  <button type="button" className="notes-folder-toggle" aria-expanded={open} aria-controls={`notes-folder-${folder.id}`} aria-haspopup="dialog"
-                    onClick={() => setCollapsed(prev => { const next = new Set(prev); if (next.has(folder.id)) next.delete(folder.id); else next.add(folder.id); return next; })}
-                    onContextMenu={event => { event.preventDefault(); setContext({ kind: "folder", folder, x: event.clientX, y: event.clientY, anchor: event.currentTarget }); }}
-                    onKeyDown={event => { if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) { event.preventDefault(); const rect = event.currentTarget.getBoundingClientRect(); setContext({ kind: "folder", folder, x: rect.left, y: rect.bottom, anchor: event.currentTarget }); } }}>
-                    <svg className="notes-folder-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
-                    <span className="notes-folder-name" title={folder.name}>{folder.name}</span>
-                  </button>
-                  <div id={`notes-folder-${folder.id}`} hidden={!open}>
-                    {filed.length ? renderEntries(filed) : <p className="muted notes-folder-empty">No notes in this folder.</p>}
-                  </div>
-                </section>
-              );
-            })}
-            {/* The strip sits just above the unfiled notes, below the folders: a note dragged out
-                of a folder starts above it, so its appearance moves nothing under the pointer. */}
-            {drag && drag.folderId !== null && folders.length > 0 && (
-              <div className="notes-drop-unfiled" data-drop-target={dropTarget === null || undefined} {...dropHandlers(null)}>No folder</div>
-            )}
-            {groups.unfiled.length > 0 && renderEntries(groups.unfiled)}
-          </>
-        )}
-
-
-        {exportedTo ? <Row label="Written to" value={exportedTo} /> : null}
-
-
-          </section>
-        </aside>
-      </div>
-    </div>
+    </SplitView>
   );
 }

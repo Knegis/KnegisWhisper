@@ -16,7 +16,7 @@ node tools/visual-check/shell-rail.mjs
 It needs Node 22, Microsoft Edge, and the Vite dev server at the loopback URL
 used by the application. `--edge`, `--url`, `--port`, `--out`, and
 `--keep-fixture-banner` are available; `--help` prints the full usage. The
-tool measures seven shell claims (KNEG-363):
+tool measures nine shell claims (KNEG-363):
 
 1. `nav.rail` is 68px wide and exactly one `.rail-item[aria-current=page]`
    exists.
@@ -29,6 +29,12 @@ tool measures seven shell claims (KNEG-363):
    `document.scrollingElement.scrollWidth <= innerWidth`.
 6. Tab reaches every rail entry and the search field, each with a 2px outline.
 7. Ctrl+K focuses `input[role=combobox]` (and Escape empties it and leaves).
+8. On Notes, `.note-detail` is one grid track with the Notes, Transcript and
+   Replay tabs at 1000x720; at 1440x900 it is two, with a 340px transcript
+   column and the Transcript tab hidden; back at 1000x720 the tab returns.
+9. After a load at 720x520 on Notes with the library opened, nothing scrolls
+   sideways (the document or `.notes-main`), every tab sits inside
+   `.notes-main`, and fixture note 104's long title ellipsises in the panel.
 
 "Hidden" is measured as the computed display and width, not the `hidden`
 attribute alone. The 720x520 check reloads at that size, because the panel's

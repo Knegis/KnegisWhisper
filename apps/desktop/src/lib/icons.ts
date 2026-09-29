@@ -8,9 +8,12 @@
  * `Settings.dc.html`, and the Meetings and Notes artboards for the handful
  * that live there instead) -- see
  * `.superpowers/sdd/nifty-tumbling-giraffe/icons-from-canvas.md` for the
- * source table. `restore` is the one exception: it is not on the canvas, but
- * the title bar needs a fourth window-state icon and this draws it in the
- * same stroke and corner style as the other three.
+ * source table. Three are not on the canvas. `restore` is drawn for the title
+ * bar, which needs a fourth window-state icon, in the same stroke and corner
+ * style as the other three. `expandAll` and `collapseAll` are the Notes
+ * library's two folder buttons, carried over path for path from the inline
+ * SVGs the library drew before it moved into the list panel; here they take
+ * the Kit's square caps and miter joins like every other entry.
  *
  * A plain `d` string rather than a component per icon, so `Icon.tsx` is the
  * only place a `<path>` is ever written and `tests/icons.test.ts` can check
@@ -59,7 +62,9 @@ export type IconName =
   | "export"
   | "refresh"
   | "clock"
-  | "call";
+  | "call"
+  | "expandAll"
+  | "collapseAll";
 
 export const ICONS: Record<IconName, string> = {
   dictation: "M3.75 10v4M7.5 7v10M11.25 4v16M15 8v8M18.75 10.5v3",
@@ -108,6 +113,8 @@ export const ICONS: Record<IconName, string> = {
   refresh: "M19.25 12a7.25 7.25 0 1 1-2.1-5.1M19.25 4.75v4.5h-4.5",
   clock: "M20.25 12a8.25 8.25 0 1 1-16.5 0 8.25 8.25 0 0 1 16.5 0zM12 7.5V12l3 2",
   call: "M3.75 6.75h11.5v10.5H3.75zM15.25 10.5l5-3v9l-5-3",
+  expandAll: "M18 2L6 2M18 22L6 22M12 14V19M12 19L15 16M12 19L9 16M12 10V5M12 5L15 8M12 5L9 8",
+  collapseAll: "M18 2L6 2M18 22L6 22M12 5V10M12 10L15 7M12 10L9 7M12 19V14M12 14L15 17M12 14L9 17",
 };
 
 /**

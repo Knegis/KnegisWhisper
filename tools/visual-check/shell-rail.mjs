@@ -3,7 +3,8 @@
  * Runs repeatable rail, list-panel and title-bar measurements against dev
  * fixtures: the 68px rail and its one current entry, the Settings panel and
  * its Developer section, the title bar's panel toggle, the 720x520 minimum
- * window, keyboard focus, and Ctrl+K.
+ * window, keyboard focus, Ctrl+K, and Notes: the transcript column a wide
+ * window gives a note, and the 720x520 fit of a note beside its library.
  */
 import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -31,6 +32,9 @@ export function clipRail({ rect, scrollX = 0, scrollY = 0 }) {
 const TOGGLE = '.app-titlebar button[aria-controls="list-panel"]';
 const RAIL_ITEM = "nav.rail .rail-item";
 const PANEL_ITEM = ".list-panel .panel-item";
+// Fixture note 104 (`apps/desktop/src/lib/devFixtures.ts`), whose title is there to be too long.
+const LONG_TITLE = "A deliberately long title that exists so the notes list can be judged when someone types far more than the column was designed for";
+const NOTE_OPEN = "Boolean(document.querySelector('.note-detail input[aria-label=\"Title\"]:enabled'))";
 
 const screenshot = async (cdp, out, name, options) => {
   await cdp.screenshot(resolve(out, name), options);
@@ -104,8 +108,8 @@ async function key(cdp, { key: name, code, keyCode, modifiers = 0 }) {
  * Waits for the shell, then removes the fixture banner unless asked not to.
  *
  * "A page in the card" is `.split-main` or `.content`: Dictation, the opening
- * screen, draws its own split with no `.content` since KNEG-363's Task 3, and
- * Notes draws `.content` with no `.split-main`.
+ * screen, draws its own split with no `.content` since KNEG-363's Task 3, as
+ * Meetings and Notes do; the settings screens and Notes > Upload have both.
  */
 async function ready(cdp, options) {
   await waitFor(
@@ -334,6 +338,89 @@ export async function runShellRail(options) {
         "The Escape half is the field's other shortcut, measured in the same pass;",
         "the screenshot is taken after typing \"meeting\", with the results open.",
       ].join(" "),
+    });
+
+    // Notes, from a fresh load at 1000x720: the page opens on fixture note 101,
+    // which has a transcript. The viewport then widens past 1280px and narrows
+    // back on the same loaded page, so what re-lays the note out is the page's
+    // own `(min-width: 1280px)` change listener, not a reload.
+    await viewport(cdp, 1000, 720);
+    await reload(cdp);
+    await ready(cdp, options);
+    await click(cdp, RAIL_ITEM, "Notes");
+    await waitFor(cdp, NOTE_OPEN, "a note to open");
+    const notesNarrow = await cdp.evaluate(snippets.notesGrid());
+    const shot8a = await screenshot(cdp, out, "08-notes-1000x720.png");
+    await viewport(cdp, 1440, 900);
+    await waitFor(cdp, "Boolean(document.querySelector('.note-detail-wide .note-side'))", "the transcript column");
+    const notesWide = await cdp.evaluate(snippets.notesGrid());
+    const shot8b = await screenshot(cdp, out, "08-notes-1440x900.png");
+    await viewport(cdp, 1000, 720);
+    await waitFor(cdp, "!document.querySelector('.note-detail-wide')", "the transcript column to go");
+    const notesBack = await cdp.evaluate(snippets.notesGrid());
+    const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+    addCheck(report, {
+      id: "8",
+      claim: [
+        "Below 1280px a note is one column with three tabs; at 1440px its transcript is a",
+        "340px second column and the Transcript tab is hidden; narrowing again brings the tab back.",
+      ].join(" "),
+      measured: { notesNarrow, notesWide, notesBack },
+      expectation: [
+        ".note-detail has 1 grid track and tabs Notes, Transcript, Replay at 1000x720;",
+        "2 tracks, tabs Notes, Replay and a 340px .note-side at 1440x900; 1 track and three tabs again at 1000x720",
+      ].join(" "),
+      matches: notesNarrow.tracks === 1
+        && same(notesNarrow.tabs, ["Notes", "Transcript", "Replay"])
+        && notesNarrow.sideWidth === null
+        && notesWide.tracks === 2
+        && same(notesWide.tabs, ["Notes", "Replay"])
+        && notesWide.sideWidth === 340
+        && notesBack.tracks === 1
+        && same(notesBack.tabs, ["Notes", "Transcript", "Replay"]),
+      screenshots: [shot8a, shot8b],
+      note: "Measured on fixture note 101, the note Notes opens first. Tabs are counted by computed display.",
+    });
+
+    // The minimum window again, on Notes with the library opened: the panel
+    // starts hidden at 720px, so the toggle is pressed once.
+    await viewport(cdp, 720, 520);
+    await reload(cdp);
+    await ready(cdp, options);
+    await click(cdp, RAIL_ITEM, "Notes");
+    await waitFor(cdp, NOTE_OPEN, "a note to open");
+    const notesToggle = await cdp.evaluate(snippets.panelToggle());
+    await cdp.evaluate(snippets.clickSelector(TOGGLE));
+    await delay(150);
+    const notesMinimum = {
+      toggle: notesToggle,
+      panel: await cdp.evaluate(snippets.panelState()),
+      overflow: await cdp.evaluate(snippets.overflowState()),
+      tabs: await cdp.evaluate(snippets.notesTabsContained()),
+      longTitle: await cdp.evaluate(snippets.notesEntry(LONG_TITLE)),
+    };
+    const shot9 = await screenshot(cdp, out, "09-notes-720x520.png");
+    addCheck(report, {
+      id: "9",
+      claim: [
+        "At 720x520 with the library open, a note fits without sideways scroll, its tabs sit inside",
+        ".notes-main, and note 104's long title is cut off with an ellipsis in the panel.",
+      ].join(" "),
+      measured: notesMinimum,
+      expectation: [
+        "the toggle starts collapsed and one press shows .list-panel; document and .notes-main",
+        "scrollWidth <= their clientWidth; all three tabs inside .notes-main; the 104 row's title",
+        "is nowrap with text-overflow ellipsis and scrollWidth > clientWidth",
+      ].join(" "),
+      matches: notesToggle.expanded === "false"
+        && notesMinimum.panel.visible
+        && notesMinimum.overflow.scrollWidth <= notesMinimum.overflow.innerWidth
+        && notesMinimum.tabs.mainScrollWidth <= notesMinimum.tabs.mainClientWidth
+        && notesMinimum.tabs.count === 3
+        && notesMinimum.tabs.contained
+        && notesMinimum.longTitle.ellipsised,
+      screenshots: [shot9],
+      note: "The tab comparison is the one notes-smoke.mjs makes in the native window; this is not that run.",
     });
 
     const markdown = renderMarkdown(report);

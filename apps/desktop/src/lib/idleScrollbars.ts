@@ -1,4 +1,6 @@
-const surfaces = ".list-panel, .notes-main, .notes-library, .notes-view .transcript-rows";
+// The same list as the `:is(...)` rules in `styles.css`: the list panel, Notes' scroller, and the
+// note and its transcript column, which scroll on their own in a wide window.
+const surfaces = ".list-panel, .notes-main, .note-body, .note-side-body";
 
 /** Reveal native scrollbars during scrolling or while pointing at their track. */
 export function installIdleScrollbars(): () => void {

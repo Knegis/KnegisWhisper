@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { ButtonHTMLAttributes, ReactNode } from "react";
 
 import type { IconName } from "../lib/icons";
 import { Icon } from "./Icon";
@@ -8,8 +8,8 @@ import { Icon } from "./Icon";
  * rows inside them. `SplitView` places the panel; these fill it.
  *
  * Shared rather than written per page, because every page that has a panel
- * draws the same four things -- the Settings panel today, Dictation's history,
- * Meetings' recent list and the Notes library once they move into one -- and
+ * draws the same four things -- the Settings panel, Dictation's history,
+ * Meetings' recent list and the Notes library -- and
  * a row that looked one way in one panel and another way in the next would
  * read as two kinds of thing where there is one.
  *
@@ -70,6 +70,12 @@ export function PanelSection({ label, children }: { label: string | null; childr
  * and becomes the button's `title`, which `components/Tooltip.tsx` draws. It
  * is opt-in because a Settings row's label always fits, and a tooltip
  * repeating it on every hover and focus would only be noise.
+ *
+ * `className` and `titleClassName` add to the button's and the title span's
+ * own classes, and any other button attribute passes through to the button.
+ * Both are for the Notes library, whose rows are dragged between folders and
+ * carry a right-click menu, and whose `notes-entry` / `notes-entry-title`
+ * classes are what `tools/visual-check/notes-smoke.mjs` finds a note by.
  */
 export function PanelItem({
   title,
@@ -80,6 +86,9 @@ export function PanelItem({
   icon,
   tooltip,
   onClick,
+  className: extraClass,
+  titleClassName,
+  ...button
 }: {
   title: string;
   srSuffix?: string | null;
@@ -89,15 +98,18 @@ export function PanelItem({
   icon?: IconName;
   tooltip?: string;
   onClick: () => void;
-}) {
+  className?: string;
+  titleClassName?: string;
+} & Omit<ButtonHTMLAttributes<HTMLButtonElement>, "title" | "className" | "onClick" | "type" | "children" | "aria-current">) {
   const className = [
     "panel-item",
     icon === undefined ? null : "panel-item-icon",
     muted ? "panel-item-muted" : null,
+    extraClass ?? null,
   ].filter((name) => name !== null).join(" ");
   const text = (
     <>
-      <span className="panel-item-title">
+      <span className={titleClassName === undefined ? "panel-item-title" : `panel-item-title ${titleClassName}`}>
         {title}
         {srSuffix === null ? null : <span className="sr-only">{srSuffix}</span>}
       </span>
@@ -105,7 +117,7 @@ export function PanelItem({
     </>
   );
   return (
-    <button type="button" className={className} aria-current={current ? "page" : undefined} title={tooltip} onClick={onClick}>
+    <button type="button" {...button} className={className} aria-current={current ? "page" : undefined} title={tooltip} onClick={onClick}>
       {icon === undefined ? text : <><Icon name={icon} /><span className="panel-item-body">{text}</span></>}
     </button>
   );

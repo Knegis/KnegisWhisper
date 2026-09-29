@@ -44,11 +44,12 @@ import { LanguagePopup } from "./components/LanguagePopup";
  * gets `SplitView` with the shared `SettingsPanel`; the title bar's toggle
  * collapses that panel, and the collapsed state reaches it through
  * `PanelCollapsed` rather than props. Dictation, Meetings and Notes each
- * render their own `SplitView`, because they own their panel's data.
- * Dictation and Meetings do already: each goes into the card bare, with no
- * `.content` and no `PageHeader`, since its task hero says what the page is
- * for. Notes does not yet, and renders in the card as it did before it --
- * full-bleed, with its own library.
+ * render their own `SplitView`, because they own their panel's data -- the
+ * history, the recent and interrupted recordings, the notes library -- and
+ * each goes into the card bare, with no `.content` and no `PageHeader`: a
+ * task hero says what Dictation and Meetings are for, and a note's own title
+ * is the heading on Notes. Notes > Upload is the one page with no panel; it
+ * keeps its `PageHeader`, and the title bar draws no panel toggle for it.
  *
  * # The error boundary
  *
@@ -247,7 +248,11 @@ function Shell({ panelCollapsed, onTogglePanel }: { panelCollapsed: boolean; onT
     if (railOf(view) === "settings") lastSettings.current = view;
   }, [view]);
 
-  const titlebar = <TitleBar panelCollapsed={panelCollapsed} onTogglePanel={onTogglePanel} onOpenNote={openNote}
+  // Every page draws a list panel but Notes > Upload -- see `# The card`
+  // above -- and the title bar's toggle is drawn only where there is one to
+  // toggle.
+  const hasListPanel = view !== "notes-upload";
+  const titlebar = <TitleBar panelCollapsed={panelCollapsed} hasListPanel={hasListPanel} onTogglePanel={onTogglePanel} onOpenNote={openNote}
     canGoBack={history.index > 0} canGoForward={history.index < history.entries.length - 1}
     onBack={() => navigate({ type: "back" })} onForward={() => navigate({ type: "forward" })} />;
 
@@ -283,10 +288,11 @@ function Shell({ panelCollapsed, onTogglePanel }: { panelCollapsed: boolean; onT
     </ViewBoundary>
   );
 
-  // Dictation and Meetings draw their own `SplitView` -- Dictation's panel is
-  // its history, Meetings' its recent and interrupted recordings -- so each
-  // goes into the card bare, with no `.content` and no `PageHeader`.
-  if (view === "dictation" || view === "meetings") return frame(boundary);
+  // Dictation, Meetings and Notes draw their own `SplitView` -- Dictation's
+  // panel is its history, Meetings' its recent and interrupted recordings,
+  // Notes' its library -- so each goes into the card bare, with no `.content`
+  // and no `PageHeader`.
+  if (view === "dictation" || view === "meetings" || view === "notes") return frame(boundary);
 
   const content = (
     <div className="content">
@@ -295,9 +301,8 @@ function Shell({ panelCollapsed, onTogglePanel }: { panelCollapsed: boolean; onT
     </div>
   );
 
-  // Every settings and developer screen shares one panel. Notes fills the
-  // card by itself (`.content:has(.notes-view)`), library included. The rest
-  // -- `notes-upload` -- scrolls in `.split-main` as a split with no panel
+  // Every settings and developer screen shares one panel. The rest --
+  // `notes-upload` -- scrolls in `.split-main` as a split with no panel
   // beside it: the card clips its overflow, so the page cannot scroll the
   // card itself.
   if (railOf(view) === "settings") {
@@ -307,7 +312,7 @@ function Shell({ panelCollapsed, onTogglePanel }: { panelCollapsed: boolean; onT
       </SplitView>,
     );
   }
-  return frame(view === "notes" ? content : <div className="split-main">{content}</div>);
+  return frame(<div className="split-main">{content}</div>);
 }
 
 /** The width at and below which the list panel starts, and falls, collapsed. */
@@ -320,8 +325,8 @@ const NARROW = "(max-width: 900px)";
 function MainWindow() {
   useEffect(installIdleScrollbars, []);
   // Collapsed from the start at 900px and below, and collapsed again whenever
-  // the window narrows past that -- the rule Notes' own library already
-  // follows. At the 720x520 minimum, rail and panel together would leave the
+  // the window narrows past that -- the rule Notes' own library followed
+  // before it became this panel. At the 720x520 minimum, rail and panel together would leave the
   // page about 372px. Widening never reopens it: the panel only reappears when
   // someone asks for it.
   const [panelCollapsed, setPanelCollapsed] = useState(() => window.matchMedia(NARROW).matches);

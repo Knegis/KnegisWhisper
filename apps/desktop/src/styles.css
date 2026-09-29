@@ -153,12 +153,14 @@
    * and centred in it. The rail is in flow beside the card now, so it holds
    * its own space open, and `.rail` is the only rule that reads this.
    *
-   * `--content-max` is derived, not chosen by feel. The widest layout in the
-   * application is `.note-workspace`, `minmax(0, 1fr) 22rem`: a markdown editor
-   * beside a 22rem transcript. A comfortable editor is about 44rem, so
-   * 44.5 + 1.5 (`--row-gap`) + 22 is where that layout stops being cramped, and
-   * 68rem is that number. Wider would only stretch prose past a readable
-   * measure; the cap on `.row-detail` below exists for the same reason.
+   * `--content-max` caps `.content`, the column a settings or developer
+   * screen and Notes > Upload render in. It was derived from a layout that has
+   * since gone -- `.note-workspace` as a markdown editor beside a 22rem
+   * transcript, where 44.5 + 1.5 (`--row-gap`) + 22 was the point it stopped
+   * being cramped -- and is kept because it is still a good measure: wider
+   * would only stretch prose past a readable one, which is why `.row-detail`
+   * below is capped too. Notes no longer renders in `.content`; its own wide
+   * layout, the transcript as a column, is `.note-detail-wide`.
    *
    * What this is worth, at the current 15px root, on Providers with the
    * Settings panel open (measured in headless Edge against dev fixtures, not
@@ -308,8 +310,9 @@ h2,
  *
  * The card clips (`overflow: hidden`) so its corners hold, which means the
  * card cannot scroll: a page scrolls in a `.split-main`, with or without a
- * list panel beside it. Notes is the exception, filling the card by itself
- * (`.content:has(.notes-view)`, below).
+ * list panel beside it -- or, on Notes, in `.notes-main` inside it, which is
+ * exactly as tall as `.split-main` so that a note's transcript column can
+ * keep to the window's height (`.note-detail-wide`, below).
  *
  * Every hover here is written `:hover:not(:disabled)`. The generic
  * `button:hover:not(:disabled)` further down scores (0,2,1), which beats a
@@ -1111,15 +1114,31 @@ button.marked:hover:not(:disabled) {
 .note-editor .milkdown .ProseMirror *::-moz-selection { background: var(--crepe-color-hover); }
 .note-editor .milkdown .ProseMirror .ProseMirror-selectednode, .note-editor .milkdown .ProseMirror li.ProseMirror-selectednode { background: var(--crepe-color-hover); }
 
-.note-detail-header input[aria-label="Title"] {
-  min-width: min(20rem, 100%);
-  flex: 1 1 20rem;
-  padding: 0.25rem 0;
+/*
+ * The note's title is the page's heading, at the canvas' 32px, and it is a
+ * field: borderless and unfilled, so it reads as the heading it is until the
+ * caret is in it. Weight 400, because that is the only weight Switzer ships.
+ * `.note-detail` in the selector because the generic text-field rule further
+ * down, `input:not([type="checkbox"]):not([type="radio"])`, is as specific as
+ * the rest of it and comes later: without it the title took that rule's fill,
+ * padding and inherited 15px.
+ */
+.note-detail .note-detail-header input[aria-label="Title"] {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  padding: 0;
   color: var(--text);
   font: inherit;
-  font-size: 1.25rem;
+  font-size: 32px;
+  font-weight: 400;
+  line-height: 40px;
+  letter-spacing: -0.4px;
+  /* A title longer than the column ends in an ellipsis while the caret is elsewhere, rather than mid-letter. */
+  text-overflow: ellipsis;
   background: transparent;
   border: 0;
+  border-radius: 2px;
 }
 
 /*
@@ -1193,16 +1212,6 @@ button.marked:hover:not(:disabled) {
   cursor: pointer;
 }
 
-.transcript-row-current {
-  color: var(--band-ink);
-  background: var(--band);
-}
-
-.transcript-row-current .transcript-speaker,
-.transcript-row-current .transcript-clock {
-  color: var(--band-ink);
-}
-
 .transcript-row-muted {
   color: var(--muted);
   cursor: default;
@@ -1222,6 +1231,7 @@ button.marked:hover:not(:disabled) {
 
 /* Keep a renameable label in the row's text flow without button chrome. */
 button.transcript-speaker {
+  margin: 0;
   background: none;
   border: 0;
   padding: 0;
@@ -1240,12 +1250,28 @@ button.transcript-speaker:focus-visible {
 /* The global button hover fill would turn an inline label into a separate box. */
 .transcript-rows button.transcript-speaker:hover:not(:disabled) { background: none; }
 
-/* The active row's filled band needs readable ink even when its label is focused. */
-.transcript-row-current button.transcript-speaker,
-.transcript-row-current button.transcript-speaker:hover:not(:disabled),
-.transcript-row-current button.transcript-speaker:focus-visible {
-  color: var(--band-ink);
-}
+/*
+ * `TranscriptPanel`'s rows -- a note's Transcript tab, and its column in a
+ * wide window -- as the canvas draws them: who and when on one line, the
+ * speaker in the text colour and the time in the machine voice, muted, and
+ * what was said underneath. Scoped to `.transcript`, the panel's own `aside`,
+ * because the meeting window's live rows share `.transcript-rows` and keep
+ * the grid above.
+ *
+ * The selected or playing row is `--band-wash` behind unchanged text, its
+ * time in `--band-text`, the text-safe blue. It was a solid `--band` fill
+ * with every part of the row in `--band-ink`.
+ */
+.transcript .transcript-rows li { display: flex; flex-direction: column; align-items: stretch; gap: 2px; padding: 10px 12px; }
+.transcript-row-head { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.transcript .transcript-speaker { font-size: 13px; line-height: 18px; color: var(--text); }
+.transcript .transcript-row-muted .transcript-speaker { color: var(--muted); }
+.transcript .transcript-clock { font-size: 12px; line-height: 16px; color: var(--muted); }
+.transcript-text { font-size: 14.5px; line-height: 22px; overflow-wrap: anywhere; }
+button.transcript-play { height: 24px; margin: 0 0 0 auto; padding: 0 8px; border-radius: 2px; color: var(--muted); font-size: 12.5px; line-height: 18px; }
+button.transcript-play:hover:not(:disabled) { color: var(--text); }
+.transcript-row-current { background: var(--band-wash); }
+.transcript .transcript-row-current .transcript-clock { color: var(--band-text); }
 
 /* Wrap on narrow notes while keeping the field and actions beside their label when space permits. */
 .transcript-rename {
@@ -1291,28 +1317,36 @@ button.transcript-speaker:focus-visible {
 }
 
 /*
- * The transcript drops below the editor when there is not room for both.
+ * The transcript beside the note, in a window 1280px wide or wider.
  *
- * The threshold is re-derived rather than kept. This was `64rem`, which tested
- * the *viewport* while the container was 46rem -- so in the 1000px default
- * window (62.5rem) it fired every time, and this layout has **never** shown two
- * columns in the shipped application. The container is now
- * `viewport - var(--nav-col) - 4rem` of `.content` padding, and two columns want
- * 44.5 + 1.5 + 22 = 68rem of it, so the viewport threshold is 68 + 13 + 4 =
- * 85rem... which the cap makes unnecessary: `.content` stops growing at
- * `--content-max`, and the narrowest container that still holds both columns
- * without squeezing the editor below ~40rem is 63.5rem, i.e. a viewport of
- * 80.5rem.
+ * `.note-workspace` is always one column: the editor and the summary, the
+ * transcript and the replay are its tabs. What changes at the width is the
+ * note around it. `NoteWorkspace.tsx` matches `(min-width: 1280px)` and, while
+ * it holds, adds `.note-detail-wide` to the article: `minmax(0, 1fr) 340px`,
+ * with the transcript taken out of its tab into a `--panel` column behind a
+ * left rule, the Transcript tab hidden, and the player at the foot of that
+ * column. The note and the column each scroll on their own there, so the
+ * article is exactly as tall as `.notes-main` and neither of them is.
  *
- * So: one column at or below 80rem, two above. At the default window it is one
- * column exactly as before -- no change there -- and on a maximised display it
- * is two, which it never was.
+ * Why 1280: beside the 68px rail, the card's 10px of margin and border and
+ * the 272px list panel, a 1280px window leaves the note about 590px next to
+ * the column; narrower, and the editor goes below a readable measure to make
+ * room. Below the width the article is a one-track grid, so the measured
+ * claim is the same either way -- one track, or two.
  */
-@media (max-width: 80rem) {
-  .note-workspace {
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
+.note-detail { display: grid; grid-template-columns: minmax(0, 1fr); flex: none; }
+.note-detail-wide { flex: 1; min-height: 0; grid-template-columns: minmax(0, 1fr) 340px; }
+.note-detail-wide > .note-body { min-height: 0; overflow-y: auto; }
+.note-side { display: flex; flex-direction: column; min-height: 0; background: var(--panel); border-left: 1px solid var(--rule); }
+.note-side-label { flex: none; display: flex; align-items: center; height: 52px; margin: 0; padding: 0 20px; font: 12px/16px var(--font-mono); letter-spacing: .5px; text-transform: uppercase; color: var(--muted); }
+.note-side-body { flex: 1; min-height: 0; overflow-y: auto; }
+.note-side-body > p { margin: 0 20px; }
+.note-side-body .transcript > button { margin: 0 20px 8px; }
+.note-side-body .transcript-rename { margin: 0 20px 12px; }
+.note-side-body .transcript-rename input { min-width: 0; flex: 1 1 10rem; }
+.note-side-body .transcript-rows { max-height: none; margin: 0; }
+.note-side-body .transcript .transcript-rows li { padding: 10px 20px; }
+.note-side-player { flex: none; padding: 12px 16px; border-top: 1px solid var(--rule); background: var(--bg); }
 
 /*
  * Several controls on one settings row lay out across, not down.
@@ -1473,25 +1507,13 @@ label:has(> input[type="checkbox"]) {
 }
 
 /*
- * The editable saved-note surface, deliberately separate from `.preview` above.
- * The preview is exact export bytes; this surface hosts the editor and optional
- * transcript workspace.
+ * The editable saved-note surface (`.note-detail`, laid out with the wide
+ * layout above), deliberately separate from `.preview` above. The preview is
+ * exact export bytes; this surface hosts the editor and the transcript. It sits
+ * on the card itself, with no wash and no inset of its own: `.note-page` sets
+ * its measure and padding, and its header is the title over the meta row.
  */
-.note-detail {
-  margin: var(--row-gap) 0 1rem;
-  padding: 0.9rem 1rem;
-  background: var(--wash);
-}
-
-.note-detail-header {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 0.75rem;
-  padding-bottom: 0.75rem;
-  border-bottom: 1px solid var(--faint);
-}
+.note-detail-header { display: block; }
 
 /* ----------------------------------------------------------- panel windows */
 /*
@@ -2171,97 +2193,85 @@ button.microphone-language-toggle:hover:not(:disabled) { background: transparent
 .titlebar-search-popup button span { font-size: 12px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 
 /*
- * Notes fills the card by itself, its own collapsible library included, until
- * it draws a list panel like the other two jobs. `.content` is a flex item of
- * the card here, stretched to the card's height, which is what gives
- * `.notes-view`'s 100% something definite to resolve against.
+ * Notes (`views/Notes.tsx`): the library in the list panel, and the open note
+ * in `.notes-main` beside it.
+ *
+ * `.notes-main` is exactly as tall as `.split-main` -- a flex item of the
+ * card's split, stretched, so its 100% has something definite to resolve
+ * against -- and it is the scroller: below the wide layout the whole note
+ * scrolls in it and the mini player sticks to its foot. In the wide layout
+ * the article fills it (`.note-detail-wide`, above) and the note and the
+ * transcript column scroll on their own, so `.notes-main` does not, and
+ * gives back the gutter it would otherwise hold for a scrollbar. What the
+ * library reports -- a failure, the file an export was written to -- sits
+ * above the note, where a collapsed panel cannot hide it.
  */
-.content:has(.notes-view) { flex: 1; min-width: 0; max-width: none; padding: 0; }
-.notes-view { --notes-rail: 17rem; height: 100%; display: flex; flex-direction: column; }
-.notes-view.notes-library-collapsed { --notes-rail: 0px; }
-.notes-library-collapsed .notes-library { padding: 0; border: 0; visibility: hidden; scrollbar-gutter: auto; }
-.notes-layout { display: grid; grid-template-columns: minmax(0, 1fr) var(--notes-rail); min-height: 0; flex: 1; overflow: hidden; }
-.notes-main { min-width: 0; min-height: 0; overflow-y: auto; scrollbar-gutter: stable; margin: 0; padding: 1.5rem clamp(1rem, 4vw, 4rem) 3rem; padding-left: max(88px, min(4vw, 4rem)); }
-.notes-main-heading { display: flex; align-items: center; justify-content: space-between; gap: 1rem; max-width: 64rem; margin: 0 auto 1.5rem; }
-.notes-main-heading h2 { margin: 0; }
-.notes-main .note-detail { max-width: 64rem; margin: 0 auto; padding: 0; background: transparent; }
-.notes-main .note-workspace { grid-template-columns: minmax(0, 1fr); margin-top: 0; }
-.notes-main .note-editor, .notes-main .note-editor .milkdown .ProseMirror { min-height: 55vh; }
-.notes-empty { max-width: 40rem; margin: 15vh auto 0; text-align: center; }
-.notes-library { min-height: 0; min-width: 0; overflow: auto; scrollbar-gutter: stable both-edges; padding: 0.75rem 0; border-left: 1px solid var(--faint); }
+/* `margin: 0` because `.notes-main` and `.notes-folder` are sections, and `section` carries a top margin and a `--surface` fill for the settings screens. */
+.notes-main { height: 100%; min-width: 0; margin: 0; display: flex; flex-direction: column; overflow-y: auto; scrollbar-gutter: stable; }
+.notes-main:has(> .note-detail-wide) { overflow: hidden; scrollbar-gutter: auto; }
+.note-detail-wide > .note-body { scrollbar-gutter: stable; }
+.notes-notices { flex: none; padding: 12px 40px 0; }
+.notes-notices > p { margin: 0 0 6px; }
+.notes-notices .row { display: flex; flex-wrap: wrap; gap: 2px 10px; padding: 0 0 6px; }
+.notes-notices .row-value { min-width: 0; overflow-wrap: anywhere; }
+.notes-empty { max-width: 40rem; margin: 15vh auto 0; padding: 0 40px; text-align: center; }
 /* Keep the native track's layout space so revealing it never shifts content. */
-:is(.list-panel, .notes-main, .notes-library, .notes-view .transcript-rows) {
+:is(.list-panel, .notes-main, .note-body, .note-side-body) {
   scrollbar-color: transparent transparent;
 }
-:is(.list-panel, .notes-main, .notes-library, .notes-view .transcript-rows).scrollbar-active {
+:is(.list-panel, .notes-main, .note-body, .note-side-body).scrollbar-active {
   scrollbar-color: var(--muted) transparent;
 }
 @media (forced-colors: active) {
-  :is(.list-panel, .notes-main, .notes-library, .notes-view .transcript-rows) { scrollbar-color: auto; }
+  :is(.list-panel, .notes-main, .note-body, .note-side-body) { scrollbar-color: auto; }
 }
-.notes-library-toggle { display: flex; align-items: center; justify-content: center; flex: 0 0 calc(18px + 0.8rem); width: calc(18px + 0.8rem); height: calc(18px + 0.8rem); padding: 0.4rem; margin: 0; border-radius: 2px; }
-.notes-library-toggle svg { flex-shrink: 0; }
-.notes-library section { margin: 0; padding: 0; }
-.notes-library section[hidden] { display: none; }
-.notes-library .row { display: flex; flex-direction: column; gap: 0.35rem; padding: 0.6rem 0; }
-.notes-library .row-value { min-width: 0; width: 100%; }
-.notes-library input, .notes-library select { min-width: 0; max-width: 100%; width: 100%; }
-.notes-library .list { margin: 0; padding: 0; list-style: none; }
-.notes-library .list > li { padding: 0.75rem 0; border-bottom: 1px solid var(--faint); }
-.notes-library .list > li > .muted { display: block; font-size: 0.75rem; overflow-wrap: anywhere; margin: 0.4rem 0; }
-.notes-library button { border-radius: 2px; }
-.notes-library button.notes-entry { display: block; width: 100%; margin: 0; text-align: left; overflow-wrap: anywhere; }
-.notes-library button.notes-entry-current { background: var(--band); color: var(--band-ink); }
-.notes-library .preview { white-space: pre-wrap; overflow-wrap: anywhere; }
-@media (prefers-reduced-motion: no-preference) { .notes-layout { transition: grid-template-columns 160ms ease-in-out; } }
-@media (max-width: 60rem) { .notes-view { --notes-rail: 17rem; } .notes-main { padding: 1rem; padding-left: 88px; } }
-@media (max-width: 44rem) { .notes-view { --notes-rail: min(17rem, 45vw); } .notes-library { top: 0; } }
 
-.notes-library .list > li { display: block; padding: 0.15rem 0; border: 0; }
-/* One line per note: the title, with the creation time in the tooltip rather than under it. */
-.notes-library button.notes-entry { padding: 0.35rem 0.7rem; }
-.notes-entry-title { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-family: var(--font-sans); font-size: 1rem; font-weight: 400; line-height: 1.4; }
+/*
+ * The library, as the canvas draws it: New note and Import as panel actions,
+ * a boxed search field, a Folders heading with its three buttons, each folder
+ * a 32px row -- disclosure, folder, name, count -- with its notes indented
+ * 45px under it, and the notes in no folder under their own heading.
+ *
+ * A note row is a `PanelItem` (`notes-entry` is the smoke scripts' handle on
+ * it), its title one line and ellipsised, its meta the Meetings list's. The
+ * current note is `--selected`, as a current row is in every panel; it was
+ * the `--band` fill, which the rail's own current entry already spends.
+ */
+.panel-search { display: flex; align-items: center; gap: 8px; height: 34px; margin: 10px 12px 0; padding: 0 10px; border: 1px solid var(--rule); border-radius: 2px; background: var(--bg); color: var(--muted); }
+.panel-search:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+.panel-search input[type="search"] { flex: 1; min-width: 0; height: 100%; margin: 0; padding: 0; border: 0; background: transparent; color: var(--text); font-size: 13.5px; }
+.panel-search input[type="search"]:focus-visible { outline: none; }
+.notes-folders-head { display: flex; align-items: center; gap: 2px; padding: 18px 10px 4px 20px; }
+.notes-folders-head > .panel-label { flex: 1; padding: 0; }
+button.panel-tool { flex: none; display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; margin: 0; padding: 0; border-radius: 2px; }
+button.panel-tool[aria-expanded="true"],
+button.panel-tool[aria-expanded="true"]:hover:not(:disabled) { background: var(--selected); }
+.notes-tool-panel { display: flex; flex-direction: column; gap: 8px; margin: 4px 20px 10px; }
+.notes-tool-panel input { width: 100%; min-width: 0; }
+.notes-tool-panel button { align-self: flex-start; margin: 0; border-radius: 2px; }
+.notes-folder { margin: 0; background: transparent; }
+button.notes-folder-toggle { display: flex; align-items: center; gap: 7px; width: 100%; height: 32px; margin: 0; padding: 0 10px; border-radius: 2px; text-align: left; font-size: 14px; line-height: 20px; }
+button.notes-folder-toggle:hover:not(:disabled) { background: var(--selected); }
+.notes-folder-toggle > .icon:first-child { color: var(--muted); }
+.notes-folder-name { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.notes-folder-count { flex: none; font-size: 12.5px; color: var(--muted); }
+.notes-folder-notes { display: flex; flex-direction: column; gap: 1px; }
+.notes-folder-notes[hidden] { display: none; }
+.notes-folder-notes > .panel-item { padding-left: 45px; }
+.notes-folder-empty { margin: 0; padding: 5px 10px 5px 45px; font-size: 12.5px; line-height: 18px; color: var(--muted); }
+.notes-hit .panel-item-meta { overflow-wrap: anywhere; }
+/* Filing by drag: the note in the air fades, the group under the pointer gets the site blue as
+ * an outline, and a "No folder" strip appears below the folders while a filed note is being
+ * dragged, so taking a note out of a folder has somewhere to land even when nothing is unfiled.
+ * The strip's words take `--band-text` when it is the target: `--band` as text is 3.3:1 in dark. */
+.notes-entry[data-dragging] { opacity: 0.45; }
+.notes-folder[data-drop-target] { outline: 1px solid var(--band); outline-offset: 2px; border-radius: 2px; }
+.notes-drop-unfiled { margin: 4px 0; padding: 6px 10px; border: 1px dashed var(--faint); border-radius: 2px; font: 12px/16px var(--font-mono); letter-spacing: .5px; text-transform: uppercase; color: var(--muted); text-align: center; }
+.notes-drop-unfiled[data-drop-target] { border-style: solid; border-color: var(--band); color: var(--band-text); }
 .notes-context-menu { position: fixed; z-index: 1100; width: 15rem; max-width: calc(100vw - 16px); max-height: calc(100vh - 16px); overflow: auto; padding: 0.35rem; background: var(--bg); color: var(--text); border: 1px solid var(--faint); border-radius: 2px; box-shadow: 0 6px 18px #0002; }
 .notes-context-menu > button { display: block; width: 100%; margin: 0; padding: 0.5rem 0.65rem; text-align: left; border-radius: 2px; }
 .notes-context-menu .row { display: flex; flex-direction: column; gap: 0.35rem; padding: 0.5rem 0.65rem; }
 .notes-context-menu select { width: 100%; min-width: 0; }
-
-#notes-titlebar-controls { display: flex; align-items: center; }
-#notes-titlebar-controls:not(:empty) { padding: 0 0.5rem; }
-.notes-library-tools { display: flex; flex-direction: column; align-items: stretch; gap: 0.6rem; }
-.notes-library-actions { display: flex; align-items: center; gap: 6px; }
-.notes-library-tools button { display: flex; align-items: center; justify-content: center; width: calc(18px + 0.8rem); height: calc(18px + 0.8rem); padding: 0.4rem; margin: 0; border-radius: 2px; }
-/* The two labelled actions carry a visible word alongside their icon, so they size to their
- * content instead of the icon-only square the rule above sets for the rest of the toolbar. */
-.notes-library-tools button.labelled { width: auto; padding: 0.4rem 0.6rem; display: inline-flex; gap: 0.4rem; }
-.notes-library-tools svg { display: block; width: 18px; height: 18px; flex: 0 0 18px; }
-.notes-library-tools button[aria-expanded="true"], .notes-library-tools button[data-active="true"] { background: var(--band); color: var(--band-ink); }
-.notes-library-list-header { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
-.notes-library-list-header h2 { margin: 0; }
-.notes-library-folder-tools { display: flex; align-items: center; gap: 6px; }
-.notes-tool-panel { display: flex; flex-direction: column; gap: 0.5rem; margin-top: 0.75rem; }
-/* A folder heading is a row, not a boxed button: a disclosure and the name. The name is set
- * exactly like a note's title (same face, size and leading), muted until pointed at, so the
- * disclosure and the colour are what tell a folder from a note. */
-/* One vertical rhythm for the whole list: a note row and a folder row each carry 0.15rem above
- * and below (the list item's padding, the heading's margin) and the same 0.35rem inside, so the
- * gap is the same between two notes, between a folder and its notes, and between folders. */
-.notes-folder { margin: 0; }
-.notes-library button.notes-folder-toggle { display: flex; align-items: center; gap: 0.4rem; width: 100%; margin: 0.15rem 0; padding: 0.35rem 0.35rem; text-align: left; font-family: var(--font-sans); font-size: 1rem; font-weight: 400; line-height: 1.4; color: var(--muted); }
-.notes-library button.notes-folder-toggle:hover, .notes-library button.notes-folder-toggle:focus-visible { color: var(--text); }
-.notes-folder-chevron { width: 14px; height: 14px; flex: 0 0 14px; transition: transform 120ms ease; }
-.notes-folder-toggle[aria-expanded="true"] .notes-folder-chevron { transform: rotate(90deg); }
-.notes-folder-name { min-width: 0; flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-/* Filed notes sit one step in from their heading; the unfiled list keeps the full width. */
-.notes-folder > div > .list { padding-left: 0.9rem; }
-.notes-folder-empty { margin: 0.15rem 0 0.15rem 1.25rem; font-size: 0.8rem; }
-/* Filing by drag: the note in the air fades, the group under the pointer gets the site blue as
- * an outline, and a "No folder" strip appears at the top while a filed note is being dragged,
- * so taking a note out of a folder has somewhere to land even when nothing is unfiled. */
-.notes-library button.notes-entry[data-dragging] { opacity: 0.45; }
-.notes-folder[data-drop-target] { outline: 1px solid var(--band); outline-offset: 2px; border-radius: 2px; }
-.notes-drop-unfiled { margin: 0.15rem 0; padding: 0.35rem 0.35rem; border: 1px dashed var(--faint); border-radius: 2px; font-family: var(--font-mono); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); text-align: center; }
-.notes-drop-unfiled[data-drop-target] { border-style: solid; border-color: var(--band); color: var(--band); }
 
 /* Vocabulary: a compact add row, and a ruled list of the words themselves. */
 .vocabulary-add { display: flex; gap: .5rem; margin: 1rem 0; }
@@ -2272,8 +2282,10 @@ button.microphone-language-toggle:hover:not(:disabled) { background: transparent
 .vocabulary-support { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr)); gap: 1rem; }
 .vocabulary-usage details { max-height: 14rem; overflow: auto; overflow-wrap: anywhere; }
 
-/* Back and forward, 2px after the toggle and 2px apart, as the canvas spaces them. */
+/* Back and forward, 2px after the toggle and 2px apart, as the canvas spaces them -- or, on a
+ * page with no list panel and so no toggle, the 10px in from the window's edge the toggle takes. */
 .titlebar-history { display: flex; align-items: center; flex-shrink: 0; gap: 2px; margin-left: 2px; }
+.app-titlebar > .titlebar-history:first-child { margin-left: 10px; }
 
 /* Separate summary and note editors retain the existing transcript workspace. */
 .note-prose, .summary-pane { min-width: 0; flex: 1; }
@@ -2287,26 +2299,52 @@ button.microphone-language-toggle:hover:not(:disabled) { background: transparent
 .summary-pane { margin: 0; padding: 0; }
 .summary-pane .ProseMirror h2 { font-size: 1.125rem; text-transform: none; letter-spacing: normal; margin: 1.5rem 0 .5rem; }
 
-/* The note owns a single player, regardless of the selected view. */
-/* Switzer ships at 400 only, so bold here was faked -- on the title and the section heading below it. */
-.notes-main .note-detail-header input.note-title { width: 100%; min-width: 0; padding: .25rem 0; background: transparent; border: 0; font-family: var(--font-sans); font-size: 2rem; font-weight: 400; line-height: 1.3; }
-.note-detail-header { display: block; margin-bottom: 0; padding-bottom: 0; border-bottom: 0; }
+/*
+ * The open note (`components/NoteWorkspace.tsx`): a 52px top bar -- the
+ * breadcrumb, the save status, Export and More -- then, in the canvas' 760px
+ * measure, the title, the meta row and the tabs.
+ */
+.note-topbar { display: flex; align-items: center; gap: 4px; height: 52px; padding: 0 12px 0 40px; }
+.note-crumb { flex: 1; min-width: 0; margin: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 13px; color: var(--muted); }
+.note-crumb-rule { margin: 0 6px; }
+.note-topbar .save-status { flex: none; margin: 0 8px 0 0; font-size: 12.5px; }
+button.note-topbar-button { flex: none; display: flex; align-items: center; justify-content: center; width: 32px; height: 32px; margin: 0; padding: 0; border-radius: 2px; }
+.note-page { max-width: 760px; padding: 14px 40px 32px; }
+.note-page > .save-status.error { margin: 0 0 12px; }
+.note-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 18px; margin: 12px 0 0; padding: 0; list-style: none; font-size: 13.5px; line-height: 20px; color: var(--muted); }
+.note-meta li { display: flex; align-items: center; gap: 6px; min-width: 0; }
+/*
+ * The note's tabs: the open one underlined in `--band` over a rule the width
+ * of the page. The underline is a rule, so it is square. Scoped to
+ * `.note-detail` because the meeting window's tabs share `.note-tabs` and
+ * keep the two rules just below.
+ */
+.note-detail .note-tabs { display: flex; flex-wrap: wrap; gap: 24px; margin-top: 26px; padding: 0; border-bottom: 1px solid var(--rule); }
+.note-detail .note-tabs > [role="tab"] { height: 38px; margin: 0 0 -1px; padding: 0; border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; color: var(--muted); font-size: 14.5px; }
+.note-detail .note-tabs > [role="tab"]:hover:not(:disabled) { background: transparent; color: var(--text); }
+.note-detail .note-tabs > [role="tab"][aria-selected="true"] { border-bottom-color: var(--band); color: var(--text); }
+.note-detail .note-tabs > [role="tab"][hidden] { display: none; }
+.note-tabs { flex-wrap: wrap; padding: 0 0 4px; }
+.note-tabs > button { margin-top: 0; }
+.note-detail .note-workspace { margin-top: 18px; }
+/* Switzer ships at 400 only, so bold here was faked. */
 .note-section-heading { font-size: .85rem; font-weight: 400; color: var(--muted); margin: 1rem 0; }
+.note-prose > .note-section-heading:first-child { margin-top: .5rem; }
 .note-workspace > section { min-width: 0; margin-top: 0; }
 .note-workspace [hidden], .note-workspace > [hidden] { display: none; }
-.note-mini-player { position: sticky; bottom: 0; grid-row: 3; padding: .75rem; background: var(--surface); border: 1px solid var(--faint); border-radius: .5rem; z-index: 3; }
+/* The note owns a single player, whichever view is open: in full above Replay, and otherwise a mini
+ * player held to the foot of the note once playback has started. A wide window moves it to the foot
+ * of the transcript column instead (`.note-side-player`, above). */
+.note-mini-player { position: sticky; bottom: 0; grid-row: 3; padding: .75rem; background: var(--surface); border: 1px solid var(--faint); border-radius: 4px; z-index: 3; }
 .note-full-player { grid-row: 1; }
 .recording-player { flex-wrap: wrap; }
 .recording-player input[type="range"] { min-width: 5rem; }
 .recording-details { margin-bottom: 1rem; color: var(--muted); }
 .recording-details p { white-space: pre-wrap; overflow-wrap: anywhere; }
-.note-workspace .transcript-rows { max-height: none; }
-.note-workspace .transcript-rows li { overflow-wrap: anywhere; }
+/* The Transcript tab's rows pull out by their own padding, so their text lines up with the title's. */
+.note-workspace .transcript-rows { max-height: none; margin: 0.25rem -12px 0; }
 .start-from-transcript { margin-bottom: 1rem; }
-.note-tabs { flex-wrap: wrap; padding: 0 0 4px; }
-.note-prose > .note-section-heading:first-child { margin-top: .5rem; }
-.note-tabs > button { margin-top: 0; }
-.notes-main .note-workspace .note-editor, .notes-main .note-workspace .note-editor .milkdown .ProseMirror { min-height: 12rem; }
+.note-workspace .note-editor, .note-workspace .note-editor .milkdown .ProseMirror { min-height: 12rem; }
 
 /* The window's one tooltip (components/Tooltip.tsx): the page's own background
  * and text, the site blue as a hairline, and an arrow at whatever it names. */
