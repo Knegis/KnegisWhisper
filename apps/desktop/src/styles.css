@@ -4,9 +4,13 @@
  * Three things define it, and all three are departures from what this file did
  * before:
  *
- *   1. Nothing is boxed. The site declares `border` exactly twice, both times
- *      `border: 0`, and `border-radius` not once. Separation is whitespace and
- *      fill, never an outline drawn around a thing.
+ *   1. Cards and the window card are the only boxes, at 4px. Everything else
+ *      still takes its separation from whitespace and fill rather than an
+ *      outline, the way the site does -- but this file no longer claims
+ *      `border-radius` never appears; it follows the Kit corner scale instead:
+ *      0 on flat regions (rows, rules, panels), 2px on controls (buttons,
+ *      chips, inputs, keys), 4px on cards and the window card, and nothing
+ *      rounder except the round recording dot.
  *   2. What is marked is filled, not outlined. The site's one interaction is
  *      `a.line:hover { background: var(--band); color: var(--band-ink) }` -- a
  *      fill swap. `--band` here is the site's blue, the colour it reserves for
@@ -116,6 +120,22 @@
   --control: rgb(228 228 231 / 13%);
 
   /*
+   * The panel model the redesign introduces: a rail, a list panel and cards
+   * floating on a frame, as opposed to the single flat `--bg`/`--surface`
+   * pair above. Defined in both themes here, before anything in this file
+   * reads them, so the two themes cannot drift apart before the shell that
+   * uses them exists.
+   */
+  --frame: #111113;
+  --panel: #1c1c1f;
+  --rule: #2e2e33;
+  --selected: #2a2a30;
+  --strip: #202024;
+  --band-wash: rgb(61 85 255 / 16%);
+  --rec: #ff7b7b;
+  --card-shadow: none;
+
+  /*
    * The row grid, as tokens because two other rules have to agree with it
    * exactly: a control that spans the whole row does so by cancelling the label
    * track with a negative margin, and a margin that disagrees with the track by
@@ -183,11 +203,12 @@
     --text: #1f2023;
     --muted: #62636a;
     /*
-     * Heavier than the dark theme's rule relative to its ground, because with
-     * no panel behind a section these rules are the only structure left on the
-     * page. They are doing the job the beige used to do.
+     * Lighter than it was: structure now comes from panels and the card, not
+     * from the rules alone, so a rule this weight no longer has to carry the
+     * whole page's structure by itself the way it did when it was the only
+     * separator on a flat page.
      */
-    --faint: #c4c4cb;
+    --faint: #e1e1e6;
     /* The site's own `--footer-bg`, unmodified. 8.09:1 against paper, and
      * 8.09:1 for the text sitting on it. */
     --band: #0015ff;
@@ -197,6 +218,15 @@
 
     --wash: rgb(31 32 35 / 5%);
     --control: rgb(31 32 35 / 10%);
+
+    --frame: #f3f3f5;
+    --panel: #f8f8f9;
+    --rule: #e1e1e6;
+    --selected: #ebebef;
+    --strip: #f5f5f7;
+    --band-wash: #eef0ff;
+    --rec: #c02626;
+    --card-shadow: 0 1px 2px rgb(24 24 32 / 4%), 0 12px 32px rgb(24 24 32 / 5%);
   }
 }
 
@@ -1974,23 +2004,19 @@ button:disabled {
   padding-left: 0.5rem;
 }
 
-.nav-icon { display: block; width: 18px; height: 18px; flex: 0 0 18px; pointer-events: none; }
+/*
+ * The Kit icon set (`lib/icons.ts`, drawn by `components/Icon.tsx`):
+ * square-ended strokes for controls, a solid fill for the two states that are
+ * a fill rather than a stroke. Replaces the old `.nav-icon`/`.nav-icon-*`
+ * masks, which existed only because some icons shipped as separate SVG files
+ * under `src/assets/navigation` -- every icon is now this one path-based
+ * component instead, sidebar icons included.
+ */
+.icon { fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: square; stroke-linejoin: miter; flex-shrink: 0; }
+.icon-filled { fill: currentColor; stroke: none; }
 /* Share the compact button's left edge and icon inset in both states. */
 .sidebar, .app-titlebar { --nav-button-size: calc(18px + 0.8rem); --nav-button-offset: calc((3.5rem - 1px - var(--nav-button-size)) / 2 - 0.5rem); }
 .sidebar button:not(.nav-child) { margin-left: var(--nav-button-offset); width: calc(100% - var(--nav-button-offset)); padding-left: 0.4rem; }
-span.nav-icon { background: currentColor; mask-position: center; mask-size: contain; mask-repeat: no-repeat; }
-.nav-icon-voice { mask-image: url('./assets/navigation/voice.svg'); }
-.nav-icon-text { mask-image: url('./assets/navigation/text.svg'); }
-.nav-icon-upload { mask-image: url('./assets/navigation/upload.svg'); }
-.nav-icon-code { mask-image: url('./assets/navigation/code.svg'); }
-.nav-icon-terminal { mask-image: url('./assets/navigation/terminal.svg'); }
-.nav-icon-git-branch { mask-image: url('./assets/navigation/git-branch.svg'); }
-.nav-icon-flare { mask-image: url('./assets/navigation/flare.svg'); }
-.nav-icon-calendar-arrow-up { mask-image: url('./assets/navigation/calendar-arrow-up.svg'); }
-.nav-icon-align-left { mask-image: url('./assets/navigation/align-left.svg'); }
-.nav-icon-square-wave { mask-image: url('./assets/navigation/square-wave.svg'); }
-.nav-icon-user-plus { mask-image: url('./assets/navigation/user-plus.svg'); }
-.nav-icon-tv { mask-image: url('./assets/navigation/tv.svg'); }
 .shell-sidebar-retracted #sidebar-navigation { width: 100%; }
 .shell-sidebar-retracted .sidebar button { justify-content: flex-start; gap: 0; width: var(--nav-button-size); height: var(--nav-button-size); padding: 0 0.4rem; margin-left: var(--nav-button-offset); margin-right: 0; }
 .shell-sidebar-retracted .nav-label { display: none; }
@@ -2066,7 +2092,8 @@ button.microphone-language-toggle:hover:not(:disabled) { background: transparent
 .is-vertical .microphone-language-toggle { left: 34px; top: 74px; width: 28px; height: 16px; min-height: 16px; border-radius: 0 0 2px 2px; }
 .microphone-language-menu { width: calc(100% - 12px); max-height: 252px; overflow: auto; padding: 10px; border-radius: 4px; background: var(--bg); color: var(--text); font-size: 12px; line-height: 1.4; box-shadow: 0 2px 6px #0005; }
 .local-language-picker { border: 0; padding: 0; margin: 0; min-width: 0; }
-.local-language-picker legend { font-weight: 600; margin-bottom: 6px; }
+/* Switzer ships at 400 only, so bold here was faked. */
+.local-language-picker legend { font-weight: 400; margin-bottom: 6px; }
 .local-language-picker p { margin: 6px 0; }
 .local-language-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 12px; margin-top: 8px; max-width: 320px; }
 .local-language-options label { display: flex; align-items: center; gap: 6px; }
@@ -2254,9 +2281,10 @@ button.microphone-language-toggle:hover:not(:disabled) { background: transparent
 .summary-pane .ProseMirror h2 { font-size: 1.125rem; text-transform: none; letter-spacing: normal; margin: 1.5rem 0 .5rem; }
 
 /* The note owns a single player, regardless of the selected view. */
-.notes-main .note-detail-header input.note-title { width: 100%; min-width: 0; padding: .25rem 0; background: transparent; border: 0; font-family: var(--font-sans); font-size: 2rem; font-weight: 600; line-height: 1.3; }
+/* Switzer ships at 400 only, so bold here was faked -- on the title and the section heading below it. */
+.notes-main .note-detail-header input.note-title { width: 100%; min-width: 0; padding: .25rem 0; background: transparent; border: 0; font-family: var(--font-sans); font-size: 2rem; font-weight: 400; line-height: 1.3; }
 .note-detail-header { display: block; margin-bottom: 0; padding-bottom: 0; border-bottom: 0; }
-.note-section-heading { font-size: .85rem; font-weight: 600; color: var(--muted); margin: 1rem 0; }
+.note-section-heading { font-size: .85rem; font-weight: 400; color: var(--muted); margin: 1rem 0; }
 .note-workspace > section { min-width: 0; margin-top: 0; }
 .note-workspace [hidden], .note-workspace > [hidden] { display: none; }
 .note-mini-player { position: sticky; bottom: 0; grid-row: 3; padding: .75rem; background: var(--surface); border: 1px solid var(--faint); border-radius: .5rem; z-index: 3; }

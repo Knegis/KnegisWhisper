@@ -1,3 +1,4 @@
+import { Icon } from "../components/Icon";
 import { NoteWorkspace, type NoteWorkspaceHandle } from "../components/NoteWorkspace";
 /**
  * Notes > Export.
@@ -370,7 +371,7 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
               <span>New note</span>
             </button>
             <button type="button" className="labelled" onClick={onImport}>
-              <span className="nav-icon nav-icon-upload" aria-hidden="true" />
+              <Icon name="import" />
               <span>Import</span>
             </button>
           </div>
