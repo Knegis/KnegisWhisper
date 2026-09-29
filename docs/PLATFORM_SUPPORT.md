@@ -1081,12 +1081,15 @@ same name, and **no immutable URL exists for them** — that was measured rather
 than assumed, and the measurements are in `ENGINEERING_LOG.md` under 2026-08-31
 (KNEG-112). What they have instead is a digest stated by the host:
 
-**GitHub's release API returns a **`digest`** and a **`size`** per asset**, one
-request for all 498 in the release. On 2026-08-31 both stated digests and both
-stated sizes matched the committed pins to the character — independent
-corroboration of a measurement, from the publisher's own metadata, at no
-bandwidth cost. `node tools/model-pin/pin.mjs --verify-stated` re-reads them
-weekly beside the Hugging Face trees.
+**GitHub's release API returns a **`size`** per asset, and a **`digest`** for
+assets uploaded from about mid-2025**, one request for all 498 in the release.
+Both Parakeet archives are recent enough to have one. On 2026-08-31 both stated
+digests and both stated sizes matched the committed pins to the character —
+independent corroboration of a measurement, from the publisher's own metadata,
+at no bandwidth cost. `node tools/model-pin/pin.mjs --verify-stated` re-reads
+them weekly beside the Hugging Face trees. The two diarization models, in
+k2-fsa's speaker releases, predate GitHub's digests and are compared by size
+alone; `SECURITY.md` says what that costs (KNEG-358).
 
 That is the same standard the thirty-two stated GGUF pins meet and it is
 *weaker* than how these two were pinned, since their bytes were hashed here. So

@@ -325,15 +325,30 @@ and held by four generator guards. This is **not** a stronger integrity claim; t
 what proves the bytes. It removes a class of spurious failure and makes the URL and the digest
 describe the same objects by construction.
 
-**The two Parakeet archives are the remaining exception, and it is now a measured one.** They are
-GitHub release assets in k2-fsa's rolling `asr-models` tag, where an asset can be replaced under
-the same name, and there is no immutable URL to move them to: the versioned releases carry library
-binaries and no models, the Hugging Face mirror holds unpacked files rather than the archive, and a
-release-asset id is destroyed when an asset is replaced rather than surviving beside the new one.
-What GitHub does offer is a **stated digest per asset**, which matched both committed pins exactly
-on 2026-08-31 and is re-read weekly by `--verify-stated` alongside the full `--verify` download. So
-a swap is caught twice — cheaply within a week, and unconditionally at install by the digest that
-was measured here (KNEG-112).
+**The six k2-fsa assets are the remaining exception, and it is now a measured one.** They are
+GitHub release assets on rolling tags, where an asset can be replaced under the same name: the four
+sherpa ASR archives in `asr-models`, and the two diarization models in `speaker-segmentation-models`
+and `speaker-recongition-models`. There is no immutable URL to move them to: the versioned releases
+carry library binaries and no models, the Hugging Face mirror holds unpacked files rather than the
+archive, and a release-asset id is destroyed when an asset is replaced rather than surviving beside
+the new one. What GitHub does offer is a **stated size per asset, and a stated digest for assets
+uploaded from about mid-2025**. The two Parakeet archives' stated digests matched their committed
+pins exactly on 2026-08-31 (KNEG-112), and all four ASR archives carry one. For those four a swap is
+caught three ways: cheaply within a week by `--verify-stated`, by the weekly `--verify`
+re-download, and unconditionally at install by the digest that was measured here.
+
+**The two diarization models have no stated digest, and that costs less than it looks.** Both were
+uploaded in October 2024, before GitHub stated digests, and the release API returns `digest: null`
+for them (measured 2026-09-29). `--verify-stated` compares their size and prints a note. A swap
+would still show there: a replaced asset is a new upload, new uploads carry a digest (measured the
+same day: every asset in `asr-models` uploaded since 2025-06-30 has one, and every one in
+`speaker-recongition-models` since 2025-08-14), and that digest would disagree with the pin. That
+GitHub keeps computing them is believed, not guaranteed. What is lost is the publisher's
+corroboration of the bytes as they stand today; the weekly `--verify` re-download and the
+install-time digest check (`crates/meeting-core/src/diarization_models.rs`, which refuses an
+unpinned model and removes a file that fails) hold that. Until 2026-09-29 the missing digest was
+counted as a disagreement, which turned the weekly job red every week from 2026-09-07 for a reason
+that could not clear (KNEG-358).
 
 **A bound is only ever an exact figure.** Every bound above comes from a measurement:
 `tools/sidecar-pin/pin.mjs` and `tools/model-pin/pin.mjs` take the length from `stat` after a full

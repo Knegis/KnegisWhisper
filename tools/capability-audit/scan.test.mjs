@@ -47,14 +47,17 @@ test("the real tree is clean, and all parser inventories are live", () => {
     { identifier: "notifications", enabled: true },
     { identifier: "titlebar", enabled: true },
   ]);
-  // Four production panels plus import, recording-deletion, vocabulary and placement IPC mock webviews.
-  assert.equal(real.builders.length, 12);
+  // Four production panels plus import, recording-deletion, vocabulary, placement, speaker-rename
+  // (KNEG-318) and meeting-provider (KNEG-317) IPC mock webviews.
+  assert.equal(real.builders.length, 14);
   assert.deepEqual(
     real.builders.filter(({ kind }) => kind === "literal").map(({ file, arg }) => ({ file, arg })),
     [
+      { file: "apps/desktop/src-tauri/src/commands.rs", arg: "main" },
       { file: "apps/desktop/src-tauri/src/media.rs", arg: "main" },
       { file: "apps/desktop/src-tauri/src/meeting/draft.rs", arg: "main" },
       { file: "apps/desktop/src-tauri/src/meeting/draft.rs", arg: "meeting" },
+      { file: "apps/desktop/src-tauri/src/meeting.rs", arg: "main" },
       { file: "apps/desktop/src-tauri/src/meeting_window.rs", arg: "main" },
       { file: "apps/desktop/src-tauri/src/recording_attach.rs", arg: "main" },
       { file: "apps/desktop/src-tauri/src/vocabulary.rs", arg: "main" },

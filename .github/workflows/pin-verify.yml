@@ -41,19 +41,21 @@ jobs:
       - name: Verify pinned sidecar targets
         run: node tools/sidecar-pin/pin.mjs --verify
 
-      # The same job for model files. Roughly 8 GB a week: two Parakeet
-      # archives at about 500 MB each and, since 2026-08-31, all six whisper
-      # models (6.49 GiB) rather than `tiny` alone. It was 1 GB before that.
+      # The same job for model files. About 8.4 GiB a week, as measured by the
+      # 2026-09-21 run: the eight whisper models (6.57 GiB, the six upstream
+      # ones plus KB-Whisper tiny and base), four sherpa ASR archives at about
+      # 450 MiB each, and the two diarization models (35 MiB). Before
+      # 2026-08-31 it was `tiny` and two Parakeet archives, about 1 GB.
       #
       # The price is worth paying here more than anywhere else in this
       # workflow, though less than it was. Since KNEG-103 the six whisper URLs
       # name a commit rather than `resolve/main`, so a publisher pushing can no
       # longer move those bytes -- what this catches for them now is a commit
       # that has stopped resolving, and bytes that disagree with a digest
-      # nothing else re-hashes. The two Parakeet archives are the ones still
-      # hanging off a moving reference: k2-fsa's rolling `asr-models` release,
-      # where an asset can be replaced under the same name. For those, this job
-      # is the only thing between a swap and a user's failed download.
+      # nothing else re-hashes. The six k2-fsa assets are the ones still
+      # hanging off a moving reference: k2-fsa's rolling releases, where an
+      # asset can be replaced under the same name. For those, this job is the
+      # only thing between a swap and a user's failed download.
       #
       # If the runtime becomes a problem, `--only <id>` narrows it; rotating
       # subsets would be the cheap fix, at the cost of the seven-day bound.
@@ -79,12 +81,19 @@ jobs:
       # commit is what makes upstream's routine publishing cost us nothing, and
       # a job that went red for it every week would stop being read.
       #
-      # The same step covers the two Parakeet archives, from the other host:
-      # GitHub's release API states a digest and a size per asset, one request
-      # for all 498 in `asr-models`. Those two are downloaded and re-hashed by
-      # the step above as well, so this is not how they are checked -- it is
-      # what tells a swapped asset from a damaged download before the gigabyte
-      # runs, and it is the only cheap signal available for a URL that cannot
-      # be pinned to anything immutable (KNEG-112).
+      # The same step covers the six k2-fsa assets, from the other host: the
+      # four sherpa ASR archives in `asr-models` and the two diarization models
+      # in k2-fsa's speaker releases, one request per release. GitHub's release
+      # API states a size per asset and a digest for assets uploaded from about
+      # mid-2025. All six are downloaded and re-hashed by the step above as
+      # well, so this is not how they are checked -- it is what tells a swapped
+      # asset from a damaged download before the re-download runs, and it is
+      # the only cheap signal available for a URL that cannot be pinned to
+      # anything immutable (KNEG-112).
+      #
+      # The two diarization models were uploaded in October 2024 and have no
+      # stated digest. They are compared by size and printed as a note, not a
+      # failure: failing on it kept this job red every week from 2026-09-07
+      # for a reason that could not clear (KNEG-358).
       - name: Re-read the stated digests, at Hugging Face and at GitHub
         run: node tools/model-pin/pin.mjs --verify-stated
