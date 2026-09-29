@@ -3,8 +3,10 @@
  *
  * The page leads with whether dictation will work (`lib/readiness.ts`), the
  * one button that starts it, and the shortcut, microphone and route it will
- * use -- each with a way to the place it is changed. The shortcut editor is
- * on Settings > Shortcuts.
+ * use. The microphone is chosen right here, in its own select; the shortcut
+ * and the route each have a Change button to the screen where they are set --
+ * the shortcut editor is on Settings > Shortcuts, the route on Settings >
+ * Transcription.
  *
  * That split had to keep the loop this page used to hold on one screen: bind
  * a key, press it, read the result. Putting the evidence that dictation worked
@@ -99,15 +101,29 @@ export function DictationView({
   const [session, setSession] = useState<SessionState | null>(null);
   const [lastOutcome, setLastOutcome] = useState<string | null>(null);
 
+  // `disposed` because `listen` resolves after the effect returns: a page left
+  // before it did would otherwise keep its listeners for the rest of the
+  // session -- the same guard Settings > Meetings uses for its one listener.
   useEffect(() => {
+    let disposed = false;
     const unlisteners: Array<() => void> = [];
-    void onDictationState(setSession).then((fn) => unlisteners.push(fn));
+    const keep = (unlisten: () => void) => {
+      if (disposed) unlisten();
+      else unlisteners.push(unlisten);
+    };
+    void onDictationState((next) => {
+      if (!disposed) setSession(next);
+    }).then(keep);
     void onDictationOutcome((outcome) => {
+      if (disposed) return;
       setLastOutcome(outcomeLabel(outcome));
       // History and the session both moved, so re-read rather than guessing.
       void reload();
-    }).then((fn) => unlisteners.push(fn));
-    return () => unlisteners.forEach((fn) => fn());
+    }).then(keep);
+    return () => {
+      disposed = true;
+      unlisteners.forEach((fn) => fn());
+    };
   }, [reload]);
 
   if (!data) {
@@ -136,6 +152,13 @@ export function DictationView({
   // by name and takes the default when it is gone -- so the row says that too.
   const missingDevice =
     device !== null && !devices.some((d) => d.name === device) ? device : null;
+  const readiness = dictationReadiness({ route, hotkeys, canInsert });
+  // Off on a broken route: the backend resolves the route only at Stop and
+  // cancels on failure (`toggle`, src-tauri/src/dictation.rs), so Start would
+  // record words that are then thrown away. A missing shortcut does not
+  // disable it -- the button needs none -- so only this case hands the
+  // page's one filled button to the status line's fix.
+  const startBlocked = !recording && route.problem !== null;
 
   return (
     <div className="view">
@@ -148,18 +171,15 @@ export function DictationView({
             claim about the session. The Status row speaks for it instead. */}
         {mic.recording || mic.busy ? null : (
           <StatusLine
-            readiness={dictationReadiness({ route, hotkeys, canInsert })}
+            readiness={readiness}
             onFix={onGoTo}
+            fixIsPrimary={startBlocked}
           />
         )}
-        {/* Off on a broken route: the backend resolves the route only at Stop
-            and cancels on failure (`toggle`, src-tauri/src/dictation.rs), so
-            Start would record words that are then thrown away. A missing
-            shortcut does not disable it -- the button needs none. */}
         <button
           type="button"
-          className="primary"
-          disabled={mic.disabled || (!recording && route.problem !== null)}
+          className={startBlocked ? undefined : "primary"}
+          disabled={mic.disabled || startBlocked}
           onClick={() => {
             void guard(toggleDictation);
           }}

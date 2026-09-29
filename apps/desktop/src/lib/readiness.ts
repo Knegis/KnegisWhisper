@@ -11,12 +11,12 @@
  *
  * **This file deliberately does not import `ViewId`.** `Fix<T>`'s `view` is a
  * bare string literal type, generic per caller, rather than a fixed page name:
- * `"shortcuts"` is a real page on Dictation (Task 6) and does not exist yet on
- * Meetings, which gets `"meeting-settings"` instead (Task 7). A per-page fix
- * union is what lets each page's own `onGoTo: (id: ViewId) => void` type-check
- * as `onFix` once its targets actually exist on that page, with no cast
- * standing in for a check nobody ran and no dead rail entry for a page that
- * cannot go anywhere.
+ * each page's union names only the pages its own fixes go to -- Dictation's
+ * `"transcription" | "shortcuts"`, Meetings' `"transcription" |
+ * "meeting-settings"`. That is what lets each page's own
+ * `onGoTo: (id: ViewId) => void` type-check as `onFix` with no cast: the
+ * check that every fix target is a real page happens at the page that passes
+ * `onGoTo`, where both types are in view, rather than being assumed here.
  */
 
 import type {
@@ -130,6 +130,11 @@ export function dictationReadiness(i: {
   };
 }
 
+/** The one sentence for a saved meeting provider that cannot be used now. */
+function chosenCannotBeUsed(name: string): string {
+  return `${name}, the provider you chose, can't be used right now.`;
+}
+
 /**
  * Whether meeting transcription is ready, and if not, what to fix and where.
  *
@@ -138,20 +143,50 @@ export function dictationReadiness(i: {
  * `selected` out of it, is `selectProvider`'s job, not this function's, so
  * this only ever asks how many usable providers there are and whether one is
  * currently chosen.
+ *
+ * `savedUnusable` is the provider the person saved, when it cannot be used
+ * right now, named and with the reason. It is its own needs-setup rather than
+ * a caution because `selectProvider` falls back to the first usable provider,
+ * and the fallback can be the opposite privacy choice: somebody who chose the
+ * local provider, whose model server is not running and who has a cloud key
+ * stored, would otherwise see Ready over a Start that sends the meeting to
+ * the cloud. So Start waits for a choice, and the fix is to make one. It comes
+ * after "nothing usable" -- with nothing to choose between, choosing is not
+ * the fix, and the detail says which saved choice it was instead -- and
+ * before the language, which is a question about a provider nobody has chosen
+ * yet.
  */
 export function meetingReadiness(i: {
   usable: readonly MeetingProviderSummary[];
   selected: string | null;
+  savedUnusable: { name: string; reason: string } | null;
   languageWarning: string | null;
   systemAudio: SystemAudioSupport;
 }): Readiness<MeetingFix> {
   if (i.usable.length === 0 || i.selected === null) {
     return {
       state: "needs-setup",
-      problem: "Meeting transcription isn't set up yet.",
-      detail:
-        "Set up local transcription, or add an API key for a cloud service under Settings > Providers.",
+      // Both ways out are something to do now, so both are said here: the one
+      // fix button goes to Transcription, which is the local path, and the
+      // cloud path must not be the half left behind Learn more.
+      problem:
+        "Meeting transcription isn't set up yet. Set up local transcription, or add an API key for a cloud service.",
+      detail: [
+        ...(i.savedUnusable
+          ? [chosenCannotBeUsed(i.savedUnusable.name), i.savedUnusable.reason]
+          : []),
+        "API keys for cloud services are added under Settings > Providers.",
+      ].join(" "),
       fix: { view: "transcription", label: "Set up transcription" },
+    };
+  }
+
+  if (i.savedUnusable !== null) {
+    return {
+      state: "needs-setup",
+      problem: chosenCannotBeUsed(i.savedUnusable.name),
+      detail: i.savedUnusable.reason,
+      fix: { view: "meeting-settings", label: "Choose a provider" },
     };
   }
 

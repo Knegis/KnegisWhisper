@@ -835,16 +835,38 @@ section > .muted {
   font-size: 0.9375rem;
 }
 
-/* Switzer ships at 400 only, so bold here is faked; this also un-bolds the Meetings and Intelligence caveat lead-ins, deliberately. */
+/* Switzer ships at 400 only, so bold here is faked; this also un-bolds the Meetings and Cleanup & summaries caveat lead-ins, deliberately. */
 .caveat strong {
   font-weight: 400;
 }
 
-/* `.status-line`'s caveat state -- same mark, with the top margin zeroed,
- * because `.status-line` already opens the gap above it and stacking both
- * would double it. */
+/* `.status-line`'s caveat state -- same mark, with the top margin zeroed.
+ * The box stands where the Ready line would, first in its section, and
+ * `.status-line` has only a bottom margin, so the Ready line sits flush with
+ * the section's top; the caveat's own 0.75rem above would put Needs setup
+ * lower than Ready. The `.status-line` inside the box keeps its bottom margin,
+ * which is the gap between "Needs setup" and the problem sentence. */
 .status-needs-setup {
   margin-top: 0;
+}
+
+/*
+ * The fix button lines its label up with the problem sentence above it.
+ *
+ * `section > button` does that for a button standing in a section, by giving
+ * back the button's 0.9rem of left padding in the margin -- and it does not
+ * reach this one, which is the box's child, not the section's. So the label
+ * sat 0.9rem inside the sentence: the box's padding, then the button's own.
+ * Plain, the button takes its left padding down to the box's 0.75rem and
+ * gives that back, so the label lands on the sentence and the hover fill
+ * stops at the inner edge of the bar rather than painting over it. Filled
+ * (`button.primary`, when the page's Start is held back and this is the one
+ * thing to do next), it keeps its padding and its fill starts on the text
+ * column, the way `section > button.primary` does.
+ */
+.status-needs-setup > button:not(.primary) {
+  margin-left: -0.75rem;
+  padding-left: 0.75rem;
 }
 
 /*

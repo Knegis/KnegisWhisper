@@ -60,6 +60,7 @@ import {
   type TranscriptEvent,
 } from "../lib/ipc";
 import {
+  availabilityLabel,
   languageRequiredWarning,
   meetingIsLive,
   meetingOutcomeLabel,
@@ -72,6 +73,17 @@ import type { ViewId } from "../lib/navigation";
 import { meetingReadiness } from "../lib/readiness";
 import { useMeetingReview } from "../lib/useMeetingReview";
 import { useRefresh } from "../lib/useRefresh";
+
+/**
+ * A label read as a sentence: capitalised, and closed with a full stop when
+ * it does not already end in one. `availabilityLabel` writes for a line
+ * beside a provider's name ("refused: ..."); the status line's Learn more
+ * reads it on its own.
+ */
+function asSentence(label: string): string {
+  const text = label.charAt(0).toUpperCase() + label.slice(1);
+  return /[.!?]$/.test(text) ? text : `${text}.`;
+}
 
 /** The newest partial per source, which is what a partial means. */
 type Live = Partial<Record<TranscriptEvent["source"], string>>;
@@ -107,11 +119,25 @@ export function Meetings({
   const [recoveryError, setRecoveryError] = useState<string | null>(null);
   const [recoveryOutcome, setRecoveryOutcome] = useState<MeetingOutcome | null>(null);
 
+  // `disposed` because `listen` resolves after the effect returns: a page left
+  // before it did would otherwise keep its listeners for the rest of the
+  // session -- the same guard Settings > Meetings uses for its one listener.
   useEffect(() => {
+    let disposed = false;
     const unlisteners: Array<() => void> = [];
+    const keep = (unlisten: () => void) => {
+      if (disposed) unlisten();
+      else unlisteners.push(unlisten);
+    };
     void onMeetingState((next) => {
+      if (disposed) return;
       setState(next);
       if (next === "idle") { setSources(null); setNotesFlushFailed(false); }
+      // A new meeting's own outcome has not happened yet, so the last one's
+      // "Saved as note ..." must not sit under it. Start clears it too, but a
+      // meeting started from the notification window never passes through
+      // this page's Start.
+      if (next === "recording") setOutcome(null);
       // The state event carries the state and nothing else, and the sentence
       // explaining it lives on `MeetingStatus`. Reloading is how it gets here
       // -- the same thing the outcome listener below does, for the same reason.
@@ -129,18 +155,23 @@ export function Meetings({
       ) {
         void reload();
       }
-    }).then((fn) => unlisteners.push(fn));
+    }).then(keep);
     // Replaced rather than appended: every event is a partial, and the windows
     // that produce them overlap by two seconds, so appending would repeat words.
     void onMeetingTranscript((event) => {
+      if (disposed) return;
       setLive((prev) => ({ ...prev, [event.source]: event.text }));
-    }).then((fn) => unlisteners.push(fn));
+    }).then(keep);
     void onMeetingOutcome((result) => {
+      if (disposed) return;
       setOutcome(result);
       setLive({});
       void reload();
-    }).then((fn) => unlisteners.push(fn));
-    return () => unlisteners.forEach((fn) => fn());
+    }).then(keep);
+    return () => {
+      disposed = true;
+      unlisteners.forEach((fn) => fn());
+    };
   }, [reload]);
 
   // Computed defensively before `data` is known to have loaded, and reused
@@ -194,16 +225,29 @@ export function Meetings({
   // still held with a WAV still on disk.
   const recording = meetingIsLive(current);
   const languageWarning = review ? languageRequiredWarning(review) : null;
-  const readiness = meetingReadiness({
-    usable,
-    selected,
-    languageWarning,
-    systemAudio: status.systemAudio,
-  });
   const selectedProvider = providers.find((p) => p.id === selected) ?? null;
   const savedProvider = savedUnusable
     ? (providers.find((p) => p.id === savedUnusable) ?? null)
     : null;
+  const readiness = meetingReadiness({
+    usable,
+    selected,
+    // Named and with its reason, so the status line can say which choice
+    // can't be used and why, rather than the page quietly using another.
+    savedUnusable: savedUnusable
+      ? {
+          name: savedProvider?.name ?? savedUnusable,
+          reason: savedProvider
+            ? asSentence(availabilityLabel(savedProvider.availability))
+            : "This version of the app doesn't offer it.",
+        }
+      : null,
+    languageWarning,
+    systemAudio: status.systemAudio,
+  });
+  // Where readiness holds Start back, the status line's fix is the one thing
+  // to do next and takes the page's single filled button.
+  const startBlocked = readiness.state === "needs-setup";
   // While a meeting is running, the provider it is running with -- which the
   // notification's Record button may have picked rather than this page.
   const liveProvider =
@@ -224,7 +268,7 @@ export function Meetings({
             unexpectedly" was two answers on one screen. The Status row and
             the caveats below speak for a running meeting instead. */}
         {recording || current === "finishing" ? null : (
-          <StatusLine readiness={readiness} onFix={onGoTo} />
+          <StatusLine readiness={readiness} onFix={onGoTo} fixIsPrimary={startBlocked} />
         )}
         {stalled ? (
           /*
@@ -303,17 +347,14 @@ export function Meetings({
           /* Off whenever the status line says Needs setup, not only when no
              provider is selected: with a language the provider requires left
              blank, `start_live` refuses (`resolve_provider_config`,
-             src-tauri/src/meeting.rs), so the one filled button would lead
-             straight into an error. The status line above says what is wrong
-             and links the fix. */
+             src-tauri/src/meeting.rs), so the button would lead straight
+             into an error, and with the saved provider unusable it would
+             record with one nobody chose. The status line above says what is
+             wrong, and its fix -- not this -- is the filled button then. */
           <button
             type="button"
-            className="primary"
-            disabled={
-              readiness.state === "needs-setup" ||
-              selected === null ||
-              current === "finishing"
-            }
+            className={startBlocked ? undefined : "primary"}
+            disabled={startBlocked || selected === null || current === "finishing"}
             onClick={() => {
               if (selected === null) return;
               void guard(async () => {
@@ -330,9 +371,11 @@ export function Meetings({
             captured: a ticked box reading "Record what the other participants
             say" under a caution saying they cannot be recorded would be two
             answers on one screen. The request itself is kept, so the box comes
-            back ticked where the capture does. The mechanism and the device
-            are folded -- the status line's caution already says the part that
-            matters. */}
+            back ticked where the capture does. Why the box is off is said
+            beside it, in every state -- the status line's caution is only
+            there while the page is Ready, and a switched-off control with no
+            reason on screen is the button that silently does nothing. Only
+            the mechanism, and the device it would capture, are folded. */}
         <div className="row">
           <span className="row-label">Other participants</span>
           <span className="row-value controls">
@@ -345,14 +388,21 @@ export function Meetings({
               />
               Record what the other participants say
             </label>
-            <LearnMore>
-              <p>
-                System audio: {systemAudioValue(status.systemAudio)} —{" "}
-                {status.systemAudio.state === "available"
-                  ? `${status.systemAudio.mechanism} — ${status.systemAudio.device}`
-                  : status.systemAudio.reason}
-              </p>
-            </LearnMore>
+            {status.systemAudio.state === "available" ? null : (
+              <em className="row-detail">
+                {`Can't be recorded on this computer: ${status.systemAudio.reason}`}
+              </em>
+            )}
+            {status.systemAudio.state === "unsupported" ? null : (
+              <LearnMore>
+                <p>
+                  System audio: {systemAudioValue(status.systemAudio)} —{" "}
+                  {status.systemAudio.state === "available"
+                    ? `${status.systemAudio.mechanism} — ${status.systemAudio.device}`
+                    : status.systemAudio.mechanism}
+                </p>
+              </LearnMore>
+            )}
           </span>
         </div>
         <Row
@@ -387,17 +437,6 @@ export function Meetings({
             </button>
           </span>
         </div>
-
-        {/* One sentence here; the reason it cannot be used, and that the
-            choice is kept, are said in full beside the select on Settings >
-            Meetings, which is where the Change button above goes. */}
-        {savedUnusable ? (
-          <p className="caveat">
-            {`${savedProvider?.name ?? savedUnusable} was chosen but can't be used right now${
-              selectedProvider ? `, so ${selectedProvider.name} is used instead` : ""
-            }.`}
-          </p>
-        ) : null}
 
         {recording && notesFlushFailed && <p className="caveat">The meeting panel could not confirm its latest note save. Stopping anyway keeps the recording and any notes already received by the app; the most recent edit may be missing.</p>}
 

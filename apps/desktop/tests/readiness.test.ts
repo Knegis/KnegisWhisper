@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { selectProvider } from "../src/lib/meetingProvider.js";
 import { dictationReadiness, meetingReadiness } from "../src/lib/readiness.js";
 import type {
   HotkeyReport,
@@ -173,23 +174,107 @@ const provider = (over: Partial<MeetingProviderSummary> = {}): MeetingProviderSu
 
 const available = { state: "available", mechanism: "WASAPI loopback", device: "Speakers", unverified: false } as const;
 
-test("no usable provider is needs-setup, fixed by setting up transcription", () => {
+test("no usable provider is needs-setup, naming both ways out in the visible problem", () => {
   const r = meetingReadiness({
     usable: [],
     selected: null,
+    savedUnusable: null,
     languageWarning: null,
     systemAudio: available,
   });
   assert.equal(r.state, "needs-setup");
   if (r.state !== "needs-setup") return;
-  assert.equal(r.problem, "Meeting transcription isn't set up yet.");
+  // Both paths are something to do now, so neither is folded: the fix button
+  // only goes to Transcription, and the cloud path must not be the half that
+  // is hidden behind Learn more.
+  assert.equal(
+    r.problem,
+    "Meeting transcription isn't set up yet. Set up local transcription, or add an API key for a cloud service.",
+  );
+  // Where the key goes is the detail, not the instruction.
+  assert.equal(r.detail, "API keys for cloud services are added under Settings > Providers.");
   assert.deepEqual(r.fix, { view: "transcription", label: "Set up transcription" });
+});
+
+/*
+ * The case Ruling 17 exists for: somebody chose the local provider (for
+ * privacy), its model server is not running, and a cloud key is stored.
+ * `selectProvider` falls back to the cloud provider, so without this the page
+ * said Ready over a Start that would send the meeting to the cloud.
+ */
+const localChosenCloudFallback = () => {
+  const cloud = provider({
+    id: "meeting:openai-realtime",
+    name: "OpenAI Realtime",
+    audioLeavesDevice: true,
+  });
+  const usable = [cloud];
+  const { selected, savedUnusable } = selectProvider(null, "local", usable.map((p) => p.id));
+  return { usable, selected, savedUnusable };
+};
+
+test("the fixture: a saved local provider that cannot be used falls back to the cloud one", () => {
+  const { selected, savedUnusable } = localChosenCloudFallback();
+  assert.equal(selected, "meeting:openai-realtime");
+  assert.equal(savedUnusable, "local");
+});
+
+test("a saved provider that can't be used is needs-setup, even with another usable, fixed by choosing a provider", () => {
+  const { usable, selected, savedUnusable } = localChosenCloudFallback();
+  assert.equal(savedUnusable, "local");
+  const r = meetingReadiness({
+    usable,
+    selected,
+    savedUnusable: { name: "Local model", reason: "The local model server isn't running." },
+    languageWarning: null,
+    systemAudio: available,
+  });
+  assert.equal(r.state, "needs-setup");
+  if (r.state !== "needs-setup") return;
+  assert.equal(r.problem, "Local model, the provider you chose, can't be used right now.");
+  assert.equal(r.detail, "The local model server isn't running.");
+  assert.deepEqual(r.fix, { view: "meeting-settings", label: "Choose a provider" });
+});
+
+test("no usable provider outranks a saved one that can't be used, and says which one it was", () => {
+  const r = meetingReadiness({
+    usable: [],
+    selected: null,
+    savedUnusable: { name: "Local model", reason: "The local model server isn't running." },
+    languageWarning: null,
+    systemAudio: available,
+  });
+  assert.equal(r.state, "needs-setup");
+  if (r.state !== "needs-setup") return;
+  assert.match(r.problem, /^Meeting transcription isn't set up yet\./);
+  assert.deepEqual(r.fix, { view: "transcription", label: "Set up transcription" });
+  // The saved choice is not lost from the screen: it is the first thing the
+  // detail says.
+  assert.equal(
+    r.detail,
+    "Local model, the provider you chose, can't be used right now. The local model server isn't running. API keys for cloud services are added under Settings > Providers.",
+  );
+});
+
+test("a saved provider that can't be used outranks a missing language", () => {
+  const { usable, selected } = localChosenCloudFallback();
+  const r = meetingReadiness({
+    usable,
+    selected,
+    savedUnusable: { name: "Local model", reason: "r" },
+    languageWarning: "This provider cannot detect the language on its own.",
+    systemAudio: available,
+  });
+  assert.equal(r.state, "needs-setup");
+  if (r.state !== "needs-setup") return;
+  assert.deepEqual(r.fix, { view: "meeting-settings", label: "Choose a provider" });
 });
 
 test("nothing selected among usable providers is also needs-setup", () => {
   const r = meetingReadiness({
     usable: [provider()],
     selected: null,
+    savedUnusable: null,
     languageWarning: null,
     systemAudio: available,
   });
@@ -200,6 +285,7 @@ test("a language warning is needs-setup, fixed by opening meeting settings, with
   const r = meetingReadiness({
     usable: [provider()],
     selected: "local",
+    savedUnusable: null,
     languageWarning: "This provider cannot detect the language on its own.",
     systemAudio: available,
   });
@@ -214,6 +300,7 @@ test("system audio not being available is ready, with a caution", () => {
   const r = meetingReadiness({
     usable: [provider()],
     selected: "local",
+    savedUnusable: null,
     languageWarning: null,
     systemAudio: { state: "unsupported", reason: "no such mechanism on this platform" },
   });
@@ -227,6 +314,7 @@ test("everything fine is ready with no caution", () => {
   const r = meetingReadiness({
     usable: [provider()],
     selected: "local",
+    savedUnusable: null,
     languageWarning: null,
     systemAudio: available,
   });

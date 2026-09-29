@@ -12,9 +12,11 @@
  * reads both back rather than being handed them. Rust reads the language from
  * the database when the meeting starts (`start_live`); the provider is the one
  * the Meetings page reads back from `meetings.provider` and passes to
- * `meeting_start`. So the provider is saved on change and the language when
- * its field is left or Enter is pressed. There is no later moment to save them
- * in -- the save that used to run just before Start went with the button.
+ * `meeting_start`. So the provider is saved on change -- or, when the saved one
+ * cannot be used, by the Use button under the caveat that says so -- and the
+ * language when its field is left or Enter is pressed. There is no later
+ * moment to save them in -- the save that used to run just before Start went
+ * with the button.
  *
  * And one from the other direction: a meeting can start while this screen is
  * open -- from the notification window -- so it follows `onMeetingState` and
@@ -259,13 +261,34 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
           </span>
         </div>
 
+        {/* The Meetings page holds Start back while this is showing, and its
+            "Choose a provider" comes here. The select above cannot answer it
+            on its own: it already shows the fallback, and choosing the option
+            a select already shows fires no change, so with one usable
+            provider there would be nothing to press. The button is that
+            choice, made explicitly -- the fallback is never saved by itself,
+            because it can be the opposite privacy choice from the saved one. */}
         {savedUnusable ? (
-          <p className="caveat">
-            {savedProvider?.name ?? savedUnusable} was chosen last time but cannot be used right
-            now{savedProvider ? ` (${availabilityLabel(savedProvider.availability)})` : ""}
-            {selectedProvider ? `, so ${selectedProvider.name} is selected instead` : ""}. That
-            choice is kept until you pick another.
-          </p>
+          <>
+            <p className="caveat">
+              {savedProvider?.name ?? savedUnusable} was chosen last time but cannot be used right
+              now{savedProvider ? ` (${availabilityLabel(savedProvider.availability)})` : ""}
+              {selectedProvider ? `, so ${selectedProvider.name} is selected instead` : ""}. That
+              choice is kept until you pick another.
+            </p>
+            {selectedProvider && !recording ? (
+              <button
+                type="button"
+                onClick={() => {
+                  const id = selectedProvider.id;
+                  setChosen(id);
+                  void guard(() => setMeetingProvider(id));
+                }}
+              >
+                {`Use ${selectedProvider.name}`}
+              </button>
+            ) : null}
+          </>
         ) : null}
 
         {selectedProvider ? (
