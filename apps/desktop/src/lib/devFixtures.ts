@@ -1610,6 +1610,10 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
   dictation_route: () => ROUTE,
   dictation_use_local: () => null,
   dictation_set_cloud_provider: () => null,
+  // Swedish alone, so the language chip -- shown on the local route only --
+  // reads as a choice rather than as "Detect language".
+  dictation_local_language: () => ["sv"],
+  dictation_set_local_language: () => null,
 
   /* local transcription */
   sherpa_status: () => SHERPA,

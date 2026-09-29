@@ -2,9 +2,11 @@ import type { Readiness } from "../lib/readiness";
 import { LearnMore } from "./LearnMore";
 
 /**
- * The machine-voice line that opens Dictation and Meetings while no session
- * is under way -- both pages leave it out once one has started, since "will
- * starting work?" is no longer the question:
+ * The machine-voice line that opens Meetings while no session is under way --
+ * the page leaves it out once one has started, since "will starting work?" is
+ * no longer the question. Dictation used to open with it too; its task hero
+ * (`components/TaskHero.tsx`) now shows the same verdict and the same fix
+ * button, by the same `fixIsPrimary` rule, in `views/Dictation.tsx`:
  * "Ready", with an optional caution underneath that never blocks anything, or
  * "Needs setup", with the one problem, the one button that fixes it, and the
  * detail -- when there is one -- folded under a {@link LearnMore} disclosure

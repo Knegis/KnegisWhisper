@@ -100,11 +100,17 @@ async function key(cdp, { key: name, code, keyCode, modifiers = 0 }) {
   });
 }
 
-/** Waits for the shell, then removes the fixture banner unless asked not to. */
+/**
+ * Waits for the shell, then removes the fixture banner unless asked not to.
+ *
+ * "A page in the card" is `.split-main` or `.content`: Dictation, the opening
+ * screen, draws its own split with no `.content` since KNEG-363's Task 3, and
+ * Notes draws `.content` with no `.split-main`.
+ */
 async function ready(cdp, options) {
   await waitFor(
     cdp,
-    "Boolean(document.querySelector('nav.rail') && document.querySelector('.card .content'))",
+    "Boolean(document.querySelector('nav.rail') && document.querySelector('.card .split-main, .card .content'))",
     "the fixture shell",
   );
   if (options.keepFixtureBanner) {

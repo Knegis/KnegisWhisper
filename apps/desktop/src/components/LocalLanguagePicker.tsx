@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
+import { LANGUAGES } from "../lib/controlBar";
 import { getLocalDictationLanguages, setLocalDictationLanguages, onLocalDictationLanguages } from "../lib/ipc";
-
-const LANGUAGES = [["sv", "Swedish"], ["en", "English"], ["da", "Danish"], ["no", "Norwegian"], ["fi", "Finnish"], ["de", "German"], ["fr", "French"], ["es", "Spanish"]] as const;
 
 export function LocalLanguagePicker({ disabled = false }: { disabled?: boolean }) {
   const [selected, setSelected] = useState<string[] | null>(null);

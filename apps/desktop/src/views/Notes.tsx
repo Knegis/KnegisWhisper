@@ -39,14 +39,15 @@ import {
   type Note,
   type SearchHit,
 } from "../lib/ipc";
+import { parseStoredTime } from "../lib/dayGroups";
 import { groupNotesByFolder } from "../lib/noteGroups";
 import { carriesNote, draggedNoteId, folderChange, NOTE_DRAG_TYPE } from "../lib/noteDrag";
 import { useRefresh } from "../lib/useRefresh";
 
 function noteDate(value: string | null) {
   if (!value) return "Date unavailable";
-  const date = new Date(value.includes("T") ? value : value.replace(" ", "T") + "Z");
-  return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(date);
+  const date = parseStoredTime(value);
+  return date === null ? value : new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(date);
 }
 
 /** The right-click menu's target: a note, or a folder heading. */

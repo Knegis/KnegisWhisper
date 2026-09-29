@@ -11,14 +11,20 @@ import type { ViewId } from "./navigation.js";
 export type Page = { title: string; intro: string };
 
 /**
- * One entry per screen the rail or the Settings panel can reach, `notes`
- * excepted.
+ * One entry per screen the rail or the Settings panel can reach, `dictation`
+ * and `notes` excepted.
  *
  * `notes` is `null` rather than a page with an empty intro: the Notes screen is
  * the writing space itself -- the library down one side, and at the top of the
  * other the open note's own title field, or "Your writing space" when no note
  * is open. A page title above that would push the note down to name a screen
  * the rail already marks as current.
+ *
+ * `dictation` is `null` because its page is a task hero, which already says
+ * what the page is for: the panel beside it is titled "Dictation", and the
+ * intro sentence that used to sit here -- "Speak, and your words are typed
+ * where your cursor is." -- moved into the hero under the shortcut
+ * (`views/Dictation.tsx`). `meetings` follows when its own hero lands.
  *
  * Every title is the screen's current label in `lib/navigation.ts` -- the one
  * the rail or the Settings panel shows -- not a new name: a screen that read
@@ -38,10 +44,7 @@ export type Page = { title: string; intro: string };
  * type to the annotation.
  */
 export const PAGES = {
-  dictation: {
-    title: "Dictation",
-    intro: "Speak, and your words are typed where your cursor is.",
-  },
+  dictation: null,
   meetings: {
     title: "Meetings",
     intro: "Record a meeting and get a transcript you can turn into notes.",

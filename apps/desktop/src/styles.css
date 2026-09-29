@@ -349,11 +349,12 @@ h2,
 
 /*
  * What a panel is built from (`components/Panel.tsx`). The title is an `h1`
- * and a section label an `h2`, so both restate the margins and the face the
+ * -- or an `h2` beside a settings screen, which has its own `h1` -- and a
+ * section label an `h2`, so both restate the margins and the face the
  * generic heading rules set.
  */
 .panel-head { display: flex; align-items: center; gap: 2px; padding: 16px 10px 10px 20px; }
-.panel-title { flex: 1; margin: 0; font-size: 22px; line-height: 28px; font-weight: 400; }
+.panel-title { flex: 1; margin: 0; font-family: var(--font-sans); font-size: 22px; line-height: 28px; font-weight: 400; letter-spacing: -0.01em; text-transform: none; color: var(--text); }
 .panel-label { margin: 0; padding: 20px 20px 6px; font: 12px/16px var(--font-mono); letter-spacing: .5px; text-transform: uppercase; color: var(--muted); }
 .panel-list { display: flex; flex-direction: column; gap: 1px; padding: 0 8px; }
 .panel-item, .panel-action { width: 100%; display: flex; margin: 0; border: 0; border-radius: 2px; background: transparent; color: var(--text); text-align: left; }
@@ -370,6 +371,157 @@ h2,
 .panel-action-label { flex: 1; min-width: 0; font-size: 14px; line-height: 20px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .panel-action-hint { font: 12px/16px var(--font-mono); letter-spacing: .5px; color: var(--muted); }
 .panel-foot { margin-top: auto; display: flex; align-items: center; gap: 8px; padding: 12px 20px; border-top: 1px solid var(--rule); font-size: 12.5px; color: var(--muted); }
+/*
+ * A panel whose content carries a `data-surface` wrapper (Dictation's
+ * history) keeps the column the foot's `margin-top: auto` needs: the wrapper
+ * grows to the panel's height, so the foot still sits at the bottom.
+ */
+.panel-surface { flex: 1 0 auto; display: flex; flex-direction: column; }
+.panel-note { margin: 0; padding: 14px 20px 0; font-size: 13px; line-height: 18px; color: var(--muted); }
+/*
+ * A foot holding a line and a disclosure under it -- Dictation's "History
+ * stays on this computer" over its History options -- stacks them. The
+ * controls inside are `--text`, as controls are anywhere; only the
+ * explanations stay muted.
+ */
+.panel-foot-stack { flex-direction: column; align-items: stretch; }
+.panel-foot-line { display: flex; align-items: center; gap: 8px; margin: 0; }
+.panel-foot .learn-more { margin: 0; }
+.panel-foot .learn-more-body { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+.panel-foot .learn-more-body label { color: var(--text); }
+.panel-foot .learn-more-body p { margin: 0 0 6px; }
+.panel-foot .learn-more-body button { margin: 0 0 0 -8px; padding: 4px 8px; border-radius: 2px; }
+
+/*
+ * A task page (`views/Dictation.tsx`, and Meetings next): the hero centred in
+ * whatever height the main area has, the control bar at its foot. `.task` is
+ * at least the height of `.split-main`, which is stretched to the card and so
+ * has a definite height for the 100% to resolve against; a window short
+ * enough that hero and bar do not both fit scrolls `.split-main` instead of
+ * overlapping them.
+ */
+.task { min-height: 100%; display: flex; flex-direction: column; margin: 0; background: none; }
+.task-hero { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 40px 32px 32px; text-align: center; }
+.task-bar { display: flex; flex-direction: column; align-items: center; padding: 0 32px 32px; }
+.task-health { margin-top: 10px; font-size: 13px; text-align: center; }
+.task-health .muted { margin: 0; }
+/* A screen that failed to render lands in the card bare when its page draws its own split. */
+.card > .view { flex: 1; min-width: 0; overflow-y: auto; padding: 40px 56px 48px; }
+
+/*
+ * The hero (`components/TaskHero.tsx`). The canvas' measurements: a 60px
+ * icon drawn at stroke 1, the status 28px under it, a 40/54 heading and a
+ * 16/24 sentence. The status mark is the shape of the state -- a filled
+ * square for ready, a round dot for recording, a hollow square for needs
+ * setup -- so the state never rests on colour alone.
+ */
+.hero { display: flex; flex-direction: column; align-items: center; max-width: 720px; }
+.hero-icon { display: flex; color: var(--text); }
+.hero-icon .icon { stroke-width: 1; }
+.hero-status { display: flex; align-items: center; gap: 8px; margin: 28px 0 0; font: 12px/16px var(--font-mono); letter-spacing: .5px; text-transform: uppercase; color: var(--text); }
+.hero-mark { width: 7px; height: 7px; flex-shrink: 0; }
+.hero-status-ready .hero-mark { background: var(--band); }
+.hero-status-recording { color: var(--rec); }
+.hero-status-recording .hero-mark { width: 8px; height: 8px; border-radius: 50%; background: var(--rec); }
+.hero-status-setup .hero-mark { border: 1px solid var(--text); }
+.hero-extra { color: var(--text); font-variant-numeric: tabular-nums; }
+.hero-heading { margin: 14px 0 0; font-family: var(--font-sans); font-size: 40px; line-height: 54px; letter-spacing: -0.5px; text-transform: none; color: var(--text); }
+.hero-sub { margin: 10px 0 0; max-width: 60ch; font-size: 16px; line-height: 24px; color: var(--muted); }
+.hero-sub > p { margin: 0; }
+.hero-sub > .hero-note { margin-top: 8px; font-size: 14px; line-height: 20px; }
+.hero-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 16px; margin-top: 24px; }
+.hero-actions > button { margin: 0; height: 38px; padding: 0 16px; border-radius: 2px; font-size: 14.5px; }
+.hero-actions > .learn-more { margin: 0; }
+/* A shortcut's keys stay on one line together; "or" between two may break. */
+.keycaps { white-space: nowrap; }
+
+/*
+ * A key, as the Kit draws it: the machine voice on the page colour, a
+ * `--rule` edge with a heavier bottom. 2px, not the canvas' 3px -- a key is a
+ * control, and the Kit's corner scale has no 3px step.
+ */
+kbd { display: inline-block; border: 1px solid var(--rule); border-bottom-width: 3px; border-radius: 2px; background: var(--bg); color: var(--text); font-family: var(--font-mono); font-size: 0.85em; line-height: 1.4; padding: 0 0.4em; }
+.hero-heading kbd { margin: 0 3px; padding: 3px 12px 1px; font-size: 22px; line-height: 30px; vertical-align: 6px; }
+
+/*
+ * A short window -- the 720x520 minimum, where the main area is about 470px
+ * tall -- would push the control bar and its Start button below the fold
+ * behind the canvas' 1440x900 spacing. The hero gives up its icon and its
+ * 40px heading first, since the bar is where the controls are. After the
+ * rules above, which it has to outrank at equal specificity.
+ */
+@media (max-height: 640px) {
+  .task-hero { padding-top: 16px; padding-bottom: 16px; }
+  .hero-icon { display: none; }
+  .hero-status { margin-top: 0; }
+  .hero-heading { margin-top: 8px; font-size: 28px; line-height: 38px; }
+  .hero-heading kbd { padding: 1px 8px 0; font-size: 16px; line-height: 22px; vertical-align: 3px; }
+  .hero-sub { margin-top: 6px; }
+}
+
+/*
+ * A chip (`components/Chip.tsx`), and the microphone's `select.chip`: a 30px
+ * control with the 2px corner, unfilled at rest like every other button. It
+ * shrinks before the privacy line does, down to its icon if it has to, and
+ * the label ellipsises inside a 260px cap; the full label is the `title`.
+ */
+.chip { display: inline-flex; align-items: center; gap: 7px; flex: 0 1 auto; min-width: 0; max-width: 260px; height: 30px; margin: 0; padding: 0 9px; border: 0; border-radius: 2px; background: transparent; color: var(--text); font: inherit; font-size: 13.5px; line-height: 18px; white-space: nowrap; }
+.chip-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.chip-chevron { display: flex; color: var(--muted); }
+.chip[aria-pressed="true"], .chip[aria-pressed="true"]:hover:not(:disabled) { background: var(--band-wash); }
+/*
+ * The select keeps its own value and picker arrow; the microphone icon sits
+ * over its left padding and lets presses through, the way the title bar's
+ * search icon does. A ring on keyboard focus, which the generic select rule
+ * replaces with a fill: here the fill is also the hover, and a chip reached
+ * by Tab has to be findable among its neighbours.
+ *
+ * `appearance: auto`, opting this one select out of the `base-select` block
+ * below. Under `base-select` the selected option's text is drawn in a box
+ * `text-overflow` does not reach: "Microphone Array (Realtek(R) Audio)
+ * (default)" was cut mid-character at the 260px cap and pushed the picker
+ * arrow out of the chip altogether. The platform's own rendering ellipsises
+ * the same select and keeps its arrow (both measured in headless Edge 154
+ * against dev fixtures, not in the Tauri window). The cost is that this
+ * list drops down in the platform's popup rather than the page's -- the
+ * fallback older engines already get, with the `option` colours below.
+ * `field-sizing: content` because a platform select is otherwise as wide as
+ * its widest option, which left "System default" in a 260px chip; where it
+ * is unsupported the chip is simply that wide.
+ */
+.chip-select { position: relative; display: inline-flex; align-items: center; flex: 0 1 auto; min-width: 0; max-width: 260px; }
+.chip-select > .icon { position: absolute; left: 9px; z-index: 1; color: var(--text); pointer-events: none; }
+select.chip { appearance: auto; field-sizing: content; width: auto; max-width: 100%; padding-left: 32px; overflow: hidden; text-overflow: ellipsis; }
+select.chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/*
+ * The control bar (`components/ControlBar.tsx`): a strip of chips and the
+ * privacy line on `--strip`, then the body. The strip wraps rather than
+ * truncating the privacy line -- at the 720px minimum the sentences drop to
+ * a line of their own and the chips ellipsise on the first.
+ */
+.control-bar { width: min(840px, 100%); background: var(--bg); border: 1px solid var(--rule); border-radius: 4px; box-shadow: var(--card-shadow); overflow: hidden; text-align: left; }
+.control-strip { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; padding: 6px 8px; background: var(--strip); border-bottom: 1px solid var(--rule); }
+.control-chips { display: flex; align-items: center; gap: 2px; flex: 0 1 auto; min-width: 0; }
+.control-spacer { flex: 1 0 0; }
+.control-privacy { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 14px; min-width: 0; margin: 0; padding: 6px 8px; list-style: none; font-size: 13px; line-height: 18px; color: var(--muted); }
+.control-privacy li { display: inline-flex; align-items: center; gap: 6px; }
+.control-body { display: flex; flex-direction: column; gap: 14px; padding: 16px 18px 14px; }
+.control-body > .error { margin: 0; }
+.control-note { margin: 0; font-size: 13px; line-height: 18px; color: var(--muted); overflow-wrap: anywhere; }
+.control-note.error { color: var(--error); }
+.control-result { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.control-result-head { display: flex; align-items: center; gap: 8px; }
+.control-result-label { flex: 1; min-width: 0; font: 12px/16px var(--font-mono); letter-spacing: .5px; text-transform: uppercase; color: var(--muted); }
+/* Four lines of the last dictation, then it scrolls: a long one must not push Start off the card. */
+.control-result-text { margin: 0; max-height: 104px; overflow-y: auto; font-size: 17px; line-height: 26px; overflow-wrap: anywhere; }
+.control-result-empty { margin: 0; padding: 15px 0; font-size: 17px; line-height: 26px; color: var(--muted); }
+button.control-copy { display: inline-flex; align-items: center; gap: 6px; height: 26px; margin: 0; padding: 0 8px; border-radius: 2px; font-size: 13px; }
+.control-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+/* The Tidy up chip's label lines up with the text above it. */
+.control-row > .chip { margin-left: -9px; }
+.control-row > button:not(.chip) { height: 38px; margin: 0; padding: 0 14px; border-radius: 2px; font-size: 14.5px; white-space: nowrap; }
+.control-row > button.control-start { display: inline-flex; align-items: center; gap: 9px; padding: 0 16px; }
 
 /*
  * One column below the width where two would leave neither usable.
@@ -453,13 +605,14 @@ h3 {
 
 /*
  * Page header, disclosure and status line: the furniture around a screen's
- * `h1`, shared by every top-level view so a colleague sees the same shape on
- * Dictation, Transcription and everywhere else.
+ * `h1`, shared by the screens that have a `PageHeader` so a colleague sees the
+ * same shape on Meetings, Transcription and everywhere else. Dictation has a
+ * task hero instead (`.hero-*`, above), whose status carries the same states.
  *
  * `.page-intro` is the one sentence saying what the screen is for; `.learn-
  * more` is the rest, folded under a `<details>` so a screen for a colleague
  * who isn't technical leads with the short version and lets anyone go looking
- * for more. `.status-line` is the machine-voice line that opens Dictation and
+ * for more. `.status-line` is the machine-voice line that opens
  * Meetings -- 13px/16px tracked ProFontWindows, the same spec as every
  * other string reporting on the machine rather than addressing the
  * person -- and `.status-needs-setup` is `.caveat` worn by that

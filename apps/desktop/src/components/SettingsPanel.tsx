@@ -20,7 +20,8 @@ export function SettingsPanel({ view, onSelect }: { view: ViewId; onSelect: (id:
   const groups = NAV.filter(isGroup);
   return (
     <>
-      <PanelHeader title="Settings" />
+      {/* `h2`: the screen beside the panel has its own `h1` in `PageHeader`. */}
+      <PanelHeader title="Settings" level={2} />
       {SETTINGS_PANEL.map((section) => {
         const group = groups.find((entry) => entry.id === section.group);
         if (!group) return null;

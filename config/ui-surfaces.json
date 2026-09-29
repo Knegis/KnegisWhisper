@@ -60,13 +60,13 @@
       "surfaceId": "dictation.task",
       "component": "apps/desktop/src/views/Dictation.tsx",
       "built": true,
-      "note": "The dictation task: whether it will work (lib/readiness.ts), the Start button, and the shortcut, microphone and route it will use -- the microphone chosen in place, the shortcut and the route each with a link to where it is changed. The shortcut editor is on Settings > Shortcuts."
+      "note": "The dictation task: whether it will work (lib/readiness.ts) and the shortcut to press, in a centred hero; then a control bar with the microphone chosen in place, chips linking to where the route, the local language and cleanup are changed, the privacy line, the last result, and the Start button. The shortcut editor is on Settings > Shortcuts, reached from the history panel."
     },
     "Dictation > History": {
       "surfaceId": "dictation.history",
-      "component": "apps/desktop/src/views/Dictation.tsx",
+      "component": "apps/desktop/src/components/DictationHistoryPanel.tsx",
       "built": true,
-      "note": "Switches history off, keeps the pre-cleanup transcript, and clears what is stored. The first two controls exist because the backend honoured history.enabled and history.keepRawText with no way in (KNEG-98, KNEG-99) -- the pattern tools/settings-audit/scan.mjs now gates."
+      "note": "Dictation's list panel: the history grouped by day, and under History options the switches that turn history off and keep the pre-cleanup transcript, and Clear history. The first two controls exist because the backend honoured history.enabled and history.keepRawText with no way in (KNEG-98, KNEG-99) -- the pattern tools/settings-audit/scan.mjs now gates. Moved out of views/Dictation.tsx into the panel in KNEG-363."
     },
     "Integrations > Calendar": {
       "surfaceId": "integrations.calendar",

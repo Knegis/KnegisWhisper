@@ -43,10 +43,12 @@ import { LanguagePopup } from "./components/LanguagePopup";
  * Every page sits in one card beside the rail. A settings or developer screen
  * gets `SplitView` with the shared `SettingsPanel`; the title bar's toggle
  * collapses that panel, and the collapsed state reaches it through
- * `PanelCollapsed` rather than props. Dictation, Meetings and Notes will each
- * render their own `SplitView`, because they own their panel's data; until
- * they do, they render in the card as they did before it, under their
- * `PageHeader` -- Notes still full-bleed, with its own library.
+ * `PanelCollapsed` rather than props. Dictation, Meetings and Notes each
+ * render their own `SplitView`, because they own their panel's data.
+ * Dictation does already: it goes into the card bare, with no `.content` and
+ * no `PageHeader`, since its task hero says what the page is for. Meetings
+ * and Notes do not yet, and render in the card as they did before it --
+ * Meetings under its `PageHeader`, Notes full-bleed, with its own library.
  *
  * # The error boundary
  *
@@ -275,20 +277,28 @@ function Shell({ panelCollapsed, onTogglePanel }: { panelCollapsed: boolean; onT
     );
   }
 
+  const boundary = (
+    <ViewBoundary view={view} onReset={() => select("diagnostics")}>
+      {renderView(view, diagnostics, select, searchNoteRequest, openNote)}
+    </ViewBoundary>
+  );
+
+  // Dictation draws its own `SplitView` -- its panel is its history -- so it
+  // goes into the card bare, with no `.content` and no `PageHeader`.
+  if (view === "dictation") return frame(boundary);
+
   const content = (
     <div className="content">
       {page ? <PageHeader page={page} /> : null}
-      <ViewBoundary view={view} onReset={() => select("diagnostics")}>
-        {renderView(view, diagnostics, select, searchNoteRequest, openNote)}
-      </ViewBoundary>
+      {boundary}
     </div>
   );
 
   // Every settings and developer screen shares one panel. Notes fills the
   // card by itself (`.content:has(.notes-view)`), library included. The rest
-  // -- `notes-upload`, and Dictation and Meetings until they draw their own
-  // panel -- scroll in `.split-main` as a split with no panel beside it: the
-  // card clips its overflow, so the page cannot scroll the card itself.
+  // -- `notes-upload`, and Meetings until it draws its own panel -- scroll in
+  // `.split-main` as a split with no panel beside it: the card clips its
+  // overflow, so the page cannot scroll the card itself.
   if (railOf(view) === "settings") {
     return frame(
       <SplitView label="Settings sections" panel={<SettingsPanel view={view} onSelect={select} />}>

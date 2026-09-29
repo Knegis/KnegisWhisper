@@ -1,36 +1,53 @@
 /**
  * Dictation: the task, and what came of it.
  *
- * The page leads with whether dictation will work (`lib/readiness.ts`), the
- * one button that starts it, and the shortcut, microphone and route it will
- * use. The microphone is chosen right here, in its own select; the shortcut
- * and the route each have a Change button to the screen where they are set --
- * the shortcut editor is on Settings > Shortcuts, the route on Settings >
- * Transcription.
+ * Three parts, the way the canvas draws them:
  *
- * That split had to keep the loop this page used to hold on one screen: bind
- * a key, press it, read the result. Putting the evidence that dictation worked
- * on a different page from the control that started it is how the first bench
- * check ended up unable to tell "the hotkey did nothing" from "the hotkey saved
- * nothing". So the evidence travels with each half rather than staying behind
- * with one of them: this page shows the last result under the button that
- * started it, and Settings > Shortcuts shows *Last fired* and *Last dictation
- * result* under the editor.
+ *   - **The hero**, centred: whether dictation will work (`lib/readiness.ts`)
+ *     and, when it will, the shortcut to press. When it will not, the one
+ *     problem and the button that fixes it; while recording, "Listening…" and
+ *     a timer.
+ *   - **The control bar** at the foot: the microphone, chosen right here in
+ *     its own select; where speech becomes text and, on the local route, the
+ *     language -- each a chip that goes to Settings > Transcription, where
+ *     they are set; the privacy line, which is never hidden; the last result
+ *     with a Copy button; the Tidy up chip, to Cleanup & summaries; and Start.
+ *   - **The history**, in the list panel (`components/DictationHistoryPanel.tsx`),
+ *     with the way to the shortcut editor and the vocabulary at its top.
+ *
+ * The loop this page used to hold on one screen -- bind a key, press it, read
+ * the result -- still has to hold across the two screens it is split over.
+ * Putting the evidence that dictation worked on a different page from the
+ * control that started it is how the first bench check ended up unable to
+ * tell "the hotkey did nothing" from "the hotkey saved nothing". So the
+ * evidence travels with each half: this page shows the last result above the
+ * button that started it, and Settings > Shortcuts shows *Last fired* and
+ * *Last dictation result* under the editor.
  *
  * Dictation state arrives from Rust by event rather than being tracked here: the
  * hotkey works while this window is hidden, so the window cannot be the thing
- * that knows.
+ * that knows. The rail carries no recording mark; the hero says it.
+ *
+ * Rendered by `App.tsx` straight into the card, with no `PageHeader`: the
+ * panel's title is the page's `h1`, and the intro sentence that used to sit
+ * under a header is the hero's own line under the shortcut.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 
+import { Chip } from "../components/Chip";
+import { ControlBar } from "../components/ControlBar";
+import { DictationHistoryPanel } from "../components/DictationHistoryPanel";
+import { Icon, IconFilled } from "../components/Icon";
 import { LearnMore } from "../components/LearnMore";
 import { LocalServerHealth } from "../components/LocalServerHealth";
-import { Row } from "../components/Row";
-import { StatusLine } from "../components/StatusLine";
+import { PanelHeader } from "../components/Panel";
+import { SplitView } from "../components/SplitView";
+import { TaskHero } from "../components/TaskHero";
+import { cleanupLabel, destinationName, languageLabel, privacyLines } from "../lib/controlBar";
+import { parseStoredTime, timeOfDay } from "../lib/dayGroups";
 import {
   cancelDictation,
-  clearHistory,
   getDictationRoute,
   getDictationState,
   getHistory,
@@ -39,13 +56,15 @@ import {
   getInputDevice,
   getInputDevices,
   getKeepRawText,
+  getLocalDictationLanguages,
+  getReasoningStatus,
   isInsertionSupported,
   onDictationOutcome,
   onDictationState,
-  setHistoryEnabled,
+  onLocalDictationLanguages,
   setInputDevice,
-  setKeepRawText,
   toggleDictation,
+  type DictationOutcome,
   type SessionState,
 } from "../lib/ipc";
 import { acceleratorText, outcomeLabel, sessionStateLabel } from "../lib/labels";
@@ -54,10 +73,52 @@ import type { ViewId } from "../lib/navigation";
 import { dictationReadiness } from "../lib/readiness";
 import { useRefresh } from "../lib/useRefresh";
 
+/**
+ * The sentence that was this page's `PageHeader` intro (`lib/pages.ts`), now
+ * the hero's line under whatever it is asking you to do.
+ */
+const INTRO = "Speak, and your words are typed where your cursor is.";
+
+/** How long "Copied" stands in for the Copy button's label. */
+const COPIED_MS = 2000;
+
+/** Seconds as `mm:ss`, the canvas' recording clock. */
+function clock(seconds: number): string {
+  const s = Math.max(0, Math.floor(seconds));
+  return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+}
+
+/**
+ * A shortcut as keycaps: `Control+Shift+D` is three, and a second
+ * accelerator on the same action is joined with "or". Built from
+ * `acceleratorText`, the same string Settings > Shortcuts and the panel show.
+ */
+function keycaps(shortcut: string): ReactNode {
+  return shortcut.split(", ").map((accelerator, i) => (
+    <Fragment key={accelerator}>
+      {i > 0 ? " or " : null}
+      <span className="keycaps">
+        {accelerator.split("+").map((key) => (
+          <kbd key={key}>{key}</kbd>
+        ))}
+      </span>
+    </Fragment>
+  ));
+}
+
+/** What the last dictation event said, kept so "Last dictation" works with history off. */
+type LastOutcome = {
+  label: string;
+  /** The inserted text, for an `inserted` outcome; `null` for every other. */
+  text: string | null;
+  failed: boolean;
+  at: Date;
+};
+
 export function DictationView({
   onGoTo,
 }: {
-  /** Where the status line's fix and each Change button take you. */
+  /** Where the fix button, the chips and the panel's actions take you. */
   onGoTo: (id: ViewId) => void;
 }) {
   const load = useCallback(async () => {
@@ -71,6 +132,7 @@ export function DictationView({
       history,
       historyOn,
       keepRaw,
+      reasoning,
     ] = await Promise.all([
       getHotkeys(),
       getDictationState(),
@@ -81,7 +143,10 @@ export function DictationView({
       getHistory(20),
       getHistoryEnabled(),
       getKeepRawText(),
+      getReasoningStatus(),
     ]);
+    // Only the local route has languages to choose, so only it is asked.
+    const languages = route.isLocal ? await getLocalDictationLanguages() : [];
     return {
       hotkeys,
       session,
@@ -92,6 +157,8 @@ export function DictationView({
       history,
       historyOn,
       keepRaw,
+      cleanup: reasoning.route,
+      languages,
     };
   }, []);
 
@@ -99,7 +166,7 @@ export function DictationView({
 
   /** Live session state, which arrives by event between reads. */
   const [session, setSession] = useState<SessionState | null>(null);
-  const [lastOutcome, setLastOutcome] = useState<string | null>(null);
+  const [lastOutcome, setLastOutcome] = useState<LastOutcome | null>(null);
 
   // `disposed` because `listen` resolves after the effect returns: a page left
   // before it did would otherwise keep its listeners for the rest of the
@@ -114,11 +181,21 @@ export function DictationView({
     void onDictationState((next) => {
       if (!disposed) setSession(next);
     }).then(keep);
-    void onDictationOutcome((outcome) => {
+    void onDictationOutcome((outcome: DictationOutcome) => {
       if (disposed) return;
-      setLastOutcome(outcomeLabel(outcome));
+      setLastOutcome({
+        label: outcomeLabel(outcome),
+        text: outcome.outcome === "inserted" ? outcome.text : null,
+        failed: outcome.outcome === "failed",
+        at: new Date(),
+      });
       // History and the session both moved, so re-read rather than guessing.
       void reload();
+    }).then(keep);
+    // The floating microphone's language menu changes this too, while the
+    // page is open; the chip re-reads rather than going stale.
+    void onLocalDictationLanguages(() => {
+      if (!disposed) void reload();
     }).then(keep);
     return () => {
       disposed = true;
@@ -126,17 +203,47 @@ export function DictationView({
     };
   }, [reload]);
 
+  const liveState = session ?? data?.session ?? null;
+  const recordingNow = liveState === "recording";
+
+  // A local timer from the moment this page saw the session go to
+  // "recording". Local, because Rust sends no start time: a page opened
+  // mid-recording counts from when it opened.
+  const [recordingSince, setRecordingSince] = useState<number | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!recordingNow) {
+      setRecordingSince(null);
+      return;
+    }
+    const start = Date.now();
+    setRecordingSince(start);
+    setNow(start);
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [recordingNow]);
+
+  // The Copy button's answer, and the text it was about. "Couldn't copy"
+  // stays until the next press, because a failure stays visible; "Copied"
+  // goes after two seconds. Either one lapses when a new dictation replaces
+  // the text it was about.
+  const [copied, setCopied] = useState<{ text: string; label: "Copied" | "Couldn't copy" } | null>(null);
+  const copiedTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(copiedTimer.current), []);
+
   if (!data) {
     return (
-      <div className="view">
-        {error ? <p className="error">{error}</p> : <p className="muted">Loading…</p>}
-      </div>
+      <SplitView label="Dictation history" panel={<PanelHeader title="Dictation" />}>
+        <section data-surface="dictation.task" className="task" aria-label="Dictation">
+          {error ? <p className="error">{error}</p> : <p className="muted">Loading…</p>}
+        </section>
+      </SplitView>
     );
   }
 
-  const { hotkeys, devices, device, canInsert, route, history, historyOn, keepRaw } =
+  const { hotkeys, devices, device, canInsert, route, history, historyOn, keepRaw, cleanup, languages } =
     data;
-  const state = session ?? data.session;
+  const state = liveState ?? data.session;
   // The floating microphone's own reading of the session, reused rather than
   // re-derived, so the two buttons cannot disagree -- and so Start is off
   // while a dictation is still transcribing or being typed, which this button
@@ -145,259 +252,279 @@ export function DictationView({
   const recording = mic.recording;
   const dictationBinding = hotkeys.bindings.find((b) => b.action === "dictation");
   const shortcut = dictationBinding ? acceleratorText(dictationBinding) : "";
+  // Keycaps name only what can be pressed. An accelerator Rust could not
+  // parse is Settings > Shortcuts' to report, not the hero's to invite.
+  const pressable = dictationBinding
+    ? acceleratorText({
+        ...dictationBinding,
+        accelerators: dictationBinding.accelerators.filter((a) => a.kind !== "invalid"),
+      })
+    : "";
   // A microphone chosen earlier and unplugged since. Listed as itself rather
   // than letting the select fall back to "System default", which would read as
   // a choice nobody made. The recording itself does fall back to the default
   // -- `Capture::start` in crates/audio-core/src/capture.rs asks for the device
-  // by name and takes the default when it is gone -- so the row says that too.
+  // by name and takes the default when it is gone -- so the bar says that too.
   const missingDevice =
     device !== null && !devices.some((d) => d.name === device) ? device : null;
+  // The select's `title`: the selected option's own text, so the full name
+  // is there under the pointer once the chip has cut it short.
+  const deviceLabel =
+    missingDevice !== null
+      ? `${missingDevice} (not connected)`
+      : device === null
+        ? "System default"
+        : `${device}${devices.some((d) => d.name === device && d.isDefault) ? " (default)" : ""}`;
   const readiness = dictationReadiness({ route, hotkeys, canInsert });
   // Off on a broken route: the backend resolves the route only at Stop and
   // cancels on failure (`toggle`, src-tauri/src/dictation.rs), so Start would
   // record words that are then thrown away. A missing shortcut does not
   // disable it -- the button needs none -- so only this case hands the
-  // page's one filled button to the status line's fix.
+  // page's one filled button to the hero's fix.
   const startBlocked = !recording && route.problem !== null;
 
+  // The last thing dictated: this session's inserted text if there is one,
+  // otherwise the newest history row that has text. The newest row, not
+  // `history[0]`, because a failed dictation writes a row with no text, and
+  // "Nothing dictated yet" over an earlier success would be false.
+  const newest = history.find((h) => h.status === "ok" && h.text !== "") ?? null;
+  const lastText = lastOutcome?.text ?? newest?.text ?? null;
+  const lastAt =
+    lastOutcome !== null && lastOutcome.text !== null
+      ? lastOutcome.at
+      : newest
+        ? parseStoredTime(newest.createdAt)
+        : null;
+  // Only ever present when cleanup changed the text and the user asked to
+  // keep it -- see `raw_for_history`. So its presence is the finding, and it
+  // is labelled rather than shown as a bare second line.
+  const lastRaw = newest !== null && newest.text === lastText ? newest.rawText : null;
+
+  const copyLast = async (text: string) => {
+    clearTimeout(copiedTimer.current);
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied({ text, label: "Copied" });
+      copiedTimer.current = setTimeout(() => setCopied(null), COPIED_MS);
+    } catch {
+      setCopied({ text, label: "Couldn't copy" });
+    }
+  };
+
+  // The hero. Readiness answers "will starting work?", which means nothing
+  // once a dictation has started -- "Ready" over a recording, or over text
+  // being typed, reads as a claim about the session -- so while one is under
+  // way the hero speaks for the session instead.
+  const hero = recording ? (
+    <TaskHero
+      icon="dictation"
+      status={{
+        tone: "recording",
+        label: sessionStateLabel(state),
+        extra: clock(recordingSince === null ? 0 : (now - recordingSince) / 1000),
+      }}
+      heading="Listening…"
+      sub="Speak now, then press Stop and transcribe. The overlay is visible while you record."
+    />
+  ) : mic.busy ? (
+    <TaskHero
+      icon="dictation"
+      status={{ tone: "ready", label: sessionStateLabel(state) }}
+      heading="Your words are on their way"
+      sub={INTRO}
+    />
+  ) : readiness.state === "ready" ? (
+    <TaskHero
+      icon="dictation"
+      status={{ tone: "ready", label: "Ready" }}
+      heading={<>Press {keycaps(pressable)} to dictate</>}
+      sub={
+        <>
+          <p>{INTRO}</p>
+          {readiness.caution ? <p className="hero-note">{readiness.caution}</p> : null}
+        </>
+      }
+    />
+  ) : (
+    <TaskHero
+      icon={readiness.fix.view === "shortcuts" ? "shortcut" : "transcription"}
+      status={{ tone: "setup", label: "Needs setup" }}
+      heading={readiness.problem}
+      sub={INTRO}
+    >
+      {/* The fix takes the page's one filled button only when Start cannot
+          be pressed; otherwise Start keeps it and this stays plain. */}
+      <button
+        type="button"
+        className={startBlocked ? "primary" : undefined}
+        onClick={() => onGoTo(readiness.fix.view)}
+      >
+        {readiness.fix.label}
+      </button>
+      {readiness.detail ? <LearnMore>{readiness.detail}</LearnMore> : null}
+    </TaskHero>
+  );
+
   return (
-    <div className="view">
-      {error ? <p className="error">{error}</p> : null}
+    <SplitView
+      label="Dictation history"
+      panel={
+        <DictationHistoryPanel
+          history={history}
+          historyOn={historyOn}
+          keepRaw={keepRaw}
+          shortcut={shortcut}
+          onGoTo={onGoTo}
+          guard={guard}
+          reload={reload}
+        />
+      }
+    >
+      <section data-surface="dictation.task" className="task" aria-label="Dictation">
+        <div className="task-hero">{hero}</div>
 
-      <section data-surface="dictation.task" aria-label="Dictation">
-        {/* Only while no dictation is under way. Readiness answers "will
-            starting work?", which means nothing once one has started --
-            "Ready" over a recording, or over text being typed, reads as a
-            claim about the session. The Status row speaks for it instead. */}
-        {mic.recording || mic.busy ? null : (
-          <StatusLine
-            readiness={readiness}
-            onFix={onGoTo}
-            fixIsPrimary={startBlocked}
-          />
-        )}
-        <button
-          type="button"
-          className={startBlocked ? undefined : "primary"}
-          disabled={mic.disabled || startBlocked}
-          onClick={() => {
-            void guard(toggleDictation);
-          }}
-        >
-          {recording
-            ? "Stop and transcribe"
-            : mic.busy
-              ? sessionStateLabel(state)
-              : "Start dictation"}
-        </button>
-        {recording ? (
-          <button
-            type="button"
-            onClick={() => {
-              void guard(cancelDictation);
-            }}
+        <div className="task-bar">
+          <ControlBar
+            strip={
+              <>
+                <span className="chip-select">
+                  <Icon name="microphone" size={16} />
+                  {/* Controlled by what the backend reports, not by the last
+                      click: `guard` re-reads after the change, and
+                      `getInputDevice` is what brings the choice back.
+                      Uncontrolled, this read "System default" whatever had
+                      been chosen (KNEG-340). */}
+                  <select
+                    className="chip"
+                    aria-label="Microphone"
+                    title={deviceLabel}
+                    value={device ?? ""}
+                    onChange={(e) => {
+                      const next = e.target.value || null;
+                      void guard(() => setInputDevice(next));
+                    }}
+                  >
+                    {missingDevice !== null ? (
+                      <option value={missingDevice}>{missingDevice} (not connected)</option>
+                    ) : null}
+                    <option value="">System default</option>
+                    {devices.map((d) => (
+                      <option key={d.name} value={d.name}>
+                        {d.name}
+                        {d.isDefault ? " (default)" : ""}
+                      </option>
+                    ))}
+                  </select>
+                </span>
+                {/* A route with a problem has no destination to name; the
+                    hero says what to do and carries the problem itself. */}
+                <Chip
+                  icon="computer"
+                  label={
+                    route.problem
+                      ? "Not set up"
+                      : route.isLocal
+                        ? "On this computer"
+                        : destinationName(route.destination)
+                  }
+                  chevron
+                  onClick={() => onGoTo("transcription")}
+                />
+                {route.isLocal ? (
+                  <Chip
+                    icon="language"
+                    label={languageLabel(languages)}
+                    chevron
+                    onClick={() => onGoTo("transcription")}
+                  />
+                ) : null}
+              </>
+            }
+            privacy={privacyLines(route, cleanup)}
           >
-            Discard
-          </button>
-        ) : null}
-
-        <div className="row">
-          <span className="row-label">Shortcut</span>
-          <span className="row-value controls">
-            {shortcut ? <code>{shortcut}</code> : <span>none set</span>}
-            <button type="button" onClick={() => onGoTo("shortcuts")}>
-              Change
-            </button>
-          </span>
-        </div>
-        <div className="row">
-          <span className="row-label">Microphone</span>
-          <span className="row-value controls">
-            {/* Controlled by what the backend reports, not by the last click:
-                `guard` re-reads after the change, and `getInputDevice` is what
-                brings the choice back. Uncontrolled, this read "System default"
-                whatever had been chosen (KNEG-340). */}
-            <select
-              aria-label="Microphone"
-              value={device ?? ""}
-              onChange={(e) => {
-                const next = e.target.value || null;
-                void guard(() => setInputDevice(next));
-              }}
-            >
-              {missingDevice !== null ? (
-                <option value={missingDevice}>{missingDevice} (not connected)</option>
-              ) : null}
-              <option value="">System default</option>
-              {devices.map((d) => (
-                <option key={d.name} value={d.name}>
-                  {d.name}
-                  {d.isDefault ? " (default)" : ""}
-                </option>
-              ))}
-            </select>
+            {error ? <p className="error">{error}</p> : null}
             {missingDevice !== null ? (
-              <em className="row-detail">
+              <p className="control-note">
                 Not connected, so dictation uses the system default until it is
                 plugged back in.
-              </em>
+              </p>
             ) : null}
-          </span>
-        </div>
-        {/* The privacy fact, so it is on the row rather than behind anything:
-            whether this dictation's audio leaves this computer. `leavesDevice`
-            decides the sentence rather than `isLocal`, because it is the field
-            that answers that question; `isLocal` only names the engine. A
-            route with a problem has no destination to describe -- the status
-            line above says what to do, and carries the problem itself. */}
-        <div className="row">
-          <span className="row-label">Transcription</span>
-          <span className="row-value controls">
-            <span>
-              {route.problem
-                ? "Not set up"
-                : route.isLocal
-                  ? "On this computer"
-                  : route.destination}
-            </span>
-            {route.problem ? null : (
-              <em className="row-detail">
-                {route.leavesDevice
-                  ? `Audio is sent to ${route.destination}`
-                  : "Audio stays on this computer"}
-              </em>
-            )}
-            <button type="button" onClick={() => onGoTo("transcription")}>
-              Change
-            </button>
-          </span>
-        </div>
-        <Row
-          label="Status"
-          value={sessionStateLabel(state)}
-          detail={recording ? "the overlay is visible" : undefined}
-        />
-        {lastOutcome ? <Row label="Last result" value={lastOutcome} /> : null}
-        {route.isLocal ? <LocalServerHealth /> : null}
-      </section>
 
-      <section data-surface="dictation.history">
-        <h2>History</h2>
-
-        {/* First, because it governs whether the other two controls in this
-            section have anything to act on. Until 2026-08-31 the backend
-            honoured `history.enabled` before every write and nothing in the
-            application could set it: the only way to stop the app writing down
-            everything dictated was to edit SQLite by hand. */}
-        <div className="row">
-          <span className="row-label">Save dictation history</span>
-          <span className="row-value controls">
-            <label>
-              <input
-                type="checkbox"
-                checked={historyOn}
-                onChange={(e) => {
-                  const enabled = e.target.checked;
-                  void guard(async () => {
-                    await setHistoryEnabled(enabled);
-                    await reload();
-                  });
-                }}
-              />
-              Add each dictation to the list below
-            </label>
-            {/* This and Clear history are a stop and a delete, and they sound
-                alike enough that the difference has to be said rather than
-                discovered -- so the one visible sentence says it in both
-                states: switching this off deletes nothing. It is a retention
-                fact, and a retention fact is never folded. Only the pointer to
-                the control that does delete sits under Learn more. Neither
-                sentence counts anything: the list below is capped at twenty, so
-                a number here would be a number about the wrong set. */}
-            <em className="row-detail">
-              {historyOn
-                ? "Switching this off stops new entries; it deletes nothing."
-                : "Nothing new is being saved; what was saved before stays until you clear it."}
-            </em>
-            <LearnMore>
-              <p>Clear history is the control that removes what is already saved.</p>
-            </LearnMore>
-          </span>
-        </div>
-
-        {/* The same shape `Settings > Meetings` uses for "Offer to record":
-            `Row` takes a string value, and this needs a control. */}
-        <div className="row">
-          <span className="row-label">Keep the text before cleanup</span>
-          <span className="row-value controls">
-            <label>
-              <input
-                type="checkbox"
-                checked={keepRaw}
-                /* Disabled rather than hidden while history is off. It is a
-                   choice about what a row contains, and with history off there
-                   are no rows -- but the setting is still stored, so hiding it
-                   would leave a value the user set and can no longer see. */
-                disabled={!historyOn}
-                onChange={(e) => {
-                  const enabled = e.target.checked;
-                  void guard(async () => {
-                    await setKeepRawText(enabled);
-                    await reload();
-                  });
-                }}
-              />
-              Store both versions when cleanup changes the text
-            </label>
-            {/* Said plainly because this is a privacy choice, not a
-                preference: switching it on stores a second copy of what was
-                said. The reason to want it is that a row carrying both is the
-                only proof cleanup did anything on that dictation. One
-                sentence in every state, like the switch above. */}
-            <em className="row-detail">
-              {!historyOn
-                ? "No entries are being saved, so there is nothing for a second version to go on."
-                : keepRaw
-                  ? "Two copies of what you said are stored on rows cleanup altered."
-                  : "Only the final text is stored; switch this on to see what cleanup changed."}
-            </em>
-          </span>
-        </div>
-
-        {history.length === 0 ? (
-          <p className="muted">Nothing dictated yet.</p>
-        ) : (
-          <>
-            {/* `list`, not `purposes`: a history entry is a status, the text
-                that was dictated and where it went -- a row, not a pill. */}
-            <ul className="list">
-              {history.map((h) => (
-                <li key={h.id}>
-                  <code>{h.status}</code> {h.text || h.errorMessage || "(empty)"}
-                  {h.provider ? (
-                    <em className="row-detail">{h.provider}</em>
+            <div className="control-result">
+              {recording ? (
+                <p className="control-result-empty">Your words appear here when you stop.</p>
+              ) : lastText !== null ? (
+                <>
+                  <div className="control-result-head">
+                    <span className="control-result-label">
+                      Last dictation{lastAt ? ` · ${timeOfDay(lastAt)}` : ""}
+                    </span>
+                    <button
+                      type="button"
+                      className="control-copy"
+                      onClick={() => {
+                        void copyLast(lastText);
+                      }}
+                    >
+                      <Icon name="copy" size={14} />
+                      {copied !== null && copied.text === lastText ? copied.label : "Copy"}
+                    </button>
+                  </div>
+                  <p className="control-result-text">{lastText}</p>
+                  {lastRaw ? (
+                    <p className="control-note">Before cleanup: {lastRaw}</p>
                   ) : null}
-                  {/* Only ever present when cleanup changed the text and the
-                      user asked to keep it -- see `raw_for_history`. So its
-                      presence is the finding, and it is labelled rather than
-                      shown as a bare second line. */}
-                  {h.rawText ? (
-                    <em className="row-detail">before cleanup: {h.rawText}</em>
-                  ) : null}
-                </li>
-              ))}
-            </ul>
-            <button
-              type="button"
-              onClick={() => {
-                void guard(clearHistory);
-              }}
-            >
-              Clear history
-            </button>
-          </>
-        )}
+                </>
+              ) : (
+                <p className="control-result-empty">Nothing dictated yet.</p>
+              )}
+              {/* The last event's own sentence -- "Inserted 42 characters",
+                  or why it failed -- under the text, because a failure is
+                  never folded. */}
+              {lastOutcome && !recording ? (
+                <p className={lastOutcome.failed ? "error control-note" : "control-note"}>
+                  {lastOutcome.label}
+                </p>
+              ) : null}
+            </div>
+
+            <div className="control-row">
+              <Chip icon="tidy" label={cleanupLabel(cleanup)} onClick={() => onGoTo("intelligence")} />
+              <div className="control-spacer" />
+              {recording ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    void guard(cancelDictation);
+                  }}
+                >
+                  Discard
+                </button>
+              ) : null}
+              <button
+                type="button"
+                className={startBlocked ? "control-start" : "primary control-start"}
+                disabled={mic.disabled || startBlocked}
+                onClick={() => {
+                  void guard(toggleDictation);
+                }}
+              >
+                {recording ? <IconFilled name="stop" size={14} /> : <Icon name="microphone" size={16} />}
+                {recording
+                  ? "Stop and transcribe"
+                  : mic.busy
+                    ? sessionStateLabel(state)
+                    : "Start dictation"}
+              </button>
+            </div>
+          </ControlBar>
+          {route.isLocal ? (
+            <div className="task-health">
+              <LocalServerHealth />
+            </div>
+          ) : null}
+        </div>
       </section>
-    </div>
+    </SplitView>
   );
 }

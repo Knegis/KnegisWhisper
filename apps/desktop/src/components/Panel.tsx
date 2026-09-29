@@ -25,12 +25,20 @@ import { Icon } from "./Icon";
  *   optional trailing `hint` in the machine voice for a key or a count.
  */
 
-/** The panel's title, and any buttons that belong beside it. */
-export function PanelHeader({ title, children }: { title: string; children?: ReactNode }) {
+/**
+ * The panel's title, and any buttons that belong beside it.
+ *
+ * `h1` by default, as on the canvas: on a task page -- Dictation, which has
+ * no `PageHeader` -- this is the page's title. `level={2}` where the page
+ * beside the panel has its own `h1`, as every settings screen does in its
+ * `PageHeader`; two `h1`s there made "Settings" and "Providers" read as two
+ * pages.
+ */
+export function PanelHeader({ title, level = 1, children }: { title: string; level?: 1 | 2; children?: ReactNode }) {
+  const Heading = level === 1 ? "h1" : "h2";
   return (
     <div className="panel-head">
-      {/* `h1`, as on the canvas: on a task page this is the page's title. */}
-      <h1 className="panel-title">{title}</h1>
+      <Heading className="panel-title">{title}</Heading>
       {children}
     </div>
   );
@@ -57,6 +65,11 @@ export function PanelSection({ label, children }: { label: string | null; childr
  * "Meetings" reads as "Meetings settings" beside the rail's own "Meetings".
  * It sits inside the title's span so the accessible name keeps the visible
  * label at its start (WCAG 2.5.3, label in name).
+ *
+ * `tooltip` is for a row whose title can be cut off -- a dictation, a note --
+ * and becomes the button's `title`, which `components/Tooltip.tsx` draws. It
+ * is opt-in because a Settings row's label always fits, and a tooltip
+ * repeating it on every hover and focus would only be noise.
  */
 export function PanelItem({
   title,
@@ -65,6 +78,7 @@ export function PanelItem({
   current = false,
   muted = false,
   icon,
+  tooltip,
   onClick,
 }: {
   title: string;
@@ -73,6 +87,7 @@ export function PanelItem({
   current?: boolean;
   muted?: boolean;
   icon?: IconName;
+  tooltip?: string;
   onClick: () => void;
 }) {
   const className = [
@@ -90,7 +105,7 @@ export function PanelItem({
     </>
   );
   return (
-    <button type="button" className={className} aria-current={current ? "page" : undefined} onClick={onClick}>
+    <button type="button" className={className} aria-current={current ? "page" : undefined} title={tooltip} onClick={onClick}>
       {icon === undefined ? text : <><Icon name={icon} /><span className="panel-item-body">{text}</span></>}
     </button>
   );
