@@ -250,7 +250,6 @@ pub fn session_config(
             let terms: Vec<Value> = keyterms
                 .iter()
                 .take(cap)
-                .cloned()
                 .map(|term| json!({ "term": term }))
                 .collect();
             map.insert("keyterms".to_owned(), json!({ "terms": terms }));
