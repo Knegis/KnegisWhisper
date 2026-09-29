@@ -247,8 +247,9 @@ fn dispatch_for(
                 // request would be refused rather than sent to a dead port, and
                 // saying "not running" points at the screen that starts it.
                 ReasoningDispatch::NeedsSidecar {
-                    reason: "no local model is running. Start one under Settings > Local text models."
-                        .to_owned(),
+                    reason:
+                        "no local model is running. Start one under Settings > Local text models."
+                            .to_owned(),
                 }
             }
         }
