@@ -112,7 +112,23 @@ type LastOutcome = {
   /** The inserted text, for an `inserted` outcome; `null` for every other. */
   text: string | null;
   failed: boolean;
+  /**
+   * The history row the outcome wrote, for `inserted` and `failed`; `null`
+   * when history is off or the outcome writes none. A `failed` outcome
+   * carries no text, but its row does when only the paste failed.
+   */
+  historyId: number | null;
   at: Date;
+};
+
+/** The dictation the control bar shows, wherever it came from. */
+type LastDictation = {
+  text: string;
+  at: Date | null;
+  /** The text before cleanup, when the row kept one. */
+  raw: string | null;
+  /** Whether it was typed where the cursor was; `false` when the paste failed. */
+  typed: boolean;
 };
 
 export function DictationView({
@@ -187,6 +203,8 @@ export function DictationView({
         label: outcomeLabel(outcome),
         text: outcome.outcome === "inserted" ? outcome.text : null,
         failed: outcome.outcome === "failed",
+        historyId:
+          outcome.outcome === "inserted" || outcome.outcome === "failed" ? outcome.historyId : null,
         at: new Date(),
       });
       // History and the session both moved, so re-read rather than guessing.
@@ -283,22 +301,38 @@ export function DictationView({
   // page's one filled button to the hero's fix.
   const startBlocked = !recording && route.problem !== null;
 
-  // The last thing dictated: this session's inserted text if there is one,
-  // otherwise the newest history row that has text. The newest row, not
-  // `history[0]`, because a failed dictation writes a row with no text, and
-  // "Nothing dictated yet" over an earlier success would be false.
-  const newest = history.find((h) => h.status === "ok" && h.text !== "") ?? null;
-  const lastText = lastOutcome?.text ?? newest?.text ?? null;
-  const lastAt =
+  // The last thing dictated, in this order:
+  //   - this session's inserted text;
+  //   - this session's failed dictation, from the row it wrote, when that row
+  //     has text -- only the paste failed, and `fail` in
+  //     crates/app-core/src/dictation.rs stores the cleaned text so it can be
+  //     copied out rather than lost;
+  //   - otherwise the newest history row with text, whatever its status.
+  // A row, not `history[0]`: a dictation that failed before anything came
+  // back writes a row with no text, and "Nothing dictated yet" over an
+  // earlier dictation would be false.
+  const rowById = (id: number | null) => (id === null ? null : history.find((h) => h.id === id) ?? null);
+  const failedRow = lastOutcome?.failed ? rowById(lastOutcome.historyId) : null;
+  const newestRow = history.find((h) => h.text !== "") ?? null;
+  const last: LastDictation | null =
     lastOutcome !== null && lastOutcome.text !== null
-      ? lastOutcome.at
-      : newest
-        ? parseStoredTime(newest.createdAt)
-        : null;
-  // Only ever present when cleanup changed the text and the user asked to
-  // keep it -- see `raw_for_history`. So its presence is the finding, and it
-  // is labelled rather than shown as a bare second line.
-  const lastRaw = newest !== null && newest.text === lastText ? newest.rawText : null;
+      ? {
+          text: lastOutcome.text,
+          at: lastOutcome.at,
+          raw: rowById(lastOutcome.historyId)?.rawText ?? null,
+          typed: true,
+        }
+      : lastOutcome !== null && failedRow !== null && failedRow.text !== ""
+        ? { text: failedRow.text, at: lastOutcome.at, raw: failedRow.rawText, typed: false }
+        : newestRow !== null
+          ? {
+              text: newestRow.text,
+              at: parseStoredTime(newestRow.createdAt),
+              raw: newestRow.rawText,
+              typed: newestRow.status !== "failed",
+            }
+          : null;
+  const lastText = last?.text ?? null;
 
   const copyLast = async (text: string) => {
     clearTimeout(copiedTimer.current);
@@ -453,27 +487,36 @@ export function DictationView({
             <div className="control-result">
               {recording ? (
                 <p className="control-result-empty">Your words appear here when you stop.</p>
-              ) : lastText !== null ? (
+              ) : last !== null ? (
                 <>
                   <div className="control-result-head">
                     <span className="control-result-label">
-                      Last dictation{lastAt ? ` · ${timeOfDay(lastAt)}` : ""}
+                      Last dictation{last.at ? ` · ${timeOfDay(last.at)}` : ""}
                     </span>
                     <button
                       type="button"
                       className="control-copy"
                       onClick={() => {
-                        void copyLast(lastText);
+                        void copyLast(last.text);
                       }}
                     >
                       <Icon name="copy" size={14} />
                       {copied !== null && copied.text === lastText ? copied.label : "Copy"}
                     </button>
                   </div>
-                  <p className="control-result-text">{lastText}</p>
-                  {lastRaw ? (
-                    <p className="control-note">Before cleanup: {lastRaw}</p>
-                  ) : null}
+                  <p className="control-result-text">{last.text}</p>
+                  {/* A failure, so on screen: the words exist, and the one
+                      place they are is here and in the history. */}
+                  {last.typed ? null : (
+                    <p className="error control-note">
+                      This could not be typed where your cursor was. Copy it from here.
+                    </p>
+                  )}
+                  {/* Only ever present when cleanup changed the text and the
+                      user asked to keep it -- see `raw_for_history`. So its
+                      presence is the finding, and it is labelled rather than
+                      shown as a bare second line. */}
+                  {last.raw ? <p className="control-note">Before cleanup: {last.raw}</p> : null}
                 </>
               ) : (
                 <p className="control-result-empty">Nothing dictated yet.</p>

@@ -1042,6 +1042,17 @@ const CALENDAR: CalendarStatus = {
 let historyEnabled = true;
 let keepRawText = true;
 
+/*
+ * The shapes Rust writes, not approximations of them. `status` is only ever
+ * `completed` or `failed` (`record`, `src-tauri/src/dictation.rs`); this list
+ * said `ok` and `nothing-to-transcribe`, and a screen written against those
+ * called every real dictation a failure. A recording that heard nothing writes
+ * no row at all (`NothingToTranscribe` returns before `write_history` in
+ * `crates/app-core/src/dictation.rs`), so there is no row for it here. The two
+ * failed rows are the two ways `fail` writes one: a request that failed before
+ * any text came back (no text, no provider), and a paste that failed after it
+ * did, which keeps the cleaned text so it can be copied out of history.
+ */
 const HISTORY: Transcription[] = [
   {
     id: 41,
@@ -1053,7 +1064,7 @@ const HISTORY: Transcription[] = [
     audioDurationMs: 5400,
     provider: "openai",
     model: "gpt-4o-transcribe",
-    status: "ok",
+    status: "completed",
     errorMessage: null,
     errorCode: null,
     routeKind: "cloud",
@@ -1067,7 +1078,7 @@ const HISTORY: Transcription[] = [
     audioDurationMs: 2100,
     provider: "local",
     model: "whisper-large-v3-turbo-q5",
-    status: "ok",
+    status: "completed",
     errorMessage: null,
     errorCode: null,
     routeKind: "local",
@@ -1079,26 +1090,28 @@ const HISTORY: Transcription[] = [
     createdAt: "2026-08-26T09:30:12Z",
     hasAudio: true,
     audioDurationMs: 800,
-    provider: "deepgram",
-    model: "nova-3",
+    // `fail` records no provider when nothing came back (`recovered: None`).
+    provider: null,
+    model: null,
     status: "failed",
     errorMessage: "401 Unauthorized — the stored key was rejected",
     errorCode: "auth",
     routeKind: "cloud",
   },
   {
+    // Only the paste failed: the text and its provider are kept.
     id: 38,
-    text: "",
-    rawText: null,
+    text: "Send the Nordbank notes to Jonas before Friday.",
+    rawText: "send the nordbank notes to jonas before friday",
     createdAt: "2026-08-25T17:02:44Z",
     hasAudio: false,
-    audioDurationMs: 300,
-    provider: null,
-    model: null,
-    status: "nothing-to-transcribe",
-    errorMessage: "only silence was captured",
-    errorCode: "silence",
-    routeKind: null,
+    audioDurationMs: 3100,
+    provider: "openai",
+    model: "gpt-4o-transcribe",
+    status: "failed",
+    errorMessage: "could not deliver the paste keystroke: the focused window refused synthetic input",
+    errorCode: null,
+    routeKind: "cloud",
   },
 ];
 

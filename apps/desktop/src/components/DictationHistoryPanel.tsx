@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
-import { groupByDay, parseStoredTime, timeOfDay } from "../lib/dayGroups";
+import { groupByDay } from "../lib/dayGroups";
+import { historyRow } from "../lib/historyRow";
 import {
   clearHistory,
   setHistoryEnabled,
@@ -33,10 +34,15 @@ const COPIED_MS = 2000;
  * "Couldn't copy" and keeps saying it until the next press, because a failure
  * stays visible.
  *
- * A row with no text is one that did not work -- a failed request, or
- * nothing heard. It reads "Didn't work", muted, with the reason Rust stored
- * in the meta line, so the reason is on screen rather than behind anything.
- * Pressing it copies the reason, which is the text a bug report needs.
+ * What a row says is `lib/historyRow.ts`'. A failed row keeps its text when
+ * it has one -- a dictation whose paste failed is stored with the cleaned
+ * text on purpose, so it can be copied from here -- and the failure's reason
+ * goes in the meta line beside the time, where it stays visible. Only a row
+ * with no text at all -- the request failed before anything came back --
+ * reads "Didn't work", muted, and pressing it copies the reason, which is the
+ * text a bug report needs. A row cleanup changed says " · Cleaned up", and
+ * its tooltip carries the text before cleanup and the provider that
+ * transcribed it.
  *
  * # History off
  *
@@ -73,14 +79,14 @@ export function DictationHistoryPanel({
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   useEffect(() => () => clearTimeout(timer.current), []);
 
-  const copy = async (h: Transcription) => {
+  const copy = async (id: number, text: string) => {
     clearTimeout(timer.current);
     try {
-      await navigator.clipboard.writeText(h.text || h.errorMessage || "");
-      setNotice({ id: h.id, text: "Copied" });
+      await navigator.clipboard.writeText(text);
+      setNotice({ id, text: "Copied" });
       timer.current = setTimeout(() => setNotice(null), COPIED_MS);
     } catch {
-      setNotice({ id: h.id, text: "Couldn't copy" });
+      setNotice({ id, text: "Couldn't copy" });
     }
   };
 
@@ -106,21 +112,17 @@ export function DictationHistoryPanel({
         groups.map((group) => (
           <PanelSection key={group.label} label={group.label}>
             {group.items.map((h) => {
-              const at = parseStoredTime(h.createdAt);
-              const time = at === null ? null : timeOfDay(at);
-              const failed = h.status !== "ok" || h.text === "";
-              const said = notice?.id === h.id ? notice.text : null;
-              const reason = failed ? h.errorMessage ?? (h.status === "ok" ? null : h.status) : null;
-              const meta = said ?? [time, reason].filter((part) => part !== null).join(" · ");
+              const row = historyRow(h);
+              const meta = notice?.id === h.id ? notice.text : row.meta;
               return (
                 <PanelItem
                   key={h.id}
-                  title={failed ? "Didn't work" : h.text}
-                  muted={failed}
+                  title={row.title}
+                  muted={row.muted}
                   {...(meta === "" ? {} : { meta })}
-                  {...(failed ? {} : { tooltip: h.text })}
+                  {...(row.tooltip === null ? {} : { tooltip: row.tooltip })}
                   onClick={() => {
-                    void copy(h);
+                    void copy(h.id, row.copyText);
                   }}
                 />
               );

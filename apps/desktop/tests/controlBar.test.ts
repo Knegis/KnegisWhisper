@@ -24,9 +24,11 @@ test("a cloud route names where the audio goes", () => {
   assert.deepEqual(privacyLines(cloud, off), ["Audio is sent to OpenAI"]);
 });
 
-test("a self-hosted route on a private address says it stays on your network", () => {
+test("a self-hosted route on a private address says the audio is sent to a server on your network", () => {
+  // It leaves this computer, so it says so (ruling R15): only "stays on this
+  // computer" or "sent to X", never a third "stays" that is not this computer.
   const lan = { isLocal: false, leavesDevice: false, destination: "self-hosted" };
-  assert.deepEqual(privacyLines(lan, off), ["Audio stays on your network"]);
+  assert.deepEqual(privacyLines(lan, off), ["Audio is sent to a server on your network"]);
 });
 
 test("a route with a problem says the audio stays, since nothing can be sent", () => {

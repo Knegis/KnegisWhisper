@@ -12,12 +12,15 @@
  *
  *   - **The local model** -- `isLocal` -- stays on this computer.
  *   - **A route that leaves the device** names where it goes.
- *   - **A self-hosted route on a private address** is neither. Rust sets
- *     `leavesDevice` from `kw_network_policy::is_private_host` for an HTTP
- *     route (`dictation_route`, `src-tauri/src/dictation.rs`), so `false`
- *     there means "on your network", which may be another machine. The old
+ *   - **A self-hosted route on a private address** is sent to a server on
+ *     your network. Rust sets `leavesDevice` from
+ *     `kw_network_policy::is_private_host` for an HTTP route
+ *     (`dictation_route`, `src-tauri/src/dictation.rs`), so `false` there
+ *     means "on your network", which may be another machine. The old
  *     Dictation page said "stays on this computer" for it, which is only true
- *     when the server happens to be on loopback.
+ *     when the server happens to be on loopback. It says "sent to" because
+ *     the audio leaves this computer, and the sentence is only ever "stays on
+ *     this computer" or "sent to" something (ruling R15).
  *   - **A route with a problem** says the audio stays: the backend resolves
  *     the route at Stop and cancels when it cannot (`toggle`,
  *     `src-tauri/src/dictation.rs`), so nothing is sent.
@@ -99,7 +102,7 @@ export function privacyLines(
       ? `Audio is sent to ${destinationName(route.destination)}`
       : route.isLocal || (route.problem ?? null) !== null
         ? "Audio stays on this computer"
-        : "Audio stays on your network",
+        : "Audio is sent to a server on your network",
   ];
   if (cleanup?.state === "ready" && cleanup.leavesDevice && cleanup.caveat === null) {
     lines.push(`Text is sent to ${destinationName(cleanup.destination)} to tidy it up`);
