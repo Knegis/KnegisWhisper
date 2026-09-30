@@ -151,6 +151,24 @@
    * exactly: a control that spans the whole row does so by cancelling the label
    * track with a negative margin, and a margin that disagrees with the track by
    * a pixel is visible as a misalignment.
+   *
+   * 14rem is 210px at the 15px root, so with the 22.5px gap a row's value
+   * track is whatever `.content` has left after 232.5px and its two 56px
+   * paddings. On Transcription that is 305.5px in the default 1000x720 window
+   * with the list panel open, 577.5 with it hidden, and 675.5 once `.content`
+   * reaches its 1020px cap (measured in headless Edge against dev fixtures,
+   * not in the Tauri window). The one width it does not fit is the 720px
+   * minimum window with the panel open, where `.content` is 370px: the value
+   * track measured 25.5px, and on Shortcuts the key wrapped one character a
+   * line and pushed `.split-main` 121px wider than itself. So rows stack --
+   * label over value -- in a main area narrower than 554.5px, which is two
+   * label tracks, the gap and the two paddings: the width below which the
+   * value would be narrower than its own label. Measured at the boundary,
+   * with the panel open: a 904px window (a 554px main area) stacks, and a
+   * 905px one draws a 210.5px value beside the label. That rule is a
+   * container query on `.split-main`, after the breakout rule below, because
+   * what decides it is the main area's width, and the window's width says
+   * that only once the panel's state is known.
    */
   --label-col: 14rem;
   --row-gap: 1.5rem;
@@ -171,17 +189,19 @@
    * below is capped too. Notes no longer renders in `.content`; its own wide
    * layout, the transcript as a column, is `.note-detail-wide`.
    *
-   * What this is worth, at the current 15px root, on Providers with the
-   * Settings panel open (measured in headless Edge against dev fixtures, not
-   * in the Tauri window): in the default 1000x720 window `.content` renders
-   * 650px wide, padding included -- the window, the rail and the 272px panel
-   * are what limit it there, not `--content-max`. At 1440x900 and 1920x1080
-   * it measures exactly the 1020px cap, which it reaches once the main area
-   * is 1020px: a window of 1020 + 272 (panel) + 68 (`--nav-col`) + 10 (the
-   * card's 8px right margin and its two 1px borders) = 1370px. The 13rem
-   * sidebar this replaced measured 805px at 1000x720: the panel takes 272px
-   * of that, the narrower rail gives 127 back, the card's edges cost 10, and
-   * with the list hidden the same arithmetic gives the page 922px.
+   * What this is worth, at the current 15px root. The main area is the
+   * window less 78px -- the rail's 68 (`--nav-col`) and 10 for the card (its
+   * 8px right margin and two 1px borders) -- and less another 272 while the
+   * list panel shows (its width, which includes its 1px rule). `.content` is
+   * the main area's width, padding included, up to the cap. Measured on
+   * Providers and on Transcription (in headless Edge against dev fixtures,
+   * not in the Tauri window): in the default 1000x720 window it is 650px
+   * with the panel open and 922px with it hidden, so there the window and
+   * the panel limit it, not `--content-max`; at the 720px minimum, 370 and
+   * 642. It reaches the 1020px cap once the main area does: at 1370px with
+   * the panel open (1020 + 272 + 78), where it measured exactly 1020, and at
+   * 1098px with it hidden. At 1440x900 and 1920x1080 it measures 1020 either
+   * way.
    */
   --nav-col: 68px;
   --content-max: 68rem;
@@ -328,7 +348,8 @@ h2,
  * `button:hover:not(:disabled)` further down scores (0,2,1), which beats a
  * bare `.rail-item:hover` at (0,2,0): without the `:not`, hovering the current
  * entry would repaint it `--control` and hover and "you are here" would look
- * the same -- the bug the sidebar's own hover rule once had.
+ * the same -- the bug the 13rem sidebar's hover rule had before the rail
+ * replaced it.
  */
 .frame { position: fixed; inset: var(--titlebar-height) 0 0; display: flex; background: var(--frame); }
 
@@ -358,11 +379,18 @@ h2,
  * `[hidden]` is restated because `.list-panel`'s own `display: flex`
  * outranks the browser's `[hidden] { display: none }`, which would leave the
  * title bar's toggle flipping an attribute nobody can see.
+ *
+ * `.split-main` is an inline-size container, so a page can ask how wide the
+ * main area is rather than how wide the window is -- the two differ by 272px
+ * depending on the panel. Only the row grid asks (`@container main`, after
+ * the breakout rule). Its width comes from the flex row, never from its
+ * content, so the containment should change nothing else about it -- and
+ * `.content` measured the same widths with it as without, from 720 to 1920px.
  */
 .split { flex: 1; min-width: 0; display: flex; }
 .list-panel { width: 272px; flex-shrink: 0; display: flex; flex-direction: column; overflow-y: auto; background: var(--panel); border-right: 1px solid var(--rule); }
 .list-panel[hidden] { display: none; }
-.split-main { flex: 1; min-width: 0; overflow-y: auto; position: relative; }
+.split-main { flex: 1; min-width: 0; overflow-y: auto; position: relative; container: main / inline-size; }
 
 /*
  * What a panel is built from (`components/Panel.tsx`). The title is an `h1`
@@ -673,8 +701,11 @@ button.panel-inline:hover:not(:disabled) { border-color: var(--muted); backgroun
  * rail; beside a list panel a centred column floats away from the list it was
  * chosen from, and left-aligned it keeps its left edge when a scrollbar
  * arrives. `min-width: 0` is not needed: a block's min-width is already 0,
- * and the `minmax(0, 1fr)` tracks inside `.row` and `.note-workspace` are
- * where a long path or a wide <pre> is actually contained.
+ * and the `minmax(0, 1fr)` track inside `.row` is where a long path or a
+ * wide <pre> is actually contained. The 56px sides drop to 24px in a main
+ * area too narrow for the row grid -- the container query after the
+ * breakout rule, which `--label-col` works out -- where they would otherwise
+ * take 112 of the 370px the minimum window leaves beside the list panel.
  */
 .content { max-width: var(--content-max); padding: 40px 56px 48px; }
 
@@ -1424,6 +1455,23 @@ button.transcript-play:hover:not(:disabled) { color: var(--text); }
 .row > .row-value > .controls {
   margin-left: calc(-1 * (var(--label-col) + var(--row-gap)));
   width: calc(100% + var(--label-col) + var(--row-gap));
+}
+
+/*
+ * Rows stack in a main area too narrow for two tracks: below 554.5px, the
+ * width `--label-col` works out, which only windows from 720 to 904px
+ * reach, and only with the list panel open. The label goes over its value,
+ * the value takes the whole column, and a lone value or a row-spanning
+ * control has no label track left to sit beside or cancel -- the negative
+ * margin above would hang it off the page's left edge. `.content` gives up
+ * most of its side padding for the same reason. After every rule it
+ * overrides, which it matches at equal specificity.
+ */
+@container main (width < 554.5px) {
+  .content { padding: 32px 24px 40px; }
+  .row { grid-template-columns: minmax(0, 1fr); row-gap: 4px; }
+  .row > .row-value:only-child { grid-column: auto; }
+  .row > .row-value > .controls { margin-left: 0; width: 100%; }
 }
 
 /*

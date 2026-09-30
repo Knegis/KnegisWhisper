@@ -1,5 +1,5 @@
 /**
- * The notes sidebar's drag payload: what a dragged note carries, and how a
+ * The notes library's drag payload: what a dragged note carries, and how a
  * drop reads it back.
  *
  * Pure so the parsing can be tested without a browser. The payload is the

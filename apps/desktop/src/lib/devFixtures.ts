@@ -1202,7 +1202,7 @@ let notes: Note[] = [
       "A deliberately long title that exists so the notes list can be judged when someone types far more than the column was designed for",
     content:
       "Long-form body text, here so wrapping and vertical rhythm can be seen honestly rather than guessed at.\n\n" +
-      "The overlay, the sidebar and this pane all share `styles.css`, so a change made against three short notes tends to look fine and then fall apart on a real one. " +
+      "The overlay, the list panel and this pane all share `styles.css`, so a change made against three short notes tends to look fine and then fall apart on a real one. " +
       "This note is the real one.\n\nIt has several paragraphs, a list:\n\n- one\n- two\n- three\n\nand a trailing line.",
     noteType: "note",
     recordingDetails: null, enhancedContent: null,
