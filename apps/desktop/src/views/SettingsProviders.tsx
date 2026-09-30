@@ -108,8 +108,13 @@ const KIND: Record<ProbeKind, string> = { catalog: "model list", chat: "text", v
 /** This computer, filtered with the rest: it matches both tabs, and a search for its name. */
 const LOCAL: ProviderRow = { slot: "", name: "This computer", letter: "", purposes: [SPEECH, TEXT], stored: true, unsupported: false };
 
-/** Focus the + or Change that opens `formId` -- after a form closes, so focus is not dropped on the page. */
-const focusToggle = (formId: string) => document.querySelector<HTMLElement>(`[aria-controls="${formId}"]`)?.focus();
+/**
+ * Focus the + or Change that opens `formId` -- after a form closes, so focus is not dropped on the
+ * page. Found by `data-toggle-for`, not `aria-controls`: that names the form only while it is open,
+ * since an id that points at nothing is an error to anything reading it, and by the time this runs
+ * the form has closed.
+ */
+const focusToggle = (formId: string) => document.querySelector<HTMLElement>(`[data-toggle-for="${formId}"]`)?.focus();
 
 export function SettingsProviders({ onGoTo }: { onGoTo: (id: ViewId) => void }) {
   const load = useCallback(async () => {
@@ -289,13 +294,13 @@ export function SettingsProviders({ onGoTo }: { onGoTo: (id: ViewId) => void }) 
             // Named for its row, as the + beside an empty one is: a list of
             // "Change, Change, Change" says nothing about which key each one
             // changes. "Change" leads, so the visible word is the name's first.
-            <button type="button" className="secondary provider-change" aria-label={`Change the key for ${row.name}`} aria-expanded={isOpen} aria-controls={formId} onClick={() => toggle(row.slot)}>
+            <button type="button" className="secondary provider-change" aria-label={`Change the key for ${row.name}`} aria-expanded={isOpen} aria-controls={isOpen ? formId : undefined} data-toggle-for={formId} onClick={() => toggle(row.slot)}>
               Change
             </button>
           ) : row.unsupported ? (
             <span className="provider-unsupported" {...(reason ? { title: reason } : {})}>Not supported yet</span>
           ) : (
-            <button type="button" className="provider-add" aria-label={`Add a key for ${row.name}`} aria-expanded={isOpen} aria-controls={formId} onClick={() => toggle(row.slot)}>
+            <button type="button" className="provider-add" aria-label={`Add a key for ${row.name}`} aria-expanded={isOpen} aria-controls={isOpen ? formId : undefined} data-toggle-for={formId} onClick={() => toggle(row.slot)}>
               <Icon name="plus" size={20} />
             </button>
           )}

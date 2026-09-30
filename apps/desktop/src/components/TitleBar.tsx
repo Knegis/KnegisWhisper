@@ -12,9 +12,11 @@ import { getCurrentWindow, type Window as AppWindow } from "@tauri-apps/api/wind
  * such toggle: Notes' library is that list panel now, and its own toggle and
  * the title-bar slot it was portalled into have gone.
  *
- * On a page with no panel (`hasListPanel` false -- today only Notes > Upload)
- * the toggle is not drawn at all, rather than drawn pointing its
- * `aria-controls` at an element that is not in the document. The collapsed
+ * On a page with no panel (`hasListPanel` false -- Notes > Upload, the card
+ * while it loads or after it failed to, and Dictation, Meetings or Notes
+ * while the error boundary stands in for the page) the toggle is not drawn
+ * at all, rather than drawn pointing its `aria-controls` at an element that
+ * is not in the document. The collapsed
  * state it flips belongs to the whole window and outlives the page, so the
  * next page with a panel still opens the way it was left.
  */

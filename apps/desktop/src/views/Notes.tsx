@@ -9,7 +9,7 @@
  * a peek that opened it when the pointer reached the window's right edge;
  * both went with the column.
  *
- * Notes > Export (`data-surface="notes.export"`) is reached two ways -- a
+ * Notes > Export (the `notes.export` surface) is reached two ways -- a
  * note's right-click menu in the library, and the open note's top bar --
  * and both run `exportNote`, so there is one Export… and one "Written to".
  * That line and any failure sit at the top of the note rather than in the
@@ -286,7 +286,8 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
         </PanelSection>
         <label className="panel-search">
           <Icon name="search" size={15} />
-          <input type="search" aria-label="Search notes and meetings" placeholder="Search notes and meetings" value={query} onChange={event => {
+          {/* Not "Search notes and meetings": that is the title bar's field, and two fields of one name cannot be told apart in a screen reader's list of fields. */}
+          <input type="search" aria-label="Filter the library" placeholder="Filter the library" value={query} onChange={event => {
             const next = event.target.value;
             setQuery(next);
             const generation = ++searchGeneration.current;
@@ -386,7 +387,7 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
             onExport={() => exportNote(openNote.id)}
             onMore={anchor => openNoteMenu(openNote, anchor)}
           />
-        ) : <div className="notes-empty"><h3>Your writing space</h3><p className="muted">Choose a note or meeting from the list, or start a new note.</p><button type="button" className="primary" onClick={() => { void newNote(); }}>New note</button> <button type="button" onClick={onImport}>Import audio or video</button></div>}
+        ) : <div className="notes-empty"><h2>Your writing space</h2><p className="muted">Choose a note or meeting from the list, or start a new note.</p><button type="button" className="primary" onClick={() => { void newNote(); }}>New note</button> <button type="button" onClick={onImport}>Import audio or video</button></div>}
       </section>
       {context && createPortal(<div ref={contextRef} className="notes-context-menu" role="dialog" aria-label={context.kind === "note" ? `Actions for ${context.note.title}` : `Actions for folder ${context.folder.name}`} style={{ left: context.x, top: context.y }} onContextMenu={event => event.preventDefault()} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) setContext(null); }}>
         {context.kind === "note" ? <>

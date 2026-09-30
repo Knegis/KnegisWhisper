@@ -520,15 +520,17 @@ export function DictationView({
             </div>
 
             <div className="control-row">
-              <Chip icon="tidy" label={cleanupLabel(cleanup)} onClick={() => onGoTo("intelligence")} />
+              <Chip icon="tidy" label={cleanupLabel(cleanup)} chevron onClick={() => onGoTo("intelligence")} />
               <div className="control-spacer" />
               {recording ? (
                 <button
                   type="button"
+                  className="secondary"
                   onClick={() => {
                     void guard(cancelDictation);
                   }}
                 >
+                  <Icon name="discard" size={16} />
                   Discard
                 </button>
               ) : null}

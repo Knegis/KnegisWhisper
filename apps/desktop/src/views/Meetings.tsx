@@ -810,13 +810,23 @@ export function Meetings({
                   }
                   onClick={() => setWantSystem((want) => !want)}
                 />
+                {/* Named as Dictation's are: "Deepgram" or "Swedish" alone
+                    says nothing about which setting it is the value of.
+                    The label stays whole inside the name (WCAG 2.5.3). */}
                 <Chip
                   icon="computer"
                   label={transcriber ? transcriber.name : "Not set up"}
+                  name={`Meeting transcription: ${transcriber ? transcriber.name : "Not set up"}`}
                   chevron
                   onClick={() => onGoTo("meeting-settings")}
                 />
-                <Chip icon="language" label={language} chevron onClick={() => onGoTo("meeting-settings")} />
+                <Chip
+                  icon="language"
+                  label={language}
+                  name={`Language: ${language}`}
+                  chevron
+                  onClick={() => onGoTo("meeting-settings")}
+                />
               </>
             }
             privacy={privacy}

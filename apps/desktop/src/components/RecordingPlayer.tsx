@@ -5,6 +5,7 @@ import {
   useImperativeHandle,
   useRef,
   useState,
+  type CSSProperties,
 } from "react";
 
 import { recordingSrc } from "../lib/ipc";
@@ -20,8 +21,9 @@ export type RecordingPlayerHandle = {
   /**
    * `position` and `resume` hand playback from one player to the next. A note
    * mounts a new player when a wide window moves it into the transcript
-   * column, or back (`NoteWorkspace.tsx`). `position` is read from the old
-   * player before it goes, and the new one resumes from it.
+   * column, or back, and when a wide window's Replay tab is opened or left
+   * (`NoteWorkspace.tsx`). `position` is read from the old player before it
+   * goes, and the new one resumes from it.
    */
   position: () => PlayerPosition | null;
   resume: (from: PlayerPosition) => void;
@@ -252,6 +254,8 @@ export const RecordingPlayer = forwardRef<RecordingPlayerHandle, RecordingPlayer
           max={duration || 0}
           step="0.01"
           value={Math.min(currentTime, duration || currentTime)}
+          // The fraction played, which `styles.css` draws in `--band` along the track.
+          style={{ "--played": duration > 0 ? Math.min(currentTime / duration, 1) : 0 } as CSSProperties}
           onPointerDown={() => { scrubbingRef.current = true; }}
           onPointerUp={() => { scrubbingRef.current = false; }}
           onChange={(event) => scrub(Number(event.target.value))}

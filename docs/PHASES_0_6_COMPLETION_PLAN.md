@@ -282,10 +282,13 @@ Leave the terminal visible beside the window — the log is the fastest diagnosi
    assumed. The Dictation page should not carry the caution that dictations can't be typed into
    other apps.
 
-2. **Give dictation a working shortcut.** It has none: the inherited default `Control+Super` is two
-   modifiers and no key, and no cross-platform API can register that. On **Settings > Shortcuts**
-   type `Control+Shift+D` next to `dictation` and press **Set**. It applies immediately — the log
-   says `hotkeys re-registered live=5 total=5`.
+2. **Give dictation a shortcut that does not need the hook.** The inherited default
+   `Control+Super` is modifier-only — two modifiers and no key — so the platform's shortcut
+   register cannot take it; on Windows it works through the application's own keyboard hook
+   instead (`crates/platform/src/keyhook.rs`). This step sets an ordinary chord so the rest of the
+   check does not rest on the hook: on **Settings > Shortcuts** type `Control+Shift+D` next to
+   `dictation` and press **Set**. It applies immediately — the log says
+   `hotkeys re-registered live=5 total=5`.
 
 3. **Install a local model.** On **Settings > Transcription**, under Local transcription, press
    **Install** on `tiny`. About 86 MB: the pinned `whisper-server` and the model. `tiny` rather

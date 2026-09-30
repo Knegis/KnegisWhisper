@@ -10,9 +10,10 @@ import { Icon } from "./Icon";
  * whatever the page passes as `strip`, because the privacy line is never
  * hidden (the redesign's decision 5). When the strip is too narrow for chips
  * and sentences on one line -- the 720px minimum window -- the sentences wrap
- * onto a line of their own rather than being cut: a chip may ellipsise, since
- * its `title` carries the rest, but a sentence about where your audio goes
- * may not.
+ * onto a line of their own rather than being cut, and chips that do not fit
+ * beside each other wrap onto another line whole. A chip still ellipsises
+ * past its 260px cap, or alone on a line too narrow for it, since its `title`
+ * carries the rest; a sentence about where your audio goes never does.
  *
  * `role="group"` with a label so a screen reader hears the strip as one set
  * of settings in effect, not as a stray run of buttons.

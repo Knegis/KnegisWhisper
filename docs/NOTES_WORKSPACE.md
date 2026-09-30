@@ -18,7 +18,9 @@ this copies literal speech and available speaker labels without changing the sou
 Transcript shows the original rows and playback actions. In windows 1280px or wider
 the transcript is a column to the right of the note instead, and the Transcript tab
 is hidden; crossing that width keeps playback and the reading position. Replay
-provides the full player and recording details without repeating the transcript.
+provides the full player and recording details without repeating the transcript, at
+any width: in a wide window the player sits at the foot of the transcript column and
+moves into Replay while that tab is open, keeping its place and whether it was playing.
 Audio continues across tabs through one player; compact controls remain available
 after playback starts. Leaving the note
 stops playback. Missing recordings offer the existing native WAV attachment flow.

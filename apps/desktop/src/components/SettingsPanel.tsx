@@ -22,24 +22,28 @@ export function SettingsPanel({ view, onSelect }: { view: ViewId; onSelect: (id:
     <>
       {/* `h2`: the screen beside the panel has its own `h1` in `PageHeader`. */}
       <PanelHeader title="Settings" level={2} />
-      {SETTINGS_PANEL.map((section) => {
-        const group = groups.find((entry) => entry.id === section.group);
-        if (!group) return null;
-        return (
-          <PanelSection key={section.group} label={section.heading}>
-            {childrenOf(group).map((child) => (
-              <PanelItem
-                key={child.id}
-                title={child.label}
-                srSuffix={srSuffixOf(child)}
-                icon={NAV_ICON[child.id]}
-                current={view === child.id}
-                onClick={() => onSelect(child.id)}
-              />
-            ))}
-          </PanelSection>
-        );
-      })}
+      {/* A landmark, as the rail is: this list is how every settings screen
+          is reached, and a screen reader's list of landmarks should say so. */}
+      <nav aria-label="Settings sections">
+        {SETTINGS_PANEL.map((section) => {
+          const group = groups.find((entry) => entry.id === section.group);
+          if (!group) return null;
+          return (
+            <PanelSection key={section.group} label={section.heading}>
+              {childrenOf(group).map((child) => (
+                <PanelItem
+                  key={child.id}
+                  title={child.label}
+                  srSuffix={srSuffixOf(child)}
+                  icon={NAV_ICON[child.id]}
+                  current={view === child.id}
+                  onClick={() => onSelect(child.id)}
+                />
+              ))}
+            </PanelSection>
+          );
+        })}
+      </nav>
     </>
   );
 }

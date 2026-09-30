@@ -104,13 +104,14 @@ import { SettingsTranscription } from "./views/SettingsTranscription";
  * anyone can act on, and it offers a way out to a screen that was working.
  */
 class ViewBoundary extends Component<
-  { children: ReactNode; view: ViewId; onReset: () => void },
+  { children: ReactNode; view: ViewId; onReset: () => void; onFailedChange: (failed: boolean) => void },
   { failed: string | null }
 > {
   constructor(props: {
     children: ReactNode;
     view: ViewId;
     onReset: () => void;
+    onFailedChange: (failed: boolean) => void;
   }) {
     super(props);
     this.state = { failed: null };
@@ -120,12 +121,26 @@ class ViewBoundary extends Component<
     return { failed: error instanceof Error ? error.message : String(error) };
   }
 
+  // `onFailedChange` tells the shell whether the page's own markup is on
+  // screen: a task page that failed has no list panel for the title bar's
+  // toggle to name.
+  override componentDidCatch() {
+    this.props.onFailedChange(true);
+  }
+
   override componentDidUpdate(prev: { view: ViewId }) {
     // Leaving a broken screen clears the failure. Without this, one thrown
     // render would leave the boundary latched for the rest of the session.
     if (prev.view !== this.props.view && this.state.failed !== null) {
       this.setState({ failed: null });
+      this.props.onFailedChange(false);
     }
+  }
+
+  override componentWillUnmount() {
+    // A task page's boundary and a settings page's sit in different places,
+    // so moving between them replaces the boundary rather than updating it.
+    if (this.state.failed !== null) this.props.onFailedChange(false);
   }
 
   override render() {
@@ -251,10 +266,17 @@ function Shell({ panelCollapsed, onTogglePanel }: { panelCollapsed: boolean; onT
     if (railOf(view) === "settings") lastSettings.current = view;
   }, [view]);
 
+  // Whether the page that failed to render is one that draws its own panel.
+  const [boundaryFailed, setBoundaryFailed] = useState(false);
+  const ownsPanel = view === "dictation" || view === "meetings" || view === "notes";
+
   // Every page draws a list panel but Notes > Upload -- see `# The card`
   // above -- and the title bar's toggle is drawn only where there is one to
-  // toggle.
-  const hasListPanel = view !== "notes-upload";
+  // toggle. Not while the card is still loading or failed to load, which
+  // draws no page at all, and not while Dictation, Meetings or Notes shows
+  // the error boundary in place of its `SplitView`; a settings page's
+  // boundary is inside the shared `SplitView`, so its panel stays.
+  const hasListPanel = diagnostics !== null && view !== "notes-upload" && !(ownsPanel && boundaryFailed);
   const titlebar = <TitleBar panelCollapsed={panelCollapsed} hasListPanel={hasListPanel} onTogglePanel={onTogglePanel} onOpenNote={openNote}
     canGoBack={history.index > 0} canGoForward={history.index < history.entries.length - 1}
     onBack={() => navigate({ type: "back" })} onForward={() => navigate({ type: "forward" })} />;
@@ -286,7 +308,7 @@ function Shell({ panelCollapsed, onTogglePanel }: { panelCollapsed: boolean; onT
   }
 
   const boundary = (
-    <ViewBoundary view={view} onReset={() => select("diagnostics")}>
+    <ViewBoundary view={view} onReset={() => select("diagnostics")} onFailedChange={setBoundaryFailed}>
       {renderView(view, diagnostics, select, searchNoteRequest, openNote)}
     </ViewBoundary>
   );
@@ -295,7 +317,7 @@ function Shell({ panelCollapsed, onTogglePanel }: { panelCollapsed: boolean; onT
   // panel is its history, Meetings' its recent and interrupted recordings,
   // Notes' its library -- so each goes into the card bare, with no `.content`
   // and no `PageHeader`.
-  if (view === "dictation" || view === "meetings" || view === "notes") return frame(boundary);
+  if (ownsPanel) return frame(boundary);
 
   // Providers draws its own header, with its search and Test connections in it.
   const content = (
@@ -308,10 +330,12 @@ function Shell({ panelCollapsed, onTogglePanel }: { panelCollapsed: boolean; onT
   // Every settings and developer screen shares one panel. The rest --
   // `notes-upload` -- scrolls in `.split-main` as a split with no panel
   // beside it: the card clips its overflow, so the page cannot scroll the
-  // card itself.
+  // card itself. The settings panel's landmark is "Settings list", as
+  // Meetings' is "Meetings list": "Settings sections" is the `nav` inside it,
+  // and a landmark named the same as the one it holds says nothing more.
   if (railOf(view) === "settings") {
     return frame(
-      <SplitView label="Settings sections" panel={<SettingsPanel view={view} onSelect={select} />}>
+      <SplitView label="Settings list" panel={<SettingsPanel view={view} onSelect={select} />}>
         {content}
       </SplitView>,
     );

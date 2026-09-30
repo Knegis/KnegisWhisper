@@ -9,11 +9,13 @@ import { Icon } from "./Icon";
  * says "notes and meetings" and not dictations. `open` is whether the results
  * popup shows, not whether the field does.
  *
- * The popup opens when something is asked of it -- typing, or ArrowDown --
- * and not when the field gains focus. The field is always in the title bar
- * now, on the way from the window buttons to the page, so opening on focus
- * dropped a popup over the page for everyone who only tabbed past it.
- * Ctrl+K focuses and selects the field and leaves the popup to the first key.
+ * The popup opens when something is asked of it -- typing, ArrowDown, Ctrl+K,
+ * or a click in the field -- and not when the field gains focus. The field is
+ * always in the title bar now, on the way from the window buttons to the
+ * page, so opening on focus dropped a popup over the page for everyone who
+ * only tabbed past it. Ctrl+K focuses and selects the field; it and a click
+ * show the results for a query already in it, and with the field empty leave
+ * the popup to the first key, since there is nothing yet to show.
  * `aria-controls` names the results only while they exist: the listbox is
  * rendered inside the popup, and an id that points at nothing is an error
  * to anything reading it.
@@ -32,6 +34,8 @@ export function TitleBarSearch({ onOpenNote }: { onOpenNote: (id: number) => voi
     const shortcut = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === "k") {
         event.preventDefault(); input.current?.focus(); input.current?.select();
+        // The field's own value, not `query`: this listener is registered once, and would read the first render's.
+        if (input.current?.value.trim()) setOpen(true);
       }
     };
     document.addEventListener("pointerdown", outside);
@@ -58,6 +62,7 @@ export function TitleBarSearch({ onOpenNote }: { onOpenNote: (id: number) => voi
     <input ref={input} type="search" role="combobox" aria-label="Search notes and meetings" placeholder="Search notes and meetings" aria-keyshortcuts="Control+K Meta+K"
       value={query} aria-expanded={open} aria-controls={open ? "titlebar-search-results" : undefined} aria-autocomplete="list"
       aria-activedescendant={open && hits[active] ? `titlebar-hit-${hits[active].id}` : undefined}
+      onClick={() => { if (query.trim()) setOpen(true); }}
       onChange={event => { setQuery(event.target.value); setHits([]); setLoading(!!event.target.value.trim()); setOpen(true); }}
       onKeyDown={event => {
         if (event.key === "Escape") { event.preventDefault(); setQuery(""); setOpen(false); input.current?.blur(); }

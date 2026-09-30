@@ -16,8 +16,13 @@
  *   2. What is marked is filled, not outlined. The site's one interaction is
  *      `a.line:hover { background: var(--band); color: var(--band-ink) }` -- a
  *      fill swap. `--band` here is the site's blue, the colour it reserves for
- *      a filled region rather than for text, so a hovered or current element is
- *      a blue bar with paper text on it and nothing is drawn around anything.
+ *      a filled region rather than for text. A blue bar with paper text on it
+ *      is the marked state -- the current rail item, `button.marked`, the
+ *      active search result -- and `button.primary` is the same fill on the
+ *      one thing to do next. Hovering is not marking: an ordinary hover is a
+ *      neutral fill (`--control` on a button, `--selected` in the rail,
+ *      `--panel-hover` on a panel row), and the current row in a list panel
+ *      is `--selected`, so pointing at a row never makes it look current.
  *   3. Two typefaces with a job each. Switzer sets prose. ProFontWindows sets
  *      anything the machine is saying about itself -- headings, navigation,
  *      identifiers, file bytes -- at the site's exact spec: 13px/16px, 0.5px
@@ -490,15 +495,23 @@ h2,
 .hero-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 16px; margin-top: 24px; }
 .hero-actions > button { margin: 0; height: 38px; padding: 0 16px; border-radius: 2px; font-size: 14.5px; }
 .hero-actions > .learn-more { margin: 0; }
-/* A shortcut's keys stay on one line together; "or" between two may break. */
-.keycaps { white-space: nowrap; }
+/*
+ * A shortcut's keys may break onto the next line between keys, never inside
+ * one. They were kept on one line together, and a four-key accelerator at
+ * 22px is 330-380px: `Control+Shift+Alt+Backspace` measured 374px, wider
+ * than the 306px hero in a 720x720 window with the panel opened by hand, and
+ * scrolled `.split-main` sideways (headless Edge, dev fixtures). `kbd` is an
+ * inline-block, so there is a break opportunity between two of them only
+ * while their parent allows wrapping; the key's own text is `nowrap` below.
+ */
+.keycaps { white-space: normal; }
 
 /*
  * A key, as the Kit draws it: the machine voice on the page colour, a
  * `--rule` edge with a heavier bottom. 2px, not the canvas' 3px -- a key is a
  * control, and the Kit's corner scale has no 3px step.
  */
-kbd { display: inline-block; border: 1px solid var(--rule); border-bottom-width: 3px; border-radius: 2px; background: var(--bg); color: var(--text); font-family: var(--font-mono); font-size: 0.85em; line-height: 1.4; padding: 0 0.4em; }
+kbd { display: inline-block; white-space: nowrap; border: 1px solid var(--rule); border-bottom-width: 3px; border-radius: 2px; background: var(--bg); color: var(--text); font-family: var(--font-mono); font-size: 0.85em; line-height: 1.4; padding: 0 0.4em; }
 .hero-heading kbd { margin: 0 3px; padding: 3px 12px 1px; font-size: 22px; line-height: 30px; vertical-align: 6px; }
 
 /*
@@ -519,9 +532,11 @@ kbd { display: inline-block; border: 1px solid var(--rule); border-bottom-width:
 
 /*
  * A chip (`components/Chip.tsx`), and the microphone's `select.chip`: a 30px
- * control with the 2px corner, unfilled at rest like every other button. It
- * shrinks before the privacy line does, down to its icon if it has to, and
- * the label ellipsises inside a 260px cap; the full label is the `title`.
+ * control with the 2px corner, unfilled at rest like every other button. A
+ * chip that does not fit beside the others goes onto the next line of the
+ * strip whole (`.control-chips`, below); it shrinks only where it is alone on
+ * a line and still too wide, and the label ellipsises inside a 260px cap
+ * either way; the full label is the `title`.
  */
 .chip { display: inline-flex; align-items: center; gap: 7px; flex: 0 1 auto; min-width: 0; max-width: 260px; height: 30px; margin: 0; padding: 0 9px; border: 0; border-radius: 2px; background: transparent; color: var(--text); font: inherit; font-size: 13.5px; line-height: 18px; white-space: nowrap; }
 .chip-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
@@ -562,11 +577,16 @@ select.chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2p
  * The control bar (`components/ControlBar.tsx`): a strip of chips and the
  * privacy line on `--strip`, then the body. The strip wraps rather than
  * truncating the privacy line -- at the 720px minimum the sentences drop to
- * a line of their own and the chips ellipsise on the first.
+ * a line of their own -- and the chips wrap among themselves rather than
+ * shrinking: at the default 1000x720 window with the panel open, a long
+ * provider and language name ellipsised all four of Meetings' chips at once,
+ * where two lines hold them, the longest at its 260px cap (KNEG-376;
+ * measured in headless Edge against dev fixtures). The row gap is the
+ * strip's padding, so two lines of chips read as one strip rather than two.
  */
 .control-bar { width: min(840px, 100%); background: var(--bg); border: 1px solid var(--rule); border-radius: 4px; box-shadow: var(--card-shadow); overflow: hidden; text-align: left; }
 .control-strip { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; padding: 6px 8px; background: var(--strip); border-bottom: 1px solid var(--rule); }
-.control-chips { display: flex; align-items: center; gap: 2px; flex: 0 1 auto; min-width: 0; }
+.control-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 2px; flex: 0 1 auto; min-width: 0; }
 .control-spacer { flex: 1 0 0; }
 .control-privacy { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 14px; min-width: 0; margin: 0; padding: 6px 8px; list-style: none; font-size: 13px; line-height: 18px; color: var(--muted); }
 .control-privacy li { display: inline-flex; align-items: center; gap: 6px; }
@@ -586,6 +606,8 @@ button.control-copy { display: inline-flex; align-items: center; gap: 6px; heigh
 .control-row > .chip { margin-left: -9px; }
 .control-row > button:not(.chip) { height: 38px; margin: 0; padding: 0 14px; border-radius: 2px; font-size: 14.5px; white-space: nowrap; }
 .control-row > button.control-start { display: inline-flex; align-items: center; gap: 9px; padding: 0 16px; }
+/* Dictation's Discard, drawn as Meetings' is (`.live-actions`): the Kit's secondary edge, and its icon. */
+.control-row > button.secondary { display: inline-flex; align-items: center; gap: 8px; }
 /* The body's gap spaces its children; a caveat's or a disclosure's own top margin would double it. */
 .control-body > .caveat, .control-body > .learn-more { margin: 0; }
 /* Meetings' Start carries the recording mark, the one round shape the Kit allows. */
@@ -1375,8 +1397,9 @@ button.transcript-play:hover:not(:disabled) { color: var(--text); }
  * it holds, adds `.note-detail-wide` to the article: `minmax(0, 1fr) 340px`,
  * with the transcript taken out of its tab into a `--panel` column behind a
  * left rule, the Transcript tab hidden, and the player at the foot of that
- * column. The note and the column each scroll on their own there, so the
- * article is exactly as tall as `.notes-main` and neither of them is.
+ * column -- or, while Replay is open, in full over it in the note column, as
+ * below the width. The note and the column each scroll on their own there,
+ * so the article is exactly as tall as `.notes-main` and neither of them is.
  *
  * Why 1280: beside the 68px rail, the card's 10px of margin and border and
  * the 272px list panel, a 1280px window leaves the note about 590px next to
@@ -2301,6 +2324,8 @@ button.microphone-language-toggle:hover:not(:disabled) { background: transparent
 .notes-notices .row { display: flex; flex-wrap: wrap; gap: 2px 10px; padding: 0 0 6px; }
 .notes-notices .row-value { min-width: 0; overflow-wrap: anywhere; }
 .notes-empty { max-width: 40rem; margin: 15vh auto 0; padding: 0 40px; text-align: center; }
+/* An `h2`, as the task heroes' headings are, drawn as the `h3` it was rather than in the machine voice `h2` gets. */
+.notes-empty > h2 { margin: 1.5rem 0 0.5rem; font-family: inherit; font-size: 1.0667rem; line-height: inherit; letter-spacing: inherit; text-transform: none; color: inherit; }
 /* Keep the native track's layout space so revealing it never shifts content. */
 :is(.list-panel, .notes-main, .note-body, .note-side-body) {
   scrollbar-color: transparent transparent;
@@ -2428,12 +2453,28 @@ button.note-topbar-button { flex: none; display: flex; align-items: center; just
 .note-workspace > section { min-width: 0; margin-top: 0; }
 .note-workspace [hidden], .note-workspace > [hidden] { display: none; }
 /* The note owns a single player, whichever view is open: in full above Replay, and otherwise a mini
- * player held to the foot of the note once playback has started. A wide window moves it to the foot
- * of the transcript column instead (`.note-side-player`, above). */
+ * player held to the foot of the note once playback has started. A wide window keeps it in full above
+ * Replay, and otherwise moves it to the foot of the transcript column (`.note-side-player`, above). */
 .note-mini-player { position: sticky; bottom: 0; grid-row: 3; padding: .75rem; background: var(--surface); border: 1px solid var(--faint); border-radius: 4px; z-index: 3; }
 .note-full-player { grid-row: 1; }
 .recording-player { flex-wrap: wrap; }
 .recording-player input[type="range"] { min-width: 5rem; }
+/*
+ * The position slider, drawn to the Kit rather than by the platform: the platform's thumb is a round
+ * knob, rounder than anything the Kit allows but the recording dot. A 2px `--rule` track with the
+ * played part in `--band`, and a 10px square `--band` thumb. `--played` is the fraction played,
+ * set by `RecordingPlayer`; the stop sits under the thumb's centre, which travels 5px in from each
+ * end. The box stays 18px tall so the thumb is as easy to catch as the platform's was, and the
+ * focus ring is the generic `input:focus-visible` one around that box. Here rather than beside the
+ * rule above: the generic `input` fill further up would otherwise draw a box behind the track.
+ * Disabled, the played part and the thumb go to `--muted`.
+ */
+.recording-player input[type="range"] { appearance: none; -webkit-appearance: none; height: 18px; margin: 0; padding: 0; border: 0; border-radius: 0; background: transparent; cursor: pointer; }
+.recording-player input[type="range"]::-webkit-slider-runnable-track { height: 2px; border-radius: 0; background: linear-gradient(to right, var(--band) calc(5px + (100% - 10px) * var(--played, 0)), var(--rule) 0); }
+.recording-player input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 10px; height: 10px; margin-top: -4px; border: 0; border-radius: 0; background: var(--band); }
+.recording-player input[type="range"]:disabled { cursor: default; }
+.recording-player input[type="range"]:disabled::-webkit-slider-runnable-track { background: linear-gradient(to right, var(--muted) calc(5px + (100% - 10px) * var(--played, 0)), var(--rule) 0); }
+.recording-player input[type="range"]:disabled::-webkit-slider-thumb { background: var(--muted); }
 .recording-details { margin-bottom: 1rem; color: var(--muted); }
 .recording-details p { white-space: pre-wrap; overflow-wrap: anywhere; }
 /* The Transcript tab's rows pull out by their own padding, so their text lines up with the title's. */
