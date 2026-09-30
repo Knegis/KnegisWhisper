@@ -1726,25 +1726,24 @@ label:has(> input[type="checkbox"]) {
 /*
  * The second line, when what it carries is not a process name but a fault.
  *
- * Amber rather than the red the panel's edge already uses, and the split is the
- * same one `.caveat.warn` makes: the red edge means *recording*, which is still
- * true and is the one indicator the brief requires. Painting this line red too
- * would say the recording had failed, when the recording is the half that is
- * working.
- * The theme dropped `--warn` because on the white page a caveat says the same
- * thing structurally and a real problem is `--error`. On this panel the fault
- * line sits beside a red recording edge, so it must not be red: amber alone
- * says "the transcript stopped, the recording did not". This panel-local pair
- * measures 10.64:1 on the dark background and 4.84:1 on the light background.
+ * Every message that reaches this class today is a failure, not a caveat:
+ * `MeetingNotification` and `UpdateNotification` both use it only for "state
+ * unknown", when reading the live status threw; `MeetingPanel` uses it for a
+ * stalled recording thread or a live transcript whose provider connection
+ * died. None of them is "needs attention, nothing has failed" -- so, as
+ * `.row-detail.warn` already found (`# there is no --warn`, near the top),
+ * this is `--error`, not the amber it used to be.
+ *
+ * The round `--rec` dot beside this text still means *recording*, and stays
+ * true the whole time this line is shown -- painting the text does not
+ * repaint the dot. `--rec` and `--error` are the same value in both themes,
+ * by design (`# there is no --warn`), so the two can share a colour without
+ * being confused for each other: one is a round mark, this is prose, and
+ * `.live-status`'s `--rec` text beside `.rec-dot` already pairs them the same
+ * way elsewhere in this file.
  */
 .notify-detail.notify-alert {
-  color: #fbbf24;
-}
-
-@media (prefers-color-scheme: light) {
-  .notify-detail.notify-alert {
-    color: #a16207;
-  }
+  color: var(--error);
 }
 
 .notify-recording {
