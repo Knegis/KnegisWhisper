@@ -32,24 +32,27 @@ const COPIED_MS = 2000;
  * "Copied" where the time was, for two seconds -- the only thing a past
  * dictation is for, once it has been typed somewhere. A copy that fails says
  * "Couldn't copy" and keeps saying it until the next press, because a failure
- * stays visible.
+ * stays visible. Both are also said in a polite live region, and each row's
+ * accessible description says what pressing it copies, since nothing on
+ * screen does: a row looks like every other panel row, which goes somewhere.
  *
- * What a row says is `lib/historyRow.ts`'. A failed row keeps its text when
- * it has one -- a dictation whose paste failed is stored with the cleaned
- * text on purpose, so it can be copied from here -- and the failure's reason
- * goes in the meta line beside the time, where it stays visible. Only a row
- * with no text at all -- the request failed before anything came back --
- * reads "Didn't work", muted, and pressing it copies the reason, which is the
- * text a bug report needs. A row cleanup changed says " · Cleaned up", and
- * its tooltip carries the text before cleanup and the provider that
- * transcribed it.
+ * What a row says comes from `lib/historyRow.ts`. A failed row keeps its
+ * text when it has one -- a dictation whose paste failed is stored with the
+ * cleaned text on purpose, so it can be copied from here -- and the failure's
+ * reason goes in the meta line beside the time, where it stays visible.
+ * Only a row with no text at all -- the request failed before anything came
+ * back -- reads "Didn't work", muted, and pressing it copies the reason,
+ * which is the text a bug report needs. A row cleanup changed says
+ * " · Cleaned up", and its tooltip carries the text before cleanup and the
+ * provider that transcribed it.
  *
  * # History off
  *
  * The panel says so, and opens the options, since switching it back on is
- * the likely next press. Anything saved before it was switched off is still
- * listed: it is still stored, and a list that went blank would read as
- * deleted when it is not.
+ * the likely next press -- and leaves them open when it is, rather than
+ * folding them under the checkbox just pressed. Anything saved before it
+ * was switched off is still listed: it is still stored, and a list that went
+ * blank would read as deleted when it is not.
  *
  * There is no search button in the header. The title bar's search looks
  * through notes only, so a search affordance over dictation history would
@@ -121,6 +124,7 @@ export function DictationHistoryPanel({
                   muted={row.muted}
                   {...(meta === "" ? {} : { meta })}
                   {...(row.tooltip === null ? {} : { tooltip: row.tooltip })}
+                  {...(row.copyDescription === null ? {} : { "aria-description": row.copyDescription })}
                   onClick={() => {
                     void copy(h.id, row.copyText);
                   }}
@@ -130,13 +134,17 @@ export function DictationHistoryPanel({
           </PanelSection>
         ))
       )}
+      {/* Always rendered, so the region exists before the notice arrives
+          in it -- a live region added along with its text is often not
+          read. */}
+      <p className="sr-only" role="status">{notice?.text ?? ""}</p>
 
       <div className="panel-foot panel-foot-stack">
         <p className="panel-foot-line">
           <Icon name="lock" size={14} />
           History stays on this computer.
         </p>
-        <LearnMore summary="History options" open={!historyOn}>
+        <LearnMore summary="History options" unfold={!historyOn}>
           {/* First, because it governs whether the other two controls have
               anything to act on. Until 2026-08-31 the backend honoured
               `history.enabled` before every write and nothing in the

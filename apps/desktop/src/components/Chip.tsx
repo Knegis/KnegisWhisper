@@ -25,6 +25,19 @@ import { Icon } from "./Icon";
  * the pointer at the 720px minimum window. A caller with something better to
  * say there -- Meetings' reason the toggle is off -- passes its own, on a
  * static chip as on a button.
+ *
+ * A `title` is not something everyone can reach -- a static chip is not
+ * focusable, and no screen reader is obliged to read it -- so two props say
+ * the rest in the chip itself:
+ *
+ *   - `name` is a button chip's accessible name, where the label alone is a
+ *     value with nothing to say what it is the value of: "OpenAI" is
+ *     "Transcription: OpenAI". The name keeps the label whole inside it, so
+ *     the words on screen are still words a speech user can say to press it
+ *     (WCAG 2.5.3). A static chip takes none, because a `span` cannot be
+ *     named.
+ *   - `srText` is visually hidden text after the label, for what `title`
+ *     explains -- Meetings' "Default microphone" and why it is the default.
  */
 export function Chip({
   icon,
@@ -34,6 +47,8 @@ export function Chip({
   chevron = false,
   disabled = false,
   title,
+  name,
+  srText,
 }: {
   icon: IconName;
   label: string;
@@ -42,11 +57,14 @@ export function Chip({
   chevron?: boolean;
   disabled?: boolean;
   title?: string;
+  name?: string;
+  srText?: string;
 }) {
   const content = (
     <>
       <Icon name={icon} size={16} />
       <span className="chip-label">{label}</span>
+      {srText === undefined ? null : <span className="sr-only">{`. ${srText}`}</span>}
       {chevron ? <span className="chip-chevron"><Icon name="chevronDown" size={14} /></span> : null}
     </>
   );
@@ -59,6 +77,7 @@ export function Chip({
       className="chip"
       onClick={onClick}
       aria-pressed={pressed}
+      aria-label={name}
       disabled={disabled}
       title={title ?? label}
     >

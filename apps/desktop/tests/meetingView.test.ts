@@ -4,6 +4,7 @@ import {
   activeCall,
   elapsedLabel,
   interruptedTitle,
+  liveElapsed,
   recentMeta,
   recordedSources,
   recordingStartedAt,
@@ -45,6 +46,29 @@ test("elapsedLabel is hh:mm:ss, whole seconds, never negative", () => {
   assert.equal(elapsedLabel(3600), "01:00:00");
   assert.equal(elapsedLabel(768.9), "00:12:48");
   assert.equal(elapsedLabel(-5), "00:00:00");
+});
+
+test("liveElapsed counts from the start, however seldom the clock ticks", () => {
+  const start = new Date(Date.UTC(2026, 8, 30, 10, 0, 0));
+  const later = (ms: number) => new Date(start.getTime() + ms);
+  assert.equal(liveElapsed(start, later(65_000), null), 65);
+  // A window the system throttles in the background may tick once a minute
+  // or less; ten minutes in, the clock still reads ten minutes, not the
+  // number of ticks that arrived.
+  assert.equal(liveElapsed(start, later(600_000), null), 600);
+  assert.equal(liveElapsed(start, later(1_500), null), 1.5);
+});
+
+test("liveElapsed holds at the moment the meeting stalled", () => {
+  const start = new Date(Date.UTC(2026, 8, 30, 10, 0, 0));
+  const stalledAt = new Date(start.getTime() + 90_000);
+  assert.equal(liveElapsed(start, new Date(start.getTime() + 300_000), stalledAt), 90);
+  assert.equal(liveElapsed(start, new Date(start.getTime() + 90_000), stalledAt), 90);
+});
+
+test("liveElapsed is never negative", () => {
+  const start = new Date(Date.UTC(2026, 8, 30, 10, 0, 0));
+  assert.equal(liveElapsed(start, new Date(start.getTime() - 5_000), null), 0);
 });
 
 test("recordedSources says which captures opened, and why the second did not", () => {

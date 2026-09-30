@@ -21,7 +21,8 @@
  *     left behind, with Recover.
  *
  * Rendered by `App.tsx` straight into the card, with no `PageHeader`: the
- * panel's title is the page's `h1`, and the intro sentence that used to sit
+ * panel's title is the page's `h1` -- `SplitView`'s `heading` stands in for
+ * it while the panel is collapsed -- and the intro sentence that used to sit
  * under a header is the hero's.
  *
  * Nothing on this page writes a setting. The provider and the language are
@@ -54,7 +55,7 @@
  * soon as one starts or the page is left.
  */
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { Chip } from "../components/Chip";
 import { ControlBar } from "../components/ControlBar";
@@ -62,7 +63,7 @@ import { Icon, IconFilled } from "../components/Icon";
 import { LearnMore } from "../components/LearnMore";
 import { PanelAction, PanelHeader, PanelItem, PanelSection } from "../components/Panel";
 import { formatClock } from "../components/RecordingPlayer";
-import { SplitView } from "../components/SplitView";
+import { PanelCollapsed, SplitView } from "../components/SplitView";
 import { TaskHero } from "../components/TaskHero";
 import { languageLabel, privacyLines } from "../lib/controlBar";
 import { timeOfDay } from "../lib/dayGroups";
@@ -103,6 +104,7 @@ import {
   activeCall,
   elapsedLabel,
   interruptedTitle,
+  liveElapsed,
   recentMeta,
   recordedSources,
   summaryPrivacyLine,
@@ -110,7 +112,7 @@ import {
 import type { ViewId } from "../lib/navigation";
 import { meetingReadiness } from "../lib/readiness";
 import { useMeetingReview } from "../lib/useMeetingReview";
-import { useRefresh } from "../lib/useRefresh";
+import { message, useRefresh } from "../lib/useRefresh";
 
 /**
  * The sentence that was this page's `PageHeader` intro (`lib/pages.ts`), now
@@ -128,9 +130,12 @@ function intro(summariesOn: boolean): string {
 }
 
 /**
- * The microphone chip's `title`. Static because the recorder always opens the
- * default input device and nothing on any screen chooses another for
- * meetings (KNEG-364).
+ * The microphone chip's `title`, and its visually hidden text. The chip is
+ * not focusable, so the `title` is only ever a hover away; the hidden text
+ * puts the same sentence where a screen reader reads the chip. (A sighted
+ * keyboard user still has only the hover.) Static because the recorder
+ * always opens the default input device and nothing on any screen chooses
+ * another for meetings (KNEG-364).
  */
 const MICROPHONE_TITLE = "Meetings record the Windows default microphone";
 
@@ -162,8 +167,12 @@ export function Meetings({
   /** Opens a Recent meeting's note in Notes. */
   onOpenNote: (id: number) => void;
 }) {
+  // Everything Start, Stop and the privacy line depend on, read together:
+  // the summary settings are here, so while they load or fail the line has
+  // nothing to go on and the page shows no control bar at all rather than a
+  // line that might leave a summary out.
   const load = useCallback(async () => {
-    const [providers, status, provider, recoverable, language, keyterms, recent, summaries] =
+    const [providers, status, provider, recoverable, language, keyterms, summaries] =
       await Promise.all([
         getMeetingProviders(),
         getMeetingStatus(),
@@ -171,13 +180,27 @@ export function Meetings({
         getRecoverableRecordings(),
         getMeetingLanguage(),
         getMeetingKeyterms(),
-        getNotes({ noteType: "meeting", limit: 20 }),
         getSummarySettings(),
       ]);
-    return { providers, status, provider, recoverable, language, keyterms, recent, summaries };
+    return { providers, status, provider, recoverable, language, keyterms, summaries };
   }, []);
 
-  const { data, error, reload, guard, fail } = useRefresh(load);
+  const { data, error, reload, guard } = useRefresh(load);
+
+  // The Recent list, read on its own: it is only a list of notes, and a
+  // failure to read it used to blank Start and Stop with it. Its error and
+  // its retry stay in the panel. Retried through `guard`, which clears the
+  // last error before reading again -- a plain `reload` keeps it even when
+  // the read succeeds.
+  const loadRecent = useCallback(() => getNotes({ noteType: "meeting", limit: 20 }), []);
+  const recentRead = useRefresh(loadRecent);
+  const recentGuard = recentRead.guard;
+  const reloadRecent = useCallback(() => recentGuard(async () => {}), [recentGuard]);
+  // Every read that follows a meeting ending or a recording being recovered
+  // reads both, since either can add a note to Recent.
+  const reloadAll = useCallback(async () => {
+    await Promise.all([reload(), reloadRecent()]);
+  }, [reload, reloadRecent]);
 
   const [state, setState] = useState<MeetingState | null>(null);
   const [wantSystem, setWantSystem] = useState(true);
@@ -190,8 +213,14 @@ export function Meetings({
   const [recoveryOutcome, setRecoveryOutcome] = useState<MeetingOutcome | null>(null);
   /** Detection as last read, by the load or by the poll -- whichever was later. */
   const [detected, setDetected] = useState<readonly Detected[] | null>(null);
-  const [elapsed, setElapsed] = useState(0);
+  /** The detection poll's own failure, which the next poll that works clears. */
+  const [pollError, setPollError] = useState<string | null>(null);
+  /** When the running meeting started, from Rust's `elapsedSeconds`; `null` with none running. */
   const [startedAt, setStartedAt] = useState<Date | null>(null);
+  /** When this page saw the meeting stall, which is where its clock stops. */
+  const [stalledAt, setStalledAt] = useState<Date | null>(null);
+  /** The clock's "now", moved on once a second while a meeting records. */
+  const [clockNow, setClockNow] = useState(() => new Date());
   const liveHeading = useRef<HTMLHeadingElement>(null);
 
   // `disposed` because `listen` resolves after the effect returns: a page left
@@ -244,56 +273,78 @@ export function Meetings({
       if (disposed) return;
       setOutcome(result);
       setTranscript(emptyLiveTranscript());
-      void reload();
+      void reloadAll();
     }).then(keep);
     return () => {
       disposed = true;
       unlisteners.forEach((fn) => fn());
     };
-  }, [reload]);
+  }, [reload, reloadAll]);
 
   // Every read of the status resets what is counted from it: detection, and
-  // the running time, which the timer below then counts on locally.
+  // when the meeting started, which the clock below is read against. Only a
+  // meeting that is running has a start: `elapsedSeconds` is 0 otherwise, and
+  // a start taken from it would be the time of the read.
   const loadedStatus = data?.status ?? null;
   useEffect(() => {
     if (loadedStatus === null) return;
     setDetected(loadedStatus.detected);
-    setElapsed(loadedStatus.elapsedSeconds);
-    setStartedAt(new Date(Date.now() - loadedStatus.elapsedSeconds * 1000));
+    setStartedAt(
+      meetingIsLive(loadedStatus.state)
+        ? new Date(Date.now() - loadedStatus.elapsedSeconds * 1000)
+        : null,
+    );
   }, [loadedStatus]);
 
   const currentState: MeetingState | null = state ?? loadedStatus?.state ?? null;
   const idle = currentState === "idle";
-  // Counted here, the way the notification window counts it
-  // (`MeetingNotification.tsx`), rather than asked for every second: the
-  // runtime owns the clock, and an IPC round trip a second for a timer is
-  // arithmetic's job. Re-synced from `getMeetingStatus` on every read. Not
-  // while stalled: nothing is being recorded then, and a timer still running
-  // would say otherwise.
+  // Kept here rather than asked for every second: the runtime owns the
+  // clock, and an IPC round trip a second for a timer is arithmetic's job.
+  // Each tick reads the time since the start (`liveElapsed`) rather than
+  // adding a second, so a window throttled in the background, whose ticks
+  // arrive seldom, still shows the right time when they do. Stopped while
+  // stalled, at the moment this page saw the stall: nothing is being
+  // recorded then, and a clock still running would say otherwise.
   const ticking = currentState === "recording" || currentState === "recording-without-transcript";
+  const stalledNow = currentState === "stalled";
   useEffect(() => {
     if (!ticking) return undefined;
-    const timer = window.setInterval(() => setElapsed((s) => s + 1), 1000);
+    setClockNow(new Date());
+    const timer = window.setInterval(() => setClockNow(new Date()), 1000);
     return () => window.clearInterval(timer);
   }, [ticking]);
+  useEffect(() => {
+    setStalledAt(stalledNow ? new Date() : null);
+  }, [stalledNow]);
+  const elapsed = startedAt === null ? 0 : liveElapsed(startedAt, clockNow, stalledAt);
 
   // Detection is only read, never pushed -- only an offer has an event -- so
   // the call card would otherwise go on saying Zoom is in a call long after
   // the call ended. Only `detected` is taken from the poll: the state comes
-  // from events, and a second writer of it would race them.
+  // from events, and a second writer of it would race them. A failed read
+  // is shown until one succeeds, in its own state rather than the page's
+  // `error`: clearing that on the next good poll would also clear a Start
+  // or Stop failure nobody had read yet.
   useEffect(() => {
     if (!idle) return undefined;
     let disposed = false;
     const timer = window.setInterval(() => {
       getMeetingStatus()
-        .then((next) => { if (!disposed) setDetected(next.detected); })
-        .catch((cause: unknown) => { if (!disposed) fail(cause); });
+        .then((next) => {
+          if (disposed) return;
+          setDetected(next.detected);
+          setPollError(null);
+        })
+        .catch((cause: unknown) => { if (!disposed) setPollError(message(cause)); });
     }, DETECTION_POLL_MS);
     return () => {
       disposed = true;
       window.clearInterval(timer);
+      // The poll stops while a meeting runs; what it last said is not news
+      // by the time it starts again.
+      setPollError(null);
     };
-  }, [idle, fail]);
+  }, [idle]);
 
   const rows = useMemo(() => liveRows(transcript), [transcript]);
 
@@ -325,10 +376,12 @@ export function Meetings({
     data?.language ?? "",
     (data?.keyterms ?? []).join("\n"),
   );
+  // Whether the list panel is showing, for the one sentence that points into it.
+  const panelCollapsed = useContext(PanelCollapsed);
 
   if (!data) {
     return (
-      <SplitView label="Meetings list" panel={<PanelHeader title="Meetings" />}>
+      <SplitView label="Meetings list" heading="Meetings" panel={<PanelHeader title="Meetings" />}>
         <section data-surface="meetings.record" className="task" aria-label="Meeting">
           {error ? <p className="error">{error}</p> : <p className="muted">Loading…</p>}
         </section>
@@ -336,7 +389,8 @@ export function Meetings({
     );
   }
 
-  const { providers, status, recoverable, recent, summaries } = data;
+  const { providers, status, recoverable, summaries } = data;
+  const recent = recentRead.data;
   const current = state ?? status.state;
   const now = new Date();
   // A meeting whose provider died is still recording, so every control that
@@ -446,7 +500,7 @@ export function Meetings({
     void recoverMeetingRecording(candidate.storageKey)
       .then(async (result) => {
         setRecoveryOutcome(result);
-        await reload();
+        await reloadAll();
       })
       .catch((cause: unknown) => setRecoveryError(String(cause)))
       .finally(() => setRecoveringKey(null));
@@ -510,8 +564,10 @@ export function Meetings({
             title="Meeting"
             current
             meta={
-              <span className="panel-rec">
-                <span className="rec-dot" aria-hidden="true" />
+              // Stalled is not recording -- nothing is being captured -- so
+              // not the recording dot: the hollow square Interrupted uses.
+              <span className={stalled ? "panel-rec panel-rec-stalled" : "panel-rec"}>
+                <span className={stalled ? "mark-hollow" : "rec-dot"} aria-hidden="true" />
                 {stalled ? "Stopped unexpectedly" : "Recording"} · {elapsedLabel(elapsed)}
               </span>
             }
@@ -519,7 +575,20 @@ export function Meetings({
           />
         </PanelSection>
       ) : null}
-      {recent.length === 0 ? (
+      {/* Recent's own states, since it is read on its own: a failure to
+          list notes says so here and offers to read again, and leaves the
+          recording controls beside it alone. */}
+      {recentRead.error !== null ? (
+        <div className="panel-note panel-note-error" role="alert">
+          <p className="error">{`Couldn't load recent meetings: ${recentRead.error}`}</p>
+          <button type="button" className="panel-inline" onClick={() => { void reloadRecent(); }}>
+            Try again
+          </button>
+        </div>
+      ) : null}
+      {recent === null ? (
+        recentRead.error === null ? <p className="panel-note">Loading recent meetings…</p> : null
+      ) : recent.length === 0 ? (
         <p className="panel-note">No meetings saved yet.</p>
       ) : (
         <PanelSection label="Recent">
@@ -584,11 +653,14 @@ export function Meetings({
           : "Transcribed on this computer",
     ].filter((part): part is string => part !== null);
     return (
-      <SplitView label="Meetings list" panel={panel}>
+      <SplitView label="Meetings list" heading="Meetings" panel={panel}>
         <section data-surface="meetings.record" className="meeting-live" aria-label="Meeting">
           <header className="live-head">
-            <p className="live-status">
-              <span className="rec-dot" aria-hidden="true" />
+            {/* Stalled draws the hollow `--text` square and drops the
+                recording red: the round dot says something is being
+                recorded, and a stalled meeting records nothing. */}
+            <p className={stalled ? "live-status live-status-stalled" : "live-status"}>
+              <span className={stalled ? "mark-hollow" : "rec-dot"} aria-hidden="true" />
               {/* Only the state is a live region: the clock beside it ticks
                   every second. */}
               <span role="status">{meetingStateLabel(current)}</span>
@@ -609,7 +681,7 @@ export function Meetings({
               rather than controls. */}
           <div className="live-bar">
             <div className="live-chips" role="group" aria-label="In effect for this meeting">
-              <Chip icon="microphone" label="Default microphone" title={MICROPHONE_TITLE} />
+              <Chip icon="microphone" label="Default microphone" title={MICROPHONE_TITLE} srText={MICROPHONE_TITLE} />
               {liveSources?.systemAudio ? <Chip icon="others" label="Other participants" /> : null}
               <Chip icon="computer" label={transcriber ? transcriber.name : "Not set up"} />
               <Chip icon="language" label={language} />
@@ -649,7 +721,7 @@ export function Meetings({
     current === "finishing" ? (
       <TaskHero
         icon="meetings"
-        status={{ tone: "ready", label: meetingStateLabel(current) }}
+        status={{ tone: "busy", label: meetingStateLabel(current) }}
         heading="Your meeting is being transcribed"
         sub="This runs over the whole recording and can take a while on a long meeting."
       />
@@ -687,7 +759,7 @@ export function Meetings({
     );
 
   return (
-    <SplitView label="Meetings list" panel={panel}>
+    <SplitView label="Meetings list" heading="Meetings" panel={panel}>
       <section data-surface="meetings.record" className="task" aria-label="Meeting">
         <div className="task-hero">
           {hero}
@@ -720,7 +792,7 @@ export function Meetings({
           <ControlBar
             strip={
               <>
-                <Chip icon="microphone" label="Default microphone" title={MICROPHONE_TITLE} />
+                <Chip icon="microphone" label="Default microphone" title={MICROPHONE_TITLE} srText={MICROPHONE_TITLE} />
                 {/* Unpressed, not just disabled, where system audio cannot be
                     captured: a pressed "Other participants" beside a caution
                     saying they cannot be recorded would be two answers on one
@@ -750,6 +822,9 @@ export function Meetings({
             privacy={privacy}
           >
             {error ? <p className="error">{error}</p> : null}
+            {pollError ? (
+              <p className="error">{`Couldn't check whether a meeting app is in a call: ${pollError}`}</p>
+            ) : null}
             {/* Why the chip is off, said beside it in every state -- the
                 hero's caution is only there while the page is Ready, and a
                 switched-off control with no reason on screen is the button
@@ -775,11 +850,15 @@ export function Meetings({
             {/* The Interrupted rows are in the list panel; what recovering
                 one did, and the sentence that changes what you get back,
                 stay here. What these are and how Recover works is folded. */}
+            {/* With the panel collapsed, "the list" is nowhere on screen, so
+                the sentence also says where the list is. */}
             {recoverable.length > 0 ? (
               <>
                 <p className="caveat">
                   A recording from an earlier session was interrupted. Recover
-                  it from Interrupted in the list; the audio may end abruptly.
+                  it from Interrupted in the list
+                  {panelCollapsed ? " (Show list in the title bar)" : ""}; the
+                  audio may end abruptly.
                 </p>
                 <LearnMore>
                   <p>

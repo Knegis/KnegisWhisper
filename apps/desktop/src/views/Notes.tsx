@@ -13,7 +13,11 @@
  * note's right-click menu in the library, and the open note's top bar --
  * and both run `exportNote`, so there is one Export… and one "Written to".
  * That line and any failure sit at the top of the note rather than in the
- * panel, where a collapsed panel would hide them.
+ * panel, where a collapsed panel would hide them; "Written to" goes when
+ * another note opens, so it never sits above a note it is not about.
+ *
+ * The panel's "Notes" is the page's `h1`, and `SplitView`'s `heading`
+ * stands in for it while the panel is collapsed.
  *
  * Two states that look alike and are not: `hits === null` means nobody has
  * searched, and `hits === []` means somebody searched and nothing matched.
@@ -153,6 +157,10 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
   // enough for the transcript column the note scrolls inside its own article instead, which is
   // keyed by note and so starts at the top by itself.
   useLayoutEffect(() => { if (mainRef.current) mainRef.current.scrollTop = 0; }, [openNoteId, openRequest]);
+  // "Written to" is about the export just made, and it sits above the open note: once another
+  // note opens it would read as that note's file. Layout timing, so it is gone before the new
+  // note's first paint rather than one frame after.
+  useLayoutEffect(() => { setExportedTo(null); }, [openNoteId]);
   useEffect(() => {
     if (!openRequest) return;
     let cancelled = false;
@@ -179,12 +187,15 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
     const id = await createNote({ title: "Untitled note", content: "" });
     await selectNote(id);
   });
-  // The one Export…, for the right-click menu and the open note's top bar alike. Flushed first,
-  // as selecting, moving and deleting are: the top bar's button sits just above the editor, and
-  // a file written from the stored text would miss whatever was typed in the last moment.
+  // The one Export…, for the right-click menu and the open note's top bar alike. Flushed first
+  // when it is the open note, as selecting, moving and deleting are: the top bar's button sits
+  // just above the editor, and a file written from the stored text would miss whatever was typed
+  // in the last moment. Only then: the workspace holds the open note's edits and no other's, so
+  // flushing for another note's export gains nothing, and a save of the open note that keeps
+  // failing would block exporting a note it has nothing to do with.
   const exportNote = (id: number) => {
     void guard(async () => {
-      await workspaceRef.current?.flush();
+      if (id === openNoteId) await workspaceRef.current?.flush();
       const path = await exportNoteToFile(id, exportFormat);
       // `null` is a cancelled dialog, not a failure. Saying
       // "exported" for it would be a lie about a file that does
@@ -235,7 +246,7 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
 
   if (!data) {
     return (
-      <SplitView label="Notes library" panel={<PanelHeader title="Notes" />}>
+      <SplitView label="Notes library" heading="Notes" panel={<PanelHeader title="Notes" />}>
         <section className="notes-main" aria-label="Note editor">
           <div className="notes-notices">{error ? <p className="error">{error}</p> : <p className="muted">Loading…</p>}</div>
         </section>
@@ -357,7 +368,7 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
   );
 
   return (
-    <SplitView label="Notes library" panel={panel}>
+    <SplitView label="Notes library" heading="Notes" panel={panel}>
       <section className="notes-main" aria-label="Note editor" ref={mainRef}>
         {error || exportedTo ? (
           <div className="notes-notices">
@@ -375,7 +386,7 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
             onExport={() => exportNote(openNote.id)}
             onMore={anchor => openNoteMenu(openNote, anchor)}
           />
-        ) : <div className="notes-empty"><h3>Your writing space</h3><p className="muted">Choose a note or meeting from the sidebar, or start a new note.</p><button type="button" className="primary" onClick={() => { void newNote(); }}>New note</button> <button type="button" onClick={onImport}>Import audio or video</button></div>}
+        ) : <div className="notes-empty"><h3>Your writing space</h3><p className="muted">Choose a note or meeting from the list, or start a new note.</p><button type="button" className="primary" onClick={() => { void newNote(); }}>New note</button> <button type="button" onClick={onImport}>Import audio or video</button></div>}
       </section>
       {context && createPortal(<div ref={contextRef} className="notes-context-menu" role="dialog" aria-label={context.kind === "note" ? `Actions for ${context.note.title}` : `Actions for folder ${context.folder.name}`} style={{ left: context.x, top: context.y }} onContextMenu={event => event.preventDefault()} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) setContext(null); }}>
         {context.kind === "note" ? <>

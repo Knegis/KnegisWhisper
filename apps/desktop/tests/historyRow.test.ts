@@ -67,6 +67,18 @@ test("the provider is in the tooltip even without a pre-cleanup text, and a mode
   assert.equal(historyRow(row({ text: "", status: "failed", provider: "groq" })).tooltip, "Transcribed by Groq");
 });
 
+test("a row tells a screen reader what pressing it copies", () => {
+  assert.equal(historyRow(row({})).copyDescription, "Press to copy this dictation");
+  // A paste failure kept its text, so pressing copies the text, not the reason.
+  assert.equal(historyRow(row({ status: "failed", errorMessage: "refused" })).copyDescription, "Press to copy this dictation");
+  assert.equal(
+    historyRow(row({ text: "", status: "failed", errorMessage: "401 Unauthorized" })).copyDescription,
+    "Press to copy why it didn't work",
+  );
+  // Nothing to copy, so nothing to promise.
+  assert.equal(historyRow(row({ text: "", status: "failed", errorMessage: null })).copyDescription, null);
+});
+
 test("an undated row has no time in its meta", () => {
   assert.equal(historyRow(row({ createdAt: null })).meta, "");
   assert.equal(historyRow(row({ createdAt: null, rawText: "x" })).meta, "Cleaned up");

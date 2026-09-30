@@ -134,6 +134,14 @@
   --panel: #1c1c1f;
   --rule: #2e2e33;
   --selected: #2a2a30;
+  /*
+   * A hovered row in the list panel, halfway from `--panel` to `--selected`,
+   * so pointing at a row does not make it look like the current one. Not
+   * `--wash`: over `--panel` that lands within a couple of levels of
+   * `--selected` in both themes, which is the look-alike this replaces.
+   * Derived rather than given a hex, so it follows both themes by itself.
+   */
+  --panel-hover: color-mix(in srgb, var(--selected) 50%, var(--panel));
   --strip: #202024;
   --band-wash: rgb(61 85 255 / 16%);
   --rec: #ff7b7b;
@@ -405,8 +413,13 @@ h2,
 .panel-item, .panel-action { width: 100%; display: flex; margin: 0; border: 0; border-radius: 2px; background: transparent; color: var(--text); text-align: left; }
 .panel-item { flex-direction: column; align-items: flex-start; gap: 1px; padding: 7px 12px; }
 .panel-action { align-items: center; gap: 10px; height: 36px; padding: 0 12px; }
-.panel-item:hover:not(:disabled), .panel-action:hover:not(:disabled) { background: var(--selected); }
-.panel-item[aria-current], .panel-item-current { background: var(--selected); }
+/*
+ * Hover is the lighter `--panel-hover`, and `--selected` is kept for the
+ * current row alone -- restated with `:hover`, which would otherwise outrank
+ * it and lighten the current row under the pointer.
+ */
+.panel-item:hover:not(:disabled), .panel-action:hover:not(:disabled) { background: var(--panel-hover); }
+.panel-item[aria-current], .panel-item[aria-current]:hover:not(:disabled) { background: var(--selected); }
 .panel-item-title { width: 100%; font-size: 14px; line-height: 20px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .panel-item-meta { font-size: 12.5px; line-height: 18px; color: var(--muted); }
 /* An item with an icon is one 36px line, the icon beside its text rather than above it. */
@@ -603,6 +616,8 @@ button.control-copy { display: inline-flex; align-items: center; gap: 6px; heigh
 .meeting-live { height: 100%; display: flex; flex-direction: column; margin: 0; background: none; }
 .live-head { padding: 22px 28px 18px; border-bottom: 1px solid var(--rule); }
 .live-status { display: flex; align-items: center; gap: 8px; margin: 0; font: 12px/16px var(--font-mono); letter-spacing: .5px; text-transform: uppercase; color: var(--rec); }
+/* Stalled records nothing, so neither the recording red nor its dot: `--text` and the hollow square (decision 6). */
+.live-status-stalled { color: var(--text); }
 .live-clock { color: var(--text); font-variant-numeric: tabular-nums; }
 .rec-dot { width: 8px; height: 8px; flex-shrink: 0; border-radius: 50%; background: var(--rec); }
 .live-title { margin: 8px 0 0; font-family: var(--font-sans); font-size: 28px; line-height: 36px; letter-spacing: -0.3px; text-transform: none; color: var(--text); }
@@ -643,12 +658,18 @@ button.control-copy { display: inline-flex; align-items: center; gap: 6px; heigh
 
 /*
  * Rows the Meetings panel carries besides `PanelItem`s. The Now row's meta is
- * `--rec` with the round dot, as the hero draws recording. An Interrupted row
- * is not a button, because Recover inside it is; its marker is the hollow
- * square Needs setup uses -- `--text`, not orange (decision 6).
+ * `--rec` with the round dot, as the hero draws recording -- or, stalled, the
+ * hollow square in `--text`, since nothing is being recorded. An Interrupted
+ * row is not a button, because Recover inside it is; its marker is the hollow
+ * square Needs setup uses -- `--text`, not orange (decision 6). Recent's
+ * error sits with its Try again under it.
  */
 .panel-rec { display: inline-flex; align-items: center; gap: 6px; color: var(--rec); font-variant-numeric: tabular-nums; }
 .panel-rec > .rec-dot { width: 7px; height: 7px; }
+.panel-rec-stalled { color: var(--text); }
+.panel-note-error { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+.panel-note-error > .error { margin: 0; overflow-wrap: anywhere; }
+.panel-note-error > button.panel-inline { margin: 0; }
 .panel-row { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; padding: 7px 12px; }
 .panel-row-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; color: var(--text); }
 .mark-hollow { width: 7px; height: 7px; flex-shrink: 0; border: 1px solid var(--text); }
@@ -656,41 +677,26 @@ button.panel-inline { height: 24px; margin: 0 0 0 4px; padding: 0 8px; border: 1
 button.panel-inline:hover:not(:disabled) { border-color: var(--muted); background: var(--bg); }
 
 /*
- * One column below the width where two would leave neither usable.
+ * No list panel below 44rem -- 704px, since a media query's rem is the
+ * browser's 16px and not this file's 15px root.
  *
  * The main window's `minWidth` is 720px (45rem, `src-tauri/tauri.conf.json`), so
  * this block is unreachable in the shipped window and reachable only in
  * `npm run dev` in a browser. That is a reason to keep it honest, not a reason
  * to delete it: the list panel goes, whatever the toggle says, because beside
  * the rail it would leave the page about half the window; the rail stays.
+ *
+ * This block also used to narrow `.content`'s padding and stack the rows.
+ * Neither ever applied -- the rules they override come later in the file at
+ * the same specificity, and at 700px `.content` measured its full 56px sides
+ * and two row tracks (in headless Edge against dev fixtures, not in the Tauri
+ * window) -- so they went. The rows stack by the main area's width instead,
+ * which the list panel changes far more than this width does (`@container
+ * main`, after the breakout rule).
  */
 @media (max-width: 44rem) {
   .list-panel {
     display: none;
-  }
-
-  .content {
-    padding: 1rem 1.5rem 3rem;
-  }
-
-  /*
-   * Rows collapse too. A fixed 14rem label track leaves the value under 200px
-   * here, and the row-spanning control has no label track left to cancel --
-   * its negative margin would hang off the left edge of the page.
-   */
-  .row {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 0.25rem;
-  }
-
-  .row > .row-value,
-  .row > .row-value:only-child {
-    grid-column: auto;
-  }
-
-  .row > .row-value > .controls {
-    margin-left: 0;
-    width: 100%;
   }
 }
 
@@ -2331,7 +2337,8 @@ button.panel-tool[aria-expanded="true"]:hover:not(:disabled) { background: var(-
 .notes-tool-panel button { align-self: flex-start; margin: 0; border-radius: 2px; }
 .notes-folder { margin: 0; background: transparent; }
 button.notes-folder-toggle { display: flex; align-items: center; gap: 7px; width: 100%; height: 32px; margin: 0; padding: 0 10px; border-radius: 2px; text-align: left; font-size: 14px; line-height: 20px; }
-button.notes-folder-toggle:hover:not(:disabled) { background: var(--selected); }
+/* A folder is never current, so its hover is a panel row's hover, not the current row's fill. */
+button.notes-folder-toggle:hover:not(:disabled) { background: var(--panel-hover); }
 .notes-folder-toggle > .icon:first-child { color: var(--muted); }
 .notes-folder-name { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .notes-folder-count { flex: none; font-size: 12.5px; color: var(--muted); }

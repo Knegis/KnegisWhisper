@@ -286,7 +286,10 @@ export function SettingsProviders({ onGoTo }: { onGoTo: (id: ViewId) => void }) 
             </span>
           ) : null}
           {row.stored ? (
-            <button type="button" className="secondary provider-change" aria-expanded={isOpen} aria-controls={formId} onClick={() => toggle(row.slot)}>
+            // Named for its row, as the + beside an empty one is: a list of
+            // "Change, Change, Change" says nothing about which key each one
+            // changes. "Change" leads, so the visible word is the name's first.
+            <button type="button" className="secondary provider-change" aria-label={`Change the key for ${row.name}`} aria-expanded={isOpen} aria-controls={formId} onClick={() => toggle(row.slot)}>
               Change
             </button>
           ) : row.unsupported ? (

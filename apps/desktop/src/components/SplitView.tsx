@@ -24,15 +24,25 @@ export const PanelCollapsed = createContext(false);
  * position and whatever its page put in it. `styles.css` restates
  * `[hidden]` for `.list-panel`, because the panel's own `display: flex`
  * would otherwise outrank the browser's `display: none`.
+ *
+ * `heading` is for a task page -- Dictation, Meetings, Notes -- whose `h1` is
+ * its panel's title. A hidden panel is out of the accessibility tree, and
+ * the page would have no `h1` at all; so while the panel is collapsed the
+ * main area carries one, visually hidden, with the same words. Only then, so
+ * the page has exactly one either way. A settings screen passes none: its
+ * `h1` is its `PageHeader`, and the Settings panel's title is an `h2`.
  */
-export function SplitView({ label, panel, children }: { label: string; panel: ReactNode; children: ReactNode }) {
+export function SplitView({ label, heading, panel, children }: { label: string; heading?: string; panel: ReactNode; children: ReactNode }) {
   const collapsed = useContext(PanelCollapsed);
   return (
     <div className="split">
       <aside id="list-panel" className="list-panel" aria-label={label} hidden={collapsed}>
         {panel}
       </aside>
-      <div className="split-main">{children}</div>
+      <div className="split-main">
+        {collapsed && heading !== undefined ? <h1 className="sr-only">{heading}</h1> : null}
+        {children}
+      </div>
     </div>
   );
 }

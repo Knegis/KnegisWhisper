@@ -7,15 +7,19 @@ import { Icon } from "./Icon";
  * The centre of a task page: a large icon, a one-line status in the machine
  * voice, the heading that says what to do, and a sentence under it.
  *
- * Three tones, and each is a shape as well as a colour, so none of them rests
- * on colour alone:
+ * Four tones. The three that mark a state are each a shape as well as a
+ * colour, so none of them rests on colour alone:
  *
  *   - **ready** -- a filled `--band` square;
  *   - **recording** -- a round `--rec` dot, the one round mark the Kit
  *     allows, followed by `extra` (the page's timer);
  *   - **setup** -- a hollow `--text` square. Not orange: the redesign has no
  *     warning colour (decision 6), and the canvas' amber was the brown the
- *     theme removed.
+ *     theme removed;
+ *   - **busy** -- no mark, only the label: work under way that is neither
+ *     ready nor recording, such as Dictation's "Transcribing…" and a
+ *     meeting's. The ready square there read as "Ready" beside a label that
+ *     said otherwise.
  *
  * The label's own text is `--text` except while recording, where it takes
  * `--rec` as the canvas draws it. The canvas also paints "Ready" blue; that
@@ -26,7 +30,9 @@ import { Icon } from "./Icon";
  * recording, and a status that announced each tick would talk over the
  * person dictating.
  *
- * The heading is an `h2`: the page's `h1` is its list panel's title.
+ * The heading is an `h2`: the page's `h1` is its list panel's title, or,
+ * while the panel is collapsed, the visually hidden one `SplitView` draws in
+ * its place.
  * `children` is for the setup state's fix button and its Learn more.
  */
 export function TaskHero({
@@ -37,7 +43,7 @@ export function TaskHero({
   children,
 }: {
   icon: IconName;
-  status: { tone: "ready" | "recording" | "setup"; label: string; extra?: string };
+  status: { tone: "ready" | "recording" | "setup" | "busy"; label: string; extra?: string };
   heading: ReactNode;
   sub: ReactNode;
   children?: ReactNode;
@@ -48,7 +54,7 @@ export function TaskHero({
         <Icon name={icon} size={60} />
       </span>
       <p className={`hero-status hero-status-${status.tone}`}>
-        <span className="hero-mark" aria-hidden="true" />
+        {status.tone === "busy" ? null : <span className="hero-mark" aria-hidden="true" />}
         <span role="status">{status.label}</span>
         {status.extra === undefined ? null : <span className="hero-extra">{status.extra}</span>}
       </p>

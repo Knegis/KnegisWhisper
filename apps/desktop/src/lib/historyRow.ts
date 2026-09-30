@@ -40,6 +40,12 @@ export type HistoryRow = {
   tooltip: string | null;
   /** What pressing the row puts on the clipboard: the text, or failing that the reason. */
   copyText: string;
+  /**
+   * The row's accessible description: what a press copies, which nothing
+   * visible says -- a row reads as a place to go, like every other panel
+   * row. `null` when there is nothing to copy.
+   */
+  copyDescription: string | null;
   /** Whether the text was typed where the cursor was. `false` for a failed row. */
   typed: boolean;
 };
@@ -69,6 +75,11 @@ export function historyRow(h: Transcription): HistoryRow {
     meta,
     tooltip: tooltip === "" ? null : tooltip,
     copyText: h.text || h.errorMessage || "",
+    copyDescription: !empty
+      ? "Press to copy this dictation"
+      : h.errorMessage
+        ? "Press to copy why it didn't work"
+        : null,
     typed: !failed,
   };
 }

@@ -29,7 +29,8 @@
  * that knows. The rail carries no recording mark; the hero says it.
  *
  * Rendered by `App.tsx` straight into the card, with no `PageHeader`: the
- * panel's title is the page's `h1`, and the intro sentence that used to sit
+ * panel's title is the page's `h1` -- `SplitView`'s `heading` stands in for
+ * it while the panel is collapsed -- and the intro sentence that used to sit
  * under a header is the hero's own line under the shortcut.
  */
 
@@ -45,7 +46,7 @@ import { PanelHeader } from "../components/Panel";
 import { SplitView } from "../components/SplitView";
 import { TaskHero } from "../components/TaskHero";
 import { cleanupLabel, destinationName, languageLabel, privacyLines } from "../lib/controlBar";
-import { parseStoredTime, timeOfDay } from "../lib/dayGroups";
+import { timeOfDay } from "../lib/dayGroups";
 import {
   cancelDictation,
   getDictationRoute,
@@ -68,6 +69,7 @@ import {
   type SessionState,
 } from "../lib/ipc";
 import { acceleratorText, outcomeLabel, sessionStateLabel } from "../lib/labels";
+import { lastDictation, type InsertedDictation } from "../lib/lastDictation";
 import { microphoneState } from "../lib/microphone";
 import type { ViewId } from "../lib/navigation";
 import { dictationReadiness } from "../lib/readiness";
@@ -106,11 +108,14 @@ function keycaps(shortcut: string): ReactNode {
   ));
 }
 
-/** What the last dictation event said, kept so "Last dictation" works with history off. */
+/**
+ * What the last dictation event said: its sentence under the result, and
+ * whether it failed. The text of an insert is not kept here but in its own
+ * state (`InsertedDictation`), so a later Discard or failure replaces this
+ * without taking the last inserted text with it.
+ */
 type LastOutcome = {
   label: string;
-  /** The inserted text, for an `inserted` outcome; `null` for every other. */
-  text: string | null;
   failed: boolean;
   /**
    * The history row the outcome wrote, for `inserted` and `failed`; `null`
@@ -119,16 +124,6 @@ type LastOutcome = {
    */
   historyId: number | null;
   at: Date;
-};
-
-/** The dictation the control bar shows, wherever it came from. */
-type LastDictation = {
-  text: string;
-  at: Date | null;
-  /** The text before cleanup, when the row kept one. */
-  raw: string | null;
-  /** Whether it was typed where the cursor was; `false` when the paste failed. */
-  typed: boolean;
 };
 
 export function DictationView({
@@ -183,6 +178,7 @@ export function DictationView({
   /** Live session state, which arrives by event between reads. */
   const [session, setSession] = useState<SessionState | null>(null);
   const [lastOutcome, setLastOutcome] = useState<LastOutcome | null>(null);
+  const [lastInserted, setLastInserted] = useState<InsertedDictation | null>(null);
 
   // `disposed` because `listen` resolves after the effect returns: a page left
   // before it did would otherwise keep its listeners for the rest of the
@@ -199,14 +195,17 @@ export function DictationView({
     }).then(keep);
     void onDictationOutcome((outcome: DictationOutcome) => {
       if (disposed) return;
+      const at = new Date();
       setLastOutcome({
         label: outcomeLabel(outcome),
-        text: outcome.outcome === "inserted" ? outcome.text : null,
         failed: outcome.outcome === "failed",
         historyId:
           outcome.outcome === "inserted" || outcome.outcome === "failed" ? outcome.historyId : null,
-        at: new Date(),
+        at,
       });
+      if (outcome.outcome === "inserted") {
+        setLastInserted({ text: outcome.text, historyId: outcome.historyId, at });
+      }
       // History and the session both moved, so re-read rather than guessing.
       void reload();
     }).then(keep);
@@ -251,7 +250,7 @@ export function DictationView({
 
   if (!data) {
     return (
-      <SplitView label="Dictation history" panel={<PanelHeader title="Dictation" />}>
+      <SplitView label="Dictation history" heading="Dictation" panel={<PanelHeader title="Dictation" />}>
         <section data-surface="dictation.task" className="task" aria-label="Dictation">
           {error ? <p className="error">{error}</p> : <p className="muted">Loading…</p>}
         </section>
@@ -300,39 +299,26 @@ export function DictationView({
   // disable it -- the button needs none -- so only this case hands the
   // page's one filled button to the hero's fix.
   const startBlocked = !recording && route.problem !== null;
+  // The route chip's label. A route with a problem has no destination to
+  // name; the hero says what to do and carries the problem itself.
+  const routeLabel = route.problem
+    ? "Not set up"
+    : route.isLocal
+      ? "On this computer"
+      : destinationName(route.destination);
 
-  // The last thing dictated, in this order:
-  //   - this session's inserted text;
-  //   - this session's failed dictation, from the row it wrote, when that row
-  //     has text -- only the paste failed, and `fail` in
-  //     crates/app-core/src/dictation.rs stores the cleaned text so it can be
-  //     copied out rather than lost;
-  //   - otherwise the newest history row with text, whatever its status.
-  // A row, not `history[0]`: a dictation that failed before anything came
-  // back writes a row with no text, and "Nothing dictated yet" over an
-  // earlier dictation would be false.
-  const rowById = (id: number | null) => (id === null ? null : history.find((h) => h.id === id) ?? null);
-  const failedRow = lastOutcome?.failed ? rowById(lastOutcome.historyId) : null;
-  const newestRow = history.find((h) => h.text !== "") ?? null;
-  const last: LastDictation | null =
-    lastOutcome !== null && lastOutcome.text !== null
-      ? {
-          text: lastOutcome.text,
-          at: lastOutcome.at,
-          raw: rowById(lastOutcome.historyId)?.rawText ?? null,
-          typed: true,
-        }
-      : lastOutcome !== null && failedRow !== null && failedRow.text !== ""
-        ? { text: failedRow.text, at: lastOutcome.at, raw: failedRow.rawText, typed: false }
-        : newestRow !== null
-          ? {
-              text: newestRow.text,
-              at: parseStoredTime(newestRow.createdAt),
-              raw: newestRow.rawText,
-              typed: newestRow.status !== "failed",
-            }
-          : null;
+  // The last thing dictated: this session's insert, a failure whose row kept
+  // the text, or the newest history row with text -- whichever is newest
+  // (`lib/lastDictation.ts` says how, and why the insert is its own state).
+  const last = lastDictation(
+    history,
+    lastInserted,
+    lastOutcome?.failed ? { historyId: lastOutcome.historyId, at: lastOutcome.at } : null,
+  );
   const lastText = last?.text ?? null;
+  // Said to a screen reader as well as on the button, whose changed label
+  // it may not announce.
+  const copyNotice = copied !== null && copied.text === lastText ? copied.label : null;
 
   const copyLast = async (text: string) => {
     clearTimeout(copiedTimer.current);
@@ -363,7 +349,7 @@ export function DictationView({
   ) : mic.busy ? (
     <TaskHero
       icon="dictation"
-      status={{ tone: "ready", label: sessionStateLabel(state) }}
+      status={{ tone: "busy", label: sessionStateLabel(state) }}
       heading="Your words are on their way"
       sub={INTRO}
     />
@@ -402,6 +388,7 @@ export function DictationView({
   return (
     <SplitView
       label="Dictation history"
+      heading="Dictation"
       panel={
         <DictationHistoryPanel
           history={history}
@@ -450,17 +437,13 @@ export function DictationView({
                     ))}
                   </select>
                 </span>
-                {/* A route with a problem has no destination to name; the
-                    hero says what to do and carries the problem itself. */}
+                {/* Named for what they are the value of: on its own,
+                    "OpenAI" or "Swedish" is a word with nothing to say which
+                    setting it is. */}
                 <Chip
                   icon="computer"
-                  label={
-                    route.problem
-                      ? "Not set up"
-                      : route.isLocal
-                        ? "On this computer"
-                        : destinationName(route.destination)
-                  }
+                  label={routeLabel}
+                  name={`Transcription: ${routeLabel}`}
                   chevron
                   onClick={() => onGoTo("transcription")}
                 />
@@ -468,6 +451,7 @@ export function DictationView({
                   <Chip
                     icon="language"
                     label={languageLabel(languages)}
+                    name={`Language: ${languageLabel(languages)}`}
                     chevron
                     onClick={() => onGoTo("transcription")}
                   />
@@ -501,7 +485,7 @@ export function DictationView({
                       }}
                     >
                       <Icon name="copy" size={14} />
-                      {copied !== null && copied.text === lastText ? copied.label : "Copy"}
+                      {copyNotice ?? "Copy"}
                     </button>
                   </div>
                   <p className="control-result-text">{last.text}</p>
@@ -529,6 +513,10 @@ export function DictationView({
                   {lastOutcome.label}
                 </p>
               ) : null}
+              {/* Always rendered, so the region exists before the notice
+                  arrives in it -- a live region added along with its text is
+                  often not read. */}
+              <p className="sr-only" role="status">{copyNotice ?? ""}</p>
             </div>
 
             <div className="control-row">

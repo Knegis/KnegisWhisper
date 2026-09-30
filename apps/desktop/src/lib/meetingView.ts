@@ -72,6 +72,22 @@ export function elapsedLabel(seconds: number): string {
 }
 
 /**
+ * A running meeting's clock, in seconds: from when it started to now, or to
+ * the moment it stalled.
+ *
+ * Read off the clock rather than counted. A timer counting one second per
+ * tick under-reports in a window the system throttles in the background,
+ * where ticks arrive seldom, and never catches up. And held while stalled:
+ * nothing is being recorded then, and a clock still running would say
+ * otherwise. `startedAt` is when Rust's `elapsedSeconds` says the meeting
+ * began; Rust's own count goes on through a stall (`live.started.elapsed()`,
+ * `src-tauri/src/meeting.rs`), which is why the stall time is the page's.
+ */
+export function liveElapsed(startedAt: Date, now: Date, stalledAt: Date | null): number {
+  return Math.max(0, ((stalledAt ?? now).getTime() - startedAt.getTime()) / 1000);
+}
+
+/**
  * Which captures a running meeting actually opened, as the live view's
  * sub-line says it. From `Sources`, which `meeting_start` reports, so a
  * meeting recording one source is never described as recording two. The
