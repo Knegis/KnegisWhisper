@@ -8,20 +8,25 @@ validation remains open.
 
 ## Using Notes
 
-The title is a separate autosaved text field above **Notes / Transcript / Replay**.
+The library — folders, notes and search — is the list panel on the left, beside the
+open note. The title is a separate autosaved text field above **Notes / Transcript /
+Replay**.
 Notes opens by default, with personal Markdown notes first and an independently
 editable AI summary below. An empty personal note offers **Start from transcript**;
 this copies literal speech and available speaker labels without changing the source.
 
-Transcript shows the original rows and playback actions. Replay provides the full
-player and recording details without repeating the transcript. Audio continues
-across tabs through one player; compact controls remain available after playback
-starts. Leaving the note
+Transcript shows the original rows and playback actions. In windows 1280px or wider
+the transcript is a column to the right of the note instead, and the Transcript tab
+is hidden; crossing that width keeps playback and the reading position. Replay
+provides the full player and recording details without repeating the transcript.
+Audio continues across tabs through one player; compact controls remain available
+after playback starts. Leaving the note
 stops playback. Missing recordings offer the existing native WAV attachment flow.
-Summary references open Transcript, reveal the supporting row and play its interval
-when audio exists. Tabs support arrow keys, Home and End. At widths of 900px or less,
-the library initially collapses (and collapses when entering that width); its titlebar
-toggle can reopen it. Tabs wrap when necessary.
+Summary references reveal the supporting row — in Transcript, or in the column when
+the window is that wide — and play its interval when audio exists. Tabs support arrow
+keys, Home and End; a hidden Transcript tab is skipped. At widths of 900px or less,
+the list panel initially collapses (and collapses when entering that width); the
+title bar's list toggle reopens it. Tabs wrap when necessary.
 
 Title, personal notes and summaries flush before tab changes, note changes and
 native window closure. A failed save retains the draft and prevents those transitions;

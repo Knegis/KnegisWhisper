@@ -23,7 +23,7 @@ checking and an update popup are not available merely because the app builds.
 | --- | --- |
 | Dictation | Global shortcuts, toggle and hold-to-talk, local Whisper/Parakeet and configured cloud routes. On Windows, modifier-only toggles such as `Control+Super` activate after all chord keys are released; an additional key cancels the gesture. |
 | Meetings | Microphone and system-audio recording, live transcription, detection/recording offers and a notification panel. Windows WASAPI capture and local/OpenAI Realtime transcription have been exercised. Other cloud meeting providers and some detection/notification scenarios still need live validation. |
-| Notes | Independent title and Notes / Transcript / Replay tabs. Personal Markdown notes precede AI summaries; empty notes can start from the transcript. Playback continues across tabs. Folders, transcript-aware full-text search and txt/md/json/srt/vtt export remain available. See [Notes workspace](docs/NOTES_WORKSPACE.md). |
+| Notes | Independent title and Notes / Transcript / Replay tabs; in windows 1280px or wider the transcript is a column beside the note instead of a tab. Personal Markdown notes precede AI summaries; empty notes can start from the transcript. Playback continues across tabs. Folders, transcript-aware full-text search and txt/md/json/srt/vtt export remain available. See [Notes workspace](docs/NOTES_WORKSPACE.md). |
 | Meeting summaries | Optional automatic/manual summaries with an independent model, editable prose, transcript references, chunked processing and retry/cancel. Configure Settings > Cleanup & summaries. See [implementation and validation](docs/MEETING_SUMMARIES.md) for model-quality limits. |
 | Recording ownership | Older notes can attach an explicitly selected PCM16 mono/stereo WAV through a native dialog. The source is copied and preserved. Desktop and API note deletion share recording cleanup. Meeting attachment failure keeps the note and WAV and displays recovery guidance. |
 | Import | Local audio/video is converted with ffmpeg, transcribed and saved with retained audio for playback. UI and API imports share one active slot, with no queue. Progress survives navigation; job metadata survives restart, while unfinished jobs become failed rather than resuming. URL import remains disabled. OpenWhispr database import is a separate flow. |
@@ -60,11 +60,18 @@ that time; they are not a claim that previously completed work is still missing.
 
 ## Find things in the app
 
-- **Dictation, Meetings, Notes** are top-level destinations. Import audio or video is reached
-  from Notes, not from the rail.
-- **Settings:** Shortcuts, Meetings, Vocabulary, Transcription, Cleanup & summaries, Local text
-  models, Providers and Calendar.
-- **Developer:** Local API, CLI, MCP and Diagnostics.
+- **The rail** down the left edge has four entries: **Dictation, Meetings, Notes**, then
+  **Settings**. Each opens a list panel beside the page; the title bar's list toggle hides and
+  shows it, and it starts hidden in windows 900px wide or narrower.
+- **Dictation** and **Meetings** are centred task screens. Their control bar holds the start
+  button and says what is in effect and where the audio goes. Dictation's list panel holds its
+  history, grouped by day; Meetings' holds Recent and Interrupted recordings.
+- **Notes:** folders and notes are in the list panel; the note opens beside it. In windows
+  1280px or wider, the transcript also shows as a column to the right. Import audio or video is
+  reached from Notes' list panel or its empty state, not from the rail.
+- **Settings:** the list panel names Shortcuts, Meetings, Vocabulary, Transcription, Cleanup &
+  summaries, Local text models, Providers and Calendar, then, under a **Developer** heading,
+  Local API, CLI, MCP and Diagnostics.
 
 Select the transcription provider/model in **Settings > Transcription**. Import audio or video
 uses that route; **Settings > Meetings** has its own provider selection. Converted import audio
@@ -79,7 +86,7 @@ sends text to that provider.
 
 ## Local API, CLI and MCP
 
-Keep the desktop app running and enable **Developer > Local API**. Both clients use its
+Keep the desktop app running and enable **Settings > Developer > Local API**. Both clients use its
 authenticated loopback API; the desktop owns transcription, storage and recording.
 The default discovery file is `~/.knegiswhisper/local-api.json` (under your Windows user
 profile on Windows). It contains the port and bearer token and should not be shared.
@@ -105,7 +112,7 @@ the visible meeting recorder, including sessions started in the UI.
 Configure your MCP client's stdio command with the absolute path to
 `target/debug/knegiswhisper-mcp.exe` on Windows, or `target/debug/knegiswhisper-mcp` on
 macOS/Linux. No arguments are needed. Protocol messages use stdout and diagnostics use
-stderr. **Developer > CLI/MCP** provides discovery and setup information.
+stderr. **Settings > Developer > CLI** and **MCP** provide discovery and setup information.
 
 See [CLI and MCP workflows](docs/CLI_MCP_WORKFLOWS.md) for export formats, upload limits,
 cancellation, restart behavior and dated Windows validation, and [agent skills](docs/agent-skills/)
