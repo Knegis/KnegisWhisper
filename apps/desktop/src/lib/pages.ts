@@ -11,7 +11,8 @@ import type { ViewId } from "./navigation.js";
 export type Page = { title: string; intro: string };
 
 /**
- * One entry per screen the rail can reach, `notes` excepted.
+ * One entry per screen the rail or the Settings panel can reach, `dictation`,
+ * `meetings` and `notes` excepted.
  *
  * `notes` is `null` rather than a page with an empty intro: the Notes screen is
  * the writing space itself -- the library down one side, and at the top of the
@@ -19,16 +20,27 @@ export type Page = { title: string; intro: string };
  * is open. A page title above that would push the note down to name a screen
  * the rail already marks as current.
  *
- * Every title is the rail's current label for that screen (`lib/navigation.ts`),
- * not a new name -- a screen that read one thing in the rail and another at the
- * top of its own content would be telling a colleague there are two screens
- * where there is one. A rename changes both together.
+ * `dictation` and `meetings` are `null` because each page is a task hero,
+ * which already says what the page is for, beside a list panel titled with
+ * the page's name. The intro sentences that used to sit here moved into the
+ * heroes: "Speak, and your words are typed where your cursor is." under
+ * Dictation's shortcut (`views/Dictation.tsx`), and Meetings' "Record a
+ * meeting and get a transcript you can turn into notes." as the canvas'
+ * "You get a transcript and a summary, saved to Notes." under "Record a
+ * meeting" -- without "and a summary" while automatic summaries are off
+ * (`views/Meetings.tsx`).
+ *
+ * Every title is the screen's current label in `lib/navigation.ts` -- the one
+ * the rail or the Settings panel shows -- not a new name: a screen that read
+ * one thing there and another at the top of its own content would be telling
+ * a colleague there are two screens where there is one. A rename changes both
+ * together.
  *
  * One exception, for the opposite reason: `meeting-settings` is "Meetings" in
- * the rail, where it sits inside Settings and cannot be mistaken for anything
- * else, and "Meeting settings" here, because a header reading "Meetings" on
- * both it and the recording page would be telling a colleague there is one
- * screen where there are two.
+ * the Settings panel, where it sits under the panel's own "Settings" title and
+ * cannot be mistaken for anything else, and "Meeting settings" here, because a
+ * header reading "Meetings" on both it and the recording page would be telling
+ * a colleague there is one screen where there are two.
  *
  * `satisfies` rather than a `: Record<ViewId, Page | null>` annotation: it
  * still checks every key against `ViewId` -- so a screen added to the rail
@@ -36,14 +48,8 @@ export type Page = { title: string; intro: string };
  * type to the annotation.
  */
 export const PAGES = {
-  dictation: {
-    title: "Dictation",
-    intro: "Speak, and your words are typed where your cursor is.",
-  },
-  meetings: {
-    title: "Meetings",
-    intro: "Record a meeting and get a transcript you can turn into notes.",
-  },
+  dictation: null,
+  meetings: null,
   notes: null,
   vocabulary: {
     title: "Vocabulary",

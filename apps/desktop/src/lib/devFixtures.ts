@@ -78,15 +78,21 @@ import type {
   ProbeReport,
   ProviderSummary,
   ReasoningStatus,
+  RecoverableRecording,
   RouteReport,
   SearchHit,
   SessionState,
   Sources,
+  SummarySettings,
   TranscriptEvent,
   TranscriptRow,
   Transcription,
   UpdateCheckResult,
 } from "../generated/ipc-types";
+// `OverlayPreferences` is hand-written in `ipc.ts`, not generated: Rust's
+// `persistent_overlay::Snapshot` has no `ts_rs` derive. A type-only import, so
+// this stays below the wrappers as the module doc above requires.
+import type { OverlayPreferences } from "./ipc";
 
 /* ------------------------------------------------------------- capabilities */
 
@@ -243,38 +249,36 @@ const HOTKEYS: HotkeyReport = {
 
 /* --------------------------------------------------------------- providers */
 
+/*
+ * Four of the registry's seven transcription providers, which is all
+ * `providers` lists: Deepgram and AssemblyAI were here, and are meeting
+ * streaming providers with no entry in `transcription` -- so Rust never lists
+ * them here, and `probe_configured`, which walks the same list, never tests
+ * them. Mistral took their place in KNEG-363 as a stored key whose test fails.
+ */
 const PROVIDERS: ProviderSummary[] = [
   {
     id: "openai",
     name: "OpenAI",
-    credentialSlot: "provider:openai",
+    credentialSlot: "openai",
     configured: true,
     modelCount: 3,
     models: ["whisper-1", "gpt-4o-transcribe", "gpt-4o-mini-transcribe"],
     dispatch: { state: "ready" },
   },
   {
-    id: "deepgram",
-    name: "Deepgram",
-    credentialSlot: "provider:deepgram",
+    id: "mistral",
+    name: "Mistral",
+    credentialSlot: "mistral",
     configured: true,
-    modelCount: 2,
-    models: ["nova-3", "nova-2"],
-    dispatch: { state: "ready" },
-  },
-  {
-    id: "assemblyai",
-    name: "AssemblyAI",
-    credentialSlot: "provider:assemblyai",
-    configured: false,
-    modelCount: 2,
-    models: ["universal", "universal-streaming"],
+    modelCount: 1,
+    models: ["voxtral-mini-latest"],
     dispatch: { state: "ready" },
   },
   {
     id: "groq",
     name: "Groq",
-    credentialSlot: "provider:groq",
+    credentialSlot: "groq",
     configured: false,
     modelCount: 1,
     models: ["whisper-large-v3-turbo"],
@@ -286,7 +290,7 @@ const PROVIDERS: ProviderSummary[] = [
   {
     id: "corti",
     name: "Corti",
-    credentialSlot: "provider:corti",
+    credentialSlot: "corti",
     configured: false,
     modelCount: 1,
     models: ["premier"],
@@ -297,57 +301,42 @@ const PROVIDERS: ProviderSummary[] = [
   },
 ];
 
+/*
+ * Twelve of the registry's twenty slots, in its order, with its slot ids,
+ * names, kinds, `usedFor` and `feature` (`config/provider-registry.json`,
+ * `credentials`). The ids used to be `provider:openai` and the like, which no
+ * registry slot is: `PROVIDERS[].credentialSlot` above and the probe's
+ * provider ids below are matched against these, so the three change together
+ * or a row cannot find its dispatch or its test (KNEG-363).
+ *
+ * `stored` is invented, and `provider_credential_set` below moves it, so a
+ * key saved on Providers flips its row. One `usedFor` is invented too: Groq
+ * is `["transcription", "reasoning"]` in the registry and is speech alone
+ * here, because `PROVIDERS` above invents a missing Groq client and a slot
+ * with another use keeps its + (`lib/providerRows.ts`) -- this is the fixture
+ * that shows "Not supported yet".
+ */
 const CREDENTIAL_SLOTS: CredentialSlotStatus[] = [
-  {
-    slot: "provider:openai",
-    name: "OpenAI API key",
-    kind: "provider",
-    usedFor: ["transcription", "cleanup", "meeting transcription"],
-    feature: null,
-    stored: true,
-  },
-  {
-    slot: "provider:deepgram",
-    name: "Deepgram API key",
-    kind: "provider",
-    usedFor: ["transcription", "meeting transcription"],
-    feature: null,
-    stored: true,
-  },
-  {
-    slot: "provider:assemblyai",
-    name: "AssemblyAI API key",
-    kind: "provider",
-    usedFor: ["transcription"],
-    feature: null,
-    stored: false,
-  },
-  {
-    slot: "provider:groq",
-    name: "Groq API key",
-    kind: "provider",
-    usedFor: ["transcription"],
-    feature: null,
-    stored: false,
-  },
-  {
-    slot: "custom:cleanup-endpoint",
-    name: "Self-hosted cleanup endpoint key",
-    kind: "custom-endpoint",
-    usedFor: ["cleanup"],
-    feature: "Intelligence",
-    stored: false,
-  },
-  {
-    slot: "enterprise:bedrock",
-    name: "AWS Bedrock",
-    kind: "enterprise",
-    usedFor: ["cleanup"],
-    feature: "Intelligence",
-    stored: true,
-  },
+  { slot: "openai", name: "OpenAI", kind: "provider", usedFor: ["transcription", "reasoning"], feature: null, stored: true },
+  { slot: "anthropic", name: "Anthropic", kind: "provider", usedFor: ["reasoning"], feature: null, stored: false },
+  { slot: "groq", name: "Groq", kind: "provider", usedFor: ["transcription"], feature: null, stored: false },
+  { slot: "mistral", name: "Mistral", kind: "provider", usedFor: ["transcription"], feature: null, stored: true },
+  { slot: "corti", name: "Corti", kind: "provider", usedFor: ["transcription", "reasoning"], feature: null, stored: false },
+  { slot: "note-formatting-custom", name: "Note formatting", kind: "custom-endpoint", usedFor: [], feature: "note-formatting", stored: false },
+  { slot: "translation-custom", name: "Translation", kind: "custom-endpoint", usedFor: [], feature: "translation", stored: true },
+  { slot: "bedrock", name: "AWS Bedrock", kind: "enterprise", usedFor: [], feature: "bedrock", stored: true },
+  { slot: "azure", name: "Azure OpenAI", kind: "enterprise", usedFor: [], feature: "azure", stored: false },
+  { slot: "vertex", name: "GCP Vertex AI", kind: "enterprise", usedFor: [], feature: "vertex", stored: true },
+  { slot: "assemblyai", name: "AssemblyAI", kind: "provider", usedFor: [], feature: null, stored: false },
+  { slot: "deepgram", name: "Deepgram", kind: "provider", usedFor: [], feature: null, stored: true },
 ];
 
+/*
+ * Only providers `PROVIDERS` lists, because `probe_configured` walks the same
+ * registry list: the Deepgram and AssemblyAI results that were here are ones
+ * Rust cannot send. One pass (OpenAI), one failure (Mistral), and the two
+ * kinds of skip.
+ */
 const PROBE_REPORT: ProbeReport = {
   results: [
     {
@@ -364,12 +353,7 @@ const PROBE_REPORT: ProbeReport = {
       },
     },
     {
-      provider: "deepgram",
-      kind: "catalog",
-      outcome: { outcome: "pass", detail: "12 models listed in 180 ms" },
-    },
-    {
-      provider: "deepgram",
+      provider: "mistral",
       kind: "voice",
       outcome: {
         outcome: "fail",
@@ -377,7 +361,7 @@ const PROBE_REPORT: ProbeReport = {
       },
     },
     {
-      provider: "assemblyai",
+      provider: "corti",
       kind: "catalog",
       outcome: { outcome: "skipped", reason: "no-credential" },
     },
@@ -419,7 +403,7 @@ const REASONING: ReasoningStatus = {
     {
       id: "openai",
       name: "OpenAI",
-      credentialSlot: "provider:openai",
+      credentialSlot: "openai",
       configured: true,
       enterprise: false,
       dispatch: { state: "ready" },
@@ -443,7 +427,7 @@ const REASONING: ReasoningStatus = {
     {
       id: "anthropic",
       name: "Anthropic",
-      credentialSlot: "provider:anthropic",
+      credentialSlot: "anthropic",
       configured: false,
       enterprise: false,
       dispatch: {
@@ -652,6 +636,46 @@ let meetingStatus: MeetingStatus = {
 
 let meetingLanguage = "en";
 let meetingProvider: string | null = null;
+
+/*
+ * Empty, as a fresh profile has none; `kw.interrupted()` adds one, so the
+ * Meetings panel's Interrupted section and its Recover button can be seen.
+ */
+let recoverable: RecoverableRecording[] = [];
+
+/*
+ * The Windows-only floating microphone, off until Settings > Dictation turns
+ * it on -- `overlay_preferences`'s Rust default. `#overlay` is its own page
+ * load in a plain browser, so a toggle flipped from the main window's tab
+ * would not reach it; `kw.overlayFloating()` flips it from inside that tab
+ * instead, over the same `overlay-preferences` event Rust emits.
+ */
+let overlayPreferences: OverlayPreferences = {
+  supported: true,
+  enabled: false,
+  vertical: false,
+};
+
+/** The meeting panel's typed-notes draft, read back after a webview reload. */
+let meetingNotes = "";
+
+/*
+ * The Meetings page reads this in its first load, for the control bar's line
+ * about where an automatic summary sends the transcript, and Cleanup &
+ * summaries reads and writes it. Rust's `SummarySettings::default()`
+ * (`crates/notes-core/src/summary.rs`): off, no provider, no model -- so the
+ * line is absent until Cleanup & summaries turns summaries on.
+ */
+let summarySettings: SummarySettings = {
+  enabled: false,
+  provider: "",
+  model: "",
+  selfHostedUrl: null,
+  enterprise: false,
+  language: "match",
+  contextBudget: 8192,
+};
+
 let meetingKeyterms = ["Nordbank", "KnegisWhisper", "WASAPI", "Realtek"];
 
 let detectLists: Lists = {
@@ -1042,6 +1066,17 @@ const CALENDAR: CalendarStatus = {
 let historyEnabled = true;
 let keepRawText = true;
 
+/*
+ * The shapes Rust writes, not approximations of them. `status` is only ever
+ * `completed` or `failed` (`record`, `src-tauri/src/dictation.rs`); this list
+ * said `ok` and `nothing-to-transcribe`, and a screen written against those
+ * called every real dictation a failure. A recording that heard nothing writes
+ * no row at all (`NothingToTranscribe` returns before `write_history` in
+ * `crates/app-core/src/dictation.rs`), so there is no row for it here. The two
+ * failed rows are the two ways `fail` writes one: a request that failed before
+ * any text came back (no text, no provider), and a paste that failed after it
+ * did, which keeps the cleaned text so it can be copied out of history.
+ */
 const HISTORY: Transcription[] = [
   {
     id: 41,
@@ -1053,7 +1088,7 @@ const HISTORY: Transcription[] = [
     audioDurationMs: 5400,
     provider: "openai",
     model: "gpt-4o-transcribe",
-    status: "ok",
+    status: "completed",
     errorMessage: null,
     errorCode: null,
     routeKind: "cloud",
@@ -1067,7 +1102,7 @@ const HISTORY: Transcription[] = [
     audioDurationMs: 2100,
     provider: "local",
     model: "whisper-large-v3-turbo-q5",
-    status: "ok",
+    status: "completed",
     errorMessage: null,
     errorCode: null,
     routeKind: "local",
@@ -1079,26 +1114,28 @@ const HISTORY: Transcription[] = [
     createdAt: "2026-08-26T09:30:12Z",
     hasAudio: true,
     audioDurationMs: 800,
-    provider: "deepgram",
-    model: "nova-3",
+    // `fail` records no provider when nothing came back (`recovered: None`).
+    provider: null,
+    model: null,
     status: "failed",
     errorMessage: "401 Unauthorized — the stored key was rejected",
     errorCode: "auth",
     routeKind: "cloud",
   },
   {
+    // Only the paste failed: the text and its provider are kept.
     id: 38,
-    text: "",
-    rawText: null,
+    text: "Send the Nordbank notes to Jonas before Friday.",
+    rawText: "send the nordbank notes to jonas before friday",
     createdAt: "2026-08-25T17:02:44Z",
     hasAudio: false,
-    audioDurationMs: 300,
-    provider: null,
-    model: null,
-    status: "nothing-to-transcribe",
-    errorMessage: "only silence was captured",
-    errorCode: "silence",
-    routeKind: null,
+    audioDurationMs: 3100,
+    provider: "openai",
+    model: "gpt-4o-transcribe",
+    status: "failed",
+    errorMessage: "could not deliver the paste keystroke: the focused window refused synthetic input",
+    errorCode: null,
+    routeKind: "cloud",
   },
 ];
 
@@ -1165,7 +1202,7 @@ let notes: Note[] = [
       "A deliberately long title that exists so the notes list can be judged when someone types far more than the column was designed for",
     content:
       "Long-form body text, here so wrapping and vertical rhythm can be seen honestly rather than guessed at.\n\n" +
-      "The overlay, the sidebar and this pane all share `styles.css`, so a change made against three short notes tends to look fine and then fall apart on a real one. " +
+      "The overlay, the list panel and this pane all share `styles.css`, so a change made against three short notes tends to look fine and then fall apart on a real one. " +
       "This note is the real one.\n\nIt has several paragraphs, a list:\n\n- one\n- two\n- three\n\nand a trailing line.",
     noteType: "note",
     recordingDetails: null, enhancedContent: null,
@@ -1310,9 +1347,22 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
   },
 
   /* providers */
-  providers: () => PROVIDERS,
-  credential_slots: () => CREDENTIAL_SLOTS,
-  provider_credential_set: () => null,
+  // Copies, as a serialised reply would be: the setter below moves these, and
+  // a screen must not see its last read change underneath it.
+  providers: () => PROVIDERS.map((p) => ({ ...p })),
+  credential_slots: () => CREDENTIAL_SLOTS.map((s) => ({ ...s })),
+  // Remembered, so a key saved on Providers flips its row to "Key saved" and
+  // Clear flips it back. An empty value deletes, as it does in Rust; the value
+  // itself is dropped here, since nothing can read one back anyway.
+  provider_credential_set: (a) => {
+    const id = arg<string>(a, "slot");
+    const stored = (arg<string>(a, "value") ?? "").trim() !== "";
+    const slot = CREDENTIAL_SLOTS.find((s) => s.slot === id);
+    if (!slot) throw new Error(`${JSON.stringify(id)} is not a credential slot this application uses`);
+    slot.stored = stored;
+    for (const p of PROVIDERS) if (p.credentialSlot === id) p.configured = stored;
+    return null;
+  },
   provider_credential_present: (a) =>
     CREDENTIAL_SLOTS.find((s) => s.slot === arg<string>(a, "slot"))?.stored ??
     false,
@@ -1585,7 +1635,7 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
         },
       ],
       relocatedCredentials: [
-        { sourceTable: "settings", account: "openai", slot: "provider:openai" },
+        { sourceTable: "settings", account: "openai", slot: "openai" },
       ],
       absentTables: ["dictation_presets"],
       ftsRows: 128,
@@ -1610,6 +1660,26 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
   dictation_route: () => ROUTE,
   dictation_use_local: () => null,
   dictation_set_cloud_provider: () => null,
+  // Swedish alone, so the language chip -- shown on the local route only --
+  // reads as a choice rather than as "Detect language".
+  dictation_local_language: () => ["sv"],
+  dictation_set_local_language: () => null,
+
+  /* overlay */
+  overlay_preferences: () => overlayPreferences,
+  overlay_preferences_set: (a) => {
+    overlayPreferences = {
+      ...overlayPreferences,
+      enabled: arg<boolean>(a, "enabled") ?? overlayPreferences.enabled,
+    };
+    void emit("overlay-preferences", overlayPreferences);
+    return overlayPreferences;
+  },
+  overlay_position_reset: () => null,
+  // The floating microphone's drag gesture and its message/language-menu
+  // visibility. Both are fire-and-forget from `Overlay.tsx`'s point of view.
+  overlay_drag: () => null,
+  overlay_message: () => null,
 
   /* local transcription */
   sherpa_status: () => SHERPA,
@@ -1639,8 +1709,32 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
   /* meetings */
   meeting_providers: () => MEETING_PROVIDERS,
   meeting_status: () => meetingStatus,
-  meeting_recoverable_recordings: () => [],
-  meeting_recover_recording: () => { throw new Error("No interrupted recordings in the fixture profile"); },
+  meeting_notes_get: () => meetingNotes,
+  meeting_notes_update: (a) => {
+    meetingNotes = arg<string>(a, "markdown") ?? meetingNotes;
+    return null;
+  },
+  meeting_notification_placement_save: () => null,
+  meeting_notification_placement_reset: () => null,
+  meeting_recoverable_recordings: () => recoverable,
+  meeting_recover_recording: (a) => {
+    const key = arg<string>(a, "storageKey");
+    if (!recoverable.some((r) => r.storageKey === key)) {
+      throw new Error("No interrupted recordings in the fixture profile");
+    }
+    recoverable = recoverable.filter((r) => r.storageKey !== key);
+    return {
+      outcome: "saved",
+      noteId: 101,
+      durationSeconds: 1847,
+      recordingPath:
+        "C:\\Users\\dev\\AppData\\Roaming\\KnegisWhisper\\recordings\\" + (key ?? ""),
+      gaps: 0,
+      reconnects: 0,
+      transcriptIsPartials: false,
+      recordingAttached: true,
+    } satisfies MeetingOutcome;
+  },
   meeting_start: (a) => {
     const wantsSystemAudio = arg<boolean>(a, "systemAudio") ?? false;
     const sources: Sources = {
@@ -1714,6 +1808,11 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
       ...meetingStatus,
       promptOnDetect: arg<boolean>(a, "enabled") ?? false,
     };
+    return null;
+  },
+  summary_settings_get: () => summarySettings,
+  summary_settings_set: (a) => {
+    summarySettings = arg<SummarySettings>(a, "settings") ?? summarySettings;
     return null;
   },
   meeting_language: () => meetingLanguage,
@@ -1872,6 +1971,23 @@ const devConsole = {
   dictationState(state: SessionState) {
     void emit("dictation-state", state);
   },
+  /**
+   * `#overlay` is its own page load, so the checkbox on Settings > Dictation
+   * in a different tab cannot reach it. This flips the same
+   * `overlay-preferences` event Rust would, so `#overlay` can be seen in its
+   * floating-microphone mode instead of only the label one.
+   */
+  overlayFloating(enabled = true, vertical = false) {
+    overlayPreferences = { ...overlayPreferences, enabled, vertical };
+    void emit("overlay-preferences", overlayPreferences);
+  },
+  /**
+   * A failed dictation, so `.microphone-error` -- the floating microphone's
+   * own error banner -- can be seen without a real transcription failure.
+   */
+  dictationFailed(message = "No response from the transcription service.") {
+    void emit("dictation-outcome", { outcome: "failed", message, historyId: null } satisfies Outcome);
+  },
   meetingState(state: MeetingState) {
     // The failure sentence travels with the state rather than being a second
     // thing to remember to set: either failure state with an empty detail line
@@ -1895,14 +2011,24 @@ const devConsole = {
     };
     void emit("meeting-state", state);
   },
-  transcript(text: string, isFinal = true) {
+  /** `extra` overrides the rest, e.g. `{ source: "system", speaker: null, timestamp: 641 }`. */
+  transcript(text: string, isFinal = true, extra: Partial<TranscriptEvent> = {}) {
     void emit("meeting-transcript", {
       text,
       isFinal,
       timestamp: meetingStatus.elapsedSeconds,
       speaker: "Anna",
       source: "mic",
+      ...extra,
     } satisfies TranscriptEvent);
+  },
+  /**
+   * An interrupted recording, as an earlier session would leave one. Read
+   * when the Meetings page next loads, so open it (or leave and come back)
+   * after calling this.
+   */
+  interrupted(storageKey = "20260901-101500-3f2a9c1e.wav", hasNotes = true) {
+    recoverable = [...recoverable.filter((r) => r.storageKey !== storageKey), { storageKey, hasNotes }];
   },
   offer(name = "Zoom") {
     const next: Offer = {
@@ -2036,6 +2162,8 @@ export function installDevFixtures(): void {
       "Try:      kw.dictationState('recording')",
       "          kw.offer()",
       "          kw.meetingState('recording')",
+      "          kw.overlayFloating()",
+      "          kw.dictationFailed()",
     ].join("\n  "),
   );
 }

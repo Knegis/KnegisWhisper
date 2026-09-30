@@ -15,7 +15,7 @@ reach `127.0.0.1`, there is nowhere else to try.
 ## Before anything else: is it on?
 
 The local API is **off by default**. The user turns it on under
-**Developer > Local API** in the application. Until they do, there is no discovery
+**Settings > Developer > Local API** in the application. Until they do, there is no discovery
 file and no listener, and that is a configuration state rather than a fault —
 say so instead of retrying.
 

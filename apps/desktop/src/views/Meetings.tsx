@@ -1,13 +1,29 @@
 /**
- * Meetings: the recording task.
+ * Meetings: the recording task, the meeting under way, and the meetings
+ * behind it.
  *
- * The page leads with whether a meeting can be recorded (`lib/readiness.ts`),
- * the one button that starts or stops it, whether the other participants are
- * captured, and who will transcribe it and whether the audio leaves this
- * computer -- with a way to Settings > Meetings, where the provider, the
- * language, detection and speaker labels are set. Below that, the live
- * transcript while there is one, and any recording an earlier session left
- * behind.
+ * Three parts, the way the canvas draws them:
+ *
+ *   - **Idle**, a task page like Dictation's. The hero says whether a meeting
+ *     can be recorded (`lib/readiness.ts`) and, when it cannot, the one
+ *     problem and the button that fixes it. Under it, a card while a meeting
+ *     application is in a call, with a way to record that call. At the foot,
+ *     the control bar: the microphone -- the system default, the only one the
+ *     recorder opens -- whether the other participants are captured, which is
+ *     the one choice made on this page, and who transcribes in what language,
+ *     each a way to Settings > Meetings. Then where the audio goes, which is
+ *     never hidden, the caveats, and Start.
+ *   - **Live**, while a meeting is running: its state and a timer, which
+ *     captures opened and where the audio goes, the live transcript, and a
+ *     bar with what is in effect, Discard, and Stop.
+ *   - **The list panel**: the meeting under way, the meetings saved lately --
+ *     each opens its note in Notes -- and any recording an earlier session
+ *     left behind, with Recover.
+ *
+ * Rendered by `App.tsx` straight into the card, with no `PageHeader`: the
+ * panel's title is the page's `h1` -- `SplitView`'s `heading` stands in for
+ * it while the panel is collapsed -- and the intro sentence that used to sit
+ * under a header is the hero's.
  *
  * Nothing on this page writes a setting. The provider and the language are
  * read here, never chosen: Settings > Meetings saves the provider on change and
@@ -15,7 +31,9 @@
  * language from the database when the meeting starts (`start_live`); the
  * provider is the one this page read back from `meetings.provider` and passes
  * to `meeting_start` itself. So what this page previews is what Start will
- * use, with no save of its own to race.
+ * use, with no save of its own to race. The control bar's provider and
+ * language chips say so by going to Settings > Meetings rather than opening
+ * a picker.
  *
  * Two things it refuses to do, carried over from the screen it came out of.
  *
@@ -25,20 +43,30 @@
  *
  * It does not report a meeting as recording both sources when it is recording
  * one. `Sources` comes back from `meeting_start` saying what actually opened,
- * and that is what the Status row shows.
+ * and that is what the live view says (`recordedSources`, `lib/meetingView.ts`).
  *
  * Meeting state arrives from Rust by event as well as by read: a meeting can
  * be started from the notification window whether or not this page is open,
  * so it reads the live state when it mounts and follows the events after
  * that. (The meeting hotkey starts nothing yet -- `shortcuts.rs` dispatches
- * it as "Meeting capture is not built yet.")
+ * it as "Meeting capture is not built yet.") Detection has no event -- only
+ * an offer does -- so while no meeting is running the page reads
+ * `meeting_status` again every five seconds for the call card, and stops as
+ * soon as one starts or the page is left.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
+import { Chip } from "../components/Chip";
+import { ControlBar } from "../components/ControlBar";
+import { Icon, IconFilled } from "../components/Icon";
 import { LearnMore } from "../components/LearnMore";
-import { Row } from "../components/Row";
-import { StatusLine } from "../components/StatusLine";
+import { PanelAction, PanelHeader, PanelItem, PanelSection } from "../components/Panel";
+import { formatClock } from "../components/RecordingPlayer";
+import { PanelCollapsed, SplitView } from "../components/SplitView";
+import { TaskHero } from "../components/TaskHero";
+import { languageLabel, privacyLines } from "../lib/controlBar";
+import { timeOfDay } from "../lib/dayGroups";
 import {
   cancelMeeting,
   flushMeetingPanelNotes,
@@ -47,17 +75,20 @@ import {
   getMeetingProvider,
   getMeetingProviders,
   getMeetingStatus,
+  getNotes,
   getRecoverableRecordings,
+  getSummarySettings,
   onMeetingOutcome,
   onMeetingState,
   onMeetingTranscript,
   recoverMeetingRecording,
   startMeeting,
   stopMeeting,
+  type Detected,
   type MeetingOutcome,
   type MeetingState,
+  type RecoverableRecording,
   type Sources,
-  type TranscriptEvent,
 } from "../lib/ipc";
 import {
   availabilityLabel,
@@ -65,37 +96,83 @@ import {
   meetingIsLive,
   meetingOutcomeLabel,
   meetingStateLabel,
-  sourcesLabel,
   systemAudioValue,
 } from "../lib/labels";
+import { emptyLiveTranscript, foldTranscriptEvent, liveRows, type LiveRow } from "../lib/liveTranscript";
 import { selectProvider } from "../lib/meetingProvider";
+import {
+  activeCall,
+  elapsedLabel,
+  interruptedTitle,
+  liveElapsed,
+  recentMeta,
+  recordedSources,
+  summaryPrivacyLine,
+} from "../lib/meetingView";
 import type { ViewId } from "../lib/navigation";
 import { meetingReadiness } from "../lib/readiness";
 import { useMeetingReview } from "../lib/useMeetingReview";
-import { useRefresh } from "../lib/useRefresh";
+import { message, useRefresh } from "../lib/useRefresh";
+
+/**
+ * The sentence that was this page's `PageHeader` intro (`lib/pages.ts`), now
+ * the hero's line under "Record a meeting" -- and it promises a summary only
+ * when one will come. A saved meeting is summarised by itself only while
+ * automatic summaries are on (`enqueue_automatic`,
+ * `crates/notes-core/src/summary.rs:96-106`), and they are off by default
+ * (`SummarySettings::default`, `:21-33`); with them off a summary is
+ * something to ask for in Notes, not something you get (R19).
+ */
+function intro(summariesOn: boolean): string {
+  return summariesOn
+    ? "You get a transcript and a summary, saved to Notes."
+    : "You get a transcript, saved to Notes.";
+}
+
+/**
+ * The microphone chip's `title`, and its visually hidden text. The chip is
+ * not focusable, so the `title` is only ever a hover away; the hidden text
+ * puts the same sentence where a screen reader reads the chip. (A sighted
+ * keyboard user still has only the hover.) Static because the recorder
+ * always opens the default input device and nothing on any screen chooses
+ * another for meetings (KNEG-364).
+ */
+const MICROPHONE_TITLE = "Meetings record the Windows default microphone";
+
+/** How often detection is read again while no meeting is running. */
+const DETECTION_POLL_MS = 5000;
 
 /**
  * A label read as a sentence: capitalised, and closed with a full stop when
  * it does not already end in one. `availabilityLabel` writes for a line
- * beside a provider's name ("refused: ..."); the status line's Learn more
- * reads it on its own.
+ * beside a provider's name ("refused: ..."); the hero's Learn more reads it
+ * on its own.
  */
 function asSentence(label: string): string {
   const text = label.charAt(0).toUpperCase() + label.slice(1);
   return /[.!?]$/.test(text) ? text : `${text}.`;
 }
 
-/** The newest partial per source, which is what a partial means. */
-type Live = Partial<Record<TranscriptEvent["source"], string>>;
+/** "Recording from 1 Sep" as it reads inside a sentence. */
+function lowerFirst(text: string): string {
+  return text.charAt(0).toLowerCase() + text.slice(1);
+}
 
 export function Meetings({
   onGoTo,
+  onOpenNote,
 }: {
-  /** Where the status line's fix and the Change button take you. */
+  /** Where the hero's fix, the chips and the panel's Calendar take you. */
   onGoTo: (id: ViewId) => void;
+  /** Opens a Recent meeting's note in Notes. */
+  onOpenNote: (id: number) => void;
 }) {
+  // Everything Start, Stop and the privacy line depend on, read together:
+  // the summary settings are here, so while they load or fail the line has
+  // nothing to go on and the page shows no control bar at all rather than a
+  // line that might leave a summary out.
   const load = useCallback(async () => {
-    const [providers, status, provider, recoverable, language, keyterms] =
+    const [providers, status, provider, recoverable, language, keyterms, summaries] =
       await Promise.all([
         getMeetingProviders(),
         getMeetingStatus(),
@@ -103,21 +180,48 @@ export function Meetings({
         getRecoverableRecordings(),
         getMeetingLanguage(),
         getMeetingKeyterms(),
+        getSummarySettings(),
       ]);
-    return { providers, status, provider, recoverable, language, keyterms };
+    return { providers, status, provider, recoverable, language, keyterms, summaries };
   }, []);
 
   const { data, error, reload, guard } = useRefresh(load);
 
+  // The Recent list, read on its own: it is only a list of notes, and a
+  // failure to read it used to blank Start and Stop with it. Its error and
+  // its retry stay in the panel. Retried through `guard`, which clears the
+  // last error before reading again -- a plain `reload` keeps it even when
+  // the read succeeds.
+  const loadRecent = useCallback(() => getNotes({ noteType: "meeting", limit: 20 }), []);
+  const recentRead = useRefresh(loadRecent);
+  const recentGuard = recentRead.guard;
+  const reloadRecent = useCallback(() => recentGuard(async () => {}), [recentGuard]);
+  // Every read that follows a meeting ending or a recording being recovered
+  // reads both, since either can add a note to Recent.
+  const reloadAll = useCallback(async () => {
+    await Promise.all([reload(), reloadRecent()]);
+  }, [reload, reloadRecent]);
+
   const [state, setState] = useState<MeetingState | null>(null);
   const [wantSystem, setWantSystem] = useState(true);
   const [sources, setSources] = useState<Sources | null>(null);
-  const [live, setLive] = useState<Live>({});
+  const [transcript, setTranscript] = useState(emptyLiveTranscript);
   const [outcome, setOutcome] = useState<MeetingOutcome | null>(null);
   const [notesFlushFailed, setNotesFlushFailed] = useState(false);
   const [recoveringKey, setRecoveringKey] = useState<string | null>(null);
   const [recoveryError, setRecoveryError] = useState<string | null>(null);
   const [recoveryOutcome, setRecoveryOutcome] = useState<MeetingOutcome | null>(null);
+  /** Detection as last read, by the load or by the poll -- whichever was later. */
+  const [detected, setDetected] = useState<readonly Detected[] | null>(null);
+  /** The detection poll's own failure, which the next poll that works clears. */
+  const [pollError, setPollError] = useState<string | null>(null);
+  /** When the running meeting started, from Rust's `elapsedSeconds`; `null` with none running. */
+  const [startedAt, setStartedAt] = useState<Date | null>(null);
+  /** When this page saw the meeting stall, which is where its clock stops. */
+  const [stalledAt, setStalledAt] = useState<Date | null>(null);
+  /** The clock's "now", moved on once a second while a meeting records. */
+  const [clockNow, setClockNow] = useState(() => new Date());
+  const liveHeading = useRef<HTMLHeadingElement>(null);
 
   // `disposed` because `listen` resolves after the effect returns: a page left
   // before it did would otherwise keep its listeners for the rest of the
@@ -144,10 +248,11 @@ export function Meetings({
       // Both failure states, because both put a sentence on screen and a state
       // that arrived without one would render the caveat empty. And
       // `recording`, because a meeting started from the notification window
-      // while this page is open brings its provider and its sources only on
-      // `MeetingStatus` too -- without the read, "Transcribed by" would
-      // name this page's choice rather than the one actually in use, and that
-      // row is where this page says whether the audio leaves this computer.
+      // while this page is open brings its provider, its sources and its
+      // running time only on `MeetingStatus` too -- without the read, the
+      // live view would name this page's provider rather than the one
+      // actually in use, and that is where it says whether the audio leaves
+      // this computer.
       if (
         next === "recording" ||
         next === "recording-without-transcript" ||
@@ -156,23 +261,92 @@ export function Meetings({
         void reload();
       }
     }).then(keep);
-    // Replaced rather than appended: every event is a partial, and the windows
-    // that produce them overlap by two seconds, so appending would repeat words.
+    // Folded rather than replaced: `foldTranscriptEvent` keeps a line open
+    // while each partial extends it and closes it when one does not, so the
+    // live view reads as lines of a conversation rather than as the latest
+    // few seconds per source.
     void onMeetingTranscript((event) => {
       if (disposed) return;
-      setLive((prev) => ({ ...prev, [event.source]: event.text }));
+      setTranscript((prev) => foldTranscriptEvent(prev, event));
     }).then(keep);
     void onMeetingOutcome((result) => {
       if (disposed) return;
       setOutcome(result);
-      setLive({});
-      void reload();
+      setTranscript(emptyLiveTranscript());
+      void reloadAll();
     }).then(keep);
     return () => {
       disposed = true;
       unlisteners.forEach((fn) => fn());
     };
-  }, [reload]);
+  }, [reload, reloadAll]);
+
+  // Every read of the status resets what is counted from it: detection, and
+  // when the meeting started, which the clock below is read against. Only a
+  // meeting that is running has a start: `elapsedSeconds` is 0 otherwise, and
+  // a start taken from it would be the time of the read.
+  const loadedStatus = data?.status ?? null;
+  useEffect(() => {
+    if (loadedStatus === null) return;
+    setDetected(loadedStatus.detected);
+    setStartedAt(
+      meetingIsLive(loadedStatus.state)
+        ? new Date(Date.now() - loadedStatus.elapsedSeconds * 1000)
+        : null,
+    );
+  }, [loadedStatus]);
+
+  const currentState: MeetingState | null = state ?? loadedStatus?.state ?? null;
+  const idle = currentState === "idle";
+  // Kept here rather than asked for every second: the runtime owns the
+  // clock, and an IPC round trip a second for a timer is arithmetic's job.
+  // Each tick reads the time since the start (`liveElapsed`) rather than
+  // adding a second, so a window throttled in the background, whose ticks
+  // arrive seldom, still shows the right time when they do. Stopped while
+  // stalled, at the moment this page saw the stall: nothing is being
+  // recorded then, and a clock still running would say otherwise.
+  const ticking = currentState === "recording" || currentState === "recording-without-transcript";
+  const stalledNow = currentState === "stalled";
+  useEffect(() => {
+    if (!ticking) return undefined;
+    setClockNow(new Date());
+    const timer = window.setInterval(() => setClockNow(new Date()), 1000);
+    return () => window.clearInterval(timer);
+  }, [ticking]);
+  useEffect(() => {
+    setStalledAt(stalledNow ? new Date() : null);
+  }, [stalledNow]);
+  const elapsed = startedAt === null ? 0 : liveElapsed(startedAt, clockNow, stalledAt);
+
+  // Detection is only read, never pushed -- only an offer has an event -- so
+  // the call card would otherwise go on saying Zoom is in a call long after
+  // the call ended. Only `detected` is taken from the poll: the state comes
+  // from events, and a second writer of it would race them. A failed read
+  // is shown until one succeeds, in its own state rather than the page's
+  // `error`: clearing that on the next good poll would also clear a Start
+  // or Stop failure nobody had read yet.
+  useEffect(() => {
+    if (!idle) return undefined;
+    let disposed = false;
+    const timer = window.setInterval(() => {
+      getMeetingStatus()
+        .then((next) => {
+          if (disposed) return;
+          setDetected(next.detected);
+          setPollError(null);
+        })
+        .catch((cause: unknown) => { if (!disposed) setPollError(message(cause)); });
+    }, DETECTION_POLL_MS);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+      // The poll stops while a meeting runs; what it last said is not news
+      // by the time it starts again.
+      setPollError(null);
+    };
+  }, [idle]);
+
+  const rows = useMemo(() => liveRows(transcript), [transcript]);
 
   // Computed defensively before `data` is known to have loaded, and reused
   // below once it has, so the review hook can sit above the loading guard
@@ -202,17 +376,23 @@ export function Meetings({
     data?.language ?? "",
     (data?.keyterms ?? []).join("\n"),
   );
+  // Whether the list panel is showing, for the one sentence that points into it.
+  const panelCollapsed = useContext(PanelCollapsed);
 
   if (!data) {
     return (
-      <div className="view">
-        {error ? <p className="error">{error}</p> : <p className="muted">Loading…</p>}
-      </div>
+      <SplitView label="Meetings list" heading="Meetings" panel={<PanelHeader title="Meetings" />}>
+        <section data-surface="meetings.record" className="task" aria-label="Meeting">
+          {error ? <p className="error">{error}</p> : <p className="muted">Loading…</p>}
+        </section>
+      </SplitView>
     );
   }
 
-  const { providers, status, recoverable } = data;
+  const { providers, status, recoverable, summaries } = data;
+  const recent = recentRead.data;
   const current = state ?? status.state;
+  const now = new Date();
   // A meeting whose provider died is still recording, so every control that
   // asks "is a session running" must keep saying yes: Stop and Discard have to
   // stay on screen, and Start has to stay off it. This was the whole shape of
@@ -232,8 +412,8 @@ export function Meetings({
   const readiness = meetingReadiness({
     usable,
     selected,
-    // Named and with its reason, so the status line can say which choice
-    // can't be used and why, rather than the page quietly using another.
+    // Named and with its reason, so the hero can say which choice can't be
+    // used and why, rather than the page quietly using another.
     savedUnusable: savedUnusable
       ? {
           name: savedProvider?.name ?? savedUnusable,
@@ -245,8 +425,8 @@ export function Meetings({
     languageWarning,
     systemAudio: status.systemAudio,
   });
-  // Where readiness holds Start back, the status line's fix is the one thing
-  // to do next and takes the page's single filled button.
+  // Where readiness holds Start back, the hero's fix is the one thing to do
+  // next and takes the page's single filled button.
   const startBlocked = readiness.state === "needs-setup";
   // While a meeting is running, the provider it is running with -- which the
   // notification's Record button may have picked rather than this page.
@@ -256,145 +436,417 @@ export function Meetings({
       : null;
   const transcriber = liveProvider ?? selectedProvider;
   const systemAudioAvailable = status.systemAudio.state === "available";
+  const liveSources = sources ?? status.sources;
+  const language = languageLabel(data.language.trim() === "" ? [] : [data.language.trim()]);
+  // The privacy fact, never hidden: whether this meeting's audio leaves this
+  // computer, from `audioLeavesDevice` -- the field Rust sets for exactly that
+  // question -- and, when an automatic summary will send the transcript
+  // somewhere, where (`summaryPrivacyLine`). With no provider nothing can
+  // start, so nothing is sent.
+  const summaryLine = summaryPrivacyLine(summaries);
+  const privacy = [
+    ...privacyLines(
+      transcriber
+        ? {
+            isLocal: !transcriber.audioLeavesDevice,
+            leavesDevice: transcriber.audioLeavesDevice,
+            destination: transcriber.name,
+          }
+        : { isLocal: false, leavesDevice: false, destination: "", problem: "not set up" },
+      null,
+    ),
+    ...(summaryLine === null ? [] : [summaryLine]),
+  ];
+  // The card is for a call nobody is recording yet. While one is being
+  // recorded or transcribed there is nothing it could offer.
+  const call = current === "idle" ? activeCall(detected ?? status.detected) : null;
 
-  return (
-    <div className="view">
-      {error ? <p className="error">{error}</p> : null}
+  const start = (withSystem: boolean) => {
+    if (selected === null) return;
+    void guard(async () => {
+      setOutcome(null);
+      // The outcome event clears the last meeting's lines; this makes sure a
+      // new meeting never opens on them should that event not have arrived.
+      setTranscript(emptyLiveTranscript());
+      setSources(await startMeeting(selected, withSystem));
+    });
+  };
+  // Stop and Discard first ask the meeting window to save what was typed in
+  // it, so the note Stop saves has the last edit; a flush that fails says so
+  // and offers "Stop recording anyway" rather than losing the recording.
+  const stop = () => {
+    void guard(async () => {
+      try { await flushMeetingPanelNotes(); }
+      catch (cause) { setNotesFlushFailed(true); throw cause; }
+      setNotesFlushFailed(false);
+      setOutcome(await stopMeeting());
+    });
+  };
+  const discard = () => {
+    void guard(async () => {
+      try { await flushMeetingPanelNotes(); }
+      catch (cause) { setNotesFlushFailed(true); throw cause; }
+      setNotesFlushFailed(false);
+      await cancelMeeting();
+    });
+  };
+  const stopAnyway = () => {
+    void guard(async () => { setOutcome(await stopMeeting()); setNotesFlushFailed(false); });
+  };
+  const recover = (candidate: RecoverableRecording) => {
+    setRecoveringKey(candidate.storageKey);
+    setRecoveryError(null);
+    setRecoveryOutcome(null);
+    void recoverMeetingRecording(candidate.storageKey)
+      .then(async (result) => {
+        setRecoveryOutcome(result);
+        await reloadAll();
+      })
+      .catch((cause: unknown) => setRecoveryError(String(cause)))
+      .finally(() => setRecoveringKey(null));
+  };
 
-      <section data-surface="meetings.record" aria-label="Meeting">
-        {/* Only while no meeting is under way. Readiness answers "will
-            starting work?", which means nothing once one has started or is
-            being transcribed -- "Ready" above "The recording stopped
-            unexpectedly" was two answers on one screen. The Status row and
-            the caveats below speak for a running meeting instead. */}
-        {recording || current === "finishing" ? null : (
-          <StatusLine readiness={readiness} onFix={onGoTo} fixIsPrimary={startBlocked} />
-        )}
-        {stalled ? (
-          /*
-           * A different sentence from the one below, because a different thing
-           * has happened: there the recording continues and the transcript
-           * does not, here neither does. The one instruction that matters is
-           * the same in both — press Stop — because that is what turns what
-           * was captured into a note.
-           */
-          <p className="caveat warn">
-            <strong>The recording stopped unexpectedly.</strong>{" "}
-            {status.transcriptFailure ??
-              "The recording thread ended without saying why."}{" "}
-            Nothing further is being captured. Stop will still transcribe what
-            was recorded before it stopped, and Discard will throw it away.
-          </p>
-        ) : null}
-        {transcriptEnded ? (
-          /*
-           * The provider's own sentence, which is why `MeetingError::
-           * ProviderFault` carries which of the two sockets died: "the
-           * connection failed" would send someone looking at their network.
-           *
-           * Marked rather than red-texted, the same split `.caveat.warn` was
-           * introduced for: nothing here has failed in a way that needs
-           * repairing right now. The recording is running and the note will
-           * still be produced -- from the whole-file pass, which reads the
-           * complete audio and does not depend on the provider that died.
-           */
-          <p className="caveat warn">
-            <strong>The live transcript stopped.</strong>{" "}
-            {status.transcriptFailure ??
-              "The transcription task ended without saying why."}{" "}
-            Recording continues, and Stop will still transcribe the whole
-            recording — the saved note comes from that pass, not from the
-            lines below.
-          </p>
-        ) : null}
+  // Visible wherever they apply, live or idle: each is something that failed
+  // or something to do now.
+  const caveats = (
+    <>
+      {stalled ? (
+        /*
+         * A different sentence from the one below, because a different thing
+         * has happened: there the recording continues and the transcript
+         * does not, here neither does. The one instruction that matters is
+         * the same in both — press Stop — because that is what turns what
+         * was captured into a note.
+         */
+        <p className="caveat warn">
+          <strong>The recording stopped unexpectedly.</strong>{" "}
+          {status.transcriptFailure ??
+            "The recording thread ended without saying why."}{" "}
+          Nothing further is being captured. Stop will still transcribe what
+          was recorded before it stopped, and Discard will throw it away.
+        </p>
+      ) : null}
+      {transcriptEnded ? (
+        /*
+         * The provider's own sentence, which is why `MeetingError::
+         * ProviderFault` carries which of the two sockets died: "the
+         * connection failed" would send someone looking at their network.
+         *
+         * Marked rather than red-texted, the same split `.caveat.warn` was
+         * introduced for: nothing here has failed in a way that needs
+         * repairing right now. The recording is running and the note will
+         * still be produced -- from the whole-file pass, which reads the
+         * complete audio and does not depend on the provider that died.
+         */
+        <p className="caveat warn">
+          <strong>The live transcript stopped.</strong>{" "}
+          {status.transcriptFailure ??
+            "The transcription task ended without saying why."}{" "}
+          Recording continues, and Stop will still transcribe the whole
+          recording — the saved note comes from that pass, not from the
+          lines below.
+        </p>
+      ) : null}
+      {recording && notesFlushFailed && <p className="caveat">The meeting panel could not confirm its latest note save. Stopping anyway keeps the recording and any notes already received by the app; the most recent edit may be missing.</p>}
+      {outcome ? <p className="caveat">{meetingOutcomeLabel(outcome)}</p> : null}
+    </>
+  );
 
-        {recording ? (
-          <>
+  const panel = (
+    <>
+      <PanelHeader title="Meetings" />
+      <PanelSection label={null}>
+        <PanelAction icon="calendar" label="Calendar" onClick={() => onGoTo("calendar")} />
+      </PanelSection>
+      {recording ? (
+        <PanelSection label="Now">
+          <PanelItem
+            title="Meeting"
+            current
+            meta={
+              // Stalled is not recording -- nothing is being captured -- so
+              // not the recording dot: the hollow square Interrupted uses.
+              <span className={stalled ? "panel-rec panel-rec-stalled" : "panel-rec"}>
+                <span className={stalled ? "mark-hollow" : "rec-dot"} aria-hidden="true" />
+                {stalled ? "Stopped unexpectedly" : "Recording"} · {elapsedLabel(elapsed)}
+              </span>
+            }
+            onClick={() => liveHeading.current?.focus()}
+          />
+        </PanelSection>
+      ) : null}
+      {/* Recent's own states, since it is read on its own: a failure to
+          list notes says so here and offers to read again, and leaves the
+          recording controls beside it alone. */}
+      {recentRead.error !== null ? (
+        <div className="panel-note panel-note-error" role="alert">
+          <p className="error">{`Couldn't load recent meetings: ${recentRead.error}`}</p>
+          <button type="button" className="panel-inline" onClick={() => { void reloadRecent(); }}>
+            Try again
+          </button>
+        </div>
+      ) : null}
+      {recent === null ? (
+        recentRead.error === null ? <p className="panel-note">Loading recent meetings…</p> : null
+      ) : recent.length === 0 ? (
+        <p className="panel-note">No meetings saved yet.</p>
+      ) : (
+        <PanelSection label="Recent">
+          {recent.map((note) => {
+            const meta = recentMeta(note.createdAt, note.audioDurationSeconds, now);
+            return (
+              <PanelItem
+                key={note.id}
+                title={note.title}
+                tooltip={note.title}
+                {...(meta === "" ? {} : { meta })}
+                onClick={() => onOpenNote(note.id)}
+              />
+            );
+          })}
+        </PanelSection>
+      )}
+      {recoverable.length === 0 ? null : (
+        <PanelSection label="Interrupted">
+          {recoverable.map((candidate) => {
+            const title = interruptedTitle(candidate.storageKey, now);
+            const busy = recoveringKey === candidate.storageKey;
+            return (
+              // Not a `PanelItem`: that is a button, and Recover is a button
+              // inside the row. The storage key, which this row used to show
+              // as its label, is the title's tooltip.
+              <div className="panel-row" key={candidate.storageKey}>
+                <span className="panel-item-title" title={candidate.storageKey}>{title}</span>
+                <span className="panel-item-meta panel-row-meta">
+                  <span className="mark-hollow" aria-hidden="true" />
+                  Not transcribed{candidate.hasNotes ? " · Typed notes found" : ""}
+                  <button
+                    type="button"
+                    className="panel-inline"
+                    aria-label={`${busy ? "Recovering" : "Recover"} ${lowerFirst(title)}`}
+                    disabled={recording || current === "finishing" || recoveringKey !== null}
+                    onClick={() => recover(candidate)}
+                  >
+                    {busy ? "Recovering…" : "Recover"}
+                  </button>
+                </span>
+              </div>
+            );
+          })}
+        </PanelSection>
+      )}
+      <div className="panel-foot">
+        <Icon name="lock" size={14} />
+        <span>Recordings are saved on this computer.</span>
+      </div>
+    </>
+  );
+
+  if (recording) {
+    const sub = [
+      startedAt === null ? null : `Started ${timeOfDay(startedAt)}`,
+      recordedSources(liveSources),
+      transcriber === null
+        ? null
+        : transcriber.audioLeavesDevice
+          ? `Sent to ${transcriber.name}`
+          : "Transcribed on this computer",
+    ].filter((part): part is string => part !== null);
+    return (
+      <SplitView label="Meetings list" heading="Meetings" panel={panel}>
+        <section data-surface="meetings.record" className="meeting-live" aria-label="Meeting">
+          <header className="live-head">
+            {/* Stalled draws the hollow `--text` square and drops the
+                recording red: the round dot says something is being
+                recorded, and a stalled meeting records nothing. */}
+            <p className={stalled ? "live-status live-status-stalled" : "live-status"}>
+              <span className={stalled ? "mark-hollow" : "rec-dot"} aria-hidden="true" />
+              {/* Only the state is a live region: the clock beside it ticks
+                  every second. */}
+              <span role="status">{meetingStateLabel(current)}</span>
+              <span className="live-clock">{elapsedLabel(elapsed)}</span>
+            </p>
+            <h2 className="live-title" ref={liveHeading} tabIndex={-1}>Meeting</h2>
+            <p className="live-sub">{sub.join(" · ")}</p>
+          </header>
+          {error || stalled || transcriptEnded || notesFlushFailed || outcome ? (
+            <div className="live-caveats">
+              {error ? <p className="error">{error}</p> : null}
+              {caveats}
+            </div>
+          ) : null}
+          <LiveTranscript rows={rows} ended={transcriptEnded || stalled} />
+          {/* Nothing here can be changed while the meeting runs -- Settings >
+              Meetings disables its fields too -- so the chips are statements
+              rather than controls. */}
+          <div className="live-bar">
+            <div className="live-chips" role="group" aria-label="In effect for this meeting">
+              <Chip icon="microphone" label="Default microphone" title={MICROPHONE_TITLE} srText={MICROPHONE_TITLE} />
+              {liveSources?.systemAudio ? <Chip icon="others" label="Other participants" /> : null}
+              <Chip icon="computer" label={transcriber ? transcriber.name : "Not set up"} />
+              <Chip icon="language" label={language} />
+            </div>
+            <ul className="control-privacy">
+              {privacy.map((line) => (
+                <li key={line}>
+                  <Icon name="lock" size={14} />
+                  {line}
+                </li>
+              ))}
+            </ul>
+            <div className="control-spacer" />
             {/* Never held back by readiness: a meeting that is running has to
                 be stoppable whatever the settings now say. */}
-            <button
-              type="button"
-              className="primary"
-              onClick={() => {
-                void guard(async () => {
-                  try { await flushMeetingPanelNotes(); }
-                  catch (cause) { setNotesFlushFailed(true); throw cause; }
-                  setNotesFlushFailed(false);
-                  setOutcome(await stopMeeting());
-                });
-              }}
-            >
-              Stop and transcribe
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                void guard(async () => {
-                  try { await flushMeetingPanelNotes(); }
-                  catch (cause) { setNotesFlushFailed(true); throw cause; }
-                  setNotesFlushFailed(false);
-                  await cancelMeeting();
-                });
-              }}
-            >
-              Discard
-            </button>
-            {notesFlushFailed && <button type="button" onClick={() => {
-              void guard(async () => { setOutcome(await stopMeeting()); setNotesFlushFailed(false); });
-            }}>Stop recording anyway</button>}
-          </>
-        ) : (
-          /* Off whenever the status line says Needs setup, not only when no
-             provider is selected: with a language the provider requires left
-             blank, `start_live` refuses (`resolve_provider_config`,
-             src-tauri/src/meeting.rs), so the button would lead straight
-             into an error, and with the saved provider unusable it would
-             record with one nobody chose. The status line above says what is
-             wrong, and its fix -- not this -- is the filled button then. */
-          <button
-            type="button"
-            className={startBlocked ? undefined : "primary"}
-            disabled={startBlocked || selected === null || current === "finishing"}
-            onClick={() => {
-              if (selected === null) return;
-              void guard(async () => {
-                setOutcome(null);
-                setSources(await startMeeting(selected, wantSystem));
-              });
-            }}
-          >
-            Start recording
-          </button>
-        )}
+            <div className="live-actions">
+              {notesFlushFailed && <button type="button" onClick={stopAnyway}>Stop recording anyway</button>}
+              <button type="button" className="secondary" onClick={discard}>
+                <Icon name="discard" size={16} />
+                Discard
+              </button>
+              <button type="button" className="primary" onClick={stop}>
+                <IconFilled name="stop" size={14} />
+                Stop and transcribe
+              </button>
+            </div>
+          </div>
+        </section>
+      </SplitView>
+    );
+  }
 
-        {/* Unchecked, not just disabled, where system audio cannot be
-            captured: a ticked box reading "Record what the other participants
-            say" under a caution saying they cannot be recorded would be two
-            answers on one screen. The request itself is kept, so the box comes
-            back ticked where the capture does. Why the box is off is said
-            beside it, in every state -- the status line's caution is only
-            there while the page is Ready, and a switched-off control with no
-            reason on screen is the button that silently does nothing. Only
-            the mechanism, and the device it would capture, are folded. */}
-        <div className="row">
-          <span className="row-label">Other participants</span>
-          <span className="row-value controls">
-            <label>
-              <input
-                type="checkbox"
-                checked={wantSystem && systemAudioAvailable}
-                disabled={recording || !systemAudioAvailable}
-                onChange={(e) => setWantSystem(e.target.checked)}
-              />
-              Record what the other participants say
-            </label>
+  // The hero. Readiness answers "will starting work?", which means nothing
+  // while a recording is being transcribed -- "Ready" above "Transcribing"
+  // would be two answers on one screen -- so then the hero speaks for that.
+  const hero =
+    current === "finishing" ? (
+      <TaskHero
+        icon="meetings"
+        status={{ tone: "busy", label: meetingStateLabel(current) }}
+        heading="Your meeting is being transcribed"
+        sub="This runs over the whole recording and can take a while on a long meeting."
+      />
+    ) : readiness.state === "ready" ? (
+      <TaskHero
+        icon="meetings"
+        status={{ tone: "ready", label: "Ready" }}
+        heading="Record a meeting"
+        sub={
+          <>
+            <p>{intro(summaries.enabled)}</p>
+            {readiness.caution ? <p className="hero-note">{readiness.caution}</p> : null}
+          </>
+        }
+      />
+    ) : (
+      <TaskHero
+        icon="meetings"
+        status={{ tone: "setup", label: "Needs setup" }}
+        heading="Record a meeting"
+        sub={
+          <>
+            <p>{intro(summaries.enabled)}</p>
+            <p className="hero-note">{readiness.problem}</p>
+          </>
+        }
+      >
+        {/* Needs setup always holds Start back (see Start's comment), so the
+            fix is the one thing to do next and takes the filled button. */}
+        <button type="button" className="primary" onClick={() => onGoTo(readiness.fix.view)}>
+          {readiness.fix.label}
+        </button>
+        {readiness.detail ? <LearnMore>{readiness.detail}</LearnMore> : null}
+      </TaskHero>
+    );
+
+  return (
+    <SplitView label="Meetings list" heading="Meetings" panel={panel}>
+      <section data-surface="meetings.record" className="task" aria-label="Meeting">
+        <div className="task-hero">
+          {hero}
+          {call === null ? null : (
+            <div className="call-card">
+              <span className="call-card-icon">
+                <Icon name="call" size={20} />
+              </span>
+              <span className="call-card-text">
+                <span className="call-card-title">{call.name} is in a call</span>
+                <span className="call-card-detail">Detected just now. Nothing is recorded until you start.</span>
+              </span>
+              {/* Held back exactly as Start is (ruling R9), and recording
+                  what the "Other participants" chip below says, as Start
+                  does (R21): the card is a quicker way to the same start,
+                  not a second choice about who is recorded. */}
+              <button
+                type="button"
+                className="secondary"
+                disabled={startBlocked || selected === null}
+                onClick={() => start(wantSystem && systemAudioAvailable)}
+              >
+                Record this call
+              </button>
+            </div>
+          )}
+        </div>
+
+        <div className="task-bar">
+          <ControlBar
+            strip={
+              <>
+                <Chip icon="microphone" label="Default microphone" title={MICROPHONE_TITLE} srText={MICROPHONE_TITLE} />
+                {/* Unpressed, not just disabled, where system audio cannot be
+                    captured: a pressed "Other participants" beside a caution
+                    saying they cannot be recorded would be two answers on one
+                    screen. The request itself is kept, so the chip comes back
+                    pressed where the capture does. */}
+                <Chip
+                  icon="others"
+                  label="Other participants"
+                  pressed={wantSystem && systemAudioAvailable}
+                  disabled={!systemAudioAvailable}
+                  title={
+                    status.systemAudio.state === "available"
+                      ? "Record what the other participants say"
+                      : `Can't be recorded on this computer: ${status.systemAudio.reason}`
+                  }
+                  onClick={() => setWantSystem((want) => !want)}
+                />
+                {/* Named as Dictation's are: "Deepgram" or "Swedish" alone
+                    says nothing about which setting it is the value of.
+                    The label stays whole inside the name (WCAG 2.5.3). */}
+                <Chip
+                  icon="computer"
+                  label={transcriber ? transcriber.name : "Not set up"}
+                  name={`Meeting transcription: ${transcriber ? transcriber.name : "Not set up"}`}
+                  chevron
+                  onClick={() => onGoTo("meeting-settings")}
+                />
+                <Chip
+                  icon="language"
+                  label={language}
+                  name={`Language: ${language}`}
+                  chevron
+                  onClick={() => onGoTo("meeting-settings")}
+                />
+              </>
+            }
+            privacy={privacy}
+          >
+            {error ? <p className="error">{error}</p> : null}
+            {pollError ? (
+              <p className="error">{`Couldn't check whether a meeting app is in a call: ${pollError}`}</p>
+            ) : null}
+            {/* Why the chip is off, said beside it in every state -- the
+                hero's caution is only there while the page is Ready, and a
+                switched-off control with no reason on screen is the button
+                that silently does nothing. Only the mechanism, and the device
+                it would capture, are folded. */}
             {status.systemAudio.state === "available" ? null : (
-              <em className="row-detail">
-                {`Can't be recorded on this computer: ${status.systemAudio.reason}`}
-              </em>
+              <p className="control-note">
+                {`Other participants can't be recorded on this computer: ${status.systemAudio.reason}`}
+              </p>
             )}
             {status.systemAudio.state === "unsupported" ? null : (
-              <LearnMore>
+              <LearnMore summary="How the other participants are recorded">
                 <p>
                   System audio: {systemAudioValue(status.systemAudio)} —{" "}
                   {status.systemAudio.state === "available"
@@ -403,102 +855,115 @@ export function Meetings({
                 </p>
               </LearnMore>
             )}
-          </span>
-        </div>
-        <Row
-          label="Status"
-          value={meetingStateLabel(current)}
-          detail={
-            recording
-              ? sourcesLabel(sources ?? status.sources)
-              : current === "finishing"
-                ? "this runs over the whole recording and can take a while on a long meeting"
-                : undefined
-          }
-        />
-        {/* The privacy fact, so it is on the row rather than behind anything:
-            whether this meeting's audio leaves this computer, decided by
-            `audioLeavesDevice` -- the field Rust sets for exactly that
-            question. The provider is chosen on Settings > Meetings, so the
-            row links there rather than offering a select of its own. */}
-        <div className="row">
-          <span className="row-label">Transcribed by</span>
-          <span className="row-value controls">
-            <span>{transcriber ? transcriber.name : "Not set up"}</span>
-            {transcriber ? (
-              <em className="row-detail">
-                {transcriber.audioLeavesDevice
-                  ? `Audio is sent to ${transcriber.name}`
-                  : "Audio stays on this computer"}
-              </em>
+            {caveats}
+
+            {/* The Interrupted rows are in the list panel; what recovering
+                one did, and the sentence that changes what you get back,
+                stay here. What these are and how Recover works is folded. */}
+            {/* With the panel collapsed, "the list" is nowhere on screen, so
+                the sentence also says where the list is. */}
+            {recoverable.length > 0 ? (
+              <>
+                <p className="caveat">
+                  A recording from an earlier session was interrupted. Recover
+                  it from Interrupted in the list
+                  {panelCollapsed ? " (Show list in the title bar)" : ""}; the
+                  audio may end abruptly.
+                </p>
+                <LearnMore>
+                  <p>
+                    These recordings are not attached to a saved note. Recover
+                    uses the local whole-recording transcriber and saves any
+                    notes typed during the meeting.
+                  </p>
+                </LearnMore>
+              </>
             ) : null}
-            <button type="button" onClick={() => onGoTo("meeting-settings")}>
-              Change
-            </button>
-          </span>
-        </div>
+            {recoveringKey !== null ? (
+              <p className="control-note" role="status">
+                Recovering the {lowerFirst(interruptedTitle(recoveringKey, now))}…
+              </p>
+            ) : null}
+            {recoveryOutcome && <p className="caveat">{meetingOutcomeLabel(recoveryOutcome)}</p>}
+            {recoveryError && <p className="error" role="alert">{recoveryError}</p>}
 
-        {recording && notesFlushFailed && <p className="caveat">The meeting panel could not confirm its latest note save. Stopping anyway keeps the recording and any notes already received by the app; the most recent edit may be missing.</p>}
-
-        {outcome ? <p className="caveat">{meetingOutcomeLabel(outcome)}</p> : null}
-      </section>
-
-      {recording || Object.keys(live).length > 0 ? (
-        <section>
-          <h2>Live transcript</h2>
-          <p className="caveat">
-            {transcriptEnded
-              ? "These are the last lines the provider sent before the live transcription stopped. Nothing further will appear here, and the transcript that gets saved comes from one pass over the whole recording when the meeting ends."
-              : "Each line is the most recent few seconds, replaced as it is revised. The transcript that gets saved comes from one pass over the whole recording when the meeting ends, so it will read better than this."}
-          </p>
-          <Row label="You" value={live.mic ?? "—"} />
-          <Row label="Everyone else" value={live.system ?? "—"} />
-        </section>
-      ) : null}
-
-      {(recoverable.length > 0 || recoveryError || recoveryOutcome) && (
-        <section>
-          <h2>Interrupted recordings</h2>
-          {/* The one sentence that changes what you expect to get back stays
-              visible; what these are and how Recover works is folded. */}
-          <p className="caveat">The audio may end abruptly.</p>
-          <LearnMore>
-            <p>
-              These recordings are not attached to a saved note. Recover uses
-              the local whole-recording transcriber and saves any notes typed
-              during the meeting.
-            </p>
-          </LearnMore>
-          {recoverable.map((candidate) => (
-            <div className="row" key={candidate.storageKey}>
-              <span className="row-label">{candidate.storageKey}</span>
-              <span className="row-value controls">
-                {candidate.hasNotes && <span className="muted">Typed notes found</span>}
-                <button
-                  type="button"
-                  disabled={recording || current === "finishing" || recoveringKey !== null}
-                  onClick={() => {
-                    setRecoveringKey(candidate.storageKey);
-                    setRecoveryError(null);
-                    setRecoveryOutcome(null);
-                    void recoverMeetingRecording(candidate.storageKey)
-                      .then(async (result) => {
-                        setRecoveryOutcome(result);
-                        await reload();
-                      })
-                      .catch((cause: unknown) => setRecoveryError(String(cause)))
-                      .finally(() => setRecoveringKey(null));
-                  }}
-                >
-                  {recoveringKey === candidate.storageKey ? "Recovering…" : "Recover recording"}
-                </button>
-              </span>
+            <div className="control-row">
+              <div className="control-spacer" />
+              {/* Off whenever the hero says Needs setup, not only when no
+                  provider is selected: with a language the provider requires
+                  left blank, `start_live` refuses (`resolve_provider_config`,
+                  src-tauri/src/meeting.rs), so the button would lead straight
+                  into an error, and with the saved provider unusable it would
+                  record with one nobody chose. The hero says what is wrong,
+                  and its fix -- not this -- is the filled button then. */}
+              <button
+                type="button"
+                className={startBlocked ? "control-start" : "primary control-start"}
+                disabled={startBlocked || selected === null || current === "finishing"}
+                onClick={() => start(wantSystem)}
+              >
+                <span className="start-dot" aria-hidden="true" />
+                Start recording
+              </button>
             </div>
-          ))}
-          {recoveryOutcome && <p className="caveat">{meetingOutcomeLabel(recoveryOutcome)}</p>}
-          {recoveryError && <p className="error" role="alert">{recoveryError}</p>}
-        </section>
-      )}
+          </ControlBar>
+        </div>
+      </section>
+    </SplitView>
+  );
+}
+
+/** The sentence over the live lines, while they are still arriving. */
+const LIVE_NOTE =
+  "Lines appear as they are heard, and the last one may still change. The transcript that gets saved comes from one pass over the whole recording when the meeting ends, so it will read better than this.";
+
+/** The same, once nothing more will arrive. */
+const ENDED_NOTE =
+  "These are the last lines the provider sent before the live transcription stopped. Nothing further will appear here, and the transcript that gets saved comes from one pass over the whole recording when the meeting ends.";
+
+/**
+ * The live lines, as `foldTranscriptEvent` built them: time, speaker, text.
+ * A line still open is muted and ends in the `--band` caret.
+ *
+ * It follows the newest line while it is scrolled to the bottom, and stops
+ * following once scrolled up, so a line being read is not pulled away -- the
+ * rule the meeting window's transcript tab keeps (`MeetingPanel.tsx`).
+ */
+function LiveTranscript({ rows, ended }: { rows: readonly LiveRow[]; ended: boolean }) {
+  const list = useRef<HTMLOListElement>(null);
+  const following = useRef(true);
+  useLayoutEffect(() => {
+    const element = list.current;
+    if (element !== null && following.current) element.scrollTop = element.scrollHeight;
+  }, [rows]);
+  return (
+    <div className="live-transcript" role="region" aria-label="Live transcript">
+      <h3 className="live-label">Live transcript</h3>
+      <p className="live-note">{ended ? ENDED_NOTE : LIVE_NOTE}</p>
+      <ol
+        className="live-rows"
+        ref={list}
+        onScroll={() => {
+          const element = list.current;
+          if (element !== null) following.current = element.scrollHeight - element.scrollTop - element.clientHeight <= 8;
+        }}
+      >
+        {rows.map((row) => {
+          const speaker = row.speaker ?? (row.source === "mic" ? "You" : "Others");
+          return (
+            <li key={row.id} className={row.committed ? "live-row" : "live-row live-row-open"}>
+              <span className="live-time">{formatClock(row.startSeconds)}</span>
+              <span className={speaker === "You" ? "live-speaker live-speaker-you" : "live-speaker"} title={speaker}>
+                {speaker}
+              </span>
+              <span className="live-text" dir="auto">
+                {row.text}
+                {row.committed ? null : <span className="live-caret" aria-hidden="true" />}
+              </span>
+            </li>
+          );
+        })}
+      </ol>
     </div>
   );
 }

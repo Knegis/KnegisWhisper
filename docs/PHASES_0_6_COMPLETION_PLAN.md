@@ -257,7 +257,7 @@ buttons and one command — but it does need a person at the machine.
 
 **Before you start.** Only one copy of the application may run at a time. A second instance finds
 every shortcut already claimed by the first and registers none of them; the startup log now names
-each refusal, so if the Shortcuts section looks dead, check there first.
+each refusal, so if **Settings > Shortcuts** looks dead, check there first.
 
 ```powershell
 # Stops anything left over, then launches both halves of the application.
@@ -274,33 +274,39 @@ this page" — the webview's own error, naming neither cause nor fix. `tauri dev
 and waits for it. A debug build now also probes that URL during startup and says so in the log
 when nothing answers, because two honest halves and no diagnosis is the worst way to fail.
 
-The window is the dashboard. Leave the terminal visible — the log is the fastest diagnosis.
+Leave the terminal visible beside the window — the log is the fastest diagnosis.
 
-1. **Check what the machine can do.** The Privacy overlay section should say capture exclusion is
-   active with `GetWindowDisplayAffinity` evidence, and that the overlay will not take focus. Both
-   are read back from the real window rather than assumed. Text insertion, under Dictation, should
-   say *Supported*.
+1. **Check what the machine can do.** The Privacy overlay section of **Settings > Developer >
+   Diagnostics** should say capture exclusion is active with `GetWindowDisplayAffinity` evidence,
+   and that the overlay will not take focus. Both are read back from the real window rather than
+   assumed. The Dictation page should not carry the caution that dictations can't be typed into
+   other apps.
 
-2. **Give dictation a working shortcut.** It has none: the inherited default `Control+Super` is two
-   modifiers and no key, and no cross-platform API can register that. In the Shortcuts section type
-   `Control+Shift+D` next to `dictation` and press **Set**. It applies immediately — the log says
+2. **Give dictation a shortcut that does not need the hook.** The inherited default
+   `Control+Super` is modifier-only — two modifiers and no key — so the platform's shortcut
+   register cannot take it; on Windows it works through the application's own keyboard hook
+   instead (`crates/platform/src/keyhook.rs`). This step sets an ordinary chord so the rest of the
+   check does not rest on the hook: on **Settings > Shortcuts** type `Control+Shift+D` next to
+   `dictation` and press **Set**. It applies immediately — the log says
    `hotkeys re-registered live=5 total=5`.
 
-3. **Install a local model.** Under Local transcription, press **Install** on `tiny`. About 86 MB:
-   the pinned `whisper-server` and the model. `tiny` rather than the recommended `base` because it
-   is the one with a measured checksum — the row says `will be checksum verified`, where `base` says
-   `size checked only`, and for this check the stronger guarantee is worth more than the accuracy.
+3. **Install a local model.** On **Settings > Transcription**, under Local transcription, press
+   **Install** on `tiny`. About 86 MB: the pinned `whisper-server` and the model. `tiny` rather
+   than the recommended `base` because it is the one with a measured checksum — the row says
+   `will be checksum verified`, where `base` says `size checked only`, and for this check the
+   stronger guarantee is worth more than the accuracy.
 
-4. **Point dictation at it.** Press **Use for dictation** on the installed model. The Route row
-   should change to `local model — audio stays on this machine`.
+4. **Point dictation at it.** Press **Use for dictation** on the installed model. The **Dictation
+   goes to** row should name it, with `audio stays on this machine`, and the Dictation page's
+   control bar should say *Audio stays on this computer*.
 
 5. **Turn on airplane mode.** Everything from here must work with no network at all. If it does
    not, that is the finding.
 
-6. **Try it from the button first.** Press **Start dictation**, say a sentence, press **Stop and
-   transcribe**. This isolates the pipeline from the shortcut: if this works and the hotkey does
-   not, the problem is registration, not transcription. Watch for the overlay appearing while
-   recording and going away afterwards.
+6. **Try it from the button first.** On the Dictation page, press **Start dictation** at the foot
+   of the control bar, say a sentence, press **Stop and transcribe**. This isolates the pipeline
+   from the shortcut: if this works and the hotkey does not, the problem is registration, not
+   transcription. Watch for the overlay appearing while recording and going away afterwards.
 
 7. **Now the hotkey, into Notepad.** Open Notepad, click into it, press `Control+Shift+D`, say
    *"the quick brown fox jumps over the lazy dog"*, press it again. The text should appear at the
@@ -310,14 +316,17 @@ The window is the dashboard. Leave the terminal visible — the log is the faste
    paste. You should get `KEEP ME` back: dictation borrows the clipboard and puts it back only if
    what is there is still what it pasted.
 
-9. **Check the dashboard never stole focus.** At no point during 7 should the caret have left
-   Notepad. If text appeared in the dashboard instead, non-activation failed despite reporting
-   otherwise.
+9. **Check the window never stole focus.** At no point during 7 should the caret have left
+   Notepad. If text appeared in the KnegisWhisper window instead, non-activation failed despite
+   reporting otherwise.
 
-10. **Check history, then that it can be switched off.** The History section should show what you
-    dictated. A failed attempt should show its reason rather than `(empty)`.
+10. **Check history, then that it can be switched off.** The Dictation page's list panel (the title
+    bar's list toggle shows it if it is hidden) should show what you dictated, under Today. A
+    failed attempt should show its reason rather than `(empty)`. **History options**, at the foot
+    of the panel, is where saving is switched off.
 
-11. **Then the CLI.** Start the local API from its section — it is off by default — and:
+11. **Then the CLI.** Start the local API from **Settings > Developer > Local API** — it is off by
+    default — and:
 
 ```powershell
 .\target\debug\knegiswhisper.exe health

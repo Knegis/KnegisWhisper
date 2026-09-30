@@ -120,16 +120,16 @@ async function commandStart(ctx) {
   try {
     // The provider select lives on Settings > Meetings since KNEG-334, not on
     // the Meetings task page that starts the recording, so both routes visit
-    // Settings first. Opened only if closed: the header is a toggle, and a
-    // Settings group left open by an earlier run would otherwise be closed
-    // here. The child reads "Meetings" on screen and "Meetings settings" in
-    // its text -- a visually hidden suffix, so it is not named the same as
-    // the top-level entry -- and `clickText` compares `textContent`, so it
-    // is found by the full name. That also keeps the bare "Meetings" clicks
-    // below on the top-level entry.
-    await main.cdp.evaluate(snippets.openGroup("Settings"));
+    // Settings first: the rail's Settings, then the panel's item. The item
+    // reads "Meetings" on screen and "Meetings settings" in its text -- a
+    // visually hidden suffix, so it is not named the same as the rail's
+    // entry -- and `clickText` compares `textContent`, so it is found by the
+    // full name. The rail's own "Meetings" is a different selector below. A
+    // collapsed panel does not matter: `clickText` calls `click()`, which
+    // fires on an element that is not displayed.
+    await main.cdp.evaluate(snippets.clickText("nav.rail .rail-item", "Settings"));
     await delay(100);
-    await main.cdp.evaluate(snippets.clickText("nav.sidebar .nav-child", "Meetings settings"));
+    await main.cdp.evaluate(snippets.clickText(".list-panel .panel-item", "Meetings settings"));
     await delay(100);
     if (ctx.options.via === "invoke") {
       // Resolve the displayed label to the live option value instead of
@@ -137,7 +137,7 @@ async function commandStart(ctx) {
       const provider = await main.cdp.evaluate(
         snippets.meetingProviderValue(ctx.options.providerLabel),
       );
-      await main.cdp.evaluate(snippets.clickText("nav.sidebar button", "Meetings"));
+      await main.cdp.evaluate(snippets.clickText("nav.rail .rail-item", "Meetings"));
       await delay(100);
       await main.cdp.evaluate(
         snippets.invoke("meeting_start", {
@@ -150,7 +150,7 @@ async function commandStart(ctx) {
         snippets.selectMeetingProvider(ctx.options.providerLabel),
       );
       await delay(100);
-      await main.cdp.evaluate(snippets.clickText("nav.sidebar button", "Meetings"));
+      await main.cdp.evaluate(snippets.clickText("nav.rail .rail-item", "Meetings"));
       await delay(100);
       await main.cdp.evaluate(
         snippets.startMeetingRecording(ctx.options.systemAudio),

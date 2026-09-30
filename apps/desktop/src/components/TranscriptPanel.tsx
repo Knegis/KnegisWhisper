@@ -7,6 +7,14 @@ import { formatClock } from "./RecordingPlayer";
 
 type TranscriptPanelProps = {
   sourceRequest?: { index: number; nonce: number } | null;
+  /**
+   * Called once `sourceRequest` has been shown (its row selected and scrolled
+   * to), so the owner can clear it. A request that stayed set would be
+   * applied again by a panel mounted afresh -- a wide window moving the
+   * transcript into its column -- or by new rows after a speaker rename,
+   * and would select an old summary source nobody just asked for.
+   */
+  onSourceShown?: () => void;
   rows: TranscriptRow[];
   recording: NoteRecording | null;
   currentTime: number;
@@ -66,7 +74,7 @@ function RenameForm({ target, suggestions, onRename, onClose }: {
   </form>;
 }
 
-export function TranscriptPanel({ sourceRequest, rows, recording, currentTime, playing, visible, playInterval, suggestions, onRename }: TranscriptPanelProps) {
+export function TranscriptPanel({ sourceRequest, onSourceShown, rows, recording, currentTime, playing, visible, playInterval, suggestions, onRename }: TranscriptPanelProps) {
   const rowRefs = useRef(new Map<number, HTMLLIElement>());
   const [selected, setSelected] = useState<Set<number>>(() => new Set());
   const [anchor, setAnchor] = useState<number | null>(null);
@@ -79,7 +87,8 @@ export function TranscriptPanel({ sourceRequest, rows, recording, currentTime, p
     if (!row) return;
     setSelected(new Set([row.index])); setAnchor(row.index);
     rowRefs.current.get(row.index)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
-  }, [sourceRequest, rows, visible]);
+    onSourceShown?.();
+  }, [sourceRequest, rows, visible, onSourceShown]);
 
   const activeRow = useMemo(() => {
     if (!playing) return null;
@@ -176,36 +185,41 @@ export function TranscriptPanel({ sourceRequest, rows, recording, currentTime, p
                 selectRow(row, event.shiftKey);
               }}
             >
-              {recording && playable ? (
-                <button
-                  type="button"
-                  aria-label={`Play transcript row ${row.index + 1}`}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    if (row.startSeconds !== null) {
-                      playInterval(row.startSeconds, row.endSeconds);
-                    }
-                  }}
-                >
-                  Play
-                </button>
-              ) : null}
-              <span className="transcript-clock">
-                {row.startSeconds !== null ? formatClock(row.startSeconds) : "—"}
+              {/* Who and when on one line, what was said under it. Play sits at the end of the
+                  first line, so a row's text starts at the same x whether it can be played or not. */}
+              <span className="transcript-row-head">
+                {speakerId !== null ? (
+                  <button type="button" className="transcript-speaker" aria-label={`Rename ${row.speaker ?? speakerId}`}
+                    onClick={event => {
+                      // The label sits inside a selectable option; its click must not toggle the row.
+                      event.stopPropagation();
+                      setRenaming({ speakerId, current: row.speaker ?? speakerId });
+                    }}
+                    onKeyDown={event => {
+                      // The option selects on Enter and Space, so keep those keys on this control.
+                      if (event.key === "Enter" || event.key === " ") event.stopPropagation();
+                    }}>{row.speaker ?? speakerId}</button>
+                ) : row.speaker ? <span className="transcript-speaker">{row.speaker}</span> : null}
+                <span className="transcript-clock">
+                  {row.startSeconds !== null ? formatClock(row.startSeconds) : "—"}
+                </span>
+                {recording && playable ? (
+                  <button
+                    type="button"
+                    className="transcript-play"
+                    aria-label={`Play transcript row ${row.index + 1}`}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      if (row.startSeconds !== null) {
+                        playInterval(row.startSeconds, row.endSeconds);
+                      }
+                    }}
+                  >
+                    Play
+                  </button>
+                ) : null}
               </span>
-              {speakerId !== null ? (
-                <button type="button" className="transcript-speaker" aria-label={`Rename ${row.speaker ?? speakerId}`}
-                  onClick={event => {
-                    // The label sits inside a selectable option; its click must not toggle the row.
-                    event.stopPropagation();
-                    setRenaming({ speakerId, current: row.speaker ?? speakerId });
-                  }}
-                  onKeyDown={event => {
-                    // The option selects on Enter and Space, so keep those keys on this control.
-                    if (event.key === "Enter" || event.key === " ") event.stopPropagation();
-                  }}>{row.speaker ?? speakerId}</button>
-              ) : row.speaker ? <span className="transcript-speaker">{row.speaker}</span> : null}
-              <span>{row.text}</span>
+              <span className="transcript-text">{row.text}</span>
             </li>
           );
         })}

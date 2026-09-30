@@ -4,14 +4,25 @@
  * Three things define it, and all three are departures from what this file did
  * before:
  *
- *   1. Nothing is boxed. The site declares `border` exactly twice, both times
- *      `border: 0`, and `border-radius` not once. Separation is whitespace and
- *      fill, never an outline drawn around a thing.
+ *   1. Cards and the window card are the only boxes, at 4px. Everything else
+ *      still takes its separation from whitespace, rules and fill rather than
+ *      an outline, the way the site does -- except a control the Kit edges at
+ *      1px: `button.secondary`, and the fields and selects of a settings page
+ *      (`# Settings pages`, near the end). This file no longer claims
+ *      `border-radius` never appears; it follows the Kit corner scale instead:
+ *      0 on flat regions (rows, rules, panels), 2px on controls (buttons,
+ *      chips, inputs, keys), 4px on cards and the window card, and nothing
+ *      rounder except the round recording dot.
  *   2. What is marked is filled, not outlined. The site's one interaction is
  *      `a.line:hover { background: var(--band); color: var(--band-ink) }` -- a
  *      fill swap. `--band` here is the site's blue, the colour it reserves for
- *      a filled region rather than for text, so a hovered or current element is
- *      a blue bar with paper text on it and nothing is drawn around anything.
+ *      a filled region rather than for text. A blue bar with paper text on it
+ *      is the marked state -- the current rail item, `button.marked`, the
+ *      active search result -- and `button.primary` is the same fill on the
+ *      one thing to do next. Hovering is not marking: an ordinary hover is a
+ *      neutral fill (`--control` on a button, `--selected` in the rail,
+ *      `--panel-hover` on a panel row), and the current row in a list panel
+ *      is `--selected`, so pointing at a row never makes it look current.
  *   3. Two typefaces with a job each. Switzer sets prose. ProFontWindows sets
  *      anything the machine is saying about itself -- headings, navigation,
  *      identifiers, file bytes -- at the site's exact spec: 13px/16px, 0.5px
@@ -89,6 +100,8 @@
    */
   --band: #3d55ff;
   --band-ink: #fdfdfd;
+  /* Blue for text, which `--band` is not: #3d55ff is 3.3:1 on this `--bg`, #8c9aff is 6.9:1 (R20). */
+  --band-text: #8c9aff;
   --accent: #fde800;
   /*
    * There is no `--warn`. It was `#9a5b00` in light, which is the brown that
@@ -116,45 +129,94 @@
   --control: rgb(228 228 231 / 13%);
 
   /*
+   * The panel model the redesign introduces: a rail, a list panel and cards
+   * floating on a frame, as opposed to the single flat `--bg`/`--surface`
+   * pair above. Defined in both themes here, before anything in this file
+   * reads them, so the two themes cannot drift apart before the shell that
+   * uses them exists.
+   */
+  --frame: #111113;
+  --panel: #1c1c1f;
+  --rule: #2e2e33;
+  --selected: #2a2a30;
+  /*
+   * A hovered row in the list panel, halfway from `--panel` to `--selected`,
+   * so pointing at a row does not make it look like the current one. Not
+   * `--wash`: over `--panel` that lands within a couple of levels of
+   * `--selected` in both themes, which is the look-alike this replaces.
+   * Derived rather than given a hex, so it follows both themes by itself.
+   */
+  --panel-hover: color-mix(in srgb, var(--selected) 50%, var(--panel));
+  --strip: #202024;
+  --band-wash: rgb(61 85 255 / 16%);
+  --rec: #ff7b7b;
+  --card-shadow: none;
+  /*
+   * The 1px edge of a control that has one -- `button.secondary`, and a
+   * settings page's fields and selects. `--rule` here; a step darker than
+   * `--rule` in light, where `#e1e1e6` on paper is too faint to find a field
+   * by.
+   */
+  --edge: #2e2e33;
+
+  /*
    * The row grid, as tokens because two other rules have to agree with it
    * exactly: a control that spans the whole row does so by cancelling the label
    * track with a negative margin, and a margin that disagrees with the track by
    * a pixel is visible as a misalignment.
+   *
+   * 14rem is 210px at the 15px root, so with the 22.5px gap a row's value
+   * track is whatever `.content` has left after 232.5px and its two 56px
+   * paddings. On Transcription that is 305.5px in the default 1000x720 window
+   * with the list panel open, 577.5 with it hidden, and 675.5 once `.content`
+   * reaches its 1020px cap (measured in headless Edge against dev fixtures,
+   * not in the Tauri window). The one width it does not fit is the 720px
+   * minimum window with the panel open, where `.content` is 370px: the value
+   * track measured 25.5px, and on Shortcuts the key wrapped one character a
+   * line and pushed `.split-main` 121px wider than itself. So rows stack --
+   * label over value -- in a main area narrower than 554.5px, which is two
+   * label tracks, the gap and the two paddings: the width below which the
+   * value would be narrower than its own label. Measured at the boundary,
+   * with the panel open: a 904px window (a 554px main area) stacks, and a
+   * 905px one draws a 210.5px value beside the label. That rule is a
+   * container query on `.split-main`, after the breakout rule below, because
+   * what decides it is the main area's width, and the window's width says
+   * that only once the panel's state is known.
    */
   --label-col: 14rem;
   --row-gap: 1.5rem;
 
   /*
-   * The shell's two horizontal measurements, as tokens because three rules and
-   * one media query all have to agree with them.
+   * The shell's two horizontal measurements.
    *
-   * `--nav-col` is the fixed rail's width, and `.shell` reserves exactly that
-   * much with `padding-left` -- the rail is out of flow, so nothing else holds
-   * the space open.
+   * `--nav-col` is the rail's width, the canvas' 68px: each entry is 56px wide
+   * and centred in it. The rail is in flow beside the card now, so it holds
+   * its own space open, and `.rail` is the only rule that reads this.
    *
-   * `--content-max` is derived, not chosen by feel. The widest layout in the
-   * application is `.note-workspace`, `minmax(0, 1fr) 22rem`: a markdown editor
-   * beside a 22rem transcript. A comfortable editor is about 44rem, so
-   * 44.5 + 1.5 (`--row-gap`) + 22 is where that layout stops being cramped, and
-   * 68rem is that number. Wider would only stretch prose past a readable
-   * measure; the cap on `.row-detail` below exists for the same reason.
+   * `--content-max` caps `.content`, the column a settings or developer
+   * screen and Notes > Upload render in. It was derived from a layout that has
+   * since gone -- `.note-workspace` as a markdown editor beside a 22rem
+   * transcript, where 44.5 + 1.5 (`--row-gap`) + 22 was the point it stopped
+   * being cramped -- and is kept because it is still a good measure: wider
+   * would only stretch prose past a readable one, which is why `.row-detail`
+   * below is capped too. Notes no longer renders in `.content`; its own wide
+   * layout, the transcript as a column, is `.note-detail-wide`.
    *
-   * What this is worth, remeasured at the current 15px root (measured in
-   * headless Edge against dev fixtures, not in the Tauri window): in the
-   * default 1000x720 window `.content` renders 805px wide, short of the
-   * 1020px cap -- the window and the rail are what limit it there, not
-   * `--content-max`. The two-column 60rem shell this replaced no longer
-   * exists to measure, but the same arithmetic gives its pane as
-   * 900 - 45 (1.5rem padding, both sides) - 180 (a 12rem sidebar) - 30 (a
-   * 2rem gap) = 645px, unchanging with the window because its cap engaged
-   * well below 1000px. So the gain is real now at every size, not only above
-   * the old cap: +160px (about +25%) in the default window, growing to
-   * +375px (about +58%) once a window is wide enough that `--content-max`,
-   * not the window, is what stops it -- 1215px (`--content-max` +
-   * `--nav-col`) and up, which is why a maximised 1920x1080 screen measures
-   * exactly the 1020px cap.
+   * What this is worth, at the current 15px root. The main area is the
+   * window less 78px -- the rail's 68 (`--nav-col`) and 10 for the card (its
+   * 8px right margin and two 1px borders) -- and less another 272 while the
+   * list panel shows (its width, which includes its 1px rule). `.content` is
+   * the main area's width, padding included, up to the cap. Measured on
+   * Providers and on Transcription (in headless Edge against dev fixtures,
+   * not in the Tauri window): in the default 1000x720 window it is 650px
+   * with the panel open and 922px with it hidden, so there the window and
+   * the panel limit it, not `--content-max`; at the 720px minimum, 370 and
+   * 642. It reaches the 1020px cap once the main area does: at 1370px with
+   * the panel open (1020 + 272 + 78), where it measured exactly 1020, and at
+   * 1098px with it hidden. At 1440x900 and 1920x1080 it measures 1020 either
+   * way.
    */
-  --nav-col: 13rem;
+  --nav-col: 68px;
   --content-max: 68rem;
 
   --font-sans: Switzer, "Helvetica Neue", Arial, sans-serif;
@@ -183,20 +245,33 @@
     --text: #1f2023;
     --muted: #62636a;
     /*
-     * Heavier than the dark theme's rule relative to its ground, because with
-     * no panel behind a section these rules are the only structure left on the
-     * page. They are doing the job the beige used to do.
+     * Lighter than it was: structure now comes from panels and the card, not
+     * from the rules alone, so a rule this weight no longer has to carry the
+     * whole page's structure by itself the way it did when it was the only
+     * separator on a flat page.
      */
-    --faint: #c4c4cb;
+    --faint: #e1e1e6;
     /* The site's own `--footer-bg`, unmodified. 8.09:1 against paper, and
      * 8.09:1 for the text sitting on it. */
     --band: #0015ff;
     --band-ink: #fdfdfd;
+    /* The same blue as `--band` here: #0015ff on paper already reads at 8:1 as text. */
+    --band-text: #0015ff;
     --accent: #1803ff;
     --error: #c02626;
 
     --wash: rgb(31 32 35 / 5%);
     --control: rgb(31 32 35 / 10%);
+
+    --frame: #f3f3f5;
+    --panel: #f8f8f9;
+    --rule: #e1e1e6;
+    --selected: #ebebef;
+    --strip: #f5f5f7;
+    --band-wash: #eef0ff;
+    --rec: #c02626;
+    --card-shadow: 0 1px 2px rgb(24 24 32 / 4%), 0 12px 32px rgb(24 24 32 / 5%);
+    --edge: #cfd0d6;
   }
 }
 
@@ -205,18 +280,19 @@
 }
 
 /*
- * Reserve the scrollbar's gutter for the whole session.
+ * Reserve the scrollbar's gutter for the whole session, in a window that
+ * scrolls its root.
  *
- * Without this the layout slides sideways on most navigations, and it is the
- * centring that moves rather than anything in the view: `.content` is held in
- * the middle of the space right of the rail by `margin: 0 auto`, so the ~15px a
- * Windows scrollbar occupies comes out of its two margins evenly. That was true
- * of the 60rem `.shell` column this replaced and it is true of `.content` now --
- * the rail is `position: fixed` and does not move, which makes the jump easier
- * to see rather than harder.
- * Diagnostics is four sections and scrolls; Local API is one and does not.
- * Switching between them moves every element on the page about 7px, which is
- * too small to read as a scrollbar arriving and too large not to notice.
+ * The main window no longer does: `:root[data-window="main"]` below sets this
+ * back to `auto`, because its pages scroll inside the card (`.split-main`),
+ * and `.content` is left-aligned there, so a scrollbar arriving narrows the
+ * page from the right without moving anything in it. This was written for the
+ * layout before, where `.content` was centred with `margin: 0 auto` and the
+ * ~15px a Windows scrollbar occupies came out of its two margins evenly:
+ * Diagnostics is four sections and scrolls, Local API is one and does not, and
+ * switching between them moved every element on the page about 7px -- too
+ * small to read as a scrollbar arriving and too large not to notice. It is
+ * kept for the other windows this stylesheet serves.
  *
  * `scrollbar-gutter` rather than `overflow-y: scroll`, which would also fix it:
  * this reserves the space without painting a permanently dead scrollbar down
@@ -245,7 +321,6 @@ body {
  * reads as shouting and hides its own casing.
  */
 h2,
-.sidebar button,
 .purposes code,
 .list code,
 .overlay {
@@ -257,309 +332,412 @@ h2,
 }
 
 /*
- * A rail pinned to the window, and a capped content column centred in what is
- * left of it.
+ * The shell: the title bar across the top, and under it the frame -- the rail
+ * on the left, and one card holding the page.
  *
- * This was a two-column grid capped at 60rem and centred, which had one
- * measurable consequence: with a 12rem sidebar and a 2rem gap the content pane
- * was 645px wide in the default 1000x720 window **and 645px wide on a 4K
- * display** (both, at today's 15px root -- the shell is gone, so this is
- * worked out rather than measured). The cap was what limited it, not the
- * window, so removing the cap is where the extra width comes from -- see
- * `--content-max` for the arithmetic and for what it is actually worth.
+ * What this replaced, and why each part changed:
  *
- * `.shell` is no longer a grid and no longer positions anything. The rail is out
- * of flow, so all this does is reserve its width; `.content` carries the padding
- * the shell used to.
+ *   - **The rail is four entries, not the whole tree.** Dictation, Meetings,
+ *     Notes, a divider, Settings: an icon over a label for each, in 68px. It
+ *     was a 13rem column listing every screen, with Settings and Developer
+ *     groups that expanded in place. The settings screens moved to the list
+ *     panel below, and `lib/navigation.ts` says why Developer went with them.
+ *   - **The rail never collapses.** Every entry keeps its label at 68px, so
+ *     there is no narrow state worth having. The title bar's toggle hides the
+ *     list panel instead, which is the column that actually takes room.
+ *   - **The page is a card on the frame.** `--frame` is the window, `--bg` is
+ *     the card, and the card's 4px corner and `--rule` border make it the one
+ *     box at that size the Kit allows. Rail and card sit side by side in the
+ *     frame's own flow, so nothing reserves space with padding the way
+ *     `.shell` had to for a rail that was out of flow.
  *
- * The comment that stood here claimed the sidebar "scrolls with the page rather
- * than being sticky" while the rule twelve lines below it was `position:
- * sticky`. That sentence was false when it was written and is deleted rather
- * than corrected, because the rail is now fixed and neither half applies.
+ * The card clips (`overflow: hidden`) so its corners hold, which means the
+ * card cannot scroll: a page scrolls in a `.split-main`, with or without a
+ * list panel beside it -- or, on Notes, in `.notes-main` inside it, which is
+ * exactly as tall as `.split-main` so that a note's transcript column can
+ * keep to the window's height (`.note-detail-wide`, below).
+ *
+ * Every hover here is written `:hover:not(:disabled)`. The generic
+ * `button:hover:not(:disabled)` further down scores (0,2,1), which beats a
+ * bare `.rail-item:hover` at (0,2,0): without the `:not`, hovering the current
+ * entry would repaint it `--control` and hover and "you are here" would look
+ * the same -- the bug the 13rem sidebar's hover rule had before the rail
+ * replaced it.
  */
-.shell {
-  padding-left: var(--nav-col);
+.frame { position: fixed; inset: var(--titlebar-height) 0 0; display: flex; background: var(--frame); }
+
+.rail { width: var(--nav-col); flex-shrink: 0; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 4px 0 10px; }
+/*
+ * 2px, not the canvas' 3px: a rail entry is a button, and the Kit's scale
+ * gives buttons 2px -- it has no 3px step. `margin` and `padding` are zeroed
+ * because the generic `button` rule gives every button both.
+ */
+.rail-item { width: 56px; height: 54px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; margin: 0; padding: 0; border: 0; border-radius: 2px; background: transparent; color: var(--muted); font-size: 11px; line-height: 13px; }
+.rail-item:hover:not(:disabled) { background: var(--selected); color: var(--text); }
+/*
+ * The marked state: the fill inverts and the text inverts with it, nothing
+ * drawn around it. In the rail `--band` marks one thing, the section you are
+ * in; the page beside it spends it on at most one more (`button.marked` or
+ * `button.primary`, never both).
+ */
+.rail-item[aria-current="page"],
+.rail-item[aria-current="page"]:hover:not(:disabled) { background: var(--band); color: var(--band-ink); }
+.rail-divider { width: 28px; height: 1px; background: var(--rule); margin: 6px 0; }
+
+.card { flex: 1; min-width: 0; display: flex; margin: 0 8px 8px 0; background: var(--bg); border: 1px solid var(--rule); border-radius: 4px; overflow: hidden; }
+
+/*
+ * A list panel beside a main area (`components/SplitView.tsx`).
+ *
+ * `[hidden]` is restated because `.list-panel`'s own `display: flex`
+ * outranks the browser's `[hidden] { display: none }`, which would leave the
+ * title bar's toggle flipping an attribute nobody can see.
+ *
+ * `.split-main` is an inline-size container, so a page can ask how wide the
+ * main area is rather than how wide the window is -- the two differ by 272px
+ * depending on the panel. Only the row grid asks (`@container main`, after
+ * the breakout rule). Its width comes from the flex row, never from its
+ * content, so the containment should change nothing else about it -- and
+ * `.content` measured the same widths with it as without, from 720 to 1920px.
+ */
+.split { flex: 1; min-width: 0; display: flex; }
+.list-panel { width: 272px; flex-shrink: 0; display: flex; flex-direction: column; overflow-y: auto; background: var(--panel); border-right: 1px solid var(--rule); }
+.list-panel[hidden] { display: none; }
+.split-main { flex: 1; min-width: 0; overflow-y: auto; position: relative; container: main / inline-size; }
+
+/*
+ * What a panel is built from (`components/Panel.tsx`). The title is an `h1`
+ * -- or an `h2` beside a settings screen, which has its own `h1` -- and a
+ * section label an `h2`, so both restate the margins and the face the
+ * generic heading rules set.
+ */
+.panel-head { display: flex; align-items: center; gap: 2px; padding: 16px 10px 10px 20px; }
+.panel-title { flex: 1; margin: 0; font-family: var(--font-sans); font-size: 22px; line-height: 28px; font-weight: 400; letter-spacing: -0.01em; text-transform: none; color: var(--text); }
+.panel-label { margin: 0; padding: 20px 20px 6px; font: 12px/16px var(--font-mono); letter-spacing: .5px; text-transform: uppercase; color: var(--muted); }
+.panel-list { display: flex; flex-direction: column; gap: 1px; padding: 0 8px; }
+.panel-item, .panel-action { width: 100%; display: flex; margin: 0; border: 0; border-radius: 2px; background: transparent; color: var(--text); text-align: left; }
+.panel-item { flex-direction: column; align-items: flex-start; gap: 1px; padding: 7px 12px; }
+.panel-action { align-items: center; gap: 10px; height: 36px; padding: 0 12px; }
+/*
+ * Hover is the lighter `--panel-hover`, and `--selected` is kept for the
+ * current row alone -- restated with `:hover`, which would otherwise outrank
+ * it and lighten the current row under the pointer.
+ */
+.panel-item:hover:not(:disabled), .panel-action:hover:not(:disabled) { background: var(--panel-hover); }
+.panel-item[aria-current], .panel-item[aria-current]:hover:not(:disabled) { background: var(--selected); }
+.panel-item-title { width: 100%; font-size: 14px; line-height: 20px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.panel-item-meta { font-size: 12.5px; line-height: 18px; color: var(--muted); }
+/* An item with an icon is one 36px line, the icon beside its text rather than above it. */
+.panel-item-icon { flex-direction: row; align-items: center; gap: 10px; min-height: 36px; }
+.panel-item-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.panel-item-muted .panel-item-title { color: var(--muted); }
+.panel-action-label { flex: 1; min-width: 0; font-size: 14px; line-height: 20px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.panel-action-hint { font: 12px/16px var(--font-mono); letter-spacing: .5px; color: var(--muted); }
+.panel-foot { margin-top: auto; display: flex; align-items: center; gap: 8px; padding: 12px 20px; border-top: 1px solid var(--rule); font-size: 12.5px; color: var(--muted); }
+/*
+ * A panel whose content carries a `data-surface` wrapper (Dictation's
+ * history) keeps the column the foot's `margin-top: auto` needs: the wrapper
+ * grows to the panel's height, so the foot still sits at the bottom.
+ */
+.panel-surface { flex: 1 0 auto; display: flex; flex-direction: column; }
+.panel-note { margin: 0; padding: 14px 20px 0; font-size: 13px; line-height: 18px; color: var(--muted); }
+/*
+ * A foot holding a line and a disclosure under it -- Dictation's "History
+ * stays on this computer" over its History options -- stacks them. The
+ * controls inside are `--text`, as controls are anywhere; only the
+ * explanations stay muted.
+ */
+.panel-foot-stack { flex-direction: column; align-items: stretch; }
+.panel-foot-line { display: flex; align-items: center; gap: 8px; margin: 0; }
+.panel-foot .learn-more { margin: 0; }
+.panel-foot .learn-more-body { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+.panel-foot .learn-more-body label { color: var(--text); }
+.panel-foot .learn-more-body p { margin: 0 0 6px; }
+.panel-foot .learn-more-body button { margin: 0 0 0 -8px; padding: 4px 8px; border-radius: 2px; }
+
+/*
+ * A task page (`views/Dictation.tsx`, `views/Meetings.tsx`): the hero centred in
+ * whatever height the main area has, the control bar at its foot. `.task` is
+ * at least the height of `.split-main`, which is stretched to the card and so
+ * has a definite height for the 100% to resolve against; a window short
+ * enough that hero and bar do not both fit scrolls `.split-main` instead of
+ * overlapping them.
+ */
+.task { min-height: 100%; display: flex; flex-direction: column; margin: 0; background: none; }
+.task-hero { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 40px 32px 32px; text-align: center; }
+.task-bar { display: flex; flex-direction: column; align-items: center; padding: 0 32px 32px; }
+.task-health { margin-top: 10px; font-size: 13px; text-align: center; }
+.task-health .muted { margin: 0; }
+/* A screen that failed to render lands in the card bare when its page draws its own split. */
+.card > .view { flex: 1; min-width: 0; overflow-y: auto; padding: 40px 56px 48px; }
+
+/*
+ * The hero (`components/TaskHero.tsx`). The canvas' measurements: a 60px
+ * icon drawn at stroke 1, the status 28px under it, a 40/54 heading and a
+ * 16/24 sentence. The status mark is the shape of the state -- a filled
+ * square for ready, a round dot for recording, a hollow square for needs
+ * setup -- so the state never rests on colour alone.
+ */
+.hero { display: flex; flex-direction: column; align-items: center; max-width: 720px; }
+.hero-icon { display: flex; color: var(--text); }
+.hero-icon .icon { stroke-width: 1; }
+.hero-status { display: flex; align-items: center; gap: 8px; margin: 28px 0 0; font: 12px/16px var(--font-mono); letter-spacing: .5px; text-transform: uppercase; color: var(--text); }
+.hero-mark { width: 7px; height: 7px; flex-shrink: 0; }
+.hero-status-ready .hero-mark { background: var(--band); }
+.hero-status-recording { color: var(--rec); }
+.hero-status-recording .hero-mark { width: 8px; height: 8px; border-radius: 50%; background: var(--rec); }
+.hero-status-setup .hero-mark { border: 1px solid var(--text); }
+.hero-extra { color: var(--text); font-variant-numeric: tabular-nums; }
+.hero-heading { margin: 14px 0 0; font-family: var(--font-sans); font-size: 40px; line-height: 54px; letter-spacing: -0.5px; text-transform: none; color: var(--text); }
+.hero-sub { margin: 10px 0 0; max-width: 60ch; font-size: 16px; line-height: 24px; color: var(--muted); }
+.hero-sub > p { margin: 0; }
+.hero-sub > .hero-note { margin-top: 8px; font-size: 14px; line-height: 20px; }
+.hero-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 16px; margin-top: 24px; }
+.hero-actions > button { margin: 0; height: 38px; padding: 0 16px; border-radius: 2px; font-size: 14.5px; }
+.hero-actions > .learn-more { margin: 0; }
+/*
+ * A shortcut's keys may break onto the next line between keys, never inside
+ * one. They were kept on one line together, and a four-key accelerator at
+ * 22px is 330-380px: `Control+Shift+Alt+Backspace` measured 374px, wider
+ * than the 306px hero in a 720x720 window with the panel opened by hand, and
+ * scrolled `.split-main` sideways (headless Edge, dev fixtures). `kbd` is an
+ * inline-block, so there is a break opportunity between two of them only
+ * while their parent allows wrapping; the key's own text is `nowrap` below.
+ */
+.keycaps { white-space: normal; }
+
+/*
+ * A key, as the Kit draws it: the machine voice on the page colour, a
+ * `--rule` edge with a heavier bottom. 2px, not the canvas' 3px -- a key is a
+ * control, and the Kit's corner scale has no 3px step.
+ */
+kbd { display: inline-block; white-space: nowrap; border: 1px solid var(--rule); border-bottom-width: 3px; border-radius: 2px; background: var(--bg); color: var(--text); font-family: var(--font-mono); font-size: 0.85em; line-height: 1.4; padding: 0 0.4em; }
+.hero-heading kbd { margin: 0 3px; padding: 3px 12px 1px; font-size: 22px; line-height: 30px; vertical-align: 6px; }
+
+/*
+ * A short window -- the 720x520 minimum, where the main area is about 470px
+ * tall -- would push the control bar and its Start button below the fold
+ * behind the canvas' 1440x900 spacing. The hero gives up its icon and its
+ * 40px heading first, since the bar is where the controls are. After the
+ * rules above, which it has to outrank at equal specificity.
+ */
+@media (max-height: 640px) {
+  .task-hero { padding-top: 16px; padding-bottom: 16px; }
+  .hero-icon { display: none; }
+  .hero-status { margin-top: 0; }
+  .hero-heading { margin-top: 8px; font-size: 28px; line-height: 38px; }
+  .hero-heading kbd { padding: 1px 8px 0; font-size: 16px; line-height: 22px; vertical-align: 3px; }
+  .hero-sub { margin-top: 6px; }
 }
 
 /*
- * The loading and error state, which has no rail to reserve space for.
- *
- * `App.tsx` renders that state before diagnostics arrive, so there is no version
- * string and no nav yet. Left with the shell's `padding-left` the message would
- * sit 13rem in from the left edge with nothing beside it.
+ * A chip (`components/Chip.tsx`), and the microphone's `select.chip`: a 30px
+ * control with the 2px corner, unfilled at rest like every other button. A
+ * chip that does not fit beside the others goes onto the next line of the
+ * strip whole (`.control-chips`, below); it shrinks only where it is alone on
+ * a line and still too wide, and the label ellipsises inside a 260px cap
+ * either way; the full label is the `title`.
  */
-.shell-bare {
-  padding-left: 0;
+.chip { display: inline-flex; align-items: center; gap: 7px; flex: 0 1 auto; min-width: 0; max-width: 260px; height: 30px; margin: 0; padding: 0 9px; border: 0; border-radius: 2px; background: transparent; color: var(--text); font: inherit; font-size: 13.5px; line-height: 18px; white-space: nowrap; }
+.chip-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.chip-chevron { display: flex; color: var(--muted); }
+.chip[aria-pressed="true"], .chip[aria-pressed="true"]:hover:not(:disabled) { background: var(--band-wash); }
+/*
+ * A chip that states what is in effect rather than offering to change it
+ * (`Chip` with neither `onClick` nor `pressed`): a `span`, so no hover fill
+ * and no pointer that promises a press.
+ */
+.chip-static { cursor: default; }
+/*
+ * The select keeps its own value and picker arrow; the microphone icon sits
+ * over its left padding and lets presses through, the way the title bar's
+ * search icon does. A ring on keyboard focus, which the generic select rule
+ * replaces with a fill: here the fill is also the hover, and a chip reached
+ * by Tab has to be findable among its neighbours.
+ *
+ * `appearance: auto`, opting this one select out of the `base-select` block
+ * below. Under `base-select` the selected option's text is drawn in a box
+ * `text-overflow` does not reach: "Microphone Array (Realtek(R) Audio)
+ * (default)" was cut mid-character at the 260px cap and pushed the picker
+ * arrow out of the chip altogether. The platform's own rendering ellipsises
+ * the same select and keeps its arrow (both measured in headless Edge 154
+ * against dev fixtures, not in the Tauri window). The cost is that this
+ * list drops down in the platform's popup rather than the page's -- the
+ * fallback older engines already get, with the `option` colours below.
+ * `field-sizing: content` because a platform select is otherwise as wide as
+ * its widest option, which left "System default" in a 260px chip; where it
+ * is unsupported the chip is simply that wide.
+ */
+.chip-select { position: relative; display: inline-flex; align-items: center; flex: 0 1 auto; min-width: 0; max-width: 260px; }
+.chip-select > .icon { position: absolute; left: 9px; z-index: 1; color: var(--text); pointer-events: none; }
+select.chip { appearance: auto; field-sizing: content; width: auto; max-width: 100%; padding-left: 32px; overflow: hidden; text-overflow: ellipsis; }
+select.chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/*
+ * The control bar (`components/ControlBar.tsx`): a strip of chips and the
+ * privacy line on `--strip`, then the body. The strip wraps rather than
+ * truncating the privacy line -- at the 720px minimum the sentences drop to
+ * a line of their own -- and the chips wrap among themselves rather than
+ * shrinking: at the default 1000x720 window with the panel open, a long
+ * provider and language name ellipsised all four of Meetings' chips at once,
+ * where two lines hold them, the longest at its 260px cap (KNEG-376;
+ * measured in headless Edge against dev fixtures). The row gap is the
+ * strip's padding, so two lines of chips read as one strip rather than two.
+ */
+.control-bar { width: min(840px, 100%); background: var(--bg); border: 1px solid var(--rule); border-radius: 4px; box-shadow: var(--card-shadow); overflow: hidden; text-align: left; }
+.control-strip { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; padding: 6px 8px; background: var(--strip); border-bottom: 1px solid var(--rule); }
+.control-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 2px; flex: 0 1 auto; min-width: 0; }
+.control-spacer { flex: 1 0 0; }
+.control-privacy { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 14px; min-width: 0; margin: 0; padding: 6px 8px; list-style: none; font-size: 13px; line-height: 18px; color: var(--muted); }
+.control-privacy li { display: inline-flex; align-items: center; gap: 6px; }
+.control-body { display: flex; flex-direction: column; gap: 14px; padding: 16px 18px 14px; }
+.control-body > .error { margin: 0; }
+.control-note { margin: 0; font-size: 13px; line-height: 18px; color: var(--muted); overflow-wrap: anywhere; }
+.control-note.error { color: var(--error); }
+.control-result { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.control-result-head { display: flex; align-items: center; gap: 8px; }
+.control-result-label { flex: 1; min-width: 0; font: 12px/16px var(--font-mono); letter-spacing: .5px; text-transform: uppercase; color: var(--muted); }
+/* Four lines of the last dictation, then it scrolls: a long one must not push Start off the card. */
+.control-result-text { margin: 0; max-height: 104px; overflow-y: auto; font-size: 17px; line-height: 26px; overflow-wrap: anywhere; }
+.control-result-empty { margin: 0; padding: 15px 0; font-size: 17px; line-height: 26px; color: var(--muted); }
+button.control-copy { display: inline-flex; align-items: center; gap: 6px; height: 26px; margin: 0; padding: 0 8px; border-radius: 2px; font-size: 13px; }
+.control-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+/* The Tidy up chip's label lines up with the text above it. */
+.control-row > .chip { margin-left: -9px; }
+.control-row > button:not(.chip) { height: 38px; margin: 0; padding: 0 14px; border-radius: 2px; font-size: 14.5px; white-space: nowrap; }
+.control-row > button.control-start { display: inline-flex; align-items: center; gap: 9px; padding: 0 16px; }
+/* Dictation's Discard, drawn as Meetings' is (`.live-actions`): the Kit's secondary edge, and its icon. */
+.control-row > button.secondary { display: inline-flex; align-items: center; gap: 8px; }
+/* The body's gap spaces its children; a caveat's or a disclosure's own top margin would double it. */
+.control-body > .caveat, .control-body > .learn-more { margin: 0; }
+/* Meetings' Start carries the recording mark, the one round shape the Kit allows. */
+.start-dot { width: 10px; height: 10px; flex-shrink: 0; border-radius: 50%; background: currentColor; }
+
+/*
+ * Meetings' call card (`views/Meetings.tsx`): under the hero while a meeting
+ * application is in a call. A card, so the Kit's 4px corner and a `--rule`
+ * edge; 580px as the canvas draws it, and never wider than the column at
+ * the 720px minimum window.
+ */
+.call-card { width: min(580px, 100%); display: flex; flex-wrap: wrap; align-items: center; gap: 14px; margin-top: 36px; padding: 14px 14px 14px 16px; border: 1px solid var(--rule); border-radius: 4px; background: var(--bg); text-align: left; }
+.call-card-icon { width: 40px; height: 40px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; border-radius: 2px; background: var(--selected); color: var(--text); }
+/* With the list panel open at 720px the card is about 300px: the button goes under the text rather than squeezing it to a word a line. */
+.call-card-text { flex: 1 1 200px; min-width: 0; display: flex; flex-direction: column; }
+.call-card-title { font-size: 15px; line-height: 22px; color: var(--text); overflow-wrap: anywhere; }
+.call-card-detail { font-size: 13px; line-height: 19px; color: var(--muted); }
+.call-card > button { flex-shrink: 0; height: 36px; margin: 0 0 0 auto; padding: 0 14px; border-radius: 2px; font-size: 14px; white-space: nowrap; }
+@media (max-height: 640px) { .call-card { margin-top: 20px; } }
+
+/*
+ * Meetings while a meeting runs: the state and its clock over a rule, the
+ * live lines filling what is left, and the bar at the foot. The column is
+ * exactly the main area's height so the lines scroll inside it rather than
+ * pushing the bar out of sight; once the transcript is down to 160px -- a
+ * short window with a long caveat -- the main area scrolls instead.
+ */
+.meeting-live { height: 100%; display: flex; flex-direction: column; margin: 0; background: none; }
+.live-head { padding: 22px 28px 18px; border-bottom: 1px solid var(--rule); }
+.live-status { display: flex; align-items: center; gap: 8px; margin: 0; font: 12px/16px var(--font-mono); letter-spacing: .5px; text-transform: uppercase; color: var(--rec); }
+/* Stalled records nothing, so neither the recording red nor its dot: `--text` and the hollow square (decision 6). */
+.live-status-stalled { color: var(--text); }
+.live-clock { color: var(--text); font-variant-numeric: tabular-nums; }
+.rec-dot { width: 8px; height: 8px; flex-shrink: 0; border-radius: 50%; background: var(--rec); }
+.live-title { margin: 8px 0 0; font-family: var(--font-sans); font-size: 28px; line-height: 36px; letter-spacing: -0.3px; text-transform: none; color: var(--text); }
+.live-sub { margin: 2px 0 0; font-size: 13.5px; line-height: 20px; color: var(--muted); overflow-wrap: anywhere; }
+.live-caveats { display: flex; flex-direction: column; gap: 10px; padding: 14px 28px 0; }
+.live-caveats > .caveat, .live-caveats > .error { margin: 0; }
+.live-transcript { flex: 1; min-height: 160px; display: flex; flex-direction: column; padding: 18px 28px 0; }
+.live-label { margin: 0 0 6px; font: 12px/16px var(--font-mono); letter-spacing: .5px; text-transform: uppercase; color: var(--muted); }
+.live-note { margin: 0 0 8px; max-width: 76ch; font-size: 13px; line-height: 18px; color: var(--muted); }
+/* A rule on top, so a line scrolled half out of the list reads as cut by its edge rather than as running into the note. */
+.live-rows { flex: 1; min-height: 0; overflow-y: auto; margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--faint); }
+/* The canvas' three columns: clock, speaker, words. */
+.live-row { display: grid; grid-template-columns: 76px 72px minmax(0, 1fr); column-gap: 14px; padding: 11px 0; border-bottom: 1px solid var(--faint); font-size: 15px; line-height: 23px; }
+.live-row:last-child { border-bottom: 0; }
+.live-time { font: 12px/23px var(--font-mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+.live-speaker { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.live-speaker-you { color: var(--band-text); }
+.live-text { overflow-wrap: anywhere; }
+/* A line still being heard: muted, and ending where the next word will go. */
+.live-row-open .live-text { color: var(--muted); }
+.live-caret { display: inline-block; width: 2px; height: 18px; margin-left: 3px; background: var(--band); vertical-align: -3px; }
+.live-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 12px 16px 12px 20px; border-top: 1px solid var(--rule); background: var(--strip); }
+/* One line, the chips ellipsising as the control bar's do, so a narrow window keeps its height for the lines. */
+.live-chips { display: flex; flex: 0 1 auto; align-items: center; gap: 2px; min-width: 0; margin-left: -9px; }
+.live-bar > .control-privacy { padding-left: 0; }
+.live-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.live-actions > button { display: inline-flex; align-items: center; gap: 8px; height: 38px; margin: 0; padding: 0 14px; border-radius: 2px; font-size: 14.5px; white-space: nowrap; }
+.live-actions > button.primary { gap: 9px; padding: 0 16px; }
+/* A short window gives the live lines what the canvas' spacing would spend on margins. */
+@media (max-height: 640px) {
+  .live-head { padding: 12px 20px 10px; }
+  .live-title { margin-top: 4px; font-size: 22px; line-height: 28px; }
+  .live-caveats { padding: 10px 20px 0; }
+  .live-transcript { padding: 10px 20px 0; }
+  .live-row { padding: 7px 0; }
+  .live-bar { padding: 8px 12px 8px 16px; }
 }
 
 /*
- * One column below the width where two would leave neither usable.
+ * Rows the Meetings panel carries besides `PanelItem`s. The Now row's meta is
+ * `--rec` with the round dot, as the hero draws recording -- or, stalled, the
+ * hollow square in `--text`, since nothing is being recorded. An Interrupted
+ * row is not a button, because Recover inside it is; its marker is the hollow
+ * square Needs setup uses -- `--text`, not orange (decision 6). Recent's
+ * error sits with its Try again under it.
+ */
+.panel-rec { display: inline-flex; align-items: center; gap: 6px; color: var(--rec); font-variant-numeric: tabular-nums; }
+.panel-rec > .rec-dot { width: 7px; height: 7px; }
+.panel-rec-stalled { color: var(--text); }
+.panel-note-error { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+.panel-note-error > .error { margin: 0; overflow-wrap: anywhere; }
+.panel-note-error > button.panel-inline { margin: 0; }
+.panel-row { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; padding: 7px 12px; }
+.panel-row-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; color: var(--text); }
+.mark-hollow { width: 7px; height: 7px; flex-shrink: 0; border: 1px solid var(--text); }
+button.panel-inline { height: 24px; margin: 0 0 0 4px; padding: 0 8px; border: 1px solid var(--rule); border-radius: 2px; background: var(--bg); font-size: 12.5px; line-height: 18px; }
+button.panel-inline:hover:not(:disabled) { border-color: var(--muted); background: var(--bg); }
+
+/*
+ * No list panel below 44rem -- 704px, since a media query's rem is the
+ * browser's 16px and not this file's 15px root.
  *
  * The main window's `minWidth` is 720px (45rem, `src-tauri/tauri.conf.json`), so
  * this block is unreachable in the shipped window and reachable only in
  * `npm run dev` in a browser. That is a reason to keep it honest, not a reason
- * to delete it: the rail goes back into flow across the top rather than being
- * pinned to an edge it would take half the width of.
+ * to delete it: the list panel goes, whatever the toggle says, because beside
+ * the rail it would leave the page about half the window; the rail stays.
+ *
+ * This block also used to narrow `.content`'s padding and stack the rows.
+ * Neither ever applied -- the rules they override come later in the file at
+ * the same specificity, and at 700px `.content` measured its full 56px sides
+ * and two row tracks (in headless Edge against dev fixtures, not in the Tauri
+ * window) -- so they went. The rows stack by the main area's width instead,
+ * which the list panel changes far more than this width does (`@container
+ * main`, after the breakout rule).
  */
 @media (max-width: 44rem) {
-  .shell {
-    padding-left: 0;
-  }
-
-  .sidebar {
-    position: static;
-    width: auto;
-    padding: 1.5rem 1.5rem 1rem;
-    overflow: visible;
-    border-right: 0;
-    border-bottom: 1px solid var(--faint);
-  }
-
-  .content {
-    padding: 1rem 1.5rem 3rem;
-  }
-
-  /*
-   * Rows collapse too. A fixed 14rem label track leaves the value under 200px
-   * here, and the row-spanning control has no label track left to cancel --
-   * its negative margin would hang off the left edge of the page.
-   */
-  .row {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 0.25rem;
-  }
-
-  .row > .row-value,
-  .row > .row-value:only-child {
-    grid-column: auto;
-  }
-
-  .row > .row-value > .controls {
-    margin-left: 0;
-    width: 100%;
+  .list-panel {
+    display: none;
   }
 }
 
 /*
- * Fixed to the window, not sticky inside the page.
+ * The page: left-aligned in the main area, as the canvas draws it, and capped.
  *
- * `position: sticky; top: 2rem` kept the rail in view while the page scrolled
- * under it, which is nearly the same effect and is not the same thing: a sticky
- * element is still a column in a centred layout, so the rail moved sideways
- * whenever the content column's width changed. Fixed puts it against the
- * window's left edge and leaves it there, which is what "the list of screens is
- * on the left" should mean.
- *
- * `overflow-y: auto` because the height is now the window's rather than the
- * list's: sixteen rows fit the 720px default and not the 520px minimum, and a
- * rail that scrolls at the minimum size is better than one that clips.
- *
- * The `border-right` is the one mark on it. This file draws no outline around
- * anything, but it does use a 1px `--faint` rule to separate two pieces of data
- * -- `border-top` between rows, `border-bottom` between list items -- and this
- * is that same rule, separating the rail from the page. A background fill would
- * have been the other option and is wrong here: `--surface` equals `--bg`
- * deliberately, and washing the rail would make it a panel.
+ * Not centred any more. It was `margin: 0 auto` in the space right of the old
+ * rail; beside a list panel a centred column floats away from the list it was
+ * chosen from, and left-aligned it keeps its left edge when a scrollbar
+ * arrives. `min-width: 0` is not needed: a block's min-width is already 0,
+ * and the `minmax(0, 1fr)` track inside `.row` is where a long path or a
+ * wide <pre> is actually contained. The 56px sides drop to 24px in a main
+ * area too narrow for the row grid -- the container query after the
+ * breakout rule, which `--label-col` works out -- where they would otherwise
+ * take 112 of the 370px the minimum window leaves beside the list panel.
  */
-.sidebar {
-  position: fixed;
-  top: 0;
-  left: 0;
-  bottom: 0;
-  width: var(--nav-col);
-  padding: 2rem 0.75rem 2rem 0.5rem;
-  overflow-y: auto;
-  overflow-x: hidden;
-  border-right: 1px solid var(--faint);
-}
+.content { max-width: var(--content-max); padding: 40px 56px 48px; }
 
-.sidebar ul {
-  list-style: none;
-  margin: 1.5rem 0 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-}
-
-/*
- * Nav items are buttons, not links: there is nothing to navigate to. Flat, and
- * now genuinely flat -- the outline that used to mark the current item is gone,
- * replaced by the fill below.
- */
-.sidebar button {
-  border-radius: 2px;
-  display: flex;
-  align-items: center;
-  gap: 0.65rem;
-  white-space: nowrap;
-  width: 100%;
-  text-align: left;
-  background: none;
-  border: 0;
-  color: var(--muted);
-  padding: 0.4rem 0.6rem;
-  font-family: var(--font-mono);
-  cursor: pointer;
-}
-
-/*
- * `:not(:disabled)` for specificity, as on the notification panel. Without it
- * this selector and the generic `button:hover` below both score (0,2,1), and
- * being the earlier of the two it lost: hovering any nav item painted it the
- * full marked blue, so hover and "this is the screen you are on" looked
- * identical.
- */
-.sidebar button:hover:not(:disabled) {
-  color: var(--text);
-  background: var(--wash);
-}
-
-/*
- * The marked state, and the pattern every other one in this file follows: the
- * fill inverts and the text inverts with it. Nothing is drawn around it.
- */
-.sidebar button.nav-current,
-.sidebar button.nav-current:hover:not(:disabled) {
-  color: var(--band-ink);
-  background: var(--band);
-}
-
-/* Visible focus, because the whole nav is keyboard-reachable. An outline is not
- * a border -- it is drawn outside the box and only while focused, and removing
- * it would cost the keyboard user the only cue they have. */
-.sidebar button:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
-/*
- * A group's children, indented under it.
- *
- * `.sidebar ul` above puts 1.5rem above the list, which is right for the one
- * list under the version string and wrong for a list nested inside it. Two
- * classes outscore one class plus a type, so this wins on specificity without
- * `!important`.
- */
-.sidebar .nav-children {
-  margin: 0;
-}
-
-/*
- * The indent is the only thing that says "inside `Settings`", so it is the whole
- * signal and it beats `.sidebar button`'s `padding: 0.4rem 0.6rem` by
- * specificity rather than by order.
- */
-.sidebar button.nav-child {
-  padding-left: 1.7rem;
-  /*
-   * `flex-start`, not the inherited `center`. A wrapped label (below) is taller
-   * than the icon, and centering an item against a box taller than itself is
-   * exactly what makes it drift toward the middle of both lines instead of
-   * sitting next to the first one. Scoped to `.nav-child` rather than
-   * `.sidebar button` because only a child can be long enough to wrap --
-   * Dictation, Meetings, Notes, Settings and Developer never do -- so nothing
-   * else's icon moves.
-   */
-  align-items: flex-start;
-}
-
-/*
- * Rail labels wrap inside their own fill instead of overflowing it.
- *
- * `.sidebar button` sets `white-space: nowrap` for the row as a whole, which
- * is right for the button but wrong for its longest label: "Cleanup &
- * summaries" is wider than the child button that carries it, so the current
- * and hover fill -- painted on the `<button>`, not on the page -- stopped
- * eleven pixels before the text did. Widening `--nav-col` would fix the
- * symptom by moving every other measurement in the shell; renaming the label
- * was the owner's call to make, not this rule's. Letting the label itself
- * wrap is the one change that touches neither. It is scoped to `.nav-label`
- * rather than reversed on `.sidebar button` so a short label -- everything but
- * the two long Settings children -- never wraps, because there is never a
- * reason for it to.
- *
- * The retracted rail is untouched: `.shell-sidebar-retracted .nav-label` sets
- * `display: none`, and a display:none element has no box to wrap.
- *
- * `flex-grow: 1` gives the label the whole of the space after the icon rather
- * than a box sized to its text. It was added to keep "Local text models" on
- * one line, and measured it does not: that space is 113px at 15px `:root`, and
- * "Local text models" is 119px on one line ("Cleanup & summaries" 133px), so
- * both still wrap -- a flex item can grow into free space, not past it. Before
- * `white-space: normal` it sat on one line only by running 6px into the
- * button's 9px of right padding. No `min-width: 0` either: it would only let
- * the label shrink below its widest word, which is not what stops it fitting.
- */
-.sidebar .nav-label {
-  white-space: normal;
-  flex-grow: 1;
-}
-
-/*
- * A section header, marked as one.
- *
- * Without this a collapsed `Settings` was indistinguishable from `Dictation` --
- * same face, same colour, same indent, one opening a list and the other opening
- * a screen. The `+` is what separates them, and it is a character rather than an
- * icon because there is no icon set in this project and the machine-voice face
- * is already loaded: `::after` content in ProFontWindows is the same typographic
- * gesture as the identifiers in `.purposes code`.
- *
- * ASCII `+` and `-`, not `U+2212` or a disclosure triangle. ProFontWindows is a
- * programming face and its coverage outside ASCII is not something this file
- * should bet a visible glyph on; a missing character would render as a box in
- * the one element whose whole job is to say what pressing it does.
- */
-.sidebar button.nav-group {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-}
-
-.sidebar button.nav-group::after {
-  content: "+";
-  margin-left: auto;
-}
-
-/*
- * The section you are in, which is a different claim from the screen you are on.
- *
- * A group header takes the ink colour and **not** the fill. In the rail,
- * `--band` marks one thing: the screen you are on
- * (`.sidebar button.nav-current`). The page beside it spends it on at most one
- * more -- a marked control (`button.marked`) for what is in effect now, or the
- * one thing to do next (`button.primary`), never both on one page, since the
- * two would make competing claims in the same colour. Filling the header as
- * well would put a second "this one" mark in the rail's column and make
- * neither reading mean anything.
- */
-.sidebar button.nav-group-open {
-  color: var(--text);
-}
-
-.sidebar button.nav-group-open::after {
-  content: "-";
-}
-
-/*
- * The page, centred in the space the rail does not occupy.
- *
- * This is the element that is capped now, and it carries the padding `.shell`
- * used to. `min-width: 0` is gone with the grid: it was there because a grid
- * item's default `min-width: auto` refuses to shrink below its content, so a
- * long path or a wide <pre> could push the sidebar off screen. Neither half of
- * that is still true -- a block's min-width is already 0, and the rail is fixed,
- * so nothing in the content can displace it. The `minmax(0, 1fr)` tracks inside
- * `.row` and `.note-workspace` are where that concern actually lives.
- */
-.content {
-  max-width: var(--content-max);
-  margin: 0 auto;
-  padding: 2rem 2rem 3rem;
-}
-
-/* The first section in a view sits level with the sidebar heading. */
+/* The first section in a view sits directly under the page header. */
 .view > section:first-of-type,
 .view > *:first-child > section:first-of-type {
   margin-top: 0;
@@ -589,27 +767,25 @@ h3 {
 }
 
 /*
- * Page header, disclosure and status line: the furniture around a screen's
- * `h1`, shared by every top-level view so a colleague sees the same shape on
- * Dictation, Transcription and everywhere else.
+ * Page header and disclosure: the furniture around a screen's `h1`, shared
+ * by the screens that have a `PageHeader` so a colleague sees the same shape
+ * on Transcription, Providers and everywhere else. Dictation and Meetings
+ * have a task hero instead (`.hero-*`, above), whose status says whether the
+ * task is ready -- the job the status line under Meetings' header did before.
  *
  * `.page-intro` is the one sentence saying what the screen is for; `.learn-
  * more` is the rest, folded under a `<details>` so a screen for a colleague
  * who isn't technical leads with the short version and lets anyone go looking
- * for more. `.status-line` is the machine-voice line that opens Dictation and
- * Meetings -- 13px/16px tracked ProFontWindows, the same spec as the
- * sidebar and every other string reporting on the machine rather than
- * addressing the person -- and `.status-needs-setup` is `.caveat` worn by that
- * line's "nothing is wired up yet" state, which needs the caveat's mark but
- * not its top margin (see the rule itself, below `.caveat`).
+ * for more.
  */
 .page-header {
   margin: 0 0 2.25rem;
 }
 
+/* The canvas' 32/40px, in px rather than rem so it matches it exactly. */
 .page-header h1 {
-  font-size: 1.75rem;
-  line-height: 1.2;
+  font-size: 32px;
+  line-height: 40px;
 }
 
 .page-intro {
@@ -660,15 +836,6 @@ h3 {
   margin: 0.4rem 0 0;
 }
 
-.status-line {
-  font-family: var(--font-mono);
-  font-size: 13px;
-  line-height: 16px;
-  letter-spacing: 0.5px;
-  text-transform: uppercase;
-  margin: 0 0 0.75rem;
-}
-
 /*
  * A section is a region, not a card. The fill is what separates it from the
  * page; the padding is what separates it from its neighbour.
@@ -678,11 +845,12 @@ h3 {
  *
  * The horizontal padding is gone with the fill it used to sit inside: 1.5rem of
  * inset against an invisible edge is an indent with nothing to indent from, and
- * it pushed every section out of line with the `h1` and the sidebar above it.
- * The separation is the margin now, which is why the margin grew.
+ * it pushed every section out of line with the `h1` above it.
+ * The separation is the margin now, which is why the margin grew -- to the
+ * Kit's 40px, in px so it does not move with the root size.
  */
 section {
-  margin-top: 2.75rem;
+  margin-top: 40px;
   padding: 0;
   background: var(--surface);
 }
@@ -699,8 +867,9 @@ section {
 /*
  * A rule between rows, which is a different thing from a box around one: it
  * separates two pieces of data from each other rather than fencing the pair off
- * from the page. `--faint` is the site's own value for exactly this weight of
- * mark.
+ * from the page. `--rule`, the Kit's weight for a line between rows -- it was
+ * `--faint`, the site's value, which is the same grey in light and a shade
+ * lighter in dark.
  */
 /*
  * A grid, not `justify-content: space-between`.
@@ -722,8 +891,9 @@ section {
   grid-template-columns: var(--label-col) minmax(0, 1fr);
   gap: var(--row-gap);
   align-items: baseline;
-  padding: 0.55rem 0;
-  border-top: 1px solid var(--faint);
+  /* The Kit's 14px, in px for the same reason `section`'s 40px is. */
+  padding: 14px 0;
+  border-top: 1px solid var(--rule);
 }
 
 .row:first-of-type {
@@ -852,35 +1022,6 @@ section > .muted {
   font-weight: 400;
 }
 
-/* `.status-line`'s caveat state -- same mark, with the top margin zeroed.
- * The box stands where the Ready line would, first in its section, and
- * `.status-line` has only a bottom margin, so the Ready line sits flush with
- * the section's top; the caveat's own 0.75rem above would put Needs setup
- * lower than Ready. The `.status-line` inside the box keeps its bottom margin,
- * which is the gap between "Needs setup" and the problem sentence. */
-.status-needs-setup {
-  margin-top: 0;
-}
-
-/*
- * The fix button lines its label up with the problem sentence above it.
- *
- * `section > button` does that for a button standing in a section, by giving
- * back the button's 0.9rem of left padding in the margin -- and it does not
- * reach this one, which is the box's child, not the section's. So the label
- * sat 0.9rem inside the sentence: the box's padding, then the button's own.
- * Plain, the button takes its left padding down to the box's 0.75rem and
- * gives that back, so the label lands on the sentence and the hover fill
- * stops at the inner edge of the bar rather than painting over it. Filled
- * (`button.primary`, when the page's Start is held back and this is the one
- * thing to do next), it keeps its padding and its fill starts on the text
- * column, the way `section > button.primary` does.
- */
-.status-needs-setup > button:not(.primary) {
-  margin-left: -0.75rem;
-  padding-left: 0.75rem;
-}
-
 /*
  * A caveat about a hotkey that works and also does something else.
  *
@@ -934,7 +1075,7 @@ section > .muted {
   flex-wrap: wrap;
   gap: 0.4rem;
   padding: 0.5rem 0;
-  border-bottom: 1px solid var(--faint);
+  border-bottom: 1px solid var(--rule);
 }
 
 .list li:last-child {
@@ -982,7 +1123,8 @@ section > .muted {
 /*
  * The marked button: this is the one currently in effect.
  *
- * Same gesture as `.sidebar button.nav-current` and for the same reason -- the
+ * Same gesture as the rail's current entry (`.rail-item[aria-current]`) and
+ * for the same reason -- the
  * fill inverts, the text inverts with it, nothing is drawn around it -- so
  * "this is the current one" reads identically wherever it appears. `--band` is
  * the site's blue and is already contrast-checked in both themes, which a new
@@ -1044,15 +1186,31 @@ button.marked:hover:not(:disabled) {
 .note-editor .milkdown .ProseMirror *::-moz-selection { background: var(--crepe-color-hover); }
 .note-editor .milkdown .ProseMirror .ProseMirror-selectednode, .note-editor .milkdown .ProseMirror li.ProseMirror-selectednode { background: var(--crepe-color-hover); }
 
-.note-detail-header input[aria-label="Title"] {
-  min-width: min(20rem, 100%);
-  flex: 1 1 20rem;
-  padding: 0.25rem 0;
+/*
+ * The note's title is the page's heading, at the canvas' 32px, and it is a
+ * field: borderless and unfilled, so it reads as the heading it is until the
+ * caret is in it. Weight 400, because that is the only weight Switzer ships.
+ * `.note-detail` in the selector because the generic text-field rule further
+ * down, `input:not([type="checkbox"]):not([type="radio"])`, is as specific as
+ * the rest of it and comes later: without it the title took that rule's fill,
+ * padding and inherited 15px.
+ */
+.note-detail .note-detail-header input[aria-label="Title"] {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  padding: 0;
   color: var(--text);
   font: inherit;
-  font-size: 1.25rem;
+  font-size: 32px;
+  font-weight: 400;
+  line-height: 40px;
+  letter-spacing: -0.4px;
+  /* A title longer than the column ends in an ellipsis while the caret is elsewhere, rather than mid-letter. */
+  text-overflow: ellipsis;
   background: transparent;
   border: 0;
+  border-radius: 2px;
 }
 
 /*
@@ -1126,16 +1284,6 @@ button.marked:hover:not(:disabled) {
   cursor: pointer;
 }
 
-.transcript-row-current {
-  color: var(--band-ink);
-  background: var(--band);
-}
-
-.transcript-row-current .transcript-speaker,
-.transcript-row-current .transcript-clock {
-  color: var(--band-ink);
-}
-
 .transcript-row-muted {
   color: var(--muted);
   cursor: default;
@@ -1155,6 +1303,7 @@ button.marked:hover:not(:disabled) {
 
 /* Keep a renameable label in the row's text flow without button chrome. */
 button.transcript-speaker {
+  margin: 0;
   background: none;
   border: 0;
   padding: 0;
@@ -1173,12 +1322,28 @@ button.transcript-speaker:focus-visible {
 /* The global button hover fill would turn an inline label into a separate box. */
 .transcript-rows button.transcript-speaker:hover:not(:disabled) { background: none; }
 
-/* The active row's filled band needs readable ink even when its label is focused. */
-.transcript-row-current button.transcript-speaker,
-.transcript-row-current button.transcript-speaker:hover:not(:disabled),
-.transcript-row-current button.transcript-speaker:focus-visible {
-  color: var(--band-ink);
-}
+/*
+ * `TranscriptPanel`'s rows -- a note's Transcript tab, and its column in a
+ * wide window -- as the canvas draws them: who and when on one line, the
+ * speaker in the text colour and the time in the machine voice, muted, and
+ * what was said underneath. Scoped to `.transcript`, the panel's own `aside`,
+ * because the meeting window's live rows share `.transcript-rows` and keep
+ * the grid above.
+ *
+ * The selected or playing row is `--band-wash` behind unchanged text, its
+ * time in `--band-text`, the text-safe blue. It was a solid `--band` fill
+ * with every part of the row in `--band-ink`.
+ */
+.transcript .transcript-rows li { display: flex; flex-direction: column; align-items: stretch; gap: 2px; padding: 10px 12px; }
+.transcript-row-head { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.transcript .transcript-speaker { font-size: 13px; line-height: 18px; color: var(--text); }
+.transcript .transcript-row-muted .transcript-speaker { color: var(--muted); }
+.transcript .transcript-clock { font-size: 12px; line-height: 16px; color: var(--muted); }
+.transcript-text { font-size: 14.5px; line-height: 22px; overflow-wrap: anywhere; }
+button.transcript-play { height: 24px; margin: 0 0 0 auto; padding: 0 8px; border-radius: 2px; color: var(--muted); font-size: 12.5px; line-height: 18px; }
+button.transcript-play:hover:not(:disabled) { color: var(--text); }
+.transcript-row-current { background: var(--band-wash); }
+.transcript .transcript-row-current .transcript-clock { color: var(--band-text); }
 
 /* Wrap on narrow notes while keeping the field and actions beside their label when space permits. */
 .transcript-rename {
@@ -1224,28 +1389,37 @@ button.transcript-speaker:focus-visible {
 }
 
 /*
- * The transcript drops below the editor when there is not room for both.
+ * The transcript beside the note, in a window 1280px wide or wider.
  *
- * The threshold is re-derived rather than kept. This was `64rem`, which tested
- * the *viewport* while the container was 46rem -- so in the 1000px default
- * window (62.5rem) it fired every time, and this layout has **never** shown two
- * columns in the shipped application. The container is now
- * `viewport - var(--nav-col) - 4rem` of `.content` padding, and two columns want
- * 44.5 + 1.5 + 22 = 68rem of it, so the viewport threshold is 68 + 13 + 4 =
- * 85rem... which the cap makes unnecessary: `.content` stops growing at
- * `--content-max`, and the narrowest container that still holds both columns
- * without squeezing the editor below ~40rem is 63.5rem, i.e. a viewport of
- * 80.5rem.
+ * `.note-workspace` is always one column: the editor and the summary, the
+ * transcript and the replay are its tabs. What changes at the width is the
+ * note around it. `NoteWorkspace.tsx` matches `(min-width: 1280px)` and, while
+ * it holds, adds `.note-detail-wide` to the article: `minmax(0, 1fr) 340px`,
+ * with the transcript taken out of its tab into a `--panel` column behind a
+ * left rule, the Transcript tab hidden, and the player at the foot of that
+ * column -- or, while Replay is open, in full over it in the note column, as
+ * below the width. The note and the column each scroll on their own there,
+ * so the article is exactly as tall as `.notes-main` and neither of them is.
  *
- * So: one column at or below 80rem, two above. At the default window it is one
- * column exactly as before -- no change there -- and on a maximised display it
- * is two, which it never was.
+ * Why 1280: beside the 68px rail, the card's 10px of margin and border and
+ * the 272px list panel, a 1280px window leaves the note about 590px next to
+ * the column; narrower, and the editor goes below a readable measure to make
+ * room. Below the width the article is a one-track grid, so the measured
+ * claim is the same either way -- one track, or two.
  */
-@media (max-width: 80rem) {
-  .note-workspace {
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
+.note-detail { display: grid; grid-template-columns: minmax(0, 1fr); flex: none; }
+.note-detail-wide { flex: 1; min-height: 0; grid-template-columns: minmax(0, 1fr) 340px; }
+.note-detail-wide > .note-body { min-height: 0; overflow-y: auto; }
+.note-side { display: flex; flex-direction: column; min-height: 0; background: var(--panel); border-left: 1px solid var(--rule); }
+.note-side-label { flex: none; display: flex; align-items: center; height: 52px; margin: 0; padding: 0 20px; font: 12px/16px var(--font-mono); letter-spacing: .5px; text-transform: uppercase; color: var(--muted); }
+.note-side-body { flex: 1; min-height: 0; overflow-y: auto; }
+.note-side-body > p { margin: 0 20px; }
+.note-side-body .transcript > button { margin: 0 20px 8px; }
+.note-side-body .transcript-rename { margin: 0 20px 12px; }
+.note-side-body .transcript-rename input { min-width: 0; flex: 1 1 10rem; }
+.note-side-body .transcript-rows { max-height: none; margin: 0; }
+.note-side-body .transcript .transcript-rows li { padding: 10px 20px; }
+.note-side-player { flex: none; padding: 12px 16px; border-top: 1px solid var(--rule); background: var(--bg); }
 
 /*
  * Several controls on one settings row lay out across, not down.
@@ -1310,6 +1484,23 @@ button.transcript-speaker:focus-visible {
 .row > .row-value > .controls {
   margin-left: calc(-1 * (var(--label-col) + var(--row-gap)));
   width: calc(100% + var(--label-col) + var(--row-gap));
+}
+
+/*
+ * Rows stack in a main area too narrow for two tracks: below 554.5px, the
+ * width `--label-col` works out, which only windows from 720 to 904px
+ * reach, and only with the list panel open. The label goes over its value,
+ * the value takes the whole column, and a lone value or a row-spanning
+ * control has no label track left to sit beside or cancel -- the negative
+ * margin above would hang it off the page's left edge. `.content` gives up
+ * most of its side padding for the same reason. After every rule it
+ * overrides, which it matches at equal specificity.
+ */
+@container main (width < 554.5px) {
+  .content { padding: 32px 24px 40px; }
+  .row { grid-template-columns: minmax(0, 1fr); row-gap: 4px; }
+  .row > .row-value:only-child { grid-column: auto; }
+  .row > .row-value > .controls { margin-left: 0; width: 100%; }
 }
 
 /*
@@ -1406,25 +1597,13 @@ label:has(> input[type="checkbox"]) {
 }
 
 /*
- * The editable saved-note surface, deliberately separate from `.preview` above.
- * The preview is exact export bytes; this surface hosts the editor and optional
- * transcript workspace.
+ * The editable saved-note surface (`.note-detail`, laid out with the wide
+ * layout above), deliberately separate from `.preview` above. The preview is
+ * exact export bytes; this surface hosts the editor and the transcript. It sits
+ * on the card itself, with no wash and no inset of its own: `.note-page` sets
+ * its measure and padding, and its header is the title over the meta row.
  */
-.note-detail {
-  margin: var(--row-gap) 0 1rem;
-  padding: 0.9rem 1rem;
-  background: var(--wash);
-}
-
-.note-detail-header {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 0.75rem;
-  padding-bottom: 0.75rem;
-  border-bottom: 1px solid var(--faint);
-}
+.note-detail-header { display: block; }
 
 /* ----------------------------------------------------------- panel windows */
 /*
@@ -1461,12 +1640,13 @@ label:has(> input[type="checkbox"]) {
 /* ------------------------------------------------------------------ overlay */
 /*
  * The overlay window is transparent, so the panel paints its own background.
- * It must stay legible over anything behind it -- a dark editor or a white
- * document -- so it carries its own contrast rather than inheriting. That is
- * why it is absent from the theme blocks above and keeps its own colours here.
+ * It now follows the theme tokens and the OS colour scheme, the same decision
+ * this redesign makes for `.notify` below: the card's own 1px rule and shadow
+ * give it a legible edge over anything behind it, so it no longer has to carry
+ * a fixed dark background of its own to stay readable regardless of theme.
  *
- * The square corners are the site's; the typeface is the one it uses for a
- * wordmark, which is what this is.
+ * The square corners are the site's -- 4px, the window card's own value; the
+ * typeface is the one it uses for a wordmark, which is what this is.
  */
 
 .overlay {
@@ -1475,23 +1655,33 @@ label:has(> input[type="checkbox"]) {
   gap: 0.6rem;
   height: 100%;
   padding: 0 1rem;
-  background: rgba(18, 18, 22, 0.92);
-  color: #f4f4f5;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  box-shadow: var(--card-shadow);
   /* The overlay must never intercept a click meant for the window beneath. */
   user-select: none;
 }
 
+/*
+ * The status mark the rest of the Kit uses: a filled 7px `--band` square at
+ * rest, a round 8px `--rec` dot -- the one round mark the Kit allows -- while
+ * recording. `.notify` below overrides the resting fill to `--muted`, since
+ * nothing there is claiming "ready".
+ */
 .indicator {
-  width: 0.7rem;
-  height: 0.7rem;
-  /* A dot, not a rounded box -- the one radius the restyle keeps. */
-  border-radius: 50%;
+  width: 7px;
+  height: 7px;
   flex: none;
-  background: #6b7280;
+  background: var(--band);
 }
 
 .indicator-recording {
-  background: #ef4444;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--rec);
   animation: pulse 1.4s ease-in-out infinite;
 }
 
@@ -1535,7 +1725,7 @@ label:has(> input[type="checkbox"]) {
   padding: 0 0.9rem;
   background: var(--bg);
   color: var(--text);
-  border: 1px solid var(--faint);
+  border: 1px solid var(--rule);
   font-family: var(--font-sans);
   font-size: 13px;
   line-height: 1.4;
@@ -1544,7 +1734,8 @@ label:has(> input[type="checkbox"]) {
   user-select: none;
 }
 
-/* The neutral dot belongs to these panels; the overlay keeps its own colour. */
+/* The neutral square belongs to these panels: nothing here is claiming
+ * "ready", so it is `--muted` rather than `--band`. */
 .notify .indicator:not(.indicator-recording) {
   background: var(--muted);
 }
@@ -1612,31 +1803,30 @@ label:has(> input[type="checkbox"]) {
 /*
  * The second line, when what it carries is not a process name but a fault.
  *
- * Amber rather than the red the panel's edge already uses, and the split is the
- * same one `.caveat.warn` makes: the red edge means *recording*, which is still
- * true and is the one indicator the brief requires. Painting this line red too
- * would say the recording had failed, when the recording is the half that is
- * working.
- * The theme dropped `--warn` because on the white page a caveat says the same
- * thing structurally and a real problem is `--error`. On this panel the fault
- * line sits beside a red recording edge, so it must not be red: amber alone
- * says "the transcript stopped, the recording did not". This panel-local pair
- * measures 10.64:1 on the dark background and 4.84:1 on the light background.
+ * Every message that reaches this class today is a failure, not a caveat:
+ * `MeetingNotification` and `UpdateNotification` both use it only for "state
+ * unknown", when reading the live status threw; `MeetingPanel` uses it for a
+ * stalled recording thread or a live transcript whose provider connection
+ * died. None of them is "needs attention, nothing has failed" -- so, as
+ * `.row-detail.warn` already found (`# there is no --warn`, near the top),
+ * this is `--error`, not the amber it used to be.
+ *
+ * The round `--rec` dot beside this text still means *recording*, and stays
+ * true the whole time this line is shown -- painting the text does not
+ * repaint the dot. `--rec` and `--error` are the same value in both themes,
+ * by design (`# there is no --warn`), so the two can share a colour without
+ * being confused for each other: one is a round mark, this is prose, and
+ * `.live-status`'s `--rec` text beside `.rec-dot` already pairs them the same
+ * way elsewhere in this file.
  */
 .notify-detail.notify-alert {
-  color: #fbbf24;
-}
-
-@media (prefers-color-scheme: light) {
-  .notify-detail.notify-alert {
-    color: #a16207;
-  }
+  color: var(--error);
 }
 
 .notify-recording {
   /* A red edge, so "recording" reads at a glance and not only in words. An
    * inset shadow rather than a border keeps the content size unchanged. */
-  box-shadow: inset 0 0 0 1.5px rgba(239, 68, 68, 0.75);
+  box-shadow: inset 0 0 0 1.5px var(--rec);
 }
 
 /* The larger recording window gives notes and transcript their own body while
@@ -1672,6 +1862,10 @@ label:has(> input[type="checkbox"]) {
  * border and their own width while every field around them lost both, and the
  * inconsistency read as a rendering glitch rather than as a missing selector.
  * Naming what is *not* a text field cannot go stale the same way.
+ *
+ * A settings page's fields and selects take the Kit's 36px, 1px edge and 2px
+ * corner instead, on the page colour (`# Settings pages`, near the end); these
+ * rules still hold everywhere else.
  */
 input:not([type="checkbox"]):not([type="radio"]),
 select {
@@ -1869,6 +2063,8 @@ button {
   margin-top: 0.75rem;
   padding: 0.45rem 0.9rem;
   border: 0;
+  /* The Kit's control corner, which a filled hover or a `.secondary` edge shows. */
+  border-radius: 2px;
   background: transparent;
   color: var(--text);
   font: inherit;
@@ -1895,6 +2091,24 @@ button.primary {
 button.primary:hover:not(:disabled) {
   background: color-mix(in srgb, var(--band) 88%, var(--band-ink));
   color: var(--band-ink);
+}
+
+/*
+ * The Kit's secondary button: an action beside the primary one that is not
+ * the next thing to do -- Meetings' Discard and "Record this call",
+ * Providers' Test connections, Change and Clear. Edged rather than filled, so
+ * it cannot be read as the primary, and its hover darkens the edge instead of
+ * washing the fill. The edge is `--edge`: `#cfd0d6` in light, `--rule`'s
+ * value in dark.
+ */
+button.secondary {
+  border: 1px solid var(--edge);
+  background: var(--bg);
+}
+
+button.secondary:hover:not(:disabled) {
+  border-color: var(--muted);
+  background: var(--bg);
 }
 
 section > button.primary,
@@ -1940,103 +2154,50 @@ button:disabled {
   cursor: default;
 }
 
-/* Keep the disclosure control reachable when the navigation is retracted. */
-.shell-sidebar-retracted {
-  --nav-col: 3.5rem;
-}
-
-.app-titlebar button.sidebar-toggle,
-.app-titlebar button.titlebar-search-trigger,
-.app-titlebar button.titlebar-history-button {
+/*
+ * The title bar's own buttons -- the list-panel toggle, back and forward --
+ * as the canvas draws them: 32px squares with the 2px corner every button
+ * has, the first 10px in from the window's edge. `margin` and `padding` are
+ * zeroed because the generic `button` rule gives every button both.
+ */
+.app-titlebar button.titlebar-button {
   display: flex;
   align-items: center;
-  justify-content: flex-start;
-  width: var(--nav-button-size);
-  height: var(--nav-button-size);
-  padding: 0.4rem;
+  justify-content: center;
   flex-shrink: 0;
   align-self: center;
+  width: 32px;
+  height: 32px;
   margin: 0;
+  padding: 0;
+  border-radius: 2px;
   color: var(--text);
 }
 
-.app-titlebar button.sidebar-toggle {
-  /* Use the same left edge and icon inset as the sidebar buttons. */
-  margin-left: calc(0.5rem + var(--nav-button-offset));
+.app-titlebar > button.titlebar-button:first-child {
+  margin-left: 10px;
 }
 
-.sidebar-toggle svg {
-  flex-shrink: 0;
+.app-titlebar button.titlebar-button:disabled {
+  opacity: 0.3;
+  cursor: default;
 }
 
-.shell-sidebar-retracted .sidebar {
-  padding-right: 0.5rem;
-  padding-left: 0.5rem;
-}
-
-.nav-icon { display: block; width: 18px; height: 18px; flex: 0 0 18px; pointer-events: none; }
-/* Share the compact button's left edge and icon inset in both states. */
-.sidebar, .app-titlebar { --nav-button-size: calc(18px + 0.8rem); --nav-button-offset: calc((3.5rem - 1px - var(--nav-button-size)) / 2 - 0.5rem); }
-.sidebar button:not(.nav-child) { margin-left: var(--nav-button-offset); width: calc(100% - var(--nav-button-offset)); padding-left: 0.4rem; }
-span.nav-icon { background: currentColor; mask-position: center; mask-size: contain; mask-repeat: no-repeat; }
-.nav-icon-voice { mask-image: url('./assets/navigation/voice.svg'); }
-.nav-icon-text { mask-image: url('./assets/navigation/text.svg'); }
-.nav-icon-upload { mask-image: url('./assets/navigation/upload.svg'); }
-.nav-icon-code { mask-image: url('./assets/navigation/code.svg'); }
-.nav-icon-terminal { mask-image: url('./assets/navigation/terminal.svg'); }
-.nav-icon-git-branch { mask-image: url('./assets/navigation/git-branch.svg'); }
-.nav-icon-flare { mask-image: url('./assets/navigation/flare.svg'); }
-.nav-icon-calendar-arrow-up { mask-image: url('./assets/navigation/calendar-arrow-up.svg'); }
-.nav-icon-align-left { mask-image: url('./assets/navigation/align-left.svg'); }
-.nav-icon-square-wave { mask-image: url('./assets/navigation/square-wave.svg'); }
-.nav-icon-user-plus { mask-image: url('./assets/navigation/user-plus.svg'); }
-.nav-icon-tv { mask-image: url('./assets/navigation/tv.svg'); }
-.shell-sidebar-retracted #sidebar-navigation { width: 100%; }
-.shell-sidebar-retracted .sidebar button { justify-content: flex-start; gap: 0; width: var(--nav-button-size); height: var(--nav-button-size); padding: 0 0.4rem; margin-left: var(--nav-button-offset); margin-right: 0; }
-.shell-sidebar-retracted .nav-label { display: none; }
-.shell-sidebar-retracted .nav-group::after { display: none; }
-.shell-sidebar-retracted .sidebar button.nav-group.nav-current { color: var(--band-ink); }
-
-/* Override the fixed rail rules above on narrow browser windows. */
-@media (max-width: 44rem) {
-  .shell .sidebar {
-    position: static;
-    width: auto;
-    padding: 1.5rem 1.5rem 1rem;
-    overflow: visible;
-    border-right: 0;
-    border-bottom: 1px solid var(--faint);
-  }
-
-}
-
-/* A brief resize keeps the toggle anchored while the page gains or loses space. */
-@media (prefers-reduced-motion: no-preference) {
-  .shell {
-    transition: padding-left 160ms ease-in-out;
-  }
-
-  .sidebar {
-    transition: width 160ms ease-in-out;
-  }
-
-  .sidebar button:not(.nav-child) {
-    transition: width 160ms ease-in-out;
-  }
-}
-
-/* Lay out navigation at its final width while the rail reveals it. This avoids
- * transient wrapping and scrollbars during expansion; tall menus still scroll. */
-@media (min-width: 44.001rem) {
-  #sidebar-navigation {
-    width: calc(var(--nav-col) - 1.25rem - 1px);
-  }
-}
+/*
+ * The Kit icon set (`lib/icons.ts`, drawn by `components/Icon.tsx`):
+ * square-ended strokes for controls, a solid fill for the two states that are
+ * a fill rather than a stroke. Replaces the old `.nav-icon`/`.nav-icon-*`
+ * masks, which existed only because some icons shipped as separate SVG files
+ * under `src/assets/navigation` -- every icon is now this one path-based
+ * component instead, the rail's and the title bar's included.
+ */
+.icon { fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: square; stroke-linejoin: miter; flex-shrink: 0; }
+.icon-filled { fill: currentColor; stroke: none; }
 
 /* Persistent dictation control: native window retains WS_EX_NOACTIVATE. */
 .microphone-overlay { height: 100%; overflow: clip; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; padding: 0; gap: 6px; user-select: none; }
 /* Keep the hit target and layout fixed as the visible pill expands. */
-.floating-microphone { position: relative; display: flex; align-items: center; justify-content: center; width: 52px; height: 32px; min-height: 32px; padding: 0; flex-shrink: 0; border-radius: 1px; background: transparent; color: white; box-shadow: none; border: 0; cursor: pointer; touch-action: none; }
+.floating-microphone { position: relative; display: flex; align-items: center; justify-content: center; width: 52px; height: 32px; min-height: 32px; padding: 0; flex-shrink: 0; border-radius: 2px; background: transparent; color: white; box-shadow: none; border: 0; cursor: pointer; touch-action: none; }
 button.floating-microphone:hover:not(:disabled) { background: transparent; color: white; border-color: transparent; box-shadow: none; }
 .floating-microphone:focus-visible { outline: 2px solid #858985; outline-offset: 2px; }
 .floating-microphone[aria-disabled="true"] { cursor: progress; }
@@ -2046,7 +2207,7 @@ button.floating-microphone:hover:not(:disabled) { background: transparent; color
 .microphone-spinner { position: relative; display: block; width: 18px; height: 18px; border: 2px solid #8888; border-top-color: currentColor; border-radius: 50%; animation: microphone-spin 1s linear infinite; }
 @keyframes microphone-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .microphone-spinner { animation: none; } .microphone-controls::before, .microphone-glyph { transition: none; } }
-.microphone-error { display: flex; gap: 6px; align-items: flex-start; padding: 8px; background: var(--bg); color: var(--text, #eee); font-size: 12px; width: 100%; max-height: 72px; overflow: auto; border-radius: 8px; box-shadow: 0 2px 6px #0005; }
+.microphone-error { display: flex; gap: 6px; align-items: flex-start; padding: 8px; background: var(--bg); color: var(--text, #eee); font-size: 12px; width: 100%; max-height: 72px; overflow: auto; border-radius: 4px; box-shadow: 0 2px 6px #0005; }
 .microphone-error span { flex: 1; overflow-wrap: anywhere; }
 .microphone-error button { padding: 0 4px; min-height: 20px; }
 .microphone-status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
@@ -2066,7 +2227,8 @@ button.microphone-language-toggle:hover:not(:disabled) { background: transparent
 .is-vertical .microphone-language-toggle { left: 34px; top: 74px; width: 28px; height: 16px; min-height: 16px; border-radius: 0 0 2px 2px; }
 .microphone-language-menu { width: calc(100% - 12px); max-height: 252px; overflow: auto; padding: 10px; border-radius: 4px; background: var(--bg); color: var(--text); font-size: 12px; line-height: 1.4; box-shadow: 0 2px 6px #0005; }
 .local-language-picker { border: 0; padding: 0; margin: 0; min-width: 0; }
-.local-language-picker legend { font-weight: 600; margin-bottom: 6px; }
+/* Switzer ships at 400 only, so bold here was faked. */
+.local-language-picker legend { font-weight: 400; margin-bottom: 6px; }
 .local-language-picker p { margin: 6px 0; }
 .local-language-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 12px; margin-top: 8px; max-width: 320px; }
 .local-language-options label { display: flex; align-items: center; gap: 6px; }
@@ -2083,7 +2245,7 @@ button.microphone-language-toggle:hover:not(:disabled) { background: transparent
 .is-vertical .microphone-language-toggle span { transform: rotate(90deg); }
 
 /* One animated surface, with separate dictation and language hit targets. */
-.microphone-controls::before { content: ""; position: absolute; left: 48px; top: 48px; width: 32px; height: 6px; border-radius: 1px; background: #858985; --surface-shift: 0px; --surface-angle: 0deg; transform: translate(-50%, -50%) rotate(var(--surface-angle)) translateX(var(--surface-shift)); transition: width 160ms ease, height 160ms ease, transform 160ms ease, background-color 160ms ease; pointer-events: none; }
+.microphone-controls::before { content: ""; position: absolute; left: 48px; top: 48px; width: 32px; height: 6px; border-radius: 2px; background: #858985; --surface-shift: 0px; --surface-angle: 0deg; transform: translate(-50%, -50%) rotate(var(--surface-angle)) translateX(var(--surface-shift)); transition: width 160ms ease, height 160ms ease, transform 160ms ease, background-color 160ms ease; pointer-events: none; }
 .is-vertical .microphone-controls::before { --surface-angle: 90deg; }
 .microphone-controls:has(.floating-microphone[data-expanded="true"])::before { width: 68px; height: 28px; --surface-shift: 8px; border-radius: 2px; background: #303430; }
 .microphone-controls:is(:hover, .hold-hover, :has(:focus-visible))::before { width: 68px; height: 28px; --surface-shift: 8px; border-radius: 2px; background: #303430; }
@@ -2097,9 +2259,12 @@ button.microphone-language-toggle:hover:not(:disabled) { background: transparent
 
 /* Custom chrome belongs only to the main window; floating panels stay borderless. */
 :root[data-window="main"] { --titlebar-height: 38px; overflow: hidden; scrollbar-gutter: auto; }
-:root[data-window="main"] .shell { position: fixed; inset: var(--titlebar-height) 0 0; overflow-y: auto; }
-:root[data-window="main"] .sidebar { top: var(--titlebar-height); }
-.app-titlebar { position: fixed; inset: 0 0 auto; height: var(--titlebar-height); display: flex; align-items: stretch; z-index: 1000; background: var(--bg); color: var(--text); border-bottom: 1px solid var(--faint); user-select: none; }
+/*
+ * The title bar sits on the frame, not on the card: `--frame`, and no rule
+ * under it, so the bar and the frame read as one window around the card
+ * rather than a white strip above a grey one.
+ */
+.app-titlebar { position: fixed; inset: 0 0 auto; height: var(--titlebar-height); display: flex; align-items: stretch; z-index: 1000; background: var(--frame); color: var(--text); user-select: none; }
 .app-titlebar-drag { flex: 1; min-width: 0; display: flex; align-items: center; padding-left: 16px; font-size: 13px; cursor: default; }
 .app-titlebar-buttons { display: flex; flex-shrink: 0; }
 .app-titlebar-buttons button { display: flex; align-items: center; justify-content: center; width: 46px; height: 100%; min-height: 0; margin: 0; padding: 0; border: 0; border-radius: 0; background: transparent; color: inherit; box-shadow: none; }
@@ -2107,21 +2272,19 @@ button.microphone-language-toggle:hover:not(:disabled) { background: transparent
 .app-titlebar-buttons button:active:not(:disabled) { background: var(--band); color: var(--band-ink); }
 .app-titlebar-buttons button.window-close:hover:not(:disabled) { background: #c42b1c; color: white; }
 .app-titlebar-buttons button:focus-visible { outline: 2px solid var(--band); outline-offset: -3px; }
-.window-icon { display: block; width: 20px; height: 20px; background: currentColor; mask-position: center; mask-size: contain; mask-repeat: no-repeat; pointer-events: none; }
-.window-icon-minimize { mask-image: url('./assets/window/minus.svg'); }
-.window-icon-maximize { mask-image: url('./assets/window/enlarge.svg'); }
-.window-icon-restore { mask-image: url('./assets/window/reduce.svg'); }
-.window-icon-close { mask-image: url('./assets/window/xmark.svg'); }
 .window-control-error { position: fixed; top: var(--titlebar-height); right: 0; z-index: 1001; max-width: 32rem; padding: 12px; background: var(--bg); color: var(--text); border: 1px solid var(--faint); }
 
-:root[data-window="main"] .sidebar { padding-top: 0.75rem; }
-#sidebar-navigation > ul { margin-top: 0; }
-
-.titlebar-search { position: relative; align-self: center; flex: 0 0 var(--nav-button-size); min-width: var(--nav-button-size); margin-left: 6px; height: var(--nav-button-size); }
-.titlebar-search[data-expanded="true"] { flex: 0 1 260px; min-width: 150px; }
-.titlebar-search-trigger .titlebar-search-icon { position: static; width: 18px; height: 18px; flex: 0 0 18px; }
-.app-titlebar .titlebar-search input { width: 100%; height: 28px; min-height: 0; margin: 0; padding: 3px 10px 3px 32px; border: 1px solid var(--faint); border-radius: 2px; background: var(--bg); color: var(--text); font: inherit; font-size: 13px; }
-.app-titlebar .titlebar-search input:focus { outline: 1px solid var(--band); outline-offset: -1px; }
+/*
+ * The search field: always drawn, 380px of `--selected` with the 2px control
+ * corner, centred between the two drag regions. The icon and the CTRL K hint
+ * sit over the field's own padding with `pointer-events: none`, so a press on
+ * either lands in the field. It shrinks rather than push the window buttons
+ * off a narrow window. Focus is the generic `input:focus-visible` ring.
+ */
+.titlebar-search { position: relative; align-self: center; flex: 0 1 380px; min-width: 0; height: 28px; }
+.titlebar-search > .icon { position: absolute; left: 10px; top: 6.5px; color: var(--muted); pointer-events: none; }
+.app-titlebar .titlebar-search input { width: 100%; height: 28px; min-height: 0; margin: 0; padding: 0 60px 0 33px; border: 0; border-radius: 2px; background: var(--selected); color: var(--text); font: inherit; font-size: 13px; }
+.titlebar-search-key { position: absolute; top: 0; right: 10px; font: 12px/28px var(--font-mono); letter-spacing: .5px; color: var(--muted); pointer-events: none; }
 .titlebar-search input::-webkit-search-cancel-button {
   -webkit-appearance: none;
   width: 16px;
@@ -2130,7 +2293,6 @@ button.microphone-language-toggle:hover:not(:disabled) { background: transparent
   mask: url('./assets/window/xmark.svg') center / contain no-repeat;
   cursor: pointer;
 }
-.titlebar-search-icon { position: absolute; left: 0.4rem; top: 0.4rem; width: 18px; height: 18px; transform: scale(1.11); background: currentColor; mask: url('./assets/window/text-magnifying-glass.svg') center / contain no-repeat; pointer-events: none; }
 .titlebar-search-popup { position: absolute; top: calc(100% + 6px); left: 0; width: min(420px, calc(100vw - 64px)); max-height: min(420px, calc(100vh - 60px)); overflow-y: auto; padding: 6px; border: 1px solid var(--faint); border-radius: 2px; background: var(--bg); color: var(--text); box-shadow: 0 6px 18px #0002; }
 .titlebar-search-status { padding: 6px 8px; font-size: 12px; color: var(--muted); }
 .titlebar-search-popup button { display: flex; flex-direction: column; gap: 3px; width: 100%; margin: 0; padding: 8px; text-align: left; border: 0; border-radius: 2px; background: transparent; color: var(--text); font-size: 13px; }
@@ -2139,113 +2301,117 @@ button.microphone-language-toggle:hover:not(:disabled) { background: transparent
 .titlebar-search-popup button strong { white-space: nowrap; }
 .titlebar-search-popup button span { font-size: 12px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 
-/* Notes keeps the writing surface independent of the collapsible library. */
-.content:has(.notes-view) { max-width: none; padding: 0; }
-:root[data-window="main"] .shell:has(.notes-view) { overflow: hidden; }
-.notes-view { --notes-rail: 17rem; height: calc(100dvh - var(--titlebar-height, 0px)); display: flex; flex-direction: column; }
-.notes-view.notes-library-collapsed { --notes-rail: 0px; }
-.notes-library-collapsed .notes-library { padding: 0; border: 0; visibility: hidden; scrollbar-gutter: auto; }
-.notes-layout { display: grid; grid-template-columns: minmax(0, 1fr) var(--notes-rail); min-height: 0; flex: 1; overflow: hidden; }
-.notes-main { min-width: 0; min-height: 0; overflow-y: auto; scrollbar-gutter: stable; margin: 0; padding: 1.5rem clamp(1rem, 4vw, 4rem) 3rem; padding-left: max(88px, min(4vw, 4rem)); }
-.notes-main-heading { display: flex; align-items: center; justify-content: space-between; gap: 1rem; max-width: 64rem; margin: 0 auto 1.5rem; }
-.notes-main-heading h2 { margin: 0; }
-.notes-main .note-detail { max-width: 64rem; margin: 0 auto; padding: 0; background: transparent; }
-.notes-main .note-workspace { grid-template-columns: minmax(0, 1fr); margin-top: 0; }
-.notes-main .note-editor, .notes-main .note-editor .milkdown .ProseMirror { min-height: 55vh; }
-.notes-empty { max-width: 40rem; margin: 15vh auto 0; text-align: center; }
-.notes-library { min-height: 0; min-width: 0; overflow: auto; scrollbar-gutter: stable both-edges; padding: 0.75rem 0; border-left: 1px solid var(--faint); }
+/*
+ * Notes (`views/Notes.tsx`): the library in the list panel, and the open note
+ * in `.notes-main` beside it.
+ *
+ * `.notes-main` is exactly as tall as `.split-main` -- a flex item of the
+ * card's split, stretched, so its 100% has something definite to resolve
+ * against -- and it is the scroller: below the wide layout the whole note
+ * scrolls in it and the mini player sticks to its foot. In the wide layout
+ * the article fills it (`.note-detail-wide`, above) and the note and the
+ * transcript column scroll on their own, so `.notes-main` does not, and
+ * gives back the gutter it would otherwise hold for a scrollbar. What the
+ * library reports -- a failure, the file an export was written to -- sits
+ * above the note, where a collapsed panel cannot hide it.
+ */
+/* `margin: 0` because `.notes-main` and `.notes-folder` are sections, and `section` carries a top margin and a `--surface` fill for the settings screens. */
+.notes-main { height: 100%; min-width: 0; margin: 0; display: flex; flex-direction: column; overflow-y: auto; scrollbar-gutter: stable; }
+.notes-main:has(> .note-detail-wide) { overflow: hidden; scrollbar-gutter: auto; }
+.note-detail-wide > .note-body { scrollbar-gutter: stable; }
+.notes-notices { flex: none; padding: 12px 40px 0; }
+.notes-notices > p { margin: 0 0 6px; }
+.notes-notices .row { display: flex; flex-wrap: wrap; gap: 2px 10px; padding: 0 0 6px; }
+.notes-notices .row-value { min-width: 0; overflow-wrap: anywhere; }
+.notes-empty { max-width: 40rem; margin: 15vh auto 0; padding: 0 40px; text-align: center; }
+/* An `h2`, as the task heroes' headings are, drawn as the `h3` it was rather than in the machine voice `h2` gets. */
+.notes-empty > h2 { margin: 1.5rem 0 0.5rem; font-family: inherit; font-size: 1.0667rem; line-height: inherit; letter-spacing: inherit; text-transform: none; color: inherit; }
 /* Keep the native track's layout space so revealing it never shifts content. */
-:is(.sidebar, .notes-main, .notes-library, .notes-view .transcript-rows) {
+:is(.list-panel, .notes-main, .note-body, .note-side-body) {
   scrollbar-color: transparent transparent;
 }
-:is(.sidebar, .notes-main, .notes-library, .notes-view .transcript-rows).scrollbar-active {
+:is(.list-panel, .notes-main, .note-body, .note-side-body).scrollbar-active {
   scrollbar-color: var(--muted) transparent;
 }
 @media (forced-colors: active) {
-  :is(.sidebar, .notes-main, .notes-library, .notes-view .transcript-rows) { scrollbar-color: auto; }
+  :is(.list-panel, .notes-main, .note-body, .note-side-body) { scrollbar-color: auto; }
 }
-.notes-library-toggle { display: flex; align-items: center; justify-content: center; flex: 0 0 calc(18px + 0.8rem); width: calc(18px + 0.8rem); height: calc(18px + 0.8rem); padding: 0.4rem; margin: 0; border-radius: 2px; }
-.notes-library-toggle svg { flex-shrink: 0; }
-.notes-library section { margin: 0; padding: 0; }
-.notes-library section[hidden] { display: none; }
-.notes-library .row { display: flex; flex-direction: column; gap: 0.35rem; padding: 0.6rem 0; }
-.notes-library .row-value { min-width: 0; width: 100%; }
-.notes-library input, .notes-library select { min-width: 0; max-width: 100%; width: 100%; }
-.notes-library .list { margin: 0; padding: 0; list-style: none; }
-.notes-library .list > li { padding: 0.75rem 0; border-bottom: 1px solid var(--faint); }
-.notes-library .list > li > .muted { display: block; font-size: 0.75rem; overflow-wrap: anywhere; margin: 0.4rem 0; }
-.notes-library button { border-radius: 2px; }
-.notes-library button.notes-entry { display: block; width: 100%; margin: 0; text-align: left; overflow-wrap: anywhere; }
-.notes-library button.notes-entry-current { background: var(--band); color: var(--band-ink); }
-.notes-library .preview { white-space: pre-wrap; overflow-wrap: anywhere; }
-@media (prefers-reduced-motion: no-preference) { .notes-layout { transition: grid-template-columns 160ms ease-in-out; } }
-@media (max-width: 60rem) { .notes-view { --notes-rail: 17rem; } .notes-main { padding: 1rem; padding-left: 88px; } }
-@media (max-width: 44rem) { .notes-view { --notes-rail: min(17rem, 45vw); } .notes-library { top: 0; } }
 
-.notes-library .list > li { display: block; padding: 0.15rem 0; border: 0; }
-/* One line per note: the title, with the creation time in the tooltip rather than under it. */
-.notes-library button.notes-entry { padding: 0.35rem 0.7rem; }
-.notes-entry-title { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-family: var(--font-sans); font-size: 1rem; font-weight: 400; line-height: 1.4; }
+/*
+ * The library, as the canvas draws it: New note and Import as panel actions,
+ * a boxed search field, a Folders heading with its three buttons, each folder
+ * a 32px row -- disclosure, folder, name, count -- with its notes indented
+ * 45px under it, and the notes in no folder under their own heading.
+ *
+ * A note row is a `PanelItem` (`notes-entry` is the smoke scripts' handle on
+ * it), its title one line and ellipsised, its meta the Meetings list's. The
+ * current note is `--selected`, as a current row is in every panel; it was
+ * the `--band` fill, which the rail's own current entry already spends.
+ */
+.panel-search { display: flex; align-items: center; gap: 8px; height: 34px; margin: 10px 12px 0; padding: 0 10px; border: 1px solid var(--rule); border-radius: 2px; background: var(--bg); color: var(--muted); }
+.panel-search:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+.panel-search input[type="search"] { flex: 1; min-width: 0; height: 100%; margin: 0; padding: 0; border: 0; background: transparent; color: var(--text); font-size: 13.5px; }
+.panel-search input[type="search"]:focus-visible { outline: none; }
+.notes-folders-head { display: flex; align-items: center; gap: 2px; padding: 18px 10px 4px 20px; }
+.notes-folders-head > .panel-label { flex: 1; padding: 0; }
+button.panel-tool { flex: none; display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; margin: 0; padding: 0; border-radius: 2px; }
+button.panel-tool[aria-expanded="true"],
+button.panel-tool[aria-expanded="true"]:hover:not(:disabled) { background: var(--selected); }
+.notes-tool-panel { display: flex; flex-direction: column; gap: 8px; margin: 4px 20px 10px; }
+.notes-tool-panel input { width: 100%; min-width: 0; }
+.notes-tool-panel button { align-self: flex-start; margin: 0; border-radius: 2px; }
+.notes-folder { margin: 0; background: transparent; }
+button.notes-folder-toggle { display: flex; align-items: center; gap: 7px; width: 100%; height: 32px; margin: 0; padding: 0 10px; border-radius: 2px; text-align: left; font-size: 14px; line-height: 20px; }
+/* A folder is never current, so its hover is a panel row's hover, not the current row's fill. */
+button.notes-folder-toggle:hover:not(:disabled) { background: var(--panel-hover); }
+.notes-folder-toggle > .icon:first-child { color: var(--muted); }
+.notes-folder-name { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.notes-folder-count { flex: none; font-size: 12.5px; color: var(--muted); }
+.notes-folder-notes { display: flex; flex-direction: column; gap: 1px; }
+.notes-folder-notes[hidden] { display: none; }
+.notes-folder-notes > .panel-item { padding-left: 45px; }
+.notes-folder-empty { margin: 0; padding: 5px 10px 5px 45px; font-size: 12.5px; line-height: 18px; color: var(--muted); }
+.notes-hit .panel-item-meta { overflow-wrap: anywhere; }
+/* Filing by drag: the note in the air fades, the group under the pointer gets the site blue as
+ * an outline, and a "No folder" strip appears below the folders while a filed note is being
+ * dragged, so taking a note out of a folder has somewhere to land even when nothing is unfiled.
+ * The strip's words take `--band-text` when it is the target: `--band` as text is 3.3:1 in dark. */
+.notes-entry[data-dragging] { opacity: 0.45; }
+.notes-folder[data-drop-target] { outline: 1px solid var(--band); outline-offset: 2px; border-radius: 2px; }
+.notes-drop-unfiled { margin: 4px 0; padding: 6px 10px; border: 1px dashed var(--faint); border-radius: 2px; font: 12px/16px var(--font-mono); letter-spacing: .5px; text-transform: uppercase; color: var(--muted); text-align: center; }
+.notes-drop-unfiled[data-drop-target] { border-style: solid; border-color: var(--band); color: var(--band-text); }
 .notes-context-menu { position: fixed; z-index: 1100; width: 15rem; max-width: calc(100vw - 16px); max-height: calc(100vh - 16px); overflow: auto; padding: 0.35rem; background: var(--bg); color: var(--text); border: 1px solid var(--faint); border-radius: 2px; box-shadow: 0 6px 18px #0002; }
 .notes-context-menu > button { display: block; width: 100%; margin: 0; padding: 0.5rem 0.65rem; text-align: left; border-radius: 2px; }
 .notes-context-menu .row { display: flex; flex-direction: column; gap: 0.35rem; padding: 0.5rem 0.65rem; }
 .notes-context-menu select { width: 100%; min-width: 0; }
 
-#notes-titlebar-controls { display: flex; align-items: center; }
-#notes-titlebar-controls:not(:empty) { padding: 0 0.5rem; }
-.notes-library-tools { display: flex; flex-direction: column; align-items: stretch; gap: 0.6rem; }
-.notes-library-actions { display: flex; align-items: center; gap: 6px; }
-.notes-library-tools button { display: flex; align-items: center; justify-content: center; width: calc(18px + 0.8rem); height: calc(18px + 0.8rem); padding: 0.4rem; margin: 0; border-radius: 2px; }
-/* The two labelled actions carry a visible word alongside their icon, so they size to their
- * content instead of the icon-only square the rule above sets for the rest of the toolbar. */
-.notes-library-tools button.labelled { width: auto; padding: 0.4rem 0.6rem; display: inline-flex; gap: 0.4rem; }
-.notes-library-tools svg { display: block; width: 18px; height: 18px; flex: 0 0 18px; }
-.notes-library-tools button[aria-expanded="true"], .notes-library-tools button[data-active="true"] { background: var(--band); color: var(--band-ink); }
-.notes-library-list-header { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
-.notes-library-list-header h2 { margin: 0; }
-.notes-library-folder-tools { display: flex; align-items: center; gap: 6px; }
-.notes-tool-panel { display: flex; flex-direction: column; gap: 0.5rem; margin-top: 0.75rem; }
-/* A folder heading is a row, not a boxed button: a disclosure and the name. The name is set
- * exactly like a note's title (same face, size and leading), muted until pointed at, so the
- * disclosure and the colour are what tell a folder from a note. */
-/* One vertical rhythm for the whole list: a note row and a folder row each carry 0.15rem above
- * and below (the list item's padding, the heading's margin) and the same 0.35rem inside, so the
- * gap is the same between two notes, between a folder and its notes, and between folders. */
-.notes-folder { margin: 0; }
-.notes-library button.notes-folder-toggle { display: flex; align-items: center; gap: 0.4rem; width: 100%; margin: 0.15rem 0; padding: 0.35rem 0.35rem; text-align: left; font-family: var(--font-sans); font-size: 1rem; font-weight: 400; line-height: 1.4; color: var(--muted); }
-.notes-library button.notes-folder-toggle:hover, .notes-library button.notes-folder-toggle:focus-visible { color: var(--text); }
-.notes-folder-chevron { width: 14px; height: 14px; flex: 0 0 14px; transition: transform 120ms ease; }
-.notes-folder-toggle[aria-expanded="true"] .notes-folder-chevron { transform: rotate(90deg); }
-.notes-folder-name { min-width: 0; flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-/* Filed notes sit one step in from their heading; the unfiled list keeps the full width. */
-.notes-folder > div > .list { padding-left: 0.9rem; }
-.notes-folder-empty { margin: 0.15rem 0 0.15rem 1.25rem; font-size: 0.8rem; }
-/* Filing by drag: the note in the air fades, the group under the pointer gets the site blue as
- * an outline, and a "No folder" strip appears at the top while a filed note is being dragged,
- * so taking a note out of a folder has somewhere to land even when nothing is unfiled. */
-.notes-library button.notes-entry[data-dragging] { opacity: 0.45; }
-.notes-folder[data-drop-target] { outline: 1px solid var(--band); outline-offset: 2px; border-radius: 2px; }
-.notes-drop-unfiled { margin: 0.15rem 0; padding: 0.35rem 0.35rem; border: 1px dashed var(--faint); border-radius: 2px; font-family: var(--font-mono); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); text-align: center; }
-.notes-drop-unfiled[data-drop-target] { border-style: solid; border-color: var(--band); color: var(--band); }
-
-/* Vocabulary uses the same compact controls and typography as the sidebar. */
+/*
+ * Vocabulary: a compact add row, and a ruled list of the words themselves --
+ * the settings rows' treatment, a `--rule` under each and a row as tall as a
+ * `.row` of one line (14px, a 22.5px line, 14px), which here holds a 36px
+ * field or button. The buttons lose `button`'s top margin, which put Edit and
+ * Delete below the word beside them.
+ */
 .vocabulary-add { display: flex; gap: .5rem; margin: 1rem 0; }
 .vocabulary-add input { flex: 1; min-width: 0; max-width: 32rem; }
 .vocabulary-list { list-style: none; padding: 0; max-width: 48rem; }
-.vocabulary-list li { display: flex; align-items: center; gap: .5rem; padding: .4rem 0; border-bottom: 1px solid var(--faint); }
+.vocabulary-list li { display: flex; align-items: center; gap: .5rem; min-height: 51px; padding: 7px 0; border-bottom: 1px solid var(--rule); }
+.vocabulary-list button { margin: 0; }
 .vocabulary-word, .vocabulary-list input { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .vocabulary-support { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr)); gap: 1rem; }
 .vocabulary-usage details { max-height: 14rem; overflow: auto; overflow-wrap: anywhere; }
 
-.titlebar-history { display: flex; align-items: center; flex-shrink: 0; gap: 2px; margin-left: 6px; }
-.app-titlebar button.titlebar-history-button { border-radius: 2px; }
-.app-titlebar button.titlebar-history-button:disabled { opacity: 0.3; cursor: default; }
+/* Back and forward, 2px after the toggle and 2px apart, as the canvas spaces them -- or, on a
+ * page with no list panel and so no toggle, the 10px in from the window's edge the toggle takes. */
+.titlebar-history { display: flex; align-items: center; flex-shrink: 0; gap: 2px; margin-left: 2px; }
+.app-titlebar > .titlebar-history:first-child { margin-left: 10px; }
 
 /* Separate summary and note editors retain the existing transcript workspace. */
 .note-prose, .summary-pane { min-width: 0; flex: 1; }
 .note-prose[hidden], .summary-pane[hidden] { display: none; }
 .summary-tabs { display: flex; gap: 8px; padding: 12px 0; }
-.summary-tabs [role="tab"] { color: var(--muted); }
+/* Square: the underline is a rule, and `button`'s 2px corner would round its ends. */
+.summary-tabs [role="tab"] { color: var(--muted); border-radius: 0; }
 .summary-tabs [aria-selected="true"] { color: var(--text); border-bottom: 2px solid var(--band); }
 .summary-toolbar { display: flex; flex-wrap: wrap; gap: 8px; padding-block: 8px; }
 .summary-pane > .muted, .summary-pane > .warn, .summary-pane > .error { padding-inline: 12px; }
@@ -2253,25 +2419,68 @@ button.microphone-language-toggle:hover:not(:disabled) { background: transparent
 .summary-pane { margin: 0; padding: 0; }
 .summary-pane .ProseMirror h2 { font-size: 1.125rem; text-transform: none; letter-spacing: normal; margin: 1.5rem 0 .5rem; }
 
-/* The note owns a single player, regardless of the selected view. */
-.notes-main .note-detail-header input.note-title { width: 100%; min-width: 0; padding: .25rem 0; background: transparent; border: 0; font-family: var(--font-sans); font-size: 2rem; font-weight: 600; line-height: 1.3; }
-.note-detail-header { display: block; margin-bottom: 0; padding-bottom: 0; border-bottom: 0; }
-.note-section-heading { font-size: .85rem; font-weight: 600; color: var(--muted); margin: 1rem 0; }
+/*
+ * The open note (`components/NoteWorkspace.tsx`): a 52px top bar -- the
+ * breadcrumb, the save status, Export and More -- then, in the canvas' 760px
+ * measure, the title, the meta row and the tabs.
+ */
+.note-topbar { display: flex; align-items: center; gap: 4px; height: 52px; padding: 0 12px 0 40px; }
+.note-crumb { flex: 1; min-width: 0; margin: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 13px; color: var(--muted); }
+.note-crumb-rule { margin: 0 6px; }
+.note-topbar .save-status { flex: none; margin: 0 8px 0 0; font-size: 12.5px; }
+button.note-topbar-button { flex: none; display: flex; align-items: center; justify-content: center; width: 32px; height: 32px; margin: 0; padding: 0; border-radius: 2px; }
+.note-page { max-width: 760px; padding: 14px 40px 32px; }
+.note-page > .save-status.error { margin: 0 0 12px; }
+.note-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 18px; margin: 12px 0 0; padding: 0; list-style: none; font-size: 13.5px; line-height: 20px; color: var(--muted); }
+.note-meta li { display: flex; align-items: center; gap: 6px; min-width: 0; }
+/*
+ * The note's tabs: the open one underlined in `--band` over a rule the width
+ * of the page. The underline is a rule, so it is square. Scoped to
+ * `.note-detail` because the meeting window's tabs share `.note-tabs` and
+ * keep the two rules just below.
+ */
+.note-detail .note-tabs { display: flex; flex-wrap: wrap; gap: 24px; margin-top: 26px; padding: 0; border-bottom: 1px solid var(--rule); }
+.note-detail .note-tabs > [role="tab"] { height: 38px; margin: 0 0 -1px; padding: 0; border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; color: var(--muted); font-size: 14.5px; }
+.note-detail .note-tabs > [role="tab"]:hover:not(:disabled) { background: transparent; color: var(--text); }
+.note-detail .note-tabs > [role="tab"][aria-selected="true"] { border-bottom-color: var(--band); color: var(--text); }
+.note-detail .note-tabs > [role="tab"][hidden] { display: none; }
+.note-tabs { flex-wrap: wrap; padding: 0 0 4px; }
+.note-tabs > button { margin-top: 0; }
+.note-detail .note-workspace { margin-top: 18px; }
+/* Switzer ships at 400 only, so bold here was faked. */
+.note-section-heading { font-size: .85rem; font-weight: 400; color: var(--muted); margin: 1rem 0; }
+.note-prose > .note-section-heading:first-child { margin-top: .5rem; }
 .note-workspace > section { min-width: 0; margin-top: 0; }
 .note-workspace [hidden], .note-workspace > [hidden] { display: none; }
-.note-mini-player { position: sticky; bottom: 0; grid-row: 3; padding: .75rem; background: var(--surface); border: 1px solid var(--faint); border-radius: .5rem; z-index: 3; }
+/* The note owns a single player, whichever view is open: in full above Replay, and otherwise a mini
+ * player held to the foot of the note once playback has started. A wide window keeps it in full above
+ * Replay, and otherwise moves it to the foot of the transcript column (`.note-side-player`, above). */
+.note-mini-player { position: sticky; bottom: 0; grid-row: 3; padding: .75rem; background: var(--surface); border: 1px solid var(--faint); border-radius: 4px; z-index: 3; }
 .note-full-player { grid-row: 1; }
 .recording-player { flex-wrap: wrap; }
 .recording-player input[type="range"] { min-width: 5rem; }
+/*
+ * The position slider, drawn to the Kit rather than by the platform: the platform's thumb is a round
+ * knob, rounder than anything the Kit allows but the recording dot. A 2px `--rule` track with the
+ * played part in `--band`, and a 10px square `--band` thumb. `--played` is the fraction played,
+ * set by `RecordingPlayer`; the stop sits under the thumb's centre, which travels 5px in from each
+ * end. The box stays 18px tall so the thumb is as easy to catch as the platform's was, and the
+ * focus ring is the generic `input:focus-visible` one around that box. Here rather than beside the
+ * rule above: the generic `input` fill further up would otherwise draw a box behind the track.
+ * Disabled, the played part and the thumb go to `--muted`.
+ */
+.recording-player input[type="range"] { appearance: none; -webkit-appearance: none; height: 18px; margin: 0; padding: 0; border: 0; border-radius: 0; background: transparent; cursor: pointer; }
+.recording-player input[type="range"]::-webkit-slider-runnable-track { height: 2px; border-radius: 0; background: linear-gradient(to right, var(--band) calc(5px + (100% - 10px) * var(--played, 0)), var(--rule) 0); }
+.recording-player input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 10px; height: 10px; margin-top: -4px; border: 0; border-radius: 0; background: var(--band); }
+.recording-player input[type="range"]:disabled { cursor: default; }
+.recording-player input[type="range"]:disabled::-webkit-slider-runnable-track { background: linear-gradient(to right, var(--muted) calc(5px + (100% - 10px) * var(--played, 0)), var(--rule) 0); }
+.recording-player input[type="range"]:disabled::-webkit-slider-thumb { background: var(--muted); }
 .recording-details { margin-bottom: 1rem; color: var(--muted); }
 .recording-details p { white-space: pre-wrap; overflow-wrap: anywhere; }
-.note-workspace .transcript-rows { max-height: none; }
-.note-workspace .transcript-rows li { overflow-wrap: anywhere; }
+/* The Transcript tab's rows pull out by their own padding, so their text lines up with the title's. */
+.note-workspace .transcript-rows { max-height: none; margin: 0.25rem -12px 0; }
 .start-from-transcript { margin-bottom: 1rem; }
-.note-tabs { flex-wrap: wrap; padding: 0 0 4px; }
-.note-prose > .note-section-heading:first-child { margin-top: .5rem; }
-.note-tabs > button { margin-top: 0; }
-.notes-main .note-workspace .note-editor, .notes-main .note-workspace .note-editor .milkdown .ProseMirror { min-height: 12rem; }
+.note-workspace .note-editor, .note-workspace .note-editor .milkdown .ProseMirror { min-height: 12rem; }
 
 /* The window's one tooltip (components/Tooltip.tsx): the page's own background
  * and text, the site blue as a hairline, and an arrow at whatever it names. */
@@ -2289,3 +2498,124 @@ button.microphone-language-toggle:hover:not(:disabled) { background: transparent
 .tooltip[data-side="above"] .tooltip-arrow { bottom: -7px; }
 .tooltip[data-side="above"] .tooltip-arrow::before, .tooltip[data-side="above"] .tooltip-arrow::after { clip-path: polygon(50% 100%, 100% 0, 0 0); }
 .tooltip[data-side="above"] .tooltip-arrow::after { top: -1.5px; }
+
+/*
+ * # Settings pages
+ *
+ * The settings and developer screens in the Kit (KNEG-363), done in CSS alone:
+ * every page keeps its markup, and these rules reach it through the classes
+ * they already share. `section`'s 40px, `.row`'s 14px and `--rule`, and
+ * `button`'s 2px corner are set where those rules are, above; what is here is
+ * scoped to `.content`, the column these screens (and Notes > Upload) render
+ * in, so Notes' title field, the task pages' chips and the list panels keep
+ * their own. Last in the file because a scoped rule and an unscoped one of
+ * equal specificity are decided by order.
+ *
+ * - **A section label** keeps the machine voice and gains a `--rule` under
+ *   it. Only a bare `h2`: every `h2` with a class -- a hero heading, a panel
+ *   label -- has its own rule set.
+ * - **Fields and selects** are 36px, with a 1px `--edge` and the 2px corner,
+ *   on the page colour rather than the `--control` fill, as the canvas draws
+ *   them. `:not()` with a list, so the rule is exactly as specific as the
+ *   unscoped one it follows and a page's own field rule (Providers' search)
+ *   can still outrank it. A select keeps its hover and focus fill.
+ * - **A checkbox** is a 16px square filled `--band` when checked: the native
+ *   control, sized, with `accent-color` -- not `appearance: none` -- so it
+ *   keeps the platform's own check, focus ring hook and disabled look, and
+ *   reads as a checkbox to everything that reads one.
+ */
+.content h2:not([class]) { padding-bottom: 8px; border-bottom: 1px solid var(--rule); }
+
+.content input:not([type="checkbox"], [type="radio"], [type="range"]),
+.content select {
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--edge);
+  border-radius: 2px;
+}
+.content input:not([type="checkbox"], [type="radio"], [type="range"]) { background: var(--bg); }
+.content textarea { padding: 6px 10px; border: 1px solid var(--edge); border-radius: 2px; background: var(--bg); color: var(--text); }
+/* `flex: none`: beside a label long enough to wrap, a flex item's box shrank to 14px wide. */
+.content input[type="checkbox"] { flex: none; width: 16px; height: 16px; margin: 0; accent-color: var(--band); }
+/*
+ * Fields stacked one `.controls` each -- an enterprise connector's four on
+ * Cleanup & summaries -- sat 2px apart, which was a gap between two fills and
+ * is a doubled line between two edges. 8px, so each reads as its own field.
+ */
+.content .row-value > .controls + .controls { margin-top: 6px; }
+/*
+ * A path breaks where it has to. The discovery file's
+ * `C:\Users\...\local-api.json` is one unbroken word, and on Local API, CLI
+ * and MCP it pushed `.split-main` 9px wider than the page at 1000x720 --
+ * a sideways scroll on three screens (measured in headless Edge against dev
+ * fixtures, not in the Tauri window).
+ */
+.content .row-value, .content .row-detail { overflow-wrap: anywhere; }
+/* Vocabulary's omitted terms: Switzer has no bold for `strong` to use, so the browser counterfeited one. */
+.vocabulary-usage strong { font-weight: 400; }
+
+/*
+ * Providers (`views/SettingsProviders.tsx`): the header's search and Test
+ * connections, the filter tabs, the lock line, and the rows in two columns
+ * where the page has the width -- one below about 816px of column, which is
+ * the default 1000x720 window with the Settings panel open.
+ *
+ * A row is the canvas': a 44px tile, the name over its purposes, and one
+ * thing on the right -- "Key saved" and Change, a +, or "Not supported yet".
+ * Its form, its result line and any detail sit under the name, in the same
+ * track. The tile is 2px, not the canvas' 3px: the Kit has no 3px step, and a
+ * tile is a key-sized mark rather than a card.
+ */
+.page-header-actions { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 16px 24px; }
+.page-heading { flex: 1 1 18rem; min-width: 0; }
+.page-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-left: auto; padding-top: 2px; }
+.page-actions > button { height: 36px; margin: 0; padding: 0 14px; white-space: nowrap; }
+.providers > .page-header { margin-bottom: 26px; }
+/* `width` as well as the basis: without it the header sized this box by the input's default 20ch and wrapped Test connections under it. */
+.providers-search { position: relative; display: flex; flex: 0 1 300px; width: 300px; min-width: 12rem; }
+.providers-search > .icon { position: absolute; left: 11px; top: 10px; color: var(--muted); pointer-events: none; }
+.content .providers-search input { width: 100%; min-width: 0; padding-left: 34px; }
+
+.providers-tabs { display: flex; flex-wrap: wrap; gap: 4px; }
+.providers-tabs > [role="tab"] { height: 32px; margin: 0; padding: 0 12px; color: var(--muted); font-size: 14px; }
+.providers-tabs > [role="tab"]:hover:not(:disabled),
+.providers-tabs > [role="tab"][aria-selected="true"] { background: var(--selected); color: var(--text); }
+
+.providers-lock, .providers-line { max-width: 76ch; margin: 18px 0 0; font-size: 13.5px; line-height: 20px; color: var(--muted); }
+.providers-lock { display: flex; align-items: flex-start; gap: 8px; }
+.providers-lock > .icon { margin-top: 3px; }
+/* Under the lock line's words, not its icon: 14px of icon and the 8px gap. */
+.providers-line { margin-top: 4px; padding-left: 22px; }
+.providers-line[role="status"] { color: var(--text); }
+.providers-tests { display: flex; flex-direction: column; gap: 8px; max-width: 76ch; margin-top: 14px; }
+.providers-tests > .caveat, .providers-tests > .learn-more, .providers-failure { margin: 0; }
+
+.providers-group { margin-top: 28px; }
+.providers-group > h2 { margin-bottom: 0; }
+.providers-note { max-width: 76ch; margin: 10px 0 2px; font-size: 13.5px; line-height: 20px; }
+.provider-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 24rem), 1fr)); column-gap: 48px; align-items: start; margin: 0; padding: 0; list-style: none; }
+.provider-row { display: grid; grid-template-columns: 44px minmax(0, 1fr) auto; align-items: center; gap: 6px 14px; min-width: 0; padding: 14px 0; border-bottom: 1px solid var(--rule); }
+.provider-tile { width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; border: 1px solid var(--rule); border-radius: 2px; background: var(--panel); color: var(--text); font: 18px/1 var(--font-mono); }
+.provider-tile-local { border-color: var(--band); background: var(--band); color: var(--band-ink); }
+.provider-text { display: flex; flex-direction: column; align-items: flex-start; min-width: 0; }
+.provider-name { font-size: 15px; line-height: 22px; overflow-wrap: anywhere; }
+.provider-purposes { font-size: 13px; line-height: 19px; color: var(--muted); }
+.provider-row-unsupported .provider-name, .provider-row-unsupported .provider-tile { color: var(--muted); }
+.provider-actions { display: flex; align-items: center; gap: 10px; justify-self: end; }
+.provider-state { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; line-height: 19px; color: var(--text); white-space: nowrap; }
+.provider-state > .icon { color: var(--band); }
+.provider-state-failed { color: var(--error); }
+.provider-unsupported { padding-right: 8px; font: 12px/16px var(--font-mono); letter-spacing: .5px; text-transform: uppercase; color: var(--muted); white-space: nowrap; }
+button.provider-add { display: flex; align-items: center; justify-content: center; width: 36px; height: 36px; margin: 0; padding: 0; }
+button.provider-add[aria-expanded="true"] { background: var(--selected); }
+button.provider-change { height: 30px; margin: 0; padding: 0 10px; font-size: 13px; }
+/* Blue words, so the text-safe blue: `--band` is 3.3:1 on the dark card. */
+button.provider-link { margin: 0; padding: 0; background: none; color: var(--band-text); font-size: 13px; line-height: 19px; text-align: left; }
+button.provider-link:hover:not(:disabled) { background: none; color: var(--band-text); text-decoration: underline; text-underline-offset: 2px; }
+.provider-detail, .provider-form { grid-column: 2 / -1; margin: 0; }
+.provider-form { margin-top: 4px; }
+/* A row's slot and feature ids, folded: under the form, or on its own for a row with none. */
+.provider-tech { grid-column: 2 / -1; font-size: 13px; line-height: 19px; }
+.provider-tech .learn-more { margin: 0; }
+.providers-empty { margin-top: 28px; }
+.providers > .learn-more { margin-top: 32px; }

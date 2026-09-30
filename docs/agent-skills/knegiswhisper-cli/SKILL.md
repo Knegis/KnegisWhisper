@@ -17,12 +17,12 @@ for you.
 ## Before anything else
 
 The local API is **off by default**. The user switches it on under
-**Developer > Local API**. Until then both tools have nothing to connect to, which
+**Settings > Developer > Local API**. Until then both tools have nothing to connect to, which
 is a configuration state and not a fault.
 
 Where the binaries are, and the command to paste into an MCP client's
-configuration, are both shown in the application under **Developer > CLI**
-and **Developer > MCP**.
+configuration, are both shown in the application under **Settings > Developer > CLI**
+and **Settings > Developer > MCP**.
 
 ## The CLI
 

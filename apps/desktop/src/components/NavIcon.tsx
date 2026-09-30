@@ -1,7 +1,11 @@
-import { PATHS, SUPPLIED } from "../lib/navIcons";
+import { NAV_ICON, type NavIconId } from "../lib/navIcons";
+import { Icon } from "./Icon";
 
-/** Supplied SVG assets inherit the navigation's selected/hover colour as masks. */
-export function NavIcon({ id }: { id: string }) {
-  if (SUPPLIED[id]) return <span aria-hidden="true" className={`nav-icon nav-icon-${SUPPLIED[id]}`} />;
-  return <svg className="nav-icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d={PATHS[id]} /></svg>;
+/**
+ * The icon for a nav id, looked up in `NAV_ICON` and drawn by the shared
+ * `Icon` component. `size` defaults to 18, the size of every other icon in
+ * the window; the rail passes 22.
+ */
+export function NavIcon({ id, size = 18 }: { id: NavIconId; size?: number }) {
+  return <Icon name={NAV_ICON[id]} size={size} />;
 }

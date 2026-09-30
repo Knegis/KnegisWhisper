@@ -2,7 +2,7 @@
 
 On Windows, Settings > Transcription > Dictation microphone offers **Always show
 dictation microphone**. It defaults to off. Enabling it replaces the dictation
-recording box with a small 32px by 6px rectangle with a subtle 1px corner radius while idle. Hover reveals a 20px microphone
+recording box with a small 32px by 6px rectangle with a 2px corner radius while idle. Hover reveals a 20px microphone
 inside a 52px by 28px button with a 2px corner radius; the hit target remains fixed during the
 transition. Recording, processing, and error states remain expanded.
 Click to start dictation and click again to finish. Existing hotkeys and the

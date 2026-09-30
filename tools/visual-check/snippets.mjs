@@ -29,167 +29,216 @@ export function clickText(selector, text) {
   `);
 }
 
-/**
- * Opens a rail group -- `Settings`, `Developer` -- only if it is closed.
- *
- * A group header is a toggle, so a bare `clickText` on it closes a group that
- * something earlier left open, and the child click after it finds nothing.
- * This is the guard `shell-rail.mjs` writes out by hand before its own
- * header clicks, as one snippet.
- */
-export function openGroup(label) {
+/** Clicks the first element matching `selector`, whatever its text. */
+export function clickSelector(selector) {
   return source(`
-    const header = [...document.querySelectorAll('nav.sidebar button.nav-group')]
-      .find((item) => item.textContent.trim() === ${JSON.stringify(label)});
-    if (!header) throw new Error('Could not find group ' + ${JSON.stringify(label)});
-    const wasOpen = header.getAttribute('aria-expanded') === 'true';
-    if (!wasOpen) header.click();
-    return { label: ${JSON.stringify(label)}, wasOpen };
+    const element = document.querySelector(${JSON.stringify(selector)});
+    if (!element) throw new Error('Could not find ' + ${JSON.stringify(selector)});
+    element.click();
+    return { clicked: ${JSON.stringify(selector)} };
   `);
 }
 
-export function railGeometry() {
+/** The rail's box, its entries, and which of them read as current. */
+export function railState() {
   return source(`
-    const rail = document.querySelector('nav.sidebar');
-    const shell = document.querySelector('.shell');
-    if (!rail || !shell) throw new Error('Shell rail is missing');
+    const rail = document.querySelector('nav.rail');
+    if (!rail) throw new Error('The rail is missing');
     const rect = rail.getBoundingClientRect();
-    const style = getComputedStyle(rail);
     return {
-      position: style.position,
       rect: {
         left: rect.left,
         top: rect.top,
         width: rect.width,
         height: rect.height,
       },
-      scrollX: window.scrollX,
-      scrollY: window.scrollY,
-      shellPaddingLeft: getComputedStyle(shell).paddingLeft,
+      items: [...rail.querySelectorAll('.rail-item')]
+        .map((item) => item.textContent.trim()),
+      current: [...rail.querySelectorAll('.rail-item[aria-current="page"]')]
+        .map((item) => item.textContent.trim()),
       rem: getComputedStyle(document.documentElement).fontSize,
     };
   `);
 }
 
-export function groupState() {
+/**
+ * Whether the list panel is on screen, and what it lists. `visible` is the
+ * rendered answer -- computed display and width -- not the `hidden`
+ * attribute alone, because a stylesheet can outrank that attribute.
+ */
+export function panelState() {
   return source(`
-    const read = (label) => {
-      const button = [...document.querySelectorAll('button.nav-group')]
-        .find((item) => item.textContent.trim() === label);
-      if (!button) throw new Error('Missing group ' + label);
-      const style = getComputedStyle(button);
-      return {
-        label,
-        content: getComputedStyle(button, '::after').content,
-        expanded: button.getAttribute('aria-expanded'),
-        display: style.display,
-        justifyContent: style.justifyContent,
-        fontFamily: style.fontFamily,
-        color: style.color,
-        background: style.backgroundColor,
-      };
-    };
+    const panel = document.querySelector('.list-panel');
+    if (!panel) {
+      return { present: false, visible: false, hidden: null, labels: [], items: [], current: [] };
+    }
+    const style = getComputedStyle(panel);
+    const rect = panel.getBoundingClientRect();
     return {
-      settings: read('Settings'),
-      developer: read('Developer'),
-      fontLoaded: document.fonts.check('13px ProFontWindows'),
-    };
-  `);
-}
-
-export function railCurrent() {
-  return source(`
-    const resolveColor = (token) => {
-      const probe = document.createElement('span');
-      probe.style.color = 'var(' + token + ')';
-      document.body.append(probe);
-      const color = getComputedStyle(probe).color;
-      probe.remove();
-      return color;
-    };
-    const rail = document.querySelector('nav.sidebar');
-    const sidebarBackground = getComputedStyle(rail).backgroundColor;
-    const buttons = [...rail.querySelectorAll('button')];
-    const filled = buttons.filter((button) => {
-      const background = getComputedStyle(button).backgroundColor;
-      return background !== 'rgba(0, 0, 0, 0)'
-        && background !== 'transparent'
-        && background !== sidebarBackground;
-    });
-    const current = rail.querySelector('[aria-current="page"]');
-    const settings = [...rail.querySelectorAll('.nav-group')]
-      .find((item) => item.textContent.trim() === 'Settings');
-    const child = rail.querySelector('.nav-child');
-    return {
-      childPaddingLeft: child ? getComputedStyle(child).paddingLeft : null,
-      topPaddingLeft: getComputedStyle(buttons[0]).paddingLeft,
-      filled: filled.map((item) => item.textContent.trim()),
-      current: current
-        ? { text: current.textContent.trim(), className: current.className }
-        : null,
-      settings: settings
-        ? {
-            color: getComputedStyle(settings).color,
-            background: getComputedStyle(settings).backgroundColor,
-            text: resolveColor('--text'),
-          }
-        : null,
-    };
-  `);
-}
-
-export function contentMeasure() {
-  return source(`
-    const content = document.querySelector('.content');
-    if (!content) throw new Error('Content is missing');
-    const rect = content.getBoundingClientRect();
-    const style = getComputedStyle(content);
-    return {
+      present: true,
+      hidden: panel.hidden,
+      display: style.display,
       width: rect.width,
-      maxWidth: style.maxWidth,
-      rem: getComputedStyle(document.documentElement).fontSize,
+      visible: style.display !== 'none' && rect.width > 0,
+      title: panel.querySelector('.panel-title')?.textContent.trim() ?? null,
+      labels: [...panel.querySelectorAll('.panel-label')]
+        .map((item) => item.textContent.trim()),
+      items: [...panel.querySelectorAll('.panel-item')]
+        .map((item) => item.textContent.trim()),
+      current: [...panel.querySelectorAll('.panel-item[aria-current]')]
+        .map((item) => item.textContent.trim()),
     };
   `);
 }
 
+/** The title bar's list-panel toggle: its name and what it says it controls. */
+export function panelToggle() {
+  return source(`
+    const toggle = document.querySelector('.app-titlebar button[aria-controls="list-panel"]');
+    if (!toggle) throw new Error('The list-panel toggle is missing');
+    return {
+      label: toggle.getAttribute('aria-label'),
+      expanded: toggle.getAttribute('aria-expanded'),
+    };
+  `);
+}
+
+/** The heading of the page in the card, which says which screen is open. */
+export function pageHeading() {
+  return source(`
+    return document.querySelector('.card .page-header h1')?.textContent.trim() ?? null;
+  `);
+}
+
+/** Horizontal overflow of the document and of the card's scrolling main area. */
+export function overflowState() {
+  return source(`
+    const main = document.querySelector('.card .split-main');
+    return {
+      innerWidth: window.innerWidth,
+      scrollWidth: document.scrollingElement.scrollWidth,
+      mainClientWidth: main?.clientWidth ?? null,
+      mainScrollWidth: main?.scrollWidth ?? null,
+    };
+  `);
+}
+
+/** The title bar search field: whether it has focus, its value, its popup. */
+export function searchState() {
+  return source(`
+    const input = document.querySelector('input[role="combobox"]');
+    if (!input) throw new Error('The search field is missing');
+    const rect = input.getBoundingClientRect();
+    return {
+      focused: document.activeElement === input,
+      value: input.value,
+      placeholder: input.placeholder,
+      width: rect.width,
+      expanded: input.getAttribute('aria-expanded'),
+      popup: Boolean(document.querySelector('.titlebar-search-popup')),
+    };
+  `);
+}
+
+/** Moves focus to the document body, so the next Tab starts from the top. */
+export function blurActive() {
+  return source(`
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+    return document.activeElement === document.body;
+  `);
+}
+
+/**
+ * The open note's layout: the grid tracks of its article (`.note-detail` --
+ * one, or two with the transcript column beside it), which of its tabs are
+ * rendered, and the transcript column's width when there is one. A tab
+ * counts as rendered by its computed display, not its `hidden` attribute.
+ */
 export function notesGrid() {
   return source(`
-    const workspace = document.querySelector('.note-workspace');
-    if (!workspace) throw new Error('Note workspace did not open');
-    const columns = getComputedStyle(workspace).gridTemplateColumns;
+    const detail = document.querySelector('.note-detail');
+    if (!detail) throw new Error('No note is open');
+    const columns = getComputedStyle(detail).gridTemplateColumns;
+    const side = detail.querySelector('.note-side');
     return {
       columns,
       tracks: columns === 'none'
         ? 0
         : columns.split(/\\s+(?![^()]*\\))/).filter(Boolean).length,
+      tabs: [...detail.querySelectorAll('[role="tab"]')]
+        .filter((tab) => getComputedStyle(tab).display !== 'none')
+        .map((tab) => tab.textContent.trim()),
+      sideWidth: side ? side.getBoundingClientRect().width : null,
     };
   `);
 }
 
-export function sidewaysState() {
+/**
+ * Whether every tab sits inside `.notes-main`, horizontally: the same
+ * comparison `notes-smoke.mjs` makes at 720x520 in the native window. Also
+ * `.notes-main`'s own widths, since it is the note's scroller and would be
+ * what scrolled sideways if the note did not fit.
+ */
+export function notesTabsContained() {
   return source(`
-    const current = document.querySelector('nav.sidebar [aria-current="page"]');
-    const settings = [...document.querySelectorAll('button.nav-group')]
-      .find((item) => item.textContent.trim() === 'Settings');
-    const heading = document.querySelector('.content h1, .content h2');
+    const main = document.querySelector('.notes-main');
+    if (!main) throw new Error('.notes-main is missing');
+    const bounds = main.getBoundingClientRect();
+    const tabs = [...document.querySelectorAll('[role="tab"]')];
     return {
-      current: current ? current.textContent.trim() : null,
-      expanded: settings?.getAttribute('aria-expanded') ?? null,
-      heading: heading?.textContent.trim() ?? null,
+      mainClientWidth: main.clientWidth,
+      mainScrollWidth: main.scrollWidth,
+      count: tabs.length,
+      contained: tabs.every((tab) => {
+        const rect = tab.getBoundingClientRect();
+        return rect.left >= bounds.left && rect.right <= bounds.right;
+      }),
     };
   `);
 }
 
+/**
+ * A note's row in the library, found by its exact title as the smoke scripts
+ * find it (`.notes-entry` holding `.notes-entry-title`), and whether that
+ * title is cut off with an ellipsis rather than wrapping or overflowing.
+ */
+export function notesEntry(title) {
+  return source(`
+    const wanted = ${JSON.stringify(title)};
+    const entry = [...document.querySelectorAll('.list-panel .notes-entry')]
+      .find((item) => item.querySelector('.notes-entry-title')?.textContent === wanted);
+    if (!entry) throw new Error('No library row is titled ' + wanted);
+    const text = entry.querySelector('.notes-entry-title');
+    const style = getComputedStyle(text);
+    return {
+      clientWidth: text.clientWidth,
+      scrollWidth: text.scrollWidth,
+      textOverflow: style.textOverflow,
+      whiteSpace: style.whiteSpace,
+      ellipsised: text.scrollWidth > text.clientWidth
+        && style.textOverflow === 'ellipsis'
+        && style.whiteSpace === 'nowrap',
+    };
+  `);
+}
+
+/**
+ * Where keyboard focus is, and the outline it draws. `kind` says which part of
+ * the shell holds it, so a Tab walk can be read back as "reached the rail".
+ */
 export function focusState() {
   return source(`
     const active = document.activeElement;
-    if (!(active instanceof HTMLButtonElement) || !active.closest('nav.sidebar')) {
-      return null;
-    }
+    if (!(active instanceof HTMLElement) || active === document.body) return null;
     const style = getComputedStyle(active);
+    const kind = active.matches('nav.rail .rail-item') ? 'rail'
+      : active.matches('input[role="combobox"]') ? 'search'
+      : active.closest('.list-panel') ? 'panel'
+      : active.closest('.app-titlebar') ? 'titlebar'
+      : 'page';
     return {
-      text: active.textContent.trim(),
-      classList: [...active.classList],
+      kind,
+      text: active.getAttribute('aria-label') ?? active.textContent.trim(),
       outlineStyle: style.outlineStyle,
       outlineWidth: style.outlineWidth,
       outlineColor: style.outlineColor,
@@ -260,24 +309,30 @@ export function selectMeetingProvider(label) {
 }
 
 /**
- * Ticks or unticks the participants checkbox and presses Start recording, on
- * the Meetings task page -- the other half of what `selectMeetingProvider`
- * used to do in one place before the provider select moved to Settings.
+ * Presses or releases the "Other participants" chip and presses Start
+ * recording, on the Meetings task page -- the other half of what
+ * `selectMeetingProvider` used to do in one place before the provider select
+ * moved to Settings. The chip replaced a checkbox (KNEG-363); it is a toggle
+ * button, read by `aria-pressed`, and disabled where system audio cannot be
+ * captured. 50ms pass between the two presses so Start runs with the chip's
+ * new state rather than the one React had before it re-rendered -- a timer
+ * rather than a frame, because a hidden window may never draw one.
  */
 export function startMeetingRecording(systemAudio) {
   return source(`
-    const checkbox = [...document.querySelectorAll('input[type="checkbox"]')]
-      .find((item) =>
-        item.closest('label')?.textContent.includes('other participants')
-          || item.parentElement?.textContent.includes('other participants'),
-      );
-    if (!checkbox) throw new Error('System-audio checkbox is missing');
-    if (checkbox.checked !== ${JSON.stringify(systemAudio)}) checkbox.click();
-    const start = [...document.querySelectorAll('button')]
-      .find((item) => item.textContent.trim() === 'Start recording');
-    if (!start) throw new Error('Start recording button is missing');
-    start.click();
-    return { systemAudio: checkbox.checked };
+    return (async () => {
+      const chip = [...document.querySelectorAll('button.chip')]
+        .find((item) => item.textContent.trim() === 'Other participants');
+      if (!chip) throw new Error('Other participants chip is missing');
+      const pressed = () => chip.getAttribute('aria-pressed') === 'true';
+      if (pressed() !== ${JSON.stringify(systemAudio)} && !chip.disabled) chip.click();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const start = [...document.querySelectorAll('button')]
+        .find((item) => item.textContent.trim() === 'Start recording');
+      if (!start) throw new Error('Start recording button is missing');
+      start.click();
+      return { systemAudio: pressed() };
+    })();
   `);
 }
 
