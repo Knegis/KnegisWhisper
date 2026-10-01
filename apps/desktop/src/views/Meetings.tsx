@@ -9,12 +9,12 @@
  *     problem and the button that fixes it. Under it, a card while a meeting
  *     application is in a call, with a way to record that call. At the foot,
  *     the control bar: the microphone -- the system default, the only one the
- *     recorder opens -- whether the other participants are captured, which is
- *     the one choice made on this page, and who transcribes in what language,
- *     each chosen in its chip's menu (`ChipMenu`), and whether a summary is
- *     made, a toggle that is a link to Cleanup & summaries until a provider
- *     and model are chosen there. Then where the audio goes,
- *     which is never hidden, the caveats, and Start.
+ *     recorder opens -- whether the other participants are captured, a choice
+ *     kept on this page only, who transcribes in what language, each chosen in
+ *     its chip's menu (`ChipMenu`), and whether a summary is made, a toggle
+ *     that is a link to Cleanup & summaries until a provider and model are
+ *     chosen there. Then where the audio goes, which is never hidden, the
+ *     caveats, and Start.
  *   - **Live**, while a meeting is running: its state and a timer, which
  *     captures opened and where the audio goes, the live transcript, and a
  *     bar with what is in effect, Discard, and Stop.
@@ -29,10 +29,11 @@
  *
  * The provider and the language are chosen here, in their chips' menus, and
  * saved as they are chosen -- the same `meetings.provider` and
- * `meetings.language` Settings > Meetings sets (the Summary toggle likewise
- * writes `reasoning.summaries`, whole, as Cleanup & summaries does; Rust
- * refuses it where the settings are incomplete, and the page shows why), which keeps its own controls
+ * `meetings.language` Settings > Meetings sets, which keeps its own controls
  * (and the menus' footers go there, for a language the menu does not list).
+ * The Summary toggle likewise writes `reasoning.summaries`, whole, as
+ * Cleanup & summaries does; Rust refuses it where the settings are incomplete,
+ * and the page shows why.
  * Rust reads the language from the database when the meeting starts
  * (`start_live`); the provider is the one this page read back from
  * `meetings.provider` and passes to `meeting_start` itself. A choice is
