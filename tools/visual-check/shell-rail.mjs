@@ -4,7 +4,8 @@
  * fixtures: the 68px rail and its one current entry, the Settings panel and
  * its Developer section, the title bar's panel toggle, the 720x520 minimum
  * window, keyboard focus, Ctrl+K, and Notes: the transcript column a wide
- * window gives a note, and the 720x520 fit of a note beside its library.
+ * window gives a note, the 720x520 fit of a note beside its library, and the
+ * top bar's button that hides and shows that column.
  */
 import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -421,6 +422,73 @@ export async function runShellRail(options) {
         && notesMinimum.longTitle.ellipsised,
       screenshots: [shot9],
       note: "The tab comparison is the one notes-smoke.mjs makes in the native window; this is not that run.",
+    });
+
+    // The transcript column's own button, from a fresh load at 1440x900 on
+    // fixture note 101. Hidden, the note goes back to one column with the
+    // Transcript tab; crossing the width then moves nothing; another note opens
+    // with the column still hidden; showing it gives an open Transcript tab way
+    // to Notes. Each press focuses the button first, as a keyboard press would.
+    await viewport(cdp, 1440, 900);
+    await reload(cdp);
+    await ready(cdp, options);
+    await click(cdp, RAIL_ITEM, "Notes");
+    await waitFor(cdp, NOTE_OPEN, "a note to open");
+    await waitFor(cdp, "Boolean(document.querySelector('.note-detail-wide .note-side'))", "the transcript column");
+    const column = {};
+    column.shown = { grid: await cdp.evaluate(snippets.notesGrid()), toggle: await cdp.evaluate(snippets.transcriptToggle()) };
+    await cdp.evaluate(snippets.pressTranscriptToggle());
+    await waitFor(cdp, "!document.querySelector('.note-detail-wide')", "the transcript column to hide");
+    column.hidden = { grid: await cdp.evaluate(snippets.notesGrid()), toggle: await cdp.evaluate(snippets.transcriptToggle()) };
+    const shot10a = await screenshot(cdp, out, "10-notes-column-hidden-1440x900.png");
+    await click(cdp, '.note-detail [role="tab"]', "Transcript");
+    await viewport(cdp, 1000, 720);
+    column.narrow = { grid: await cdp.evaluate(snippets.notesGrid()), toggle: await cdp.evaluate(snippets.transcriptToggle()) };
+    await viewport(cdp, 1440, 900);
+    await delay(150);
+    column.widenedAgain = { grid: await cdp.evaluate(snippets.notesGrid()), toggle: await cdp.evaluate(snippets.transcriptToggle()) };
+    const firstNote = await cdp.evaluate("document.querySelector('.note-detail').id");
+    await cdp.evaluate(`[...document.querySelectorAll('.list-panel .notes-entry')].find((entry) => entry.querySelector('.notes-entry-title')?.textContent.startsWith(${JSON.stringify(LONG_TITLE.slice(0, 24))})).click()`);
+    await waitFor(cdp, `document.querySelector('.note-detail')?.id !== ${JSON.stringify(firstNote)} && ${NOTE_OPEN}`, "another note to open");
+    column.otherNote = { id: await cdp.evaluate("document.querySelector('.note-detail').id"), grid: await cdp.evaluate(snippets.notesGrid()), toggle: await cdp.evaluate(snippets.transcriptToggle()) };
+    await click(cdp, '.note-detail [role="tab"]', "Transcript");
+    await cdp.evaluate(snippets.pressTranscriptToggle());
+    await waitFor(cdp, "Boolean(document.querySelector('.note-detail-wide .note-side'))", "the transcript column to come back");
+    column.shownAgain = { grid: await cdp.evaluate(snippets.notesGrid()), toggle: await cdp.evaluate(snippets.transcriptToggle()) };
+    const shot10b = await screenshot(cdp, out, "10-notes-column-shown-1440x900.png");
+    const shownRight = (state) => state.grid.tracks === 2 && state.grid.sideWidth === 340
+      && same(state.grid.tabs, ["Notes", "Replay"])
+      && state.toggle.label === "Hide transcript" && state.toggle.expanded === "true" && state.toggle.controlsExists === true;
+    const hiddenRight = (state) => state.grid.tracks === 1 && state.grid.sideWidth === null
+      && same(state.grid.tabs, ["Notes", "Transcript", "Replay"])
+      && state.toggle.label === "Show transcript" && state.toggle.expanded === "false" && state.toggle.controls === null;
+    addCheck(report, {
+      id: "10",
+      claim: [
+        "At 1440x900 the note's top bar hides and shows the transcript column: hidden, the note is one",
+        "column with three tabs at any width, and stays so for the next note opened; shown, the column is",
+        "back and an open Transcript tab gives way to Notes. The button keeps focus throughout.",
+      ].join(" "),
+      measured: column,
+      expectation: [
+        "shown: 2 tracks, a 340px .note-side, tabs Notes, Replay, \"Hide transcript\" expanded, controlling",
+        "an element that exists; hidden: 1 track, no .note-side, three tabs, \"Show transcript\" collapsed with",
+        "no aria-controls, focused; at 1000x720 no button, 1 track, Transcript still selected; back at 1440x900",
+        "still hidden; another note opens hidden; shown again with Notes selected and the button focused",
+      ].join(" "),
+      matches: shownRight(column.shown)
+        && hiddenRight(column.hidden) && column.hidden.toggle.focused
+        && column.narrow.toggle.exists === false && column.narrow.grid.tracks === 1
+        && column.narrow.toggle.selectedTab === "Transcript"
+        && hiddenRight(column.widenedAgain) && column.widenedAgain.toggle.selectedTab === "Transcript"
+        && column.otherNote.id !== firstNote && hiddenRight(column.otherNote)
+        && shownRight(column.shownAgain) && column.shownAgain.toggle.focused
+        && column.shownAgain.toggle.selectedTab === "Notes",
+      screenshots: [shot10a, shot10b],
+      note: [
+        "The other note is fixture note 104. Playback and the reading position across the button are not",
+        "measured here: the fixtures have no recording to play (see the NoteWorkspace hand-off).",
+      ].join(" "),
     });
 
     const markdown = renderMarkdown(report);

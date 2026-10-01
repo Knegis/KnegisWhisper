@@ -29,6 +29,14 @@ const TAB_LABELS: Record<Tab, string> = { notes: "Notes", transcript: "Transcrip
 const WIDE = "(min-width: 1280px)";
 
 /**
+ * Whether the reader has hidden the transcript column, for as long as the app
+ * is open. Held here rather than in the component because `Notes.tsx` mounts
+ * a workspace per note: each note opens with the column as the last one left
+ * it, as the list panel keeps its state from page to page (`App.tsx`).
+ */
+let columnHiddenChoice = false;
+
+/**
  * What a switch between the two layouts carries across; see `NoteWorkspace`.
  * `anchor` is the reading position; `reading`, a plain offset down the note,
  * is kept for when the anchor itself was inside something that remounted.
@@ -88,7 +96,8 @@ const playerSlotOf = (wide: boolean, tab: Tab): PlayerSlot => wide && tab !== "r
  * **The top bar** is the breadcrumb (folder, then title), the save status,
  * and two buttons that hand back to `Notes.tsx`, which owns both actions:
  * Export runs the same Export… the library's right-click menu does, and More
- * opens that menu under the button.
+ * opens that menu under the button. At the width a third, Hide transcript or
+ * Show transcript, is the transcript column's own.
  *
  * **Wide** (`WIDE`, tracked with a change listener): the transcript leaves
  * its tab for a column on the right, the Transcript tab is hidden, and the
@@ -99,16 +108,24 @@ const playerSlotOf = (wide: boolean, tab: Tab): PlayerSlot => wide && tab !== "r
  * same in both layouts -- the hidden tab keeps its button and its (empty)
  * panel, so no `aria-controls` points at nothing.
  *
+ * **Hiding the column** (`columnHiddenChoice`) puts the note back in the
+ * narrower layout at any width: one column, the Transcript tab back, the
+ * player in the note. It is the same switch as crossing the width, and is
+ * carried across the same way (below); while the column is hidden, crossing
+ * the width moves nothing. Showing it again gives an open Transcript tab way
+ * to Notes, as widening does.
+ *
  * There is only ever one player, so one `<audio>` (`playerSlotOf`). In a wide
  * window, moving to or from Replay moves it between the column and the note,
  * which mounts it afresh; `switchTab` takes its position first and the new
  * one resumes from it, as a crossing of the width does below.
  *
  * **Crossing the width** -- maximising the 1000px window, or snapping it to
- * half a screen -- mounts the transcript afresh, and the player too unless
- * Replay is open, because each has one parent per layout. What the reader
- * was doing is carried across (`Flip`), taken in the media listener before
- * React renders and put back in the new layout:
+ * half a screen -- or hiding or showing the column mounts the transcript
+ * afresh, and the player too unless Replay is open, because each has one
+ * parent per layout. What the reader was doing is carried across (`Flip`),
+ * taken in the media listener or the column's button before React renders
+ * and put back in the new layout:
  *
  * - the reading position -- the element at the top of the scroller that is
  *   going (`.notes-main`, or the note's own column when wide), as recorded
@@ -159,7 +176,13 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
 
   const articleRef = useRef<HTMLElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
-  const [wide, setWide] = useState(() => window.matchMedia(WIDE).matches);
+  const [windowWide, setWindowWide] = useState(() => window.matchMedia(WIDE).matches);
+  const [columnHidden, setColumnHidden] = useState(columnHiddenChoice);
+  // Read by the media listener, which is subscribed once per note, and set as the button is pressed.
+  const columnHiddenNow = useRef(columnHidden);
+  // The layout, rather than the width: a window at the width with the column hidden lays the note
+  // out as a narrower one does, Transcript tab and all.
+  const wide = windowWide && !columnHidden;
   // The layout on screen, which the media listener reads: by the time it runs, `query.matches`
   // already describes the width being moved to.
   const renderedWide = useRef(wide);
@@ -200,26 +223,41 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
     main.addEventListener("scroll", scrolled, { capture: true, passive: true });
     return () => { main.removeEventListener("scroll", scrolled, { capture: true }); cancelAnimationFrame(frame); };
   }, [readingOffset]);
+  // What the reader was doing, taken before a switch of layout renders; see `Flip`.
+  const takeFlip = useCallback((): Flip => {
+    const article = articleRef.current;
+    const active = document.activeElement;
+    return {
+      ...lastReading.current,
+      player: playerRef.current?.position() ?? null,
+      focus: active?.id === `note-${note.id}-tab-transcript` ? "notes-tab"
+        : active instanceof Element && article?.contains(active) && active.closest(MOVING) ? "selected-tab"
+        : null,
+    };
+  }, [note.id]);
   useEffect(() => {
     const query = window.matchMedia(WIDE);
     const change = () => {
-      // Overwritten on every change, not only the first: two changes before a render leave the
-      // layout where it was, and the next real switch must not carry a stale snapshot.
-      const article = articleRef.current;
-      const active = document.activeElement;
-      flip.current = {
-        ...lastReading.current,
-        player: playerRef.current?.position() ?? null,
-        focus: active?.id === `note-${note.id}-tab-transcript` ? "notes-tab"
-          : active instanceof Element && article?.contains(active) && active.closest(MOVING) ? "selected-tab"
-          : null,
-      };
-      setWide(query.matches);
-      if (query.matches) setTab(current => current === "transcript" ? "notes" : current);
+      const next = query.matches && !columnHiddenNow.current;
+      // Taken on every change that moves the layout and cleared on one that does not, never kept
+      // from an earlier one: two changes before a render leave the layout where it was, and the next
+      // real switch must not carry a stale snapshot. With the column hidden, crossing the width
+      // moves nothing.
+      flip.current = next === renderedWide.current ? null : takeFlip();
+      setWindowWide(query.matches);
+      if (next) setTab(current => current === "transcript" ? "notes" : current);
     };
     query.addEventListener("change", change);
     return () => query.removeEventListener("change", change);
-  }, [note.id, readingOffset]);
+  }, [takeFlip]);
+  // The column's button. The same switch of layout as crossing the width, carried across the same way.
+  const toggleColumn = () => {
+    const hide = !columnHidden;
+    flip.current = takeFlip();
+    columnHiddenChoice = hide; columnHiddenNow.current = hide;
+    setColumnHidden(hide);
+    if (!hide) setTab(current => current === "transcript" ? "notes" : current);
+  };
   // The reading position and focus, before the new layout is painted.
   useLayoutEffect(() => {
     renderedWide.current = wide;
@@ -392,6 +430,10 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
         <p className="save-status" role="status" aria-live="polite">{saveStatusText(autosave.status)}</p>
         <button type="button" className="note-topbar-button" aria-label="Export…" title="Export…" onClick={onExport}><Icon name="export" /></button>
         <button type="button" className="note-topbar-button" aria-label="More" title="More" aria-haspopup="dialog" onClick={event => onMore(event.currentTarget)}><Icon name="more" /></button>
+        {/* Only where there is a column to hide. `aria-controls` only while it is on screen, so it never names nothing. */}
+        {windowWide ? <button type="button" className="note-topbar-button" aria-label={columnHidden ? "Show transcript" : "Hide transcript"}
+          title={columnHidden ? "Show transcript" : "Hide transcript"} aria-expanded={!columnHidden}
+          aria-controls={wide ? `note-${note.id}-side` : undefined} onClick={toggleColumn}><Icon name="panelRight" /></button> : null}
       </div>
       <div className="note-page">
         {autosave.status === "failed" && <p className="save-status error" role="alert">Couldn't save: {autosave.error} <button type="button" onClick={() => { void autosave.retry().catch(() => undefined); }}>Retry save</button></p>}
@@ -454,7 +496,7 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
       </div>
     </div>
     {/* No recording details here: the Replay tab still has them, and beside it they would be on screen twice. */}
-    {wide ? <div className="note-side">
+    {wide ? <div id={`note-${note.id}-side`} className="note-side">
       <h2 className="note-side-label">Transcript</h2>
       <div className="note-side-body">{transcriptBody}</div>
       {player && playerSlot === "side" ? <div className="note-side-player">{player}</div> : null}

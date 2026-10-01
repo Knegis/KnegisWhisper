@@ -6,7 +6,8 @@
  * listener on the document watches the pointer enter, or keyboard focus land
  * on, anything with a `title`; it moves the text into `data-tooltip` so the
  * browser never shows its bubble, waits, and renders the text in a box under
- * the element. Leaving, pressing, scrolling or Escape hides it and puts the
+ * the element. Leaving, pressing (with the pointer or from the keyboard),
+ * scrolling or Escape hides it and puts the
  * attribute back, so accessible names and the markup stay as they were.
  *
  * Mounted once, in the main window only. The meeting panel and the overlay
@@ -73,6 +74,10 @@ export function Tooltips() {
     document.addEventListener("pointerover", over);
     document.addEventListener("pointerout", out);
     document.addEventListener("pointerdown", hide, true);
+    // A press from the keyboard (Enter or Space on a button) has no pointerdown, and a button that
+    // names what it will do next -- Hide list, Show list -- changes its `title` as it is pressed: a
+    // tooltip left up would say the old one.
+    document.addEventListener("click", hide, true);
     document.addEventListener("focusin", focusIn);
     document.addEventListener("focusout", focusOut);
     document.addEventListener("keydown", escape);
@@ -84,6 +89,7 @@ export function Tooltips() {
       document.removeEventListener("pointerover", over);
       document.removeEventListener("pointerout", out);
       document.removeEventListener("pointerdown", hide, true);
+      document.removeEventListener("click", hide, true);
       document.removeEventListener("focusin", focusIn);
       document.removeEventListener("focusout", focusOut);
       document.removeEventListener("keydown", escape);

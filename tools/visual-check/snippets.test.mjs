@@ -16,6 +16,8 @@ test("every renderer snippet is syntactically valid JavaScript", () => {
     snippets.searchState(),
     snippets.blurActive(),
     snippets.notesGrid(),
+    snippets.transcriptToggle(),
+    snippets.pressTranscriptToggle(),
     snippets.notesTabsContained(),
     snippets.notesEntry("A title with \"quotes\" and a 'single' one"),
     snippets.focusState(),

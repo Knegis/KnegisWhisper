@@ -35,6 +35,12 @@ tool measures nine shell claims (KNEG-363):
 9. After a load at 720x520 on Notes with the library opened, nothing scrolls
    sideways (the document or `.notes-main`), every tab sits inside
    `.notes-main`, and fixture note 104's long title ellipsises in the panel.
+10. At 1440x900 on Notes, the top bar's Hide transcript puts the note back to
+    one track with three tabs and Show transcript brings the 340px column
+    back, the button keeping focus and naming the column in `aria-controls`
+    only while it is on screen. While hidden, narrowing to 1000x720 and
+    widening again moves nothing, and fixture note 104 opens hidden too;
+    showing the column with Transcript open selects Notes.
 
 "Hidden" is measured as the computed display and width, not the `hidden`
 attribute alone. The 720x520 check reloads at that size, because the panel's

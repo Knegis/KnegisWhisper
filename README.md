@@ -67,7 +67,8 @@ that time; they are not a claim that previously completed work is still missing.
   button and says what is in effect and where the audio goes. Dictation's list panel holds its
   history, grouped by day; Meetings' holds Recent and Interrupted recordings.
 - **Notes:** folders and notes are in the list panel; the note opens beside it. In windows
-  1280px or wider, the transcript also shows as a column to the right. Import audio or video is
+  1280px or wider, the transcript also shows as a column to the right, which the note's top bar
+  can hide. Import audio or video is
   reached from Notes' list panel or its empty state, not from the rail.
 - **Settings:** the list panel names Shortcuts, Meetings, Vocabulary, Transcription, Cleanup &
   summaries, Local text models, Providers and Calendar, then, under a **Developer** heading,

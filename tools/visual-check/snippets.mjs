@@ -174,6 +174,46 @@ export function notesGrid() {
 }
 
 /**
+ * The open note's Hide transcript / Show transcript button, or null where it
+ * draws none (below 1280px): its name, whether it reads as expanded, the id it
+ * names in `aria-controls` and whether that element exists, whether it has
+ * focus, and which tab is selected.
+ */
+export function transcriptToggle() {
+  return source(`
+    const toggle = [...document.querySelectorAll('.note-topbar button')]
+      .find((button) => /^(Hide|Show) transcript$/.test(button.getAttribute('aria-label') ?? ''));
+    const selected = document.querySelector('.note-detail [role="tab"][aria-selected="true"]');
+    if (!toggle) return { exists: false, selectedTab: selected?.textContent.trim() ?? null };
+    const controls = toggle.getAttribute('aria-controls');
+    return {
+      exists: true,
+      label: toggle.getAttribute('aria-label'),
+      expanded: toggle.getAttribute('aria-expanded'),
+      controls,
+      controlsExists: controls === null ? null : Boolean(document.getElementById(controls)),
+      focused: document.activeElement === toggle,
+      selectedTab: selected?.textContent.trim() ?? null,
+    };
+  `);
+}
+
+/**
+ * Focuses and presses the open note's transcript column button, as a keyboard
+ * user would: `click()` alone leaves focus where it was.
+ */
+export function pressTranscriptToggle() {
+  return source(`
+    const toggle = [...document.querySelectorAll('.note-topbar button')]
+      .find((button) => /^(Hide|Show) transcript$/.test(button.getAttribute('aria-label') ?? ''));
+    if (!toggle) throw new Error('The transcript column button is missing');
+    toggle.focus();
+    toggle.click();
+    return { pressed: toggle.getAttribute('aria-label') };
+  `);
+}
+
+/**
  * Whether every tab sits inside `.notes-main`, horizontally: the same
  * comparison `notes-smoke.mjs` makes at 720x520 in the native window. Also
  * `.notes-main`'s own widths, since it is the note's scroller and would be
