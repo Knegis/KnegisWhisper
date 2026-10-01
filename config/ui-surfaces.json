@@ -48,7 +48,7 @@
       "surfaceId": "meetings.record",
       "component": "apps/desktop/src/views/Meetings.tsx",
       "built": true,
-      "note": "The recording task: whether a meeting can be recorded (lib/readiness.ts), Start/Stop/Discard, whether the other participants are captured, the live transcript and interrupted recordings. Provider, language and detection are set on Settings > Meetings."
+      "note": "The recording task: whether a meeting can be recorded (lib/readiness.ts), Start/Stop/Discard, whether the other participants are captured, the live transcript and interrupted recordings. The provider and language are chosen here, in the control bar chips, and also set on Settings > Meetings, which owns them along with detection."
     },
     "Settings > Shortcuts": {
       "surfaceId": "settings.shortcuts",

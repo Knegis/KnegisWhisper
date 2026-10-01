@@ -5,6 +5,7 @@ import {
   elapsedLabel,
   interruptedTitle,
   liveElapsed,
+  meetingLanguageMenu,
   recentMeta,
   recordedSources,
   recordingStartedAt,
@@ -140,4 +141,36 @@ test("interruptedTitle is when the recording started, or a plain name when that 
   assert.ok(title.startsWith("Recording from "), title);
   assert.ok(title.endsWith(`, ${timeOfDay(started)}`), title);
   assert.equal(interruptedTitle("orphan.wav", now), "Interrupted recording");
+});
+
+const DETECTS = { name: "Deepgram", languageDetection: true };
+const NEEDS_LANGUAGE = { name: "OpenAI Realtime", languageDetection: false };
+
+test("meetingLanguageMenu lists Detect language first, then the eight languages, and ticks the current one", () => {
+  const menu = meetingLanguageMenu("sv", DETECTS);
+  assert.equal(menu.length, 9);
+  assert.deepEqual(menu[0], { id: "", label: "Detect language", group: null, current: false, disabled: false, reason: null });
+  assert.deepEqual(menu.filter((o) => o.current).map((o) => o.id), ["sv"]);
+  assert.equal(menu.find((o) => o.id === "sv")?.label, "Swedish");
+});
+
+test("meetingLanguageMenu ticks Detect language when no language is saved, ignoring blanks", () => {
+  assert.deepEqual(meetingLanguageMenu("  ", DETECTS).filter((o) => o.current).map((o) => o.id), [""]);
+});
+
+test("meetingLanguageMenu greys Detect language, with the reason, for a provider that cannot detect", () => {
+  const detect = meetingLanguageMenu("en", NEEDS_LANGUAGE)[0];
+  assert.equal(detect?.disabled, true);
+  assert.equal(detect?.reason, "OpenAI Realtime can't detect the language. Choose one.");
+  assert.equal(meetingLanguageMenu("en", DETECTS)[0]?.disabled, false);
+});
+
+test("meetingLanguageMenu with no provider greys nothing", () => {
+  assert.equal(meetingLanguageMenu("en", null).every((o) => !o.disabled), true);
+});
+
+test("meetingLanguageMenu lists a saved value it does not know as itself, so the tick is never missing", () => {
+  const menu = meetingLanguageMenu("sv-SE", DETECTS);
+  assert.deepEqual(menu.filter((o) => o.current).map((o) => [o.id, o.label]), [["sv-SE", "sv-SE"]]);
+  assert.equal(menu.length, 10);
 });

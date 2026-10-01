@@ -233,7 +233,7 @@ test("a saved provider that can't be used is needs-setup, even with another usab
   if (r.state !== "needs-setup") return;
   assert.equal(r.problem, "Local model, the provider you chose, can't be used right now.");
   assert.equal(r.detail, "The local model server isn't running.");
-  assert.deepEqual(r.fix, { view: "meeting-settings", label: "Choose a provider" });
+  assert.deepEqual(r.fix, { view: "provider-menu", label: "Choose a provider" });
 });
 
 test("no usable provider outranks a saved one that can't be used, and says which one it was", () => {
@@ -267,7 +267,7 @@ test("a saved provider that can't be used outranks a missing language", () => {
   });
   assert.equal(r.state, "needs-setup");
   if (r.state !== "needs-setup") return;
-  assert.deepEqual(r.fix, { view: "meeting-settings", label: "Choose a provider" });
+  assert.deepEqual(r.fix, { view: "provider-menu", label: "Choose a provider" });
 });
 
 test("nothing selected among usable providers is also needs-setup", () => {
@@ -281,7 +281,7 @@ test("nothing selected among usable providers is also needs-setup", () => {
   assert.equal(r.state, "needs-setup");
 });
 
-test("a language warning is needs-setup, fixed by opening meeting settings, with the warning as detail", () => {
+test("a language warning is needs-setup, fixed by choosing a language, with the warning as detail", () => {
   const r = meetingReadiness({
     usable: [provider()],
     selected: "local",
@@ -293,7 +293,7 @@ test("a language warning is needs-setup, fixed by opening meeting settings, with
   if (r.state !== "needs-setup") return;
   assert.equal(r.problem, "Choose a meeting language first.");
   assert.equal(r.detail, "This provider cannot detect the language on its own.");
-  assert.deepEqual(r.fix, { view: "meeting-settings", label: "Open meeting settings" });
+  assert.deepEqual(r.fix, { view: "language-menu", label: "Choose a language" });
 });
 
 test("system audio not being available is ready, with a caution", () => {

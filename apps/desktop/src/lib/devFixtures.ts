@@ -585,8 +585,12 @@ const MEETING_PROVIDERS: MeetingProviderSummary[] = [
     languageDetection: false,
     reconnect: true,
     batchFallback: true,
+    // `no-client`, not `declined`: the Meetings page's provider menu leaves a
+    // refused provider out (it is a policy, not something to act on), and the
+    // fixture wants the "On this computer" group visible with a greyed row, the
+    // saved-but-unusable case the page has to explain.
     availability: {
-      state: "declined",
+      state: "no-client",
       reason: "the local server is installed but not running",
     },
     summary: "Audio never leaves this machine. No partials, no speaker labels.",

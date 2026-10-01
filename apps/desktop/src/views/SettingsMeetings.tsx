@@ -5,7 +5,11 @@
  * notification window, which applications count as a meeting, speaker labels,
  * and every provider this build describes. The recording itself -- Start,
  * Stop, the live transcript, interrupted recordings -- is on the Meetings page
- * (`views/Meetings.tsx`), which reads what is set here and sets none of it.
+ * (`views/Meetings.tsx`), which reads what is set here and also sets the
+ * provider and the language, from its control bar chips' menus. This screen
+ * keeps its own controls for both: it is where a language the menu does not
+ * list is typed, and where "Use X" answers a saved provider that cannot be
+ * used.
  *
  * That split puts one obligation on this screen: whatever it shows has to be
  * saved before anybody can press Start, because Start is now a page away and
