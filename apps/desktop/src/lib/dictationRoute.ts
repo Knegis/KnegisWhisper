@@ -48,7 +48,7 @@
  */
 
 import type { MenuOption } from "./chipMenu.js";
-import type { LocalStatus, ProviderSummary, RouteReport, SherpaStatus } from "./ipc.js";
+import type { LocalStatus, ProviderSummary, RouteReport, SessionState, SherpaStatus } from "./ipc.js";
 
 /** One switch of the route, and the words the chip says while it is applied. */
 export type RouteChoice =
@@ -148,4 +148,22 @@ export function routeMenu(
  */
 export function routeBusyLabel(choice: RouteChoice | null): string | null {
   return choice === null || choice.kind === "cloud" ? null : `Starting ${choice.label}…`;
+}
+
+/**
+ * Why the route and the language cannot be changed right now, or `null` when
+ * they can: only between dictations, as the live meeting view holds its chips
+ * until the meeting ends.
+ *
+ * While recording, because Rust resolves both at Stop (`toggle`,
+ * src-tauri/src/dictation.rs): a change would apply to audio already captured
+ * under the privacy line the page showed when it started. While the words are
+ * transcribed, because choosing another whisper model stops the server
+ * running the one in use (`start_model`, src-tauri/src/local_model.rs) --
+ * believed from that code to fail the transcription in flight, not tried.
+ * And while they are typed, so the chips are held for one span, from Start
+ * until the dictation is over, rather than flickering back for a moment.
+ */
+export function routeHeld(state: SessionState): string | null {
+  return state === "idle" ? null : "Can't change during a dictation";
 }

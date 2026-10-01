@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { localEngine, routeBusyLabel, routeMenu } from "../src/lib/dictationRoute.js";
+import { localEngine, routeBusyLabel, routeHeld, routeMenu } from "../src/lib/dictationRoute.js";
 import type {
   Dispatch,
   LocalStatus,
@@ -249,4 +249,13 @@ test("the chip says Starting while a local model is being switched to, and nothi
   assert.equal(routeBusyLabel({ kind: "parakeet", model: "unified", label: "Parakeet Unified" }), "Starting Parakeet Unified…");
   assert.equal(routeBusyLabel({ kind: "cloud", provider: "openai", model: "whisper-1", label: "OpenAI" }), null);
   assert.equal(routeBusyLabel(null), null);
+});
+
+test("the route and the language can be changed only between dictations", () => {
+  assert.equal(routeHeld("idle"), null);
+  for (const state of ["recording", "transcribing", "inserting"] as const) {
+    // Rust resolves both at Stop, so a change now would apply to audio
+    // already captured under the old privacy line.
+    assert.equal(routeHeld(state), "Can't change during a dictation", state);
+  }
 });

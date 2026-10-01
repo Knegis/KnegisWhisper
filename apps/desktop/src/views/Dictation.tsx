@@ -12,10 +12,11 @@
  *     provider -- each chosen right here in its chip's menu (`ChipMenu`);
  *     on the local whisper route, the languages, in a panel holding the
  *     picker Settings > Transcription shows (that page keeps its own
- *     controls for the route and the languages); the privacy line, which
- *     is never hidden and follows a switch as soon as it lands; the last
- *     result with a Copy button; the Tidy up chip, to Cleanup & summaries;
- *     and Start, which waits while a route switch is applied.
+ *     controls for the route and the languages). Those two are held while a
+ *     dictation is under way, because Rust reads them at Stop. Then the
+ *     privacy line, which is never hidden and follows a switch as soon as it
+ *     lands; the last result with a Copy button; the Tidy up chip, to Cleanup
+ *     & summaries; and Start, which waits while a route switch is applied.
  *   - **The history**, in the list panel (`components/DictationHistoryPanel.tsx`),
  *     with the way to the shortcut editor and the vocabulary at its top.
  *
@@ -53,7 +54,7 @@ import { SplitView } from "../components/SplitView";
 import { TaskHero } from "../components/TaskHero";
 import { cleanupLabel, destinationName, languageLabel, microphoneMenu, privacyLines } from "../lib/controlBar";
 import { timeOfDay } from "../lib/dayGroups";
-import { localEngine, routeBusyLabel, routeMenu, type RouteChoice } from "../lib/dictationRoute";
+import { localEngine, routeBusyLabel, routeHeld, routeMenu, type RouteChoice } from "../lib/dictationRoute";
 import {
   cancelDictation,
   getDictationRoute,
@@ -205,7 +206,10 @@ export function DictationView({
    * The route switch being applied, from its choice until the re-read after
    * it. The chip says what is starting, and Start waits: the backend resolves
    * the route at Stop, so a dictation started mid-switch could end on a route
-   * nobody chose -- the server up, the route not yet pointed at it.
+   * nobody chose -- the server up, the route not yet pointed at it. Stop and
+   * Discard never wait on it: no switch can begin during a dictation (the
+   * chips are held), and one begun before it, by the hotkey starting a
+   * dictation mid-switch, must not keep the microphone open.
    */
   const [switching, setSwitching] = useState<RouteChoice | null>(null);
 
@@ -329,6 +333,12 @@ export function DictationView({
   // disable it -- the button needs none -- so only this case hands the
   // page's one filled button to the hero's fix.
   const startBlocked = !recording && route.problem !== null;
+  // Start, never Stop, waits for a route switch (see `switching`).
+  const startWaits = !recording && switching !== null;
+  // The route and the language are held from Start until the dictation is
+  // over (`routeHeld` says why); the chips keep saying what is in effect. The
+  // microphone is not: it never was, as a select, before it became a menu.
+  const held = routeHeld(state);
   // The route chip's menu (`lib/dictationRoute.ts`): the installed models
   // and the providers, which one the route resolves to, and what choosing
   // each writes. A choice is written and everything is read back (`guard`),
@@ -340,7 +350,7 @@ export function DictationView({
     const choice = routes.choices.get(id);
     // One switch at a time: a provider's is not `busy`, so its chip can be
     // reopened while the write is still out.
-    if (choice === undefined || switching !== null) return;
+    if (choice === undefined || switching !== null || held !== null) return;
     setSwitching(choice);
     void guard(() => chooseRoute(choice)).finally(() => setSwitching(null));
   };
@@ -480,6 +490,7 @@ export function DictationView({
                   name="Transcription"
                   label={routeLabel}
                   busy={routeBusyLabel(switching)}
+                  held={held}
                   options={routes.options}
                   onChoose={chooseRouteRow}
                   footer={{ label: "More in Settings…", onClick: () => onGoTo("transcription") }}
@@ -491,7 +502,7 @@ export function DictationView({
                     starts from what this page read, so the panel opens on
                     its first control rather than on a picker still loading. */}
                 {engine === "whisper" ? (
-                  <ChipMenu icon="language" name="Language" label={languageLabel(languages)}>
+                  <ChipMenu icon="language" name="Language" label={languageLabel(languages)} held={held}>
                     <LocalLanguagePicker initial={languages} />
                   </ChipMenu>
                 ) : null}
@@ -576,7 +587,7 @@ export function DictationView({
               <button
                 type="button"
                 className={startBlocked ? "control-start" : "primary control-start"}
-                disabled={mic.disabled || startBlocked || switching !== null}
+                disabled={mic.disabled || startBlocked || startWaits}
                 onClick={() => {
                   void guard(toggleDictation);
                 }}

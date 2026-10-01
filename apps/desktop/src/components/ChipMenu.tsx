@@ -45,6 +45,11 @@
  * than `disabled`, because a disabled button drops the focus a keyboard user
  * just brought back to it by choosing.
  *
+ * `held` is why the value cannot be changed right now ("Can't change during a
+ * dictation"). The chip keeps saying the value in effect -- which is the point
+ * while it is in effect -- and cannot be opened, as when busy; the reason is
+ * its `title` and its `aria-description`.
+ *
  * `open()` (the ref's handle) opens the menu from elsewhere -- a setup button
  * in a page's hero that is asking for this very value. Focus goes into the
  * menu, and returns to the chip, as it would had the chip been pressed.
@@ -81,6 +86,8 @@ type ChipMenuCommon = {
   title?: string;
   /** While set, the chip says this instead of the label and cannot be opened. */
   busy?: string | null;
+  /** While set, the chip keeps its label but cannot be opened, and this says why. */
+  held?: string | null;
   footer?: MenuFooter;
 };
 
@@ -97,7 +104,7 @@ const TABBABLE =
   'button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a[href], [tabindex]:not([tabindex="-1"])';
 
 export const ChipMenu = forwardRef<ChipMenuHandle, ChipMenuProps>(function ChipMenu(props, ref) {
-  const { icon, name, label, title, busy = null, footer } = props;
+  const { icon, name, label, title, busy = null, held = null, footer } = props;
   const options = props.options;
   const panel = options === undefined;
   const id = useId();
@@ -111,10 +118,12 @@ export const ChipMenu = forwardRef<ChipMenuHandle, ChipMenuProps>(function ChipM
   const [open, setOpen] = useState(false);
   const [placement, setPlacement] = useState<MenuPlacement | null>(null);
   const shown = busy ?? label;
+  /** Busy or held: either way it cannot be opened. */
+  const blocked = busy !== null || held !== null;
 
   const show = useCallback(() => {
-    if (busy === null) setOpen(true);
-  }, [busy]);
+    if (!blocked) setOpen(true);
+  }, [blocked]);
   const close = useCallback((refocus: boolean) => {
     setOpen(false);
     setPlacement(null);
@@ -124,10 +133,11 @@ export const ChipMenu = forwardRef<ChipMenuHandle, ChipMenuProps>(function ChipM
 
   useImperativeHandle(ref, () => ({ open: show }), [show]);
 
-  // A choice being applied closes the menu it was made in, if something else has not.
+  // A choice being applied closes the menu it was made in, if something else has not;
+  // and a value that stops being changeable closes its menu too.
   useLayoutEffect(() => {
-    if (busy !== null) close(false);
-  }, [busy, close]);
+    if (blocked) close(false);
+  }, [blocked, close]);
 
   // Placed against the chip once it has been laid out hidden at its own size, and again
   // whenever what it holds changes while it is open. The natural height is read past any
@@ -335,8 +345,9 @@ export const ChipMenu = forwardRef<ChipMenuHandle, ChipMenuProps>(function ChipM
         aria-expanded={open}
         aria-controls={open ? popupId : undefined}
         aria-label={`${name}: ${shown}`}
-        aria-disabled={busy !== null || undefined}
-        title={title ?? shown}
+        aria-disabled={blocked || undefined}
+        aria-description={held ?? undefined}
+        title={held ?? title ?? shown}
         onClick={() => (open ? close(true) : show())}
         onKeyDown={(event) => {
           if (!panel && !open && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
