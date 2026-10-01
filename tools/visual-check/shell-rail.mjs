@@ -5,7 +5,7 @@
  * its Developer section, the title bar's panel toggle, the 720x520 minimum
  * window, keyboard focus, Ctrl+K, and Notes: the transcript column a wide
  * window gives a note, the 720x520 fit of a note beside its library, and the
- * top bar's button that hides and shows that column.
+ * note's button that hides and shows that column.
  */
 import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -465,7 +465,7 @@ export async function runShellRail(options) {
     addCheck(report, {
       id: "10",
       claim: [
-        "At 1440x900 the note's top bar hides and shows the transcript column: hidden, the note is one",
+        "At 1440x900 the note's actions hide and show the transcript column: hidden, the note is one",
         "column with three tabs at any width, and stays so for the next note opened; shown, the column is",
         "back and an open Transcript tab gives way to Notes. The button keeps focus throughout.",
       ].join(" "),

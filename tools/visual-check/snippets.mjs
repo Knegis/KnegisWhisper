@@ -181,7 +181,7 @@ export function notesGrid() {
  */
 export function transcriptToggle() {
   return source(`
-    const toggle = [...document.querySelectorAll('.note-topbar button')]
+    const toggle = [...document.querySelectorAll('.note-actions button')]
       .find((button) => /^(Hide|Show) transcript$/.test(button.getAttribute('aria-label') ?? ''));
     const selected = document.querySelector('.note-detail [role="tab"][aria-selected="true"]');
     if (!toggle) return { exists: false, selectedTab: selected?.textContent.trim() ?? null };
@@ -204,7 +204,7 @@ export function transcriptToggle() {
  */
 export function pressTranscriptToggle() {
   return source(`
-    const toggle = [...document.querySelectorAll('.note-topbar button')]
+    const toggle = [...document.querySelectorAll('.note-actions button')]
       .find((button) => /^(Hide|Show) transcript$/.test(button.getAttribute('aria-label') ?? ''));
     if (!toggle) throw new Error('The transcript column button is missing');
     toggle.focus();

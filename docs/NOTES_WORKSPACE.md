@@ -18,7 +18,7 @@ this copies literal speech and available speaker labels without changing the sou
 Transcript shows the original rows and playback actions. In windows 1280px or wider
 the transcript is a column to the right of the note instead, and the Transcript tab
 is hidden; crossing that width keeps playback and the reading position. **Hide
-transcript**, at the right of the note's top bar, puts the note back in the one-column
+transcript**, beside Export and More above the editor, puts the note back in the one-column
 layout with the Transcript tab, and **Show transcript** brings the column back; both keep
 playback and the reading position the same way, and the choice holds for every note until
 the app closes. Replay

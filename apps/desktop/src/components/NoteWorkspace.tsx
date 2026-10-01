@@ -90,11 +90,11 @@ type PlayerSlot = "note" | "side";
 const playerSlotOf = (wide: boolean, tab: Tab): PlayerSlot => wide && tab !== "replay" ? "side" : "note";
 
 /**
- * One open note: its top bar, its title and meta row, and the Notes /
+ * One open note: its title and meta row, and the Notes /
  * Transcript / Replay tabs.
  *
- * **The top bar** is the breadcrumb (folder, then title), the save status,
- * and two buttons that hand back to `Notes.tsx`, which owns both actions:
+ * **Above the editor**, the tabs share their row with the save status and
+ * two buttons that hand back to `Notes.tsx`, which owns both actions:
  * Export runs the same Export… the library's right-click menu does, and More
  * opens that menu under the button. At the width a third, Hide transcript or
  * Show transcript, is the transcript column's own.
@@ -144,10 +144,9 @@ const playerSlotOf = (wide: boolean, tab: Tab): PlayerSlot => wide && tab !== "r
 export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
   note: Note;
   reload: () => Promise<void>;
-  folderName: string | null;
   onExport: () => void;
   onMore: (anchor: HTMLButtonElement) => void;
-}>(function NoteWorkspace({ note, reload, folderName, onExport, onMore }, ref) {
+}>(function NoteWorkspace({ note, reload, onExport, onMore }, ref) {
   const saved = useRef({ title: note.title, content: note.content });
   const draft = useRef({ title: note.title, content: note.content });
   const [title, setTitle] = useState(note.title);
@@ -402,7 +401,6 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
     autosave.schedule({ content });
   };
 
-  // The folder half of `noteMeta` is Notes' to resolve -- it holds the folder list -- and arrives as `folderName`.
   const { date, minutes, participants } = noteMeta(note, []);
   const recordingDetails = note.recordingDetails && <details className="recording-details" open><summary>Recording details</summary><p>{note.recordingDetails}</p></details>;
   const transcriptBody = transcriptError ? <p className="error" role="alert">{transcriptError} <button type="button" onClick={() => { void loadTranscript(); }}>Retry</button></p> : !transcript ? <p role="status">Loading transcript and recording…</p> : transcript.rows.length ?
@@ -421,20 +419,6 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
 
   return <article ref={articleRef} id={`note-detail-${note.id}`} className={wide ? "note-detail note-detail-wide" : "note-detail"} aria-label={title}>
     <div className="note-body" ref={bodyRef}>
-      <div className="note-topbar">
-        <p className="note-crumb">
-          {folderName === null ? null : <><span>{folderName}</span><span className="note-crumb-rule" aria-hidden="true">/</span></>}
-          <span>{title.trim() || "Untitled note"}</span>
-        </p>
-        {/* Always rendered, and holding its place when it has nothing to say: a live region that is already in the page is the one screen readers announce reliably, and one that came and went would shift the buttons beside it. */}
-        <p className="save-status" role="status" aria-live="polite">{saveStatusText(autosave.status)}</p>
-        <button type="button" className="note-topbar-button" aria-label="Export…" title="Export…" onClick={onExport}><Icon name="export" /></button>
-        <button type="button" className="note-topbar-button" aria-label="More" title="More" aria-haspopup="dialog" onClick={event => onMore(event.currentTarget)}><Icon name="more" /></button>
-        {/* Only where there is a column to hide. `aria-controls` only while it is on screen, so it never names nothing. */}
-        {windowWide ? <button type="button" className="note-topbar-button" aria-label={columnHidden ? "Show transcript" : "Hide transcript"}
-          title={columnHidden ? "Show transcript" : "Hide transcript"} aria-expanded={!columnHidden}
-          aria-controls={wide ? `note-${note.id}-side` : undefined} onClick={toggleColumn}><Icon name="panelRight" /></button> : null}
-      </div>
       <div className="note-page">
         {autosave.status === "failed" && <p className="save-status error" role="alert">Couldn't save: {autosave.error} <button type="button" onClick={() => { void autosave.retry().catch(() => undefined); }}>Retry save</button></p>}
         <header className="note-detail-header">
@@ -449,17 +433,29 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
             {participants.length === 0 ? null : <li><Icon name="meetings" size={15} /><span className="sr-only">Participants: </span>{participants.join(", ")}</li>}
           </ul> : null}
         </header>
-        <div className="summary-tabs note-tabs" role="tablist" aria-label="Note view">
-          {TABS.map(value => <button key={value} id={`note-${note.id}-tab-${value}`} type="button" role="tab" hidden={!shown.includes(value)}
-            aria-controls={`note-${note.id}-panel-${value}`} aria-selected={tab === value} tabIndex={tab === value ? 0 : -1}
-            onClick={() => { void switchTab(value); }} onKeyDown={event => {
-              if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
-              event.preventDefault();
-              // Over the tabs on screen: a wide window's hidden Transcript tab is skipped, not landed on.
-              const at = shown.indexOf(value);
-              const next = event.key === "Home" ? 0 : event.key === "End" ? shown.length - 1 : (at + (event.key === "ArrowRight" ? 1 : shown.length - 1)) % shown.length;
-              void switchTab(shown[next]!, true);
-            }}>{TAB_LABELS[value]}</button>)}
+        <div className="note-controls">
+          <div className="summary-tabs note-tabs" role="tablist" aria-label="Note view">
+            {TABS.map(value => <button key={value} id={`note-${note.id}-tab-${value}`} type="button" role="tab" hidden={!shown.includes(value)}
+              aria-controls={`note-${note.id}-panel-${value}`} aria-selected={tab === value} tabIndex={tab === value ? 0 : -1}
+              onClick={() => { void switchTab(value); }} onKeyDown={event => {
+                if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+                event.preventDefault();
+                // Over the tabs on screen: a wide window's hidden Transcript tab is skipped, not landed on.
+                const at = shown.indexOf(value);
+                const next = event.key === "Home" ? 0 : event.key === "End" ? shown.length - 1 : (at + (event.key === "ArrowRight" ? 1 : shown.length - 1)) % shown.length;
+                void switchTab(shown[next]!, true);
+              }}>{TAB_LABELS[value]}</button>)}
+          </div>
+          <div className="note-actions">
+            {/* Keep the live region mounted so save changes are announced reliably. */}
+            <p className="save-status" role="status" aria-live="polite">{saveStatusText(autosave.status)}</p>
+            <button type="button" className="note-action-button" aria-label="Export…" title="Export…" onClick={onExport}><Icon name="export" /></button>
+            <button type="button" className="note-action-button" aria-label="More" title="More" aria-haspopup="dialog" onClick={event => onMore(event.currentTarget)}><Icon name="more" /></button>
+            {/* Only where there is a column to hide. `aria-controls` only while it is on screen, so it never names nothing. */}
+            {windowWide ? <button type="button" className="note-action-button" aria-label={columnHidden ? "Show transcript" : "Hide transcript"}
+              title={columnHidden ? "Show transcript" : "Hide transcript"} aria-expanded={!columnHidden}
+              aria-controls={wide ? `note-${note.id}-side` : undefined} onClick={toggleColumn}><Icon name="panelRight" /></button> : null}
+          </div>
         </div>
         {error && <p className="error" role="alert">{error}</p>}
         <div className="note-workspace">

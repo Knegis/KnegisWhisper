@@ -1415,7 +1415,7 @@ button.transcript-play:hover:not(:disabled) { color: var(--text); }
  * `.note-workspace` is always one column: the editor and the summary, the
  * transcript and the replay are its tabs. What changes at the width is the
  * note around it. `NoteWorkspace.tsx` matches `(min-width: 1280px)` and, while
- * it holds and the reader has not hidden the column (the top bar's Hide
+ * it holds and the reader has not hidden the column (the note's Hide
  * transcript), adds `.note-detail-wide` to the article: `minmax(0, 1fr) 340px`,
  * with the transcript taken out of its tab into a `--panel` column behind a
  * left rule, the Transcript tab hidden, and the player at the foot of that
@@ -2449,10 +2449,10 @@ button.notes-folder-toggle:hover:not(:disabled) { background: var(--panel-hover)
 .summary-pane .ProseMirror h2 { font-size: 1.125rem; text-transform: none; letter-spacing: normal; margin: 1.5rem 0 .5rem; }
 
 /*
- * The open note (`components/NoteWorkspace.tsx`): a 52px top bar -- the
- * breadcrumb, the save status, Export and More -- across the note's full
- * width, then, in the canvas' 760px measure centred in that width, the title,
- * the meta row and the tabs. Centred rather than held to the left, so a note
+ * The open note (`components/NoteWorkspace.tsx`): the title, meta row and
+ * tabs in the canvas' 760px measure centred in the note's width. The save
+ * status, Export, More and transcript toggle sit beside the tabs, directly
+ * above the editor. Centred rather than held to the left, so a note
  * with room to spare -- the list or the transcript column hidden, or a wide
  * window -- keeps the space even on both sides.
  *
@@ -2467,11 +2467,10 @@ button.notes-folder-toggle:hover:not(:disabled) { background: var(--panel-hover)
  * the centring gives, `(100% - 760px) / 2`, clamped between 40px and 88px.
  * The notices above the note (`.notes-notices`, above) share it line for line.
  */
-.note-topbar { display: flex; align-items: center; gap: 4px; height: 52px; padding: 0 12px 0 40px; }
-.note-crumb { flex: 1; min-width: 0; margin: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 13px; color: var(--muted); }
-.note-crumb-rule { margin: 0 6px; }
-.note-topbar .save-status { flex: none; margin: 0 8px 0 0; font-size: 12.5px; }
-button.note-topbar-button { flex: none; display: flex; align-items: center; justify-content: center; width: 32px; height: 32px; margin: 0; padding: 0; border-radius: 2px; }
+.note-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 0 16px; margin-top: 26px; border-bottom: 1px solid var(--rule); }
+.note-actions { display: flex; align-items: center; gap: 4px; margin-left: auto; }
+.note-actions .save-status { flex: none; margin: 0 8px 0 0; font-size: 12.5px; }
+button.note-action-button { flex: none; display: flex; align-items: center; justify-content: center; width: 32px; height: 32px; margin: 0; padding: 0; border-radius: 2px; }
 .note-page, .notes-notices > * { max-width: 760px; margin-inline: auto; padding-right: 40px; padding-left: clamp(40px, calc(468px - 50%), 88px); }
 .note-page { padding-top: 14px; padding-bottom: 32px; }
 .note-page > .save-status.error { margin: 0 0 12px; }
@@ -2483,7 +2482,7 @@ button.note-topbar-button { flex: none; display: flex; align-items: center; just
  * `.note-detail` because the meeting window's tabs share `.note-tabs` and
  * keep the two rules just below.
  */
-.note-detail .note-tabs { display: flex; flex-wrap: wrap; gap: 24px; margin-top: 26px; padding: 0; border-bottom: 1px solid var(--rule); }
+.note-detail .note-tabs { display: flex; flex-wrap: wrap; gap: 24px; margin: 0; padding: 0; }
 .note-detail .note-tabs > [role="tab"] { height: 38px; margin: 0 0 -1px; padding: 0; border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; color: var(--muted); font-size: 14.5px; }
 .note-detail .note-tabs > [role="tab"]:hover:not(:disabled) { background: transparent; color: var(--text); }
 .note-detail .note-tabs > [role="tab"][aria-selected="true"] { border-bottom-color: var(--band); color: var(--text); }
