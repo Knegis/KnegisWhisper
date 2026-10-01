@@ -27,6 +27,27 @@ test("every renderer snippet is syntactically valid JavaScript", () => {
     snippets.startMeetingRecording(true),
     snippets.meetingProviderValue("local streaming"),
     snippets.clickStop(),
+    snippets.installInvokeStub(),
+    snippets.stubInvoke({
+      delay: { local_server_start: 1500 },
+      reject: { reasoning_set_cleanup: "a \"refusal\" and a 'quote'" },
+      merge: { reasoning_status: { route: { state: "off" } } },
+    }),
+    snippets.stubInvoke(),
+    snippets.stubCalls("meeting_set_provider"),
+    snippets.clearStubCalls(),
+    snippets.invokeFixture("meeting_set_provider", { provider: "meeting:local" }),
+    snippets.emitDictationState("recording"),
+    snippets.chipState("Transcription: "),
+    snippets.chipCenter("Tidy up"),
+    snippets.centerOfText(".task-hero button.primary", "Choose a provider"),
+    snippets.centerOfText(".task-hero button", null),
+    snippets.optionCenter("Whisper \"Small\" (Q5)"),
+    snippets.menuVisible(),
+    snippets.menuState(),
+    snippets.taskPageState(),
+    snippets.focusChip("Microphone: "),
+    snippets.themeState(),
   ];
   for (const value of values) {
     assert.doesNotThrow(() => new Function(value), value);

@@ -64,8 +64,12 @@ that time; they are not a claim that previously completed work is still missing.
   **Settings**. Each opens a list panel beside the page; the title bar's list toggle hides and
   shows it, and it starts hidden in windows 900px wide or narrower.
 - **Dictation** and **Meetings** are centred task screens. Their control bar holds the start
-  button and says what is in effect and where the audio goes. Dictation's list panel holds its
-  history, grouped by day; Meetings' holds Recent and Interrupted recordings.
+  button and says what is in effect and where the audio goes, and its chips change those values
+  in place: the microphone, the route and the languages on Dictation, the provider and language
+  on Meetings, and the Tidy up and Summary switches once they have been set up in Settings (until
+  then they link there). The route, the languages and Tidy up are held while a dictation runs.
+  Dictation's list panel holds its history, grouped by day; Meetings' holds Recent and Interrupted
+  recordings.
 - **Notes:** folders and notes are in the list panel; the note opens beside it. In windows
   1280px or wider, the transcript also shows as a column to the right, which the note's top bar
   can hide. Import audio or video is

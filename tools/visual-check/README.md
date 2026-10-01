@@ -58,6 +58,57 @@ directory. False checks do not make a completed measurement run fail: they are
 evidence for a person to judge. A failure to launch Edge, reach Vite, or
 evaluate the page exits nonzero.
 
+## Chip menus
+
+```powershell
+node tools/visual-check/chip-menus.mjs --url http://127.0.0.1:5191/
+```
+
+Same options as the shell rail (`--edge`, `--url`, `--port`, `--out`; the
+banner is always removed). It measures what KNEG-385 made the task pages'
+control-bar chips do: change a setting in place. Run it against the fixtures
+only (`npx vite` in `apps/desktop`, any port but the running app's): it clicks
+every write, and the fixtures keep them in memory. States the fixture defaults
+cannot reach -- a slow write, a refused one, an unconfigured Tidy up, a route
+with a caveat -- are made by wrapping the page's `invoke` for that one command
+after the shell loads (`installInvokeStub` in `snippets.mjs`), and again after
+each reload. It numbers ten checks:
+
+1. At 1000x720 the microphone, route, Dictation language, Meetings provider and
+   Meetings language menus each open inside the window and above the control
+   bar.
+2. On the Dictation route menu: ArrowDown reaches a greyed row and Enter there
+   does nothing; ArrowUp to a normal row and Enter chooses it; Escape closes
+   with focus back on the chip; Tab closes; `aria-expanded` is right and
+   `aria-controls` is present only while open.
+3. Choosing updates the chip and the privacy line. 3a, Dictation: a cloud
+   provider says "Audio is sent to X", a local model "Audio stays on this
+   computer". 3b, Meetings: the provider's line changes and names it; the
+   language menu greys "Detect language" for a provider that cannot, and the
+   keyboard cannot choose it.
+4. With `local_server_start` stubbed slow, the route chip says "Starting
+   <model>…", cannot be opened, and Start is held.
+5. During a dictation (the fixtures' dev-console state) the route, language and
+   Tidy up chips are held with "Can't change during a dictation", and Stop is
+   enabled; all are live again when it ends.
+6. Tidy up and Summary: toggles that flip `aria-pressed` when set up, links when
+   not (stubbed for Tidy up, the fixture default for Summary), Tidy up's caveat
+   line with its link (stubbed route), and a refused write (stubbed) on the
+   error line with the chip unchanged.
+7. Meetings: with a saved provider that cannot be used, the hero's "Choose a
+   provider" opens the provider menu without leaving the page, and Start is
+   held while `meeting_set_provider` (stubbed slow) is in flight.
+8. At 720x520 nothing scrolls sideways on Dictation or Meetings, and a menu
+   still opens inside the window.
+9. An open menu on each page in light and dark (`prefers-color-scheme`
+   emulated), with screenshots.
+
+Like the shell rail, it reports **measured in headless Edge against dev
+fixtures, not in the Tauri window**, and false checks do not fail the run.
+Not covered: Meetings' language-required fix (the fixtures cannot make a
+provider require a language on a blank value without a conditional stub) and
+anything the Tauri window itself does.
+
 ## Running application windows
 
 Launch the running development application with its WebView2 debugger exposed:
