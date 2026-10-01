@@ -1401,19 +1401,54 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
   probe_providers: () => PROBE_REPORT,
 
   /* reasoning */
-  reasoning_status: () => REASONING,
+  // What was last stored and where it resolves, as Rust reports them: a write
+  // below moves both, so Settings and Dictation's Tidy up chip read it back.
+  reasoning_status: () => ({
+    ...REASONING,
+    settings: { ...REASONING.settings },
+    route: REASONING.route,
+  }),
+  // Mirrors `reasoning_set_cleanup` (src-tauri/src/reasoning.rs): off always
+  // resolves; on needs a model, and a provider or a URL; it is refused before
+  // anything is stored, so a refusal leaves the status as it was. A provider
+  // with no key resolves, with the caveat Rust words.
   reasoning_set_cleanup: (a) => {
     const settings = arg<CleanupSettings>(a, "settings");
-    if (!settings?.enabled) return { state: "off" } satisfies CleanupRoute;
-    const route: CleanupRoute = {
-      state: "ready",
-      destination: settings.selfHostedUrl
-        ? "self-hosted"
-        : (settings.provider ?? "openai"),
-      model: settings.model ?? "gpt-4o-mini",
-      leavesDevice: !settings.selfHostedUrl,
-      caveat: null,
-    };
+    if (!settings) throw new Error("no cleanup settings were sent");
+    let route: CleanupRoute;
+    if (!settings.enabled) {
+      route = { state: "off" };
+    } else {
+      if (!(settings.model ?? "").trim()) {
+        throw new Error(
+          "cleanup needs a model. Providers disagree about parameter names, so there is no safe default to fall back on.",
+        );
+      }
+      const url = (settings.selfHostedUrl ?? "").trim();
+      const provider = REASONING.providers.find((p) => p.id === settings.provider);
+      if (!url && !provider) {
+        throw new Error("cleanup needs a provider or a self-hosted URL");
+      }
+      route = url
+        ? {
+            state: "ready",
+            destination: `self-hosted at ${url}`,
+            model: settings.model ?? "",
+            leavesDevice: !url.includes("127.0.0.1") && !url.includes("localhost"),
+            caveat: null,
+          }
+        : {
+            state: "ready",
+            destination: provider!.id,
+            model: settings.model ?? "",
+            leavesDevice: true,
+            caveat: provider!.configured
+              ? null
+              : `no key is stored for ${provider!.credentialSlot ?? provider!.id}. Cleanup will leave the transcript as it is until one is, on the Providers screen.`,
+          };
+    }
+    REASONING.settings = { ...settings };
+    REASONING.route = route;
     return route;
   },
   enterprise_config_set: () => null,

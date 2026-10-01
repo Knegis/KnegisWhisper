@@ -24,6 +24,7 @@ import { SummarySettingsPanel } from "../components/SummarySettingsPanel";
 import { useCallback, useState } from "react";
 
 import { Row } from "../components/Row";
+import { cleanupFields, effectiveCleanup } from "../lib/cleanup";
 import {
   clearEnterpriseConfig,
   getReasoningStatus,
@@ -224,25 +225,17 @@ export function SettingsIntelligence({
 
   // A draft field falls back to what is stored, so the controls always show the
   // real configuration rather than an empty box next to a working setting.
-  const provider = draftProvider ?? settings.provider ?? "";
-  const url = draftUrl ?? settings.selfHostedUrl ?? "";
-  const selfHosted = url.trim() !== "";
-  const chosen = providers.find((p) => p.id === provider);
-  const model =
-    draftModel ?? settings.model ?? (selfHosted ? "" : (chosen?.models[0]?.id ?? ""));
+  const drafts = { provider: draftProvider, model: draftModel, url: draftUrl };
+  const { provider, url, selfHosted, chosen, model } = cleanupFields(settings, providers, drafts);
 
   const usable = providers.filter((p) => p.dispatch.state === "ready");
 
   const apply = (enabled: boolean) => {
     setSaid(null);
     void guard(async () => {
-      const next = await setCleanup({
-        enabled,
-        provider: provider || null,
-        model: model || null,
-        selfHostedUrl: url.trim() || null,
-        enterprise: chosen?.enterprise ?? false,
-      });
+      // The same computation Dictation's Tidy up toggle sends (`lib/cleanup.ts`);
+      // the write stays here, where the settings audit looks for it.
+      const next = await setCleanup(effectiveCleanup(settings, providers, enabled, drafts));
       const label = routeLabel(next);
       setSaid(`${label.value} — ${label.detail}`);
       // Drafts drop so the controls go back to mirroring what is stored.

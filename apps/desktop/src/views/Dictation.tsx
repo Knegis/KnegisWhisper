@@ -15,8 +15,11 @@
  *     controls for the route and the languages). Those two are held while a
  *     dictation is under way, because Rust reads them at Stop. Then the
  *     privacy line, which is never hidden and follows a switch as soon as it
- *     lands; the last result with a Copy button; the Tidy up chip, to Cleanup
- *     & summaries; and Start, which waits while a route switch is applied.
+ *     lands; the last result with a Copy button; the Tidy up chip -- a switch
+ *     once cleanup has been set up in Cleanup & summaries (held during a
+ *     dictation too, since it applies to the running session at once, and
+ *     saying under itself when it cannot run), until then the way there; and
+ *     Start, which waits while a route switch or the Tidy up write is applied.
  *   - **The history**, in the list panel (`components/DictationHistoryPanel.tsx`),
  *     with the way to the shortcut editor and the vocabulary at its top.
  *
@@ -52,6 +55,7 @@ import { LocalServerHealth } from "../components/LocalServerHealth";
 import { PanelHeader } from "../components/Panel";
 import { SplitView } from "../components/SplitView";
 import { TaskHero } from "../components/TaskHero";
+import { cleanupConfigured, effectiveCleanup } from "../lib/cleanup";
 import { cleanupLabel, destinationName, languageLabel, microphoneMenu, privacyLines } from "../lib/controlBar";
 import { timeOfDay } from "../lib/dayGroups";
 import { localEngine, routeBusyLabel, routeHeld, routeMenu, type RouteChoice } from "../lib/dictationRoute";
@@ -74,6 +78,7 @@ import {
   onDictationOutcome,
   onDictationState,
   onLocalDictationLanguages,
+  setCleanup,
   setInputDevice,
   toggleDictation,
   type DictationOutcome,
@@ -188,7 +193,9 @@ export function DictationView({
       history,
       historyOn,
       keepRaw,
-      cleanup: reasoning.route,
+      // The whole status, not only where cleanup goes: the Tidy up toggle
+      // writes from what is stored (`effectiveCleanup`).
+      reasoning,
       languages,
       providers,
       local,
@@ -212,6 +219,8 @@ export function DictationView({
    * dictation mid-switch, must not keep the microphone open.
    */
   const [switching, setSwitching] = useState<RouteChoice | null>(null);
+  /** The Tidy up write in flight; Start waits on it as on a switch. */
+  const [tidying, setTidying] = useState(false);
 
   // `disposed` because `listen` resolves after the effect returns: a page left
   // before it did would otherwise keep its listeners for the rest of the
@@ -300,12 +309,13 @@ export function DictationView({
     history,
     historyOn,
     keepRaw,
-    cleanup,
+    reasoning,
     languages,
     providers,
     local,
     sherpa,
   } = data;
+  const cleanup = reasoning.route;
   const state = liveState ?? data.session;
   // The floating microphone's own reading of the session, reused rather than
   // re-derived, so the two buttons cannot disagree -- and so Start is off
@@ -334,7 +344,7 @@ export function DictationView({
   // page's one filled button to the hero's fix.
   const startBlocked = !recording && route.problem !== null;
   // Start, never Stop, waits for a route switch (see `switching`).
-  const startWaits = !recording && switching !== null;
+  const startWaits = !recording && (switching !== null || tidying);
   // The route and the language are held from Start until the dictation is
   // over (`routeHeld` says why); the chips keep saying what is in effect. The
   // microphone is not: it never was, as a select, before it became a menu.
@@ -354,6 +364,26 @@ export function DictationView({
     setSwitching(choice);
     void guard(() => chooseRoute(choice)).finally(() => setSwitching(null));
   };
+  // Tidy up is a switch once a provider or a URL is stored; until then it is
+  // the way to set one up. The switch writes the stored setting with only
+  // `enabled` changed (`effectiveCleanup`), which Rust resolves first and
+  // refuses if it cannot (the page's error line says so, and the chip stays as
+  // it was), and applies to the running session at once -- so it is held, as
+  // the route is, until a dictation is over: a text already on its way would
+  // change destination after the privacy line was read. The privacy line
+  // follows the write, as `guard` re-reads.
+  const tidyConfigured = cleanupConfigured(reasoning.settings);
+  const toggleCleanup = () => {
+    if (tidying || held !== null) return;
+    setTidying(true);
+    void guard(() =>
+      setCleanup(effectiveCleanup(reasoning.settings, reasoning.providers, !reasoning.settings.enabled)),
+    ).finally(() => setTidying(false));
+  };
+  // Why a stored setup cannot run, for the line under the chip: a caveat on a
+  // route that resolves (no key), or a setup that no longer resolves.
+  const tidyCaveat =
+    cleanup.state === "ready" ? cleanup.caveat : cleanup.state === "problem" ? cleanup.reason : null;
   // The route chip's label: the row in effect, by its own words. Failing
   // that, a route with a problem has no destination to name -- the hero says
   // what to do and carries the problem itself -- and a local route with no
@@ -570,7 +600,18 @@ export function DictationView({
             </div>
 
             <div className="control-row">
-              <Chip icon="tidy" label={cleanupLabel(cleanup)} chevron onClick={() => onGoTo("intelligence")} />
+              {tidyConfigured ? (
+                <Chip
+                  icon="tidy"
+                  label={cleanupLabel(cleanup)}
+                  pressed={reasoning.settings.enabled}
+                  onClick={toggleCleanup}
+                  disabled={held !== null}
+                  {...(held === null ? {} : { title: held })}
+                />
+              ) : (
+                <Chip icon="tidy" label={cleanupLabel(cleanup)} chevron onClick={() => onGoTo("intelligence")} />
+              )}
               <div className="control-spacer" />
               {recording ? (
                 <button
@@ -600,6 +641,16 @@ export function DictationView({
                     : "Start dictation"}
               </button>
             </div>
+            {/* Under the chip, and not only in its label: "needs setup" says
+                that it cannot run, this says why and where it is fixed. */}
+            {tidyConfigured && tidyCaveat !== null ? (
+              <p className="control-note" role="status">
+                Tidy up can't run yet: {tidyCaveat}{" "}
+                <button type="button" className="provider-link" onClick={() => onGoTo("intelligence")}>
+                  Open Cleanup &amp; summaries
+                </button>
+              </p>
+            ) : null}
           </ControlBar>
           {/* The whisper server's health, so on its route alone: under a
               Parakeet model it describes a server dictation is not using. */}
