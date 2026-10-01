@@ -608,7 +608,7 @@ export function taskPageState() {
       stop: stop ? { text: stop.textContent.trim(), disabled: stop.disabled } : null,
       privacy: [...document.querySelectorAll('.control-privacy li')].map((item) => item.textContent.trim()),
       errors: [...document.querySelectorAll('.control-body > .error, .task > .error')].map((item) => item.textContent.trim()),
-      notes: [...document.querySelectorAll('.control-body > p.control-note[role="status"]')].map((item) => ({
+      notes: [...document.querySelectorAll('.control-body > [role="status"] > p.control-note')].map((item) => ({
         text: item.textContent.trim(),
         link: item.querySelector('button.provider-link')?.textContent ?? null,
       })),

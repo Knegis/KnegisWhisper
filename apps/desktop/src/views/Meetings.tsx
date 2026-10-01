@@ -45,7 +45,10 @@
  * answered for the new values (`startHeld`). The hero's "Choose a provider" and the language fix open
  * those same menus rather than navigating; its other fixes still navigate.
  * The live view's chips stay static: a running meeting has its provider and
- * language already.
+ * language already. The idle chips stay live while a meeting is finishing
+ * (being saved after Stop): turning Summary on then applies to the meeting
+ * being saved, because its summary is enqueued when the note is saved, while
+ * a provider or language change applies to the next meeting.
  *
  * Two things it refuses to do, carried over from the screen it came out of.
  *
@@ -497,6 +500,10 @@ export function Meetings({
   const providerOptions = providerMenu(providers, data.provider, selected);
   const languageOptions = meetingLanguageMenu(data.language, selectedProvider);
   const choose = (write: () => Promise<void>) => {
+    // One write at a time, as Dictation's switch does: a second choice made
+    // while the first is in flight is ignored, so `writing` clears only when
+    // the one write it stands for has landed.
+    if (writing) return;
     setWriting(true);
     void guard(write).finally(() => setWriting(false));
   };
@@ -873,7 +880,7 @@ export function Meetings({
                   onChoose={(id) => {
                     if (id !== data.provider) choose(() => setMeetingProvider(id));
                   }}
-                  footer={{ label: "Settings > Meetings", onClick: () => onGoTo("meeting-settings") }}
+                  footer={{ label: "More in Settings…", onClick: () => onGoTo("meeting-settings") }}
                 />
                 <ChipMenu
                   ref={languageMenuRef}
@@ -884,7 +891,7 @@ export function Meetings({
                   onChoose={(id) => {
                     if (id !== data.language.trim()) choose(() => setMeetingLanguage(id));
                   }}
-                  footer={{ label: "Another language in Settings > Meetings", onClick: () => onGoTo("meeting-settings") }}
+                  footer={{ label: "Another language in Settings…", onClick: () => onGoTo("meeting-settings") }}
                 />
                 {/* The summary, written here like the provider and the language
                     (Settings > Cleanup & summaries keeps its own switch). Where

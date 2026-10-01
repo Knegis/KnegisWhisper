@@ -316,7 +316,7 @@ export const ChipMenu = forwardRef<ChipMenuHandle, ChipMenuProps>(function ChipM
       {footerRow}
     </div>
   ) : (
-    <div ref={popup} className="chip-menu" data-side={placement?.side} style={position} onKeyDown={onPopupKey}>
+    <div ref={popup} className="chip-menu" tabIndex={-1} data-side={placement?.side} style={position} onKeyDown={onPopupKey}>
       <div ref={scroller} id={popupId} role="listbox" aria-label={name} className="chip-menu-list">
         {menuGroups(options).map((run, r) =>
           run.group === null ? (

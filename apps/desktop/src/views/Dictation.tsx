@@ -362,7 +362,17 @@ export function DictationView({
     // reopened while the write is still out.
     if (choice === undefined || switching !== null || held !== null) return;
     setSwitching(choice);
-    void guard(() => chooseRoute(choice)).finally(() => setSwitching(null));
+    // A switch that fails part-way may already have stopped the route it
+    // left, so the page is re-read before the error is shown: the chip and
+    // the menu must not keep marking a route that is no longer running.
+    void guard(async () => {
+      try {
+        await chooseRoute(choice);
+      } catch (cause) {
+        await reload();
+        throw cause;
+      }
+    }).finally(() => setSwitching(null));
   };
   // Tidy up is a switch once a provider or a URL is stored; until then it is
   // the way to set one up. The switch writes the stored setting with only
@@ -606,8 +616,7 @@ export function DictationView({
                   label={cleanupLabel(cleanup)}
                   pressed={reasoning.settings.enabled}
                   onClick={toggleCleanup}
-                  disabled={held !== null}
-                  {...(held === null ? {} : { title: held })}
+                  held={held}
                 />
               ) : (
                 <Chip icon="tidy" label={cleanupLabel(cleanup)} chevron onClick={() => onGoTo("intelligence")} />
@@ -643,14 +652,19 @@ export function DictationView({
             </div>
             {/* Under the chip, and not only in its label: "needs setup" says
                 that it cannot run, this says why and where it is fixed. */}
-            {tidyConfigured && tidyCaveat !== null ? (
-              <p className="control-note" role="status">
-                Tidy up can't run yet: {tidyCaveat}{" "}
-                <button type="button" className="provider-link" onClick={() => onGoTo("intelligence")}>
-                  Open Cleanup &amp; summaries
-                </button>
-              </p>
-            ) : null}
+            {/* The live region is always rendered, so it exists before the
+                caveat arrives in it -- one added along with its text is often
+                not read. */}
+            <div role="status">
+              {tidyConfigured && tidyCaveat !== null ? (
+                <p className="control-note">
+                  Tidy up can't run yet: {tidyCaveat}{" "}
+                  <button type="button" className="provider-link" onClick={() => onGoTo("intelligence")}>
+                    Open Cleanup &amp; summaries
+                  </button>
+                </p>
+              ) : null}
+            </div>
           </ControlBar>
           {/* The whisper server's health, so on its route alone: under a
               Parakeet model it describes a server dictation is not using. */}

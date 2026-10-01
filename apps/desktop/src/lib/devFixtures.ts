@@ -591,11 +591,13 @@ const MEETING_PROVIDERS: MeetingProviderSummary[] = [
     // saved-but-unusable case the page has to explain.
     availability: {
       state: "no-client",
-      reason: "the local server is installed but not running",
+      reason: "No streaming client for this provider has been written yet.",
     },
     summary: "Audio never leaves this machine. No partials, no speaker labels.",
   },
 ];
+
+const DICTATION_LANGUAGE_CODES = ["sv", "en", "da", "no", "fi", "de", "fr", "es"];
 
 let meetingStatus: MeetingStatus = {
   state: "idle",
@@ -1750,12 +1752,15 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
     return null;
   },
   dictation_local_language: () => [...localLanguages],
+  // `validated_local_languages`' eight codes (src-tauri/src/dictation.rs).
   // Checked as `validated_local_languages` checks, and announced as Rust
   // announces it, so the Dictation chip and the floating microphone follow.
   dictation_set_local_language: (a) => {
     const languages = arg<string[]>(a, "languages") ?? [];
     if (languages.length > 2) throw new Error("Choose at most two languages");
-    if (new Set(languages).size !== languages.length) throw new Error("Choose distinct supported dictation languages");
+    if (new Set(languages).size !== languages.length || !languages.every((code) => DICTATION_LANGUAGE_CODES.includes(code))) {
+      throw new Error("Choose distinct supported dictation languages");
+    }
     localLanguages = [...languages];
     void emit("dictation-languages", localLanguages);
     return null;
@@ -1783,10 +1788,10 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
   sherpa_status: () => ({ ...SHERPA }),
   sherpa_install_model: () => null,
   sherpa_use_model: (a) => {
+    // Rust checks only that the id resolves (`resolve_id`), not what the model
+    // is for; so does this. An id it does not know is refused.
     const model = SHERPA.models.find((m) => m.id === arg<string>(a, "modelId"));
-    if (!model?.installed || model.usedFor !== "dictation") {
-      throw new Error(`${model?.name ?? "That model"} is not an installed dictation model.`);
-    }
+    if (!model) throw new Error(`Unknown model: ${arg<string>(a, "modelId") ?? ""}`);
     SHERPA.selected = model.id;
     return null;
   },

@@ -399,17 +399,17 @@ async function checkDictationHeld(cdp, out, report) {
     measured,
     expectation: [
       `while recording (state announced through the fixtures' dev console): the route and language chips keep their labels, are aria-disabled with title and aria-description "${HELD}" and do not open when pressed;`,
-      `the Tidy up chip is disabled with title "${HELD}"; Stop and transcribe is enabled;`,
+      `the Tidy up chip is aria-disabled, not disabled (so focus stays), with title and aria-description "${HELD}"; Stop and transcribe is enabled;`,
       "after the session goes idle all three are live again",
     ].join(" "),
     matches: measured.idle.route.ariaDisabled === null && measured.idle.language.ariaDisabled === null
       && heldMenu(rec.route) && rec.route.text === measured.idle.route.text
       && heldMenu(rec.language) && rec.language.text === measured.idle.language.text
       && rec.menuOpenedByPress === false
-      && rec.tidy.disabled === true && rec.tidy.title === HELD
+      && heldMenu(rec.tidy) && rec.tidy.disabled === false
       && rec.page.stop?.disabled === false
       && measured.after.route.ariaDisabled === null && measured.after.language.ariaDisabled === null
-      && measured.after.tidy.disabled === false && measured.after.page.start?.disabled === false,
+      && measured.after.tidy.ariaDisabled === null && measured.after.tidy.disabled === false && measured.after.page.start?.disabled === false,
     screenshots: [shot],
     note: "The session state is the fixtures' own dev-console announcement, not a real recording; this measures what the page does with the state.",
   });
@@ -510,7 +510,7 @@ async function checkToggles(cdp, out, report) {
       && t.refused.errors.some((text) => text.startsWith("cleanup needs a model")) && t.refused.chip.pressed === "true"
       && t.caveat.chip.text === "Tidy up: needs setup" && t.caveat.notes.length === 1
       && t.caveat.notes[0].text.includes("no key is stored for anthropic") && t.caveat.notes[0].link === "Open Cleanup & summaries"
-      && !t.caveat.privacy.some((line) => line.startsWith("Text is sent"))
+      && t.caveat.privacy.length > 0 && !t.caveat.privacy.some((line) => line.startsWith("Text is sent"))
       && t.unconfigured.chip.pressed === null && t.unconfigured.chip.chevron
       && t.unconfigured.leftThePage && t.unconfigured.writes === 0
       && s.unconfigured.chip.text === "Summary: needs setup" && s.unconfigured.chip.pressed === null
@@ -653,7 +653,10 @@ async function checkMinimumWindow(cdp, out, report) {
     await closeMenu(cdp);
   }
   const shot = await screenshot(cdp, out, "08-minimum-720x520.png");
-  const fits = (scroll) => scroll.scrollWidth <= scroll.innerWidth
+  // `null <= null` is true, so a missing .split-main or .control-bar must fail
+  // the check rather than pass it.
+  const fits = (scroll) => scroll.mainClientWidth !== null && scroll.barClientWidth !== null
+    && scroll.scrollWidth <= scroll.innerWidth
     && scroll.mainScrollWidth <= scroll.mainClientWidth && scroll.barScrollWidth <= scroll.barClientWidth;
   addCheck(report, {
     id: "8",
@@ -737,8 +740,11 @@ export async function runChipMenus(options) {
     process.stdout.write(markdown);
     return report;
   } finally {
-    await cdp?.close();
-    await killBrowser(browser?.child);
+    try {
+      await cdp?.close();
+    } finally {
+      await killBrowser(browser?.child);
+    }
   }
 }
 

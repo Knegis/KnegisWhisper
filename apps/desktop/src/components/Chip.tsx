@@ -43,6 +43,12 @@ import { Icon } from "./Icon";
  *     the words on screen are still words a speech user can say to press it
  *     (WCAG 2.5.3). A static chip takes none, because a `span` cannot be
  *     named.
+ *   - `held` is why a button chip cannot be pressed right now ("Can't change
+ *     during a dictation"). It is `aria-disabled` rather than `disabled`, as
+ *     `ChipMenu`'s is, so a keyboard user on it keeps focus when the hold
+ *     starts; the reason is its `aria-description` and its `title`, and a
+ *     press does nothing. `disabled` stays for a chip that is simply
+ *     unavailable.
  *   - `srText` is visually hidden text after the label, for what `title`
  *     explains -- Meetings' "Default microphone" and why it is the default.
  */
@@ -53,6 +59,7 @@ export function Chip({
   pressed,
   chevron = false,
   disabled = false,
+  held = null,
   title,
   name,
   srText,
@@ -63,6 +70,7 @@ export function Chip({
   pressed?: boolean;
   chevron?: boolean;
   disabled?: boolean;
+  held?: string | null;
   title?: string;
   name?: string;
   srText?: string;
@@ -82,11 +90,13 @@ export function Chip({
     <button
       type="button"
       className="chip"
-      onClick={onClick}
+      onClick={held === null ? onClick : undefined}
       aria-pressed={pressed}
       aria-label={name}
+      aria-disabled={held !== null ? true : undefined}
+      aria-description={held ?? undefined}
       disabled={disabled}
-      title={title ?? label}
+      title={held ?? title ?? label}
     >
       {content}
     </button>
