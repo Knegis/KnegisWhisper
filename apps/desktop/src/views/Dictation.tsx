@@ -8,10 +8,11 @@
  *     problem and the button that fixes it; while recording, "Listening…" and
  *     a timer.
  *   - **The control bar** at the foot: the microphone, chosen right here in
- *     its own select; where speech becomes text and, on the local route, the
- *     language -- each a chip that goes to Settings > Transcription, where
- *     they are set; the privacy line, which is never hidden; the last result
- *     with a Copy button; the Tidy up chip, to Cleanup & summaries; and Start.
+ *     its chip's menu (`ChipMenu`); where speech becomes text and, on the
+ *     local route, the language -- each a chip that goes to Settings >
+ *     Transcription, where they are set; the privacy line, which is never
+ *     hidden; the last result with a Copy button; the Tidy up chip, to
+ *     Cleanup & summaries; and Start.
  *   - **The history**, in the list panel (`components/DictationHistoryPanel.tsx`),
  *     with the way to the shortcut editor and the vocabulary at its top.
  *
@@ -37,6 +38,7 @@
 import { Fragment, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 
 import { Chip } from "../components/Chip";
+import { ChipMenu } from "../components/ChipMenu";
 import { ControlBar } from "../components/ControlBar";
 import { DictationHistoryPanel } from "../components/DictationHistoryPanel";
 import { Icon, IconFilled } from "../components/Icon";
@@ -45,7 +47,7 @@ import { LocalServerHealth } from "../components/LocalServerHealth";
 import { PanelHeader } from "../components/Panel";
 import { SplitView } from "../components/SplitView";
 import { TaskHero } from "../components/TaskHero";
-import { cleanupLabel, destinationName, languageLabel, privacyLines } from "../lib/controlBar";
+import { cleanupLabel, destinationName, languageLabel, microphoneMenu, privacyLines } from "../lib/controlBar";
 import { timeOfDay } from "../lib/dayGroups";
 import {
   cancelDictation,
@@ -277,21 +279,9 @@ export function DictationView({
         accelerators: dictationBinding.accelerators.filter((a) => a.kind !== "invalid"),
       })
     : "";
-  // A microphone chosen earlier and unplugged since. Listed as itself rather
-  // than letting the select fall back to "System default", which would read as
-  // a choice nobody made. The recording itself does fall back to the default
-  // -- `Capture::start` in crates/audio-core/src/capture.rs asks for the device
-  // by name and takes the default when it is gone -- so the bar says that too.
-  const missingDevice =
-    device !== null && !devices.some((d) => d.name === device) ? device : null;
-  // The select's `title`: the selected option's own text, so the full name
-  // is there under the pointer once the chip has cut it short.
-  const deviceLabel =
-    missingDevice !== null
-      ? `${missingDevice} (not connected)`
-      : device === null
-        ? "System default"
-        : `${device}${devices.some((d) => d.name === device && d.isDefault) ? " (default)" : ""}`;
+  // The microphone chip and its menu, including one chosen earlier and
+  // unplugged since (`microphoneMenu` says why it is listed as itself).
+  const microphone = microphoneMenu(devices, device);
   const readiness = dictationReadiness({ route, hotkeys, canInsert });
   // Off on a broken route: the backend resolves the route only at Stop and
   // cancels on failure (`toggle`, src-tauri/src/dictation.rs), so Start would
@@ -408,35 +398,20 @@ export function DictationView({
           <ControlBar
             strip={
               <>
-                <span className="chip-select">
-                  <Icon name="microphone" size={16} />
-                  {/* Controlled by what the backend reports, not by the last
-                      click: `guard` re-reads after the change, and
-                      `getInputDevice` is what brings the choice back.
-                      Uncontrolled, this read "System default" whatever had
-                      been chosen (KNEG-340). */}
-                  <select
-                    className="chip"
-                    aria-label="Microphone"
-                    title={deviceLabel}
-                    value={device ?? ""}
-                    onChange={(e) => {
-                      const next = e.target.value || null;
-                      void guard(() => setInputDevice(next));
-                    }}
-                  >
-                    {missingDevice !== null ? (
-                      <option value={missingDevice}>{missingDevice} (not connected)</option>
-                    ) : null}
-                    <option value="">System default</option>
-                    {devices.map((d) => (
-                      <option key={d.name} value={d.name}>
-                        {d.name}
-                        {d.isDefault ? " (default)" : ""}
-                      </option>
-                    ))}
-                  </select>
-                </span>
+                {/* What is current is what the backend reports, not the
+                    last click: `guard` re-reads after the change, and
+                    `getInputDevice` is what brings the choice back. The
+                    select here before, while it was uncontrolled, read
+                    "System default" whatever had been chosen (KNEG-340). */}
+                <ChipMenu
+                  icon="microphone"
+                  name="Microphone"
+                  label={microphone.label}
+                  options={microphone.options}
+                  onChoose={(id) => {
+                    void guard(() => setInputDevice(id || null));
+                  }}
+                />
                 {/* Named for what they are the value of: on its own,
                     "OpenAI" or "Swedish" is a word with nothing to say which
                     setting it is. */}
@@ -461,7 +436,7 @@ export function DictationView({
             privacy={privacyLines(route, cleanup)}
           >
             {error ? <p className="error">{error}</p> : null}
-            {missingDevice !== null ? (
+            {microphone.missing !== null ? (
               <p className="control-note">
                 Not connected, so dictation uses the system default until it is
                 plugged back in.

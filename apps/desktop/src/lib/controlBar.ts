@@ -34,7 +34,8 @@
  * in the same case, so the two cannot disagree.
  */
 
-import type { CleanupRoute } from "./ipc.js";
+import type { MenuOption } from "./chipMenu.js";
+import type { CleanupRoute, InputDevice } from "./ipc.js";
 
 /**
  * Whisper's dictation languages, by code, in the order the picker lists them.
@@ -121,6 +122,42 @@ export function languageLabel(codes: readonly string[]): string {
   return codes
     .map((code) => LANGUAGES.find(([known]) => known === code)?.[1] ?? code)
     .join(", ");
+}
+
+/**
+ * Dictation's microphone chip and its menu, from what the backend reports:
+ * the devices, and the one chosen (`null` for the system default).
+ *
+ * `missing` is a microphone chosen earlier and unplugged since. It is listed
+ * first, as itself and current, rather than letting the menu fall back to
+ * "System default", which would read as a choice nobody made. The recording
+ * itself does fall back to the default -- `Capture::start` in
+ * crates/audio-core/src/capture.rs asks for the device by name and takes the
+ * default when it is gone -- so the page says that beside it.
+ *
+ * The chip's label is the current row's own words, so the full name is the
+ * chip's `title` once the chip has cut it short. "System default" is id `""`,
+ * which the page turns back into `null` when it is chosen.
+ */
+export function microphoneMenu(
+  devices: readonly InputDevice[],
+  device: string | null,
+): { label: string; missing: string | null; options: MenuOption[] } {
+  const missing = device !== null && !devices.some((d) => d.name === device) ? device : null;
+  const row = (id: string, label: string, current: boolean): MenuOption => ({
+    id,
+    label,
+    group: null,
+    current,
+    disabled: false,
+    reason: null,
+  });
+  const options = [
+    ...(missing === null ? [] : [row(missing, `${missing} (not connected)`, true)]),
+    row("", "System default", device === null),
+    ...devices.map((d) => row(d.name, d.isDefault ? `${d.name} (default)` : d.name, d.name === device)),
+  ];
+  return { label: options.find((o) => o.current)?.label ?? "System default", missing, options };
 }
 
 /**

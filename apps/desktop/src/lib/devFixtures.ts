@@ -711,6 +711,13 @@ const INPUT_DEVICES: InputDevice[] = [
   { name: "Line In (Focusrite Scarlett 2i2)", isDefault: false },
 ];
 
+/**
+ * The microphone `dictation_set_device` stored, which `dictation_device` reads
+ * back, so the chip's menu shows the choice it made. `null` is the system
+ * default, as in Rust.
+ */
+let dictationDevice: string | null = null;
+
 const ROUTE: RouteReport = {
   destination: "openai",
   isLocal: false,
@@ -1654,8 +1661,11 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
     }) satisfies Outcome,
   dictation_cancel: () => ({ outcome: "cancelled" }) satisfies Outcome,
   input_devices: () => INPUT_DEVICES,
-  dictation_set_device: () => null,
-  dictation_device: () => null,
+  dictation_set_device: (a) => {
+    dictationDevice = arg<string | null>(a, "device") ?? null;
+    return null;
+  },
+  dictation_device: () => dictationDevice,
   insertion_supported: () => true,
   dictation_route: () => ROUTE,
   dictation_use_local: () => null,

@@ -531,7 +531,7 @@ kbd { display: inline-block; white-space: nowrap; border: 1px solid var(--rule);
 }
 
 /*
- * A chip (`components/Chip.tsx`), and the microphone's `select.chip`: a 30px
+ * A chip (`components/Chip.tsx`, or the chip a `ChipMenu` draws): a 30px
  * control with the 2px corner, unfilled at rest like every other button. A
  * chip that does not fit beside the others goes onto the next line of the
  * strip whole (`.control-chips`, below); it shrinks only where it is alone on
@@ -549,29 +549,50 @@ kbd { display: inline-block; white-space: nowrap; border: 1px solid var(--rule);
  */
 .chip-static { cursor: default; }
 /*
- * The select keeps its own value and picker arrow; the microphone icon sits
- * over its left padding and lets presses through, the way the title bar's
- * search icon does. A ring on keyboard focus, which the generic select rule
- * replaces with a fill: here the fill is also the hover, and a chip reached
- * by Tab has to be findable among its neighbours.
- *
- * `appearance: auto`, opting this one select out of the `base-select` block
- * below. Under `base-select` the selected option's text is drawn in a box
- * `text-overflow` does not reach: "Microphone Array (Realtek(R) Audio)
- * (default)" was cut mid-character at the 260px cap and pushed the picker
- * arrow out of the chip altogether. The platform's own rendering ellipsises
- * the same select and keeps its arrow (both measured in headless Edge 154
- * against dev fixtures, not in the Tauri window). The cost is that this
- * list drops down in the platform's popup rather than the page's -- the
- * fallback older engines already get, with the `option` colours below.
- * `field-sizing: content` because a platform select is otherwise as wide as
- * its widest option, which left "System default" in a 260px chip; where it
- * is unsupported the chip is simply that wide.
+ * A chip whose menu is open keeps the hover fill while it is, so the menu
+ * floating over the page says which chip it came from -- the reason a
+ * select keeps its fill while its list is down (`select:open`, below). A
+ * busy chip (`ChipMenu`'s `busy`) is `aria-disabled` rather than disabled,
+ * so it is drawn here as `button:disabled` is, and takes no hover fill.
  */
-.chip-select { position: relative; display: inline-flex; align-items: center; flex: 0 1 auto; min-width: 0; max-width: 260px; }
-.chip-select > .icon { position: absolute; left: 9px; z-index: 1; color: var(--text); pointer-events: none; }
-select.chip { appearance: auto; field-sizing: content; width: auto; max-width: 100%; padding-left: 32px; overflow: hidden; text-overflow: ellipsis; }
-select.chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.chip[aria-expanded="true"] { background: var(--control); }
+.chip[aria-disabled="true"] { opacity: 0.55; cursor: default; }
+.chip[aria-disabled="true"]:hover { background: transparent; }
+
+/*
+ * A chip's menu (`components/ChipMenu.tsx`). A card, so the Kit's 4px corner,
+ * a `--rule` edge and `--card-shadow`, on the page colour; its rows are
+ * square, as a list panel's are, and are filled as those are: `--panel-hover`
+ * under the pointer, `--selected` on the value in effect, which is also
+ * ticked. A greyed row is muted and takes no fill under the pointer, but it
+ * takes focus, and its reason sits at the row's end.
+ *
+ * As wide as its longest row, between 220 and 360px. `max-content` rather
+ * than the shrink-to-fit width a fixed box gets by default, so its width does
+ * not depend on where `placeMenu` puts it, and a row too long for 360px wraps
+ * rather than being cut: a row has no `title` to finish it. `placeMenu` caps
+ * the height at the room on its side of the chip; the list or a panel's body
+ * scrolls inside that, and the footer stays.
+ *
+ * Focus is a ring inside the row, since the card clips anything outside it.
+ */
+.chip-menu { position: fixed; z-index: 1100; display: flex; flex-direction: column; width: max-content; min-width: 220px; max-width: min(360px, calc(100vw - 12px)); padding: 4px 0; background: var(--bg); color: var(--text); border: 1px solid var(--rule); border-radius: 4px; box-shadow: var(--card-shadow); font-size: 14px; line-height: 20px; text-align: left; }
+.chip-menu-list, .chip-menu-body { min-height: 0; overflow-y: auto; }
+.chip-menu-body { padding: 8px 12px; }
+.chip-menu-label { padding: 10px 12px 4px; font: 12px/16px var(--font-mono); letter-spacing: .5px; text-transform: uppercase; color: var(--muted); }
+.chip-menu-option { display: flex; align-items: flex-start; gap: 8px; padding: 7px 12px; cursor: pointer; }
+.chip-menu-option:hover { background: var(--panel-hover); }
+.chip-menu-option[aria-selected="true"], .chip-menu-option[aria-selected="true"]:hover { background: var(--selected); }
+.chip-menu-option[aria-disabled="true"] { color: var(--muted); cursor: default; }
+.chip-menu-option[aria-disabled="true"]:hover { background: transparent; }
+.chip-menu-option:focus-visible, .chip-menu-footer:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.chip-menu-check { display: flex; align-items: center; flex: none; width: 16px; height: 20px; }
+.chip-menu-text { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow-wrap: anywhere; }
+.chip-menu-detail { font-size: 12.5px; line-height: 18px; color: var(--muted); }
+.chip-menu-reason { flex: none; padding-left: 4px; font-size: 12.5px; color: var(--muted); }
+/* Its words start under the options' labels: the row's 12px, the tick's 16 and the gap's 8. */
+button.chip-menu-footer { flex: none; display: block; width: 100%; margin: 4px 0 0; padding: 9px 12px 7px 36px; border-top: 1px solid var(--rule); border-radius: 0; font-size: 14px; line-height: 20px; text-align: left; }
+button.chip-menu-footer:hover:not(:disabled) { background: var(--panel-hover); }
 
 /*
  * The control bar (`components/ControlBar.tsx`): a strip of chips and the
