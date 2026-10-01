@@ -1,8 +1,9 @@
 /**
  * Which meeting provider the two meeting screens should show as selected:
  * Settings > Meetings, in its select, and the Meetings page, as the provider
- * that will transcribe. The Meetings page passes no `chosen` -- it has no
- * select -- so the two agree on everything but a choice being made right now.
+ * that will transcribe. The Meetings page passes no `chosen` -- its chip's
+ * menu saves the choice and the page reads it back -- so the two agree on
+ * everything but a choice being made right now.
  *
  * Three inputs, in order of authority: what the person chose on this visit to
  * the screen, what was saved on an earlier one (`meetings.provider`), and the
@@ -17,6 +18,10 @@
  * else. Nothing here writes: the fallback must never overwrite the saved
  * choice, or one start without the model server would forget it.
  */
+import type { MenuOption } from "./chipMenu.js";
+import type { MeetingProviderSummary } from "./ipc.js";
+import { availabilityLabel } from "./labels.js";
+
 export interface ProviderSelection {
   /** The provider id to show selected, or `null` when nothing is usable. */
   selected: string | null;
@@ -35,4 +40,45 @@ export function selectProvider(
   const selected = candidates[0] ?? usable[0] ?? null;
   const savedUnusable = saved !== null && saved !== "" && !usable.includes(saved) ? saved : null;
   return { selected, savedUnusable };
+}
+
+/**
+ * The Meetings page's provider menu: where the audio goes first, because that
+ * is the question the choice answers. "On this computer" and "Cloud", each
+ * group's rows together, as `ChipMenu` requires.
+ *
+ * A provider that is not `available` is greyed with the reason Rust gave
+ * (`availabilityLabel`), so the menu says why a row cannot be chosen rather
+ * than leaving it out -- except `declined`, which is a refusal and not
+ * something to act on, and is left out unless it is the saved provider.
+ *
+ * A saved provider that cannot be used is listed too, greyed, and `selected`
+ * -- the fallback `selectProvider` picked, which Start would use -- is the
+ * current row. The page lets that row be chosen again, which writes it, so a
+ * saved choice that cannot be used is replaced only by somebody choosing;
+ * nothing here, and nothing in `selectProvider`, writes it.
+ */
+export function providerMenu(
+  providers: readonly MeetingProviderSummary[],
+  saved: string | null,
+  selected: string | null,
+): MenuOption[] {
+  const option = (p: MeetingProviderSummary): MenuOption => {
+    const usable = p.availability.state === "available";
+    return {
+      id: p.id,
+      label: p.name,
+      group: p.audioLeavesDevice ? "Cloud" : "On this computer",
+      current: usable && p.id === selected,
+      disabled: !usable,
+      reason: usable ? null : availabilityLabel(p.availability),
+    };
+  };
+  const listed = providers
+    .filter((p) => p.availability.state !== "declined" || p.id === saved)
+    .map(option);
+  return [
+    ...listed.filter((o) => o.group === "On this computer"),
+    ...listed.filter((o) => o.group === "Cloud"),
+  ];
 }

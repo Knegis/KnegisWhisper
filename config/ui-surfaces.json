@@ -48,7 +48,7 @@
       "surfaceId": "meetings.record",
       "component": "apps/desktop/src/views/Meetings.tsx",
       "built": true,
-      "note": "The recording task: whether a meeting can be recorded (lib/readiness.ts), Start/Stop/Discard, whether the other participants are captured, the live transcript and interrupted recordings. Provider, language and detection are set on Settings > Meetings."
+      "note": "The recording task: whether a meeting can be recorded (lib/readiness.ts), Start/Stop/Discard, whether the other participants are captured, the live transcript and interrupted recordings. The provider and language are chosen here, in the control bar chips, and also set on Settings > Meetings, which owns them along with detection."
     },
     "Settings > Shortcuts": {
       "surfaceId": "settings.shortcuts",
@@ -60,7 +60,7 @@
       "surfaceId": "dictation.task",
       "component": "apps/desktop/src/views/Dictation.tsx",
       "built": true,
-      "note": "The dictation task: whether it will work (lib/readiness.ts) and the shortcut to press, in a centred hero; then a control bar with the microphone chosen in place, chips linking to where the route, the local language and cleanup are changed, the privacy line, the last result, and the Start button. The shortcut editor is on Settings > Shortcuts, reached from the history panel."
+      "note": "The dictation task: whether it will work (lib/readiness.ts) and the shortcut to press, in a centred hero; then a control bar with the microphone, the route (an installed model on this computer or a cloud provider) and, on the local whisper route, the languages, each chosen in place in its chip's menu -- the route and the languages only between dictations, since Rust reads them at Stop, and they are also set on Settings > Transcription, which owns them; a Tidy up chip that switches cleanup on and off once it has been set up in Settings > Cleanup & summaries (held during a dictation, and saying under itself when it cannot run), and until then links there; the privacy line; the last result; and the Start button, held while a route switch is applied. The shortcut editor is on Settings > Shortcuts, reached from the history panel."
     },
     "Dictation > History": {
       "surfaceId": "dictation.history",

@@ -8,9 +8,12 @@
  * `Settings.dc.html`, and the Meetings and Notes artboards for the handful
  * that live there instead) -- see
  * `.superpowers/sdd/nifty-tumbling-giraffe/icons-from-canvas.md` for the
- * source table. Three are not on the canvas. `restore` is drawn for the title
+ * source table. Four are not on the canvas. `restore` is drawn for the title
  * bar, which needs a fourth window-state icon, in the same stroke and corner
- * style as the other three. `expandAll` and `collapseAll` are the Notes
+ * style as the other three. `panelRight` is `panel` mirrored, its rule at
+ * 14.75 rather than 9.25, for the note's transcript column toggle, which
+ * hides a column on the right as `panel` hides the list on the left.
+ * `expandAll` and `collapseAll` are the Notes
  * library's two folder buttons, carried over path for path from the inline
  * SVGs the library drew before it moved into the list panel; here they take
  * the Kit's square caps and miter joins like every other entry.
@@ -55,6 +58,7 @@ export type IconName =
   | "back"
   | "forward"
   | "panel"
+  | "panelRight"
   | "more"
   | "minimise"
   | "maximise"
@@ -105,6 +109,7 @@ export const ICONS: Record<IconName, string> = {
   back: "M19.5 12h-15M10.5 6l-6 6 6 6",
   forward: "M4.5 12h15M13.5 6l6 6-6 6",
   panel: "M3.75 4.75h16.5v14.5H3.75zM9.25 4.75v14.5",
+  panelRight: "M3.75 4.75h16.5v14.5H3.75zM14.75 4.75v14.5",
   more: "M5.5 12h.5M11.75 12h.5M18 12h.5",
   minimise: "M5 12h14",
   maximise: "M5.75 5.75h12.5v12.5H5.75z",

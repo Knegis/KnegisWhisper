@@ -5,20 +5,27 @@ import { Icon } from "./Icon";
  * One control in a task page's control bar: an icon, a label, and an optional
  * chevron.
  *
- * A chip is a real control only where the page itself writes the value it
- * shows -- Meetings' "Other participants" toggle, which takes `pressed` and so
- * gets `aria-pressed`. Every other chip is a way to the settings screen that
- * owns the value, and says so by going there on click (the redesign's
- * decision 4). Dictation's microphone is the one real select, and it uses
- * `className="chip"` on a `<select>` rather than this component, because a
- * select already is the control.
+ * A chip is one of three things:
  *
- * A chip with neither `onClick` nor `pressed` is not a control at all but a
- * statement of what is in effect -- Meetings' "Default microphone", which the
- * page cannot change, and every chip in its live view, where nothing can be
- * changed until the meeting ends. That one is a `span.chip.chip-static`:
- * drawn like the others so the strip reads as one row, but not a button, so
- * it is not in the tab order and does not offer a press that does nothing.
+ *   - **A link**, with `onClick`: a way to the settings screen that owns a
+ *     value the page does not write, which says so by going there on click
+ *     (the redesign's decision 4). It takes the `chevron`.
+ *   - **A toggle**, with `pressed`, where the page writes an on-or-off value
+ *     itself -- Meetings' "Other participants" (kept on the page only) and
+ *     "Summary", Dictation's "Tidy up" (both written once they have been set
+ *     up in Settings; until then each is a link) -- and so gets
+ *     `aria-pressed`.
+ *   - **Static**, with neither: not a control at all but a statement of what
+ *     is in effect -- Meetings' "Default microphone", which the page cannot
+ *     change, and every chip in its live view, where nothing can be changed
+ *     until the meeting ends. That one is a `span.chip.chip-static`: drawn
+ *     like the others so the strip reads as one row, but not a button, so it
+ *     is not in the tab order and does not offer a press that does nothing.
+ *
+ * A chip that chooses among values in place is not this component but
+ * `ChipMenu`, which draws the same chip and opens a menu from it -- since
+ * KNEG-385, Dictation's microphone, which was a native select styled as a
+ * chip before that.
  *
  * The label ellipsises inside the chip's 260px cap, so `title` defaults to the
  * whole label: "Microphone Array (Realtek(R) Audio)" still reads in full under
@@ -36,6 +43,12 @@ import { Icon } from "./Icon";
  *     the words on screen are still words a speech user can say to press it
  *     (WCAG 2.5.3). A static chip takes none, because a `span` cannot be
  *     named.
+ *   - `held` is why a button chip cannot be pressed right now ("Can't change
+ *     during a dictation"). It is `aria-disabled` rather than `disabled`, as
+ *     `ChipMenu`'s is, so a keyboard user on it keeps focus when the hold
+ *     starts; the reason is its `aria-description` and its `title`, and a
+ *     press does nothing. `disabled` stays for a chip that is simply
+ *     unavailable.
  *   - `srText` is visually hidden text after the label, for what `title`
  *     explains -- Meetings' "Default microphone" and why it is the default.
  */
@@ -46,6 +59,7 @@ export function Chip({
   pressed,
   chevron = false,
   disabled = false,
+  held = null,
   title,
   name,
   srText,
@@ -56,6 +70,7 @@ export function Chip({
   pressed?: boolean;
   chevron?: boolean;
   disabled?: boolean;
+  held?: string | null;
   title?: string;
   name?: string;
   srText?: string;
@@ -75,11 +90,13 @@ export function Chip({
     <button
       type="button"
       className="chip"
-      onClick={onClick}
+      onClick={held === null ? onClick : undefined}
       aria-pressed={pressed}
       aria-label={name}
+      aria-disabled={held !== null ? true : undefined}
+      aria-description={held ?? undefined}
       disabled={disabled}
-      title={title ?? label}
+      title={held ?? title ?? label}
     >
       {content}
     </button>

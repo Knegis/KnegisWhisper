@@ -18,6 +18,7 @@
 import { useEffect, useState } from "react";
 
 import { reviewMeetingConfig, type ConfigReview } from "./ipc.js";
+import { reviewIsFor, type ReviewKey } from "./meetingView.js";
 
 /**
  * One entry per line, trimmed, with blank lines dropped.
@@ -49,13 +50,29 @@ export function useMeetingReview(
   language: string,
   keytermsText: string,
 ): ConfigReview | null {
-  const [review, setReview] = useState<ConfigReview | null>(null);
+  return useMeetingReviewFor(provider, language, keytermsText).review;
+}
+
+/**
+ * `useMeetingReview`, plus whether the verdict answers these inputs yet
+ * (`current`). It is false from the render where an input changed until the
+ * answer -- or the failure -- for the new inputs arrives. A page that gates
+ * Start on the verdict blocks while it is false, rather than trusting the
+ * previous configuration's answer.
+ */
+export function useMeetingReviewFor(
+  provider: string | null,
+  language: string,
+  keytermsText: string,
+): { review: ConfigReview | null; current: boolean } {
+  const [answer, setAnswer] = useState<{ key: ReviewKey; review: ConfigReview | null } | null>(null);
 
   useEffect(() => {
     if (!provider) {
-      setReview(null);
+      setAnswer(null);
       return;
     }
+    const key = { provider, language, keytermsText };
     let cancelled = false;
     void reviewMeetingConfig(
       provider,
@@ -63,15 +80,18 @@ export function useMeetingReview(
       onePerLine(keytermsText),
     )
       .then((result) => {
-        if (!cancelled) setReview(result);
+        if (!cancelled) setAnswer({ key, review: result });
       })
       .catch(() => {
-        if (!cancelled) setReview(null);
+        if (!cancelled) setAnswer({ key, review: null });
       });
     return () => {
       cancelled = true;
     };
   }, [provider, language, keytermsText]);
 
-  return review;
+  return {
+    review: answer?.review ?? null,
+    current: reviewIsFor(answer?.key ?? null, provider, language, keytermsText),
+  };
 }

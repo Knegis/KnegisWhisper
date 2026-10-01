@@ -44,6 +44,7 @@ import {
   useForLabel,
   verificationLabel,
 } from "../lib/labels";
+import { chooseParakeetRoute, chooseWhisperRoute } from "../lib/routeChoice";
 import { useRefresh } from "../lib/useRefresh";
 
 /**
@@ -446,13 +447,13 @@ export function SettingsTranscription({
                       className={inUse ? "marked" : undefined}
                       aria-pressed={inUse}
                       onClick={() => {
-                        void guard(async () => {
-                          await startLocalServer(m.id);
-                          // Two steps under one label, and the label says both:
-                          // a server that is up is not the same as a route
-                          // pointing at it.
-                          await useLocalModel(true);
-                        });
+                        // Two steps under one label, and the label says both:
+                        // a server that is up is not the same as a route
+                        // pointing at it. The steps are the Dictation route
+                        // menu's too (`lib/routeChoice.ts`); `startLocalServer`
+                        // is named here because rule F of the settings gate
+                        // reads only this file.
+                        void guard(() => chooseWhisperRoute(m.id, startLocalServer));
                       }}
                     >
                       {inUse ? "In use for dictation" : "Use for dictation"}
@@ -576,8 +577,10 @@ export function SettingsTranscription({
                                   // cross-setting this split exists to prevent.
                                   await useSherpaStreamModel(m.id);
                                 } else {
-                                  await useSherpaModel(m.id);
-                                  await useLocalModel(true);
+                                  // `lib/routeChoice.ts`, as the whisper
+                                  // rows above, with the wrapper named for
+                                  // the same reason.
+                                  await chooseParakeetRoute(m.id, useSherpaModel);
                                 }
                               });
                             }}

@@ -10,7 +10,7 @@
  * both went with the column.
  *
  * Notes > Export (the `notes.export` surface) is reached two ways -- a
- * note's right-click menu in the library, and the open note's top bar --
+ * note's right-click menu in the library, and the open note's actions --
  * and both run `exportNote`, so there is one Export… and one "Written to".
  * That line and any failure sit at the top of the note rather than in the
  * panel, where a collapsed panel would hide them; "Written to" goes when
@@ -61,7 +61,6 @@ import {
 } from "../lib/ipc";
 import { parseStoredTime } from "../lib/dayGroups";
 import { recentMeta } from "../lib/meetingView";
-import { noteMeta } from "../lib/noteMeta";
 import { groupNotesByFolder } from "../lib/noteGroups";
 import { carriesNote, draggedNoteId, folderChange, NOTE_DRAG_TYPE } from "../lib/noteDrag";
 import { useRefresh } from "../lib/useRefresh";
@@ -187,8 +186,8 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
     const id = await createNote({ title: "Untitled note", content: "" });
     await selectNote(id);
   });
-  // The one Export…, for the right-click menu and the open note's top bar alike. Flushed first
-  // when it is the open note, as selecting, moving and deleting are: the top bar's button sits
+  // The one Export…, for the right-click menu and the open note's actions alike. Flushed first
+  // when it is the open note, as selecting, moving and deleting are: the Export button sits
   // just above the editor, and a file written from the stored text would miss whatever was typed
   // in the last moment. Only then: the workspace holds the open note's edits and no other's, so
   // flushing for another note's export gains nothing, and a save of the open note that keeps
@@ -383,7 +382,6 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
             ref={workspaceRef}
             note={openNote}
             reload={reload}
-            folderName={noteMeta(openNote, folders).folder}
             onExport={() => exportNote(openNote.id)}
             onMore={anchor => openNoteMenu(openNote, anchor)}
           />

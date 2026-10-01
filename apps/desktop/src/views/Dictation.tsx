@@ -7,11 +7,19 @@
  *     and, when it will, the shortcut to press. When it will not, the one
  *     problem and the button that fixes it; while recording, "Listening…" and
  *     a timer.
- *   - **The control bar** at the foot: the microphone, chosen right here in
- *     its own select; where speech becomes text and, on the local route, the
- *     language -- each a chip that goes to Settings > Transcription, where
- *     they are set; the privacy line, which is never hidden; the last result
- *     with a Copy button; the Tidy up chip, to Cleanup & summaries; and Start.
+ *   - **The control bar** at the foot: the microphone, and where speech
+ *     becomes text -- an installed model on this computer or a cloud
+ *     provider -- each chosen right here in its chip's menu (`ChipMenu`);
+ *     on the local whisper route, the languages, in a panel holding the
+ *     picker Settings > Transcription shows (that page keeps its own
+ *     controls for the route and the languages). Those two are held while a
+ *     dictation is under way, because Rust reads them at Stop. Then the
+ *     privacy line, which is never hidden and follows a switch as soon as it
+ *     lands; the last result with a Copy button; the Tidy up chip -- a switch
+ *     once cleanup has been set up in Cleanup & summaries (held during a
+ *     dictation too, since it applies to the running session at once, and
+ *     saying under itself when it cannot run), until then the way there; and
+ *     Start, which waits while a route switch or the Tidy up write is applied.
  *   - **The history**, in the list panel (`components/DictationHistoryPanel.tsx`),
  *     with the way to the shortcut editor and the vocabulary at its top.
  *
@@ -37,16 +45,20 @@
 import { Fragment, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 
 import { Chip } from "../components/Chip";
+import { ChipMenu } from "../components/ChipMenu";
 import { ControlBar } from "../components/ControlBar";
 import { DictationHistoryPanel } from "../components/DictationHistoryPanel";
 import { Icon, IconFilled } from "../components/Icon";
 import { LearnMore } from "../components/LearnMore";
+import { LocalLanguagePicker } from "../components/LocalLanguagePicker";
 import { LocalServerHealth } from "../components/LocalServerHealth";
 import { PanelHeader } from "../components/Panel";
 import { SplitView } from "../components/SplitView";
 import { TaskHero } from "../components/TaskHero";
-import { cleanupLabel, destinationName, languageLabel, privacyLines } from "../lib/controlBar";
+import { cleanupConfigured, effectiveCleanup } from "../lib/cleanup";
+import { cleanupLabel, destinationName, languageLabel, microphoneMenu, privacyLines } from "../lib/controlBar";
 import { timeOfDay } from "../lib/dayGroups";
+import { localEngine, routeBusyLabel, routeHeld, routeMenu, type RouteChoice } from "../lib/dictationRoute";
 import {
   cancelDictation,
   getDictationRoute,
@@ -58,11 +70,15 @@ import {
   getInputDevices,
   getKeepRawText,
   getLocalDictationLanguages,
+  getLocalStatus,
+  getProviders,
   getReasoningStatus,
+  getSherpaStatus,
   isInsertionSupported,
   onDictationOutcome,
   onDictationState,
   onLocalDictationLanguages,
+  setCleanup,
   setInputDevice,
   toggleDictation,
   type DictationOutcome,
@@ -73,6 +89,7 @@ import { lastDictation, type InsertedDictation } from "../lib/lastDictation";
 import { microphoneState } from "../lib/microphone";
 import type { ViewId } from "../lib/navigation";
 import { dictationReadiness } from "../lib/readiness";
+import { chooseRoute } from "../lib/routeChoice";
 import { useRefresh } from "../lib/useRefresh";
 
 /**
@@ -144,6 +161,9 @@ export function DictationView({
       historyOn,
       keepRaw,
       reasoning,
+      providers,
+      local,
+      sherpa,
     ] = await Promise.all([
       getHotkeys(),
       getDictationState(),
@@ -155,9 +175,14 @@ export function DictationView({
       getHistoryEnabled(),
       getKeepRawText(),
       getReasoningStatus(),
+      // What the route menu lists, read as Settings > Transcription reads it.
+      getProviders(),
+      getLocalStatus(),
+      getSherpaStatus(),
     ]);
-    // Only the local route has languages to choose, so only it is asked.
-    const languages = route.isLocal ? await getLocalDictationLanguages() : [];
+    // Only local whisper has languages to choose -- a Parakeet model uses its
+    // own -- so only it is asked.
+    const languages = localEngine(route, sherpa) === "whisper" ? await getLocalDictationLanguages() : [];
     return {
       hotkeys,
       session,
@@ -168,8 +193,13 @@ export function DictationView({
       history,
       historyOn,
       keepRaw,
-      cleanup: reasoning.route,
+      // The whole status, not only where cleanup goes: the Tidy up toggle
+      // writes from what is stored (`effectiveCleanup`).
+      reasoning,
       languages,
+      providers,
+      local,
+      sherpa,
     };
   }, []);
 
@@ -179,6 +209,18 @@ export function DictationView({
   const [session, setSession] = useState<SessionState | null>(null);
   const [lastOutcome, setLastOutcome] = useState<LastOutcome | null>(null);
   const [lastInserted, setLastInserted] = useState<InsertedDictation | null>(null);
+  /**
+   * The route switch being applied, from its choice until the re-read after
+   * it. The chip says what is starting, and Start waits: the backend resolves
+   * the route at Stop, so a dictation started mid-switch could end on a route
+   * nobody chose -- the server up, the route not yet pointed at it. Stop and
+   * Discard never wait on it: no switch can begin during a dictation (the
+   * chips are held), and one begun before it, by the hotkey starting a
+   * dictation mid-switch, must not keep the microphone open.
+   */
+  const [switching, setSwitching] = useState<RouteChoice | null>(null);
+  /** The Tidy up write in flight; Start waits on it as on a switch. */
+  const [tidying, setTidying] = useState(false);
 
   // `disposed` because `listen` resolves after the effect returns: a page left
   // before it did would otherwise keep its listeners for the rest of the
@@ -258,8 +300,22 @@ export function DictationView({
     );
   }
 
-  const { hotkeys, devices, device, canInsert, route, history, historyOn, keepRaw, cleanup, languages } =
-    data;
+  const {
+    hotkeys,
+    devices,
+    device,
+    canInsert,
+    route,
+    history,
+    historyOn,
+    keepRaw,
+    reasoning,
+    languages,
+    providers,
+    local,
+    sherpa,
+  } = data;
+  const cleanup = reasoning.route;
   const state = liveState ?? data.session;
   // The floating microphone's own reading of the session, reused rather than
   // re-derived, so the two buttons cannot disagree -- and so Start is off
@@ -277,21 +333,9 @@ export function DictationView({
         accelerators: dictationBinding.accelerators.filter((a) => a.kind !== "invalid"),
       })
     : "";
-  // A microphone chosen earlier and unplugged since. Listed as itself rather
-  // than letting the select fall back to "System default", which would read as
-  // a choice nobody made. The recording itself does fall back to the default
-  // -- `Capture::start` in crates/audio-core/src/capture.rs asks for the device
-  // by name and takes the default when it is gone -- so the bar says that too.
-  const missingDevice =
-    device !== null && !devices.some((d) => d.name === device) ? device : null;
-  // The select's `title`: the selected option's own text, so the full name
-  // is there under the pointer once the chip has cut it short.
-  const deviceLabel =
-    missingDevice !== null
-      ? `${missingDevice} (not connected)`
-      : device === null
-        ? "System default"
-        : `${device}${devices.some((d) => d.name === device && d.isDefault) ? " (default)" : ""}`;
+  // The microphone chip and its menu, including one chosen earlier and
+  // unplugged since (`microphoneMenu` says why it is listed as itself).
+  const microphone = microphoneMenu(devices, device);
   const readiness = dictationReadiness({ route, hotkeys, canInsert });
   // Off on a broken route: the backend resolves the route only at Stop and
   // cancels on failure (`toggle`, src-tauri/src/dictation.rs), so Start would
@@ -299,13 +343,68 @@ export function DictationView({
   // disable it -- the button needs none -- so only this case hands the
   // page's one filled button to the hero's fix.
   const startBlocked = !recording && route.problem !== null;
-  // The route chip's label. A route with a problem has no destination to
-  // name; the hero says what to do and carries the problem itself.
-  const routeLabel = route.problem
-    ? "Not set up"
-    : route.isLocal
-      ? "On this computer"
-      : destinationName(route.destination);
+  // Start, never Stop, waits for a route switch (see `switching`).
+  const startWaits = !recording && (switching !== null || tidying);
+  // The route and the language are held from Start until the dictation is
+  // over (`routeHeld` says why); the chips keep saying what is in effect. The
+  // microphone is not: it never was, as a select, before it became a menu.
+  const held = routeHeld(state);
+  // The route chip's menu (`lib/dictationRoute.ts`): the installed models
+  // and the providers, which one the route resolves to, and what choosing
+  // each writes. A choice is written and everything is read back (`guard`),
+  // so the privacy line, the hero and the local server's health follow the
+  // route as Rust resolves it; the row already in effect writes nothing.
+  const routes = routeMenu(providers, local, sherpa, route);
+  const engine = localEngine(route, sherpa);
+  const chooseRouteRow = (id: string) => {
+    const choice = routes.choices.get(id);
+    // One switch at a time: a provider's is not `busy`, so its chip can be
+    // reopened while the write is still out.
+    if (choice === undefined || switching !== null || held !== null) return;
+    setSwitching(choice);
+    // A switch that fails part-way may already have stopped the route it
+    // left, so the page is re-read before the error is shown: the chip and
+    // the menu must not keep marking a route that is no longer running.
+    void guard(async () => {
+      try {
+        await chooseRoute(choice);
+      } catch (cause) {
+        await reload();
+        throw cause;
+      }
+    }).finally(() => setSwitching(null));
+  };
+  // Tidy up is a switch once a provider or a URL is stored; until then it is
+  // the way to set one up. The switch writes the stored setting with only
+  // `enabled` changed (`effectiveCleanup`), which Rust resolves first and
+  // refuses if it cannot (the page's error line says so, and the chip stays as
+  // it was), and applies to the running session at once -- so it is held, as
+  // the route is, until a dictation is over: a text already on its way would
+  // change destination after the privacy line was read. The privacy line
+  // follows the write, as `guard` re-reads.
+  const tidyConfigured = cleanupConfigured(reasoning.settings);
+  const toggleCleanup = () => {
+    if (tidying || held !== null) return;
+    setTidying(true);
+    void guard(() =>
+      setCleanup(effectiveCleanup(reasoning.settings, reasoning.providers, !reasoning.settings.enabled)),
+    ).finally(() => setTidying(false));
+  };
+  // Why a stored setup cannot run, for the line under the chip: a caveat on a
+  // route that resolves (no key), or a setup that no longer resolves.
+  const tidyCaveat =
+    cleanup.state === "ready" ? cleanup.caveat : cleanup.state === "problem" ? cleanup.reason : null;
+  // The route chip's label: the row in effect, by its own words. Failing
+  // that, a route with a problem has no destination to name -- the hero says
+  // what to do and carries the problem itself -- and a local route with no
+  // model running, or a destination the menu does not list, is said plainly.
+  const routeLabel =
+    routes.current?.label ??
+    (route.problem
+      ? "Not set up"
+      : route.isLocal
+        ? "On this computer"
+        : destinationName(route.destination));
 
   // The last thing dictated: this session's insert, a failure whose row kept
   // the text, or the newest history row with text -- whichever is newest
@@ -408,60 +507,51 @@ export function DictationView({
           <ControlBar
             strip={
               <>
-                <span className="chip-select">
-                  <Icon name="microphone" size={16} />
-                  {/* Controlled by what the backend reports, not by the last
-                      click: `guard` re-reads after the change, and
-                      `getInputDevice` is what brings the choice back.
-                      Uncontrolled, this read "System default" whatever had
-                      been chosen (KNEG-340). */}
-                  <select
-                    className="chip"
-                    aria-label="Microphone"
-                    title={deviceLabel}
-                    value={device ?? ""}
-                    onChange={(e) => {
-                      const next = e.target.value || null;
-                      void guard(() => setInputDevice(next));
-                    }}
-                  >
-                    {missingDevice !== null ? (
-                      <option value={missingDevice}>{missingDevice} (not connected)</option>
-                    ) : null}
-                    <option value="">System default</option>
-                    {devices.map((d) => (
-                      <option key={d.name} value={d.name}>
-                        {d.name}
-                        {d.isDefault ? " (default)" : ""}
-                      </option>
-                    ))}
-                  </select>
-                </span>
+                {/* What is current is what the backend reports, not the
+                    last click: `guard` re-reads after the change, and
+                    `getInputDevice` is what brings the choice back. The
+                    select here before, while it was uncontrolled, read
+                    "System default" whatever had been chosen (KNEG-340). */}
+                <ChipMenu
+                  icon="microphone"
+                  name="Microphone"
+                  label={microphone.label}
+                  options={microphone.options}
+                  onChoose={(id) => {
+                    void guard(() => setInputDevice(id || null));
+                  }}
+                />
                 {/* Named for what they are the value of: on its own,
                     "OpenAI" or "Swedish" is a word with nothing to say which
-                    setting it is. */}
-                <Chip
+                    setting it is. Settings > Transcription keeps its own
+                    controls for both, and installing a model is only there. */}
+                <ChipMenu
                   icon="computer"
+                  name="Transcription"
                   label={routeLabel}
-                  name={`Transcription: ${routeLabel}`}
-                  chevron
-                  onClick={() => onGoTo("transcription")}
+                  busy={routeBusyLabel(switching)}
+                  held={held}
+                  options={routes.options}
+                  onChoose={chooseRouteRow}
+                  footer={{ label: "More in Settings…", onClick: () => onGoTo("transcription") }}
                 />
-                {route.isLocal ? (
-                  <Chip
-                    icon="language"
-                    label={languageLabel(languages)}
-                    name={`Language: ${languageLabel(languages)}`}
-                    chevron
-                    onClick={() => onGoTo("transcription")}
-                  />
+                {/* Local whisper only: a Parakeet model uses its own
+                    languages, and Settings disables the picker under one.
+                    The picker writes, validates and announces the choice
+                    itself, and the page re-reads on that announcement. It
+                    starts from what this page read, so the panel opens on
+                    its first control rather than on a picker still loading. */}
+                {engine === "whisper" ? (
+                  <ChipMenu icon="language" name="Language" label={languageLabel(languages)} held={held}>
+                    <LocalLanguagePicker initial={languages} />
+                  </ChipMenu>
                 ) : null}
               </>
             }
             privacy={privacyLines(route, cleanup)}
           >
             {error ? <p className="error">{error}</p> : null}
-            {missingDevice !== null ? (
+            {microphone.missing !== null ? (
               <p className="control-note">
                 Not connected, so dictation uses the system default until it is
                 plugged back in.
@@ -520,7 +610,17 @@ export function DictationView({
             </div>
 
             <div className="control-row">
-              <Chip icon="tidy" label={cleanupLabel(cleanup)} chevron onClick={() => onGoTo("intelligence")} />
+              {tidyConfigured ? (
+                <Chip
+                  icon="tidy"
+                  label={cleanupLabel(cleanup)}
+                  pressed={reasoning.settings.enabled}
+                  onClick={toggleCleanup}
+                  held={held}
+                />
+              ) : (
+                <Chip icon="tidy" label={cleanupLabel(cleanup)} chevron onClick={() => onGoTo("intelligence")} />
+              )}
               <div className="control-spacer" />
               {recording ? (
                 <button
@@ -537,7 +637,7 @@ export function DictationView({
               <button
                 type="button"
                 className={startBlocked ? "control-start" : "primary control-start"}
-                disabled={mic.disabled || startBlocked}
+                disabled={mic.disabled || startBlocked || startWaits}
                 onClick={() => {
                   void guard(toggleDictation);
                 }}
@@ -550,8 +650,25 @@ export function DictationView({
                     : "Start dictation"}
               </button>
             </div>
+            {/* Under the chip, and not only in its label: "needs setup" says
+                that it cannot run, this says why and where it is fixed. */}
+            {/* The live region is always rendered, so it exists before the
+                caveat arrives in it -- one added along with its text is often
+                not read. */}
+            <div role="status">
+              {tidyConfigured && tidyCaveat !== null ? (
+                <p className="control-note">
+                  Tidy up can't run yet: {tidyCaveat}{" "}
+                  <button type="button" className="provider-link" onClick={() => onGoTo("intelligence")}>
+                    Open Cleanup &amp; summaries
+                  </button>
+                </p>
+              ) : null}
+            </div>
           </ControlBar>
-          {route.isLocal ? (
+          {/* The whisper server's health, so on its route alone: under a
+              Parakeet model it describes a server dictation is not using. */}
+          {engine === "whisper" ? (
             <div className="task-health">
               <LocalServerHealth />
             </div>

@@ -229,7 +229,7 @@
       "reachable": true
     },
     "meetings.provider": {
-      "what": "The meeting provider chosen on Settings > Meetings. Remembered across restarts. Read by the callers of meeting_start, not by Rust at start: the Meetings page starts a meeting with it when it can be used, and the notification window's Record button starts an offered meeting with it too.",
+      "what": "The meeting provider, chosen on Settings > Meetings or in the Meetings page control bar. Remembered across restarts. Read by the callers of meeting_start, not by Rust at start: the Meetings page (which also writes it, from its provider chip) starts a meeting with it when it can be used, and the notification window's Record button starts an offered meeting with it too.",
       "writtenBy": [
         "meeting_set_provider"
       ],

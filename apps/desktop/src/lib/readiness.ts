@@ -12,11 +12,11 @@
  * **This file deliberately does not import `ViewId`.** `Fix<T>`'s `view` is a
  * bare string literal type, generic per caller, rather than a fixed page name:
  * each page's union names only the pages its own fixes go to -- Dictation's
- * `"transcription" | "shortcuts"`, Meetings' `"transcription" |
- * "meeting-settings"`. That is what lets each page hand `fix.view` to its own
- * `onGoTo: (id: ViewId) => void` with no cast: the check that every fix
- * target is a real page happens at the page that calls `onGoTo`, where both
- * types are in view, rather than being assumed here.
+ * `"transcription" | "shortcuts"`, Meetings' `"transcription"` plus the two
+ * menus it opens itself (`MeetingFix`). That is what lets each page hand
+ * `fix.view` to its own `onGoTo: (id: ViewId) => void` with no cast: the
+ * check that every fix target is a real page happens at the page that calls
+ * `onGoTo`, where both types are in view, rather than being assumed here.
  */
 
 import type {
@@ -34,7 +34,13 @@ export type Readiness<T extends string> =
   | { state: "needs-setup"; problem: string; detail: string | null; fix: Fix<T> };
 
 export type DictationFix = "transcription" | "shortcuts";
-export type MeetingFix = "transcription" | "meeting-settings";
+/**
+ * Where a meeting fix goes. `"transcription"` is a page; the two `*-menu`
+ * fixes are not -- they are the provider and language chips' own menus on the
+ * Meetings page, which the page opens instead of navigating (`ChipMenu`'s
+ * `open()`), because the value they ask for is chosen there.
+ */
+export type MeetingFix = "transcription" | "provider-menu" | "language-menu";
 
 /**
  * Whether one registration result means the shortcut actually fires.
@@ -186,7 +192,7 @@ export function meetingReadiness(i: {
       state: "needs-setup",
       problem: chosenCannotBeUsed(i.savedUnusable.name),
       detail: i.savedUnusable.reason,
-      fix: { view: "meeting-settings", label: "Choose a provider" },
+      fix: { view: "provider-menu", label: "Choose a provider" },
     };
   }
 
@@ -195,7 +201,7 @@ export function meetingReadiness(i: {
       state: "needs-setup",
       problem: "Choose a meeting language first.",
       detail: i.languageWarning,
-      fix: { view: "meeting-settings", label: "Open meeting settings" },
+      fix: { view: "language-menu", label: "Choose a language" },
     };
   }
 

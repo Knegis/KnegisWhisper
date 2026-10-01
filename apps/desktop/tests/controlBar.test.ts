@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { cleanupLabel, destinationName, languageLabel, privacyLines } from "../src/lib/controlBar.js";
+import { cleanupLabel, destinationName, languageLabel, microphoneMenu, privacyLines } from "../src/lib/controlBar.js";
 import type { CleanupRoute } from "../src/generated/ipc-types.js";
 
 const local = { isLocal: true, leavesDevice: false, destination: "local model" };
@@ -86,5 +86,56 @@ test("every provider in the registry is named as the registry names it", () => {
     const providers = registry[group] as { id: string; name: string }[];
     assert.ok(Array.isArray(providers) && providers.length > 0, group);
     for (const provider of providers) assert.equal(destinationName(provider.id), provider.name, provider.id);
+  }
+});
+
+const devices = [
+  { name: "Microphone Array (Realtek(R) Audio)", isDefault: true },
+  { name: "Headset (Jabra Evolve2 65)", isDefault: false },
+];
+
+test("with no microphone chosen, the system default is current and is the chip's label", () => {
+  const menu = microphoneMenu(devices, null);
+  assert.equal(menu.label, "System default");
+  assert.equal(menu.missing, null);
+  assert.deepEqual(
+    menu.options.map((o) => [o.id, o.label, o.current]),
+    [
+      ["", "System default", true],
+      ["Microphone Array (Realtek(R) Audio)", "Microphone Array (Realtek(R) Audio) (default)", false],
+      ["Headset (Jabra Evolve2 65)", "Headset (Jabra Evolve2 65)", false],
+    ],
+  );
+});
+
+test("a chosen microphone is current, and its row's words are the chip's label", () => {
+  const menu = microphoneMenu(devices, "Microphone Array (Realtek(R) Audio)");
+  assert.equal(menu.label, "Microphone Array (Realtek(R) Audio) (default)");
+  assert.deepEqual(menu.options.filter((o) => o.current).map((o) => o.id), ["Microphone Array (Realtek(R) Audio)"]);
+});
+
+test("a chosen microphone that is unplugged is listed first as itself, not as the system default", () => {
+  const menu = microphoneMenu(devices, "USB Mic");
+  assert.equal(menu.missing, "USB Mic");
+  assert.equal(menu.label, "USB Mic (not connected)");
+  assert.deepEqual(menu.options[0], {
+    id: "USB Mic",
+    label: "USB Mic (not connected)",
+    group: null,
+    current: true,
+    disabled: false,
+    reason: null,
+  });
+  assert.equal(menu.options.filter((o) => o.current).length, 1);
+});
+
+test("every microphone row can be chosen, and none is grouped", () => {
+  const { options } = microphoneMenu(devices, "USB Mic");
+  // The unplugged one, the system default and the two connected ones.
+  assert.equal(options.length, 4);
+  for (const o of options) {
+    assert.equal(o.disabled, false, o.id);
+    assert.equal(o.reason, null, o.id);
+    assert.equal(o.group, null, o.id);
   }
 });

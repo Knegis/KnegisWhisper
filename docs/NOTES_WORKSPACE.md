@@ -17,7 +17,11 @@ this copies literal speech and available speaker labels without changing the sou
 
 Transcript shows the original rows and playback actions. In windows 1280px or wider
 the transcript is a column to the right of the note instead, and the Transcript tab
-is hidden; crossing that width keeps playback and the reading position. Replay
+is hidden; crossing that width keeps playback and the reading position. **Hide
+transcript**, beside Export and More above the editor, puts the note back in the one-column
+layout with the Transcript tab, and **Show transcript** brings the column back; both keep
+playback and the reading position the same way, and the choice holds for every note until
+the app closes. Replay
 provides the full player and recording details without repeating the transcript, at
 any width: in a wide window the player sits at the foot of the transcript column and
 moves into Replay while that tab is open, keeping its place and whether it was playing.

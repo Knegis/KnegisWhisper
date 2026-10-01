@@ -6,8 +6,15 @@
  * listener on the document watches the pointer enter, or keyboard focus land
  * on, anything with a `title`; it moves the text into `data-tooltip` so the
  * browser never shows its bubble, waits, and renders the text in a box under
- * the element. Leaving, pressing, scrolling or Escape hides it and puts the
+ * the element. Leaving, pressing (with the pointer or from the keyboard),
+ * scrolling or Escape hides it and puts the
  * attribute back, so accessible names and the markup stay as they were.
+ *
+ * Nothing is drawn while a chip's menu is open (`ChipMenu`, whose chip says
+ * `aria-expanded="true"`): the menu is what is being read, and the pointer
+ * passing over a chip on its way into it would otherwise lay that chip's
+ * name over the rows. The `title` is still moved aside, so the platform's
+ * own bubble stays away too.
  *
  * Mounted once, in the main window only. The meeting panel and the overlay
  * are small always-on-top windows, and a box floated near their edge would be
@@ -20,6 +27,12 @@ import { placeTooltip, type Placement } from "../lib/tooltipPlacement";
 const SHOW_DELAY_MS = 400;
 const STASH = "data-tooltip";
 const ANCHOR = "[title], [data-tooltip]";
+/**
+ * A chip whose menu is open. Chips only: a Notes folder toggle says
+ * `aria-haspopup` and `aria-expanded` too, and is expanded most of the time.
+ */
+const POPUP_OPEN = '.chip[aria-haspopup][aria-expanded="true"]';
+const popupOpen = () => document.querySelector(POPUP_OPEN) !== null;
 
 type Active = { anchor: HTMLElement; text: string };
 
@@ -55,7 +68,8 @@ export function Tooltips() {
       const text = stash(element).trim();
       if (!text) { restore(element); return; }
       current = element;
-      timer = window.setTimeout(() => { if (current === element && element.isConnected) setActive({ anchor: element, text }); }, delay);
+      if (popupOpen()) return;
+      timer = window.setTimeout(() => { if (current === element && element.isConnected && !popupOpen()) setActive({ anchor: element, text }); }, delay);
     };
     const anchorOf = (target: EventTarget | null) => {
       const element = target instanceof Element ? target.closest(ANCHOR) : null;
@@ -73,6 +87,10 @@ export function Tooltips() {
     document.addEventListener("pointerover", over);
     document.addEventListener("pointerout", out);
     document.addEventListener("pointerdown", hide, true);
+    // A press from the keyboard (Enter or Space on a button) has no pointerdown, and a button that
+    // names what it will do next -- Hide list, Show list -- changes its `title` as it is pressed: a
+    // tooltip left up would say the old one.
+    document.addEventListener("click", hide, true);
     document.addEventListener("focusin", focusIn);
     document.addEventListener("focusout", focusOut);
     document.addEventListener("keydown", escape);
@@ -84,6 +102,7 @@ export function Tooltips() {
       document.removeEventListener("pointerover", over);
       document.removeEventListener("pointerout", out);
       document.removeEventListener("pointerdown", hide, true);
+      document.removeEventListener("click", hide, true);
       document.removeEventListener("focusin", focusIn);
       document.removeEventListener("focusout", focusOut);
       document.removeEventListener("keydown", escape);

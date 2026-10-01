@@ -26,7 +26,8 @@
  */
 
 import type { Detected, Sources, SummarySettings } from "../generated/ipc-types.js";
-import { destinationName } from "./controlBar.js";
+import type { MenuOption } from "./chipMenu.js";
+import { destinationName, LANGUAGES, languageLabel } from "./controlBar.js";
 import { parseStoredTime, timeOfDay } from "./dayGroups.js";
 
 /**
@@ -159,4 +160,68 @@ export function recentMeta(createdAt: string | null, durationSeconds: number | n
 export function interruptedTitle(storageKey: string, now: Date): string {
   const started = recordingStartedAt(storageKey);
   return started === null ? "Interrupted recording" : `Recording from ${shortDate(started, now)}, ${timeOfDay(started)}`;
+}
+
+/** What a configuration review was asked about. */
+export interface ReviewKey {
+  provider: string | null;
+  language: string;
+  keytermsText: string;
+}
+
+/**
+ * Whether a review verdict answers the configuration shown now. The verdict
+ * arrives after the inputs change, so for a moment it describes the previous
+ * ones; Start must not trust it then. No provider needs no verdict.
+ */
+export function reviewIsFor(
+  asked: ReviewKey | null,
+  provider: string | null,
+  language: string,
+  keytermsText: string,
+): boolean {
+  if (provider === null) return true;
+  return (
+    asked !== null &&
+    asked.provider === provider &&
+    asked.language === language &&
+    asked.keytermsText === keytermsText
+  );
+}
+
+/**
+ * The Meetings page's language menu: "Detect language", then the eight
+ * languages the other pickers offer.
+ *
+ * Rust stores any string for `meetings.language` and Settings > Meetings takes
+ * free text, so a saved value that is not one of the eight is listed as
+ * itself, ticked, rather than the menu showing no current row.
+ *
+ * "Detect language" is greyed, with the reason, for a provider that cannot
+ * detect (`languageDetection`): choosing it would leave a language the
+ * provider requires blank, which `start_live` refuses. With no provider
+ * nothing is known, so nothing is greyed.
+ */
+export function meetingLanguageMenu(
+  language: string,
+  provider: { name: string; languageDetection: boolean } | null,
+): MenuOption[] {
+  const code = language.trim();
+  const row = (id: string, label: string): MenuOption => ({
+    id,
+    label,
+    group: null,
+    current: id === code,
+    disabled: false,
+    reason: null,
+  });
+  const unknown = code !== "" && !LANGUAGES.some(([known]) => known === code);
+  const detect = row("", languageLabel([]));
+  return [
+    provider !== null && !provider.languageDetection
+      ? { ...detect, disabled: true, reason: `${provider.name} can't detect the language. Choose one.` }
+      : detect,
+    ...LANGUAGES.map(([id, label]) => row(id, label)),
+    ...(unknown ? [row(code, code)] : []),
+  ];
 }

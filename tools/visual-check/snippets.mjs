@@ -174,6 +174,46 @@ export function notesGrid() {
 }
 
 /**
+ * The open note's Hide transcript / Show transcript button, or null where it
+ * draws none (below 1280px): its name, whether it reads as expanded, the id it
+ * names in `aria-controls` and whether that element exists, whether it has
+ * focus, and which tab is selected.
+ */
+export function transcriptToggle() {
+  return source(`
+    const toggle = [...document.querySelectorAll('.note-actions button')]
+      .find((button) => /^(Hide|Show) transcript$/.test(button.getAttribute('aria-label') ?? ''));
+    const selected = document.querySelector('.note-detail [role="tab"][aria-selected="true"]');
+    if (!toggle) return { exists: false, selectedTab: selected?.textContent.trim() ?? null };
+    const controls = toggle.getAttribute('aria-controls');
+    return {
+      exists: true,
+      label: toggle.getAttribute('aria-label'),
+      expanded: toggle.getAttribute('aria-expanded'),
+      controls,
+      controlsExists: controls === null ? null : Boolean(document.getElementById(controls)),
+      focused: document.activeElement === toggle,
+      selectedTab: selected?.textContent.trim() ?? null,
+    };
+  `);
+}
+
+/**
+ * Focuses and presses the open note's transcript column button, as a keyboard
+ * user would: `click()` alone leaves focus where it was.
+ */
+export function pressTranscriptToggle() {
+  return source(`
+    const toggle = [...document.querySelectorAll('.note-actions button')]
+      .find((button) => /^(Hide|Show) transcript$/.test(button.getAttribute('aria-label') ?? ''));
+    if (!toggle) throw new Error('The transcript column button is missing');
+    toggle.focus();
+    toggle.click();
+    return { pressed: toggle.getAttribute('aria-label') };
+  `);
+}
+
+/**
  * Whether every tab sits inside `.notes-main`, horizontally: the same
  * comparison `notes-smoke.mjs` makes at 720x520 in the native window. Also
  * `.notes-main`'s own widths, since it is the note's scroller and would be
@@ -356,5 +396,253 @@ export function clickStop() {
     if (!stop) throw new Error('No stop button is present');
     stop.click();
     return stop.textContent.trim();
+  `);
+}
+
+/* ---------------------------------------------------------------- chip menus */
+
+/**
+ * Wraps the fixture `invoke`, once per document, so a check can reach states
+ * the fixture defaults do not: a slow write, a refused one, a different read.
+ * Nothing is stubbed until `stubInvoke` says so. Every call is logged, so a
+ * check can say a write did or did not happen. Re-install after a reload.
+ */
+export function installInvokeStub() {
+  return source(`
+    if (window.__chipStub) return { installed: false };
+    const stub = window.__chipStub = { delay: {}, reject: {}, merge: {}, log: [] };
+    const original = window.__TAURI_INTERNALS__.invoke.bind(window.__TAURI_INTERNALS__);
+    window.__TAURI_INTERNALS__.invoke = async (cmd, args, options) => {
+      stub.log.push({ cmd, args: args ?? null });
+      if (stub.delay[cmd]) await new Promise((resolve) => setTimeout(resolve, stub.delay[cmd]));
+      if (stub.reject[cmd]) throw new Error(stub.reject[cmd]);
+      const result = await original(cmd, args, options);
+      return stub.merge[cmd] ? { ...result, ...stub.merge[cmd] } : result;
+    };
+    return { installed: true };
+  `);
+}
+
+/**
+ * Sets what the stub does per command: `delay` (ms before the call), `reject`
+ * (an error message instead of the call) and `merge` (fields laid over an
+ * object the fixture returns). `null` for a command clears it.
+ */
+export function stubInvoke({ delay = {}, reject = {}, merge = {} } = {}) {
+  return source(`
+    const stub = window.__chipStub;
+    if (!stub) throw new Error('The invoke stub is not installed');
+    const apply = (into, from) => {
+      for (const [cmd, value] of Object.entries(from)) {
+        if (value === null) delete into[cmd];
+        else into[cmd] = value;
+      }
+    };
+    apply(stub.delay, ${JSON.stringify(delay)});
+    apply(stub.reject, ${JSON.stringify(reject)});
+    apply(stub.merge, ${JSON.stringify(merge)});
+    return true;
+  `);
+}
+
+/** The arguments of every logged call to `cmd`, oldest first. */
+export function stubCalls(cmd) {
+  return source(`
+    return (window.__chipStub?.log ?? [])
+      .filter((entry) => entry.cmd === ${JSON.stringify(cmd)})
+      .map((entry) => entry.args);
+  `);
+}
+
+/** Empties the call log, leaving the stub's behaviour as it is. */
+export function clearStubCalls() {
+  return source(`
+    if (window.__chipStub) window.__chipStub.log.length = 0;
+    return true;
+  `);
+}
+
+/** Runs a fixture command through the wrapped `invoke`, for state the page would otherwise need a click to reach. */
+export function invokeFixture(cmd, args = {}) {
+  return source(`
+    return window.__TAURI_INTERNALS__.invoke(${JSON.stringify(cmd)}, ${JSON.stringify(args)}).then(() => true);
+  `);
+}
+
+/** The dev console's dictation state hand-hold (`kw.dictationState`), as the session announces it. */
+export function emitDictationState(state) {
+  return source(`
+    if (!globalThis.kw?.dictationState) throw new Error('The fixture dev console is missing');
+    globalThis.kw.dictationState(${JSON.stringify(state)});
+    return true;
+  `);
+}
+
+/**
+ * The first chip whose name -- its aria-label, or its text where it has none --
+ * starts with `prefix`, as a DOM expression for the other snippets to build on.
+ */
+const chipExpression = (prefix) =>
+  `[...document.querySelectorAll('button.chip')].find((item) => (item.getAttribute('aria-label') ?? item.textContent.trim()).startsWith(${JSON.stringify(prefix)}))`;
+
+/** A chip's state: name, label, the ARIA a menu or toggle chip carries, and whether it is held. */
+export function chipState(prefix) {
+  return source(`
+    const chip = ${chipExpression(prefix)};
+    if (!chip) return null;
+    const label = chip.querySelector('.chip-label');
+    return {
+      name: chip.getAttribute('aria-label'),
+      text: label ? label.textContent : chip.textContent.trim(),
+      expanded: chip.getAttribute('aria-expanded'),
+      controls: chip.getAttribute('aria-controls'),
+      haspopup: chip.getAttribute('aria-haspopup'),
+      pressed: chip.getAttribute('aria-pressed'),
+      ariaDisabled: chip.getAttribute('aria-disabled'),
+      disabled: chip.disabled,
+      title: chip.getAttribute('title'),
+      description: chip.getAttribute('aria-description'),
+      chevron: Boolean(chip.querySelector('.chip-chevron')),
+      focused: document.activeElement === chip,
+    };
+  `);
+}
+
+/** The centre of the chip, to press with a real pointer. */
+export function chipCenter(prefix) {
+  return source(`
+    const chip = ${chipExpression(prefix)};
+    if (!chip) throw new Error('No chip is named ' + ${JSON.stringify(prefix)});
+    const rect = chip.getBoundingClientRect();
+    return { x: (rect.left + rect.right) / 2, y: (rect.top + rect.bottom) / 2 };
+  `);
+}
+
+/** The centre of the first element matching `selector` whose text is `text` (any, when `text` is null). */
+export function centerOfText(selector, text) {
+  return source(`
+    const wanted = ${JSON.stringify(text)};
+    const element = [...document.querySelectorAll(${JSON.stringify(selector)})]
+      .find((item) => wanted === null || item.textContent.trim() === wanted);
+    if (!element) throw new Error('No ' + ${JSON.stringify(selector)} + ' reads ' + wanted);
+    const rect = element.getBoundingClientRect();
+    return { x: (rect.left + rect.right) / 2, y: (rect.top + rect.bottom) / 2 };
+  `);
+}
+
+/** The centre of the open menu's row named `name`. */
+export function optionCenter(name) {
+  return source(`
+    const row = [...document.querySelectorAll('.chip-menu [role="option"]')]
+      .find((item) => document.getElementById(item.getAttribute('aria-labelledby'))?.textContent === ${JSON.stringify(name)});
+    if (!row) throw new Error('The open menu has no row named ' + ${JSON.stringify(name)});
+    const rect = row.getBoundingClientRect();
+    return { x: (rect.left + rect.right) / 2, y: (rect.top + rect.bottom) / 2 };
+  `);
+}
+
+/** Whether a menu is open and placed (not still `visibility: hidden`). */
+export function menuVisible() {
+  return source(`
+    const menu = document.querySelector('.chip-menu');
+    return Boolean(menu) && getComputedStyle(menu).visibility === 'visible';
+  `);
+}
+
+/**
+ * The open menu: its box against the window and the control bar, its kind,
+ * rows (with group, ticked, greyed and the reason a screen reader is given),
+ * footer, and what has focus.
+ */
+export function menuState() {
+  return source(`
+    const menu = document.querySelector('.chip-menu');
+    const bar = document.querySelector('.control-bar')?.getBoundingClientRect() ?? null;
+    const active = document.activeElement;
+    const describe = (element) => {
+      if (!element || element === document.body) return 'body';
+      if (element.getAttribute('role') === 'option') {
+        return 'option:' + document.getElementById(element.getAttribute('aria-labelledby'))?.textContent;
+      }
+      if (element.classList.contains('chip-menu-footer')) return 'footer';
+      if (element.getAttribute('role') === 'dialog') return 'dialog';
+      if (element.classList.contains('chip')) return 'chip:' + (element.getAttribute('aria-label') ?? element.textContent.trim());
+      return element.tagName.toLowerCase() + ':' + (element.textContent ?? '').trim().slice(0, 30);
+    };
+    const list = menu?.querySelector('[role="listbox"]') ?? null;
+    const box = menu?.getBoundingClientRect() ?? null;
+    return {
+      open: Boolean(menu),
+      viewport: { width: innerWidth, height: innerHeight },
+      bar: bar && { top: bar.top, bottom: bar.bottom },
+      box: box && { left: box.left, top: box.top, right: box.right, bottom: box.bottom },
+      side: menu?.dataset.side ?? null,
+      kind: !menu ? null : list ? 'listbox' : menu.getAttribute('role'),
+      id: menu ? (list ? list.id : menu.id) : null,
+      name: menu ? (list ? list.getAttribute('aria-label') : menu.getAttribute('aria-label')) : null,
+      groups: menu ? [...menu.querySelectorAll('.chip-menu-label')].map((item) => item.textContent) : [],
+      options: menu ? [...menu.querySelectorAll('[role="option"]')].map((row) => ({
+        name: document.getElementById(row.getAttribute('aria-labelledby'))?.textContent ?? null,
+        selected: row.getAttribute('aria-selected') === 'true',
+        greyed: row.getAttribute('aria-disabled') === 'true',
+        reason: row.querySelector('.chip-menu-reason')?.textContent ?? null,
+      })) : [],
+      footer: menu?.querySelector('.chip-menu-footer')?.textContent ?? null,
+      active: describe(active),
+    };
+  `);
+}
+
+/**
+ * The page under a control bar: the primary button, the privacy lines, the
+ * page's error and notes, and how far the page scrolls sideways.
+ */
+export function taskPageState() {
+  return source(`
+    const start = document.querySelector('.control-start');
+    const stop = [...document.querySelectorAll('.control-row button')]
+      .find((item) => item.textContent.trim().startsWith('Stop'));
+    const main = document.querySelector('.card .split-main');
+    return {
+      start: start ? { text: start.textContent.trim(), disabled: start.disabled } : null,
+      stop: stop ? { text: stop.textContent.trim(), disabled: stop.disabled } : null,
+      privacy: [...document.querySelectorAll('.control-privacy li')].map((item) => item.textContent.trim()),
+      errors: [...document.querySelectorAll('.control-body > .error, .task > .error')].map((item) => item.textContent.trim()),
+      notes: [...document.querySelectorAll('.control-body > [role="status"] > p.control-note')].map((item) => ({
+        text: item.textContent.trim(),
+        link: item.querySelector('button.provider-link')?.textContent ?? null,
+      })),
+      hero: [...document.querySelectorAll('.task-hero button')].map((item) => item.textContent.trim()),
+      scroll: {
+        innerWidth: innerWidth,
+        scrollWidth: document.scrollingElement.scrollWidth,
+        mainClientWidth: main?.clientWidth ?? null,
+        mainScrollWidth: main?.scrollWidth ?? null,
+        barClientWidth: document.querySelector('.control-bar')?.clientWidth ?? null,
+        barScrollWidth: document.querySelector('.control-bar')?.scrollWidth ?? null,
+      },
+    };
+  `);
+}
+
+/** Puts keyboard focus on the chip, as Tab would have. */
+export function focusChip(prefix) {
+  return source(`
+    const chip = ${chipExpression(prefix)};
+    if (!chip) throw new Error('No chip is named ' + ${JSON.stringify(prefix)});
+    chip.focus();
+    return document.activeElement === chip;
+  `);
+}
+
+/** Which colour scheme the page is drawing, and the open menu's own background. */
+export function themeState() {
+  return source(`
+    const menu = document.querySelector('.chip-menu');
+    return {
+      dark: matchMedia('(prefers-color-scheme: dark)').matches,
+      menuBackground: menu ? getComputedStyle(menu).backgroundColor : null,
+      pageBackground: getComputedStyle(document.body).backgroundColor,
+    };
   `);
 }

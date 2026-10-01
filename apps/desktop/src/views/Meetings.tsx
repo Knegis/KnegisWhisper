@@ -9,10 +9,12 @@
  *     problem and the button that fixes it. Under it, a card while a meeting
  *     application is in a call, with a way to record that call. At the foot,
  *     the control bar: the microphone -- the system default, the only one the
- *     recorder opens -- whether the other participants are captured, which is
- *     the one choice made on this page, and who transcribes in what language,
- *     each a way to Settings > Meetings. Then where the audio goes, which is
- *     never hidden, the caveats, and Start.
+ *     recorder opens -- whether the other participants are captured, a choice
+ *     kept on this page only, who transcribes in what language, each chosen in
+ *     its chip's menu (`ChipMenu`), and whether a summary is made, a toggle
+ *     that is a link to Cleanup & summaries until a provider and model are
+ *     chosen there. Then where the audio goes, which is never hidden, the
+ *     caveats, and Start.
  *   - **Live**, while a meeting is running: its state and a timer, which
  *     captures opened and where the audio goes, the live transcript, and a
  *     bar with what is in effect, Discard, and Stop.
@@ -25,15 +27,28 @@
  * it while the panel is collapsed -- and the intro sentence that used to sit
  * under a header is the hero's.
  *
- * Nothing on this page writes a setting. The provider and the language are
- * read here, never chosen: Settings > Meetings saves the provider on change and
- * the language when its field is left or Enter is pressed. Rust reads the
- * language from the database when the meeting starts (`start_live`); the
- * provider is the one this page read back from `meetings.provider` and passes
- * to `meeting_start` itself. So what this page previews is what Start will
- * use, with no save of its own to race. The control bar's provider and
- * language chips say so by going to Settings > Meetings rather than opening
- * a picker.
+ * The provider and the language are chosen here, in their chips' menus, and
+ * saved as they are chosen -- the same `meetings.provider` and
+ * `meetings.language` Settings > Meetings sets, which keeps its own controls
+ * (and the menus' footers go there, for a language the menu does not list).
+ * The Summary toggle likewise writes `reasoning.summaries`, whole, as
+ * Cleanup & summaries does; Rust refuses it where the settings are incomplete,
+ * and the page shows why.
+ * Rust reads the language from the database when the meeting starts
+ * (`start_live`); the provider is the one this page read back from
+ * `meetings.provider` and passes to `meeting_start` itself. A choice is
+ * written, then everything is read back, so the chip, the hero and the
+ * privacy line follow what was saved rather than what was clicked. Start waits
+ * while a write is in flight (`writing`): that is the save this page now has to
+ * race, and a Start pressed before it landed would use the value the page was
+ * still showing -- and, once it has, until the configuration review has
+ * answered for the new values (`startHeld`). The hero's "Choose a provider" and the language fix open
+ * those same menus rather than navigating; its other fixes still navigate.
+ * The live view's chips stay static: a running meeting has its provider and
+ * language already. The idle chips stay live while a meeting is finishing
+ * (being saved after Stop): turning Summary on then applies to the meeting
+ * being saved, because its summary is enqueued when the note is saved, while
+ * a provider or language change applies to the next meeting.
  *
  * Two things it refuses to do, carried over from the screen it came out of.
  *
@@ -58,6 +73,7 @@
 import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { Chip } from "../components/Chip";
+import { ChipMenu, type ChipMenuHandle } from "../components/ChipMenu";
 import { ControlBar } from "../components/ControlBar";
 import { Icon, IconFilled } from "../components/Icon";
 import { LearnMore } from "../components/LearnMore";
@@ -78,10 +94,13 @@ import {
   getNotes,
   getRecoverableRecordings,
   getSummarySettings,
+  setMeetingLanguage,
+  setMeetingProvider,
   onMeetingOutcome,
   onMeetingState,
   onMeetingTranscript,
   recoverMeetingRecording,
+  setSummarySettings,
   startMeeting,
   stopMeeting,
   type Detected,
@@ -99,19 +118,21 @@ import {
   systemAudioValue,
 } from "../lib/labels";
 import { emptyLiveTranscript, foldTranscriptEvent, liveRows, type LiveRow } from "../lib/liveTranscript";
-import { selectProvider } from "../lib/meetingProvider";
+import { providerMenu, selectProvider } from "../lib/meetingProvider";
 import {
   activeCall,
   elapsedLabel,
   interruptedTitle,
   liveElapsed,
+  meetingLanguageMenu,
   recentMeta,
   recordedSources,
   summaryPrivacyLine,
 } from "../lib/meetingView";
 import type { ViewId } from "../lib/navigation";
 import { meetingReadiness } from "../lib/readiness";
-import { useMeetingReview } from "../lib/useMeetingReview";
+import { summaryConfigured } from "../lib/summaryConfigured";
+import { useMeetingReviewFor } from "../lib/useMeetingReview";
 import { message, useRefresh } from "../lib/useRefresh";
 
 /**
@@ -208,6 +229,10 @@ export function Meetings({
   const [transcript, setTranscript] = useState(emptyLiveTranscript);
   const [outcome, setOutcome] = useState<MeetingOutcome | null>(null);
   const [notesFlushFailed, setNotesFlushFailed] = useState(false);
+  /** A provider or language write is in flight: Start waits for it. */
+  const [writing, setWriting] = useState(false);
+  const providerMenuRef = useRef<ChipMenuHandle>(null);
+  const languageMenuRef = useRef<ChipMenuHandle>(null);
   const [recoveringKey, setRecoveringKey] = useState<string | null>(null);
   const [recoveryError, setRecoveryError] = useState<string | null>(null);
   const [recoveryOutcome, setRecoveryOutcome] = useState<MeetingOutcome | null>(null);
@@ -354,7 +379,8 @@ export function Meetings({
   const usable = (data?.providers ?? []).filter(
     (p) => p.availability.state === "available",
   );
-  // No `chosen`: nothing is chosen on this page. The saved choice wins over
+  // No `chosen`: the menu saves a choice and the page reads it back, so what
+  // is shown is what was saved. The saved choice wins over
   // the first usable provider, exactly as on Settings > Meetings, so the two
   // screens name the same provider, and this page passes it to `meeting_start`
   // itself -- Rust does not read `meetings.provider` at start. The
@@ -368,10 +394,9 @@ export function Meetings({
     data?.provider ?? null,
     usable.map((p) => p.id),
   );
-  // The saved language, not a draft: this page has no field, and the review
-  // has to describe the language `start_live` will read back from the
-  // database.
-  const review = useMeetingReview(
+  // The saved language, not a draft: the review has to describe the language
+  // `start_live` will read back from the database.
+  const { review, current: reviewCurrent } = useMeetingReviewFor(
     selected,
     data?.language ?? "",
     (data?.keyterms ?? []).join("\n"),
@@ -428,6 +453,12 @@ export function Meetings({
   // Where readiness holds Start back, the hero's fix is the one thing to do
   // next and takes the page's single filled button.
   const startBlocked = readiness.state === "needs-setup";
+  // What holds Start and "Record this call" off, the same for both: setup is
+  // missing, no provider, a provider or language write in flight, or the
+  // review still describing the previous configuration -- its answer arrives
+  // after the re-read, and until it does `readiness` cannot be trusted to
+  // know that the new provider needs a language.
+  const startHeld = startBlocked || selected === null || writing || !reviewCurrent;
   // While a meeting is running, the provider it is running with -- which the
   // notification's Record button may have picked rather than this page.
   const liveProvider =
@@ -461,8 +492,24 @@ export function Meetings({
   // recorded or transcribed there is nothing it could offer.
   const call = current === "idle" ? activeCall(detected ?? status.detected) : null;
 
+  // The two menus. A choice is written and then everything is read back
+  // (`guard`), so `selected`, the review, the hero and the privacy line all
+  // follow the saved value. Choosing what is already saved writes nothing --
+  // except the fallback shown when the saved provider cannot be used: that one
+  // is not what is saved, so choosing it is the write that replaces it.
+  const providerOptions = providerMenu(providers, data.provider, selected);
+  const languageOptions = meetingLanguageMenu(data.language, selectedProvider);
+  const choose = (write: () => Promise<void>) => {
+    // One write at a time, as Dictation's switch does: a second choice made
+    // while the first is in flight is ignored, so `writing` clears only when
+    // the one write it stands for has landed.
+    if (writing) return;
+    setWriting(true);
+    void guard(write).finally(() => setWriting(false));
+  };
+
   const start = (withSystem: boolean) => {
-    if (selected === null) return;
+    if (startHeld) return;
     void guard(async () => {
       setOutcome(null);
       // The outcome event clears the last meeting's lines; this makes sure a
@@ -751,7 +798,18 @@ export function Meetings({
       >
         {/* Needs setup always holds Start back (see Start's comment), so the
             fix is the one thing to do next and takes the filled button. */}
-        <button type="button" className="primary" onClick={() => onGoTo(readiness.fix.view)}>
+        <button
+          type="button"
+          className="primary"
+          onClick={() => {
+            const view = readiness.fix.view;
+            // The two choices this page makes itself open their menus; the
+            // rest are somewhere else.
+            if (view === "provider-menu") providerMenuRef.current?.open();
+            else if (view === "language-menu") languageMenuRef.current?.open();
+            else onGoTo(view);
+          }}
+        >
           {readiness.fix.label}
         </button>
         {readiness.detail ? <LearnMore>{readiness.detail}</LearnMore> : null}
@@ -779,7 +837,7 @@ export function Meetings({
               <button
                 type="button"
                 className="secondary"
-                disabled={startBlocked || selected === null}
+                disabled={startHeld}
                 onClick={() => start(wantSystem && systemAudioAvailable)}
               >
                 Record this call
@@ -813,20 +871,54 @@ export function Meetings({
                 {/* Named as Dictation's are: "Deepgram" or "Swedish" alone
                     says nothing about which setting it is the value of.
                     The label stays whole inside the name (WCAG 2.5.3). */}
-                <Chip
+                <ChipMenu
+                  ref={providerMenuRef}
                   icon="computer"
+                  name="Meeting transcription"
                   label={transcriber ? transcriber.name : "Not set up"}
-                  name={`Meeting transcription: ${transcriber ? transcriber.name : "Not set up"}`}
-                  chevron
-                  onClick={() => onGoTo("meeting-settings")}
+                  options={providerOptions}
+                  onChoose={(id) => {
+                    if (id !== data.provider) choose(() => setMeetingProvider(id));
+                  }}
+                  footer={{ label: "More in Settings…", onClick: () => onGoTo("meeting-settings") }}
                 />
-                <Chip
+                <ChipMenu
+                  ref={languageMenuRef}
                   icon="language"
+                  name="Language"
                   label={language}
-                  name={`Language: ${language}`}
-                  chevron
-                  onClick={() => onGoTo("meeting-settings")}
+                  options={languageOptions}
+                  onChoose={(id) => {
+                    if (id !== data.language.trim()) choose(() => setMeetingLanguage(id));
+                  }}
+                  footer={{ label: "Another language in Settings…", onClick: () => onGoTo("meeting-settings") }}
                 />
+                {/* The summary, written here like the provider and the language
+                    (Settings > Cleanup & summaries keeps its own switch). Where
+                    the provider and model are not chosen yet there is nothing
+                    to turn on -- Rust refuses it -- so the chip says so and
+                    goes where they are chosen. */}
+                {summaryConfigured(summaries) ? (
+                  <Chip
+                    icon="notes"
+                    label="Summary"
+                    pressed={summaries.enabled}
+                    title={
+                      summaries.enabled
+                        ? "A summary is made of each meeting when it ends"
+                        : "Make a summary of each meeting when it ends"
+                    }
+                    onClick={() => choose(() => setSummarySettings({ ...summaries, enabled: !summaries.enabled }))}
+                  />
+                ) : (
+                  <Chip
+                    icon="notes"
+                    label="Summary: needs setup"
+                    chevron
+                    title="Choose a summary provider and model in Cleanup & summaries"
+                    onClick={() => onGoTo("intelligence")}
+                  />
+                )}
               </>
             }
             privacy={privacy}
@@ -899,7 +991,7 @@ export function Meetings({
               <button
                 type="button"
                 className={startBlocked ? "control-start" : "primary control-start"}
-                disabled={startBlocked || selected === null || current === "finishing"}
+                disabled={startHeld || current === "finishing"}
                 onClick={() => start(wantSystem)}
               >
                 <span className="start-dot" aria-hidden="true" />

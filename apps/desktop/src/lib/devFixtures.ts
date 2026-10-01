@@ -585,13 +585,19 @@ const MEETING_PROVIDERS: MeetingProviderSummary[] = [
     languageDetection: false,
     reconnect: true,
     batchFallback: true,
+    // `no-client`, not `declined`: the Meetings page's provider menu leaves a
+    // refused provider out (it is a policy, not something to act on), and the
+    // fixture wants the "On this computer" group visible with a greyed row, the
+    // saved-but-unusable case the page has to explain.
     availability: {
-      state: "declined",
-      reason: "the local server is installed but not running",
+      state: "no-client",
+      reason: "No streaming client for this provider has been written yet.",
     },
     summary: "Audio never leaves this machine. No partials, no speaker labels.",
   },
 ];
+
+const DICTATION_LANGUAGE_CODES = ["sv", "en", "da", "no", "fi", "de", "fr", "es"];
 
 let meetingStatus: MeetingStatus = {
   state: "idle",
@@ -711,12 +717,36 @@ const INPUT_DEVICES: InputDevice[] = [
   { name: "Line In (Focusrite Scarlett 2i2)", isDefault: false },
 ];
 
-const ROUTE: RouteReport = {
-  destination: "openai",
-  isLocal: false,
-  leavesDevice: true,
-  problem: null,
-};
+/**
+ * The microphone `dictation_set_device` stored, which `dictation_device` reads
+ * back, so the chip's menu shows the choice it made. `null` is the system
+ * default, as in Rust.
+ */
+let dictationDevice: string | null = null;
+
+/**
+ * What `dictation_set_cloud_provider` and `dictation_use_local` stored, which
+ * `dictation_route` resolves, so a switch made on the Dictation page's route
+ * menu or on Settings > Transcription reads back (KNEG-385). Resolved as
+ * `route::resolve` resolves these two settings: the local flag first, then
+ * the provider. Every provider `PROVIDERS` lists is a public endpoint, so a
+ * cloud route leaves the device. The model is kept, as Rust keeps it, though
+ * no read reports it.
+ */
+const dictationRoute = { useLocal: false, provider: "openai", model: "whisper-1" };
+
+function resolvedRoute(): RouteReport {
+  return dictationRoute.useLocal
+    ? { destination: "local model", isLocal: true, leavesDevice: false, problem: null }
+    : { destination: dictationRoute.provider, isLocal: false, leavesDevice: true, problem: null };
+}
+
+/**
+ * The local languages `dictation_set_local_language` stored. Swedish alone to
+ * start, so the language chip -- shown on the local whisper route only --
+ * reads as a choice rather than as "Detect language".
+ */
+let localLanguages: string[] = ["sv"];
 
 /* ------------------------------------------------------------ local models */
 
@@ -769,10 +799,11 @@ const LOCAL_MODELS: LocalStatus = {
     },
   ],
   port: 8178,
-  // Deliberately disagreeing with ROUTE, which resolves to openai: the local
+  // Deliberately disagreeing with the route, which starts on openai: the local
   // server is up with a model loaded and dictation is not using it. That is the
   // state the marked button must *not* claim, so the fixtures show it rather
-  // than the easy case.
+  // than the easy case. `local_server_start` and `local_server_stop` move
+  // this and `port`.
   runningModel: "whisper-small-q5",
   installDir: "C:\\ProgramData\\KnegisWhisper\\whisper-server",
   installDirFellBack: true,
@@ -823,6 +854,9 @@ const SHERPA: SherpaStatus = {
       usedFor: "meetings",
     },
   ],
+  // Selected, while the route is not local: a selection only matters once the
+  // route is. `sherpa_use_model` moves it, and `local_server_start` clears it,
+  // as Rust does.
   selected: "parakeet-unified-en-0.6b",
   selectedStream: "nemotron-speech-streaming-en-0.6b",
   modelsDir: "C:\\ProgramData\\KnegisWhisper\\models\\sherpa",
@@ -1369,19 +1403,54 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
   probe_providers: () => PROBE_REPORT,
 
   /* reasoning */
-  reasoning_status: () => REASONING,
+  // What was last stored and where it resolves, as Rust reports them: a write
+  // below moves both, so Settings and Dictation's Tidy up chip read it back.
+  reasoning_status: () => ({
+    ...REASONING,
+    settings: { ...REASONING.settings },
+    route: REASONING.route,
+  }),
+  // Mirrors `reasoning_set_cleanup` (src-tauri/src/reasoning.rs): off always
+  // resolves; on needs a model, and a provider or a URL; it is refused before
+  // anything is stored, so a refusal leaves the status as it was. A provider
+  // with no key resolves, with the caveat Rust words.
   reasoning_set_cleanup: (a) => {
     const settings = arg<CleanupSettings>(a, "settings");
-    if (!settings?.enabled) return { state: "off" } satisfies CleanupRoute;
-    const route: CleanupRoute = {
-      state: "ready",
-      destination: settings.selfHostedUrl
-        ? "self-hosted"
-        : (settings.provider ?? "openai"),
-      model: settings.model ?? "gpt-4o-mini",
-      leavesDevice: !settings.selfHostedUrl,
-      caveat: null,
-    };
+    if (!settings) throw new Error("no cleanup settings were sent");
+    let route: CleanupRoute;
+    if (!settings.enabled) {
+      route = { state: "off" };
+    } else {
+      if (!(settings.model ?? "").trim()) {
+        throw new Error(
+          "cleanup needs a model. Providers disagree about parameter names, so there is no safe default to fall back on.",
+        );
+      }
+      const url = (settings.selfHostedUrl ?? "").trim();
+      const provider = REASONING.providers.find((p) => p.id === settings.provider);
+      if (!url && !provider) {
+        throw new Error("cleanup needs a provider or a self-hosted URL");
+      }
+      route = url
+        ? {
+            state: "ready",
+            destination: `self-hosted at ${url}`,
+            model: settings.model ?? "",
+            leavesDevice: !url.includes("127.0.0.1") && !url.includes("localhost"),
+            caveat: null,
+          }
+        : {
+            state: "ready",
+            destination: provider!.id,
+            model: settings.model ?? "",
+            leavesDevice: true,
+            caveat: provider!.configured
+              ? null
+              : `no key is stored for ${provider!.credentialSlot ?? provider!.id}. Cleanup will leave the transcript as it is until one is, on the Providers screen.`,
+          };
+    }
+    REASONING.settings = { ...settings };
+    REASONING.route = route;
     return route;
   },
   enterprise_config_set: () => null,
@@ -1654,16 +1723,48 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
     }) satisfies Outcome,
   dictation_cancel: () => ({ outcome: "cancelled" }) satisfies Outcome,
   input_devices: () => INPUT_DEVICES,
-  dictation_set_device: () => null,
-  dictation_device: () => null,
+  dictation_set_device: (a) => {
+    dictationDevice = arg<string | null>(a, "device") ?? null;
+    return null;
+  },
+  dictation_device: () => dictationDevice,
   insertion_supported: () => true,
-  dictation_route: () => ROUTE,
-  dictation_use_local: () => null,
-  dictation_set_cloud_provider: () => null,
-  // Swedish alone, so the language chip -- shown on the local route only --
-  // reads as a choice rather than as "Detect language".
-  dictation_local_language: () => ["sv"],
-  dictation_set_local_language: () => null,
+  dictation_route: () => resolvedRoute(),
+  dictation_use_local: (a) => {
+    dictationRoute.useLocal = arg<boolean>(a, "useLocal") ?? false;
+    return null;
+  },
+  // Refused where Rust refuses -- a pair the registry does not list, and Corti
+  // without its environment and tenant -- so a screen's error path can be
+  // seen; otherwise stored, and the route is off local, as in Rust.
+  dictation_set_cloud_provider: (a) => {
+    const provider = arg<string>(a, "provider") ?? "";
+    const model = arg<string>(a, "model") ?? "";
+    if (!PROVIDERS.some((p) => p.id === provider && p.models.includes(model))) {
+      throw new Error(`"${provider}" / "${model}" is not a transcription model the registry lists`);
+    }
+    if (provider === "corti" && !(arg<string | null>(a, "cortiEnvironment") && arg<string | null>(a, "cortiTenant"))) {
+      throw new Error("Corti needs both an environment and a tenant.");
+    }
+    dictationRoute.useLocal = false;
+    dictationRoute.provider = provider;
+    dictationRoute.model = model;
+    return null;
+  },
+  dictation_local_language: () => [...localLanguages],
+  // `validated_local_languages`' eight codes (src-tauri/src/dictation.rs).
+  // Checked as `validated_local_languages` checks, and announced as Rust
+  // announces it, so the Dictation chip and the floating microphone follow.
+  dictation_set_local_language: (a) => {
+    const languages = arg<string[]>(a, "languages") ?? [];
+    if (languages.length > 2) throw new Error("Choose at most two languages");
+    if (new Set(languages).size !== languages.length || !languages.every((code) => DICTATION_LANGUAGE_CODES.includes(code))) {
+      throw new Error("Choose distinct supported dictation languages");
+    }
+    localLanguages = [...languages];
+    void emit("dictation-languages", localLanguages);
+    return null;
+  },
 
   /* overlay */
   overlay_preferences: () => overlayPreferences,
@@ -1682,13 +1783,43 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
   overlay_message: () => null,
 
   /* local transcription */
-  sherpa_status: () => SHERPA,
+  // Copies, as for `providers`: the writes below move these, and a screen must
+  // not see its last read change underneath it.
+  sherpa_status: () => ({ ...SHERPA }),
   sherpa_install_model: () => null,
-  sherpa_use_model: () => null,
-  local_model_status: () => LOCAL_MODELS,
+  sherpa_use_model: (a) => {
+    // Rust checks only that the id resolves (`resolve_id`), not what the model
+    // is for; so does this. An id it does not know is refused.
+    const model = SHERPA.models.find((m) => m.id === arg<string>(a, "modelId"));
+    if (!model) throw new Error(`Unknown model: ${arg<string>(a, "modelId") ?? ""}`);
+    SHERPA.selected = model.id;
+    return null;
+  },
+  local_model_status: () => ({ ...LOCAL_MODELS }),
   local_model_install: () => "whisper-large-v3-turbo-q5",
-  local_server_start: () => 8178,
-  local_server_stop: () => null,
+  // A second and a half before it answers, as a real server takes seconds to
+  // load a model, so the route chip's "Starting …" and the held Start button
+  // can be seen. The old server goes first, as `start_model` stops one
+  // running another model, and a Parakeet selection is released.
+  local_server_start: async (a) => {
+    const model = LOCAL_MODELS.models.find((m) => m.id === arg<string>(a, "modelId"));
+    if (!model?.installed) throw new Error("That model is not installed.");
+    LOCAL_MODELS.port = null;
+    LOCAL_MODELS.runningModel = null;
+    LOCAL_MODELS.runtimeMessage = `Checking or starting local model ${model.id}...`;
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    LOCAL_MODELS.port = 8178;
+    LOCAL_MODELS.runningModel = model.id;
+    LOCAL_MODELS.runtimeMessage = `Local model ${model.id} is ready on port 8178.`;
+    SHERPA.selected = null;
+    return 8178;
+  },
+  local_server_stop: () => {
+    LOCAL_MODELS.port = null;
+    LOCAL_MODELS.runningModel = null;
+    LOCAL_MODELS.runtimeMessage = "Local model server is stopped.";
+    return null;
+  },
   local_server_refresh: () => ({
     files: 37,
     restarted: "whisper-large-v3-turbo-q5",
