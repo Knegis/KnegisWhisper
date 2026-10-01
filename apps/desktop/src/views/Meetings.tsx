@@ -11,7 +11,9 @@
  *     the control bar: the microphone -- the system default, the only one the
  *     recorder opens -- whether the other participants are captured, which is
  *     the one choice made on this page, and who transcribes in what language,
- *     each chosen in its chip's menu (`ChipMenu`). Then where the audio goes,
+ *     each chosen in its chip's menu (`ChipMenu`), and whether a summary is
+ *     made, a toggle that is a link to Cleanup & summaries until a provider
+ *     and model are chosen there. Then where the audio goes,
  *     which is never hidden, the caveats, and Start.
  *   - **Live**, while a meeting is running: its state and a timer, which
  *     captures opened and where the audio goes, the live transcript, and a
@@ -27,7 +29,9 @@
  *
  * The provider and the language are chosen here, in their chips' menus, and
  * saved as they are chosen -- the same `meetings.provider` and
- * `meetings.language` Settings > Meetings sets, which keeps its own controls
+ * `meetings.language` Settings > Meetings sets (the Summary toggle likewise
+ * writes `reasoning.summaries`, whole, as Cleanup & summaries does; Rust
+ * refuses it where the settings are incomplete, and the page shows why), which keeps its own controls
  * (and the menus' footers go there, for a language the menu does not list).
  * Rust reads the language from the database when the meeting starts
  * (`start_live`); the provider is the one this page read back from
@@ -92,6 +96,7 @@ import {
   onMeetingState,
   onMeetingTranscript,
   recoverMeetingRecording,
+  setSummarySettings,
   startMeeting,
   stopMeeting,
   type Detected,
@@ -122,6 +127,7 @@ import {
 } from "../lib/meetingView";
 import type { ViewId } from "../lib/navigation";
 import { meetingReadiness } from "../lib/readiness";
+import { summaryConfigured } from "../lib/summaryConfigured";
 import { useMeetingReviewFor } from "../lib/useMeetingReview";
 import { message, useRefresh } from "../lib/useRefresh";
 
@@ -879,6 +885,32 @@ export function Meetings({
                   }}
                   footer={{ label: "Another language in Settings > Meetings", onClick: () => onGoTo("meeting-settings") }}
                 />
+                {/* The summary, written here like the provider and the language
+                    (Settings > Cleanup & summaries keeps its own switch). Where
+                    the provider and model are not chosen yet there is nothing
+                    to turn on -- Rust refuses it -- so the chip says so and
+                    goes where they are chosen. */}
+                {summaryConfigured(summaries) ? (
+                  <Chip
+                    icon="notes"
+                    label="Summary"
+                    pressed={summaries.enabled}
+                    title={
+                      summaries.enabled
+                        ? "A summary is made of each meeting when it ends"
+                        : "Make a summary of each meeting when it ends"
+                    }
+                    onClick={() => choose(() => setSummarySettings({ ...summaries, enabled: !summaries.enabled }))}
+                  />
+                ) : (
+                  <Chip
+                    icon="notes"
+                    label="Summary: needs setup"
+                    chevron
+                    title="Choose a summary provider and model in Cleanup & summaries"
+                    onClick={() => onGoTo("intelligence")}
+                  />
+                )}
               </>
             }
             privacy={privacy}
