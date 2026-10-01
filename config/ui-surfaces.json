@@ -60,7 +60,7 @@
       "surfaceId": "dictation.task",
       "component": "apps/desktop/src/views/Dictation.tsx",
       "built": true,
-      "note": "The dictation task: whether it will work (lib/readiness.ts) and the shortcut to press, in a centred hero; then a control bar with the microphone chosen in place, chips linking to where the route, the local language and cleanup are changed, the privacy line, the last result, and the Start button. The shortcut editor is on Settings > Shortcuts, reached from the history panel."
+      "note": "The dictation task: whether it will work (lib/readiness.ts) and the shortcut to press, in a centred hero; then a control bar with the microphone, the route (an installed model on this computer or a cloud provider) and, on the local whisper route, the languages, each chosen in place in its chip's menu -- the route and the languages are also set on Settings > Transcription, which owns them; a chip linking to where cleanup is changed; the privacy line; the last result; and the Start button, held while a route switch is applied. The shortcut editor is on Settings > Shortcuts, reached from the history panel."
     },
     "Dictation > History": {
       "surfaceId": "dictation.history",

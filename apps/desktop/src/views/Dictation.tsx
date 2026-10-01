@@ -7,12 +7,15 @@
  *     and, when it will, the shortcut to press. When it will not, the one
  *     problem and the button that fixes it; while recording, "Listening…" and
  *     a timer.
- *   - **The control bar** at the foot: the microphone, chosen right here in
- *     its chip's menu (`ChipMenu`); where speech becomes text and, on the
- *     local route, the language -- each a chip that goes to Settings >
- *     Transcription, where they are set; the privacy line, which is never
- *     hidden; the last result with a Copy button; the Tidy up chip, to
- *     Cleanup & summaries; and Start.
+ *   - **The control bar** at the foot: the microphone, and where speech
+ *     becomes text -- an installed model on this computer or a cloud
+ *     provider -- each chosen right here in its chip's menu (`ChipMenu`);
+ *     on the local whisper route, the languages, in a panel holding the
+ *     picker Settings > Transcription shows (that page keeps its own
+ *     controls for the route and the languages); the privacy line, which
+ *     is never hidden and follows a switch as soon as it lands; the last
+ *     result with a Copy button; the Tidy up chip, to Cleanup & summaries;
+ *     and Start, which waits while a route switch is applied.
  *   - **The history**, in the list panel (`components/DictationHistoryPanel.tsx`),
  *     with the way to the shortcut editor and the vocabulary at its top.
  *
@@ -43,12 +46,14 @@ import { ControlBar } from "../components/ControlBar";
 import { DictationHistoryPanel } from "../components/DictationHistoryPanel";
 import { Icon, IconFilled } from "../components/Icon";
 import { LearnMore } from "../components/LearnMore";
+import { LocalLanguagePicker } from "../components/LocalLanguagePicker";
 import { LocalServerHealth } from "../components/LocalServerHealth";
 import { PanelHeader } from "../components/Panel";
 import { SplitView } from "../components/SplitView";
 import { TaskHero } from "../components/TaskHero";
 import { cleanupLabel, destinationName, languageLabel, microphoneMenu, privacyLines } from "../lib/controlBar";
 import { timeOfDay } from "../lib/dayGroups";
+import { localEngine, routeBusyLabel, routeMenu, type RouteChoice } from "../lib/dictationRoute";
 import {
   cancelDictation,
   getDictationRoute,
@@ -60,7 +65,10 @@ import {
   getInputDevices,
   getKeepRawText,
   getLocalDictationLanguages,
+  getLocalStatus,
+  getProviders,
   getReasoningStatus,
+  getSherpaStatus,
   isInsertionSupported,
   onDictationOutcome,
   onDictationState,
@@ -75,6 +83,7 @@ import { lastDictation, type InsertedDictation } from "../lib/lastDictation";
 import { microphoneState } from "../lib/microphone";
 import type { ViewId } from "../lib/navigation";
 import { dictationReadiness } from "../lib/readiness";
+import { chooseRoute } from "../lib/routeChoice";
 import { useRefresh } from "../lib/useRefresh";
 
 /**
@@ -146,6 +155,9 @@ export function DictationView({
       historyOn,
       keepRaw,
       reasoning,
+      providers,
+      local,
+      sherpa,
     ] = await Promise.all([
       getHotkeys(),
       getDictationState(),
@@ -157,9 +169,14 @@ export function DictationView({
       getHistoryEnabled(),
       getKeepRawText(),
       getReasoningStatus(),
+      // What the route menu lists, read as Settings > Transcription reads it.
+      getProviders(),
+      getLocalStatus(),
+      getSherpaStatus(),
     ]);
-    // Only the local route has languages to choose, so only it is asked.
-    const languages = route.isLocal ? await getLocalDictationLanguages() : [];
+    // Only local whisper has languages to choose -- a Parakeet model uses its
+    // own -- so only it is asked.
+    const languages = localEngine(route, sherpa) === "whisper" ? await getLocalDictationLanguages() : [];
     return {
       hotkeys,
       session,
@@ -172,6 +189,9 @@ export function DictationView({
       keepRaw,
       cleanup: reasoning.route,
       languages,
+      providers,
+      local,
+      sherpa,
     };
   }, []);
 
@@ -181,6 +201,13 @@ export function DictationView({
   const [session, setSession] = useState<SessionState | null>(null);
   const [lastOutcome, setLastOutcome] = useState<LastOutcome | null>(null);
   const [lastInserted, setLastInserted] = useState<InsertedDictation | null>(null);
+  /**
+   * The route switch being applied, from its choice until the re-read after
+   * it. The chip says what is starting, and Start waits: the backend resolves
+   * the route at Stop, so a dictation started mid-switch could end on a route
+   * nobody chose -- the server up, the route not yet pointed at it.
+   */
+  const [switching, setSwitching] = useState<RouteChoice | null>(null);
 
   // `disposed` because `listen` resolves after the effect returns: a page left
   // before it did would otherwise keep its listeners for the rest of the
@@ -260,8 +287,21 @@ export function DictationView({
     );
   }
 
-  const { hotkeys, devices, device, canInsert, route, history, historyOn, keepRaw, cleanup, languages } =
-    data;
+  const {
+    hotkeys,
+    devices,
+    device,
+    canInsert,
+    route,
+    history,
+    historyOn,
+    keepRaw,
+    cleanup,
+    languages,
+    providers,
+    local,
+    sherpa,
+  } = data;
   const state = liveState ?? data.session;
   // The floating microphone's own reading of the session, reused rather than
   // re-derived, so the two buttons cannot disagree -- and so Start is off
@@ -289,13 +329,32 @@ export function DictationView({
   // disable it -- the button needs none -- so only this case hands the
   // page's one filled button to the hero's fix.
   const startBlocked = !recording && route.problem !== null;
-  // The route chip's label. A route with a problem has no destination to
-  // name; the hero says what to do and carries the problem itself.
-  const routeLabel = route.problem
-    ? "Not set up"
-    : route.isLocal
-      ? "On this computer"
-      : destinationName(route.destination);
+  // The route chip's menu (`lib/dictationRoute.ts`): the installed models
+  // and the providers, which one the route resolves to, and what choosing
+  // each writes. A choice is written and everything is read back (`guard`),
+  // so the privacy line, the hero and the local server's health follow the
+  // route as Rust resolves it; the row already in effect writes nothing.
+  const routes = routeMenu(providers, local, sherpa, route);
+  const engine = localEngine(route, sherpa);
+  const chooseRouteRow = (id: string) => {
+    const choice = routes.choices.get(id);
+    // One switch at a time: a provider's is not `busy`, so its chip can be
+    // reopened while the write is still out.
+    if (choice === undefined || switching !== null) return;
+    setSwitching(choice);
+    void guard(() => chooseRoute(choice)).finally(() => setSwitching(null));
+  };
+  // The route chip's label: the row in effect, by its own words. Failing
+  // that, a route with a problem has no destination to name -- the hero says
+  // what to do and carries the problem itself -- and a local route with no
+  // model running, or a destination the menu does not list, is said plainly.
+  const routeLabel =
+    routes.current?.label ??
+    (route.problem
+      ? "Not set up"
+      : route.isLocal
+        ? "On this computer"
+        : destinationName(route.destination));
 
   // The last thing dictated: this session's insert, a failure whose row kept
   // the text, or the newest history row with text -- whichever is newest
@@ -414,22 +473,27 @@ export function DictationView({
                 />
                 {/* Named for what they are the value of: on its own,
                     "OpenAI" or "Swedish" is a word with nothing to say which
-                    setting it is. */}
-                <Chip
+                    setting it is. Settings > Transcription keeps its own
+                    controls for both, and installing a model is only there. */}
+                <ChipMenu
                   icon="computer"
+                  name="Transcription"
                   label={routeLabel}
-                  name={`Transcription: ${routeLabel}`}
-                  chevron
-                  onClick={() => onGoTo("transcription")}
+                  busy={routeBusyLabel(switching)}
+                  options={routes.options}
+                  onChoose={chooseRouteRow}
+                  footer={{ label: "More in Settings…", onClick: () => onGoTo("transcription") }}
                 />
-                {route.isLocal ? (
-                  <Chip
-                    icon="language"
-                    label={languageLabel(languages)}
-                    name={`Language: ${languageLabel(languages)}`}
-                    chevron
-                    onClick={() => onGoTo("transcription")}
-                  />
+                {/* Local whisper only: a Parakeet model uses its own
+                    languages, and Settings disables the picker under one.
+                    The picker writes, validates and announces the choice
+                    itself, and the page re-reads on that announcement. It
+                    starts from what this page read, so the panel opens on
+                    its first control rather than on a picker still loading. */}
+                {engine === "whisper" ? (
+                  <ChipMenu icon="language" name="Language" label={languageLabel(languages)}>
+                    <LocalLanguagePicker initial={languages} />
+                  </ChipMenu>
                 ) : null}
               </>
             }
@@ -512,7 +576,7 @@ export function DictationView({
               <button
                 type="button"
                 className={startBlocked ? "control-start" : "primary control-start"}
-                disabled={mic.disabled || startBlocked}
+                disabled={mic.disabled || startBlocked || switching !== null}
                 onClick={() => {
                   void guard(toggleDictation);
                 }}
@@ -526,7 +590,9 @@ export function DictationView({
               </button>
             </div>
           </ControlBar>
-          {route.isLocal ? (
+          {/* The whisper server's health, so on its route alone: under a
+              Parakeet model it describes a server dictation is not using. */}
+          {engine === "whisper" ? (
             <div className="task-health">
               <LocalServerHealth />
             </div>

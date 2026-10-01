@@ -722,12 +722,29 @@ const INPUT_DEVICES: InputDevice[] = [
  */
 let dictationDevice: string | null = null;
 
-const ROUTE: RouteReport = {
-  destination: "openai",
-  isLocal: false,
-  leavesDevice: true,
-  problem: null,
-};
+/**
+ * What `dictation_set_cloud_provider` and `dictation_use_local` stored, which
+ * `dictation_route` resolves, so a switch made on the Dictation page's route
+ * menu or on Settings > Transcription reads back (KNEG-385). Resolved as
+ * `route::resolve` resolves these two settings: the local flag first, then
+ * the provider. Every provider `PROVIDERS` lists is a public endpoint, so a
+ * cloud route leaves the device. The model is kept, as Rust keeps it, though
+ * no read reports it.
+ */
+const dictationRoute = { useLocal: false, provider: "openai", model: "whisper-1" };
+
+function resolvedRoute(): RouteReport {
+  return dictationRoute.useLocal
+    ? { destination: "local model", isLocal: true, leavesDevice: false, problem: null }
+    : { destination: dictationRoute.provider, isLocal: false, leavesDevice: true, problem: null };
+}
+
+/**
+ * The local languages `dictation_set_local_language` stored. Swedish alone to
+ * start, so the language chip -- shown on the local whisper route only --
+ * reads as a choice rather than as "Detect language".
+ */
+let localLanguages: string[] = ["sv"];
 
 /* ------------------------------------------------------------ local models */
 
@@ -780,10 +797,11 @@ const LOCAL_MODELS: LocalStatus = {
     },
   ],
   port: 8178,
-  // Deliberately disagreeing with ROUTE, which resolves to openai: the local
+  // Deliberately disagreeing with the route, which starts on openai: the local
   // server is up with a model loaded and dictation is not using it. That is the
   // state the marked button must *not* claim, so the fixtures show it rather
-  // than the easy case.
+  // than the easy case. `local_server_start` and `local_server_stop` move
+  // this and `port`.
   runningModel: "whisper-small-q5",
   installDir: "C:\\ProgramData\\KnegisWhisper\\whisper-server",
   installDirFellBack: true,
@@ -834,6 +852,9 @@ const SHERPA: SherpaStatus = {
       usedFor: "meetings",
     },
   ],
+  // Selected, while the route is not local: a selection only matters once the
+  // route is. `sherpa_use_model` moves it, and `local_server_start` clears it,
+  // as Rust does.
   selected: "parakeet-unified-en-0.6b",
   selectedStream: "nemotron-speech-streaming-en-0.6b",
   modelsDir: "C:\\ProgramData\\KnegisWhisper\\models\\sherpa",
@@ -1671,13 +1692,39 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
   },
   dictation_device: () => dictationDevice,
   insertion_supported: () => true,
-  dictation_route: () => ROUTE,
-  dictation_use_local: () => null,
-  dictation_set_cloud_provider: () => null,
-  // Swedish alone, so the language chip -- shown on the local route only --
-  // reads as a choice rather than as "Detect language".
-  dictation_local_language: () => ["sv"],
-  dictation_set_local_language: () => null,
+  dictation_route: () => resolvedRoute(),
+  dictation_use_local: (a) => {
+    dictationRoute.useLocal = arg<boolean>(a, "useLocal") ?? false;
+    return null;
+  },
+  // Refused where Rust refuses -- a pair the registry does not list, and Corti
+  // without its environment and tenant -- so a screen's error path can be
+  // seen; otherwise stored, and the route is off local, as in Rust.
+  dictation_set_cloud_provider: (a) => {
+    const provider = arg<string>(a, "provider") ?? "";
+    const model = arg<string>(a, "model") ?? "";
+    if (!PROVIDERS.some((p) => p.id === provider && p.models.includes(model))) {
+      throw new Error(`"${provider}" / "${model}" is not a transcription model the registry lists`);
+    }
+    if (provider === "corti" && !(arg<string | null>(a, "cortiEnvironment") && arg<string | null>(a, "cortiTenant"))) {
+      throw new Error("Corti needs both an environment and a tenant.");
+    }
+    dictationRoute.useLocal = false;
+    dictationRoute.provider = provider;
+    dictationRoute.model = model;
+    return null;
+  },
+  dictation_local_language: () => [...localLanguages],
+  // Checked as `validated_local_languages` checks, and announced as Rust
+  // announces it, so the Dictation chip and the floating microphone follow.
+  dictation_set_local_language: (a) => {
+    const languages = arg<string[]>(a, "languages") ?? [];
+    if (languages.length > 2) throw new Error("Choose at most two languages");
+    if (new Set(languages).size !== languages.length) throw new Error("Choose distinct supported dictation languages");
+    localLanguages = [...languages];
+    void emit("dictation-languages", localLanguages);
+    return null;
+  },
 
   /* overlay */
   overlay_preferences: () => overlayPreferences,
@@ -1696,13 +1743,43 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
   overlay_message: () => null,
 
   /* local transcription */
-  sherpa_status: () => SHERPA,
+  // Copies, as for `providers`: the writes below move these, and a screen must
+  // not see its last read change underneath it.
+  sherpa_status: () => ({ ...SHERPA }),
   sherpa_install_model: () => null,
-  sherpa_use_model: () => null,
-  local_model_status: () => LOCAL_MODELS,
+  sherpa_use_model: (a) => {
+    const model = SHERPA.models.find((m) => m.id === arg<string>(a, "modelId"));
+    if (!model?.installed || model.usedFor !== "dictation") {
+      throw new Error(`${model?.name ?? "That model"} is not an installed dictation model.`);
+    }
+    SHERPA.selected = model.id;
+    return null;
+  },
+  local_model_status: () => ({ ...LOCAL_MODELS }),
   local_model_install: () => "whisper-large-v3-turbo-q5",
-  local_server_start: () => 8178,
-  local_server_stop: () => null,
+  // A second and a half before it answers, as a real server takes seconds to
+  // load a model, so the route chip's "Starting …" and the held Start button
+  // can be seen. The old server goes first, as `start_model` stops one
+  // running another model, and a Parakeet selection is released.
+  local_server_start: async (a) => {
+    const model = LOCAL_MODELS.models.find((m) => m.id === arg<string>(a, "modelId"));
+    if (!model?.installed) throw new Error("That model is not installed.");
+    LOCAL_MODELS.port = null;
+    LOCAL_MODELS.runningModel = null;
+    LOCAL_MODELS.runtimeMessage = `Checking or starting local model ${model.id}...`;
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    LOCAL_MODELS.port = 8178;
+    LOCAL_MODELS.runningModel = model.id;
+    LOCAL_MODELS.runtimeMessage = `Local model ${model.id} is ready on port 8178.`;
+    SHERPA.selected = null;
+    return 8178;
+  },
+  local_server_stop: () => {
+    LOCAL_MODELS.port = null;
+    LOCAL_MODELS.runningModel = null;
+    LOCAL_MODELS.runtimeMessage = "Local model server is stopped.";
+    return null;
+  },
   local_server_refresh: () => ({
     files: 37,
     restarted: "whisper-large-v3-turbo-q5",
