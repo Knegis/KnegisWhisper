@@ -6,6 +6,7 @@ import {
   interruptedTitle,
   liveElapsed,
   meetingLanguageMenu,
+  reviewIsFor,
   recentMeta,
   recordedSources,
   recordingStartedAt,
@@ -163,6 +164,19 @@ test("meetingLanguageMenu greys Detect language, with the reason, for a provider
   assert.equal(detect?.disabled, true);
   assert.equal(detect?.reason, "OpenAI Realtime can't detect the language. Choose one.");
   assert.equal(meetingLanguageMenu("en", DETECTS)[0]?.disabled, false);
+});
+
+test("reviewIsFor is true only for the inputs the verdict was asked about", () => {
+  const asked = { provider: "meeting:deepgram", language: "sv", keytermsText: "a\nb" };
+  assert.equal(reviewIsFor(asked, "meeting:deepgram", "sv", "a\nb"), true);
+  assert.equal(reviewIsFor(asked, "meeting:openai-realtime", "sv", "a\nb"), false);
+  assert.equal(reviewIsFor(asked, "meeting:deepgram", "", "a\nb"), false);
+  assert.equal(reviewIsFor(asked, "meeting:deepgram", "sv", "a"), false);
+});
+
+test("reviewIsFor: no verdict yet is stale, and no provider needs none", () => {
+  assert.equal(reviewIsFor(null, "meeting:deepgram", "sv", ""), false);
+  assert.equal(reviewIsFor(null, null, "sv", ""), true);
 });
 
 test("meetingLanguageMenu with no provider greys nothing", () => {

@@ -36,7 +36,8 @@
  * privacy line follow what was saved rather than what was clicked. Start waits
  * while a write is in flight (`writing`): that is the save this page now has to
  * race, and a Start pressed before it landed would use the value the page was
- * still showing. The hero's "Choose a provider" and the language fix open
+ * still showing -- and, once it has, until the configuration review has
+ * answered for the new values (`startHeld`). The hero's "Choose a provider" and the language fix open
  * those same menus rather than navigating; its other fixes still navigate.
  * The live view's chips stay static: a running meeting has its provider and
  * language already.
@@ -121,7 +122,7 @@ import {
 } from "../lib/meetingView";
 import type { ViewId } from "../lib/navigation";
 import { meetingReadiness } from "../lib/readiness";
-import { useMeetingReview } from "../lib/useMeetingReview";
+import { useMeetingReviewFor } from "../lib/useMeetingReview";
 import { message, useRefresh } from "../lib/useRefresh";
 
 /**
@@ -385,7 +386,7 @@ export function Meetings({
   );
   // The saved language, not a draft: the review has to describe the language
   // `start_live` will read back from the database.
-  const review = useMeetingReview(
+  const { review, current: reviewCurrent } = useMeetingReviewFor(
     selected,
     data?.language ?? "",
     (data?.keyterms ?? []).join("\n"),
@@ -442,6 +443,12 @@ export function Meetings({
   // Where readiness holds Start back, the hero's fix is the one thing to do
   // next and takes the page's single filled button.
   const startBlocked = readiness.state === "needs-setup";
+  // What holds Start and "Record this call" off, the same for both: setup is
+  // missing, no provider, a provider or language write in flight, or the
+  // review still describing the previous configuration -- its answer arrives
+  // after the re-read, and until it does `readiness` cannot be trusted to
+  // know that the new provider needs a language.
+  const startHeld = startBlocked || selected === null || writing || !reviewCurrent;
   // While a meeting is running, the provider it is running with -- which the
   // notification's Record button may have picked rather than this page.
   const liveProvider =
@@ -488,7 +495,7 @@ export function Meetings({
   };
 
   const start = (withSystem: boolean) => {
-    if (selected === null || writing) return;
+    if (startHeld) return;
     void guard(async () => {
       setOutcome(null);
       // The outcome event clears the last meeting's lines; this makes sure a
@@ -816,7 +823,7 @@ export function Meetings({
               <button
                 type="button"
                 className="secondary"
-                disabled={startBlocked || selected === null || writing}
+                disabled={startHeld}
                 onClick={() => start(wantSystem && systemAudioAvailable)}
               >
                 Record this call
@@ -944,7 +951,7 @@ export function Meetings({
               <button
                 type="button"
                 className={startBlocked ? "control-start" : "primary control-start"}
-                disabled={startBlocked || selected === null || current === "finishing" || writing}
+                disabled={startHeld || current === "finishing"}
                 onClick={() => start(wantSystem)}
               >
                 <span className="start-dot" aria-hidden="true" />

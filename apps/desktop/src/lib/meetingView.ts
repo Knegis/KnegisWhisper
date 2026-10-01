@@ -162,6 +162,33 @@ export function interruptedTitle(storageKey: string, now: Date): string {
   return started === null ? "Interrupted recording" : `Recording from ${shortDate(started, now)}, ${timeOfDay(started)}`;
 }
 
+/** What a configuration review was asked about. */
+export interface ReviewKey {
+  provider: string | null;
+  language: string;
+  keytermsText: string;
+}
+
+/**
+ * Whether a review verdict answers the configuration shown now. The verdict
+ * arrives after the inputs change, so for a moment it describes the previous
+ * ones; Start must not trust it then. No provider needs no verdict.
+ */
+export function reviewIsFor(
+  asked: ReviewKey | null,
+  provider: string | null,
+  language: string,
+  keytermsText: string,
+): boolean {
+  if (provider === null) return true;
+  return (
+    asked !== null &&
+    asked.provider === provider &&
+    asked.language === language &&
+    asked.keytermsText === keytermsText
+  );
+}
+
 /**
  * The Meetings page's language menu: "Detect language", then the eight
  * languages the other pickers offer.
