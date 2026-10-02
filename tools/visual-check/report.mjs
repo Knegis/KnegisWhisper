@@ -8,6 +8,14 @@ export function addCheck(report, check) {
   return report;
 }
 
+/**
+ * The ids of the checks measured false. A `null` match is left for a person to
+ * judge and fails nothing; a `false` one makes the script exit 1 (KNEG-389).
+ */
+export function failedChecks(report) {
+  return report.checks.filter((check) => check.matches === false).map((check) => check.id);
+}
+
 export function addEvent(report, event) {
   report.events.push(event);
   return report;

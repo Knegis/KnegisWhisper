@@ -5,6 +5,7 @@ import {
   addCheck,
   addEvent,
   createReport,
+  failedChecks,
   renderMarkdown,
 } from "./report.mjs";
 
@@ -29,4 +30,14 @@ test("report keeps structured records and makes a readable summary", () => {
   assert.match(markdown, /Measured after scrolling\./);
   assert.match(markdown, /Screenshots: rail\.png/);
   assert.match(markdown, /## Observations/);
+});
+
+test("only a check measured false fails the run (KNEG-389)", () => {
+  const report = createReport();
+  addCheck(report, { id: "1", claim: "a", measured: {}, expectation: "", matches: true });
+  addCheck(report, { id: "2", claim: "b", measured: {}, expectation: "", matches: null });
+  assert.deepEqual(failedChecks(report), []);
+  addCheck(report, { id: "3", claim: "c", measured: {}, expectation: "", matches: false });
+  addCheck(report, { id: "4", claim: "d", measured: {}, expectation: "", matches: false });
+  assert.deepEqual(failedChecks(report), ["3", "4"]);
 });

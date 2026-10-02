@@ -66,7 +66,10 @@ test("KNEG-226: worktree copies are excluded while ordinary manifests remain aud
   const manifests = [
     "Cargo.toml",
     "apps/desktop/Cargo.toml",
+    "crates/worktrees/Cargo.toml",
     "vendor/example/Cargo.toml",
+    ".claude/worktrees/chip-menus/Cargo.toml",
+    ".claude/worktrees/chip-menus/apps/desktop/Cargo.toml",
     ".worktrees/stale/apps/desktop/Cargo.toml",
     ".worktrees/stale/crates/obsolete/Cargo.toml",
   ];
@@ -76,7 +79,9 @@ test("KNEG-226: worktree copies are excluded while ordinary manifests remain aud
   }
   // The selected root may itself be a linked worktree.
   writeFileSync(join(root, ".git"), "gitdir: /unused/worktree/metadata\n");
-  assert.deepEqual(cargoManifests(root), manifests.slice(0, 3));
+  // KNEG-379: Claude Code's `.claude/worktrees` is skipped by path, so a
+  // `worktrees` directory elsewhere is still read.
+  assert.deepEqual(cargoManifests(root), manifests.slice(0, 4));
 });
 
 test("the real tree is clean, and not vacuously so", () => {

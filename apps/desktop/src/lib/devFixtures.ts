@@ -84,6 +84,7 @@ import type {
   SessionState,
   Sources,
   SummarySettings,
+  SummaryState,
   TranscriptEvent,
   TranscriptRow,
   Transcription,
@@ -93,6 +94,7 @@ import type {
 // `persistent_overlay::Snapshot` has no `ts_rs` derive. A type-only import, so
 // this stays below the wrappers as the module doc above requires.
 import type { OverlayPreferences } from "./ipc";
+import { summaryConfigured } from "./summaryConfigured";
 
 /* ------------------------------------------------------------- capabilities */
 
@@ -681,6 +683,28 @@ let summarySettings: SummarySettings = {
   language: "match",
   contextBudget: 8192,
 };
+
+/*
+ * Notes' summary pane, one record per note (KNEG-348). Rust's `state`
+ * (`crates/notes-core/src/summary.rs`) reads the text from the note's
+ * `enhanced_content` and the rest from two tables; a note with text and no
+ * record yet is a legacy, edited summary there, and is here too. Generating
+ * finishes at once with placeholder text instead of queueing a job: the pane's
+ * queued and processing lines are not what dev mode is for, and a job loop
+ * would be a second implementation to keep in step.
+ */
+const summaries = new Map<number, SummaryState>();
+function summaryOf(id: number): SummaryState {
+  const known = summaries.get(id);
+  if (known) return known;
+  const note = notes.find((n) => n.id === id);
+  if (!note) throw new Error("This note no longer exists.");
+  const legacy = note.enhancedContent !== null;
+  return {
+    noteId: id, content: note.enhancedContent, revision: 0, edited: legacy, outdated: false, legacy,
+    status: null, completed: 0, total: 0, error: null, language: null, generatedAt: null, references: [],
+  };
+}
 
 let meetingKeyterms = ["Nordbank", "KnegisWhisper", "WASAPI", "Realtek"];
 
@@ -1333,7 +1357,13 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
   hotkey_capture_end: () => undefined,
   hotkey_set: (a) => {
     const action = arg<HotkeyAction>(a, "action") ?? "dictation";
-    const accelerators = arg<string[]>(a, "accelerators") ?? [];
+    // One comma-separated string, as `setHotkey` sends it and Rust's
+    // `hotkey::parse_list` splits it -- without that function's rescue of a
+    // comma key, which no fixture binding uses (KNEG-348).
+    const accelerators = (arg<string>(a, "accelerators") ?? "")
+      .split(",")
+      .map((accelerator) => accelerator.trim())
+      .filter((accelerator) => accelerator !== "");
     const change: HotkeyChange = {
       binding: {
         action,
@@ -1942,6 +1972,39 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
     return null;
   },
   summary_settings_get: () => summarySettings,
+  note_summary_get: (a) => summaryOf(arg<number>(a, "id") ?? 0),
+  note_summary_generate: (a) => {
+    const id = arg<number>(a, "id") ?? 0;
+    const current = summaryOf(id);
+    // The two refusals `generate` and `route()` make before queueing, in their words.
+    if (!summaryConfigured(summarySettings)) throw new Error("Choose a summary provider and model.");
+    const note = notes.find((n) => n.id === id);
+    if (!note?.transcript?.trim() || note.transcript.trim() === "[]") throw new Error("This note has no transcript to summarize.");
+    const next: SummaryState = {
+      ...current,
+      content: `## Summary
+
+A fixture summary of "${note.title}", written without a model.
+
+## Action items
+
+- None.`,
+      revision: current.revision + 1, edited: false, outdated: false, legacy: false,
+      status: "succeeded", error: null, language: "en", generatedAt: nowIso(),
+    };
+    summaries.set(id, next);
+    return next;
+  },
+  note_summary_cancel: () => null,
+  note_summary_update: (a) => {
+    const id = arg<number>(a, "id") ?? 0;
+    const current = summaryOf(id);
+    if (arg<number>(a, "revision") !== current.revision) throw new Error("Summary changed. Reload before saving.");
+    const next: SummaryState = { ...current, content: arg<string>(a, "content") ?? "", revision: current.revision + 1, edited: true };
+    summaries.set(id, next);
+    return next;
+  },
+  note_summary_export: () => null,
   summary_settings_set: (a) => {
     summarySettings = arg<SummarySettings>(a, "settings") ?? summarySettings;
     return null;

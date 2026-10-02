@@ -56,9 +56,10 @@ rail geometry; the `FIXTURES` title prefix remains. Pass
 `--keep-fixture-banner` to measure the page exactly as Vite marked it.
 
 Each run writes PNGs, `report.json`, and `report.md` below the selected output
-directory. False checks do not make a completed measurement run fail: they are
-evidence for a person to judge. A failure to launch Edge, reach Vite, or
-evaluate the page exits nonzero.
+directory. A completed run with any check measured false exits 1 and names the
+false checks on stderr (KNEG-389); the report is written either way, and it is
+still the evidence a person judges. A failure to launch Edge, reach Vite, or
+evaluate the page also exits nonzero.
 
 ## Chip menus
 
@@ -106,7 +107,7 @@ each reload. It numbers ten checks:
    emulated), with screenshots.
 
 Like the shell rail, it reports **measured in headless Edge against dev
-fixtures, not in the Tauri window**, and false checks do not fail the run.
+fixtures, not in the Tauri window**, and a false check makes it exit 1.
 Not covered: Meetings' language-required fix (the fixtures cannot make a
 provider require a language on a blank value without a conditional stub) and
 anything the Tauri window itself does.

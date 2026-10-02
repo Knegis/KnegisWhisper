@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
 import { parseShellArgs, shellUsage } from "./args.mjs";
 import { launchEdge, killBrowser } from "./browser.mjs";
 import { connectCdp } from "./cdp.mjs";
-import { createReport, addCheck, renderMarkdown } from "./report.mjs";
+import { createReport, addCheck, failedChecks, renderMarkdown } from "./report.mjs";
 import * as snippets from "./snippets.mjs";
 
 const delay = (ms) => new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
@@ -546,7 +546,14 @@ if (isMain) {
   try {
     const options = parseShellArgs(process.argv.slice(2));
     if (options.help) process.stdout.write(`${shellUsage()}\n`);
-    else await runShellRail(options);
+    else {
+      const failed = failedChecks(await runShellRail(options));
+      // The run completed; a check measured false still fails it, so a wrapper or CI step sees it.
+      if (failed.length) {
+        console.error(`shell-rail: ${failed.length} check(s) false: ${failed.join(", ")}`);
+        process.exitCode = 1;
+      }
+    }
   } catch (error) {
     console.error(`shell-rail failed: ${error.message}`);
     process.exitCode = 1;
