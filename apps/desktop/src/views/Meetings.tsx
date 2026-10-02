@@ -937,6 +937,13 @@ export function Meetings({
                 {`Other participants can't be recorded on this computer: ${status.systemAudio.reason}`}
               </p>
             )}
+            {/* Believed, not tested, said in view rather than only in the fold
+                below: the one place a colleague would learn it (KNEG-351). */}
+            {status.systemAudio.state === "available" && status.systemAudio.unverified ? (
+              <p className="control-note">
+                Recording the other participants is available on this operating system but has never been tested here.
+              </p>
+            ) : null}
             {status.systemAudio.state === "unsupported" ? null : (
               <LearnMore summary="How the other participants are recorded">
                 <p>

@@ -832,7 +832,11 @@ pub struct RouteReport {
     /// the string `"local model"`: that phrase exists to be read by a person
     /// and rewording it must not silently change what a control does.
     pub is_local: bool,
-    /// Whether audio leaves this machine on this route.
+    /// Whether audio leaves the user's own control on this route. False for
+    /// the local model, and also for an `HttpBatch` endpoint on a private host
+    /// (`is_private_host`): that audio does leave this machine, for a server
+    /// on the user's network, so a screen must not read false as "stays on
+    /// this computer" without also checking `is_local` (KNEG-352).
     pub leaves_device: bool,
     /// Present when the route cannot be resolved at all.
     pub problem: Option<String>,

@@ -377,8 +377,10 @@ h2,
 /*
  * The marked state: the fill inverts and the text inverts with it, nothing
  * drawn around it. In the rail `--band` marks one thing, the section you are
- * in; the page beside it spends it on at most one more (`button.marked` or
- * `button.primary`, never both).
+ * in. The page beside it spends it on claims only: what is in effect
+ * (`button.marked`, once per setting, so a settings screen can show several)
+ * or the one thing to do next (`button.primary`, at most one, and never beside
+ * `button.marked`) -- KNEG-356.
  */
 .rail-item[aria-current="page"],
 .rail-item[aria-current="page"]:hover:not(:disabled) { background: var(--band); color: var(--band-ink); }
@@ -2075,10 +2077,11 @@ option:checked:hover {
  * screen of settings is mostly things you are reading, and a grey box drawn
  * around every ordinary button competed with the values they act on.
  *
- * Beside the rail's mark for the screen you are on, `--band` is spent on at
- * most one claim per page -- what is true now, or, failing that, the one thing
- * to do next -- made by `button.marked` or `button.primary` below and never by
- * a hover state. An ordinary button's own hover is the neutral `--control`
+ * Beside the rail's mark for the screen you are on, `--band` is spent only on
+ * claims, and never by a hover state: what is true now, by `button.marked`,
+ * once for each setting it marks -- Settings > Transcription can show two or
+ * three at once -- or, failing that, the one thing to do next, by at most one
+ * `button.primary` below (KNEG-356). An ordinary button's own hover is the neutral `--control`
  * wash instead, so "your pointer is here" never gets read as either of those.
  */
 button {
