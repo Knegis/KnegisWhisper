@@ -16,7 +16,7 @@ node tools/visual-check/shell-rail.mjs
 It needs Node 22, Microsoft Edge, and the Vite dev server at the loopback URL
 used by the application. `--edge`, `--url`, `--port`, `--out`, and
 `--keep-fixture-banner` are available; `--help` prints the full usage. The
-tool measures nine shell claims (KNEG-363):
+tool measures eleven shell claims (KNEG-363, KNEG-382, KNEG-390):
 
 1. `nav.rail` is 68px wide and exactly one `.rail-item[aria-current=page]`
    exists.
@@ -41,6 +41,8 @@ tool measures nine shell claims (KNEG-363):
     only while it is on screen. While hidden, narrowing to 1000x720 and
     widening again moves nothing, and fixture note 104 opens hidden too;
     showing the column with Transcript open selects Notes.
+11. From that note, Dictation in the rail and then Notes reopens it, marked in the
+    library; after a reload Notes opens its first note again.
 
 "Hidden" is measured as the computed display and width, not the `hidden`
 attribute alone. The 720x520 check reloads at that size, because the panel's

@@ -9,7 +9,9 @@ validation remains open.
 ## Using Notes
 
 The library — folders, notes and search — is the list panel on the left, beside the
-open note. The title is a separate autosaved text field above **Notes / Transcript /
+open note. Coming back to Notes from another page reopens the note that was open, until the
+app closes; the first visit, or one after that note was deleted, opens the most recently
+edited note. The title is a separate autosaved text field above **Notes / Transcript /
 Replay**.
 Notes opens by default, with personal Markdown notes first and an independently
 editable AI summary below. An empty personal note offers **Start from transcript**;
