@@ -125,6 +125,11 @@ impl TranscriptBudget {
     /// why gaps are counted as runs rather than as a single flag flipped once.
     /// (The event ceiling *is* final once reached, since every event costs
     /// one.)
+    ///
+    /// `fetch_update` is deprecated from Rust 1.99 in favour of `try_update`,
+    /// which is unstable on 1.90, the workspace's `rust-version`. The allow
+    /// goes once that floor reaches the release that stabilized it (KNEG-393).
+    #[allow(deprecated)]
     fn reserve(&self, source: AudioSource, bytes: usize) -> Reserved {
         if self
             .bytes
