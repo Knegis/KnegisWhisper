@@ -48,6 +48,7 @@ import {
   type Sources,
 } from "./lib/ipc";
 import { meetingIsLive, offerReason } from "./lib/labels";
+import { liveElapsed } from "./lib/meetingView";
 import { MeetingPanel } from "./components/MeetingPanel";
 import { emptyLiveTranscript, foldTranscriptEvent, liveRows, type LiveTranscript } from "./lib/liveTranscript";
 
@@ -62,7 +63,10 @@ export function MeetingNotification() {
   const [state, setState] = useState<MeetingState | null>(null);
   const [offer, setOffer] = useState<Offer | null>(null);
   const [sources, setSources] = useState<Sources | null>(null);
-  const [elapsed, setElapsed] = useState(0);
+  // When the running meeting started, from Rust's `elapsedSeconds`; `null` with none running.
+  const [startedAt, setStartedAt] = useState<Date | null>(null);
+  const [clockNow, setClockNow] = useState(() => new Date());
+  const [stalledAt, setStalledAt] = useState<Date | null>(null);
   const [session, setSession] = useState(0);
   const [notes, setNotes] = useState<string | null>(null);
   const [transcript, setTranscript] = useState<LiveTranscript>(emptyLiveTranscript);
@@ -129,7 +133,7 @@ export function MeetingNotification() {
           }
           setOffer(status.offer);
           setSources(status.sources);
-          setElapsed(status.elapsedSeconds);
+          setStartedAt(meetingIsLive(status.state) ? new Date(Date.now() - status.elapsedSeconds * 1000) : null);
           setStateReadProblem(null);
           const excluded = status.notificationExcluded?.state === "active";
           captureExcluded = excluded;
@@ -145,7 +149,7 @@ export function MeetingNotification() {
         enterState(next);
         if (!meetingIsLive(next)) {
           setSources(null);
-          setElapsed(0);
+          setStartedAt(null);
         }
         refresh();
       }).then(keepListener),
@@ -183,15 +187,25 @@ export function MeetingNotification() {
   const recording = state !== null && meetingIsLive(state);
   const rows = useMemo(() => liveRows(transcript), [transcript]);
 
-  // Counted here rather than asked for every second: the runtime owns the
+  // Kept here rather than asked for every second: the runtime owns the
   // session and the clock, and one command a second to render a timer would be
-  // an IPC round trip for something arithmetic can do. Re-synced from
-  // `getMeetingStatus` on every runtime state transition.
+  // an IPC round trip for something arithmetic can do. The start is re-read
+  // from `getMeetingStatus` on every runtime state transition. Each tick reads
+  // the time since the start (`liveElapsed`) rather than adding a second, as
+  // the Meetings page does, so a throttled window whose ticks arrive seldom
+  // still shows the right time when they do (KNEG-374). Held while stalled,
+  // from the moment this window saw the stall: nothing is being recorded then.
+  const ticking = recording && !stalled;
   useEffect(() => {
-    if (!recording) return undefined;
-    const timer = window.setInterval(() => setElapsed((s) => s + 1), 1000);
+    if (!ticking) return undefined;
+    setClockNow(new Date());
+    const timer = window.setInterval(() => setClockNow(new Date()), 1000);
     return () => window.clearInterval(timer);
-  }, [recording]);
+  }, [ticking]);
+  useEffect(() => {
+    setStalledAt(stalled ? new Date() : null);
+  }, [stalled]);
+  const elapsed = startedAt === null ? 0 : liveElapsed(startedAt, clockNow, stalledAt);
 
   if (recording) {
     return <MeetingPanel session={session} elapsed={elapsed}
