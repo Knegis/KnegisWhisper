@@ -206,9 +206,9 @@ export function MeetingNotification() {
         <div className="notify-header" title="Drag to move">
         <span className="indicator" aria-hidden="true" />
         <span className="notify-body">
-          <strong>Transcribing</strong>
+          <strong>Finishing meeting</strong>
           <span className="notify-detail">
-            the recording is being transcribed; this can take a while
+            finalizing the transcript and saving your notes
           </span>
         </span>
         </div>

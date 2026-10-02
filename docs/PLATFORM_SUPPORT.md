@@ -820,9 +820,12 @@ whole difference from the windowed provider beside it, and the reason this one
 is allowed to use the word "streaming".
 
 **What that run did not cover:** *Stop and transcribe*, and the note it saves.
-`meeting.rs`'s `keep` runs a whole-file pass rather than keeping the live
-partials, so words appearing on screen says nothing about what ends up in the
-note.
+At that run, `meeting.rs`'s `keep` ran a whole-file pass rather than keeping the
+live partials. As of 2026-09-30, successful local streaming meetings save their settled
+transcript after flushing the final audio, without retranscribing the recording.
+Windowed local and cloud meetings, and failed or incomplete local streams, still use whole-file
+recovery. Optional local speaker analysis can still add processing time. The new
+stop path has automated coverage; timing on a real long meeting remains to be checked.
 
 **A real bug this measurement caught.** `config/provider-registry.json`'s
 `sizeMb` for a sherpa model (631 for Parakeet Unified EN 0.6B) is **the

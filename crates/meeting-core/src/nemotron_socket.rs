@@ -210,11 +210,11 @@ impl LocalStreaming {
     /// Separated from [`MeetingTranscriptionProvider::finish`] so the two
     /// sockets can do it one after the other with the same words about what a
     /// timeout means.
-    async fn drain_and_wait(connection: &mut Connection, source: AudioSource) {
+    async fn drain_and_wait(connection: &mut Connection, source: AudioSource) -> bool {
         if let Some(tail) = connection.pending.drain() {
             if let Err(err) = connection.sink.send(Message::Binary(tail)).await {
                 tracing::warn!(error = %err, ?source, "the last audio frame could not be sent");
-                return;
+                return false;
             }
         }
 
@@ -224,13 +224,13 @@ impl LocalStreaming {
             .await
         {
             tracing::warn!(error = %err, ?source, "could not tell the server the audio was over");
-            return;
+            return false;
         }
 
         // Bounded, because the server never closes and there is therefore no
-        // end of stream to wait on. A timeout here is not a fault: every sample
-        // reached the server, and the transcript is whatever it managed to
-        // send.
+        // end of stream to wait on. Without acknowledgement the transcript may
+        // be incomplete, even though every sample reached the server. Report a
+        // gap so Stop can recover from the recording instead of claiming success.
         if tokio::time::timeout(FINISH_TIMEOUT, connection.finished.notified())
             .await
             .is_err()
@@ -240,7 +240,9 @@ impl LocalStreaming {
                 seconds = FINISH_TIMEOUT.as_secs(),
                 "the local model server did not finish in time; keeping what it sent"
             );
+            return false;
         }
+        true
     }
 }
 
@@ -318,6 +320,11 @@ async fn read(
                     Step::Begin(text) => {
                         let event = nemotron::event(text, is_final, elapsed, source);
                         if let Ok(mut held) = events.lock() {
+                            // A new utterance settles the preceding one. The
+                            // server may reserve is_final for the EOF update.
+                            if let Some(previous) = current.and_then(|index| held.get_mut(index)) {
+                                previous.is_final = true;
+                            }
                             current = Some(held.len());
                             held.push(event.clone());
                         }
@@ -463,12 +470,20 @@ impl MeetingTranscriptionProvider for LocalStreaming {
             return Err(fault.into_error(PROVIDER_ID));
         }
 
-        if let Some(connection) = self.mic.as_mut() {
-            Self::drain_and_wait(connection, AudioSource::Mic).await;
-        }
-        if let Some(connection) = self.system.as_mut() {
-            Self::drain_and_wait(connection, AudioSource::System).await;
-        }
+        let (mic_complete, system_complete) = tokio::join!(
+            async {
+                match self.mic.as_mut() {
+                    Some(connection) => Self::drain_and_wait(connection, AudioSource::Mic).await,
+                    None => true,
+                }
+            },
+            async {
+                match self.system.as_mut() {
+                    Some(connection) => Self::drain_and_wait(connection, AudioSource::System).await,
+                    None => true,
+                }
+            },
+        );
 
         for connection in [self.mic.take(), self.system.take()].into_iter().flatten() {
             connection.close().await;
@@ -491,7 +506,9 @@ impl MeetingTranscriptionProvider for LocalStreaming {
             .started
             .map_or(0.0, |started| started.elapsed().as_secs_f64());
 
-        Ok(nemotron::transcript(events, duration))
+        let mut transcript = nemotron::transcript(events, duration);
+        transcript.gaps = u32::from(!mic_complete) + u32::from(!system_complete);
+        Ok(transcript)
     }
 
     async fn cancel(&mut self) -> Result<(), MeetingError> {
@@ -530,6 +547,7 @@ static FALLBACK: MeetingProviderCapabilities = MeetingProviderCapabilities {
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     fn provider() -> LocalStreaming {
         // Port 9 is the discard port. Nothing here connects; the tests that
@@ -546,6 +564,78 @@ mod tests {
             key_ref: None,
             sample_rate: nemotron::SAMPLE_RATE,
         }
+    }
+
+    #[tokio::test]
+    async fn finish_flushes_both_tails_and_keeps_one_final_event_per_utterance() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let mut peers = Vec::new();
+            for _ in 0..2 {
+                let (socket, _) = listener.accept().await.unwrap();
+                peers.push(tokio::spawn(async move {
+                    let mut ws = tokio_tungstenite::accept_async(socket).await.unwrap();
+                    let mut tail = false;
+                    while let Some(message) = ws.next().await {
+                        match message.unwrap() {
+                            Message::Binary(bytes) => {
+                                assert_eq!(bytes.len(), 64, "short tail must be flushed");
+                                tail = true;
+                            }
+                            Message::Text(text) if text == CLIENT_DONE => {
+                                assert!(tail);
+                                for update in [
+                                    r#"{"segment":0,"text":"old preview"}"#,
+                                    r#"{"segment":0,"text":"first sentence"}"#,
+                                    r#"{"segment":1,"text":"last preview"}"#,
+                                    r#"{"segment":1,"text":"last sentence","is_final":true}"#,
+                                    "Done!",
+                                ] {
+                                    ws.send(Message::Text(update.into())).await.unwrap();
+                                }
+                            }
+                            Message::Close(_) => break,
+                            _ => {}
+                        }
+                    }
+                }));
+            }
+            for peer in peers {
+                peer.await.unwrap();
+            }
+        });
+        let mut client = LocalStreaming::new(NetworkPolicy::new().unwrap(), port);
+        client.connect(config()).await.unwrap();
+        for source in [AudioSource::Mic, AudioSource::System] {
+            client
+                .send_audio(AudioChunk {
+                    pcm: vec![0; 32],
+                    source,
+                })
+                .await
+                .unwrap();
+        }
+        let transcript = tokio::time::timeout(Duration::from_secs(2), client.finish())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(transcript.gaps, 0);
+        assert_eq!(transcript.events.len(), 4);
+        assert!(transcript.events.iter().all(|event| event.is_final));
+        for source in [AudioSource::Mic, AudioSource::System] {
+            let words: Vec<_> = transcript
+                .events
+                .iter()
+                .filter(|event| event.source == source)
+                .map(|event| event.text.as_str())
+                .collect();
+            assert_eq!(words, ["first sentence", "last sentence"]);
+        }
+        tokio::time::timeout(Duration::from_secs(2), server)
+            .await
+            .unwrap()
+            .unwrap();
     }
 
     #[tokio::test]

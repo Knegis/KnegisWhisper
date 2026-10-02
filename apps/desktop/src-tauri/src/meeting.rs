@@ -46,17 +46,18 @@
 //! its channel, which is how "stop" travels from one to the other without a
 //! second signal to get out of step.
 //!
-//! **A finishing step** transcribes the whole recording once and writes the note.
+//! **A finishing step** flushes the provider and writes the note. Successful
+//! local streaming sessions save their settled transcript without another ASR pass.
 //!
-//! # Why the note is not made of the live events
+//! # When a whole-recording pass is needed
 //!
 //! The live events are partials, and what that costs depends on the provider:
 //! `local`'s five-second windows overlap by two and repeat words, and
 //! [`kw_meeting_core::local`] explains why deduplicating them properly is not
 //! possible with what `/inference` returns; `local-streaming` revises one event
-//! per utterance in place and does not repeat at all. Either way they are the
-//! running transcription rather than a considered pass, so the note gets one
-//! pass over the finished file, which is exactly the path a dictation takes.
+//! per utterance in place and does not repeat at all. Windowed previews need a
+//! whole-recording pass. Local streaming sessions only need that recovery when the
+//! live provider failed, left gaps, or produced no text despite receiving audio.
 //!
 //! **Which engine that pass uses is [`crate::dictation::local_engine`]'s
 //! answer, not this module's.** It used to build a `WhisperServer` directly and
@@ -107,7 +108,9 @@ use config::{
     draft_config, resolve_client, resolve_corti_scope, resolve_key_ref, resolve_provider_config,
 };
 
-use notes::{labelled, pcm_bytes, segment, whisper_for_note, WholePass};
+#[cfg(test)]
+use notes::segment;
+use notes::{labelled, pcm_bytes, select_transcript, whisper_for_note, WholePass};
 pub use recorder::Delivered;
 use recorder::{spawn_recorder, Drained, Finished, RecorderCommand, RecorderEnd};
 use watcher::{Transition, WatchState};
@@ -233,7 +236,7 @@ pub enum MeetingState {
     /// [`RecorderEnd`], which is the thread saying so itself rather than the
     /// caller inferring it.
     Stalled,
-    /// The recording has stopped and the whole-file pass is still running.
+    /// The recording has stopped and transcript finalization or saving is running.
     ///
     /// A separate state because it can take minutes on a long meeting, and
     /// "Idle" while the transcript is still being produced would look like a
@@ -1163,7 +1166,7 @@ impl MeetingRuntime {
         Ok(sources)
     }
 
-    /// Stop, transcribe the recording, and keep a note.
+    /// Stop, finalize the transcript, and keep a note.
     ///
     /// **Everything below the `take` runs, whatever goes wrong.** This used to
     /// `?` out of three places -- the recorder thread having stopped, the
@@ -1301,12 +1304,9 @@ impl MeetingRuntime {
                     .await
             }
             Err(reason) => {
-                // Still `keep`, rather than returning here. The whole-file local
-                // pass has not run yet and it is what produces the saved note --
-                // the live transcript is only ever its fallback. A cloud
-                // provider that died at second zero costs the live transcript,
-                // not the meeting. Skipping the pass entirely, which is what the
-                // old `?` did, was a pure loss.
+                // Still `keep`, rather than returning here: a failed live
+                // session needs whole-recording recovery. A cloud provider that
+                // died at second zero must not cost the recording too.
                 tracing::error!(provider = provider_id, %reason, "the live transcription failed");
                 self.keep(
                     provider_id,
@@ -1491,7 +1491,7 @@ impl MeetingRuntime {
         }
     }
 
-    /// Transcribe the recording properly and write the note.
+    /// Save the streaming transcript or recover from the recording, then write the note.
     ///
     /// `live_failure` carries why the streaming transcription stopped, when it
     /// did. It changes two things and nothing else: an empty result becomes
@@ -1518,29 +1518,26 @@ impl MeetingRuntime {
             );
         }
 
-        // One pass over the whole file, which is the same path a dictation takes
-        // and produces a transcript with no overlap to deduplicate.
-        let mut speaker_note: Option<String> = None;
-        let (segments, from_partials) = match self.transcribe_whole(&finished.path).await {
-            Ok(Some(pass)) => {
-                let (segments, note) = self.with_speakers(pass, &finished.path).await;
-                speaker_note = note;
-                (segments, false)
-            }
-            Ok(None) => (Vec::new(), false),
-            Err(err) => {
-                // Not fatal, and not silent. The partials overlap and are worse,
-                // and a meeting nobody can read would be worse still.
-                tracing::warn!(error = %err, "the whole-recording pass failed; keeping the partials");
-                (
-                    transcript
-                        .events
-                        .iter()
-                        .map(|e| segment(&e.text, e.timestamp, Some(e.source)))
-                        .collect(),
-                    true,
-                )
-            }
+        let saved = select_transcript(
+            provider_id,
+            &transcript,
+            live_failure,
+            finished.mic_delivered == Delivered::Audio
+                || finished.system_delivered == Delivered::Audio,
+            async {
+                match self.transcribe_whole(&finished.path).await? {
+                    Some(pass) => Ok(self.with_speakers(pass, &finished.path).await),
+                    None => Ok((Vec::new(), None)),
+                }
+            },
+        )
+        .await;
+        let from_partials = saved.from_partials;
+        let (segments, speaker_note) = if saved.used_streaming {
+            self.with_streaming_speakers(saved.segments, &finished)
+                .await
+        } else {
+            (saved.segments, saved.speaker_note)
         };
 
         if segments.is_empty() && notes.trim().is_empty() {
@@ -1578,9 +1575,13 @@ impl MeetingRuntime {
             // how the reader expects should say so. This one is the good case --
             // the whole-recording pass ran afterwards over the complete audio,
             // so nothing is missing from what follows.
+            let recovery = if from_partials {
+                "The whole-recording recovery also failed; the saved live transcript may be incomplete."
+            } else {
+                "This note is the whole-recording pass, which ran afterwards over the complete audio."
+            };
             recording_details.push_str(&format!(
-                "\n\n(The live transcription stopped early: {reason} This note is the \
-                 whole-recording pass, which ran afterwards over the complete audio.)"
+                "\n\n(The live transcription stopped early: {reason} {recovery})"
             ));
         }
         if let Some(note) = &speaker_note {
@@ -1590,7 +1591,7 @@ impl MeetingRuntime {
             // that a feature worked is noise.
             recording_details.push_str(&format!("\n\n({note})"));
         }
-        if transcript.gaps > 0 {
+        if transcript.gaps > 0 && from_partials {
             // Two causes, and `MeetingTranscript::gaps` is one number that does
             // not distinguish them: the local model falling behind the meeting,
             // or a session past the limit on how much transcript is retained.
@@ -1641,7 +1642,7 @@ impl MeetingRuntime {
                     duration_seconds: finished.duration_seconds,
                     recording_path: path,
                     recording_attached,
-                    gaps: transcript.gaps,
+                    gaps: if from_partials { transcript.gaps } else { 0 },
                     reconnects: transcript.reconnects,
                     transcript_is_partials: from_partials && !segments.is_empty(),
                 }
@@ -1663,6 +1664,51 @@ impl MeetingRuntime {
                 }
             }
         }
+    }
+
+    /// Optional speaker analysis uses the existing streaming text and never
+    /// invokes ASR again. Native provider labels already identify speakers.
+    async fn with_streaming_speakers(
+        &self,
+        mut segments: Vec<kw_notes_core::transcript::Segment>,
+        finished: &Finished,
+    ) -> (Vec<kw_notes_core::transcript::Segment>, Option<String>) {
+        if segments.is_empty()
+            || segments.iter().any(|s| s.speaker.is_some())
+            || !crate::diarization::is_enabled(&self.db).await
+        {
+            return (segments, None);
+        }
+        let pass = WholePass {
+            text: String::new(),
+            timings: segments
+                .iter()
+                .enumerate()
+                .map(|(index, saved)| {
+                    let start = saved.timestamp.unwrap_or_default();
+                    let end = segments
+                        .iter()
+                        .skip(index + 1)
+                        .find(|next| next.source == saved.source)
+                        .and_then(|next| next.timestamp)
+                        .unwrap_or(finished.duration_seconds)
+                        .max(start);
+                    kw_transcription_core::local::TimedSegment {
+                        text: saved.text.clone(),
+                        start,
+                        end,
+                    }
+                })
+                .collect(),
+        };
+        let (labelled, note) = self.with_speakers(pass, &finished.path).await;
+        for (saved, labelled) in segments.iter_mut().zip(labelled) {
+            saved.end_timestamp = labelled.end_timestamp;
+            saved.speaker = labelled.speaker;
+            saved.speaker_name = labelled.speaker_name;
+            saved.speaker_is_placeholder = labelled.speaker_is_placeholder;
+        }
+        (segments, note)
     }
 
     /// Run the diarizer if it was asked for, and label the pass.

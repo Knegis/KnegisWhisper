@@ -489,8 +489,8 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
         </LearnMore>
         <p className="caveat warn">
           Measured on this machine: the pass costs about 8% of the meeting’s
-          length, so an hour-long recording adds roughly five minutes to Stop and
-          transcribe — on top of the transcription pass that already runs there.
+          length, so an hour-long recording adds roughly five minutes when you
+          stop and save, even with a streaming model.
           That is why it is off unless you turn it on.
         </p>
         <p className="caveat warn">

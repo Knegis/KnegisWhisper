@@ -752,7 +752,7 @@ export function Meetings({
               </button>
               <button type="button" className="primary" onClick={stop}>
                 <IconFilled name="stop" size={14} />
-                Stop and transcribe
+                Stop and save
               </button>
             </div>
           </div>
@@ -769,8 +769,8 @@ export function Meetings({
       <TaskHero
         icon="meetings"
         status={{ tone: "busy", label: meetingStateLabel(current) }}
-        heading="Your meeting is being transcribed"
-        sub="This runs over the whole recording and can take a while on a long meeting."
+        heading="Finishing your meeting"
+        sub="Finalizing the transcript and saving your notes. Speaker labels or recovery from an interrupted transcript may take longer."
       />
     ) : readiness.state === "ready" ? (
       <TaskHero
@@ -1007,7 +1007,7 @@ export function Meetings({
 
 /** The sentence over the live lines, while they are still arriving. */
 const LIVE_NOTE =
-  "Lines appear as they are heard, and the last one may still change. The transcript that gets saved comes from one pass over the whole recording when the meeting ends, so it will read better than this.";
+  "Lines appear as they are heard, and the last one may still change. Local streaming models save the finalized transcript when you stop. Other models process the recording afterwards.";
 
 /** The same, once nothing more will arrive. */
 const ENDED_NOTE =

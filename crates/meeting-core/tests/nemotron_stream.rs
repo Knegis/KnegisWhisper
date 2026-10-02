@@ -19,6 +19,10 @@
 //!   cargo test -p kw-meeting-core --test nemotron_stream -- --ignored --nocapture
 //! ```
 //!
+//! For another streaming model, set `KW_SHERPA_TEST_WAV` to a known 16 kHz
+//! PCM16 mono sample and run `both_sources_finish_with_settled_text`. The exact
+//! reference-transcript test above targets the English model's own fixture.
+//!
 //! # The control is the model's own transcript
 //!
 //! `test_wavs/trans.txt` ships with the model and is what its authors got. The
@@ -59,6 +63,14 @@ fn from_env(name: &str) -> PathBuf {
         std::env::var(name)
             .unwrap_or_else(|_| panic!("{name} must point at the real thing for this test")),
     )
+}
+
+// Multilingual Nemotron ships different sample names. Reuse the English
+// model's reference audio when testing the same client with another model.
+fn test_wav(model: &Path) -> PathBuf {
+    std::env::var_os("KW_SHERPA_TEST_WAV")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| model.join("test_wavs").join("0.wav"))
 }
 
 /// Find one file in `dir` whose name contains `part` and ends in `.onnx`.
@@ -182,7 +194,7 @@ async fn the_shipped_client_transcribes_against_the_real_server() {
     // Fed in 4096-byte pieces, which is neither the frame size nor a divisor of
     // it. A chunk that lined up with `SAMPLES_PER_FRAME` would never exercise
     // `Pending`, and `Pending` is where the tail either survives or is lost.
-    let pcm = wav_pcm(&model.join("test_wavs").join("0.wav"));
+    let pcm = wav_pcm(&test_wav(&model));
     for piece in pcm.chunks(4_096) {
         client
             .send_audio(AudioChunk {
@@ -227,6 +239,62 @@ async fn the_shipped_client_transcribes_against_the_real_server() {
 
 #[tokio::test]
 #[ignore = "needs the sherpa server and a streaming model on disk"]
+async fn both_sources_finish_with_settled_text() {
+    let executable = from_env("KW_SHERPA_SERVER");
+    let model = from_env("KW_SHERPA_STREAM_MODEL");
+    let pcm = wav_pcm(&test_wav(&model));
+    let _server = start_server(&executable, &model).await;
+    let mut client = LocalStreaming::new(
+        kw_network_policy::NetworkPolicy::new().expect("a policy"),
+        PORT,
+    );
+    client
+        .connect(MeetingProviderConfig {
+            provider: kw_meeting_core::nemotron::PROVIDER_ID.to_owned(),
+            model: None,
+            language: Some("en".to_owned()),
+            keyterms: Vec::new(),
+            key_ref: None,
+            sample_rate: SAMPLE_RATE,
+        })
+        .await
+        .expect("the session opens");
+    for piece in pcm.chunks(4_096) {
+        for source in [AudioSource::Mic, AudioSource::System] {
+            client
+                .send_audio(AudioChunk {
+                    pcm: piece.to_vec(),
+                    source,
+                })
+                .await
+                .expect("audio is accepted");
+        }
+    }
+    let stopped = std::time::Instant::now();
+    let transcript = tokio::time::timeout(Duration::from_secs(10), client.finish())
+        .await
+        .expect("finalization is bounded")
+        .expect("the session finishes");
+    eprintln!(
+        "both streaming sources finalized in {:.2}s",
+        stopped.elapsed().as_secs_f64()
+    );
+    assert_eq!(transcript.gaps, 0);
+    for source in [AudioSource::Mic, AudioSource::System] {
+        let events: Vec<_> = transcript
+            .events
+            .iter()
+            .filter(|event| event.source == source)
+            .collect();
+        assert!(!events.is_empty(), "{source:?} has a transcript");
+        assert!(events
+            .iter()
+            .all(|event| event.is_final && !event.text.trim().is_empty()));
+    }
+}
+
+#[tokio::test]
+#[ignore = "needs the sherpa server and a streaming model on disk"]
 async fn a_server_that_dies_mid_session_reaches_the_caller_as_an_error() {
     // The failure mode this provider is most exposed to. Its only fault channel
     // is transport-level -- the server sends no error frame, measured -- so if
@@ -253,7 +321,7 @@ async fn a_server_that_dies_mid_session_reaches_the_caller_as_an_error() {
         .await
         .expect("the session opens");
 
-    let pcm = wav_pcm(&model.join("test_wavs").join("0.wav"));
+    let pcm = wav_pcm(&test_wav(&model));
     let half = pcm.len() / 2;
     for piece in pcm.get(..half).unwrap_or_default().chunks(4_096) {
         client
