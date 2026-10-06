@@ -16,8 +16,8 @@ import { Icon } from "./Icon";
  *     up in Settings; until then each is a link) -- and so gets
  *     `aria-pressed`.
  *   - **Static**, with neither: not a control at all but a statement of what
- *     is in effect -- Meetings' "Default microphone", which the page cannot
- *     change, and every chip in its live view, where nothing can be changed
+ *     is in effect -- Meetings' microphone, which is chosen on Dictation and
+ *     shared (KNEG-341), and every chip in its live view, where nothing can be changed
  *     until the meeting ends. That one is a `span.chip.chip-static`: drawn
  *     like the others so the strip reads as one row, but not a button, so it
  *     is not in the tab order and does not offer a press that does nothing.
@@ -50,7 +50,7 @@ import { Icon } from "./Icon";
  *     press does nothing. `disabled` stays for a chip that is simply
  *     unavailable.
  *   - `srText` is visually hidden text after the label, for what `title`
- *     explains -- Meetings' "Default microphone" and why it is the default.
+ *     explains -- Meetings' microphone, which one it is and where it is chosen.
  */
 export function Chip({
   icon,

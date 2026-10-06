@@ -90,9 +90,13 @@ import {
   getMeetingLanguage,
   getMeetingProvider,
   getMeetingProviders,
+  getInputDevice,
+  getInputDevices,
+  getLocalStatus,
   getMeetingStatus,
   getNotes,
   getRecoverableRecordings,
+  getSherpaStatus,
   getSummarySettings,
   setMeetingLanguage,
   setMeetingProvider,
@@ -125,12 +129,13 @@ import {
   interruptedTitle,
   liveElapsed,
   meetingLanguageMenu,
+  meetingMicrophone,
   recentMeta,
   recordedSources,
   summaryPrivacyLine,
 } from "../lib/meetingView";
 import type { ViewId } from "../lib/navigation";
-import { meetingReadiness } from "../lib/readiness";
+import { localProviderProblem, meetingReadiness } from "../lib/readiness";
 import { summaryConfigured } from "../lib/summaryConfigured";
 import { useMeetingReviewFor } from "../lib/useMeetingReview";
 import { message, useRefresh } from "../lib/useRefresh";
@@ -149,16 +154,6 @@ function intro(summariesOn: boolean): string {
     ? "You get a transcript and a summary, saved to Notes."
     : "You get a transcript, saved to Notes.";
 }
-
-/**
- * The microphone chip's `title`, and its visually hidden text. The chip is
- * not focusable, so the `title` is only ever a hover away; the hidden text
- * puts the same sentence where a screen reader reads the chip. (A sighted
- * keyboard user still has only the hover.) Static because the recorder
- * always opens the default input device and nothing on any screen chooses
- * another for meetings (KNEG-364).
- */
-const MICROPHONE_TITLE = "Meetings record the Windows default microphone";
 
 /** How often detection is read again while no meeting is running. */
 const DETECTION_POLL_MS = 5000;
@@ -215,6 +210,23 @@ export function Meetings({
   // the read succeeds.
   const loadRecent = useCallback(() => getNotes({ noteType: "meeting", limit: 20 }), []);
   const recentRead = useRefresh(loadRecent);
+  // What the two local providers need on this computer (KNEG-387), read on
+  // their own for the same reason: a failure leaves both unknown, which holds
+  // nothing back, and Start still says what went wrong.
+  const loadEngines = useCallback(async () => {
+    const [whisper, sherpa] = await Promise.all([getLocalStatus(), getSherpaStatus()]);
+    return { whisper, sherpa };
+  }, []);
+  const engines = useRefresh(loadEngines).data ?? null;
+  // The microphone chosen on Dictation, which meetings record too (KNEG-341).
+  // A failed read leaves the chip saying the default, which is what a meeting
+  // falls back to anyway.
+  const loadMicrophone = useCallback(async () => {
+    const [devices, chosen] = await Promise.all([getInputDevices(), getInputDevice()]);
+    return { devices, chosen };
+  }, []);
+  const microphoneRead = useRefresh(loadMicrophone).data ?? null;
+  const microphone = meetingMicrophone(microphoneRead?.devices ?? null, microphoneRead?.chosen ?? null);
   const recentGuard = recentRead.guard;
   const reloadRecent = useCallback(() => recentGuard(async () => {}), [recentGuard]);
   // Every read that follows a meeting ending or a recording being recovered
@@ -448,6 +460,7 @@ export function Meetings({
         }
       : null,
     languageWarning,
+    localProblem: localProviderProblem(selected, engines?.whisper ?? null, engines?.sherpa ?? null),
     systemAudio: status.systemAudio,
   });
   // Where readiness holds Start back, the hero's fix is the one thing to do
@@ -728,7 +741,7 @@ export function Meetings({
               rather than controls. */}
           <div className="live-bar">
             <div className="live-chips" role="group" aria-label="In effect for this meeting">
-              <Chip icon="microphone" label="Default microphone" title={MICROPHONE_TITLE} srText={MICROPHONE_TITLE} />
+              <Chip icon="microphone" label={microphone.label} title={microphone.title} srText={microphone.title} />
               {liveSources?.systemAudio ? <Chip icon="others" label="Other participants" /> : null}
               <Chip icon="computer" label={transcriber ? transcriber.name : "Not set up"} />
               <Chip icon="language" label={language} />
@@ -850,7 +863,11 @@ export function Meetings({
           <ControlBar
             strip={
               <>
-                <Chip icon="microphone" label="Default microphone" title={MICROPHONE_TITLE} srText={MICROPHONE_TITLE} />
+                {/* Static: the microphone is chosen on Dictation, and both
+                    tasks share it (KNEG-341). The `title` is a hover away,
+                    so the same sentence is also the chip's hidden text for a
+                    screen reader. */}
+                <Chip icon="microphone" label={microphone.label} title={microphone.title} srText={microphone.title} />
                 {/* Unpressed, not just disabled, where system audio cannot be
                     captured: a pressed "Other participants" beside a caution
                     saying they cannot be recorded would be two answers on one

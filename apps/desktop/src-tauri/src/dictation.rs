@@ -746,6 +746,11 @@ impl DictationRuntime {
         self.recorder.set_device(device);
     }
 
+    /// Bring back the saved microphone (KNEG-341). Called once at startup.
+    pub async fn restore_device(&self) {
+        self.set_device(load_device(&self.db).await);
+    }
+
     /// The input device the next recording will use.
     #[must_use]
     pub fn device(&self) -> Option<String> {
@@ -1048,12 +1053,52 @@ pub fn input_devices() -> Result<Vec<kw_audio_core::InputDevice>, String> {
 
 /// Choose the microphone for the next recording.
 #[tauri::command]
-pub fn dictation_set_device(
+pub async fn dictation_set_device(
     runtime: tauri::State<'_, Arc<DictationRuntime>>,
     device: Option<String>,
 ) -> Result<(), String> {
+    // Saved before it is applied, so a choice the screen shows as made is one
+    // the next launch will also have (KNEG-341). Written here rather than in a
+    // helper so `tools/settings-audit` can see this command writes the key.
+    let device = chosen_device(device);
+    let pool = runtime.db.pool();
+    match &device {
+        Some(name) => kw_storage::settings::set(pool, INPUT_DEVICE_KEY, name).await,
+        None => kw_storage::settings::remove(pool, INPUT_DEVICE_KEY).await,
+    }
+    .map_err(|err| format!("the microphone choice could not be saved: {err}"))?;
     runtime.set_device(device);
     Ok(())
+}
+
+/// A chosen microphone's name, or `None` for the system default; a blank name
+/// is the default too.
+fn chosen_device(device: Option<String>) -> Option<String> {
+    device
+        .map(|name| name.trim().to_owned())
+        .filter(|name| !name.is_empty())
+}
+
+/// The microphone dictation and meetings record from, by its device name;
+/// absent for the system default (KNEG-341).
+///
+/// Until this the choice lived only in memory, so a headset chosen once was
+/// silently back to the system default after every restart. One key for both
+/// tasks: a meeting reads it at Start ([`load_device`]). A device that is not
+/// connected when recording starts falls back to the system default
+/// (`kw_audio_core::Capture::start`), and the screens say so beforehand.
+pub const INPUT_DEVICE_KEY: &str = "audio.inputDevice";
+
+/// The saved microphone, or `None` for the system default. An unreadable
+/// value is the default too: recording from the default is better than not
+/// recording.
+pub async fn load_device(db: &kw_storage::Db) -> Option<String> {
+    kw_storage::settings::get::<String>(db.pool(), INPUT_DEVICE_KEY)
+        .await
+        .ok()
+        .flatten()
+        .map(|name| name.trim().to_owned())
+        .filter(|name| !name.is_empty())
 }
 
 /// The microphone the next recording will use, or `None` for the system default.
@@ -1226,6 +1271,43 @@ mod tests {
         assert!(super::validated_local_languages(vec!["invalid".into()]).is_err());
     }
     use super::*;
+
+    /* ------------------------------- the microphone, kept across restarts (KNEG-341) */
+
+    #[tokio::test]
+    async fn a_chosen_microphone_is_read_back_as_the_command_writes_it() {
+        // `dictation_set_device` writes the trimmed name, or removes the key.
+        let db = kw_storage::Db::open_in_memory().await.unwrap();
+        let pool = db.pool();
+        assert_eq!(
+            load_device(&db).await,
+            None,
+            "never chosen is the system default"
+        );
+
+        kw_storage::settings::set(pool, INPUT_DEVICE_KEY, &"Headset (Jabra Evolve2 65)")
+            .await
+            .unwrap();
+        assert_eq!(
+            load_device(&db).await.as_deref(),
+            Some("Headset (Jabra Evolve2 65)")
+        );
+
+        kw_storage::settings::remove(pool, INPUT_DEVICE_KEY)
+            .await
+            .unwrap();
+        assert_eq!(load_device(&db).await, None, "back to the system default");
+    }
+
+    #[test]
+    fn a_blank_microphone_name_is_the_system_default() {
+        assert_eq!(chosen_device(Some("   ".to_owned())), None);
+        assert_eq!(chosen_device(None), None);
+        assert_eq!(
+            chosen_device(Some(" USB Mic ".to_owned())).as_deref(),
+            Some("USB Mic")
+        );
+    }
 
     /* --------------------------------------------- which local engine */
 

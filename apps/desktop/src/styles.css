@@ -102,7 +102,13 @@
   --band-ink: #fdfdfd;
   /* Blue for text, which `--band` is not: #3d55ff is 3.3:1 on this `--bg`, #8c9aff is 6.9:1 (R20). */
   --band-text: #8c9aff;
-  --accent: #fde800;
+  /*
+   * Focus rings, a caveat's edge and inline code. The Kit's blue, at the
+   * lightness `--band-text` already uses for text in this theme: 6.9:1 on
+   * `--bg`, where #0015ff is 1.96:1. It was the site's yellow until
+   * KNEG-375; the Kit has no yellow.
+   */
+  --accent: #8c9aff;
   /*
    * There is no `--warn`. It was `#9a5b00` in light, which is the brown that
    * had to go: an amber dark enough to be read on white *is* brown, so there is
@@ -232,11 +238,10 @@
 /*
  * The light theme: knegis.com's `:root` set, which is its light one.
  *
- * The accents are the site's two, assigned to the theme each is legible in
- * rather than to the one it appears in there. The site's nav sits over inverted
- * artwork, so its light-mode yellow has a dark backdrop; here there is no such
- * backdrop, and `#fde800` on paper is 1.2:1. So blue marks light and yellow
- * marks dark, at 8.27:1 and 14.14:1.
+ * The accent is the Kit's blue in both themes (KNEG-375): `#0015ff` here, at
+ * 8.09:1 on paper, and lightened in dark, above. It used to be the site's two
+ * accents, blue here and yellow there, but the Kit the redesign follows has
+ * no yellow.
  */
 @media (prefers-color-scheme: light) {
   :root {
@@ -257,7 +262,7 @@
     --band-ink: #fdfdfd;
     /* The same blue as `--band` here: #0015ff on paper already reads at 8:1 as text. */
     --band-text: #0015ff;
-    --accent: #1803ff;
+    --accent: #0015ff;
     --error: #c02626;
 
     --wash: rgb(31 32 35 / 5%);

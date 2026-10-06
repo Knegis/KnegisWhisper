@@ -201,7 +201,15 @@ pub(super) type Recorder = (
 ///
 /// Returns the audio channel and the command channel. Both captures are started
 /// here, on the thread, because `cpal::Stream` is not `Send`.
-pub(super) fn spawn_recorder(path: std::path::PathBuf, system: bool) -> Result<Recorder, String> {
+///
+/// `microphone` is the saved choice ([`crate::dictation::load_device`]), or
+/// `None` for the system default; a choice that is not connected falls back to
+/// the default (`kw_audio_core::Capture::start`).
+pub(super) fn spawn_recorder(
+    path: std::path::PathBuf,
+    system: bool,
+    microphone: Option<String>,
+) -> Result<Recorder, String> {
     let (audio_tx, audio_rx) = mpsc::unbounded_channel::<Drained>();
     let (command_tx, command_rx) = sync_mpsc::channel::<RecorderCommand>();
     // The thread reports whether it got its devices before anything else
@@ -216,7 +224,11 @@ pub(super) fn spawn_recorder(path: std::path::PathBuf, system: bool) -> Result<R
         .name("kw-meeting".to_owned())
         .spawn({
             let ended = Arc::clone(&ended);
-            move || record(path, system, audio_tx, command_rx, ready_tx, &ended)
+            move || {
+                record(
+                    path, system, microphone, audio_tx, command_rx, ready_tx, &ended,
+                )
+            }
         })
         .map_err(|e| format!("could not start the recording thread: {e}"))?;
 
@@ -231,6 +243,7 @@ pub(super) fn spawn_recorder(path: std::path::PathBuf, system: bool) -> Result<R
 fn record(
     path: std::path::PathBuf,
     want_system: bool,
+    microphone: Option<String>,
     audio: mpsc::UnboundedSender<Drained>,
     commands: sync_mpsc::Receiver<RecorderCommand>,
     ready: sync_mpsc::Sender<Result<Sources, String>>,
@@ -240,7 +253,7 @@ fn record(
     // does. Every `return` below and every unwind goes through it.
     let _exit = RecorderExit(Arc::clone(ended));
 
-    let mic = match Capture::start(None) {
+    let mic = match Capture::start(microphone.as_deref()) {
         Ok(capture) => capture,
         Err(err) => {
             let _ = ready.send(Err(format!("the microphone could not be opened: {err}")));

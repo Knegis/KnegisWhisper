@@ -903,6 +903,76 @@ pub fn revive_handle(local: &Arc<LocalTranscription>, db: &kw_storage::Db) -> Ar
     })
 }
 
+/// The handle a meeting on the `local` provider starts the server through
+/// (KNEG-387).
+///
+/// Not [`revive_handle`]: that one starts a model only while *dictation* is
+/// routed to local Whisper, and someone dictating to a cloud service can still
+/// choose the local provider for meetings. Until this, Start then failed with
+/// "the local model server is not running" while the page said Ready.
+#[must_use]
+pub fn meeting_revive_handle(
+    local: &Arc<LocalTranscription>,
+    db: &kw_storage::Db,
+) -> Arc<dyn Revive> {
+    Arc::new(ReviveForMeeting {
+        local: Arc::clone(local),
+        db: db.clone(),
+    })
+}
+
+/// The [`Revive`] behind [`meeting_revive_handle`]. See [`meeting_model`].
+struct ReviveForMeeting {
+    local: Arc<LocalTranscription>,
+    db: kw_storage::Db,
+}
+
+impl std::fmt::Debug for ReviveForMeeting {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ReviveForMeeting").finish_non_exhaustive()
+    }
+}
+
+#[async_trait::async_trait]
+impl Revive for ReviveForMeeting {
+    async fn revive(&self) -> Result<u16, String> {
+        let remembered = kw_storage::settings::get::<String>(self.db.pool(), LOCAL_MODEL_KEY)
+            .await
+            .ok()
+            .flatten();
+        let models_dir = paths::model_cache_dir();
+        let registry = kw_provider_registry::registry().map_err(|err| err.to_string())?;
+        let installed: Vec<String> = registry
+            .local_asr
+            .whisper
+            .iter()
+            .filter(|model| models::is_installed(&models_dir.path, model))
+            .map(|model| model.id.clone())
+            .collect();
+        match meeting_model(remembered.as_deref(), &installed) {
+            Some(model_id) => self.local.start_model(&model_id).await,
+            None => Err(
+                "no local Whisper model is installed. Install one under Settings > \
+                         Transcription > Local."
+                    .to_owned(),
+            ),
+        }
+    }
+}
+
+/// Which model a meeting starts: the remembered one while it is still
+/// installed, otherwise the first installed, in the registry's order.
+///
+/// The same rule the Meetings page's readiness assumes (`lib/readiness.ts`
+/// `localProviderProblem`): any installed model means Start can begin.
+fn meeting_model(remembered: Option<&str>, installed: &[String]) -> Option<String> {
+    remembered
+        .map(str::trim)
+        .filter(|id| installed.iter().any(|model| model == id))
+        .map(str::to_owned)
+        .or_else(|| installed.first().cloned())
+}
+
 /// A [`Revive`] that never does, for tests about something else.
 ///
 /// Named for what it does rather than `Stub`, so a test that revives by
@@ -1204,6 +1274,38 @@ mod tests {
 
     async fn db() -> kw_storage::Db {
         kw_storage::Db::open_in_memory().await.unwrap()
+    }
+
+    /* --------------------------------- the model a meeting starts (KNEG-387) */
+
+    #[test]
+    fn a_meeting_starts_the_remembered_model_while_it_is_still_installed() {
+        let installed = ["tiny".to_owned(), "base".to_owned()];
+        assert_eq!(
+            meeting_model(Some("base"), &installed).as_deref(),
+            Some("base")
+        );
+    }
+
+    #[test]
+    fn a_meeting_falls_back_to_the_first_installed_model() {
+        // Dictation's route is not consulted: someone dictating to a cloud
+        // service can still have chosen the local provider for meetings.
+        let installed = ["tiny".to_owned(), "base".to_owned()];
+        assert_eq!(
+            meeting_model(Some("large"), &installed).as_deref(),
+            Some("tiny")
+        );
+        assert_eq!(meeting_model(None, &installed).as_deref(), Some("tiny"));
+        assert_eq!(
+            meeting_model(Some("  "), &installed).as_deref(),
+            Some("tiny")
+        );
+    }
+
+    #[test]
+    fn with_no_model_installed_a_meeting_has_nothing_to_start() {
+        assert_eq!(meeting_model(Some("base"), &[]), None);
     }
 
     /* ------------------------------------------------ the sidecar guard */

@@ -434,6 +434,9 @@ pub struct MeetingRuntime {
     credentials: Arc<dyn kw_security::CredentialStore>,
     /// Where the local model server is listening, and what it loaded.
     local: crate::local_model::SharedLocal,
+    /// How Start brings the local model server up for the `local` provider when
+    /// it is not running (KNEG-387). See `local_model::meeting_revive_handle`.
+    local_revive: Arc<dyn crate::local_model::Revive>,
     /// Which sherpa model is selected for dictation, if any.
     ///
     /// Read by the whole-recording pass so it uses the same engine dictation
@@ -632,6 +635,7 @@ impl MeetingRuntime {
         policy: NetworkPolicy,
         credentials: Arc<dyn kw_security::CredentialStore>,
         local: crate::local_model::SharedLocal,
+        local_revive: Arc<dyn crate::local_model::Revive>,
         sherpa: crate::local_asr::Selection,
         stream: Arc<crate::sherpa_stream::SherpaStream>,
         notes: Arc<draft::NotesDraft>,
@@ -644,6 +648,7 @@ impl MeetingRuntime {
             live: Arc::new(Mutex::new(None)),
             lifecycle: Mutex::new(SessionLifecycle::default()),
             local,
+            local_revive,
             sherpa,
             stream,
             watch: Mutex::new(WatchState::default()),
@@ -773,15 +778,22 @@ impl MeetingRuntime {
     ) -> Result<ProviderBuild, String> {
         match client {
             Client::LocalWindow => {
-                let port =
+                let recorded =
                     *self.local.port.read().map_err(|_| {
                         "the local model server's state could not be read".to_owned()
                     })?;
-                let port = port.ok_or_else(|| {
-                    "the local model server is not running. Start a model under Settings > \
-                     Transcription > Local first."
-                        .to_owned()
-                })?;
+                // Started here when it is not running, as dictation and media
+                // import already do (KNEG-387). Until this, Start failed with
+                // "the local model server is not running" while the page said
+                // Ready, because the provider needs no key and so was listed as
+                // available.
+                let port = crate::local_model::ensure_whisper(
+                    &self.policy,
+                    recorded,
+                    self.local_revive.as_ref(),
+                )
+                .await
+                .map_err(|err| format!("the local model server could not be started: {err}"))?;
                 let model = self
                     .local
                     .model
@@ -1104,8 +1116,11 @@ impl MeetingRuntime {
             chrono::Utc::now().format("%Y%m%d-%H%M%S"),
             uuid::Uuid::new_v4()
         ));
+        // The microphone chosen on the Dictation page: one choice for both
+        // tasks (KNEG-341). Until this a meeting always opened the default.
+        let microphone = crate::dictation::load_device(&self.db).await;
         let (audio, commands, sources, recorder_end) =
-            match spawn_recorder(path.clone(), system_audio) {
+            match spawn_recorder(path.clone(), system_audio, microphone) {
                 Ok(parts) => parts,
                 Err(err) => {
                     cancel_provider(provider.as_mut()).await;

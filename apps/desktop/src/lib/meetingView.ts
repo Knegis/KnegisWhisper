@@ -25,7 +25,7 @@
  * transcript is sent: a privacy line that errs errs towards saying so.
  */
 
-import type { Detected, Sources, SummarySettings } from "../generated/ipc-types.js";
+import type { Detected, InputDevice, Sources, SummarySettings } from "../generated/ipc-types.js";
 import type { MenuOption } from "./chipMenu.js";
 import { destinationName, LANGUAGES, languageLabel } from "./controlBar.js";
 import { parseStoredTime, timeOfDay } from "./dayGroups.js";
@@ -224,4 +224,32 @@ export function meetingLanguageMenu(
     ...LANGUAGES.map(([id, label]) => row(id, label)),
     ...(unknown ? [row(code, code)] : []),
   ];
+}
+
+/**
+ * The Meetings microphone chip: what a meeting will record from, and the
+ * sentence its hover and screen-reader text carry (KNEG-341).
+ *
+ * Meetings record the microphone chosen on Dictation -- one choice for both,
+ * saved across restarts (`dictation.rs` `INPUT_DEVICE_KEY`). A chosen device
+ * that is not connected is recorded as the system default instead
+ * (`kw_audio_core::Capture::start`), so the chip says that before Start rather
+ * than naming a microphone that will not be used. `devices` is `null` until the
+ * list arrives, and then a choice is named rather than called unplugged.
+ */
+export function meetingMicrophone(
+  devices: readonly InputDevice[] | null,
+  chosen: string | null,
+): { label: string; title: string } {
+  const shared = "Dictation and meetings use the same microphone, chosen on Dictation.";
+  if (chosen === null) {
+    return { label: "Default microphone", title: `Meetings record the system default microphone. ${shared}` };
+  }
+  if (devices !== null && !devices.some((device) => device.name === chosen)) {
+    return {
+      label: `${chosen} (not connected)`,
+      title: `${chosen} isn't connected, so meetings record the system default microphone until it is.`,
+    };
+  }
+  return { label: chosen, title: `Meetings record ${chosen}. ${shared}` };
 }

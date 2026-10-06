@@ -271,6 +271,9 @@ pub fn run() -> anyhow::Result<()> {
             // The route survives a restart. Bring it back, in the background:
             // the window should not wait on a settings read.
             reasoning::apply_at_startup(&session, &db);
+            // So does the microphone (KNEG-341). Read before the first
+            // dictation can start: it is one settings row.
+            tauri::async_runtime::block_on(session.restore_device());
 
             app.manage(session);
 
@@ -332,6 +335,9 @@ pub fn run() -> anyhow::Result<()> {
                 meeting_policy,
                 meeting_credentials,
                 local.shared(),
+                // So Start can bring the server up for the `local` provider,
+                // whatever dictation is routed to (KNEG-387).
+                local_model::meeting_revive_handle(&local, &db),
                 // So the whole-recording pass uses the engine dictation uses.
                 asr.selection(),
                 std::sync::Arc::clone(&stream),

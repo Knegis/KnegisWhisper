@@ -48,7 +48,7 @@
       "surfaceId": "meetings.record",
       "component": "apps/desktop/src/views/Meetings.tsx",
       "built": true,
-      "note": "The recording task: whether a meeting can be recorded (lib/readiness.ts), Start/Stop/Discard, whether the other participants are captured, the live transcript and interrupted recordings. The provider and language are chosen here, in the control bar chips, and also set on Settings > Meetings, which owns them along with detection."
+      "note": "The recording task: whether a meeting can be recorded (lib/readiness.ts), Start/Stop/Discard, whether the other participants are captured, the live transcript and interrupted recordings. The provider and language are chosen here, in the control bar chips, and also set on Settings > Meetings, which owns them along with detection. The microphone chip names the one chosen on Dictation (audio.inputDevice, shared by both tasks), or says it is not connected and the default will be recorded; it is shown here, not chosen. A local provider that cannot start (no model installed, no streaming model chosen or downloaded) holds Start with a fix to Settings > Transcription; Start itself brings the local Whisper server up when it is not running."
     },
     "Settings > Shortcuts": {
       "surfaceId": "settings.shortcuts",

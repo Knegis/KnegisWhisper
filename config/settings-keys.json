@@ -276,6 +276,14 @@
       "ui": "Settings > Meetings",
       "reachable": true
     },
+    "audio.inputDevice": {
+      "what": "The microphone dictation and meetings record from, by device name; absent for the system default (KNEG-341). One choice for both tasks, the owner's call on 2026-10-06: read at startup into dictation's recorder and by MeetingRuntime::start when a meeting begins. Until then the choice lived only in memory and was gone after every restart, and meetings always opened the default. A device that is not connected when recording starts falls back to the system default (kw_audio_core::Capture::start); the Dictation microphone menu and the Meetings microphone chip say so beforehand.",
+      "writtenBy": [
+        "dictation_set_device"
+      ],
+      "ui": "Dictation",
+      "reachable": true
+    },
     "dictation.floatingMicrophone": {
       "what": "Persistent Windows dictation microphone preference and saved monitor-relative placement.",
       "writtenBy": [

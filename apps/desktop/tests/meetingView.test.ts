@@ -6,6 +6,7 @@ import {
   interruptedTitle,
   liveElapsed,
   meetingLanguageMenu,
+  meetingMicrophone,
   reviewIsFor,
   recentMeta,
   recordedSources,
@@ -187,4 +188,37 @@ test("meetingLanguageMenu lists a saved value it does not know as itself, so the
   const menu = meetingLanguageMenu("sv-SE", DETECTS);
   assert.deepEqual(menu.filter((o) => o.current).map((o) => [o.id, o.label]), [["sv-SE", "sv-SE"]]);
   assert.equal(menu.length, 10);
+});
+
+/* ------------------------------- the microphone a meeting records (KNEG-341) */
+
+const MICROPHONES = [
+  { name: "Microphone Array (Realtek(R) Audio)", isDefault: true },
+  { name: "Headset (Jabra Evolve2 65)", isDefault: false },
+];
+
+test("meetingMicrophone: nothing chosen is the system default", () => {
+  assert.deepEqual(meetingMicrophone(MICROPHONES, null), {
+    label: "Default microphone",
+    title: "Meetings record the system default microphone. Dictation and meetings use the same microphone, chosen on Dictation.",
+  });
+});
+
+test("meetingMicrophone: a chosen microphone that is connected is named", () => {
+  assert.deepEqual(meetingMicrophone(MICROPHONES, "Headset (Jabra Evolve2 65)"), {
+    label: "Headset (Jabra Evolve2 65)",
+    title: "Meetings record Headset (Jabra Evolve2 65). Dictation and meetings use the same microphone, chosen on Dictation.",
+  });
+});
+
+test("meetingMicrophone: a chosen microphone that is unplugged says the default is recorded instead", () => {
+  assert.deepEqual(meetingMicrophone(MICROPHONES, "USB Mic"), {
+    label: "USB Mic (not connected)",
+    title: "USB Mic isn't connected, so meetings record the system default microphone until it is.",
+  });
+});
+
+test("meetingMicrophone: before the device list arrives, a choice is named rather than called unplugged", () => {
+  assert.equal(meetingMicrophone(null, "USB Mic").label, "USB Mic");
+  assert.equal(meetingMicrophone(null, null).label, "Default microphone");
 });

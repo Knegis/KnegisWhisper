@@ -136,6 +136,68 @@ export function dictationReadiness(i: {
   };
 }
 
+/** Why the chosen local meeting provider cannot start. See [`localProviderProblem`]. */
+export type LocalProblem = { problem: string; detail: string };
+
+/**
+ * Why the chosen meeting provider, when it is one of the two that run on this
+ * computer, cannot start -- or `null` when it can, or when that is not known
+ * yet (KNEG-387).
+ *
+ * Rust lists both as always available, because neither needs a key, and until
+ * this they failed only at Start. What each needs:
+ *
+ * - `local` (windowed Whisper): its server running, or the engine and at least
+ *   one Whisper model installed. Start loads the remembered model, or the first
+ *   installed one, when the server is not running (`local_model.rs`
+ *   `meeting_revive_handle`).
+ * - `local-streaming`: a streaming model chosen and downloaded, and the
+ *   sherpa-onnx runtime that serves it (`sherpa_stream.rs` `start`).
+ *
+ * A status that has not arrived is `null` and holds nothing: Start still says
+ * what went wrong if it does.
+ */
+export function localProviderProblem(
+  selected: string | null,
+  whisper:
+    | { port: number | null; serverInstalled: boolean; models: readonly { installed: boolean }[] }
+    | null,
+  sherpa:
+    | {
+        cliInstalled: boolean;
+        selectedStream: string | null;
+        models: readonly { id: string; installed: boolean }[];
+      }
+    | null,
+): LocalProblem | null {
+  if (selected === "local" && whisper !== null) {
+    const startable = whisper.serverInstalled && whisper.models.some((model) => model.installed);
+    if (whisper.port !== null || startable) return null;
+    return {
+      problem: "Local transcription needs a model installed on this computer first.",
+      detail: "Install one under Settings > Transcription > Local. Start then loads it.",
+    };
+  }
+  if (selected === "local-streaming" && sherpa !== null) {
+    if (sherpa.selectedStream === null) {
+      return {
+        problem: "Choose a streaming model for live meetings first.",
+        detail: "It runs on this computer and is chosen under Settings > Transcription > Local.",
+      };
+    }
+    const downloaded = sherpa.models.some(
+      (model) => model.id === sherpa.selectedStream && model.installed,
+    );
+    if (!downloaded || !sherpa.cliInstalled) {
+      return {
+        problem: "The streaming model for live meetings isn't downloaded yet.",
+        detail: "Download it under Settings > Transcription > Local.",
+      };
+    }
+  }
+  return null;
+}
+
 /** The one sentence for a saved meeting provider that cannot be used now. */
 function chosenCannotBeUsed(name: string): string {
   return `${name}, the provider you chose, can't be used right now.`;
@@ -167,6 +229,8 @@ export function meetingReadiness(i: {
   selected: string | null;
   savedUnusable: { name: string; reason: string } | null;
   languageWarning: string | null;
+  /** From [`localProviderProblem`]: the chosen local provider cannot start. */
+  localProblem: LocalProblem | null;
   systemAudio: SystemAudioSupport;
 }): Readiness<MeetingFix> {
   if (i.usable.length === 0 || i.selected === null) {
@@ -193,6 +257,18 @@ export function meetingReadiness(i: {
       problem: chosenCannotBeUsed(i.savedUnusable.name),
       detail: i.savedUnusable.reason,
       fix: { view: "provider-menu", label: "Choose a provider" },
+    };
+  }
+
+  // After a saved choice that can't be used -- that is about which provider,
+  // this is about the one chosen -- and before the language, which is no use
+  // to a provider that cannot start.
+  if (i.localProblem !== null) {
+    return {
+      state: "needs-setup",
+      problem: i.localProblem.problem,
+      detail: i.localProblem.detail,
+      fix: { view: "transcription", label: "Set up local transcription" },
     };
   }
 
