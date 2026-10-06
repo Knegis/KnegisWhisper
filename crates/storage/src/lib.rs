@@ -283,8 +283,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            applied, 6,
-            "initial, note recordings, automation, desktop origin, summary, and note workspace migrations recorded exactly once"
+            applied, 7,
+            "initial, note recordings, automation, desktop origin, summary, note workspace, and search tokenizer migrations recorded exactly once"
         );
         second.close().await;
     }
@@ -569,5 +569,117 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(count, 3);
+    }
+
+    async fn matches(pool: &SqlitePool, table: &str, query: &str) -> i64 {
+        sqlx::query_scalar(&format!(
+            "SELECT count(*) FROM {table} WHERE {table} MATCH ?"
+        ))
+        .bind(query)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn dictation_history_search_keeps_swedish_letters_apart() {
+        // KNEG-405, for the index the local API's transcription search reads.
+        let db = db().await;
+        let p = db.pool();
+        for text in ["Detta är för dig", "This is for you", "Vi ses HÄR"] {
+            sqlx::query("INSERT INTO transcriptions (text) VALUES (?)")
+                .bind(text)
+                .execute(p)
+                .await
+                .unwrap();
+        }
+        for (query, expected) in [("för", 1), ("for", 1), ("här", 1), ("har", 0)] {
+            assert_eq!(
+                matches(p, "transcriptions_fts", query).await,
+                expected,
+                "{query:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn search_tokenizer_migration_reindexes_what_was_already_there() {
+        // An existing profile has both indexes built with the old tokenizer, so
+        // the migration has to refill them, not just change how new rows go in.
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        for migration in [
+            include_str!("../migrations/0001_initial.sql"),
+            include_str!("../migrations/0002_note_recordings.sql"),
+            include_str!("../migrations/0003_automation.sql"),
+            include_str!("../migrations/0004_desktop_import_origin.sql"),
+            include_str!("../migrations/0005_meeting_summaries.sql"),
+            include_str!("../migrations/0006_note_workspace.sql"),
+        ] {
+            sqlx::raw_sql(migration).execute(&pool).await.unwrap();
+        }
+        sqlx::query(
+            "INSERT INTO notes (title, content, transcript) VALUES ('Plan', 'Vi ses här', ?)",
+        )
+        .bind(r#"[{"text":"ett möte i morgon","timestamp":0}]"#)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO transcriptions (text) VALUES ('Detta är för dig')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            matches(&pool, "notes_fts", "har").await,
+            1,
+            "the old tokenizer folds ä"
+        );
+
+        sqlx::raw_sql(include_str!("../migrations/0007_search_tokenizer.sql"))
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        for (table, query, expected) in [
+            ("notes_fts", "här", 1),
+            ("notes_fts", "har", 0),
+            ("notes_fts", "möte", 1),
+            ("notes_fts", "mote", 0),
+            ("transcriptions_fts", "för", 1),
+            ("transcriptions_fts", "for", 0),
+        ] {
+            assert_eq!(
+                matches(&pool, table, query).await,
+                expected,
+                "{table} {query:?}"
+            );
+        }
+
+        // The triggers came back with the tables.
+        sqlx::query("UPDATE notes SET content = 'Det var så'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(matches(&pool, "notes_fts", "så").await, 1);
+        assert_eq!(matches(&pool, "notes_fts", "här").await, 0);
+        sqlx::query("UPDATE transcriptions SET text = 'Hon sa nej'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(matches(&pool, "transcriptions_fts", "sa").await, 1);
+        assert_eq!(matches(&pool, "transcriptions_fts", "för").await, 0);
+        sqlx::query("DELETE FROM notes")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM transcriptions")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(matches(&pool, "notes_fts", "så").await, 0);
+        assert_eq!(matches(&pool, "transcriptions_fts", "sa").await, 0);
     }
 }

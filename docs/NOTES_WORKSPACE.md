@@ -70,6 +70,11 @@ WAV and its notes sidecar can be recovered from Meetings (KNEG-316).
   SQL triggers maintain it for all writers, including foreign imports and transcript
   updates. Structured segment text is indexed; legacy plain text is retained for
   search. Snippets prefer matching personal notes, then transcript text.
+- Migration `0007_search_tokenizer.sql` rebuilds and refills both search indexes,
+  notes and dictation history, with `unicode61 remove_diacritics 0` (KNEG-405). The
+  default tokenizer folded å and ä to a and ö to o, so "for" found "för", "har" found
+  "här" and "sa" found "så". Letter case still folds. Every accent now counts, so
+  "cafe" no longer finds "café".
 - No new renderer command or user-editable transcript API was added. Existing note
   exports and separate summary exports retain their behavior.
 

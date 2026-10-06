@@ -680,6 +680,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn swedish_letters_are_not_searched_as_their_plain_vowels() {
+        // KNEG-405. å, ä and ö are letters of their own in Swedish, and folding
+        // them collides on its commonest words: för/for, här/har, så/sa.
+        let db = db().await;
+        let p = db.pool();
+        let har = add(p, "A", "Vi har ett möte").await;
+        let har_upper = add(p, "B", "Vi ses HÄR").await;
+        let for_sv = add(p, "C", "Detta är för dig").await;
+        let for_en = add(p, "D", "This is for you").await;
+        let sa = add(p, "E", "Hon sa nej").await;
+        let sa_sv = add(p, "F", "Det var så").await;
+        let in_transcript = create(
+            p,
+            &NewNote {
+                title: "G".into(),
+                transcript: Some(r#"[{"text":"Vi ses här i transkriptet","timestamp":0}]"#.into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        for (query, mut expected) in [
+            ("har", vec![har]),
+            ("här", vec![har_upper, in_transcript]),
+            ("for", vec![for_en]),
+            ("för", vec![for_sv]),
+            ("sa", vec![sa]),
+            ("så", vec![sa_sv]),
+            ("möte", vec![har]),
+            ("mote", vec![]),
+        ] {
+            let mut found: Vec<i64> = search(p, query, 10)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|hit| hit.id)
+                .collect();
+            found.sort_unstable();
+            expected.sort_unstable();
+            assert_eq!(found, expected, "{query:?}");
+        }
+    }
+
+    #[tokio::test]
     async fn an_empty_search_returns_nothing_rather_than_everything() {
         let db = db().await;
         let p = db.pool();
