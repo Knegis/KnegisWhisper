@@ -12,7 +12,7 @@
 //! reachable only through one is untestable by construction.
 
 use kw_audio_core::wav;
-use kw_meeting_core::AudioSource;
+use kw_meeting_core::{AudioSource, Client, MeetingTranscript};
 use kw_network_policy::NetworkPolicy;
 use kw_transcription_core::local::WhisperServer;
 
@@ -48,6 +48,111 @@ pub(super) fn segment(
             AudioSource::Mic => "mic".to_owned(),
             AudioSource::System => "system".to_owned(),
         }),
+    }
+}
+
+#[derive(Debug)]
+pub(super) struct SavedTranscript {
+    pub(super) segments: Vec<kw_notes_core::transcript::Segment>,
+    pub(super) speaker_note: Option<String>,
+    pub(super) from_partials: bool,
+    pub(super) used_streaming: bool,
+}
+
+/// Only the windowed provider needs its overlapping previews replaced. A
+/// successful local streaming session already holds the transcript to save. Keep the
+/// offline future lazy so choosing streaming never reads or transcribes the WAV.
+pub(super) async fn select_transcript(
+    provider_id: &str,
+    transcript: &MeetingTranscript,
+    live_failure: Option<&str>,
+    has_audio: bool,
+    offline: impl std::future::Future<
+        Output = Result<(Vec<kw_notes_core::transcript::Segment>, Option<String>), String>,
+    >,
+) -> SavedTranscript {
+    let streaming = match kw_meeting_core::client(provider_id) {
+        Some(Client::LocalStreaming) => true,
+        // These clients currently close their readers without waiting for the
+        // last utterance. Keep their whole-file pass until they have a verified
+        // finish handshake; otherwise switching to finals would lose the tail.
+        Some(
+            Client::LocalWindow
+            | Client::OpenAiRealtime
+            | Client::AssemblyAi
+            | Client::DeepgramRealtime
+            | Client::CortiRealtime,
+        )
+        | None => false,
+    };
+    let finals: Vec<_> = transcript
+        .events
+        .iter()
+        .filter(|event| event.is_final && !event.text.trim().is_empty())
+        .collect();
+    // Local streaming revises events in place. An unsettled event means the
+    // finish handshake did not complete; retain recovery in that case too.
+    let unsettled =
+        provider_id == "local-streaming" && transcript.events.iter().any(|event| !event.is_final);
+    if streaming
+        && live_failure.is_none()
+        && transcript.gaps == 0
+        && !unsettled
+        && (!finals.is_empty() || !has_audio)
+    {
+        let mut segments: Vec<_> = finals
+            .into_iter()
+            .map(|event| {
+                let mut saved = segment(&event.text, event.timestamp, Some(event.source));
+                // Speaker IDs are local to each socket, so mic speaker 0 and
+                // system speaker 0 must not become the same person.
+                saved.speaker = event.speaker.as_ref().map(|speaker| {
+                    format!("{}:{speaker}", saved.source.as_deref().unwrap_or_default())
+                });
+                saved
+            })
+            .collect();
+        segments.sort_by(|a, b| {
+            a.timestamp
+                .unwrap_or_default()
+                .total_cmp(&b.timestamp.unwrap_or_default())
+        });
+        return SavedTranscript {
+            segments,
+            speaker_note: None,
+            from_partials: false,
+            used_streaming: true,
+        };
+    }
+
+    match offline.await {
+        Ok((segments, speaker_note)) => SavedTranscript {
+            segments,
+            speaker_note,
+            from_partials: false,
+            used_streaming: false,
+        },
+        Err(error) => {
+            tracing::warn!(%error, "the whole-recording pass failed; keeping the live transcript");
+            let events: Vec<_> = transcript
+                .events
+                .iter()
+                .filter(|event| !event.text.trim().is_empty())
+                .collect();
+            SavedTranscript {
+                segments: events
+                    .into_iter()
+                    .map(|event| {
+                        let mut saved = segment(&event.text, event.timestamp, Some(event.source));
+                        saved.speaker = event.speaker.clone();
+                        saved
+                    })
+                    .collect(),
+                speaker_note: None,
+                from_partials: true,
+                used_streaming: false,
+            }
+        }
     }
 }
 
@@ -181,6 +286,126 @@ pub(super) fn labelled(
 )]
 mod tests {
     use super::*;
+
+    fn stream_transcript() -> MeetingTranscript {
+        MeetingTranscript {
+            events: vec![
+                kw_meeting_core::TranscriptEvent {
+                    text: " remote words ".into(),
+                    is_final: true,
+                    timestamp: 20.0,
+                    speaker: Some("0".into()),
+                    source: AudioSource::System,
+                },
+                kw_meeting_core::TranscriptEvent {
+                    text: "local words".into(),
+                    is_final: true,
+                    timestamp: 10.0,
+                    speaker: Some("0".into()),
+                    source: AudioSource::Mic,
+                },
+            ],
+            duration_seconds: 7200.0,
+            reconnects: 0,
+            gaps: 0,
+        }
+    }
+
+    #[tokio::test]
+    async fn long_streaming_meetings_save_existing_text_without_polling_offline_asr() {
+        let provider = "local-streaming";
+        let transcript = stream_transcript();
+        let saved = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            select_transcript(provider, &transcript, None, true, std::future::pending()),
+        )
+        .await
+        .expect("must not wait for offline ASR");
+        assert!(saved.used_streaming, "{provider}");
+        assert!(!saved.from_partials);
+        assert_eq!(saved.segments.len(), 2);
+        assert_eq!(saved.segments[0].text, "local words");
+        assert_eq!(saved.segments[0].timestamp, Some(10.0));
+        assert_eq!(saved.segments[0].source.as_deref(), Some("mic"));
+        assert_eq!(saved.segments[0].speaker.as_deref(), Some("mic:0"));
+        assert_eq!(saved.segments[1].text, "remote words");
+        assert_eq!(saved.segments[1].speaker.as_deref(), Some("system:0"));
+    }
+
+    #[tokio::test]
+    async fn providers_without_a_verified_final_flush_keep_the_whole_recording_pass() {
+        for provider in [
+            "local",
+            "openai-realtime",
+            "assemblyai-realtime",
+            "deepgram-realtime",
+            "corti-realtime",
+            "unknown",
+        ] {
+            let saved = select_transcript(provider, &stream_transcript(), None, true, async {
+                Ok((vec![segment("whole recording", 0.0, None)], None))
+            })
+            .await;
+            assert!(!saved.used_streaming, "{provider}");
+            assert_eq!(saved.segments[0].text, "whole recording");
+        }
+    }
+
+    #[tokio::test]
+    async fn windowed_failed_gapped_and_empty_audio_sessions_still_use_recovery() {
+        for case in 0..6 {
+            let mut transcript = stream_transcript();
+            let provider = if case == 0 {
+                "local"
+            } else {
+                "local-streaming"
+            };
+            let failure = (case == 1).then_some("socket failed");
+            match case {
+                2 => transcript.gaps = 1,
+                3 => transcript.events.clear(),
+                4 => transcript.events[0].is_final = false,
+                5 => transcript
+                    .events
+                    .iter_mut()
+                    .for_each(|event| event.text.clear()),
+                _ => {}
+            }
+            let saved = select_transcript(provider, &transcript, failure, true, async {
+                Ok((vec![segment("recovered recording", 0.0, None)], None))
+            })
+            .await;
+            assert!(!saved.used_streaming, "case {case}");
+            assert!(!saved.from_partials);
+            assert_eq!(saved.segments[0].text, "recovered recording");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_quiet_streaming_meeting_needs_no_offline_pass() {
+        let saved = select_transcript(
+            "local-streaming",
+            &MeetingTranscript::default(),
+            None,
+            false,
+            async { panic!("quiet streaming must not retranscribe") },
+        )
+        .await;
+        assert!(saved.used_streaming);
+        assert!(saved.segments.is_empty());
+    }
+
+    #[tokio::test]
+    async fn failed_recovery_keeps_streaming_text_and_marks_it_incomplete() {
+        let mut transcript = stream_transcript();
+        transcript.gaps = 1;
+        let saved = select_transcript("local-streaming", &transcript, None, true, async {
+            Err("offline engine unavailable".into())
+        })
+        .await;
+        assert!(saved.from_partials);
+        assert_eq!(saved.segments.len(), 2);
+    }
 
     #[test]
     fn pcm_round_trips_through_the_one_encoder() {

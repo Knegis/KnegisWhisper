@@ -1110,7 +1110,7 @@ export function meetingStateLabel(state: MeetingState): string {
     case "stalled":
       return "Stopped unexpectedly — nothing is being recorded";
     case "finishing":
-      return "Transcribing the recording…";
+      return "Finishing the meeting…";
     case "idle":
       return "Not recording";
     default: {

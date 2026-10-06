@@ -71,6 +71,9 @@ export const WORKFLOW_DIR = ".github/workflows";
 // Local checkout copies are not inputs to this checkout's CI. Do not skip all
 // nested .git markers: vendored packages/submodules must still be audited.
 const SKIP = new Set(["target", "node_modules", ".git", ".worktrees", "dist", "coverage"]);
+// Claude Code's worktrees, matched by their path from the root rather than by
+// name: a directory called `worktrees` anywhere else is still audited (KNEG-379).
+const SKIP_PATHS = new Set([".claude/worktrees"]);
 
 /**
  * Every Cargo.toml in the tree, not only the workspace members. A feature on a
@@ -83,6 +86,7 @@ export function cargoManifests(root = REPO_ROOT) {
     for (const entry of readdirSync(dir)) {
       if (SKIP.has(entry)) continue;
       const path = join(dir, entry);
+      if (SKIP_PATHS.has(relative(root, path).split("\\").join("/"))) continue;
       let stats;
       try {
         stats = statSync(path);

@@ -19,6 +19,10 @@
  * The panel's "Notes" is the page's `h1`, and `SplitView`'s `heading`
  * stands in for it while the panel is collapsed.
  *
+ * Coming back to Notes from another page reopens the note that was open when
+ * it was left (`lastOpenNoteId`); the first visit, and a visit after that note
+ * has gone, opens the most recently edited one.
+ *
  * Two states that look alike and are not: `hits === null` means nobody has
  * searched, and `hits === []` means somebody searched and nothing matched.
  * Collapsing them would show the full note list as though it were the result.
@@ -70,6 +74,15 @@ function noteDate(value: string | null) {
   const date = parseStoredTime(value);
   return date === null ? value : new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(date);
 }
+
+/**
+ * The note open when Notes was last left, for as long as the app is open. Held
+ * here rather than in the component because the page unmounts whenever another
+ * one opens, as the transcript column's choice is held in `NoteWorkspace.tsx`.
+ * Never cleared: a note deleted since -- here or through the API -- is simply
+ * not found on the way back, and the most recently edited one opens instead.
+ */
+let lastOpenNoteId: number | null = null;
 
 /** The right-click menu's target: a note, or a folder heading. */
 type ContextMenu = { x: number; y: number; anchor: HTMLButtonElement } & ({ kind: "note"; note: Note } | { kind: "folder"; folder: Folder });
@@ -140,13 +153,23 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
   const workspaceRef = useRef<NoteWorkspaceHandle>(null);
   const [requestedNote, setRequestedNote] = useState<Note | null>(null);
   const initialSelectionDone = useRef(false);
+  const alive = useRef(true);
+  useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
   useEffect(() => {
     if (!data || initialSelectionDone.current) return;
     initialSelectionDone.current = true;
     if (initialNoteId !== null || openRequest) return;
-    const first = data.notes.at(0);
-    if (first) { setRequestedNote(first); reveal(first.folderId); setOpenNoteId(first.id); onOpenNote?.(first.id); }
-  }, [data, initialNoteId, openRequest, onOpenNote, reveal]);
+    const open = (note: Note) => { setRequestedNote(note); reveal(note.folderId); setOpenNoteId(note.id); onOpenNote?.(note.id); };
+    const newest = () => { const first = data.notes.at(0); if (first) open(first); };
+    const last = lastOpenNoteId;
+    const listed = data.notes.find(note => note.id === last);
+    if (listed) { open(listed); return; }
+    if (last === null) { newest(); return; }
+    // Not among the library's newest notes -- an older one opened from search -- so fetched, as an
+    // open request is. Not opened once the page has gone: `onOpenNote` would navigate back to it.
+    void getNote(last).then(note => { if (!alive.current) return; if (note) open(note); else newest(); }).catch(fail);
+  }, [data, initialNoteId, openRequest, onOpenNote, reveal, fail]);
+  useEffect(() => { if (openNoteId !== null) lastOpenNoteId = openNoteId; }, [openNoteId]);
   const mainRef = useRef<HTMLElement>(null);
   // A note opens at its top. The pane outlives the note inside it, so on its own it keeps the
   // previous note's offset, clamped against the new note's first layout before the editor has its

@@ -35,6 +35,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { importActive, importProgressText, pollImport } from "../lib/importProgress";
 import { LearnMore } from "../components/LearnMore";
 import { Row } from "../components/Row";
+import { destinationName } from "../lib/controlBar";
 import {
   getDictationRoute,
   getMediaImportStatus,
@@ -215,16 +216,21 @@ export function NotesUpload({ onOpenNote }: { onOpenNote: (id: number) => void }
       <section data-surface="notes.upload">
         <Row
           label="Transcription goes to"
-          value={route.problem ? "Nowhere usable" : route.destination}
+          value={route.problem ? "Nowhere usable" : destinationName(route.destination)}
+          // The order Dictation's privacy line uses (`privacyLines`): a route
+          // that does not leave the user's control is on this computer only
+          // when it is the local model (KNEG-352).
           detail={
             route.problem
               ? route.problem
               : route.leavesDevice
                 ? "audio leaves this computer"
-                : "audio stays on this computer"
+                : route.isLocal
+                  ? "audio stays on this computer"
+                  : "audio goes to a server on your network"
           }
         />
-        <LearnMore>
+        <LearnMore summary="How transcription is chosen">
           <p>
             This uses whichever transcription provider Settings &gt;
             Transcription already points at. Nothing here has a transcription
@@ -236,7 +242,7 @@ export function NotesUpload({ onOpenNote }: { onOpenNote: (id: number) => void }
         <h3>Sidecars</h3>
         {sidecarRow("ffmpeg", ffmpeg, () => installMediaImportSidecar("ffmpeg"))}
         {progress ? <Row label="Progress" value={progress} /> : null}
-        <LearnMore>
+        <LearnMore summary="What ffmpeg is for">
           <p>
             Audio and video are converted to 16 kHz mono WAV with ffmpeg. It
             is downloaded on demand, the same way the local transcription
@@ -311,12 +317,21 @@ export function NotesUpload({ onOpenNote }: { onOpenNote: (id: number) => void }
           OpenWhispr into this application; some OpenWhispr-only data is left
           behind.
         </p>
-        <LearnMore>
+        <LearnMore summary="What is copied">
+          {/* Category by category from `COPY_PLAN` (`crates/storage/src/import.rs`),
+              which is what the import actually runs (KNEG-350). */}
           <p>
             Copies an existing OpenWhispr <code>transcriptions.db</code> into
-            this application: notes, transcriptions, folders, snippets,
-            custom actions, agent conversations, speaker profiles and
-            calendar events.
+            this application: notes and their folders, transcriptions, your
+            custom dictionary, snippets, custom actions, agent conversations
+            and their messages, speaker profiles, the speaker names and voice
+            fingerprints kept with notes, contacts, and your Google, Microsoft and
+            Apple calendars with their events.
+          </p>
+          <p>
+            Left behind: anything you deleted in OpenWhispr, its{" "}
+            <code>spaces</code> table and two internal queues, and every cloud
+            and sync field.
           </p>
           <p>
             The source file is opened read-only and is never written to.

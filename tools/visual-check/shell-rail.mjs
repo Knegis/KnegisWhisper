@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
 import { parseShellArgs, shellUsage } from "./args.mjs";
 import { launchEdge, killBrowser } from "./browser.mjs";
 import { connectCdp } from "./cdp.mjs";
-import { createReport, addCheck, renderMarkdown } from "./report.mjs";
+import { createReport, addCheck, failedChecks, renderMarkdown } from "./report.mjs";
 import * as snippets from "./snippets.mjs";
 
 const delay = (ms) => new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
@@ -491,6 +491,46 @@ export async function runShellRail(options) {
       ].join(" "),
     });
 
+    // Leaving Notes and coming back, from check 10's note 104, which is not the
+    // note Notes opens first; then a reload, which is the app opening again.
+    const OPEN_ID = "document.querySelector('.note-detail')?.id ?? null";
+    const CURRENT_ENTRY = "document.querySelector('.list-panel .notes-entry[aria-current=\"page\"] .notes-entry-title')?.textContent ?? null";
+    const resume = { left: await cdp.evaluate(OPEN_ID) };
+    await click(cdp, RAIL_ITEM, "Dictation");
+    await waitFor(cdp, "Boolean(document.querySelector('[data-surface=\"dictation.task\"]'))", "the Dictation page");
+    resume.away = await cdp.evaluate(OPEN_ID);
+    await click(cdp, RAIL_ITEM, "Notes");
+    await waitFor(cdp, NOTE_OPEN, "a note to open");
+    resume.back = { id: await cdp.evaluate(OPEN_ID), current: await cdp.evaluate(CURRENT_ENTRY) };
+    const shot11 = await screenshot(cdp, out, "11-notes-reopened-1440x900.png");
+    await reload(cdp);
+    await ready(cdp, options);
+    await click(cdp, RAIL_ITEM, "Notes");
+    await waitFor(cdp, NOTE_OPEN, "a note to open");
+    resume.reloaded = await cdp.evaluate(OPEN_ID);
+    addCheck(report, {
+      id: "11",
+      claim: [
+        "Going to Dictation from note 104 and back through the rail reopens note 104, marked in the",
+        "library; after a reload, as when the app starts, Notes opens its first note again.",
+      ].join(" "),
+      measured: resume,
+      expectation: [
+        "left is check 10's other note and not its first; no .note-detail on Dictation; back, the same",
+        "id with the long-titled entry current; reloaded, check 10's first note",
+      ].join(" "),
+      matches: resume.left === column.otherNote.id && resume.left !== firstNote
+        && resume.away === null
+        && resume.back.id === resume.left
+        && typeof resume.back.current === "string" && resume.back.current.startsWith(LONG_TITLE.slice(0, 24))
+        && resume.reloaded === firstNote,
+      screenshots: [shot11],
+      note: [
+        "Not measured: the fall-back when the remembered note has been deleted (the fixtures' delete",
+        "asks window.confirm), and a remembered note older than the library's 100 newest.",
+      ].join(" "),
+    });
+
     const markdown = renderMarkdown(report);
     await writeFile(resolve(out, "report.json"), `${JSON.stringify(report, null, 2)}\n`);
     await writeFile(resolve(out, "report.md"), markdown);
@@ -506,7 +546,14 @@ if (isMain) {
   try {
     const options = parseShellArgs(process.argv.slice(2));
     if (options.help) process.stdout.write(`${shellUsage()}\n`);
-    else await runShellRail(options);
+    else {
+      const failed = failedChecks(await runShellRail(options));
+      // The run completed; a check measured false still fails it, so a wrapper or CI step sees it.
+      if (failed.length) {
+        console.error(`shell-rail: ${failed.length} check(s) false: ${failed.join(", ")}`);
+        process.exitCode = 1;
+      }
+    }
   } catch (error) {
     console.error(`shell-rail failed: ${error.message}`);
     process.exitCode = 1;

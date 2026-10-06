@@ -77,12 +77,22 @@ const PROVIDER_NAMES: Readonly<Record<string, string>> = {
 };
 
 /**
+ * Rust's names for the two routes a person points at a URL themselves
+ * (`crates/transcription-core/src/route.rs`, `Transport::HttpBatch`). They are
+ * not providers, so the registry has no name for them (KNEG-352).
+ */
+const ENDPOINT_NAMES: Readonly<Record<string, string>> = {
+  "self-hosted": "your self-hosted server",
+  custom: "your custom endpoint",
+};
+
+/**
  * A route's `destination` as a person reads it: the provider's name where the
- * registry has one, otherwise the phrase Rust sent -- `self-hosted`, `custom`,
- * `self-hosted at https://...` -- unchanged rather than guessed at.
+ * registry has one, the endpoint's where it is one of those two, otherwise the
+ * phrase Rust sent unchanged rather than guessed at.
  */
 export function destinationName(destination: string): string {
-  return PROVIDER_NAMES[destination] ?? destination;
+  return PROVIDER_NAMES[destination] ?? ENDPOINT_NAMES[destination] ?? destination;
 }
 
 /**

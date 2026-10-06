@@ -162,6 +162,20 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
   const effectiveLanguage = languageDraft ?? data?.language ?? "";
   const effectiveKeytermsText = (data?.keyterms ?? []).join("\n");
   const review = useMeetingReview(selected, effectiveLanguage, effectiveKeytermsText);
+  // Asked of `meetingIsLive`, the same question the Meetings page asks before
+  // it offers Start, so the two screens cannot disagree about whether a
+  // meeting is running. Above the loading guard for the effect below.
+  const recording = meetingIsLive(state ?? data?.status.state ?? "idle");
+  // A meeting started from the notification disables the language field
+  // while it may hold half-typed text. It is dropped rather than saved: the
+  // meeting has already read the language, and the field goes back to the one
+  // it is using (KNEG-347). Disabling the focused field also blurs it, which
+  // is when it saves -- measured in Edge on 2026-10-02, though the issue
+  // expected no blur -- so the blur handler below skips a disabled field, or
+  // the draft would become the next meeting's language.
+  useEffect(() => {
+    if (recording) setLanguageDraft(null);
+  }, [recording]);
 
   if (!data) {
     return (
@@ -174,10 +188,6 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
   const { providers, status, detect, diarization } = data;
   const effectiveAllowText = allowDraft ?? detect.allow.join("\n");
   const effectiveBlockText = blockDraft ?? detect.block.join("\n");
-  // Asked of `meetingIsLive`, the same question the Meetings page asks before
-  // it offers Start, so the two screens cannot disagree about whether a
-  // meeting is running.
-  const recording = meetingIsLive(state ?? status.state);
   const selectedProvider = providers.find((p) => p.id === selected) ?? null;
   const savedProvider = savedUnusable
     ? (providers.find((p) => p.id === savedUnusable) ?? null)
@@ -314,7 +324,7 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
                   value={effectiveLanguage}
                   disabled={recording}
                   onChange={(e) => setLanguageDraft(e.target.value)}
-                  onBlur={saveLanguage}
+                  onBlur={(e) => { if (!e.currentTarget.disabled) saveLanguage(); }}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" && !e.nativeEvent.isComposing) saveLanguage();
                   }}
@@ -489,8 +499,8 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
         </LearnMore>
         <p className="caveat warn">
           Measured on this machine: the pass costs about 8% of the meeting’s
-          length, so an hour-long recording adds roughly five minutes to Stop and
-          transcribe — on top of the transcription pass that already runs there.
+          length, so an hour-long recording adds roughly five minutes when you
+          stop and save, even with a streaming model.
           That is why it is off unless you turn it on.
         </p>
         <p className="caveat warn">

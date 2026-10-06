@@ -16,7 +16,7 @@ node tools/visual-check/shell-rail.mjs
 It needs Node 22, Microsoft Edge, and the Vite dev server at the loopback URL
 used by the application. `--edge`, `--url`, `--port`, `--out`, and
 `--keep-fixture-banner` are available; `--help` prints the full usage. The
-tool measures nine shell claims (KNEG-363):
+tool measures eleven shell claims (KNEG-363, KNEG-382, KNEG-390):
 
 1. `nav.rail` is 68px wide and exactly one `.rail-item[aria-current=page]`
    exists.
@@ -41,6 +41,8 @@ tool measures nine shell claims (KNEG-363):
     only while it is on screen. While hidden, narrowing to 1000x720 and
     widening again moves nothing, and fixture note 104 opens hidden too;
     showing the column with Transcript open selects Notes.
+11. From that note, Dictation in the rail and then Notes reopens it, marked in the
+    library; after a reload Notes opens its first note again.
 
 "Hidden" is measured as the computed display and width, not the `hidden`
 attribute alone. The 720x520 check reloads at that size, because the panel's
@@ -54,9 +56,10 @@ rail geometry; the `FIXTURES` title prefix remains. Pass
 `--keep-fixture-banner` to measure the page exactly as Vite marked it.
 
 Each run writes PNGs, `report.json`, and `report.md` below the selected output
-directory. False checks do not make a completed measurement run fail: they are
-evidence for a person to judge. A failure to launch Edge, reach Vite, or
-evaluate the page exits nonzero.
+directory. A completed run with any check measured false exits 1 and names the
+false checks on stderr (KNEG-389); the report is written either way, and it is
+still the evidence a person judges. A failure to launch Edge, reach Vite, or
+evaluate the page also exits nonzero.
 
 ## Chip menus
 
@@ -104,7 +107,7 @@ each reload. It numbers ten checks:
    emulated), with screenshots.
 
 Like the shell rail, it reports **measured in headless Edge against dev
-fixtures, not in the Tauri window**, and false checks do not fail the run.
+fixtures, not in the Tauri window**, and a false check makes it exit 1.
 Not covered: Meetings' language-required fix (the fixtures cannot make a
 provider require a language on a blank value without a conditional stub) and
 anything the Tauri window itself does.

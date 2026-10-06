@@ -76,6 +76,13 @@ test("destinationName falls back to the destination itself", () => {
   assert.equal(destinationName("self-hosted at http://10.0.0.5:8080"), "self-hosted at http://10.0.0.5:8080");
 });
 
+test("the two endpoint routes Rust names are said in words, not as their ids (KNEG-352)", () => {
+  assert.equal(destinationName("custom"), "your custom endpoint");
+  assert.equal(destinationName("self-hosted"), "your self-hosted server");
+  const custom = { isLocal: false, leavesDevice: true, destination: "custom" };
+  assert.deepEqual(privacyLines(custom, off), ["Audio is sent to your custom endpoint"]);
+});
+
 test("every provider in the registry is named as the registry names it", () => {
   // The names are copied into `lib/controlBar.ts` rather than imported, so the
   // bundle does not carry the whole registry; this is what keeps the copy honest.

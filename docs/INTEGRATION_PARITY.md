@@ -149,19 +149,27 @@ with no way in" the same way chunks A–C already had for reasoning and transcri
 
 ## Current state
 
-Quoted from the gate's own output, not recomputed by hand — **102 entries** against baseline
-`c4000db9802d`:
+Quoted from the gate's own output, not recomputed by hand — **103 entries** against baseline
+`c4000db9802d` (re-run 2026-10-02, KNEG-355):
 
 | Status | Count |
 | --- | --- |
-| `ported-with-new-rust-implementation` | 52 |
+| `ported-with-new-rust-implementation` | 55 |
 | `rewired-to-direct-byok` | 21 |
 | `removed-vendor-service` | 18 |
-| `temporarily-deferred` | 8 |
-| `ported` | 2 |
+| `temporarily-deferred` | 5 |
+| `ported` | 3 |
 | `platform-specific` | 1 |
 
-This was 99 entries and different counts when this section was last written. Three entries were
+The previous version of this table read 102 entries: 52 / 21 / 18 / 8 / 2 / 1. Four entries
+moved since. `meeting-stream:local-streaming` was added when the sherpa streaming client was
+measured against a real server (51c4d03). The two diarization models
+(`diarization-model:sherpa-onnx-pyannote-segmentation-3-0`, `diarization-model:3dspeaker-campplus-en`)
+went from `temporarily-deferred` to `ported-with-new-rust-implementation` when speaker diarization
+was built (a307cea). `developer:agent-skills` went to `ported` once `docs/agent-skills/` was
+written (705d258).
+
+Before that, this was 99 entries and different counts. Three entries were
 added in between — `credential:assemblyai` and `credential:deepgram` (new BYOK slots for meeting
 streaming), and `media:openwhispr-import` (an importer that existed and was tested from early in
 the build but was deliberately kept out of the manifest until it had a screen, per the
@@ -185,18 +193,20 @@ instances of the identical overclaim, plus one adjacent case outside the `ACTIVE
 | `calendar:apple` | `platform-specific` | `AppleCalendarSource` is "deliberately unimplemented by anything in this crate," on every platform |
 | `developer:agent-skills` (`kind: "documentation"`, outside `ACTIVE`) | `ported`, target `docs/agent-skills/` | That directory does not exist; the rewrite was never done |
 
-All four now carry `temporarily-deferred`. For the two Tinfoil entries this is a disclosed
+All four were moved to `temporarily-deferred`; three still carry it. `developer:agent-skills` is
+`ported` again since 705d258 wrote `docs/agent-skills/`. For the two Tinfoil entries this is a disclosed
 compromise, not a fit: this manifest's `statusVocabulary` has no "declined on principle" term, and
 each entry's `deferral.why` says so rather than letting the status imply a resource-blocked,
-resumable wait. `calendar:apple` and `developer:agent-skills` fit the term's ordinary meaning —
-a macOS machine and a person to write documentation, respectively, are named dependencies rather
-than open questions.
+resumable wait. `calendar:apple` fits the term's ordinary meaning — a macOS machine is a named
+dependency rather than an open question — as `developer:agent-skills` did while its dependency
+was a person to write the documentation.
 
 ## Deferred integrations
 
-Eight, each with dependencies and a named interface in the manifest — up from three when this
-section was last written, once the four corrections above joined the four that were already
-deferred for a genuine resource or scope reason.
+Five, each with dependencies and a named interface in the manifest. There were eight after the
+four corrections above joined the four already deferred for a resource or scope reason; three
+have left the list since: the two diarization models when speaker diarization was built
+(a307cea), and `developer:agent-skills` when its documentation was written (705d258).
 
 | Integration | Phase | Why | Degradation |
 | --- | --- | --- | --- |
@@ -205,7 +215,6 @@ deferred for a genuine resource or scope reason.
 | `meeting-stream:tinfoil-realtime` | 4 | Declined on principle, not resource-blocked — see "the `ACTIVE`-status audit" above. | Every other meeting-stream provider is unaffected; this one is refused rather than approximated. |
 | `transcription:tinfoil` | 3 | Same principled refusal as above, for the batch client. | The other six transcription providers are unaffected. |
 | `calendar:apple` | 5 | EventKit has no Rust binding anywhere in this project and there is no macOS machine to write or verify one against. | Google and Microsoft calendar sync are unaffected; Apple reports `Unsupported` with the reason rather than an empty calendar list. |
-| `developer:agent-skills` | 7 | The rewritten `docs/agent-skills/` was never written; nothing blocks it beyond someone doing it. | None — documentation only, with no backend or UI surface of its own. |
 
 ## Things worth knowing about the data
 

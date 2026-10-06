@@ -172,6 +172,13 @@ export function SettingsShortcuts({
   const unhandled = new Map<string, string>(
     hotkeys.unhandled.map((u: UnhandledAction) => [u.action, u.reason]),
   );
+  // The modifier-only shortcuts bound now. Without the hook they do nothing,
+  // and once dictation is rebound away from `Control+Super` there are none, so
+  // the caveat below goes with them rather than outliving its cause (KNEG-351).
+  // Once each: two actions can share one.
+  const modifierOnly = [...new Set(hotkeys.bindings.flatMap((b) =>
+    b.accelerators.filter((a) => a.kind === "modifier-only").map((a) => a.accelerator),
+  ))];
 
   return (
     <div className="view">
@@ -341,11 +348,14 @@ export function SettingsShortcuts({
           default does nothing, and that has to be read before anyone relies on
           it. The explanation of why stays in the fold.
         */}
-        {hook.state === "available" ? null : (
+        {hook.state === "available" || modifierOnly.length === 0 ? null : (
           <p className="caveat">
-            The dictation default, <code>Control+Super</code>, does nothing on
-            this computer and has to be changed. Try{" "}
-            <code>Control+Shift+D</code>.
+            {modifierOnly.map((accelerator, index) => (
+              <Fragment key={`${index}-${accelerator}`}>{index > 0 ? ", " : null}<code>{accelerator}</code></Fragment>
+            ))}{" "}
+            {modifierOnly.length === 1 ? "does" : "do"} nothing on this computer
+            and {modifierOnly.length === 1 ? "has" : "have"} to be changed to a
+            shortcut with a key in it, such as <code>Control+Shift+D</code>.
           </p>
         )}
         {/*

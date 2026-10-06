@@ -9,7 +9,9 @@ validation remains open.
 ## Using Notes
 
 The library — folders, notes and search — is the list panel on the left, beside the
-open note. The title is a separate autosaved text field above **Notes / Transcript /
+open note. Coming back to Notes from another page reopens the note that was open, until the
+app closes; the first visit, or one after that note was deleted, opens the most recently
+edited note. The title is a separate autosaved text field above **Notes / Transcript /
 Replay**.
 Notes opens by default, with personal Markdown notes first and an independently
 editable AI summary below. An empty personal note offers **Start from transcript**;
@@ -68,6 +70,11 @@ WAV and its notes sidecar can be recovered from Meetings (KNEG-316).
   SQL triggers maintain it for all writers, including foreign imports and transcript
   updates. Structured segment text is indexed; legacy plain text is retained for
   search. Snippets prefer matching personal notes, then transcript text.
+- Migration `0007_search_tokenizer.sql` rebuilds and refills both search indexes,
+  notes and dictation history, with `unicode61 remove_diacritics 0` (KNEG-405). The
+  default tokenizer folded å and ä to a and ö to o, so "for" found "för", "har" found
+  "här" and "sa" found "så". Letter case still folds. Every accent now counts, so
+  "cafe" no longer finds "café".
 - No new renderer command or user-editable transcript API was added. Existing note
   exports and separate summary exports retain their behavior.
 

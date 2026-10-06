@@ -1174,7 +1174,11 @@ destination: string,
  */
 isLocal: boolean,
 /**
- * Whether audio leaves this machine on this route.
+ * Whether audio leaves the user's own control on this route. False for
+ * the local model, and also for an `HttpBatch` endpoint on a private host
+ * (`is_private_host`): that audio does leave this machine, for a server
+ * on the user's network, so a screen must not read false as "stays on
+ * this computer" without also checking `is_local` (KNEG-352).
  */
 leavesDevice: boolean,
 /**
