@@ -75,6 +75,15 @@ Typed notes become the saved note body even if transcription fails. Discarding a
 recording keeps nonempty typed notes as a notes-only meeting note. An interrupted
 WAV and its notes sidecar can be recovered from Meetings (KNEG-316).
 
+A meeting can be named, and given a folder in the Folder chip, before Start on
+the Meetings page (KNEG-365). Rust keeps both with the session and in a
+`.meeting.json` beside the WAV, so the saved note, a discarded meeting's
+notes-only note and a recovered note all take them, however the meeting ends. A
+meeting with no name is named for when it started. A folder deleted before the
+note is saved is left out, and the outcome says the note isn't in a folder. The
+notification window's Record and the local API start an unnamed meeting in no
+folder.
+
 ## Data compatibility
 
 - New meetings save the typed personal notes, or an empty body if none were typed.

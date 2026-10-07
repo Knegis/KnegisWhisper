@@ -583,6 +583,49 @@ export function meetingPageState() {
   `);
 }
 
+/* ------------------------------------------------------------- meeting plan */
+
+/**
+ * What the Meetings page says a meeting is saved as (KNEG-365): the name
+ * field (its value, placeholder and accessible name), the live view's title,
+ * and the titles of the list panel's rows under each heading -- "Now",
+ * "Recent", "Interrupted".
+ */
+export function meetingPlanState() {
+  return source(`
+    const field = document.querySelector('.control-row input.meeting-name');
+    const sections = {};
+    for (const section of document.querySelectorAll('.list-panel .panel-section')) {
+      const label = section.querySelector('.panel-label')?.textContent.trim();
+      if (!label) continue;
+      sections[label] = [...section.querySelectorAll('.panel-item-title')].map((item) => item.textContent.trim());
+    }
+    return {
+      name: field ? { value: field.value, placeholder: field.placeholder, label: field.getAttribute('aria-label') } : null,
+      liveTitle: document.querySelector('.meeting-live .live-title')?.textContent.trim() ?? null,
+      sections,
+    };
+  `);
+}
+
+/**
+ * The Notes library's folders, each with the titles of the notes filed in
+ * it, and the notes in none ("Not in a folder").
+ */
+export function notesFolders() {
+  return source(`
+    const titles = (root) => [...root.querySelectorAll('.notes-entry-title')].map((item) => item.textContent.trim());
+    const folders = {};
+    for (const folder of document.querySelectorAll('.list-panel .notes-folder')) {
+      const name = folder.querySelector('.notes-folder-name')?.textContent.trim() ?? '';
+      folders[name] = titles(folder);
+    }
+    const unfiled = [...document.querySelectorAll('.list-panel .panel-section')]
+      .find((section) => section.querySelector('.panel-label')?.textContent.trim() === 'Not in a folder');
+    return { folders, unfiled: unfiled ? titles(unfiled) : [] };
+  `);
+}
+
 /**
  * The first chip whose name -- its aria-label, or its text where it has none --
  * starts with `prefix`, as a DOM expression for the other snippets to build on.

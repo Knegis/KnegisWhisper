@@ -2,9 +2,11 @@
 
 An interrupted meeting can leave a WAV in the application's `meetings` directory
 without a `note_recordings` row. Personal notes may also be in the matching
-`.notes.md` sidecar. The **Interrupted** section of the Meetings page's list
-panel lists these files while no meeting is running and offers recovery one
-recording at a time. Nothing is transcribed or saved until the user presses
+`.notes.md` sidecar, and the name and folder chosen before Start are in the
+matching `.meeting.json` (KNEG-365), written as the meeting starts. The
+**Interrupted** section of the Meetings page's list panel lists these files
+while no meeting is running, by that name when it has one, and offers recovery
+one recording at a time. Nothing is transcribed or saved until the user presses
 **Recover** on a row.
 
 Recovery checks that the WAV is still a regular, unattached file in the owned
@@ -17,12 +19,20 @@ its file and notes sidecar left in place.
 The existing whole-file local engine transcribes the WAV; optional speaker
 labels follow the normal meeting setting. The note's body comes only from the
 typed sidecar. A failed transcription still saves nonempty typed notes, with a
-recording detail that names the failure. The note and WAV attachment commit in
-one transaction, so a failed save leaves neither a duplicate note nor an
-attachment claim. The sidecar is removed only after that commit. If there are
-neither typed notes nor transcribed segments, recovery leaves the WAV available
-for a later attempt. Recovered notes say that audio may end abruptly and that
-the original capture-source measurements are unavailable.
+recording detail that names the failure. The note takes the meeting's name, or
+is named for when the recording started (read from its file name), and is
+saved in the chosen folder; a folder deleted since is left out, and the outcome
+says so. An unreadable `.meeting.json` is ignored, with a warning in the log.
+The note and WAV attachment commit in one transaction, so a failed save leaves
+neither a duplicate note nor an attachment claim. Both sidecars are removed
+only after that commit. If there are neither typed notes nor transcribed
+segments, recovery leaves the WAV available for a later attempt. Recovered
+notes say that audio may end abruptly and that the original capture-source
+measurements are unavailable.
+
+A meeting that ends without a note owning its WAV -- the recording could not
+be closed, or nothing was transcribed and nothing typed -- keeps its
+`.meeting.json`, so the note recovered from that WAV is still named and filed.
 
 New recording names include a UUID, and `WavWriter::create` refuses an existing
 path, so starting another meeting cannot overwrite an orphan from a prior run.

@@ -229,6 +229,45 @@ meeting command sends a state, and an `idle` heard once would outrank every
 later status read. Not measured: a real meeting window hanging, and which notes
 Rust keeps on cancel (`meeting.rs`'s `cancel`, `notes.take()`).
 
+## Meeting plan
+
+```powershell
+node tools/visual-check/meeting-plan.mjs --url http://127.0.0.1:5191/
+```
+
+Same options as the chip menus (the banner is always removed). It measures
+KNEG-365: naming a meeting and choosing its folder before recording. The name
+is typed with CDP's `Input.insertText` into the focused field, and the folder
+chosen by pressing the Folder chip and its row. The page's `invoke` is wrapped
+(`installInvokeStub`) to log what reached `meeting_start`. The fixtures keep
+the plan on `meeting_status` while the meeting runs, as Rust keeps it with the
+session. Their `meeting_stop` saves a new meeting note as Rust's `keep` does
+and announces the outcome as Rust's `stop` does, which is what makes the page
+read Recent again. Each check starts from a fresh load at 1000x720. Five
+checks:
+
+1. With "Board review" typed and Internal (fixture folder 3) chosen, the
+   Folder chip reads "Save to Internal". One `meeting_start` carries that
+   title and `folderId` 3, from Start recording and, on a fresh page, from
+   Record this call. The field's placeholder and accessible name are read too.
+2. While it records, the live view's title and the Now row read the name.
+3. Stop and save: Recent's first row is the name, the field is empty again,
+   and the chip still names the folder. In Notes, the Internal folder lists
+   the note.
+4. Folder 3 deleted through the fixtures while the meeting records, then Stop:
+   the caveat says "The folder you chose was deleted, so the note isn't in a
+   folder.", the chip is back at "Save to Notes", and Notes lists the note
+   under "Not in a folder".
+5. No name and no folder: `meeting_start` gets `null` for both, the live title
+   is "Meeting", and the note is named "Meeting — " and when it started, in no
+   folder.
+
+Measured in headless Edge against dev fixtures, not in the Tauri window; a
+false check makes it exit 1. Rust's own side -- the plan beside the
+recording, recovery's name and folder, and a folder deleted between Rust's
+lookup and its insert -- is covered by `cargo test`, not here. Not measured:
+the notification window's Record, which starts an unnamed meeting.
+
 ## Running application windows
 
 Launch the running development application with its WebView2 debugger exposed:

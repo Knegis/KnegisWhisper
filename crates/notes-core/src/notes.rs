@@ -517,6 +517,25 @@ pub async fn folders(pool: &SqlitePool) -> Result<Vec<Folder>, StorageError> {
     .await?)
 }
 
+/// `folder_id` while that folder still exists, and `None` once it is gone.
+///
+/// For a folder chosen before the note it is for exists -- a meeting's,
+/// chosen at Start and used at Stop (KNEG-365). `notes.folder_id` references
+/// `folders` and the foreign key is enforced, so a note saved with a deleted
+/// folder's id is refused outright rather than filed nowhere.
+pub async fn existing_folder(
+    pool: &SqlitePool,
+    folder_id: Option<i64>,
+) -> Result<Option<i64>, StorageError> {
+    let Some(id) = folder_id else {
+        return Ok(None);
+    };
+    Ok(sqlx::query_scalar("SELECT id FROM folders WHERE id = ?")
+        .bind(id)
+        .fetch_optional(pool)
+        .await?)
+}
+
 /// Delete a folder. Its notes survive, with no folder.
 pub async fn delete_folder(pool: &SqlitePool, id: i64) -> Result<bool, StorageError> {
     let result = sqlx::query("DELETE FROM folders WHERE id = ?")
@@ -711,6 +730,21 @@ mod tests {
             .unwrap()
             .expect("the note should survive");
         assert_eq!(survivor.folder_id, None, "it should just lose its folder");
+    }
+
+    #[tokio::test]
+    async fn a_folder_chosen_earlier_is_kept_only_while_it_exists() {
+        // KNEG-365: a meeting's folder is chosen at Start and used at Stop,
+        // and `notes.folder_id` refuses an id whose folder was deleted between.
+        let db = db().await;
+        let p = db.pool();
+        let kept = create_folder(p, "Customer calls").await.unwrap();
+        let gone = create_folder(p, "Temporary").await.unwrap();
+        assert!(delete_folder(p, gone).await.unwrap());
+
+        assert_eq!(existing_folder(p, Some(kept)).await.unwrap(), Some(kept));
+        assert_eq!(existing_folder(p, Some(gone)).await.unwrap(), None);
+        assert_eq!(existing_folder(p, None).await.unwrap(), None);
     }
 
     /* --------------------------------------------------------- query escaping */

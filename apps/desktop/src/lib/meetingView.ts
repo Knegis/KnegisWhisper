@@ -25,7 +25,7 @@
  * transcript is sent: a privacy line that errs errs towards saying so.
  */
 
-import type { Detected, InputDevice, Sources, SummarySettings } from "../generated/ipc-types.js";
+import type { Detected, Folder, InputDevice, Sources, SummarySettings } from "../generated/ipc-types.js";
 import { PROVIDER_REGISTRY, type ProviderRegistry } from "../generated/providers.js";
 import type { MenuOption } from "./chipMenu.js";
 import { destinationName, LANGUAGES, languageLabel } from "./controlBar.js";
@@ -292,6 +292,38 @@ export function meetingLanguageMenu(
     ...LANGUAGES.map(([id, label]) => row(id, label)),
     ...(unknown ? [row(code, code)] : []),
   ];
+}
+
+/**
+ * The Meetings page's Folder chip: where the meeting's note will be saved,
+ * chosen before Start (KNEG-365), and its menu -- "No folder", the word Notes'
+ * own Move to folder uses, then every folder in the order Notes lists them.
+ *
+ * A chosen folder that is not in `folders` -- deleted in Notes since it was
+ * chosen -- reads as no folder, so the chip never names a folder the note
+ * cannot go to. Rust makes the same call at Stop for a folder deleted while
+ * the meeting ran, and the outcome says so.
+ */
+export function folderMenu(
+  folders: readonly Folder[],
+  chosen: number | null,
+): { label: string; options: MenuOption[] } {
+  const folder = folders.find((f) => f.id === chosen) ?? null;
+  const row = (id: string, label: string, current: boolean): MenuOption => ({
+    id,
+    label,
+    group: null,
+    current,
+    disabled: false,
+    reason: null,
+  });
+  return {
+    label: folder === null ? "Save to Notes" : `Save to ${folder.name}`,
+    options: [
+      row("", "No folder", folder === null),
+      ...folders.map((f) => row(String(f.id), f.name, f.id === folder?.id)),
+    ],
+  };
 }
 
 /**

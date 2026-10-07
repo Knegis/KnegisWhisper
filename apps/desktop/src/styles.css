@@ -649,6 +649,13 @@ button.control-copy { display: inline-flex; align-items: center; gap: 6px; heigh
 .control-row > button.secondary { display: inline-flex; align-items: center; gap: 8px; }
 /* The body's gap spaces its children; a caveat's or a disclosure's own top margin would double it. */
 .control-body > .caveat, .control-body > .learn-more { margin: 0; }
+/*
+ * Meetings' name field (KNEG-365), in the room left of Start, at the row's
+ * 38px and the Kit's 2px corner. Its fill is every text field's (`# Text
+ * fields keep theirs`, below). It wraps onto a line of its own, whole, where
+ * the row is too narrow for both.
+ */
+.control-row > input.meeting-name { flex: 1 1 220px; min-width: 0; height: 38px; margin: 0; border-radius: 2px; }
 /* Meetings' Start carries the recording mark, the one round shape the Kit allows. */
 .start-dot { width: 10px; height: 10px; flex-shrink: 0; border-radius: 50%; background: currentColor; }
 
@@ -681,7 +688,7 @@ button.control-copy { display: inline-flex; align-items: center; gap: 6px; heigh
 .live-status-stalled { color: var(--text); }
 .live-clock { color: var(--text); font-variant-numeric: tabular-nums; }
 .rec-dot { width: 8px; height: 8px; flex-shrink: 0; border-radius: 50%; background: var(--rec); }
-.live-title { margin: 8px 0 0; font-family: var(--font-sans); font-size: 28px; line-height: 36px; letter-spacing: -0.3px; text-transform: none; color: var(--text); }
+.live-title { margin: 8px 0 0; font-family: var(--font-sans); font-size: 28px; line-height: 36px; letter-spacing: -0.3px; text-transform: none; color: var(--text); overflow-wrap: anywhere; }
 .live-sub { margin: 2px 0 0; font-size: 13.5px; line-height: 20px; color: var(--muted); overflow-wrap: anywhere; }
 .live-caveats { display: flex; flex-direction: column; gap: 10px; padding: 14px 28px 0; }
 .live-caveats > .caveat, .live-caveats > .error { margin: 0; }

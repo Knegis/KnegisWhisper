@@ -45,6 +45,8 @@ test("every renderer snippet is syntactically valid JavaScript", () => {
     snippets.scriptConfirm(false),
     snippets.confirmQuestions(),
     snippets.meetingPageState(),
+    snippets.meetingPlanState(),
+    snippets.notesFolders(),
     snippets.chipState("Transcription: "),
     snippets.chipCenter("Tidy up"),
     snippets.centerOfText(".task-hero button.primary", "Choose a provider"),

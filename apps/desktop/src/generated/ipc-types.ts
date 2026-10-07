@@ -717,6 +717,31 @@ systemAudioReason: string | null, };
 export type Delivered = "not-captured" | "nothing" | "silence" | "audio";
 
 /**
+ * What a meeting is saved as, chosen before it starts (KNEG-365).
+ *
+ * Held by the session and written beside the recording
+ * ([`draft::write_plan`]) as it starts, so every way a meeting ends applies
+ * it: Stop or Discard from the meeting window with the Meetings page not
+ * open, the local API, and recovery after a crash. The page that chose it
+ * keeps nothing.
+ *
+ * `#[serde(default)]` on the whole struct, so a plan written before a field
+ * was added still reads, with that field's default.
+ */
+export type MeetingPlan = {
+/**
+ * The meeting's name, tidied as the note's title will be
+ * ([`note_title`]). `None` names the note for when the meeting started.
+ */
+title: string | null,
+/**
+ * The folder the note is saved to, or `None` for no folder. A folder
+ * deleted before the note is saved is left out, and the outcome says so
+ * (`MeetingOutcome::Saved::folder_missing`).
+ */
+folderId: number | null, };
+
+/**
  * What can be said about the meeting session.
  */
 export type MeetingStatus = { state: MeetingState,
@@ -739,7 +764,12 @@ transcriptFailure: string | null,
 /**
  * The provider in use, while there is one.
  */
-provider: string | null, elapsedSeconds: number, sources: Sources | null,
+provider: string | null,
+/**
+ * What the running meeting will be saved as (KNEG-365). `None` unless a
+ * meeting is recording: like `provider`, it belongs to the session.
+ */
+plan: MeetingPlan | null, elapsedSeconds: number, sources: Sources | null,
 /**
  * What this platform can do about system audio, whether or not a meeting is
  * running.
@@ -816,7 +846,12 @@ reconnects: number,
  * True when the whole-file pass failed and the overlapping live
  * partials were saved instead.
  */
-transcriptIsPartials: boolean, } | { "outcome": "nothing-transcribed", recordingPath: string, mic: Delivered, system: Delivered,
+transcriptIsPartials: boolean,
+/**
+ * True when the folder chosen before Start was deleted before the
+ * note was saved, so the note is in no folder (KNEG-365).
+ */
+folderMissing: boolean, } | { "outcome": "nothing-transcribed", recordingPath: string, mic: Delivered, system: Delivered,
 /**
  * Scheduled live-session reconnects still happened even when no words
  * were produced. Keeping the count makes this successful provider work
@@ -824,7 +859,13 @@ transcriptIsPartials: boolean, } | { "outcome": "nothing-transcribed", recording
  */
 reconnects: number, } | { "outcome": "cancelled", noteId: number | null, } | { "outcome": "failed", message: string, };
 
-export type RecoverableRecording = { storageKey: string, hasNotes: boolean, };
+export type RecoverableRecording = { storageKey: string, hasNotes: boolean,
+/**
+ * The name the meeting was given before Start, from the plan beside it
+ * (KNEG-365), tidied as the recovered note's title will be. `None` when
+ * it was given none, or has no plan.
+ */
+title: string | null, };
 
 /**
  * An offer to record a meeting that appears to be happening.

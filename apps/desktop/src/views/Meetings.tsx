@@ -11,10 +11,12 @@
  *     the control bar: the microphone -- the system default, the only one the
  *     recorder opens -- whether the other participants are captured, a choice
  *     kept on this page only, who transcribes in what language, each chosen in
- *     its chip's menu (`ChipMenu`), and whether a summary is made, a toggle
+ *     its chip's menu (`ChipMenu`), whether a summary is made, a toggle
  *     that is a link to Cleanup & summaries until a provider and model are
- *     chosen there. Then where the audio goes, which is never hidden, the
- *     caveats, and Start.
+ *     chosen there, and the folder the note is saved to. Then where the audio
+ *     goes, which is never hidden, the caveats, the meeting's name, and Start.
+ *     The name and the folder go to Rust with Start and stay with the meeting
+ *     (KNEG-365); the page keeps neither for a meeting already running.
  *   - **Live**, while a meeting is running: its state and a timer, which
  *     captures opened and where the audio goes, the live transcript, and a
  *     bar with what is in effect, Discard, and Stop.
@@ -86,6 +88,7 @@ import { timeOfDay } from "../lib/dayGroups";
 import {
   cancelMeeting,
   flushMeetingPanelNotes,
+  getFolders,
   getMeetingKeyterms,
   getMeetingLanguage,
   getMeetingProvider,
@@ -127,6 +130,7 @@ import {
   activeCall,
   discardQuestion,
   elapsedLabel,
+  folderMenu,
   interruptedTitle,
   liveElapsed,
   meetingLanguageMenu,
@@ -216,16 +220,32 @@ export function Meetings({
   }, []);
   const microphoneRead = useRefresh(loadMicrophone).data ?? null;
   const microphone = meetingMicrophone(microphoneRead?.devices ?? null, microphoneRead?.chosen ?? null);
+  // The folders the Folder chip offers (KNEG-365), read on their own for the
+  // same reason: a failure leaves only "No folder", which is where a note
+  // goes anyway, and nothing else on the page waits for them.
+  const folderRead = useRefresh(getFolders);
+  const folders = folderRead.data ?? [];
+  const reloadFolders = folderRead.reload;
   const recentGuard = recentRead.guard;
   const reloadRecent = useCallback(() => recentGuard(async () => {}), [recentGuard]);
   // Every read that follows a meeting ending or a recording being recovered
-  // reads both, since either can add a note to Recent.
+  // reads both, since either can add a note to Recent -- and the folders,
+  // since an outcome can say the chosen one was deleted, and the chip should
+  // stop naming it then.
   const reloadAll = useCallback(async () => {
-    await Promise.all([reload(), reloadRecent()]);
-  }, [reload, reloadRecent]);
+    await Promise.all([reload(), reloadRecent(), reloadFolders()]);
+  }, [reload, reloadRecent, reloadFolders]);
 
   const [state, setState] = useState<MeetingState | null>(null);
   const [wantSystem, setWantSystem] = useState(true);
+  /**
+   * What the next meeting started here is saved as (KNEG-365): its name, and
+   * the folder chosen in the Folder chip. Kept on this page only, like
+   * `wantSystem`, and handed to Rust at Start, which keeps them with the
+   * meeting however it ends. The name clears once a start from here works.
+   */
+  const [meetingName, setMeetingName] = useState("");
+  const [folderId, setFolderId] = useState<number | null>(null);
   const [sources, setSources] = useState<Sources | null>(null);
   const [transcript, setTranscript] = useState(emptyLiveTranscript);
   const [outcome, setOutcome] = useState<MeetingOutcome | null>(null);
@@ -472,6 +492,10 @@ export function Meetings({
   const transcriber = liveProvider ?? selectedProvider;
   const systemAudioAvailable = status.systemAudio.state === "available";
   const liveSources = sources ?? status.sources;
+  // The running meeting's name, from Rust rather than this page: a meeting
+  // started from the notification window has none, and one started here may
+  // have been named before the page was last mounted (KNEG-365).
+  const liveTitle = status.plan?.title ?? "Meeting";
   const language = languageLabel(data.language.trim() === "" ? [] : [data.language.trim()]);
   // The privacy fact, never hidden: whether this meeting's audio leaves this
   // computer, from `audioLeavesDevice` -- the field Rust sets for exactly that
@@ -506,6 +530,10 @@ export function Meetings({
   // is not what is saved, so choosing it is the write that replaces it.
   const providerOptions = providerMenu(providers, data.provider, selected);
   const languageOptions = meetingLanguageMenu(data.language, selectedProvider);
+  const folderChoice = folderMenu(folders, folderId);
+  // Only a folder the chip can name: one deleted in Notes since it was chosen
+  // here is no folder, as the chip already says (`folderMenu`).
+  const folderForStart = folders.some((folder) => folder.id === folderId) ? folderId : null;
   const choose = (write: () => Promise<void>) => {
     // One write at a time, as Dictation's switch does: a second choice made
     // while the first is in flight is ignored, so `writing` clears only when
@@ -522,7 +550,12 @@ export function Meetings({
       // The outcome event clears the last meeting's lines; this makes sure a
       // new meeting never opens on them should that event not have arrived.
       setTranscript(emptyLiveTranscript());
-      setSources(await startMeeting(selected, withSystem));
+      // Rust tidies the name (`note_title`); a blank one is no name.
+      const title = meetingName.trim() === "" ? null : meetingName;
+      setSources(await startMeeting(selected, withSystem, { title, folderId: folderForStart }));
+      // That meeting has the name now; the next one starts unnamed. The
+      // folder stays chosen, as the chips do.
+      setMeetingName("");
     });
   };
   // Stop and Discard first ask the meeting window to save what was typed in
@@ -647,7 +680,8 @@ export function Meetings({
       {recording ? (
         <PanelSection label="Now">
           <PanelItem
-            title="Meeting"
+            title={liveTitle}
+            tooltip={liveTitle}
             current
             meta={
               // Stalled is not recording -- nothing is being captured -- so
@@ -695,7 +729,9 @@ export function Meetings({
       {recoverable.length === 0 ? null : (
         <PanelSection label="Interrupted">
           {recoverable.map((candidate) => {
-            const title = interruptedTitle(candidate.storageKey, now);
+            // The name it was given before Start, from the plan Rust kept
+            // beside it (KNEG-365); otherwise when it started.
+            const title = candidate.title ?? interruptedTitle(candidate.storageKey, now);
             const busy = recoveringKey === candidate.storageKey;
             return (
               // Not a `PanelItem`: that is a button, and Recover is a button
@@ -709,7 +745,7 @@ export function Meetings({
                   <button
                     type="button"
                     className="panel-inline"
-                    aria-label={`${busy ? "Recovering" : "Recover"} ${lowerFirst(title)}`}
+                    aria-label={`${busy ? "Recovering" : "Recover"} ${candidate.title ?? lowerFirst(title)}`}
                     disabled={recording || current === "finishing" || recoveringKey !== null}
                     onClick={() => recover(candidate)}
                   >
@@ -752,7 +788,7 @@ export function Meetings({
               <span role="status">{meetingStateLabel(current)}</span>
               <span className="live-clock">{elapsedLabel(elapsed)}</span>
             </p>
-            <h2 className="live-title" ref={liveHeading} tabIndex={-1}>Meeting</h2>
+            <h2 className="live-title" ref={liveHeading} tabIndex={-1}>{liveTitle}</h2>
             <p className="live-sub">{sub.join(" · ")}</p>
           </header>
           {error || stalled || transcriptEnded || notesFlushFailed || outcome ? (
@@ -973,6 +1009,17 @@ export function Meetings({
                     onClick={() => onGoTo("intelligence")}
                   />
                 )}
+                {/* Where the note goes (KNEG-365). Page state, not a
+                    setting: it applies to the next meeting started here and
+                    goes to Rust with it, so it holds however that meeting
+                    ends. */}
+                <ChipMenu
+                  icon="folder"
+                  name="Folder"
+                  label={folderChoice.label}
+                  options={folderChoice.options}
+                  onChoose={(id) => setFolderId(id === "" ? null : Number(id))}
+                />
               </>
             }
             privacy={privacy}
@@ -1041,14 +1088,28 @@ export function Meetings({
             ) : null}
             {recoveringKey !== null ? (
               <p className="control-note" role="status">
-                Recovering the {lowerFirst(interruptedTitle(recoveringKey, now))}…
+                Recovering{" "}
+                {recoverable.find((candidate) => candidate.storageKey === recoveringKey)?.title ??
+                  `the ${lowerFirst(interruptedTitle(recoveringKey, now))}`}
+                …
               </p>
             ) : null}
             {recoveryOutcome && <OutcomeCaveat outcome={recoveryOutcome} />}
             {recoveryError && <p className="error" role="alert">{recoveryError}</p>}
 
             <div className="control-row">
-              <div className="control-spacer" />
+              {/* The meeting's name, the note's title (KNEG-365); left
+                  blank, the note is named for when the meeting started.
+                  Rust caps a title at 200 characters. */}
+              <input
+                type="text"
+                className="meeting-name"
+                value={meetingName}
+                maxLength={200}
+                placeholder="Name this meeting (optional)"
+                aria-label="Meeting name (optional)"
+                onChange={(event) => setMeetingName(event.target.value)}
+              />
               {/* Off whenever the hero says Needs setup, not only when no
                   provider is selected: with a language the provider requires
                   left blank, `start_live` refuses (`resolve_provider_config`,

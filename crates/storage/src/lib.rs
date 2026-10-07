@@ -64,6 +64,18 @@ pub enum StorageError {
     Import(String),
 }
 
+impl StorageError {
+    /// Whether SQLite refused the statement on a foreign key: a row naming a
+    /// parent that does not exist. Foreign keys are enforced here, so a caller
+    /// holding an id read earlier -- a meeting's folder, chosen at Start and
+    /// used at Stop (KNEG-365) -- can tell "that parent has gone" from any
+    /// other failure, and save without it.
+    #[must_use]
+    pub fn is_foreign_key_violation(&self) -> bool {
+        matches!(self, Self::Sqlx(sqlx::Error::Database(error)) if error.is_foreign_key_violation())
+    }
+}
+
 /// Substrings that mark a column name as a probable credential.
 const CREDENTIAL_COLUMN_MARKERS: [&str; 7] = [
     "token",
@@ -497,6 +509,26 @@ mod tests {
             orphan.is_err(),
             "foreign_keys pragma should reject the orphan"
         );
+    }
+
+    #[tokio::test]
+    async fn a_refused_foreign_key_says_so_and_other_failures_do_not() {
+        let db = db().await;
+        let orphan: StorageError =
+            sqlx::query("INSERT INTO notes (title, folder_id) VALUES ('m', 9999)")
+                .execute(db.pool())
+                .await
+                .unwrap_err()
+                .into();
+        assert!(orphan.is_foreign_key_violation(), "{orphan}");
+
+        let other: StorageError = sqlx::query("INSERT INTO no_such_table VALUES (1)")
+            .execute(db.pool())
+            .await
+            .unwrap_err()
+            .into();
+        assert!(!other.is_foreign_key_violation(), "{other}");
+        assert!(!StorageError::Import("x".into()).is_foreign_key_violation());
     }
 
     #[tokio::test]

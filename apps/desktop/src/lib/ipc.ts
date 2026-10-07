@@ -95,6 +95,7 @@ import type {
   MediaImportSource,
   MediaSidecar,
   MeetingOutcome,
+  MeetingPlan,
   RecoverableRecording,
   MeetingProviderSummary,
   MeetingState,
@@ -213,6 +214,7 @@ export type {
   MediaImportSource,
   MediaSidecar,
   MeetingOutcome,
+  MeetingPlan,
   RecoverableRecording,
   MeetingProviderSummary,
   MeetingState,
@@ -364,7 +366,9 @@ export async function saveMeetingNotificationPlacement(): Promise<void> { return
 export async function resetMeetingNotificationPlacement(): Promise<void> { return invoke("meeting_notification_placement_reset"); }
 
 /**
- * Start recording a meeting.
+ * Start recording a meeting, saved under `plan`'s name in its folder
+ * (KNEG-365). Rust keeps the plan with the meeting, so it applies however the
+ * meeting ends; without one, the meeting is unnamed and in no folder.
  *
  * Returns which captures actually started: a meeting works microphone-only, and
  * the user should be told which one they got rather than left to assume.
@@ -372,8 +376,9 @@ export async function resetMeetingNotificationPlacement(): Promise<void> { retur
 export async function startMeeting(
   provider: string,
   systemAudio: boolean,
+  plan: MeetingPlan = { title: null, folderId: null },
 ): Promise<Sources> {
-  return invoke<Sources>("meeting_start", { provider, systemAudio });
+  return invoke<Sources>("meeting_start", { provider, systemAudio, title: plan.title, folderId: plan.folderId });
 }
 
 export async function stopMeeting(): Promise<MeetingOutcome> {

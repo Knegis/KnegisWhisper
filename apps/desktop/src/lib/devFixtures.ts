@@ -615,6 +615,7 @@ let meetingStatus: MeetingStatus = {
   state: "idle",
   transcriptFailure: null,
   provider: null,
+  plan: null,
   elapsedSeconds: 0,
   sources: null,
   systemAudio: DIAGNOSTICS.systemAudio,
@@ -654,6 +655,87 @@ let meetingStatus: MeetingStatus = {
 
 let meetingLanguage = "en";
 let meetingProvider: string | null = null;
+/** When the fixture meeting started, which names its note when it has no name. */
+let meetingStartedAt: Date | null = null;
+
+/** A name typed before Start, tidied as Rust's `clean_title` tidies it (`meeting.rs`). */
+function fixtureMeetingTitle(given: string | null | undefined): string | null {
+  const line = (given ?? "").split(/[\r\n]/).map((part) => part.trim()).filter((part) => part !== "").join(" ");
+  const title = [...line].slice(0, 200).join("").trimEnd();
+  return title === "" ? null : title;
+}
+
+/** Rust's `note_title`: the name, or "Meeting — " and when it started, local time. */
+function fixtureNoteTitle(given: string | null, started: Date): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const when = `${started.getFullYear()}-${pad(started.getMonth() + 1)}-${pad(started.getDate())} ${pad(started.getHours())}:${pad(started.getMinutes())}`;
+  return given ?? `Meeting — ${when}`;
+}
+
+/**
+ * The fixture meeting stopping: idle again, and what Rust's `keep` would
+ * have made of it -- a new meeting note under the plan's name or when it
+ * started, in the plan's folder, or in none with `folderMissing` when that
+ * folder was deleted while it ran (KNEG-365).
+ */
+function fixtureStop(): MeetingOutcome {
+  const provider = meetingStatus.provider;
+  const plan = meetingStatus.plan ?? { title: null, folderId: null };
+  const startedAt = meetingStartedAt ?? new Date();
+  meetingStartedAt = null;
+  meetingStatus = {
+    ...meetingStatus,
+    state: "idle",
+    provider: null,
+    plan: null,
+    elapsedSeconds: 0,
+    sources: null,
+    offer: null,
+  };
+  // OpenAI is the provider whose capped sessions reconnect. Its fixture uses
+  // the quiet outcome so the second public shape carrying `reconnects` can be
+  // inspected in the browser; every other provider keeps the saved-note path.
+  if (provider === "meeting:openai-realtime") {
+    return {
+      outcome: "nothing-transcribed",
+      recordingPath:
+        "C:\\Users\\dev\\AppData\\Roaming\\KnegisWhisper\\recordings\\2026-08-26T09-00.wav",
+      mic: "silence",
+      system: "nothing",
+      reconnects: 1,
+    };
+  }
+  const folderId = folders.some((f) => f.id === plan.folderId) ? plan.folderId : null;
+  const noteId = nextNoteId++;
+  notes = [
+    {
+      id: noteId,
+      title: fixtureNoteTitle(plan.title, startedAt),
+      content: "",
+      noteType: "meeting",
+      recordingDetails: null, enhancedContent: null,
+      folderId,
+      transcript: null,
+      participants: null,
+      audioDurationSeconds: 1847,
+      createdAt: nowIso(),
+      updatedAt: nowIso(),
+    },
+    ...notes,
+  ];
+  return {
+    outcome: "saved",
+    noteId,
+    durationSeconds: 1847,
+    recordingPath:
+      "C:\\Users\\dev\\AppData\\Roaming\\KnegisWhisper\\recordings\\2026-08-26T09-00.wav",
+    gaps: 0,
+    reconnects: 1,
+    transcriptIsPartials: false,
+    recordingAttached: true,
+    folderMissing: plan.folderId !== null && folderId === null,
+  };
+}
 
 /*
  * Empty, as a fresh profile has none; `kw.interrupted()` adds one, so the
@@ -1942,8 +2024,11 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
       reconnects: 0,
       transcriptIsPartials: false,
       recordingAttached: true,
+      folderMissing: false,
     } satisfies MeetingOutcome;
   },
+  // The plan comes back on `meeting_status` while the meeting runs, tidied,
+  // as Rust keeps it with the session (KNEG-365).
   meeting_start: (a) => {
     const wantsSystemAudio = arg<boolean>(a, "systemAudio") ?? false;
     const sources: Sources = {
@@ -1953,55 +2038,37 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
         ? null
         : "system audio was not requested",
     };
+    meetingStartedAt = new Date();
     meetingStatus = {
       ...meetingStatus,
       state: "recording",
       provider: arg<string>(a, "provider") ?? "meeting:deepgram",
+      plan: {
+        title: fixtureMeetingTitle(arg<string | null>(a, "title")),
+        folderId: arg<number | null>(a, "folderId") ?? null,
+      },
       elapsedSeconds: 0,
       sources,
     };
     return sources;
   },
+  // `fixtureStop` saves the note (a folder deleted while the meeting ran has
+  // no `kw` hand-hold: delete it in Notes, or through `folder_delete`). The
+  // outcome is announced as well as returned, as Rust's `stop` announces it:
+  // that is what makes the page read Recent again. Not the `idle` state, for
+  // the reason `meeting_cancel` gives.
   meeting_stop: () => {
-    const provider = meetingStatus.provider;
-    meetingStatus = {
-      ...meetingStatus,
-      state: "idle",
-      provider: null,
-      elapsedSeconds: 0,
-      sources: null,
-      offer: null,
-    };
-    // OpenAI is the provider whose capped sessions reconnect. Its fixture uses
-    // the quiet outcome so the second public shape carrying `reconnects` can be
-    // inspected in the browser; every other provider keeps the saved-note path.
-    if (provider === "meeting:openai-realtime") {
-      return {
-        outcome: "nothing-transcribed",
-        recordingPath:
-          "C:\\Users\\dev\\AppData\\Roaming\\KnegisWhisper\\recordings\\2026-08-26T09-00.wav",
-        mic: "silence",
-        system: "nothing",
-        reconnects: 1,
-      } satisfies MeetingOutcome;
-    }
-    return {
-      outcome: "saved",
-      noteId: 101,
-      durationSeconds: 1847,
-      recordingPath:
-        "C:\\Users\\dev\\AppData\\Roaming\\KnegisWhisper\\recordings\\2026-08-26T09-00.wav",
-      gaps: 0,
-      reconnects: 1,
-      transcriptIsPartials: false,
-      recordingAttached: true,
-    } satisfies MeetingOutcome;
+    const outcome = fixtureStop();
+    void emit("meeting-outcome", outcome);
+    return outcome;
   },
   meeting_cancel: () => {
+    meetingStartedAt = null;
     meetingStatus = {
       ...meetingStatus,
       state: "idle",
       provider: null,
+      plan: null,
       elapsedSeconds: 0,
       sources: null,
       offer: null,
@@ -2297,10 +2364,11 @@ const devConsole = {
   /**
    * An interrupted recording, as an earlier session would leave one. Read
    * when the Meetings page next loads, so open it (or leave and come back)
-   * after calling this.
+   * after calling this. `title` is the name it was given before Start, as
+   * its plan sidecar would carry it (KNEG-365).
    */
-  interrupted(storageKey = "20260901-101500-3f2a9c1e.wav", hasNotes = true) {
-    recoverable = [...recoverable.filter((r) => r.storageKey !== storageKey), { storageKey, hasNotes }];
+  interrupted(storageKey = "20260901-101500-3f2a9c1e.wav", hasNotes = true, title: string | null = null) {
+    recoverable = [...recoverable.filter((r) => r.storageKey !== storageKey), { storageKey, hasNotes, title }];
   },
   offer(name = "Zoom") {
     const next: Offer = {

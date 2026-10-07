@@ -22,6 +22,7 @@ const saved = {
   gaps: 0,
   reconnects: 0,
   transcriptIsPartials: false,
+  folderMissing: false,
 } as const;
 
 test("a saved meeting says so plainly, with the note id and path behind Learn more", () => {
@@ -36,6 +37,19 @@ test("what is missing from a saved transcript stays in view", () => {
   assert.match(label.text, /running one/);
   assert.match(label.text, /2 stretch\(es\) of audio were never transcribed/);
   assert.doesNotMatch(label.text, /AppData|\.wav/);
+});
+
+// KNEG-365: the folder chosen before Start was deleted before Stop, so Rust
+// saved the note in no folder rather than refusing it. Said in view: the note
+// is not where the chip said it would be.
+test("a saved meeting whose folder was deleted says the note isn't in a folder", () => {
+  const label = meetingOutcomeLabel({ ...saved, folderMissing: true });
+  assert.equal(
+    label.text,
+    "Saved as a note (5 min). The folder you chose was deleted, so the note isn't in a folder.",
+  );
+  assert.equal(label.more, `Note 42. The recording is at ${PATH}.`);
+  assert.doesNotMatch(meetingOutcomeLabel(saved).text, /folder/);
 });
 
 test("nothing transcribed keeps why in view and folds the path", () => {

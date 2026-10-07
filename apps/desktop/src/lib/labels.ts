@@ -987,6 +987,10 @@ export function meetingOutcomeLabel(outcome: MeetingOutcome): { text: string; mo
     case "saved": {
       const minutes = Math.round(outcome.durationSeconds / 60);
       const parts = [`Saved as a note (${minutes} min).`];
+      // The folder chosen before Start went while the meeting ran, and Rust
+      // saved the note rather than refuse it (KNEG-365). Said beside where it
+      // went, since the chip said somewhere else.
+      if (outcome.folderMissing) parts.push("The folder you chose was deleted, so the note isn't in a folder.");
       const recordingWarning = meetingRecordingWarning(outcome.recordingAttached);
       if (recordingWarning) parts.push(recordingWarning);
       if (outcome.transcriptIsPartials) {

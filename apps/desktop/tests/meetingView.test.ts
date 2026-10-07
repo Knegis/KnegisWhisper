@@ -4,6 +4,7 @@ import {
   activeCall,
   discardQuestion,
   elapsedLabel,
+  folderMenu,
   interruptedTitle,
   liveElapsed,
   meetingLanguageMenu,
@@ -19,7 +20,7 @@ import {
   summaryPrivacyLine,
 } from "../src/lib/meetingView.js";
 import { timeOfDay } from "../src/lib/dayGroups.js";
-import type { Detected, SummarySettings } from "../src/generated/ipc-types.js";
+import type { Detected, Folder, SummarySettings } from "../src/generated/ipc-types.js";
 
 // The dev fixtures' pair (`lib/devFixtures.ts`): Teams open and idle, Zoom in a call.
 const TEAMS: Detected = { provider: "meeting-detect:teams", name: "Microsoft Teams", evidence: "ms-teams.exe", inCall: false, signal: "none" };
@@ -308,4 +309,41 @@ test("sameMeetingStart: a meeting started while the question was open is another
 test("sameMeetingStart takes another tolerance", () => {
   assert.equal(sameMeetingStart(1_000_000, { elapsedSeconds: 600 }, 1_600_500, 500), true);
   assert.equal(sameMeetingStart(1_000_000, { elapsedSeconds: 600 }, 1_600_501, 500), false);
+});
+
+// KNEG-365: the Meetings page's Folder chip. Its menu is "No folder" -- the
+// word Notes' own Move to folder uses -- then every folder in Notes' order;
+// the chip says where the note will go.
+const FOLDERS: Folder[] = [
+  { id: 1, name: "Inbox", isDefault: true, sortOrder: 0 },
+  { id: 2, name: "Customer calls", isDefault: false, sortOrder: 1 },
+  { id: 3, name: "Internal", isDefault: false, sortOrder: 2 },
+];
+
+test("folderMenu offers no folder, then every folder, ticking the one chosen", () => {
+  const menu = folderMenu(FOLDERS, 3);
+  assert.equal(menu.label, "Save to Internal");
+  assert.deepEqual(
+    menu.options.map((option) => [option.id, option.label, option.current]),
+    [["", "No folder", false], ["1", "Inbox", false], ["2", "Customer calls", false], ["3", "Internal", true]],
+  );
+  assert.ok(menu.options.every((option) => option.group === null && !option.disabled && option.reason === null));
+});
+
+test("folderMenu with no folder chosen saves to Notes", () => {
+  const menu = folderMenu(FOLDERS, null);
+  assert.equal(menu.label, "Save to Notes");
+  assert.deepEqual(menu.options.filter((option) => option.current).map((option) => option.id), [""]);
+  // With no folders at all, the one row is still there to say where it goes.
+  assert.deepEqual(folderMenu([], null), {
+    label: "Save to Notes",
+    options: [{ id: "", label: "No folder", group: null, current: true, disabled: false, reason: null }],
+  });
+});
+
+test("folderMenu treats a chosen folder that is gone as no folder", () => {
+  // Deleted in Notes while it was chosen here: the chip must not name it.
+  const menu = folderMenu(FOLDERS.filter((folder) => folder.id !== 3), 3);
+  assert.equal(menu.label, "Save to Notes");
+  assert.deepEqual(menu.options.filter((option) => option.current).map((option) => option.id), [""]);
 });
