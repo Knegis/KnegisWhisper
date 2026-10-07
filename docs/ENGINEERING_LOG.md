@@ -12,7 +12,42 @@ maintained in place rather than appended to, because its purpose is to be curren
 
 ---
 
-## 2026-10-06 (latest) — KNEG-404: long recordings find their speech first, and the server's own VAD is not what does it
+## 2026-10-07 (latest) — KNEG-410: the live `local` meeting view skips windows with no speech, and the invented text it was filed for does not happen
+
+KNEG-404 left the windowed `local` meeting provider sending every five-second window to
+`whisper-server`, silence included, on the belief that silent windows would come back as invented
+text, as 40 s of noise sent whole had.
+
+- **The belief was measured and is wrong for windows.** On 2026-10-07, with `ggml-base` and the
+  application's decoder thresholds, 59 silent five-second windows came back empty: 21 in the new
+  harness, 13 each from the pink- and white-noise meetings of KNEG-404, and 12 cut from the very
+  40 s of noise that, sent whole twice to the same server, came back as "4.0% de la baihaka." and
+  "[Answering]". Not tried: other models, or a real room.
+- **What the change buys is time.** Each source is silent for much of a meeting, and every silent
+  window cost a whisper request, about 1.3 s of `ggml-base`. On 102 s with 21 silent windows of
+  33, the live pass took 17.9 s instead of 44.3 s with the same twelve events. The finder took 51
+  ms median, 163 ms at worst, against a three-second hop. A slow model falls behind by the rate,
+  not the backlog, so a quiet stretch now pays its deficit down instead of dropping audio.
+- **Judgement calls, each with its reason in `crates/meeting-core/src/local.rs`:**
+  - The provider holds a `FindSpeech` of its own rather than using `WhisperServer::speech_first`.
+    That path detects the language with a request of its own when none is set, which would double
+    the requests for every window with speech.
+  - A window with speech goes whole, not cut to its speech; the event is placed by the window's
+    start either way.
+  - The edges: speech at a window's edge was found from 0.25 s of it, and 0.1 s was not. Nothing
+    is lost even then: the windows overlap by two seconds, so speech up to two seconds lies whole
+    inside some window, and longer speech has at least two seconds inside one.
+  - A failed search sends the window, as before, and is logged at warn once per run of failures,
+    not every three seconds.
+  - The search counts against the hop. A test pins that a finder slower than the meeting drops
+    audio and says so, as a slow model does.
+- **One claim in KNEG-410 was half true.** It said the saved note does not use the live windows.
+  It does when the whole-recording pass fails (`meeting/notes.rs`, `select_transcript`).
+- **Measured** with `crates/meeting-core/tests/live_windows.rs` (ignored; downloads about 160 MB),
+  and the KNEG-404 recordings through a scratch probe. Not checked: a real meeting in the running
+  app.
+
+## 2026-10-06 — KNEG-404: long recordings find their speech first, and the server's own VAD is not what does it
 
 Upstream's Silero rule was ported to `kw_audio_core::vad` and never called, so every import and
 every meeting's whole-recording pass went to `whisper-server` whole. Measured on 102 s of ten
@@ -53,10 +88,10 @@ and ended up to 16.2 s after it, and 40 s of noise alone came back as invented t
   first, 8 rows, one per sentence, starts within 0.28 s and ends within 0.34 s of the speech;
   noise alone `Empty`. Wall time 6.56 s against 4.65 s whole: each chunk is a full 30 s
   decoder window, so the gain is in where rows sit, not in speed.
-- **Not done:** the windowed live `local` meeting provider still sends every five-second
-  window, silent or not. Its text is partials the saved note does not use, so it is filed
-  separately as KNEG-410; the finder costs 30-55 ms on a five-second window, so it would fit. The Linux archive was not checked for the finder; without it a recording is sent
-  whole. Neither whisper.cpp bug is reported upstream; that is outward-facing and the owner's
+- **Not done:** the windowed live `local` meeting provider was left sending every
+  five-second window, silent or not; it skips silent ones since KNEG-410 (2026-10-07), where the
+  invented text this entry expected from them was measured and did not happen. The Linux archive
+  was not checked for the finder; without it a recording is sent whole. Neither whisper.cpp bug is reported upstream; that is outward-facing and the owner's
   call. A real meeting recording has not been through it yet.
 
 ## 2026-09-26 (second) — KNEG-326: speaker labels never attached on a whisper engine, and the note's own sentence pointed the wrong way

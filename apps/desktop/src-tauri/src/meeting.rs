@@ -620,6 +620,21 @@ impl ProviderBuild {
     }
 }
 
+/// The live `local` provider, which searches each window for speech before
+/// sending it when the tools are here (KNEG-410), as the whole-recording pass
+/// does (`whisper_for_note`). `None` sends every window, as before.
+fn local_window_provider(
+    server: kw_transcription_core::local::WhisperServer,
+    events: mpsc::UnboundedSender<TranscriptEvent>,
+    speech: Option<Arc<dyn kw_transcription_core::speech::FindSpeech>>,
+) -> LocalWindowProvider {
+    let provider = LocalWindowProvider::new(Arc::new(server)).with_live_events(events);
+    match speech {
+        Some(finder) => provider.with_speech_finder(finder),
+        None => provider,
+    }
+}
+
 impl std::fmt::Debug for MeetingRuntime {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MeetingRuntime").finish_non_exhaustive()
@@ -807,7 +822,13 @@ impl MeetingRuntime {
                     model,
                 );
                 Ok(ProviderBuild::without_stream_lease(Box::new(
-                    LocalWindowProvider::new(Arc::new(server)).with_live_events(events),
+                    local_window_provider(
+                        server,
+                        events,
+                        self.local
+                            .speech
+                            .finder(kw_audio_core::vad::Context::Meeting),
+                    ),
                 )))
             }
             Client::LocalStreaming => {
@@ -2417,6 +2438,30 @@ pub async fn meeting_review_config(
 )]
 mod tests {
     use super::*;
+
+    /* ------------------------------------------------- the live local view */
+
+    #[test]
+    fn the_live_local_view_searches_each_window_for_speech_when_it_can() {
+        // KNEG-410. Without it, every silent window of a meeting is a whisper
+        // request for nothing.
+        let policy = NetworkPolicy::new().unwrap();
+        let (events, _receiver) = mpsc::unbounded_channel();
+        let server =
+            || kw_transcription_core::local::WhisperServer::new(policy.clone(), 8178, None);
+        let finder: Arc<dyn kw_transcription_core::speech::FindSpeech> =
+            Arc::new(kw_transcription_core::speech::SpeechFinder::new(
+                "vad.exe".into(),
+                "silero.bin".into(),
+                kw_audio_core::vad::VadConfig::default(),
+                "scratch".into(),
+            ));
+        assert!(
+            local_window_provider(server(), events.clone(), Some(finder)).searches_for_speech()
+        );
+        // Without the tools, every window is sent, as before.
+        assert!(!local_window_provider(server(), events, None).searches_for_speech());
+    }
 
     /* ----------------------------------------------- session interleavings */
 

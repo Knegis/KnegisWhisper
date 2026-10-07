@@ -48,6 +48,38 @@
 //! [`WindowFeed::skip_to_live`], and the count lands in
 //! [`MeetingTranscript::gaps`] because a transcript missing thirty seconds must
 //! not look complete.
+//!
+//! # A window with no speech in it is not sent (KNEG-410)
+//!
+//! Each source is silent for much of a meeting: the microphone while others
+//! speak, the system audio while you do. Every one of those windows was a
+//! whisper request for nothing, about 1.3 s of `ggml-base` each on the
+//! machine that measured it. So each window is searched for speech first, by
+//! the same [`FindSpeech`] the whole-recording pass uses, and one with none
+//! is skipped. The search took 51 ms (median of 33 windows; slowest 163 ms)
+//! against a three-second hop. It counts against the hop like the
+//! transcription does, and a skipped window costs only the search, so a quiet
+//! stretch lets a slow model catch up rather than drop audio. On 102 s with
+//! 21 silent windows, the live pass took 17.9 s of wall clock instead of
+//! 44.3 s, with the same events (`tests/live_windows.rs`, 2026-10-07).
+//!
+//! This was filed to stop invented text: 40 s of noise sent to whisper whole
+//! comes back as some, different each time. Five-second windows did not.
+//! The same 40 s cut into windows, and 47 other silent windows under white
+//! and pink noise, all came back empty from `ggml-base` on 2026-10-07, with
+//! the application's decoder thresholds. The gain measured is the time.
+//! Whether another model or a real room invents text on a silent window was
+//! not tried; a window the finder hears no speech in is no longer sent to find
+//! out.
+//!
+//! A window with any speech in it goes to whisper whole, as before, not cut
+//! down to its speech: the event is placed by the window's start either way.
+//! A word clipped at an edge is safe because the windows overlap. At five
+//! seconds every three, the last two seconds of one window are the first two
+//! of the next, so speech up to two seconds long lies whole inside some
+//! window, and longer speech has at least two seconds inside one. A search
+//! that fails sends the window, as before: a worse live view, never an empty
+//! one.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -55,6 +87,7 @@ use std::time::Duration;
 use kw_audio_core::meeting::WindowFeed;
 use kw_audio_core::wav;
 use kw_transcription_core::local::{Inference, LocalTranscriber};
+use kw_transcription_core::speech::FindSpeech;
 use tokio::sync::mpsc;
 
 use crate::capabilities::{capabilities, MeetingProviderCapabilities};
@@ -109,6 +142,11 @@ impl Windowing {
 /// Repeated short passes over a local `whisper-server`.
 pub struct LocalWindowProvider {
     transcriber: Arc<dyn LocalTranscriber>,
+    /// What says whether a window has speech in it. `None` sends every window.
+    speech: Option<Arc<dyn FindSpeech>>,
+    /// Whether the last search failed, so a broken tool is reported once per
+    /// run of failures rather than every three seconds.
+    search_failing: bool,
     /// One feed per source. The two are transcribed separately and never mixed,
     /// because `whisper` cannot separate speakers — mixing them would make
     /// [`AudioSource`] on every event a guess, and that field exists precisely so
@@ -147,6 +185,7 @@ impl std::fmt::Debug for LocalWindowProvider {
             .field("state", &self.state)
             .field("events", &self.events.len())
             .field("gaps", &self.gaps)
+            .field("searches_for_speech", &self.searches_for_speech())
             .finish_non_exhaustive()
     }
 }
@@ -161,6 +200,8 @@ impl LocalWindowProvider {
     pub fn new(transcriber: Arc<dyn LocalTranscriber>) -> Self {
         Self {
             transcriber,
+            speech: None,
+            search_failing: false,
             mic: WindowFeed::standard(),
             system: WindowFeed::standard(),
             events: Vec::new(),
@@ -190,6 +231,23 @@ impl LocalWindowProvider {
     pub fn with_live_events(mut self, sink: mpsc::UnboundedSender<TranscriptEvent>) -> Self {
         self.live = Some(sink);
         self
+    }
+
+    /// Search each window for speech, and send only those that have some.
+    /// See the module doc.
+    #[must_use]
+    pub fn with_speech_finder(mut self, finder: Arc<dyn FindSpeech>) -> Self {
+        self.speech = Some(finder);
+        self
+    }
+
+    /// Whether windows are searched for speech before they are sent.
+    ///
+    /// Read-only, for a caller's test to pin what it built, as
+    /// `WhisperServer::finds_speech_first` is.
+    #[must_use]
+    pub const fn searches_for_speech(&self) -> bool {
+        self.speech.is_some()
     }
 
     /// How many stretches of audio were dropped to keep up.
@@ -244,6 +302,28 @@ impl LocalWindowProvider {
         Ok(())
     }
 
+    /// Whether `wav` goes to whisper: only a search that found nothing says no.
+    async fn has_speech(&mut self, wav: &[u8]) -> bool {
+        let Some(finder) = self.speech.clone() else {
+            return true;
+        };
+        match finder.find(wav).await {
+            Ok(spans) => {
+                self.search_failing = false;
+                !spans.is_empty()
+            }
+            Err(detail) => {
+                if self.search_failing {
+                    tracing::debug!(%detail, "still could not look for speech in a window");
+                } else {
+                    tracing::warn!(%detail, "could not look for speech in a window; sending every window until it can");
+                }
+                self.search_failing = true;
+                true
+            }
+        }
+    }
+
     /// Transcribe one window and record what came back.
     async fn transcribe(
         &mut self,
@@ -253,6 +333,11 @@ impl LocalWindowProvider {
         is_final: bool,
     ) -> Result<(), MeetingError> {
         let wav = wav::encode_wav(samples, wav::TARGET_SAMPLE_RATE);
+
+        // No speech, no request (KNEG-410).
+        if !self.has_speech(&wav).await {
+            return Ok(());
+        }
 
         let inference = self
             .transcriber
@@ -433,6 +518,8 @@ static FALLBACK: MeetingProviderCapabilities = MeetingProviderCapabilities {
 mod tests {
     use std::sync::Mutex;
 
+    use kw_transcription_core::speech::Span;
+
     use super::*;
 
     const RATE: usize = 16_000;
@@ -495,6 +582,56 @@ mod tests {
 
         fn model_name(&self) -> Option<String> {
             Some("scripted".to_owned())
+        }
+    }
+
+    /// A speech finder that answers from a script, and counts what it was asked.
+    /// Answers "no speech" once the script runs out.
+    #[derive(Debug, Default)]
+    struct Finder {
+        answers: Mutex<Vec<Result<Vec<Span>, String>>>,
+        asked: Mutex<usize>,
+        /// How long each search takes, for pinning that it counts against the hop.
+        delay: Duration,
+    }
+
+    impl Finder {
+        fn answering(answers: Vec<Result<Vec<Span>, String>>) -> Arc<Self> {
+            Arc::new(Self {
+                answers: Mutex::new(answers),
+                ..Self::default()
+            })
+        }
+
+        fn hearing_nothing() -> Arc<Self> {
+            Self::answering(Vec::new())
+        }
+
+        fn taking(delay: Duration) -> Arc<Self> {
+            Arc::new(Self {
+                delay,
+                ..Self::default()
+            })
+        }
+
+        fn asked(&self) -> usize {
+            *self.asked.lock().unwrap()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl FindSpeech for Finder {
+        async fn find(&self, _wav: &[u8]) -> Result<Vec<Span>, String> {
+            if !self.delay.is_zero() {
+                tokio::time::sleep(self.delay).await;
+            }
+            *self.asked.lock().unwrap() += 1;
+            let mut answers = self.answers.lock().unwrap();
+            if answers.is_empty() {
+                Ok(Vec::new())
+            } else {
+                answers.remove(0)
+            }
         }
     }
 
@@ -606,6 +743,129 @@ mod tests {
 
         assert_eq!(scripted.calls(), 2);
         assert!(provider.finish().await.unwrap().events.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_window_with_no_speech_in_it_is_never_sent_to_whisper() {
+        // KNEG-410. Each of these was a whisper request for nothing, about
+        // 1.3 s of `ggml-base` a window.
+        let scripted = Scripted::saying(vec![
+            Inference::Text("invented".to_owned()),
+            Inference::Text("invented".to_owned()),
+        ]);
+        let finder = Finder::hearing_nothing();
+        let mut provider = LocalWindowProvider::new(Arc::clone(&scripted) as Arc<_>)
+            .with_speech_finder(Arc::clone(&finder) as Arc<_>);
+        provider.connect(config()).await.unwrap();
+        provider.send_audio(pcm(8, AudioSource::Mic)).await.unwrap();
+
+        assert_eq!(finder.asked(), 2, "both windows were searched");
+        assert_eq!(scripted.calls(), 0, "and neither was sent");
+        assert!(provider.finish().await.unwrap().events.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_window_with_any_speech_in_it_is_sent_whole() {
+        // Not trimmed to its speech: the event is placed by the window's start,
+        // and a clipped word at an edge is better heard than cut.
+        let scripted = Scripted::saying(vec![Inference::Text("at the edge".to_owned())]);
+        let finder = Finder::answering(vec![Ok(vec![Span::new(4.8, 5.0)])]);
+        let mut provider = LocalWindowProvider::new(Arc::clone(&scripted) as Arc<_>)
+            .with_speech_finder(Arc::clone(&finder) as Arc<_>);
+        provider.connect(config()).await.unwrap();
+        provider.send_audio(pcm(5, AudioSource::Mic)).await.unwrap();
+
+        assert_eq!(scripted.calls(), 1);
+        assert_eq!(scripted.seen.lock().unwrap()[0], RATE * 5);
+        let transcript = provider.finish().await.unwrap();
+        assert_eq!(transcript.events.len(), 1);
+        assert_eq!(transcript.events[0].text, "at the edge");
+    }
+
+    #[tokio::test]
+    async fn a_window_that_could_not_be_searched_is_sent_as_before() {
+        // A failed search is not "no speech". Skipping on it would blank the
+        // live view for a whole meeting because a tool crashed.
+        let scripted = Scripted::saying(vec![
+            Inference::Text("one".to_owned()),
+            Inference::Text("two".to_owned()),
+        ]);
+        let finder = Finder::answering(vec![
+            Err("the speech finder exited with 3".to_owned()),
+            Err("the speech finder exited with 3".to_owned()),
+        ]);
+        let mut provider = LocalWindowProvider::new(Arc::clone(&scripted) as Arc<_>)
+            .with_speech_finder(Arc::clone(&finder) as Arc<_>);
+        provider.connect(config()).await.unwrap();
+        provider.send_audio(pcm(8, AudioSource::Mic)).await.unwrap();
+
+        assert_eq!(scripted.calls(), 2);
+        assert_eq!(provider.finish().await.unwrap().events.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn the_tail_is_searched_too() {
+        // The tail is a final event, the one a live view commits as a row.
+        let scripted = Scripted::saying(vec![Inference::Text("invented".to_owned())]);
+        let finder = Finder::hearing_nothing();
+        let mut provider = LocalWindowProvider::new(Arc::clone(&scripted) as Arc<_>)
+            .with_speech_finder(Arc::clone(&finder) as Arc<_>);
+        provider.connect(config()).await.unwrap();
+        provider.send_audio(pcm(2, AudioSource::Mic)).await.unwrap();
+
+        let transcript = provider.finish().await.unwrap();
+        assert_eq!(finder.asked(), 1);
+        assert_eq!(scripted.calls(), 0);
+        assert!(transcript.events.is_empty());
+    }
+
+    #[test]
+    fn it_says_whether_it_searches_for_speech() {
+        // For the caller's test. Without a finder -- no tool or no model on
+        // this computer -- every window is sent, as before KNEG-410, which the
+        // tests above without one already pin.
+        let provider = LocalWindowProvider::new(Arc::new(Scripted::default()) as Arc<_>);
+        assert!(!provider.searches_for_speech());
+        let provider = provider.with_speech_finder(Finder::hearing_nothing() as Arc<_>);
+        assert!(provider.searches_for_speech());
+    }
+
+    #[tokio::test]
+    async fn silence_lets_a_slow_model_catch_up() {
+        // The windowing of the test below, where a 200 ms transcriber falls
+        // behind. Windows with no speech cost only the search, so a quiet
+        // stretch pays the deficit down instead of adding to it.
+        let windowing = Windowing {
+            window: Duration::from_millis(100),
+            hop: Duration::from_millis(60),
+        };
+        let scripted = Scripted::taking(Duration::from_millis(200));
+        let mut provider = LocalWindowProvider::new(Arc::clone(&scripted) as Arc<_>)
+            .with_windowing(windowing)
+            .with_speech_finder(Finder::hearing_nothing() as Arc<_>);
+        provider.connect(config()).await.unwrap();
+        provider.send_audio(pcm(2, AudioSource::Mic)).await.unwrap();
+
+        assert_eq!(scripted.calls(), 0);
+        assert_eq!(provider.finish().await.unwrap().gaps, 0);
+    }
+
+    #[tokio::test]
+    async fn the_search_counts_against_the_hop() {
+        // What keeps the live view live is the time a window costs, and the
+        // search is part of it. A finder slower than the meeting falls behind
+        // like a slow model does, and says so.
+        let windowing = Windowing {
+            window: Duration::from_millis(100),
+            hop: Duration::from_millis(60),
+        };
+        let mut provider = LocalWindowProvider::new(Arc::new(Scripted::default()) as Arc<_>)
+            .with_windowing(windowing)
+            .with_speech_finder(Finder::taking(Duration::from_millis(200)) as Arc<_>);
+        provider.connect(config()).await.unwrap();
+        provider.send_audio(pcm(2, AudioSource::Mic)).await.unwrap();
+
+        assert!(provider.finish().await.unwrap().gaps > 0);
     }
 
     #[tokio::test]
