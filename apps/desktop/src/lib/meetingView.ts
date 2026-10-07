@@ -26,6 +26,7 @@
  */
 
 import type { Detected, InputDevice, Sources, SummarySettings } from "../generated/ipc-types.js";
+import { PROVIDER_REGISTRY, type ProviderRegistry } from "../generated/providers.js";
 import type { MenuOption } from "./chipMenu.js";
 import { destinationName, LANGUAGES, languageLabel } from "./controlBar.js";
 import { parseStoredTime, timeOfDay } from "./dayGroups.js";
@@ -121,6 +122,26 @@ export function summaryPrivacyLine(settings: SummarySettings | null): string | n
   const provider = settings.provider.trim() || "openai";
   if (!settings.enterprise && (provider === "local" || provider === "lan")) return null;
   return `The transcript is sent to ${destinationName(provider)} for a summary`;
+}
+
+/**
+ * The name of the model that wrote a summary, from the id stored when it
+ * succeeded (`SummaryState.model`): as the menus name it when the registry
+ * lists it -- `qwen3.5-9b-q4_k_m` is "Qwen3.5 9B" -- and as stored when it
+ * doesn't, since an Azure deployment or a typed id has no other name.
+ *
+ * Only the model. Where the transcript went isn't stored with the summary,
+ * and `provider` can't stand in for it (a typed URL wins over it), so the
+ * summary doesn't claim one (KNEG-367).
+ */
+export function summaryModelName(model: string | null): string | null {
+  if (model === null) return null;
+  const registry: ProviderRegistry = PROVIDER_REGISTRY;
+  const models: readonly { readonly id: string; readonly name: string }[] = [
+    ...registry.localLlm.flatMap((provider) => provider.models),
+    ...registry.reasoning.flatMap((provider) => provider.models),
+  ];
+  return models.find((m) => m.id === model)?.name ?? model;
 }
 
 /**

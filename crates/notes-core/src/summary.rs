@@ -70,6 +70,12 @@ pub struct SummaryState {
     pub error: Option<String>,
     pub language: Option<String>,
     pub generated_at: Option<String>,
+    /// The model that wrote the summary, as the settings named it when it
+    /// succeeded: an id such as `qwen3.5-9b-q4_k_m`, not a display name.
+    /// `None` until a generation succeeds. Not where the transcript went:
+    /// `provider` alone can't say that (a typed URL wins over it), so the
+    /// summary names only the model (KNEG-367).
+    pub model: Option<String>,
     pub references: Vec<SummaryReference>,
 }
 
@@ -117,11 +123,12 @@ pub async fn state(pool: &SqlitePool, id: i64) -> Result<SummaryState, String> {
         String,
         Option<String>,
         Option<String>,
+        Option<String>,
     );
-    let meta: Option<Meta> = sqlx::query_as("SELECT revision,edited,source_hash,references_json,language,generated_at FROM note_summary_meta WHERE note_id=?").bind(id).fetch_optional(pool).await.map_err(|e|e.to_string())?;
+    let meta: Option<Meta> = sqlx::query_as("SELECT revision,edited,source_hash,references_json,language,generated_at,model FROM note_summary_meta WHERE note_id=?").bind(id).fetch_optional(pool).await.map_err(|e|e.to_string())?;
     let legacy = note.enhanced_content.is_some() && meta.as_ref().is_none_or(|m| m.2.is_none());
-    let (revision, edited, hash, refs, language, generated_at) =
-        meta.unwrap_or((0, legacy, None, "[]".into(), None, None));
+    let (revision, edited, hash, refs, language, generated_at, model) =
+        meta.unwrap_or((0, legacy, None, "[]".into(), None, None, None));
     let job: Option<(String, i64, i64, Option<String>)> = sqlx::query_as(
         "SELECT status,completed,total,error FROM note_summary_jobs WHERE note_id=?",
     )
@@ -150,6 +157,7 @@ pub async fn state(pool: &SqlitePool, id: i64) -> Result<SummaryState, String> {
         error,
         language,
         generated_at,
+        model: model.filter(|m| !m.trim().is_empty()),
         references: serde_json::from_str(&refs).unwrap_or_default(),
     })
 }
@@ -415,6 +423,27 @@ mod tests {
         assert_eq!(retry.chunks_json, r#"{"extract-0":{}}"#);
         assert!(retry.generation > job.generation);
     }
+    /// The model that wrote it, as stored at success, so the summary can name
+    /// it (KNEG-367). A note whose summary row exists without one -- created
+    /// by an edit before any generation -- names none.
+    #[tokio::test]
+    async fn a_finished_summary_reports_its_model() {
+        let (db, _, id) = fixture(true).await;
+        assert_eq!(state(db.pool(), id).await.unwrap().model, None);
+        let job = claim(db.pool()).await.unwrap().unwrap();
+        finish(db.pool(), &job, "Generated", &[], "en")
+            .await
+            .unwrap();
+        assert_eq!(
+            state(db.pool(), id).await.unwrap().model.as_deref(),
+            Some("fixture")
+        );
+
+        let (db, _, id) = fixture(false).await;
+        edit(db.pool(), id, 0, "Written by hand").await.unwrap();
+        assert_eq!(state(db.pool(), id).await.unwrap().model, None);
+    }
+
     #[tokio::test]
     async fn failed_regeneration_keeps_edits_and_original_notes() {
         let (db, settings, id) = fixture(true).await;

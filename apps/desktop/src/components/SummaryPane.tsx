@@ -1,6 +1,7 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { NoteEditor } from "./NoteEditor";
 import { getNoteSummary, generateNoteSummary, cancelNoteSummary, updateNoteSummary, exportNoteSummary, onNoteSummaryChanged, type SummaryState } from "../lib/ipc";
+import { summaryModelName } from "../lib/meetingView";
 import { useAutosave, type AutosaveStatus } from "../lib/useAutosave";
 
 export type SummaryPaneHandle = { flush: () => Promise<void> };
@@ -77,7 +78,7 @@ export const SummaryPane = forwardRef<SummaryPaneHandle, { noteId: number; visib
         <button type="button" disabled={pending} onClick={() => { void run(async () => { const path = await exportNoteSummary(noteId, "txt"); if (path) setNotice(`Exported to ${path}`); }); }}>Export text</button>
       </>}
     </div>
-    <p role="status" className="muted">{!state ? "Loading summary…" : busy ? state.status === "queued" ? "Summary queued" : `Generating summary · ${state.completed} steps completed` : state.edited ? "Edited summary · source links are navigation aids" : state.legacy ? "Imported summary · source references unavailable" : state.content ? `AI summary · ${state.language ?? "language unknown"}` : "Summaries use your saved transcript. Configure the model in Settings > Cleanup & summaries."}</p>
+    <p role="status" className="muted">{!state ? "Loading summary…" : busy ? state.status === "queued" ? "Summary queued" : `Generating summary · ${state.completed} steps completed` : state.edited ? "Edited summary · source links are navigation aids" : state.legacy ? "Imported summary · source references unavailable" : state.content ? `AI summary · ${state.language ?? "language unknown"}${state.model ? ` · by ${summaryModelName(state.model)}` : ""}` : "Summaries use your saved transcript. Configure the model in Settings > Cleanup & summaries."}</p>
     {state?.outdated && <p className="warn">The transcript changed. Regenerate this summary to refresh its source links.</p>}
     {(error || state?.error) && <p className="error" role="alert">{error ?? state?.error}</p>}
     {notice && <p role="status">{notice}</p>}

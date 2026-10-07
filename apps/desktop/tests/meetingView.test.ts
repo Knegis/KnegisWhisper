@@ -13,6 +13,7 @@ import {
   recentMeta,
   recordedSources,
   recordingStartedAt,
+  summaryModelName,
   summaryPrivacyLine,
 } from "../src/lib/meetingView.js";
 import { timeOfDay } from "../src/lib/dayGroups.js";
@@ -241,4 +242,14 @@ test("while Start waits on a saved provider that can't be used, the privacy line
   assert.equal(privacyProvider(null, null, false), null);
   // A meeting that is running says what it is running with, whatever is saved.
   assert.equal(privacyProvider("running", "fallback", true), "running");
+});
+
+// KNEG-367: a summary names the model that wrote it. What is stored is the id
+// the settings chose; a model the registry lists is named as the menus name
+// it, and anything else -- a deployment name, a typed id -- is shown as stored.
+test("a summary's model is named as the registry names it, or shown as stored", () => {
+  assert.equal(summaryModelName("qwen3.5-9b-q4_k_m"), "Qwen3.5 9B");
+  assert.equal(summaryModelName("claude-sonnet-5"), "Claude Sonnet 5");
+  assert.equal(summaryModelName("my-azure-deployment"), "my-azure-deployment");
+  assert.equal(summaryModelName(null), null);
 });

@@ -437,7 +437,15 @@ contextBudget: number, };
 
 export type SummaryReference = { id: string, rowIndex: number, };
 
-export type SummaryState = { noteId: number, content: string | null, revision: number, edited: boolean, outdated: boolean, legacy: boolean, status: string | null, completed: number, total: number, error: string | null, language: string | null, generatedAt: string | null, references: Array<SummaryReference>, };
+export type SummaryState = { noteId: number, content: string | null, revision: number, edited: boolean, outdated: boolean, legacy: boolean, status: string | null, completed: number, total: number, error: string | null, language: string | null, generatedAt: string | null,
+/**
+ * The model that wrote the summary, as the settings named it when it
+ * succeeded: an id such as `qwen3.5-9b-q4_k_m`, not a display name.
+ * `None` until a generation succeeds. Not where the transcript went:
+ * `provider` alone can't say that (a typed URL wins over it), so the
+ * summary names only the model (KNEG-367).
+ */
+model: string | null, references: Array<SummaryReference>, };
 
 /**
  * What the user configured, as stored.

@@ -710,7 +710,7 @@ function summaryOf(id: number): SummaryState {
   const legacy = note.enhancedContent !== null;
   return {
     noteId: id, content: note.enhancedContent, revision: 0, edited: legacy, outdated: false, legacy,
-    status: null, completed: 0, total: 0, error: null, language: null, generatedAt: null, references: [],
+    status: null, completed: 0, total: 0, error: null, language: null, generatedAt: null, model: null, references: [],
   };
 }
 
@@ -2010,6 +2010,8 @@ A fixture summary of "${note.title}", written without a model.
 - None.`,
       revision: current.revision + 1, edited: false, outdated: false, legacy: false,
       status: "succeeded", error: null, language: "en", generatedAt: nowIso(),
+      // What Rust stores at success: the id the settings named (KNEG-367).
+      model: summarySettings.model,
     };
     summaries.set(id, next);
     return next;
