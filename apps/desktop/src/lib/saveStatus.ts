@@ -24,3 +24,25 @@ export function saveStatusText(status: AutosaveStatus): string | null {
       return null;
   }
 }
+
+/**
+ * The same line for a whole note: its title and personal notes, and its AI
+ * summary, which saves on its own (`SummaryPane.tsx`).
+ *
+ * The line used to follow the first alone, so it read "Saved" while a summary
+ * edit was still waiting to land, or had failed (KNEG-398). Now it says
+ * "Saved" only when nothing in either is pending or failed.
+ *
+ * A summary that failed reads "Summary not saved" here, not `null`: its alert
+ * and Retry are in the summary pane, below the note and often scrolled out of
+ * view, while the note's own failure has its banner at the top of the page. So
+ * a failed note still leaves this line empty, as `saveStatusText` explains.
+ */
+export function workspaceSaveText(note: AutosaveStatus, summary: AutosaveStatus): string | null {
+  if (summary === "failed") return "Summary not saved";
+  if (note === "failed") return null;
+  const pending = (status: AutosaveStatus) => status === "dirty" || status === "saving";
+  if (pending(note) || pending(summary)) return saveStatusText("saving");
+  if (note === "saved" || summary === "saved") return saveStatusText("saved");
+  return null;
+}

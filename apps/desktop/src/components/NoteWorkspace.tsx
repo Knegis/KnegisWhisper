@@ -1,8 +1,8 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { attachNoteRecording, getNoteRecording, getNoteSpeakerSuggestions, getNoteTranscriptRows, renameNoteSpeaker, updateNote, type Note, type NoteUpdate } from "../lib/ipc";
-import { useAutosave } from "../lib/useAutosave";
-import { saveStatusText } from "../lib/saveStatus";
+import { useAutosave, type AutosaveStatus } from "../lib/useAutosave";
+import { workspaceSaveText } from "../lib/saveStatus";
 import { transcriptToMarkdown } from "../lib/noteBody";
 import { timeOfDay } from "../lib/dayGroups";
 import { hasStoredTranscript, noteMeta } from "../lib/noteMeta";
@@ -156,6 +156,8 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
   const [ready, setReady] = useState(false);
   const [seed, setSeed] = useState({ content: note.content, generation: 0 });
   const summaryRef = useRef<SummaryPaneHandle>(null);
+  // The summary pane saves on its own; the toolbar's line covers both (KNEG-398).
+  const [summarySave, setSummarySave] = useState<AutosaveStatus>("idle");
   const playerRef = useRef<RecordingPlayerHandle>(null);
   const [tab, setTab] = useState<Tab>("notes");
   // The tab on screen, for `switchTab`, which reads it after waiting on a save.
@@ -464,7 +466,7 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
           </div>
           <div className="note-actions">
             {/* Keep the live region mounted so save changes are announced reliably. */}
-            <p className="save-status" role="status" aria-live="polite">{saveStatusText(autosave.status)}</p>
+            <p className="save-status" role="status" aria-live="polite">{workspaceSaveText(autosave.status, summarySave)}</p>
             <button type="button" className="note-action-button" aria-label="Export…" title="Export…" onClick={onExport}><Icon name="export" /></button>
             <button type="button" className="note-action-button" aria-label="More" title="More" aria-haspopup="dialog" aria-expanded={moreOpen} onClick={event => onMore(event.currentTarget)}><Icon name="more" /></button>
             {/* Only where there is a column to hide. `aria-controls` only while it is on screen, so it never names nothing. */}
@@ -485,7 +487,7 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
                 onChange={content => { draft.current.content = content; setEmpty(!content.trim()); autosave.schedule({ content }); }} />
             </div>
             <h2 className="note-section-heading">AI summary</h2>
-            <SummaryPane ref={summaryRef} noteId={note.id} visible={tab === "notes"} onSource={index => { void showSource(index); }} />
+            <SummaryPane ref={summaryRef} noteId={note.id} visible={tab === "notes"} onSource={index => { void showSource(index); }} onSaveStatus={setSummarySave} />
           </section>
           {player && playerSlot === "note" ? <div className={tab === "replay" ? "note-full-player" : "note-mini-player"} hidden={tab !== "replay" && !playbackStarted}>
             {player}
