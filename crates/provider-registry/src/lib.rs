@@ -347,10 +347,11 @@ pub struct CredentialSlot {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Registry {
-    /// Every credential slot, including the eleven that belong to no cloud
-    /// provider list: `openrouter`, the five custom endpoints, the three
-    /// enterprise connectors, and `assemblyai`/`deepgram`, which exist for a
-    /// meeting client rather than a transcription or reasoning one.
+    /// Every credential slot, including the twelve that belong to no cloud
+    /// provider list: `openrouter`, the five per-feature custom endpoints,
+    /// `custom` (your own server's key, which the self-hosted route reads),
+    /// the three enterprise connectors, and `assemblyai`/`deepgram`, which
+    /// exist for a meeting client rather than a transcription or reasoning one.
     ///
     /// Derived from upstream's `secretKeys` rather than from the provider lists
     /// below: `openrouter` has no pinned models and the five custom endpoints
@@ -421,7 +422,7 @@ impl Registry {
 
     /// Every credential slot the application can store a key for.
     ///
-    /// All twenty, not just the ones a transcription or reasoning provider
+    /// All twenty-one, not just the ones a transcription or reasoning provider
     /// names. It used to be derived from the provider lists, which meant
     /// `openrouter` and the five custom endpoints were declared in the
     /// integration manifest and invisible here, so a settings screen would

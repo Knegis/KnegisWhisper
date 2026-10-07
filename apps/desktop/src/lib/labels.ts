@@ -402,7 +402,7 @@ export function sessionStateLabel(state: SessionState): string {
  * By size, not by id. KB Whisper Medium and Large were the reason, but the
  * upstream Medium, Large and Turbo are bigger still, and a list that called
  * only the KB ones slower would imply the others are not. 500 MB: the smallest
- * of them is KB Medium at 540, the largest left unlabelled the upstream Small
+ * of them is KB Medium at 539, the largest left unlabelled the upstream Small
  * at 466. Believed from how Whisper sizes behave, not timed here; the timings
  * are the owner's by-hand item.
  */

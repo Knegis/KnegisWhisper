@@ -41,7 +41,7 @@ export type SherpaModelId = (typeof SHERPA_MODEL_IDS)[number];
 export const DIARIZATION_MODEL_IDS = ["3dspeaker-campplus-en", "sherpa-onnx-pyannote-segmentation-3-0"] as const;
 export type DiarizationModelId = (typeof DIARIZATION_MODEL_IDS)[number];
 
-/** OS credential-store slots, in registry order. Twenty: twelve providers, five per-feature custom endpoints and three enterprise connectors. */
+/** OS credential-store slots, in registry order. Twenty-one: twelve providers, five per-feature custom endpoints, your own server's key (custom) and three enterprise connectors. */
 export const CREDENTIAL_SLOTS = ["openai", "anthropic", "gemini", "groq", "berget", "xai", "mistral", "openrouter", "tinfoil", "corti", "note-formatting-custom", "translation-custom", "dictation-agent-custom", "dictation-agent-vision-custom", "chat-agent-custom", "bedrock", "azure", "vertex", "assemblyai", "deepgram", "custom"] as const;
 export type CredentialSlot = (typeof CREDENTIAL_SLOTS)[number];
 

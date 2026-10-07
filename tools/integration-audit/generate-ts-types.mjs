@@ -397,7 +397,7 @@ const rendered = [
     "CredentialSlot",
     "CREDENTIAL_SLOTS",
     credentialSlots,
-    "OS credential-store slots, in registry order. Twenty: twelve providers, five per-feature custom endpoints and three enterprise connectors.",
+    "OS credential-store slots, in registry order. Twenty-one: twelve providers, five per-feature custom endpoints, your own server's key (custom) and three enterprise connectors.",
   ),
   types.trim(),
   `/** The registry. Generated from config/provider-registry.json. */\nexport const PROVIDER_REGISTRY = ${JSON.stringify(

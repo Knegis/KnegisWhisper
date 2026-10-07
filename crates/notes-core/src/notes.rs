@@ -322,10 +322,12 @@ pub struct SearchHit {
     /// A snippet with the match marked by `[` and `]`. The row's own when
     /// `transcript_row` names one, so the time and the words agree.
     pub snippet: String,
-    /// Where in the transcript the words were said, when the hit is in a
-    /// meeting transcript and one row holds every word (KNEG-406). `None` for
-    /// a hit in the title or the notes, and when no single row can be named:
-    /// the note then opens as it always has, rather than at a guess.
+    /// Where in the transcript the words were said, when every word is in a
+    /// meeting transcript and one row holds them all (KNEG-406). `None` when
+    /// the notes hold every word, when the words are only in the title or are
+    /// split between fields, and when no single row can be named: the note
+    /// then opens as it always has, rather than at a guess. A title that also
+    /// holds them doesn't stop a row being named.
     pub transcript_row: Option<SearchHitRow>,
 }
 

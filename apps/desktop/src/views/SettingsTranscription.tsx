@@ -557,10 +557,13 @@ export function SettingsTranscription({
             {/* The catch in a big model, said once (KNEG-407): one Whisper
                 model at a time serves dictation as well as meetings and
                 imports, so choosing a slow one for long recordings slows
-                dictation too. */}
+                dictation too. "Usually": believed from how Whisper sizes
+                behave, not measured here. */}
             <p className="muted">
-              Only one Whisper model runs at a time, and dictation uses it too,
-              so a bigger one is more accurate but makes dictation slower.
+              Only one Whisper model runs at a time. Meetings and imports
+              transcribed on this computer use it, and so does dictation when
+              it uses Whisper, so a bigger one is usually more accurate and
+              slower for all of them.
             </p>
             <h3>Parakeet models</h3>
             <p className="muted">

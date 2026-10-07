@@ -105,8 +105,12 @@ succeeding at it would hide that.
 ### Query parameters
 
 `notes/list` accepts a `limit` (default 20), a folder id, and a note type.
-`notes/search` takes the query and a `limit`. `transcriptions/list` takes a
-`limit` and an `after` id to continue a previous page.
+`notes/search` takes the query and a `limit`. Each hit has `id`, `title`, a
+`snippet` with the match in `[` `]`, and `transcriptRow`: when every word is in
+one row of a meeting transcript, `{ index, startSeconds }` names that row and
+when it was said (seconds from the start, or `null` for an untimed row), and the
+snippet is that row's; otherwise `null`. `transcriptions/list` takes a `limit`
+and an `after` id to continue a previous page.
 
 ## Errors
 
