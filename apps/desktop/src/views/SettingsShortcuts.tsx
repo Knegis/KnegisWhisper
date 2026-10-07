@@ -47,6 +47,7 @@ import {
   changeLabel,
   hotkeyModeLabel,
   outcomeLabel,
+  registrationFor,
 } from "../lib/labels";
 import { useRefresh } from "../lib/useRefresh";
 
@@ -228,7 +229,10 @@ export function SettingsShortcuts({
                 <em className="row-detail">none configured</em>
               ) : (
                 b.accelerators.map((a, i) => {
-                  const label = acceleratorLabel(a, hook);
+                  // The registration as well as the platform's hook: a hook
+                  // that failed to start leaves the platform "available" and
+                  // the chord dead (KNEG-353).
+                  const label = acceleratorLabel(a, hook, registrationFor(hotkeys.registrations, b.action, a));
                   // No "works" note for an action nothing handles: its
                   // accelerators are not offered to the platform at all --
                   // not registered and not hooked (`register_all`,

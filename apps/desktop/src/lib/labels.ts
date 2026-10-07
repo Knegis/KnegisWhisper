@@ -28,6 +28,7 @@ import type {
   DictationOutcome,
   DiscoveryPermissions,
   GgufIntegrity,
+  HotkeyAction,
   HotkeyChange,
   HotkeyMode,
   ImportReport,
@@ -43,6 +44,7 @@ import type {
   Offer,
   RecheckOutcome,
   RefreshOutcome,
+  Registration,
   RelocatedCredential,
   SessionState,
   ShortcutHookStatus,
@@ -130,15 +132,27 @@ export function nonActivatingLabel(n: NonActivating): Stated {
  * `undefined` means the answer is not known yet — diagnostics has not loaded —
  * and the note says that rather than guessing either way. Not knowing is not
  * a failure, so it is never a `problem`.
+ *
+ * `registration` is what became of this accelerator when it was registered
+ * (`registrationFor`), and a failure there outranks everything above
+ * (KNEG-353). The platform can have a hook that failed to start, and then
+ * `hook` says "available" while the chord does nothing: this screen said
+ * "Works on this computer." while Dictation, which reads the registration,
+ * said the shortcut didn't work. An action nothing handles is the exception:
+ * the screen says so once, above its accelerators.
  */
 export function acceleratorLabel(
   a: Accelerator,
   hook?: ShortcutHookStatus,
+  registration?: Registration,
 ): {
   text: string;
   problem: string | null;
   note: { text: string; more: string } | null;
 } {
+  if (registration?.state === "rejected" || registration?.state === "not-registrable") {
+    return { text: a.kind === "invalid" ? a.input : a.accelerator, problem: registration.reason, note: null };
+  }
   switch (a.kind) {
     case "standard":
       return { text: a.accelerator, problem: null, note: null };
@@ -201,6 +215,22 @@ export function acceleratorLabel(
     case "invalid":
       return { text: a.input, problem: a.reason, note: null };
   }
+}
+
+/**
+ * What became of accelerator `a` of `action` when the shortcuts were last
+ * registered, or `undefined` when no report names it.
+ *
+ * Matched by text, which is what Rust reports each result under: the
+ * canonical accelerator, or for an invalid one what was typed.
+ */
+export function registrationFor(
+  reports: readonly { action: HotkeyAction; results: readonly Registration[] }[],
+  action: HotkeyAction,
+  a: Accelerator,
+): Registration | undefined {
+  const text = a.kind === "invalid" ? a.input : a.accelerator;
+  return reports.find((report) => report.action === action)?.results.find((result) => result.accelerator === text);
 }
 
 /**

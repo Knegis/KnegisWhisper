@@ -386,25 +386,11 @@ pub fn register_all(
             continue;
         }
 
-        // Everything the classifier already rejected, reported as-is rather
-        // than attempted and failed.
-        for accelerator in &binding.accelerators {
-            match accelerator {
-                kw_platform::hotkey::Accelerator::Standard { .. } => {}
-                // Live through the hook rather than the register.
-                kw_platform::hotkey::Accelerator::ModifierOnly { accelerator, .. }
-                    if hooked.contains(accelerator) =>
-                {
-                    results.push(Registration::Hooked {
-                        accelerator: accelerator.clone(),
-                    });
-                }
-                other => results.push(Registration::NotRegistrable {
-                    accelerator: other.text().to_owned(),
-                    reason: other.explain(),
-                }),
-            }
-        }
+        results.extend(hook_results(
+            &binding.accelerators,
+            &hooked,
+            kw_platform::keyhook::support().is_available(),
+        ));
 
         for accelerator in binding.registrable() {
             results.push(register_one(app, binding.action, accelerator, binding.mode));
@@ -476,6 +462,71 @@ pub fn register_all(
 
     hooks.set_reports(reports.clone());
     reports
+}
+
+/// What became of every accelerator the system shortcut register does not take.
+///
+/// Everything the classifier already rejected is reported as-is rather than
+/// attempted and failed. Pure, so what Dictation's readiness and Settings ›
+/// Shortcuts are told can be tested without a hook or a Tauri runtime.
+///
+/// Two things this got wrong until KNEG-353. A mouse button that `install`
+/// hooked fell through to `NotRegistrable`, so a dictation bound only to
+/// `Mouse4` was reported dead while it worked. And a chord the hook failed to
+/// take was given [`Accelerator::explain`]'s reason, which describes the
+/// accelerator with the hook running -- "It still works" -- on a result saying
+/// it does not.
+///
+/// [`Accelerator::explain`]: kw_platform::hotkey::Accelerator::explain
+fn hook_results(
+    accelerators: &[kw_platform::hotkey::Accelerator],
+    hooked: &std::collections::BTreeSet<String>,
+    hook_available: bool,
+) -> Vec<Registration> {
+    use kw_platform::hotkey::Accelerator;
+
+    let mut results = Vec::new();
+    for accelerator in accelerators {
+        match accelerator {
+            Accelerator::Standard { .. } => {}
+            // Live through the hook rather than the register. Both kinds:
+            // `install` hooks both.
+            Accelerator::ModifierOnly { accelerator, .. }
+            | Accelerator::MouseButton { accelerator, .. }
+                if hooked.contains(accelerator) =>
+            {
+                results.push(Registration::Hooked {
+                    accelerator: accelerator.clone(),
+                });
+            }
+            // This platform has the hook and it did not take this one, so
+            // `install` failed. No advice to add a regular key: on a sided
+            // chord that makes it invalid (`Accelerator::explain`).
+            Accelerator::ModifierOnly { accelerator, .. } if hook_available => {
+                results.push(Registration::NotRegistrable {
+                    accelerator: accelerator.clone(),
+                    reason: format!(
+                        "{accelerator} needs the keyboard hook, which could not be started, so \
+                         this shortcut does nothing right now. Restarting the app may fix it."
+                    ),
+                });
+            }
+            Accelerator::MouseButton { accelerator, .. } if hook_available => {
+                results.push(Registration::NotRegistrable {
+                    accelerator: accelerator.clone(),
+                    reason: format!(
+                        "{accelerator} needs the mouse hook, which could not be started, so \
+                         this button does nothing right now. Restarting the app may fix it."
+                    ),
+                });
+            }
+            other => results.push(Registration::NotRegistrable {
+                accelerator: other.text().to_owned(),
+                reason: other.explain(),
+            }),
+        }
+    }
+    results
 }
 
 /// Owns the keyboard hook across re-registrations.
@@ -834,6 +885,81 @@ mod tests {
             hooked_act(Edge::Activated, HotkeyMode::Hold, "Control+Super"),
             Act::Nothing
         );
+    }
+
+    /* ------------------------------------------- what the hook took (KNEG-353) */
+
+    fn classified(text: &str) -> kw_platform::hotkey::Accelerator {
+        kw_platform::hotkey::classify(text)
+    }
+
+    fn hooked(texts: &[&str]) -> std::collections::BTreeSet<String> {
+        texts.iter().map(|t| (*t).to_owned()).collect()
+    }
+
+    #[test]
+    fn a_hooked_mouse_button_is_reported_hooked() {
+        // KNEG-353. `install` hooks it, and it was reported NotRegistrable, so
+        // Dictation said a Mouse4-only binding did not work while Settings said
+        // it did.
+        let mouse = classified("Mouse4");
+        assert!(matches!(
+            mouse,
+            kw_platform::hotkey::Accelerator::MouseButton { .. }
+        ));
+        let results = hook_results(&[mouse], &hooked(&["Mouse4"]), true);
+        assert!(
+            matches!(&results[..], [Registration::Hooked { accelerator }] if accelerator == "Mouse4"),
+            "{results:?}"
+        );
+    }
+
+    #[test]
+    fn a_hooked_chord_is_reported_hooked() {
+        let chord = classified("Control+Super");
+        let results = hook_results(&[chord], &hooked(&["Control+Super"]), true);
+        assert!(
+            matches!(&results[..], [Registration::Hooked { .. }]),
+            "{results:?}"
+        );
+    }
+
+    #[test]
+    fn a_hook_that_failed_to_install_is_not_described_as_working() {
+        // KNEG-353. The platform has a hook, `install` failed, and the reason
+        // used to be `explain()`'s "It still works".
+        for text in ["Control+Super", "Mouse4"] {
+            let results = hook_results(&[classified(text)], &hooked(&[]), true);
+            match &results[..] {
+                [Registration::NotRegistrable {
+                    accelerator,
+                    reason,
+                }] => {
+                    assert_eq!(accelerator, text);
+                    assert!(!reason.contains("works"), "{text}: {reason}");
+                    assert!(reason.contains("could not be started"), "{text}: {reason}");
+                    assert!(reason.contains("does nothing"), "{text}: {reason}");
+                }
+                other => panic!("{text}: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn without_a_hook_on_this_platform_the_reason_says_so() {
+        let results = hook_results(&[classified("Control+Super")], &hooked(&[]), false);
+        match &results[..] {
+            [Registration::NotRegistrable { reason, .. }] => {
+                assert_eq!(reason, &classified("Control+Super").explain());
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn standard_accelerators_are_left_to_the_register() {
+        let results = hook_results(&[classified("Control+Shift+D")], &hooked(&[]), true);
+        assert!(results.is_empty(), "{results:?}");
     }
 
     #[test]

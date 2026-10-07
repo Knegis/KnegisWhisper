@@ -288,8 +288,13 @@ impl Accelerator {
         }
     }
 
-    /// A short phrase for the settings UI. Never claims a modifier-only hotkey
-    /// works.
+    /// What this accelerator is and how it is taken, with any hook it needs
+    /// running. Never claims a modifier-only hotkey works where there is no
+    /// hook.
+    ///
+    /// Not the last word on whether it works. The hook can exist and still fail
+    /// to start, and then this sentence ("It still works") is false; the
+    /// desktop's `register_all` gives its own reason in that case (KNEG-353).
     #[must_use]
     pub fn explain(&self) -> String {
         match self {
