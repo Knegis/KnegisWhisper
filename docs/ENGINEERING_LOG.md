@@ -12,7 +12,50 @@ maintained in place rather than appended to, because its purpose is to be curren
 
 ---
 
-## 2026-10-07 (latest) — KNEG-410: the live `local` meeting view skips windows with no speech, and the invented text it was filed for does not happen
+## 2026-10-07 (latest) — KNEG-388: a model switch interrupted by a dictation undid itself, and push-to-talk's release could start a recording
+
+KNEG-388 was filed as "the hotkey can start a dictation while a route switch is in flight". Reading
+the code to fix it found that the damage is on **Stop**, not Start, and reaches further than
+dictation. **Read from code and pinned by tests; not reproduced in the running app.**
+
+- **A revive undid the switch.** Switching the local Whisper model from A to B stops A first, so
+  the port is empty while B loads. Anything needing the server in that window revives it: a
+  dictation stopped then (the route is resolved at Stop), a media import, a local meeting.
+  `ReviveRemembered` reads the remembered model, which is still A because `local_server_start`
+  stores B only once it is up. It waited on `operation` behind B, ignored B's result (the join
+  matched the same model only), then stopped B and started A: A running, B stored, the page saying
+  B. A recording started *before* the switch reaches it, so refusing starts alone could not fix it.
+- **The fix is a revive-only join** (`LocalTranscription::revive_model`): a revive that waited
+  behind a start which succeeded uses that server, whatever its model. `start_model`, the user's own
+  choice, is unchanged, so a switch to C queued behind B still starts C.
+  `a_revive_that_waited_behind_a_switch_keeps_the_model_switched_to` fails against the old join;
+  that was checked by putting the old join back.
+- **The refusal the issue asked for.** `RouteSwitch`, a count held for the whole of
+  `local_server_start` and `local_server_refresh`, the two commands a button press reaches. A start
+  meanwhile is refused with "Dictation didn't start: the transcription model is still changing. Try
+  again in a moment." It reaches the floating microphone and the Dictation page through the
+  existing failed outcome. Launch-time resume and revives do not hold it: refusing dictation while
+  the remembered model loads at startup would have been a regression. Remaining window, accepted:
+  the two IPC calls after `local_server_start` returns. The server is up by then, so a dictation
+  started there goes to the old route or the new one, and both work.
+- **Push-to-talk's release started recordings.** The release called `toggle` whatever its press had
+  done. A press that was refused, could not open the microphone, or finished a recording the
+  floating microphone had started left the session idle, so the release started one that nothing
+  would end. Now `press` says what it did (`Pressed::Started` or `Finished`), and the release
+  finishes only a recording its own press started (`release_finishes`). This existed before the
+  refusal did. The refusal would only have made it easier to reach.
+- **A start no longer reports `Cancelled`.** `toggle` answered a start with `Outcome::Cancelled`
+  because a start has no outcome, and the hotkey path emitted it. Settings › Shortcuts showed "Last
+  dictation result: Cancelled." for as long as the recording ran. The hotkey path now emits nothing
+  for a start; the state event already says it. The `dictation_toggle` command still answers
+  `Cancelled`, so its TypeScript type is unchanged.
+
+Not covered, and filed as KNEG-414: a switch is not refused while a local dictation is being
+transcribed or a local meeting is running, so the request in flight can still fail mid-switch.
+
+---
+
+## 2026-10-07 — KNEG-410: the live `local` meeting view skips windows with no speech, and the invented text it was filed for does not happen
 
 KNEG-404 left the windowed `local` meeting provider sending every five-second window to
 `whisper-server`, silence included, on the belief that silent windows would come back as invented

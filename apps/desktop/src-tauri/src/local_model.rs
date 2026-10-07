@@ -61,6 +61,60 @@ pub struct LocalTranscription {
     model: Arc<RwLock<Option<String>>>,
     /// Shared with media import and meetings. See [`SpeechTools`].
     speech: SpeechTools,
+    /// Whether the user is switching the model right now. See [`RouteSwitch`].
+    switching: RouteSwitch,
+}
+
+/// Whether the user is switching the local model right now (KNEG-388).
+///
+/// Held for the whole of `local_server_start` and `local_server_refresh`, the
+/// two commands that stop a server and start one because somebody pressed a
+/// button. Dictation reads it to refuse a start in that window: the old server
+/// is already gone, and the route a recording would be transcribed by is
+/// whichever the switch has reached by the time it stops. Launch-time resume
+/// and revives do not hold it -- nobody chose those, and refusing a dictation
+/// while the remembered model loads at startup would be a regression.
+///
+/// A count rather than a flag, so a second switch queued behind the first
+/// keeps it held until both are done.
+#[derive(Debug, Clone, Default)]
+pub struct RouteSwitch(Arc<std::sync::atomic::AtomicUsize>);
+
+impl RouteSwitch {
+    /// Mark a switch as running until the returned guard is dropped.
+    pub fn begin(&self) -> RouteSwitchGuard {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        RouteSwitchGuard(Arc::clone(&self.0))
+    }
+
+    /// Whether any switch is running.
+    #[must_use]
+    pub fn in_progress(&self) -> bool {
+        self.0.load(std::sync::atomic::Ordering::SeqCst) > 0
+    }
+}
+
+/// One running switch. Dropping it ends it, however the command returned.
+#[must_use = "the switch ends when this guard is dropped"]
+#[derive(Debug)]
+pub struct RouteSwitchGuard(Arc<std::sync::atomic::AtomicUsize>);
+
+impl Drop for RouteSwitchGuard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// Which earlier start a waiting one may take as its own answer.
+#[derive(Debug, Clone, Copy)]
+enum Join {
+    /// Only a start of the same model, whatever its result. What a user's
+    /// choice needs: choosing C while B starts must never answer with B.
+    SameModel,
+    /// That, or a start of any model that succeeded. What a revive needs: it
+    /// wants *a* server, and the one the user just switched to is the right
+    /// one even though the remembered model has not caught up yet (KNEG-388).
+    AnySuccess,
 }
 
 impl std::fmt::Debug for LocalTranscription {
@@ -95,6 +149,7 @@ impl LocalTranscription {
                 &paths::sidecar_dir().path,
                 paths::audio_temp_dir(),
             ),
+            switching: RouteSwitch::default(),
         })
     }
 
@@ -105,6 +160,7 @@ impl LocalTranscription {
             port: Arc::clone(&self.port),
             model: Arc::clone(&self.model),
             speech: self.speech.clone(),
+            switching: self.switching.clone(),
         }
     }
 
@@ -171,6 +227,9 @@ pub struct SharedLocal {
     pub model: Arc<RwLock<Option<String>>>,
     /// What long recordings need to find their speech first.
     pub speech: SpeechTools,
+    /// Whether the user is switching the model, for dictation to refuse a
+    /// start meanwhile. See [`RouteSwitch`].
+    pub switching: RouteSwitch,
 }
 
 /// The Silero VAD model `tauri.conf.json` bundles under `resources/`
@@ -920,6 +979,9 @@ pub async fn local_server_refresh(
     app: AppHandle,
     local: State<'_, Arc<LocalTranscription>>,
 ) -> Result<RefreshOutcome, String> {
+    // A refresh stops the server and starts it again, so dictation refuses a
+    // start meanwhile, as for a switch (KNEG-388).
+    let _switching = local.switching.begin();
     let _operation = local.operation.lock().await;
     let (spec, asset) = local
         .catalog
@@ -983,6 +1045,10 @@ pub async fn local_server_start(
     asr: State<'_, Arc<crate::local_asr::LocalAsr>>,
     model_id: String,
 ) -> Result<u16, String> {
+    // Held until the new model is remembered, so dictation refuses a start for
+    // the whole switch rather than recording into a route half-way through
+    // changing (KNEG-388).
+    let _switching = local.switching.begin();
     let port = local.start_model(&model_id).await?;
 
     // One local engine at a time. Choosing a whisper model releases a sherpa
@@ -1031,6 +1097,11 @@ pub trait Revive: Send + Sync + std::fmt::Debug {
 /// persisted choice is the only durable answer to *which* model, and it is the
 /// same one [`resume_last_used`] reads, so reviving mid-dictation cannot bring
 /// back a different model than a relaunch would.
+///
+/// One exception, through [`LocalTranscription::revive_model`]: a revive that
+/// waited behind a start which succeeded uses that server, whatever its model.
+/// During a switch from A to B the persisted choice is still A until B is up,
+/// and starting A then undid the switch (KNEG-388).
 struct ReviveRemembered {
     local: Arc<LocalTranscription>,
     db: kw_storage::Db,
@@ -1046,7 +1117,7 @@ impl std::fmt::Debug for ReviveRemembered {
 impl Revive for ReviveRemembered {
     async fn revive(&self) -> Result<u16, String> {
         match model_to_resume(&self.db).await {
-            Resume::Model(model_id) => self.local.start_model(&model_id).await,
+            Resume::Model(model_id) => self.local.revive_model(&model_id).await,
             // Neither of these is an ordinary failure: something asked to
             // revive a server for a route that should not have been reaching
             // one. Say which contradiction it was rather than reporting a
@@ -1118,7 +1189,7 @@ impl Revive for ReviveForMeeting {
             .map(|model| model.id.clone())
             .collect();
         match meeting_model(remembered.as_deref(), &installed) {
-            Some(model_id) => self.local.start_model(&model_id).await,
+            Some(model_id) => self.local.revive_model(&model_id).await,
             None => Err(
                 "no local Whisper model is installed. Install one under Settings > \
                          Transcription > Local."
@@ -1231,6 +1302,22 @@ impl LocalTranscription {
 
     /// Start the server for one model, or return the port if it is already up.
     pub async fn start_model(&self, model_id: &str) -> Result<u16, String> {
+        self.start(model_id, Join::SameModel).await
+    }
+
+    /// [`start_model`](Self::start_model), for a revive.
+    ///
+    /// The difference is what it accepts from a start that finished while it
+    /// waited: any that succeeded, not only one of `model_id`. A revive reads
+    /// the remembered model, and during a switch from A to B that is still A
+    /// -- B is remembered only once it is up. Starting A then stopped the
+    /// server the user had just switched to and left A running with B stored
+    /// (KNEG-388).
+    pub async fn revive_model(&self, model_id: &str) -> Result<u16, String> {
+        self.start(model_id, Join::AnySuccess).await
+    }
+
+    async fn start(&self, model_id: &str, join: Join) -> Result<u16, String> {
         let requested = std::time::Instant::now();
         let _operation = self.operation.lock().await;
         let shared = self
@@ -1239,7 +1326,11 @@ impl LocalTranscription {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone();
         if let Some((finished, model, result)) = shared {
-            if finished >= requested && model == model_id {
+            let joins = match join {
+                Join::SameModel => model == model_id,
+                Join::AnySuccess => model == model_id || result.is_ok(),
+            };
+            if finished >= requested && joins {
                 return result;
             }
         }
@@ -1738,6 +1829,88 @@ mod tests {
         drop(gate);
         assert_eq!(first.await.unwrap(), Err("same failed startup".to_owned()));
         assert_eq!(second.await.unwrap(), Err("same failed startup".to_owned()));
+    }
+
+    /// KNEG-388. A dictation, import or local meeting that needs the server
+    /// while the user switches from model A to B revives it. The revive reads
+    /// the remembered model, still A, because B is remembered only once it is
+    /// up. It used to wait for B, stop it and start A, leaving A running and B
+    /// stored. Now a revive that waited behind a start that succeeded uses it.
+    #[tokio::test]
+    async fn a_revive_that_waited_behind_a_switch_keeps_the_model_switched_to() {
+        let local = Arc::new(local());
+        let gate = local.operation.lock().await;
+        let reviver = Arc::clone(&local);
+        let revive = tokio::spawn(async move { reviver.revive_model("model-a").await });
+        tokio::task::yield_now().await;
+        // The user's switch to B, finishing while the revive waits.
+        *local.last_start.lock().unwrap() =
+            Some((std::time::Instant::now(), "model-b".to_owned(), Ok(8178)));
+        drop(gate);
+        assert_eq!(revive.await.unwrap(), Ok(8178));
+        assert_eq!(
+            local
+                .last_start
+                .lock()
+                .unwrap()
+                .as_ref()
+                .map(|(_, model, _)| model.clone()),
+            Some("model-b".to_owned()),
+            "the revive must not have started another model over B"
+        );
+    }
+
+    /// A revive accepts another model's start only when it succeeded: B
+    /// failing is no server to use, so the revive starts its own.
+    #[tokio::test]
+    async fn a_revive_does_not_take_another_models_failure_as_its_own() {
+        let local = Arc::new(local());
+        let gate = local.operation.lock().await;
+        let reviver = Arc::clone(&local);
+        let revive = tokio::spawn(async move { reviver.revive_model("model-a").await });
+        tokio::task::yield_now().await;
+        *local.last_start.lock().unwrap() = Some((
+            std::time::Instant::now(),
+            "model-b".to_owned(),
+            Err("model B failed".to_owned()),
+        ));
+        drop(gate);
+        assert_ne!(revive.await.unwrap(), Err("model B failed".to_owned()));
+    }
+
+    /// The user's own switch is unchanged: choosing C while B starts must
+    /// never hand back B's server.
+    #[tokio::test]
+    async fn a_user_switch_does_not_accept_another_models_start() {
+        let local = Arc::new(local());
+        let gate = local.operation.lock().await;
+        let switcher = Arc::clone(&local);
+        let switch = tokio::spawn(async move { switcher.start_model("model-c").await });
+        tokio::task::yield_now().await;
+        *local.last_start.lock().unwrap() =
+            Some((std::time::Instant::now(), "model-b".to_owned(), Ok(8178)));
+        drop(gate);
+        assert_ne!(switch.await.unwrap(), Ok(8178));
+    }
+
+    #[test]
+    fn a_route_switch_is_in_progress_exactly_while_a_guard_is_held() {
+        let local = local();
+        let dictation_sees = local.shared().switching;
+        assert!(!dictation_sees.in_progress());
+        let first = local.switching.begin();
+        assert!(
+            dictation_sees.in_progress(),
+            "the clone must see the switch"
+        );
+        let second = local.switching.begin();
+        drop(first);
+        assert!(
+            dictation_sees.in_progress(),
+            "a second switch is still running"
+        );
+        drop(second);
+        assert!(!dictation_sees.in_progress());
     }
 
     #[tokio::test]

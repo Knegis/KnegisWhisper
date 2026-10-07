@@ -265,6 +265,7 @@ pub fn run() -> anyhow::Result<()> {
                     transcription_model: shared.model,
                     transcription_sherpa: sherpa_selection,
                     transcription_revive: revive,
+                    transcription_switching: shared.switching,
                     generation: llm_endpoint,
                 },
                 // Off until `reasoning::apply_at_startup` fills it, and off
