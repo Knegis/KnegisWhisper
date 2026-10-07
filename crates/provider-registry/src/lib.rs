@@ -725,7 +725,11 @@ mod tests {
     /// `generate-provider-registry.mjs` derives, and widening its vocabulary
     /// to fit a label was rejected on purpose. The purpose lives in
     /// `config/integration-manifest.json`'s `credential:assemblyai` and
-    /// `credential:deepgram` notes instead.
+    /// `credential:deepgram` notes instead. Settings › Providers says it too,
+    /// without this file: its "Live meetings" label comes from the meeting
+    /// providers, each naming the slot its client reads (`credential_slot` on
+    /// `kw_meeting_core::MeetingProviderSummary`, KNEG-373). That decision
+    /// stands, and this test with it.
     #[test]
     fn assemblyai_and_deepgram_are_provider_slots_upstream_never_needed() {
         let r = reg();

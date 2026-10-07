@@ -555,6 +555,13 @@ pub struct MeetingProviderSummary {
     pub reconnect: bool,
     pub batch_fallback: bool,
     pub availability: ClientAvailability,
+    /// The credential slot this provider's client reads its key from, from
+    /// [`credential_slot`]; `None` for a provider that needs no key or has no
+    /// client. Settings › Providers reads it to say which keys live meetings
+    /// use (KNEG-373). The registry's `usedFor` cannot say that, on purpose:
+    /// see `assemblyai_and_deepgram_are_provider_slots_upstream_never_needed`
+    /// in `crates/provider-registry/src/lib.rs`.
+    pub credential_slot: Option<&'static str>,
     /// The same honest sentence [`MeetingProviderCapabilities::summary`] builds,
     /// rendered once here rather than reassembled in TypeScript.
     pub summary: String,
@@ -614,6 +621,7 @@ pub fn listing() -> Vec<MeetingProviderSummary> {
             reconnect: p.reconnect,
             batch_fallback: p.batch_fallback,
             availability: availability(p.id),
+            credential_slot: client(p.id).and_then(credential_slot),
             summary: p.summary(),
         })
         .collect()
@@ -735,6 +743,39 @@ mod tests {
         assert!(
             checked > 0,
             "no cloud client was checked -- this test would pass vacuously"
+        );
+    }
+
+    /// What lets Settings › Providers say a key is for live meetings
+    /// (KNEG-373): each listed provider names the slot its client reads, from
+    /// the same [`credential_slot`] the runtime uses, so the page never
+    /// guesses. A provider with no client -- Tinfoil, declined -- names none,
+    /// even though a slot of that name may exist for other uses.
+    #[test]
+    fn the_listing_names_the_slot_each_providers_client_reads() {
+        let slots: Vec<(&str, Option<&str>)> = listing()
+            .iter()
+            .map(|p| (p.id, p.credential_slot))
+            .collect();
+        for (id, expected) in [
+            ("openai-realtime", Some("openai")),
+            ("assemblyai-realtime", Some("assemblyai")),
+            ("deepgram-realtime", Some("deepgram")),
+            ("corti-realtime", Some("corti")),
+            ("local", None),
+            ("local-streaming", None),
+            ("tinfoil-realtime", None),
+        ] {
+            let found = slots
+                .iter()
+                .find(|(listed, _)| *listed == id)
+                .unwrap_or_else(|| panic!("{id} is not listed"));
+            assert_eq!(found.1, expected, "{id}");
+        }
+        assert_eq!(
+            slots.len(),
+            7,
+            "a provider was added: say which slot it reads above"
         );
     }
 

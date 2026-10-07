@@ -67,6 +67,7 @@ function provider(
     reconnect: false,
     batchFallback: false,
     availability,
+    credentialSlot: null,
     summary: "",
   };
 }

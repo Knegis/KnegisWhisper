@@ -535,6 +535,9 @@ const MEETING_PROVIDERS: MeetingProviderSummary[] = [
     reconnect: true,
     batchFallback: true,
     availability: { state: "available" },
+    // As `credential_slot(client(id))` gives it in Rust; the ids here are
+    // fixture ids, so the slot is written out rather than derived (KNEG-373).
+    credentialSlot: "deepgram",
     summary:
       "Streams audio to Deepgram. Speaker labels and live partials, no session limit.",
   },
@@ -552,6 +555,7 @@ const MEETING_PROVIDERS: MeetingProviderSummary[] = [
     reconnect: true,
     batchFallback: true,
     availability: { state: "available" },
+    credentialSlot: "openai",
     summary:
       "Streams audio to OpenAI. No speaker labels, and the session is capped at 30 minutes.",
   },
@@ -572,6 +576,7 @@ const MEETING_PROVIDERS: MeetingProviderSummary[] = [
     // client landed in chunk E. Now the fixture for the state added after the
     // 2026-08-27 bench run: a client exists and no key is stored.
     availability: { state: "needs-credential", slot: "assemblyai" },
+    credentialSlot: "assemblyai",
     summary: "Streams audio to AssemblyAI. Speaker labels and live partials.",
   },
   {
@@ -595,6 +600,7 @@ const MEETING_PROVIDERS: MeetingProviderSummary[] = [
       state: "no-client",
       reason: "No streaming client for this provider has been written yet.",
     },
+    credentialSlot: null,
     summary: "Audio never leaves this machine. No partials, no speaker labels.",
   },
 ];

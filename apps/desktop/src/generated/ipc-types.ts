@@ -638,6 +638,15 @@ export type MeetingProviderSummary = { id: string, name: string,
  */
 audioLeavesDevice: boolean, keyterms: KeytermSupport, sessionLimitSeconds: number | null, tokenRotation: boolean, sampleRates: Array<number>, speakerLabels: boolean, partials: boolean, languageDetection: boolean, reconnect: boolean, batchFallback: boolean, availability: ClientAvailability,
 /**
+ * The credential slot this provider's client reads its key from, from
+ * [`credential_slot`]; `None` for a provider that needs no key or has no
+ * client. Settings › Providers reads it to say which keys live meetings
+ * use (KNEG-373). The registry's `usedFor` cannot say that, on purpose:
+ * see `assemblyai_and_deepgram_are_provider_slots_upstream_never_needed`
+ * in `crates/provider-registry/src/lib.rs`.
+ */
+credentialSlot: string | null,
+/**
  * The same honest sentence [`MeetingProviderCapabilities::summary`] builds,
  * rendered once here rather than reassembled in TypeScript.
  */

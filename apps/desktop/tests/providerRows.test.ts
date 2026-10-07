@@ -126,6 +126,49 @@ test("all keeps every row, and the query matches the name whatever its case", ()
   assert.deepEqual(filterRows(all, "speech", "anthropic"), []);
 });
 
+/*
+ * Shaped as `meeting_providers` returns them: only `credentialSlot` is read, and
+ * each value is what `credential_slot(client(id))` gives in
+ * `crates/meeting-core/src/capabilities.rs`. Tinfoil has no meeting client, so
+ * it names no slot even though a `tinfoil` slot exists for other uses.
+ */
+const meetings = [
+  { credentialSlot: "openai" },
+  { credentialSlot: "assemblyai" },
+  { credentialSlot: "deepgram" },
+  { credentialSlot: "corti" },
+  { credentialSlot: null },
+  { credentialSlot: null },
+  { credentialSlot: null },
+];
+
+test("a key a live-meeting client reads says so, after the uses the registry declares", () => {
+  // KNEG-373: Deepgram's and AssemblyAI's keys are what live meetings use, and
+  // the registry's empty `usedFor` cannot say so, on purpose.
+  const { inUse, available } = providerRows(slots, transcription, meetings);
+  assert.deepEqual(bySlot(inUse, "deepgram")?.purposes, ["Live meetings"]);
+  assert.deepEqual(bySlot(available, "assemblyai")?.purposes, ["Live meetings"]);
+  assert.deepEqual(bySlot(inUse, "openai")?.purposes, ["Speech to text", "Cleanup and summaries", "Live meetings"]);
+  assert.deepEqual(bySlot(available, "tinfoil")?.purposes, ["Speech to text", "Cleanup and summaries"]);
+  assert.deepEqual(bySlot(available, "anthropic")?.purposes, ["Cleanup and summaries"]);
+});
+
+test("the speech filter keeps the keys live meetings use too", () => {
+  // Live meeting transcription is speech to text, so there is no fourth tab.
+  const { inUse, available } = providerRows(slots, transcription, meetings);
+  const all = [...inUse, ...available];
+  assert.deepEqual(filterRows(all, "speech", "").map((r) => r.slot), ["openai", "deepgram", "groq", "tinfoil", "assemblyai"]);
+  assert.deepEqual(filterRows(all, "text", "").map((r) => r.slot), ["openai", "anthropic", "tinfoil"]);
+});
+
+test("a key a live-meeting client reads is never marked unsupported", () => {
+  // Its speech client may be missing, but the key still does something.
+  const speechOnly = slot({ slot: "deepgram", name: "Deepgram", usedFor: ["transcription"] });
+  const missing = [summary("deepgram", { state: "needs-client", reason: "no batch client" })];
+  assert.equal(bySlot(providerRows([speechOnly], missing).available, "deepgram")?.unsupported, true);
+  assert.equal(bySlot(providerRows([speechOnly], missing, meetings).available, "deepgram")?.unsupported, false);
+});
+
 test("a key row is shown under a filter and a search only while one of its lists keeps it", () => {
   // KNEG-377: a typed key stayed in the hidden row's form and came back with
   // it. The page closes the form when this says the row went out of view.

@@ -168,6 +168,7 @@ const provider = (over: Partial<MeetingProviderSummary> = {}): MeetingProviderSu
   reconnect: false,
   batchFallback: false,
   availability: { state: "available" },
+  credentialSlot: null,
   summary: "runs on this machine",
   ...over,
 });

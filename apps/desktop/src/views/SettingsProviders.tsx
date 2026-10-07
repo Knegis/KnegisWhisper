@@ -30,8 +30,9 @@
  * Available, Custom endpoints and Company accounts, after a first row for this
  * computer, which needs no key and has no form. What a row says about itself
  * comes from the slot and nothing else -- its tile is the first letter of its
- * name, its line is its `usedFor` in words, and "Not supported yet" is
- * `getProviders().dispatch`. The filter tabs and the search field narrow the
+ * name, its line is its `usedFor` in words plus "Live meetings" when a meeting
+ * client reads the slot (`getMeetingProviders().credentialSlot`, KNEG-373), and
+ * "Not supported yet" is `getProviders().dispatch`. The filter tabs and the search field narrow the
  * same rows; neither hides a slot the registry declares from All with the
  * field empty, so every one of them can still be reached here.
  *
@@ -51,6 +52,7 @@ import { LearnMore } from "../components/LearnMore";
 import { PageHeader } from "../components/PageHeader";
 import {
   getCredentialSlots,
+  getMeetingProviders,
   getProviders,
   isProviderConnected,
   probeProviders,
@@ -118,8 +120,14 @@ const focusToggle = (formId: string) => document.querySelector<HTMLElement>(`[da
 
 export function SettingsProviders({ onGoTo }: { onGoTo: (id: ViewId) => void }) {
   const load = useCallback(async () => {
-    const [slots, transcription] = await Promise.all([getCredentialSlots(), getProviders()]);
-    return { slots, transcription };
+    // The meeting providers only add "Live meetings" to the rows whose keys
+    // they read. A failed read loses that word, not the page.
+    const [slots, transcription, meetings] = await Promise.all([
+      getCredentialSlots(),
+      getProviders(),
+      getMeetingProviders().catch(() => []),
+    ]);
+    return { slots, transcription, meetings };
   }, []);
   const { data, error, guard, fail } = useRefresh(load);
 
@@ -234,9 +242,9 @@ export function SettingsProviders({ onGoTo }: { onGoTo: (id: ViewId) => void }) 
     );
   }
 
-  const { slots, transcription } = data;
+  const { slots, transcription, meetings } = data;
   const bySlot = new Map(slots.map((s) => [s.slot, s]));
-  const lists = providerRows(slots, transcription);
+  const lists = providerRows(slots, transcription, meetings);
   // What `probe_configured` will test: a transcription provider with a key.
   const testable = slots.filter((s) => s.stored && transcription.some((p) => p.credentialSlot === s.slot));
 
@@ -318,7 +326,14 @@ export function SettingsProviders({ onGoTo }: { onGoTo: (id: ViewId) => void }) 
         {tile(row)}
         <span className="provider-text">
           <span className="provider-name">{row.name}</span>
-          {row.purposes.length > 0 ? <span className="provider-purposes">{row.purposes.join(" · ")}</span> : null}
+          {row.purposes.length > 0 ? (
+            <span className="provider-purposes">
+              {/* One span per purpose, so a narrow row wraps between them, not inside "Live meetings". */}
+              {row.purposes.map((purpose, i) => (
+                <span key={purpose} className="provider-purpose">{i > 0 ? ` · ${purpose}` : purpose}</span>
+              ))}
+            </span>
+          ) : null}
         </span>
         <span className="provider-actions">
           {state ? (
