@@ -81,8 +81,9 @@ pub struct LocalTranscription {
 /// that was running, and holding it would refuse every route for the length
 /// of a download.
 ///
-/// A count rather than a flag, so a second switch queued behind the first
-/// keeps it held until both are done.
+/// A count rather than a flag, so two commands that overlap -- the second is
+/// refused by [`ServerUsers`] a moment later -- cannot clear it for each
+/// other.
 ///
 /// The reverse -- refusing the switch while something is using the server --
 /// is [`ServerUsers`] (KNEG-414).
@@ -124,8 +125,9 @@ impl Drop for RouteSwitchGuard {
 pub(crate) const NOT_NOW: &str = "Not now: ";
 const ALREADY_CHANGING: &str =
     "Not now: the transcription model is already changing. Try again in a moment.";
-/// When the lock is held and nothing is counted: only for a moment, between a
-/// use taking the lock and being counted, or a read the commands hold.
+/// When the lock is held and nothing is counted: only for a moment, while a
+/// start of the model already running holds its read, or another command's
+/// `try_read` probe does.
 const IN_USE: &str = "Not now: the transcription model is in use. Try again in a moment.";
 
 /// Something that uses the running server, which a change is refused during.
@@ -182,11 +184,10 @@ impl ServerUser {
 /// takes the write side with `try_write` and is refused while a use holds it.
 /// A use that starts during a change **waits** for it and then reads the new
 /// model's port, so a dictation stopped mid-switch is transcribed by the model
-/// switched to. Nothing ever waits for the write side: that is what makes it
-/// safe for a use to take a second read while holding one (a meeting's
-/// whole-file pass inside its session), and for a use to wait on `operation`
-/// in a revive, since no change can be holding it then. **Never add a
-/// `write().await`.**
+/// switched to. Nothing ever waits for the write side: that is what keeps a
+/// use from queueing behind a waiting writer, and lets a use wait on
+/// `operation` in a revive, since no change can be holding it then. **Never
+/// add a `write().await`.**
 ///
 /// The counts only choose the sentence of a refusal.
 #[derive(Debug, Clone, Default)]
@@ -232,8 +233,9 @@ pub struct ServerChange {
 pub enum ChangeGuard {
     /// Nothing is using the server: the command may stop it.
     Change { _change: ServerChange },
-    /// The model asked for is the one running, so nothing is stopped. Holds a
-    /// read, so no change can start until the command is done.
+    /// The model asked for is the one running, so nothing is stopped while it
+    /// answers its health check. Holds a read, so no change can start until
+    /// the command is done.
     SameModel {
         _read: tokio::sync::OwnedRwLockReadGuard<()>,
     },
@@ -410,7 +412,7 @@ pub struct SharedLocal {
     /// start meanwhile. See [`RouteSwitch`].
     pub switching: RouteSwitch,
     /// What dictation, meetings and imports hold while they use the server,
-    /// so a change waits for nothing and stops nothing under them. See
+    /// so a change is refused rather than stopping the server under them. See
     /// [`ServerUsers`].
     pub users: ServerUsers,
 }
@@ -1246,7 +1248,8 @@ pub async fn local_server_start(
     // changing (KNEG-388).
     let _switching = local.switching.begin();
     // And refused while something is using the server, unless it is the model
-    // already running, which stops nothing (KNEG-414).
+    // already running, which stops nothing while it answers its health check
+    // (KNEG-414).
     let _change = local.begin_change(Some(&model_id))?;
     let port = local.start_model(&model_id).await?;
 
@@ -1498,7 +1501,8 @@ impl LocalTranscription {
     /// holds that.
     ///
     /// `model` is the one a start asks for. When it is the one running,
-    /// nothing is stopped, so a start is allowed during a use -- but only
+    /// nothing is stopped while it answers its health check, so a start is
+    /// allowed during a use -- but only
     /// holding a read, so that no change can begin meanwhile and the model
     /// is compared after the guard is had, not before. Without that, a start
     /// of A read "A" as running while a switch to B was under way, joined no

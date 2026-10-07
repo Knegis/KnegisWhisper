@@ -111,7 +111,8 @@ impl CleanupSettings {
     rename_all_fields = "camelCase"
 )]
 pub enum ReasoningDispatch {
-    /// OpenAI-compatible. A request would really be sent.
+    /// A request would really be sent: a cloud provider, the local server
+    /// while it runs, or a company account once it is set up.
     Ready,
     /// Bedrock, Azure or Vertex. The request shape and the signing exist; what
     /// is missing is the organisation's own credentials, which are multi-field
@@ -235,26 +236,24 @@ fn dispatch_for(
     };
 
     match kw_reasoning_core::resolve_chat(registry, &settings) {
-        // Ready once its configuration is stored: the same test `describe`
-        // makes for the stored route. This answered `NeedsConfig` for every
-        // company account, so the cleanup menu, which enables only `ready`,
-        // never let one be chosen however it was set up.
-        Ok(ChatRoute::Enterprise { id })
-            if kw_security::KeyRef::new(&id).is_some_and(|slot| credentials.contains(&slot)) =>
-        {
-            ReasoningDispatch::Ready
-        }
+        // Ready once a configuration it can use is stored. This answered
+        // `NeedsConfig` for every company account, so the cleanup menu, which
+        // enables only `ready`, never let one be chosen however it was set up.
         Ok(ChatRoute::Enterprise { id }) => {
             let name = registry
                 .enterprise
                 .iter()
                 .find(|p| p.id == id)
                 .map_or(id.as_str(), |p| p.name.as_str());
-            ReasoningDispatch::NeedsConfig {
-                reason: format!(
-                    "{name} isn't set up yet. Enter your organisation's details under Company \
-                     accounts below."
-                ),
+            if company_account_ready(&id, name, credentials) {
+                ReasoningDispatch::Ready
+            } else {
+                ReasoningDispatch::NeedsConfig {
+                    reason: format!(
+                        "{name} isn't set up yet. Enter your organisation's details under \
+                         Company accounts below."
+                    ),
+                }
             }
         }
         Ok(ChatRoute::Local) => {
@@ -408,8 +407,7 @@ pub async fn reasoning_status(
             // Multi-field credentials: region and profile, or endpoint and
             // deployment, or a service-account JSON. There is no single slot.
             credential_slot: None,
-            configured: kw_security::KeyRef::new(&p.id)
-                .is_some_and(|slot| state.credentials().contains(&slot)),
+            configured: company_account_ready(&p.id, &p.name, state.credentials()),
             enterprise: true,
             dispatch: dispatch_for(registry, &p.id, true, local_running, state.credentials()),
             models: p
@@ -458,9 +456,10 @@ fn local_route_summary(
 ) -> ReasoningProviderSummary {
     ReasoningProviderSummary {
         id: "local".to_owned(),
-        // As every other screen names it (KNEG-343). It read "On this machine
-        // (llama.cpp)": the engine's name, in the one string kept in Rust.
-        name: "On this computer".to_owned(),
+        // As the Summaries menu and the "Currently" line on the same page name
+        // it (KNEG-343). It read "On this machine (llama.cpp)": the engine's
+        // name, in the one string kept in Rust.
+        name: "This computer".to_owned(),
         credential_slot: None,
         configured: local_running.is_some(),
         enterprise: false,
@@ -482,6 +481,19 @@ fn local_route_summary(
             })
             .collect(),
     }
+}
+
+/// Whether a company account has a configuration it can use: stored,
+/// readable and valid, which is what its form on the same page reports. Not
+/// merely something in the slot -- a configuration that no longer reads would
+/// otherwise be "Can be used" beside a form saying it can't.
+fn company_account_ready(
+    id: &str,
+    name: &str,
+    credentials: &dyn kw_security::CredentialStore,
+) -> bool {
+    let status = enterprise_status(id, name, credentials);
+    status.configured && status.problem.is_none()
 }
 
 /// Read one connector's stored configuration and report its shape.
@@ -749,7 +761,18 @@ mod tests {
         let store = kw_security::MemoryCredentialStore::default();
         let slot = kw_security::KeyRef::new("bedrock").expect("slot");
         store
-            .set(&slot, &kw_security::Secret::new("{}".to_owned()))
+            .set(
+                &slot,
+                &kw_security::Secret::new(
+                    serde_json::to_string(&EnterpriseConfig::Bedrock {
+                        region: "eu-west-1".to_owned(),
+                        access_key_id: "AKIDEXAMPLE".to_owned(),
+                        secret_access_key: "a-real-secret".to_owned(),
+                        session_token: None,
+                    })
+                    .expect("serialize"),
+                ),
+            )
             .expect("store");
 
         assert!(matches!(
@@ -757,6 +780,23 @@ mod tests {
             ReasoningDispatch::Ready
         ));
         // Only the one that is set up.
+        assert!(matches!(
+            dispatch_for(reg(), "vertex", true, None, &store),
+            ReasoningDispatch::NeedsConfig { .. }
+        ));
+    }
+
+    /// Something stored that can't be read is not set up: its form on the
+    /// same page says "The saved settings can't be used", so the row and the
+    /// menu must not say it can (branch review).
+    #[test]
+    fn a_company_account_whose_settings_cannot_be_read_is_not_ready() {
+        let store = kw_security::MemoryCredentialStore::default();
+        let slot = kw_security::KeyRef::new("azure").expect("slot");
+        store
+            .set(&slot, &kw_security::Secret::new("{}".to_owned()))
+            .expect("store");
+
         assert!(matches!(
             dispatch_for(reg(), "azure", true, None, &store),
             ReasoningDispatch::NeedsConfig { .. }
@@ -769,7 +809,7 @@ mod tests {
         let store = kw_security::MemoryCredentialStore::default();
         let summary = local_route_summary(reg(), None, &store);
         assert_eq!(summary.id, "local");
-        assert_eq!(summary.name, "On this computer");
+        assert_eq!(summary.name, "This computer");
     }
 
     /// A stored configuration is reported by shape, never by value.

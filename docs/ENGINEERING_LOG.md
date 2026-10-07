@@ -37,16 +37,18 @@ reproduced in the running app. The wiring into the four users is not under test.
     stopped mid-switch therefore reads the new model's port. Before, it read the old model's
     healthy port until `stop_inner` cleared it, and was killed mid-request.
   - **Changes** take the write side with `try_write` and are refused while any use holds it.
-  - Nothing ever waits for the write side, so readers cannot starve, a use can take a second read
-    (a meeting's whole-file pass inside its session), and a use can wait on `operation` in a
-    revive without deadlocking. The type's doc says never to add a `write().await`.
+  - Nothing ever waits for the write side, so a use never queues behind a waiting writer, and a
+    use can wait on `operation` in a revive without deadlocking. The type's doc says never to add a
+    `write().await`.
   - The precedent is `local_llm`, which refuses start, update and stop while a request runs.
 - **The refusals name the use.** "Not now: a dictation is being transcribed. Try again when it's
   done." Then a meeting, an import, "already changing", and a fallback. Per-kind counts choose the
   sentence. When `try_write` fails, a `try_read` probe comes first, so a dictation *waiting* behind
   a running change doesn't turn "already changing" into "a dictation".
-- **Starting the model already running is not a change.** It stops nothing, so it is allowed
-  during a use, but holding a read, with the model compared after the read is had.
+- **Starting the model already running is not a change.** It stops nothing while the server
+  answers its health check, so it is allowed during a use, but holding a read, with the model
+  compared after the read is had. A server that fails the check is restarted, the old risk named
+  under "Not changed" below.
   - A stress test of the design found the race this closes. A start of A read "A" as running while
     a switch to B was under way, joined no lock, and then stopped B under the dictation waiting for
     it.
@@ -57,6 +59,10 @@ reproduced in the running app. The wiring into the four users is not under test.
 - **Side fix, same command.** A refresh restarted the server through `start_model_inner`,
   bypassing `start`, so the state stayed at Loading and Settings kept saying so after an engine
   update. Both now go through `record_start`.
+- **"Stop and use a provider instead" stops first.** It used to move dictation to a provider and
+  then stop the server. Once the stop could be refused, a refusal left the route moved beside a
+  "Not now" that said nothing had happened (found by the branch review). With the stop first, a
+  refusal changes nothing.
 
 Not changed: a revive inside a use can still restart the server, after a failed two-second health
 check. That is an old risk, not a new one.
@@ -75,6 +81,28 @@ finishes", whose whole content is what to do, and would have buried these.
   installed text model to start.
 - Seen, not changed: Settings › Transcription shows every error at the top of the page, so a
   refusal of a button far below it is above the fold.
+
+---
+
+## 2026-10-07 — KNEG-416 and KNEG-417: two leftovers from the KNEG-343 review, each hiding a defect
+
+- **KNEG-416, company accounts.** The leftover was a Rust reason naming "Enterprise connectors",
+  a section the page no longer has. Behind it, `dispatch_for` answered `NeedsConfig` for every
+  company account without reading the store, so the cleanup menu, which enables only `ready`,
+  never let a set-up Bedrock, Azure or Vertex account be chosen.
+  - **Judgement call:** a set-up account is now choosable for cleanup although none has made a
+    live call (KNEG-54). Summaries already allowed it, and the page says no request has been run
+    against a real account.
+  - "Set up" means what the account's own form reports: stored, readable and valid. Something in
+    the slot that no longer reads stays "isn't set up yet". This was tightened after the branch
+    review found "Can be used" beside "The saved settings can't be used".
+  - The local route is "This computer" there now, as on the Summaries menu and the "Currently"
+    line.
+- **KNEG-417, the tools' entry point.** Thirteen scripts compared `resolve(argv[1])` with
+  `import.meta.url`, which Node sets to the real path. Through a junction they did nothing and
+  exited 0, which a test reproduced on both pin tools.
+  - **Judgement call:** all thirteen were fixed rather than the one flagged, since for a CI gate a
+    vacuous pass is the same defect. They share `tools/ci/entry.mjs`.
 
 ---
 

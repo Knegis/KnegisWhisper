@@ -228,15 +228,22 @@ export function SettingsIntelligence({
 
   const providerRow = (p: ReasoningProviderSummary) => {
     const dispatch = reasoningDispatchLine(p.dispatch);
+    const local = p.id === "local";
     return (
       <div key={p.id} className="row">
         <span className="row-label">{p.name}</span>
         <span className="row-value">
-          {p.enterprise
-            ? "Company account"
-            : p.configured
-              ? "Key saved"
-              : "No key saved"}
+          {/* The local route has no key: `configured` is whether a model is
+              running. It read "Key saved" / "No key saved" (branch review). */}
+          {local
+            ? p.configured
+              ? "A model is running"
+              : "No model is running"
+            : p.enterprise
+              ? "Company account"
+              : p.configured
+                ? "Key saved"
+                : "No key saved"}
           <em className="row-detail">
             {dispatch.text} · {p.models.length} model
             {p.models.length === 1 ? "" : "s"}
@@ -244,7 +251,9 @@ export function SettingsIntelligence({
           <LearnMore summary="Details">
             {dispatch.more ? <p>{dispatch.more}</p> : null}
             <p>
-              {p.credentialSlot ? (
+              {local ? (
+                "It runs on this computer and needs no key. Start a model under Local text models."
+              ) : p.credentialSlot ? (
                 <>
                   Its key is in the credential slot <code>{p.credentialSlot}</code>.
                 </>

@@ -716,8 +716,12 @@ export function SettingsTranscription({
                 type="button"
                 onClick={() => {
                   void guard(async () => {
-                    await useLocalModel(false);
+                    // The stop first: it is refused while something is
+                    // using the server (KNEG-414), and a refusal must mean
+                    // nothing changed. In the other order the route had
+                    // already moved to a provider beside a "Not now".
                     await stopLocalServer();
+                    await useLocalModel(false);
                   });
                 }}
               >

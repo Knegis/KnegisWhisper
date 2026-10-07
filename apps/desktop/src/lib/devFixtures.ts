@@ -448,13 +448,15 @@ const REASONING: ReasoningStatus = {
     },
     {
       id: "local",
-      name: "On this computer",
+      name: "This computer",
       credentialSlot: null,
-      configured: true,
+      // As Rust reports it: `configured` is whether a model is running, the
+      // same fact `needs-sidecar` says is not true.
+      configured: false,
       enterprise: false,
       dispatch: {
         state: "needs-sidecar",
-        reason: "the llama.cpp sidecar is not installed",
+        reason: "no local model is running. Start one under Settings > Local text models.",
       },
       models: [
         {
