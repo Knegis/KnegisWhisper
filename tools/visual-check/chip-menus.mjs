@@ -4,7 +4,8 @@
  * in place (KNEG-385) against dev fixtures: where each menu opens, its
  * keyboard, what choosing does to the chip and the privacy line, the holds
  * while a switch or a dictation is running, the Tidy up and Summary toggles,
- * Meetings' hero buttons, the 720x520 fit, and the menus in light and dark.
+ * Meetings' hero buttons, the 720x520 fit, the menus in light and dark, and
+ * what Record this call and Start ask for with the Other participants chip.
  *
  * States the fixture defaults cannot reach -- a slow write, a refused one, an
  * unconfigured Tidy up, a route with a caveat -- are made by wrapping the
@@ -699,6 +700,98 @@ async function checkThemes(cdp, out, report) {
   });
 }
 
+/** What the page says beside the chip where system audio cannot be captured (`Meetings.tsx`). */
+const CANNOT_RECORD_OTHERS = "Other participants can't be recorded on this computer.";
+const CONTROL_NOTES = "[...document.querySelectorAll('.control-body p.control-note')].map((item) => item.textContent.trim())";
+const RECORD_ENABLED = "(() => { const button = [...document.querySelectorAll('.call-card button')].find((item) => item.textContent.trim() === 'Record this call'); return Boolean(button) && !button.disabled; })()";
+const START_ENABLED = `${field(snippets.taskPageState(), "start.disabled")} === false`;
+
+/**
+ * The four states of the "Other participants" chip: system audio available
+ * with the chip pressed or released (the fixture default is available), and
+ * the two states where it cannot be captured, made by laying a different
+ * `systemAudio` over the fixtures' `meeting_status`.
+ */
+const SYSTEM_AUDIO_CASES = [
+  { name: "available, chip pressed", want: true, systemAudio: null, expected: true },
+  { name: "available, chip released", want: false, systemAudio: null, expected: false },
+  {
+    name: "unsupported",
+    want: true,
+    systemAudio: { state: "unsupported", reason: "this platform has no way to capture what the speakers play" },
+    expected: false,
+  },
+  {
+    name: "no-device",
+    want: true,
+    systemAudio: { state: "no-device", mechanism: "WASAPI loopback", reason: "no output device is active" },
+    expected: false,
+  },
+];
+
+/**
+ * One press of `how` ("record", the call card's Record this call, or "start",
+ * Start recording) on a fresh Meetings page in one `SYSTEM_AUDIO_CASES` case,
+ * and what reached `meeting_start`. `shot` names a screenshot of the page just
+ * before the press.
+ */
+async function pressStartIn(cdp, out, testCase, how, shot = null) {
+  await freshPage(cdp, "Meetings");
+  if (testCase.systemAudio) {
+    await cdp.evaluate(snippets.stubInvoke({ merge: { meeting_status: { systemAudio: testCase.systemAudio } } }));
+    await enterPage(cdp, "Meetings");
+  }
+  await waitFor(cdp, how === "record" ? RECORD_ENABLED : START_ENABLED, `${how === "record" ? "Record this call" : "Start recording"} to be enabled`);
+  const chip = await cdp.evaluate(snippets.chipState("Other participants"));
+  const notes = await cdp.evaluate(CONTROL_NOTES);
+  if (shot) await screenshot(cdp, out, shot);
+  await cdp.evaluate(snippets.clearStubCalls());
+  const pressed = await cdp.evaluate(how === "record" ? snippets.recordThisCall(testCase.want) : snippets.startMeetingRecording(testCase.want));
+  await waitFor(cdp, `${snippets.stubCalls("meeting_start")}.length > 0`, `meeting_start after ${how}`);
+  const calls = await cdp.evaluate(snippets.stubCalls("meeting_start"));
+  return {
+    chipBefore: { pressed: chip.pressed, disabled: chip.disabled, title: chip.title },
+    notes,
+    chipAtPress: pressed.systemAudio,
+    calls: calls.map((args) => args?.systemAudio ?? null),
+  };
+}
+
+/** 10. Record this call, and Start, record what the "Other participants" chip says. */
+async function checkRecordThisCall(cdp, out, report) {
+  const measured = {};
+  const shot = "10-unsupported-before-record-this-call.png";
+  for (const testCase of SYSTEM_AUDIO_CASES) {
+    measured[testCase.name] = {
+      record: await pressStartIn(cdp, out, testCase, "record", testCase.name === "unsupported" ? shot : null),
+      start: await pressStartIn(cdp, out, testCase, "start"),
+    };
+  }
+  const sent = (result, expected) => result.calls.length === 1 && result.calls[0] === expected;
+  const unavailable = (result) => result.chipBefore.pressed === "false" && result.chipBefore.disabled === true
+    && result.chipAtPress === false && result.notes.includes(CANNOT_RECORD_OTHERS);
+  addCheck(report, {
+    id: "10",
+    claim: "Record this call on the call card, and Start recording, each ask meeting_start for the other participants only when the Other participants chip reads pressed.",
+    measured,
+    expectation: [
+      "on a fresh Meetings page per press, once the button is enabled, one meeting_start call whose systemAudio is:",
+      "true with system audio available and the chip pressed; false with it available and the chip released;",
+      `false where system audio is unsupported or has no device, with the chip disabled and unpressed and the note "${CANNOT_RECORD_OTHERS}";`,
+      "the same for Record this call and for Start",
+    ].join(" "),
+    matches: SYSTEM_AUDIO_CASES.every((testCase) => {
+      const { record, start } = measured[testCase.name];
+      return sent(record, testCase.expected) && sent(start, testCase.expected)
+        && (testCase.systemAudio === null
+          ? [record, start].every((result) => result.chipBefore.disabled === false && result.chipAtPress === testCase.want)
+          : unavailable(record) && unavailable(start));
+    }),
+    screenshots: [shot],
+    note: "The fixtures report a detected Zoom call, which is what puts the card on the page. The unavailable states are meeting_status's systemAudio stubbed for the page; Rust's own refusal to capture is not exercised.",
+  });
+}
+
 export async function runChipMenus(options) {
   const out = resolve(options.out);
   await mkdir(out, { recursive: true });
@@ -730,6 +823,7 @@ export async function runChipMenus(options) {
     await checkMeetingsHero(cdp, out, report);
     await checkMinimumWindow(cdp, out, report);
     await checkThemes(cdp, out, report);
+    await checkRecordThisCall(cdp, out, report);
 
     // 3a (Dictation) and 3b (Meetings) are one claim measured in two places.
     report.checks.sort((a, b) => a.id.localeCompare(b.id, "en", { numeric: true }));

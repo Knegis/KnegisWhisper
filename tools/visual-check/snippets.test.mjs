@@ -25,6 +25,7 @@ test("every renderer snippet is syntactically valid JavaScript", () => {
     snippets.invoke("meeting_status"),
     snippets.selectMeetingProvider("local streaming"),
     snippets.startMeetingRecording(true),
+    snippets.recordThisCall(false),
     snippets.meetingProviderValue("local streaming"),
     snippets.clickStop(),
     snippets.installInvokeStub(),
@@ -48,6 +49,10 @@ test("every renderer snippet is syntactically valid JavaScript", () => {
     snippets.taskPageState(),
     snippets.focusChip("Microphone: "),
     snippets.themeState(),
+    snippets.playerState(),
+    snippets.startPlaybackSampler(),
+    snippets.playbackSamples(),
+    snippets.choosePlayerSpeed(".note-side-player", "1.5"),
   ];
   for (const value of values) {
     assert.doesNotThrow(() => new Function(value), value);

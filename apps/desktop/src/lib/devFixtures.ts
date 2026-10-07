@@ -94,6 +94,7 @@ import type {
 // `persistent_overlay::Snapshot` has no `ts_rs` derive. A type-only import, so
 // this stays below the wrappers as the module doc above requires.
 import type { OverlayPreferences } from "./ipc";
+import { FIXTURE_RECORDING_SECONDS, toneWav } from "./fixtureWav";
 import { summaryConfigured } from "./summaryConfigured";
 
 /* ------------------------------------------------------------- capabilities */
@@ -1300,13 +1301,16 @@ let notes: Note[] = [
   },
 ];
 
+// Every note here is served the same playable WAV (`servePlayableRecordings`), so 101's recording
+// is as long as that WAV, not as the meeting: the note's own `audioDurationSeconds` still says the
+// meeting ran 1847 s.
 const noteRecordings = new Map<number, NoteRecording>([
   [
     101,
     {
       noteId: 101,
       storageKey: "20260901-101500.wav",
-      durationSeconds: 1847,
+      durationSeconds: FIXTURE_RECORDING_SECONDS,
       originalFilename: null,
       createdAt: "2026-08-26T09:00:00Z",
     },
@@ -1624,8 +1628,9 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
     noteTranscriptRows.delete(id);
     return notes.length !== before;
   },
-  // The fixture setup stubs convertFileSrc. It intentionally has no recording
-  // server, so the recording player's honest error state appears in browser dev.
+  // A note listed here gets a player, and the player's `recording` URL is
+  // answered with the fixtures' two-minute WAV (`servePlayableRecordings`).
+  // A note that is not has no player, as in the app.
   note_recording_get: (a) => {
     const id = arg<number>(a, "id");
     return typeof id === "number" ? noteRecordings.get(id) ?? null : null;
@@ -2361,10 +2366,45 @@ function markThePageAsInvented(): void {
   }
 }
 
+/**
+ * The one URL every fixture recording plays from: `toneWav`'s two minutes,
+ * built the first time a note with a recording asks for it and then kept.
+ * Kept because `recordingSrc` runs on every render: a new blob URL each time
+ * would hand the `<audio>` a new `src` and reload it mid-playback.
+ */
+let fixtureRecordingUrl: string | null = null;
+function fixtureRecording(): string {
+  fixtureRecordingUrl ??= URL.createObjectURL(
+    new Blob([toneWav({ seconds: FIXTURE_RECORDING_SECONDS })], { type: "audio/wav" }),
+  );
+  return fixtureRecordingUrl;
+}
+
+/**
+ * Answers the player's `recording` URL (`lib/ipc.ts`' `recordingSrc`) for
+ * every fixture note that has a recording, as Rust's scheme answers it in the
+ * app, so the player plays in browser dev and a headless check can measure
+ * playback (KNEG-412, `tools/visual-check/note-playback.mjs`). Before this the
+ * fixtures had nothing behind that URL and the player could only show its
+ * error. Every other URL still goes to Tauri's mock, which nothing answers,
+ * so an id with no recording fails as Rust's 404 would.
+ */
+function servePlayableRecordings(): void {
+  const internals = (window as unknown as {
+    __TAURI_INTERNALS__: { convertFileSrc: (filePath: string, protocol?: string) => string };
+  }).__TAURI_INTERNALS__;
+  const mocked = internals.convertFileSrc.bind(internals);
+  internals.convertFileSrc = (filePath, protocol = "asset") =>
+    protocol === "recording" && noteRecordings.has(Number(filePath))
+      ? fixtureRecording()
+      : mocked(filePath, protocol);
+}
+
 export function installDevFixtures(): void {
   markThePageAsInvented();
   mockWindows("main");
   mockConvertFileSrc("windows");
+  servePlayableRecordings();
   mockIPC(
     (cmd, payload) => {
       const handler = HANDLERS[cmd];

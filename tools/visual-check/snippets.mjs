@@ -376,6 +376,32 @@ export function startMeetingRecording(systemAudio) {
   `);
 }
 
+/**
+ * `startMeetingRecording`'s other way in: sets the "Other participants" chip
+ * the same way, then presses the call card's "Record this call", which the
+ * Meetings page shows while a meeting app is in a call nobody is recording.
+ * Returns what the chip reads when the button is pressed, and whether it was
+ * enabled.
+ */
+export function recordThisCall(systemAudio) {
+  return source(`
+    return (async () => {
+      const chip = [...document.querySelectorAll('button.chip')]
+        .find((item) => item.textContent.trim() === 'Other participants');
+      if (!chip) throw new Error('Other participants chip is missing');
+      const pressed = () => chip.getAttribute('aria-pressed') === 'true';
+      if (pressed() !== ${JSON.stringify(systemAudio)} && !chip.disabled) chip.click();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const record = [...document.querySelectorAll('.call-card button')]
+        .find((item) => item.textContent.trim() === 'Record this call');
+      if (!record) throw new Error('Record this call button is missing');
+      const enabled = !record.disabled;
+      record.click();
+      return { systemAudio: pressed(), enabled };
+    })();
+  `);
+}
+
 export function meetingProviderValue(label) {
   return source(`
     const wanted = ${JSON.stringify(label)}.toLowerCase();
@@ -644,5 +670,89 @@ export function themeState() {
       menuBackground: menu ? getComputedStyle(menu).backgroundColor : null,
       pageBackground: getComputedStyle(document.body).backgroundColor,
     };
+  `);
+}
+
+/* ------------------------------------------------------------- note playback */
+
+/**
+ * Which of a note's three player slots an `audio` element is in, as an
+ * expression over `audio`: the transcript column's foot (`side`), Replay's
+ * full player (`full`) or the mini player at the foot of the note (`mini`).
+ */
+const slotExpression = `(audio.closest('.note-side-player') ? 'side'
+  : audio.closest('.note-full-player') ? 'full'
+  : audio.closest('.note-mini-player') ? 'mini' : null)`;
+
+/**
+ * Every `audio` on the page -- its slot, whether it is paused, its time,
+ * speed and ready state, whether it plays the fixtures' blob, and the
+ * `data-probe` a check may tag it with -- and what the players say: their
+ * error lines and their clocks.
+ */
+export function playerState() {
+  return source(`
+    return {
+      audios: [...document.querySelectorAll('audio')].map((audio) => ({
+        slot: ${slotExpression},
+        hidden: Boolean(audio.closest('[hidden]')),
+        paused: audio.paused,
+        currentTime: audio.currentTime,
+        duration: Number.isFinite(audio.duration) ? audio.duration : null,
+        playbackRate: audio.playbackRate,
+        readyState: audio.readyState,
+        blob: audio.src.startsWith('blob:'),
+        probe: audio.dataset.probe ?? null,
+      })),
+      errors: [...document.querySelectorAll('.recording-player .error')]
+        .map((item) => item.textContent.trim()),
+      clocks: [...document.querySelectorAll('.recording-clock')]
+        .map((item) => item.textContent.trim()),
+    };
+  `);
+}
+
+/**
+ * Samples every `audio` every 50ms into `window.__playbackSamples`, from now
+ * on, replacing any sampler already running. A timer rather than animation
+ * frames, which a headless page may not draw. `t` is `performance.now()`.
+ */
+export function startPlaybackSampler() {
+  return source(`
+    if (window.__playbackSampler) clearInterval(window.__playbackSampler);
+    const samples = window.__playbackSamples = [];
+    const take = () => samples.push({
+      t: performance.now(),
+      audios: [...document.querySelectorAll('audio')].map((audio) => ({
+        slot: ${slotExpression},
+        paused: audio.paused,
+        currentTime: audio.currentTime,
+        playbackRate: audio.playbackRate,
+        readyState: audio.readyState,
+        probe: audio.dataset.probe ?? null,
+      })),
+    });
+    take();
+    window.__playbackSampler = setInterval(take, 50);
+    return performance.now();
+  `);
+}
+
+/** The sampler's samples so far, oldest first. */
+export function playbackSamples() {
+  return source(`
+    return window.__playbackSamples ?? [];
+  `);
+}
+
+/** Chooses a speed on the player inside `container`, as its select would be changed by hand. */
+export function choosePlayerSpeed(container, rate) {
+  return source(`
+    const select = document.querySelector(${JSON.stringify(`${container} .recording-player select`)});
+    if (!select) throw new Error('No player speed in ' + ${JSON.stringify(container)});
+    select.value = ${JSON.stringify(rate)};
+    if (select.value !== ${JSON.stringify(rate)}) throw new Error('The player has no speed ' + ${JSON.stringify(rate)});
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    return select.value;
   `);
 }

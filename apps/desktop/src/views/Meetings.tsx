@@ -860,7 +860,8 @@ export function Meetings({
               {/* Held back exactly as Start is (ruling R9), and recording
                   what the "Other participants" chip below says, as Start
                   does (R21): the card is a quicker way to the same start,
-                  not a second choice about who is recorded. */}
+                  not a second choice about who is recorded. Both are pinned
+                  by tools/visual-check/chip-menus.mjs check 10. */}
               <button
                 type="button"
                 className="secondary"
@@ -1037,12 +1038,16 @@ export function Meetings({
                   src-tauri/src/meeting.rs), so the button would lead straight
                   into an error, and with the saved provider unusable it would
                   record with one nobody chose. The hero says what is wrong,
-                  and its fix -- not this -- is the filled button then. */}
+                  and its fix -- not this -- is the filled button then.
+                  Records what the "Other participants" chip says, as the
+                  call card does (R21): where system audio can't be captured
+                  the chip reads unpressed, so Start doesn't ask for it
+                  (KNEG-412). */}
               <button
                 type="button"
                 className={startBlocked ? "control-start" : "primary control-start"}
                 disabled={startHeld || current === "finishing"}
-                onClick={() => start(wantSystem)}
+                onClick={() => start(wantSystem && systemAudioAvailable)}
               >
                 <span className="start-dot" aria-hidden="true" />
                 Start recording

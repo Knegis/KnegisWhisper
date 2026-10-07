@@ -485,8 +485,8 @@ export async function runShellRail(options) {
         && column.shownAgain.toggle.selectedTab === "Notes",
       screenshots: [shot10a, shot10b],
       note: [
-        "The other note is fixture note 104. Playback and the reading position across the button are not",
-        "measured here: the fixtures have no recording to play (see the NoteWorkspace hand-off).",
+        "The other note is fixture note 104. Playback across the button is note-playback.mjs check 4,",
+        "against the fixtures' playable recording (KNEG-412); the reading position across it is not measured here.",
       ].join(" "),
     });
 

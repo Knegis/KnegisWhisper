@@ -75,7 +75,7 @@ every write, and the fixtures keep them in memory. States the fixture defaults
 cannot reach -- a slow write, a refused one, an unconfigured Tidy up, a route
 with a caveat -- are made by wrapping the page's `invoke` for that one command
 after the shell loads (`installInvokeStub` in `snippets.mjs`), and again after
-each reload. It numbers ten checks:
+each reload. It numbers eleven checks (3 is measured in two halves):
 
 1. At 1000x720 the microphone, route, Dictation language, Meetings provider and
    Meetings language menus each open inside the window and above the control
@@ -105,6 +105,14 @@ each reload. It numbers ten checks:
    still opens inside the window.
 9. An open menu on each page in light and dark (`prefers-color-scheme`
    emulated), with screenshots.
+10. Meetings' "Record this call" (the call card the fixtures' detected Zoom call
+    puts on the page) and Start recording each send `meeting_start` the
+    `systemAudio` the "Other participants" chip shows (KNEG-412): true with
+    system audio available and the chip pressed, false with it released, and
+    false where it is unsupported or has no device (`meeting_status` stubbed),
+    with the chip disabled and unpressed and the note "Other participants can't
+    be recorded on this computer." Each press is on a fresh Meetings page, once
+    the button is enabled.
 
 Like the shell rail, it reports **measured in headless Edge against dev
 fixtures, not in the Tauri window**, and a false check makes it exit 1.
@@ -138,8 +146,45 @@ and every `audio` element to be paused. Five checks:
 Measured in headless Edge against dev fixtures, not in the Tauri window, and a
 false check makes it exit 1. The fixtures' search is a substring match standing
 in for FTS5: which row Rust names is pinned by `crates/notes-core`'s tests, not
-here. The fixtures also have no recording that plays, so "nothing started" is
-shown, but "the recording kept playing" is not.
+here. The fixtures' recording plays since KNEG-412, but no check here starts
+it, so "nothing started" is shown and "a recording already playing kept
+playing" is not.
+
+## Note playback
+
+```powershell
+node tools/visual-check/note-playback.mjs --url http://127.0.0.1:5191/
+```
+
+Same options as the chip menus (the banner is always removed). It measures
+KNEG-412: a note's one player keeps playing, from where it was and at its
+speed, when the note moves it. The fixtures answer the player's `recording` URL with a two-minute WAV, a soft
+beep once a second (`apps/desktop/src/lib/fixtureWav.ts`), for every note that
+has a recording (`servePlayableRecordings` in `devFixtures.ts`), and Edge runs
+with `--mute-audio`. Each check starts from a fresh load at 1440x900 on Notes,
+fixture note 101 open and playing from the transcript column at 1.5x, Play
+pressed with a real pointer press (`Input.dispatchMouseEvent`) so the page has
+the sticky user activation a click gives it; no autoplay flag is needed. A 50ms
+timer in the page samples every `audio` (`startPlaybackSampler` in
+`snippets.mjs`). "Playing" is not paused with `readyState >= 3`. Four checks:
+
+1. Notes, Replay, Notes: the player moves from the transcript column to
+   Replay's full player and back.
+2. On Notes the window goes 1440, 1000, 1440: column, mini player, column.
+3. On Replay the window crosses the width both ways: the same `audio` (tagged
+   with `data-probe`) stays in the full player, playing, its time never going
+   back, and the note really is one track at 1000 and two at 1440.
+4. Hide transcript, then Show transcript: column, mini player, column.
+
+After each move in 1, 2 and 4, within 1.5s: exactly one `audio`, in the
+expected slot and not hidden, not paused, at 1.5x; the first sample with that
+slot playing at or after the position before the move minus 0.25s; under 1s
+with nothing playing; never two `audio` elements at once; no player error.
+
+Measured in headless Edge against dev fixtures, not in the Tauri window, whose
+recordings Rust streams with range requests; a false check makes it exit 1.
+Not measured: the reading position across a move, and a summary source's
+interval playback (`playInterval`) across one.
 
 ## Running application windows
 
