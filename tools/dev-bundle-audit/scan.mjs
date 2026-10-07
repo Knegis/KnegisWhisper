@@ -33,6 +33,7 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { isEntryPoint } from "../ci/entry.mjs";
 
 /**
  * Modules that write an inherited `Object.prototype` property while loading.
@@ -196,7 +197,7 @@ async function main() {
   }
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isEntryPoint(import.meta.url)) {
   main().catch((err) => {
     console.error(`dev-bundle audit: ${err?.stack ?? err}`);
     process.exit(1);

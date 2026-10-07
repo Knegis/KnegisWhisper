@@ -3,7 +3,6 @@
 import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { parseAppArgs, appUsage } from "./args.mjs";
 import { jsonAt } from "./browser.mjs";
 import { connectCdp } from "./cdp.mjs";
@@ -11,10 +10,10 @@ import { listClassifiedTargets, pickTarget } from "./targets.mjs";
 import { createReport, addEvent, renderMarkdown } from "./report.mjs";
 import { windowByTitle } from "./win32.mjs";
 import * as snippets from "./snippets.mjs";
+import { isEntryPoint } from "../ci/entry.mjs";
 
 const delay = (ms) => new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
-const isMain = process.argv[1]
-  && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+const isMain = isEntryPoint(import.meta.url);
 const title = "KnegisWhisper meeting";
 
 function remoteDebuggingFailure(port, cause) {

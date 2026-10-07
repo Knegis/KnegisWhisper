@@ -171,6 +171,7 @@ import { fileURLToPath } from "node:url";
 import { pipeline } from "node:stream/promises";
 
 import { HttpError, describe, discard, removePartial, retryLine, retrying } from "./retry.mjs";
+import { isEntryPoint } from "../ci/entry.mjs";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const REGISTRY = join(REPO_ROOT, "config/provider-registry.json");
@@ -1184,8 +1185,7 @@ async function main(argv) {
   }
 }
 
-const isMain =
-  process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url));
+const isMain = isEntryPoint(import.meta.url);
 if (isMain) {
   // The network paths throw rather than exit, so one place turns a failure
   // into the tool's own one-line message and a non-zero exit, as `die` always

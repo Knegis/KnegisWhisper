@@ -82,6 +82,7 @@ import {
   retryLine,
   retrying,
 } from "../model-pin/retry.mjs";
+import { isEntryPoint } from "../ci/entry.mjs";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const MANIFEST = join(REPO_ROOT, "config/sidecars.json");
@@ -802,8 +803,7 @@ async function main(argv) {
 // Only as the entry point, so the tests can import `download` without starting
 // a measurement (KNEG-413). The network paths throw rather than exit; this is
 // the one place a failure becomes the tool's one-line message and exit 1.
-const isMain =
-  process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url));
+const isMain = isEntryPoint(import.meta.url);
 if (isMain) {
   try {
     await main(process.argv.slice(2));
