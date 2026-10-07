@@ -394,6 +394,23 @@ export function sessionStateLabel(state: SessionState): string {
 }
 
 /**
+ * What a local Whisper model of `sizeMb` is worth knowing before choosing it:
+ * a big one is slower, for imports and meetings rather than dictation
+ * (KNEG-407). One model serves all of this computer's Whisper transcription,
+ * which the list says once, below it.
+ *
+ * By size, not by id. KB Whisper Medium and Large were the reason, but the
+ * upstream Medium, Large and Turbo are bigger still, and a list that called
+ * only the KB ones slower would imply the others are not. 500 MB: the smallest
+ * of them is KB Medium at 539, the largest left unlabelled the upstream Small
+ * at 466. Believed from how Whisper sizes behave, not timed here; the timings
+ * are the owner's by-hand item.
+ */
+export function whisperModelHint(sizeMb: number | null): string | null {
+  return sizeMb !== null && sizeMb >= 500 ? "slower; best for imports and meetings" : null;
+}
+
+/**
  * How a model's bytes were checked, said plainly rather than implied.
  *
  * The two digest cases are deliberately not the same phrase. Both mean the file

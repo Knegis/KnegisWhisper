@@ -42,13 +42,14 @@
  * under a header is the hero's own line under the shortcut.
  */
 
-import { Fragment, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { Chip } from "../components/Chip";
 import { ChipMenu } from "../components/ChipMenu";
 import { ControlBar } from "../components/ControlBar";
 import { DictationHistoryPanel } from "../components/DictationHistoryPanel";
 import { Icon, IconFilled } from "../components/Icon";
+import { Keycaps } from "../components/Keycaps";
 import { LearnMore } from "../components/LearnMore";
 import { LocalLanguagePicker } from "../components/LocalLanguagePicker";
 import { LocalServerHealth } from "../components/LocalServerHealth";
@@ -84,7 +85,7 @@ import {
   type DictationOutcome,
   type SessionState,
 } from "../lib/ipc";
-import { acceleratorText, outcomeLabel, pressableAccelerators, sessionStateLabel } from "../lib/labels";
+import { acceleratorLabel, acceleratorText, outcomeLabel, pressableAccelerators, sessionStateLabel } from "../lib/labels";
 import { lastDictation, type InsertedDictation } from "../lib/lastDictation";
 import { microphoneState } from "../lib/microphone";
 import type { ViewId } from "../lib/navigation";
@@ -105,24 +106,6 @@ const COPIED_MS = 2000;
 function clock(seconds: number): string {
   const s = Math.max(0, Math.floor(seconds));
   return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
-}
-
-/**
- * A shortcut as keycaps: `Control+Shift+D` is three, and a second
- * accelerator on the same action is joined with "or". Built from
- * `acceleratorText`, the same string Settings > Shortcuts and the panel show.
- */
-function keycaps(shortcut: string): ReactNode {
-  return shortcut.split(", ").map((accelerator, i) => (
-    <Fragment key={accelerator}>
-      {i > 0 ? " or " : null}
-      <span className="keycaps">
-        {accelerator.split("+").map((key) => (
-          <kbd key={key}>{key}</kbd>
-        ))}
-      </span>
-    </Fragment>
-  ));
 }
 
 /**
@@ -329,11 +312,8 @@ export function DictationView({
   // parse, or could not register, is Settings > Shortcuts' to report, not the
   // hero's to invite (`pressableAccelerators`).
   const pressable = dictationBinding
-    ? acceleratorText({
-        ...dictationBinding,
-        accelerators: pressableAccelerators(dictationBinding, hotkeys.registrations),
-      })
-    : "";
+    ? pressableAccelerators(dictationBinding, hotkeys.registrations).map((a) => acceleratorLabel(a).text)
+    : [];
   // The microphone chip and its menu, including one chosen earlier and
   // unplugged since (`microphoneMenu` says why it is listed as itself).
   const microphone = microphoneMenu(devices, device);
@@ -457,7 +437,7 @@ export function DictationView({
     <TaskHero
       icon="dictation"
       status={{ tone: "ready", label: "Ready" }}
-      heading={<>Press {keycaps(pressable)} to dictate</>}
+      heading={<>Press <Keycaps accelerators={pressable} /> to dictate</>}
       sub={
         <>
           <p>{INTRO}</p>

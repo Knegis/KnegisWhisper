@@ -12,7 +12,58 @@ maintained in place rather than appended to, because its purpose is to be curren
 
 ---
 
-## 2026-10-07 (latest) — KNEG-414: a Whisper model change is refused while the server is in use
+## 2026-10-07 (latest) — six one-answer issues: KNEG-331, 367, 415, 394, 407, 406
+
+The owner answered six issues on 2026-10-07, each with the recommended option. What the answers
+left open was decided here.
+
+- **KNEG-406, a transcript hit opens at its row.** Each transcript segment is now indexed on its
+  own (`0008_transcript_rows.sql`), with the rowid packing the note id and the row's position:
+  `id * 2^20 + position`.
+  - **Judgement call: the packed rowid.** An UNINDEXED `note_id` column would make every note
+    delete scan every meeting's rows. External content means twice the objects, and a trigger
+    that drifts silently. Re-tokenising in Rust could not match unicode61, so it would guess. A
+    rowid range is read as a range by FTS5.
+  - **Which row:** the note-level query asked of each row alone, the best bm25 first. If no
+    single row holds every word, there is no row and the note opens as before. A hit in the
+    notes never gets a row.
+  - **The rows and times come from the same parse** (`transcript::parse_stored`, which replaces
+    two copies) and the same `rows()` as the Transcript tab, so the two cannot disagree.
+  - **Only the transcript's own update re-indexes** (`AFTER UPDATE OF id, transcript`): autosave
+    and summary writes update `notes` constantly.
+  - **Selecting never plays.** `showSource`, which summary links use, plays the row; the search
+    path is split out of it and only selects. The `transcript-search` visual check counts
+    `play()` calls from before the page loads.
+  - **The cost to old builds.** A build without 0008 refuses to open a profile that has it:
+    sqlx raises `VersionMissing(8)`, shown as "could not open the database". Nothing is damaged,
+    since the refusal comes before any write. But the kneg-404 and kneg-410 worktrees, built
+    before this, can no longer be run against the owner's real profile until they are rebased.
+    `set_ignore_missing` was not used: it only helps builds made after it, and it hides real
+    downgrades.
+- **KNEG-415, your own server's key.** The self-hosted route always read slot `custom`, and
+  nothing declared it.
+  - **Judgement call:** its `usedFor` comes from one named fact in the generator (the slot the
+    self-hosted route reads), not a hand-written list. A reasoning-core test resolves a typed
+    URL and requires that slot to be declared and used for reasoning. That keeps the registry's
+    rule that `usedFor` is derived rather than restated.
+  - Speech-to-text's custom endpoint reads the same slot, but no screen can choose it, so the
+    row says "Cleanup and summaries" only.
+- **KNEG-407, KB Whisper Small, Medium and Large.** Pinned from downloads at the revisions the
+  Hugging Face API gave, each agreeing with the stated LFS digest.
+  - **Judgement call:** "slower; best for imports and meetings" goes by size (500 MB or more),
+    not by id. The upstream Medium, Large and Turbo are bigger than KB Medium and Large, and a
+    list labelling only the KB ones would imply the others are not.
+- **KNEG-367:** the summary names its model, by the registry's name when it lists the id. Where
+  the transcript went is not shown, as the owner chose: the stored `provider` can't say it,
+  because a typed URL wins over it.
+- **KNEG-394:** Discard asks first. After a yes it asks Rust whether the meeting is still
+  running, because the question holds the page, and a meeting stopped from its own window
+  meanwhile would otherwise show "no meeting is being recorded" as a failure.
+- **KNEG-331:** Ready's mark is grey. Key caps keep the Kit's outlined key, not the filled one
+  the issue proposed. The owner declined switches, keeping the native checkbox for the reasons
+  `styles.css` gives.
+
+## 2026-10-07 — KNEG-414: a Whisper model change is refused while the server is in use
 
 KNEG-388 refused a dictation *start* during a model switch. This is the reverse: a switch, an
 engine update or a Stop while something is using `whisper-server`. Each of those stops the server,

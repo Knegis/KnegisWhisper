@@ -32,6 +32,7 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type DragEvent as ReactDragEvent,
@@ -67,6 +68,7 @@ import {
 import { parseStoredTime } from "../lib/dayGroups";
 import { recentMeta } from "../lib/meetingView";
 import { groupNotesByFolder } from "../lib/noteGroups";
+import { hitMeta } from "../lib/searchHit";
 import { carriesNote, draggedNoteId, folderChange, NOTE_DRAG_TYPE } from "../lib/noteDrag";
 import { useRefresh } from "../lib/useRefresh";
 
@@ -91,7 +93,7 @@ let lastOpenNoteId: number | null = null;
  */
 type ContextMenu = { x: number; y: number; anchor: HTMLButtonElement; fromButton?: boolean } & ({ kind: "note"; note: Note } | { kind: "folder"; folder: Folder });
 
-export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, onImport }: { initialNoteId?: number | null; openRequest?: { id: number } | null; onOpenNote?: (id: number) => void; onImport: () => void }) {
+export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, onImport }: { initialNoteId?: number | null; openRequest?: { id: number; transcriptRow: number | null } | null; onOpenNote?: (id: number, transcriptRow?: number) => void; onImport: () => void }) {
   const [context, setContext] = useState<ContextMenu | null>(null);
   const [shareFolder, setShareFolder] = useState<Folder | null>(null);
   const [shareImportRequest, setShareImportRequest] = useState(0);
@@ -209,13 +211,13 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
     return () => { cancelled = true; };
   }, [openRequest, fail, reveal]);
 
-  const selectNote = async (id: number) => {
+  const selectNote = async (id: number, transcriptRow?: number) => {
     await workspaceRef.current?.flush();
     const note = await getNote(id);
     if (!note) throw new Error("This note is no longer available.");
     setRequestedNote(note);
     setOpenNoteId(id);
-    onOpenNote?.(id);
+    onOpenNote?.(id, transcriptRow);
   };
   const newNote = () => guard(async () => {
     await workspaceRef.current?.flush();
@@ -285,6 +287,14 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
     },
   });
 
+  // The transcript row an open request asks for (KNEG-406), one object per
+  // request: the workspace shows each once, so a hit chosen again -- a new
+  // request -- shows its row again. Before the early return, as a hook.
+  const revealRow = useMemo(
+    () => (openRequest?.transcriptRow == null ? null : { noteId: openRequest.id, index: openRequest.transcriptRow }),
+    [openRequest],
+  );
+
   if (!data) {
     return (
       <SplitView label="Notes library" heading="Notes" panel={<PanelHeader title="Notes" />}>
@@ -343,8 +353,8 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
         ) : (
           <PanelSection label={`${hits.length} match${hits.length === 1 ? "" : "es"}`}>
             {hits.map((hit) => (
-              <PanelItem key={hit.id} className="notes-hit" title={hit.title} meta={hit.snippet} tooltip={hit.title}
-                current={openNoteId === hit.id} onClick={() => { void selectNote(hit.id).catch(fail); }} />
+              <PanelItem key={hit.id} className="notes-hit" title={hit.title} meta={hitMeta(hit)} tooltip={hit.title}
+                current={openNoteId === hit.id} onClick={() => { void selectNote(hit.id, hit.transcriptRow?.index).catch(fail); }} />
             ))}
           </PanelSection>
         )}
@@ -425,6 +435,7 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
             key={openNote.id}
             ref={workspaceRef}
             note={openNote}
+            revealRow={revealRow?.noteId === openNote.id ? revealRow : null}
             reload={reload}
             onExport={() => exportNote(openNote.id)}
             onMore={anchor => toggleMoreMenu(openNote, anchor)}

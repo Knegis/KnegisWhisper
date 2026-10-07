@@ -26,6 +26,7 @@
  */
 
 import type { Detected, InputDevice, Sources, SummarySettings } from "../generated/ipc-types.js";
+import { PROVIDER_REGISTRY, type ProviderRegistry } from "../generated/providers.js";
 import type { MenuOption } from "./chipMenu.js";
 import { destinationName, LANGUAGES, languageLabel } from "./controlBar.js";
 import { parseStoredTime, timeOfDay } from "./dayGroups.js";
@@ -63,6 +64,21 @@ export function recordingStartedAt(storageKey: string): Date | null {
     date.getUTCMinutes() === minute &&
     date.getUTCSeconds() === second;
   return same ? date : null;
+}
+
+/**
+ * What Discard asks before it deletes a running meeting's recording
+ * (KNEG-394). It sat beside Stop and save and deleted the recording on one
+ * click.
+ *
+ * The length is the page's clock, rounded as the saved outcome rounds it
+ * ("Saved as a note (38 min)."). The notes sentence is true whatever was
+ * typed: `MeetingRuntime::cancel` keeps typed notes as a note when there are
+ * any, and when there are none there is nothing to lose.
+ */
+export function discardQuestion(elapsedSeconds: number): string {
+  const length = elapsedSeconds < 60 ? "under a minute" : `${Math.round(elapsedSeconds / 60)} min`;
+  return `Discard this meeting? The recording so far (${length}) will be deleted and can't be recovered. Any notes you typed are kept as a separate note.`;
 }
 
 /** A meeting's running time as `hh:mm:ss`, the canvas' recording clock. */
@@ -121,6 +137,26 @@ export function summaryPrivacyLine(settings: SummarySettings | null): string | n
   const provider = settings.provider.trim() || "openai";
   if (!settings.enterprise && (provider === "local" || provider === "lan")) return null;
   return `The transcript is sent to ${destinationName(provider)} for a summary`;
+}
+
+/**
+ * The name of the model that wrote a summary, from the id stored when it
+ * succeeded (`SummaryState.model`): as the menus name it when the registry
+ * lists it -- `qwen3.5-9b-q4_k_m` is "Qwen3.5 9B" -- and as stored when it
+ * doesn't, since an Azure deployment or a typed id has no other name.
+ *
+ * Only the model. Where the transcript went isn't stored with the summary,
+ * and `provider` can't stand in for it (a typed URL wins over it), so the
+ * summary doesn't claim one (KNEG-367).
+ */
+export function summaryModelName(model: string | null): string | null {
+  if (model === null) return null;
+  const registry: ProviderRegistry = PROVIDER_REGISTRY;
+  const models: readonly { readonly id: string; readonly name: string }[] = [
+    ...registry.localLlm.flatMap((provider) => provider.models),
+    ...registry.reasoning.flatMap((provider) => provider.models),
+  ];
+  return models.find((m) => m.id === model)?.name ?? model;
 }
 
 /**

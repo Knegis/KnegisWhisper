@@ -9,7 +9,7 @@
 //! So a model carries [`Integrity::Pinned`] where a digest is known and
 //! [`Integrity::Size`] otherwise, and which one applied is reported rather than
 //! implied. Upstream checks size alone for its six models. **Every shipped model is now pinned,**
-//! including the two KB Whisper additions.
+//! including the five KB Whisper additions.
 //! This module used to hold a `PINNED` table of its own with `tiny` alone in it
 //! and a note that the rest were "a job for a tool rather than something to
 //! invent digests for here"; that tool is `tools/model-pin/pin.mjs`, and on
@@ -399,7 +399,8 @@ mod tests {
     fn every_whisper_model_is_pinned_to_a_measured_digest() {
         // Mirrors `every_installable_sherpa_model_has_integrity_and_size_limits`
         // in sherpa_models.rs. The original six were measured on 2026-08-31;
-        // KB Whisper Tiny and Base were measured on 2026-09-10,
+        // KB Whisper Tiny and Base were measured on 2026-09-10, and Small,
+        // Medium and Large on 2026-10-07 (KNEG-407),
         // so anything weaker than Pinned here means a pin was dropped from
         // WHISPER_PINS in tools/integration-audit/generate-provider-registry.mjs
         // -- and a model that quietly fell back to a size check would install

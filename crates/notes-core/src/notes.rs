@@ -9,8 +9,11 @@
 
 use kw_storage::StorageError;
 use serde::Serialize;
-use sqlx::{FromRow, SqlitePool};
+use sqlx::{FromRow, SqliteConnection, SqlitePool};
+use std::collections::BTreeMap;
 use ts_rs::TS;
+
+use crate::transcript::{self, NoteMeta, SpeakerLabels};
 
 /// A note, as listed.
 #[derive(Debug, Clone, FromRow, Serialize, PartialEq, TS)]
@@ -311,14 +314,59 @@ pub fn escape_query(input: &str) -> Option<String> {
 }
 
 /// A search hit.
-#[derive(Debug, Clone, FromRow, Serialize, PartialEq, TS)]
+#[derive(Debug, Clone, Serialize, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchHit {
     pub id: i64,
     pub title: String,
-    /// A snippet with the match marked by `[` and `]`.
+    /// A snippet with the match marked by `[` and `]`. The row's own when
+    /// `transcript_row` names one, so the time and the words agree.
     pub snippet: String,
+    /// Where in the transcript the words were said, when every word is in a
+    /// meeting transcript and one row holds them all (KNEG-406). `None` when
+    /// the notes hold every word, when the words are only in the title or are
+    /// split between fields, and when no single row can be named: the note
+    /// then opens as it always has, rather than at a guess. A title that also
+    /// holds them doesn't stop a row being named.
+    pub transcript_row: Option<SearchHitRow>,
 }
+
+/// The transcript row a search hit's words are in.
+#[derive(Debug, Clone, Serialize, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchHitRow {
+    /// Its position in the stored transcript: `TranscriptRow::index`.
+    pub index: usize,
+    /// Seconds from the start of the recording, as the Transcript tab shows
+    /// it. `None` when the row has no time; it is still the row.
+    pub start_seconds: Option<f64>,
+}
+
+/// A note-level hit before its row is looked for. `matched` is which column
+/// the snippet came from: 1 the notes, 3 the transcript, -1 neither alone.
+#[derive(FromRow)]
+struct NoteHit {
+    id: i64,
+    title: String,
+    snippet: String,
+    matched: i64,
+}
+
+/// What a row's time is computed from: the fields `NoteMeta` needs, and the
+/// stored transcript.
+#[derive(FromRow)]
+struct TranscriptSource {
+    title: String,
+    created_at: Option<String>,
+    participants: Option<String>,
+    transcript: Option<String>,
+}
+
+/// Each note's rows in `note_segments_fts` are the rowids
+/// `id * SEGMENT_SPAN ..= id * SEGMENT_SPAN + SEGMENT_SPAN - 1`: the row's
+/// position added to the note's base. The migration that builds it,
+/// `0008_transcript_rows.sql`, writes 2^20 as 1048576.
+const SEGMENT_SPAN: i64 = 1 << 20;
 
 /// Search notes.
 ///
@@ -336,10 +384,14 @@ pub async fn search(
 
     let limit = limit.clamp(1, 200);
 
-    let rows = sqlx::query_as::<_, SearchHit>(
+    // One read transaction, so the note index and the row index are read as
+    // of the same moment.
+    let mut tx = pool.begin().await?;
+    let notes = sqlx::query_as::<_, NoteHit>(
         "SELECT notes.id AS id,
                 notes.title AS title,
-                snippet(notes_fts, CASE WHEN notes.id IN (SELECT rowid FROM notes_fts WHERE content MATCH ?1) THEN 1 WHEN notes.id IN (SELECT rowid FROM notes_fts WHERE transcript_text MATCH ?1) THEN 3 ELSE -1 END, '[', ']', '…', 24) AS snippet
+                snippet(notes_fts, CASE WHEN notes.id IN (SELECT rowid FROM notes_fts WHERE content MATCH ?1) THEN 1 WHEN notes.id IN (SELECT rowid FROM notes_fts WHERE transcript_text MATCH ?1) THEN 3 ELSE -1 END, '[', ']', '…', 24) AS snippet,
+                CASE WHEN notes.id IN (SELECT rowid FROM notes_fts WHERE content MATCH ?1) THEN 1 WHEN notes.id IN (SELECT rowid FROM notes_fts WHERE transcript_text MATCH ?1) THEN 3 ELSE -1 END AS matched
          FROM notes_fts
          JOIN notes ON notes.id = notes_fts.rowid
          WHERE notes_fts MATCH ?1
@@ -348,10 +400,101 @@ pub async fn search(
     )
     .bind(&escaped)
     .bind(limit)
-    .fetch_all(pool)
+    .fetch_all(&mut *tx)
     .await?;
 
-    Ok(rows)
+    let mut hits = Vec::with_capacity(notes.len());
+    for note in notes {
+        // Only a hit whose words are all in the transcript: a hit in what the
+        // person typed opens their notes, not a row.
+        let row = if note.matched == 3 {
+            transcript_row(&mut tx, &escaped, note.id).await?
+        } else {
+            None
+        };
+        let (transcript_row, snippet) = match row {
+            Some((row, snippet)) => (Some(row), snippet),
+            None => (None, note.snippet),
+        };
+        hits.push(SearchHit {
+            id: note.id,
+            title: note.title,
+            snippet,
+            transcript_row,
+        });
+    }
+    tx.commit().await?;
+
+    Ok(hits)
+}
+
+/// The row of note `id`'s transcript that holds every word of `escaped`, and
+/// that row's snippet: the best match among its rows, the earlier on a tie.
+/// `None` when no one row holds them all, and when the transcript can't be
+/// read as rows -- the Transcript tab couldn't show the row either.
+async fn transcript_row(
+    connection: &mut SqliteConnection,
+    escaped: &str,
+    id: i64,
+) -> Result<Option<(SearchHitRow, String)>, StorageError> {
+    let Some(first) = id.checked_mul(SEGMENT_SPAN) else {
+        return Ok(None);
+    };
+    let found: Option<(i64, String)> = sqlx::query_as(
+        "SELECT rowid - ?2, snippet(note_segments_fts, 0, '[', ']', '…', 24)
+         FROM note_segments_fts
+         WHERE note_segments_fts MATCH ?1 AND rowid BETWEEN ?2 AND ?3
+         ORDER BY rank, rowid
+         LIMIT 1",
+    )
+    .bind(escaped)
+    .bind(first)
+    .bind(first + (SEGMENT_SPAN - 1))
+    .fetch_optional(&mut *connection)
+    .await?;
+    let Some((position, snippet)) = found else {
+        return Ok(None);
+    };
+    let Ok(index) = usize::try_from(position) else {
+        return Ok(None);
+    };
+
+    // The time as the Transcript tab computes it, from the same parse and
+    // the same rows, so the hit and the tab can't disagree about it.
+    let note: Option<TranscriptSource> = sqlx::query_as(
+        "SELECT title, created_at, participants, transcript FROM notes WHERE id = ?",
+    )
+    .bind(id)
+    .fetch_optional(&mut *connection)
+    .await?;
+    let Some(note) = note else {
+        return Ok(None);
+    };
+    let Ok(segments) = transcript::parse_stored(note.transcript.as_deref()) else {
+        return Ok(None);
+    };
+    let meta = NoteMeta {
+        title: note.title,
+        created_at: note.created_at,
+        participants: note.participants,
+    };
+    let rows = transcript::rows(
+        &segments,
+        &meta,
+        &BTreeMap::new(),
+        &SpeakerLabels::default(),
+    );
+    let Some(row) = rows.get(index) else {
+        return Ok(None);
+    };
+
+    Ok(Some((
+        SearchHitRow {
+            index,
+            start_seconds: row.start_seconds,
+        },
+        snippet,
+    )))
 }
 
 /* ------------------------------------------------------------------ folders */
@@ -823,5 +966,161 @@ mod tests {
             .contains("[elephant]"));
         delete(p, id).await.unwrap();
         assert!(search(p, "elephant", 10).await.unwrap().is_empty());
+    }
+
+    /* ------------------------------------------ the row a transcript hit names */
+
+    async fn meeting(pool: &SqlitePool, title: &str, transcript: &str) -> i64 {
+        create(
+            pool,
+            &NewNote {
+                title: title.into(),
+                note_type: Some("meeting".into()),
+                transcript: Some(transcript.into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+    }
+
+    /// KNEG-406. A hit in a meeting transcript names the row its words are in
+    /// and when they were said, in seconds from the start as the Transcript
+    /// tab shows them -- epoch milliseconds normalised, not raw -- and its
+    /// snippet is that row's, so the time and the words agree.
+    #[tokio::test]
+    async fn a_transcript_hit_names_its_row_and_when_it_was_said() {
+        let db = db().await;
+        let p = db.pool();
+        let id = meeting(
+            p,
+            "Weekly",
+            r#"[{"text":"Opening words","timestamp":1759000000000},
+                {"text":"Then the budget was agreed","timestamp":1759000760000},
+                {"text":"Closing words","timestamp":1759000900000}]"#,
+        )
+        .await;
+
+        let hits = search(p, "budget", 10).await.unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].id, id);
+        assert_eq!(
+            hits[0].transcript_row,
+            Some(SearchHitRow {
+                index: 1,
+                start_seconds: Some(760.0)
+            })
+        );
+        assert_eq!(hits[0].snippet, "Then the [budget] was agreed");
+    }
+
+    /// The note matches because every word is in its transcript, but no one
+    /// row holds them all. Naming a row that holds one of them would be a
+    /// guess, so the hit opens the note as before.
+    #[tokio::test]
+    async fn words_said_in_different_rows_give_no_row() {
+        let db = db().await;
+        let p = db.pool();
+        meeting(
+            p,
+            "Split",
+            r#"[{"text":"the budget first","timestamp":0},{"text":"then the deadline","timestamp":5}]"#,
+        )
+        .await;
+
+        let hits = search(p, "budget deadline", 10).await.unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].transcript_row, None);
+    }
+
+    /// A hit in what the person typed opens their notes, not a row.
+    #[tokio::test]
+    async fn a_body_match_opens_without_a_row() {
+        let db = db().await;
+        let p = db.pool();
+        let id = meeting(p, "Typed", r#"[{"text":"the budget again","timestamp":3}]"#).await;
+        update(
+            p,
+            id,
+            &NoteUpdate {
+                content: Some("My budget note".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        let hits = search(p, "budget", 10).await.unwrap();
+        assert_eq!(hits[0].transcript_row, None);
+        assert!(hits[0].snippet.starts_with("My "), "{}", hits[0].snippet);
+    }
+
+    /// The row index has the transcript index's tokenizer (KNEG-405): "har"
+    /// is not "här", so a search for one names the row with it, not the first
+    /// row with either.
+    #[tokio::test]
+    async fn a_row_is_found_by_its_swedish_letters() {
+        let db = db().await;
+        let p = db.pool();
+        meeting(
+            p,
+            "Svenska",
+            r#"[{"text":"Vi har en plan","timestamp":0},{"text":"Vi ses här","timestamp":4}]"#,
+        )
+        .await;
+
+        for (query, index) in [("här", 1), ("har", 0)] {
+            let hits = search(p, query, 10).await.unwrap();
+            assert_eq!(
+                hits[0].transcript_row.as_ref().map(|row| row.index),
+                Some(index),
+                "{query:?}"
+            );
+        }
+    }
+
+    /// A transcript that isn't a list of segments has no rows, so a hit in it
+    /// names none: plain text from an old import, and an array the Transcript
+    /// tab can't read either.
+    #[tokio::test]
+    async fn a_legacy_or_unparseable_transcript_gives_no_row() {
+        let db = db().await;
+        let p = db.pool();
+        meeting(p, "Legacy", "a plain elephant transcript").await;
+        meeting(
+            p,
+            "Mixed",
+            r#"[null,{"text":"a mixed giraffe","timestamp":1}]"#,
+        )
+        .await;
+
+        for query in ["elephant", "giraffe"] {
+            let hits = search(p, query, 10).await.unwrap();
+            assert_eq!(hits.len(), 1, "{query:?}");
+            assert_eq!(hits[0].transcript_row, None, "{query:?}");
+        }
+    }
+
+    /// A row with no timestamp is still the row the words are in. It is named
+    /// with no time rather than dropped or put at 0:00.
+    #[tokio::test]
+    async fn a_row_without_a_time_is_still_named() {
+        let db = db().await;
+        let p = db.pool();
+        meeting(
+            p,
+            "Untimed",
+            r#"[{"text":"first"},{"text":"the zebra crossing"}]"#,
+        )
+        .await;
+
+        let hits = search(p, "zebra", 10).await.unwrap();
+        assert_eq!(
+            hits[0].transcript_row,
+            Some(SearchHitRow {
+                index: 1,
+                start_seconds: None
+            })
+        );
     }
 }

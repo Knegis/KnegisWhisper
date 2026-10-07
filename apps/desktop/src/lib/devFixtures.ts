@@ -304,7 +304,7 @@ const PROVIDERS: ProviderSummary[] = [
 ];
 
 /*
- * Twelve of the registry's twenty slots, in its order, with its slot ids,
+ * Thirteen of the registry's twenty-one slots, in its order, with its slot ids,
  * names, kinds, `usedFor` and `feature` (`config/provider-registry.json`,
  * `credentials`). The ids used to be `provider:openai` and the like, which no
  * registry slot is: `PROVIDERS[].credentialSlot` above and the probe's
@@ -331,6 +331,7 @@ const CREDENTIAL_SLOTS: CredentialSlotStatus[] = [
   { slot: "vertex", name: "GCP Vertex AI", kind: "enterprise", usedFor: [], feature: "vertex", stored: true },
   { slot: "assemblyai", name: "AssemblyAI", kind: "provider", usedFor: [], feature: null, stored: false },
   { slot: "deepgram", name: "Deepgram", kind: "provider", usedFor: [], feature: null, stored: true },
+  { slot: "custom", name: "Your own server", kind: "custom-endpoint", usedFor: ["reasoning"], feature: null, stored: false },
 ];
 
 /*
@@ -710,7 +711,7 @@ function summaryOf(id: number): SummaryState {
   const legacy = note.enhancedContent !== null;
   return {
     noteId: id, content: note.enhancedContent, revision: 0, edited: legacy, outdated: false, legacy,
-    status: null, completed: 0, total: 0, error: null, language: null, generatedAt: null, references: [],
+    status: null, completed: 0, total: 0, error: null, language: null, generatedAt: null, model: null, references: [],
   };
 }
 
@@ -820,6 +821,16 @@ const LOCAL_MODELS: LocalStatus = {
       recommended: false,
       installed: true,
       verifiedBy: "size",
+    },
+    // The registry's, so the list shows a KB model with its "slower" label
+    // (KNEG-407).
+    {
+      id: "kb-whisper-large",
+      name: "KB Whisper Large (Swedish, Q5)",
+      sizeMb: 1081,
+      recommended: false,
+      installed: false,
+      verifiedBy: "digest",
     },
     {
       id: "whisper-base-en",
@@ -1544,22 +1555,26 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
   notes_search: (a) => {
     const query = (arg<string>(a, "query") ?? "").trim().toLowerCase();
     if (query === "") return [] satisfies SearchHit[];
-    return notes
-      .filter(
-        (n) =>
-          n.title.toLowerCase().includes(query) ||
-          n.content.toLowerCase().includes(query),
-      )
-      .map((n): SearchHit => {
-        const at = n.content.toLowerCase().indexOf(query);
-        if (at === -1) {
-          return { id: n.id, title: n.title, snippet: n.content.slice(0, 90) };
-        }
-        const before = n.content.slice(Math.max(0, at - 35), at);
-        const hit = n.content.slice(at, at + query.length);
-        const after = n.content.slice(at + query.length, at + query.length + 35);
-        return { id: n.id, title: n.title, snippet: `${before}[${hit}]${after}` };
-      });
+    const marked = (text: string, at: number) =>
+      `${text.slice(Math.max(0, at - 35), at)}[${text.slice(at, at + query.length)}]${text.slice(at + query.length, at + query.length + 35)}`;
+    // As Rust answers it: the title or the notes first, with no row; otherwise
+    // the transcript row the words are in, with its time and its own snippet
+    // (KNEG-406). A plain substring here, where Rust asks FTS5 for every word.
+    return notes.flatMap((n): SearchHit[] => {
+      const at = n.content.toLowerCase().indexOf(query);
+      if (at !== -1) return [{ id: n.id, title: n.title, snippet: marked(n.content, at), transcriptRow: null }];
+      if (n.title.toLowerCase().includes(query)) {
+        return [{ id: n.id, title: n.title, snippet: n.content.slice(0, 90), transcriptRow: null }];
+      }
+      const row = (noteTranscriptRows.get(n.id) ?? []).find((r) => r.text.toLowerCase().includes(query));
+      if (!row) return [];
+      return [{
+        id: n.id,
+        title: n.title,
+        snippet: marked(row.text, row.text.toLowerCase().indexOf(query)),
+        transcriptRow: { index: row.index, startSeconds: row.startSeconds },
+      }];
+    });
   },
   notes_get: (a) => notes.find((n) => n.id === arg<number>(a, "id")) ?? null,
   notes_create: (a) => {
@@ -2010,6 +2025,8 @@ A fixture summary of "${note.title}", written without a model.
 - None.`,
       revision: current.revision + 1, edited: false, outdated: false, legacy: false,
       status: "succeeded", error: null, language: "en", generatedAt: nowIso(),
+      // What Rust stores at success: the id the settings named (KNEG-367).
+      model: summarySettings.model,
     };
     summaries.set(id, next);
     return next;

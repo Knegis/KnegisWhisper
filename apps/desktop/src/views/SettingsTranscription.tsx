@@ -58,6 +58,7 @@ import {
   useForDetail,
   useForLabel,
   verificationLabel,
+  whisperModelHint,
   type Plain,
 } from "../lib/labels";
 import { chooseParakeetRoute, chooseWhisperRoute } from "../lib/routeChoice";
@@ -497,6 +498,7 @@ export function SettingsTranscription({
                   {m.name}
                   {m.sizeMb ? ` · ${m.sizeMb} MB` : ""}
                   {m.recommended ? " · recommended" : ""}
+                  {whisperModelHint(m.sizeMb) ? ` · ${whisperModelHint(m.sizeMb)}` : ""}
                   <em className="row-detail">
                     {m.installed ? "Installed" : "Not installed"}
                   </em>
@@ -552,6 +554,17 @@ export function SettingsTranscription({
                 );
               })}
             </ul>
+            {/* The catch in a big model, said once (KNEG-407): one Whisper
+                model at a time serves dictation as well as meetings and
+                imports, so choosing a slow one for long recordings slows
+                dictation too. "Usually": believed from how Whisper sizes
+                behave, not measured here. */}
+            <p className="muted">
+              Only one Whisper model runs at a time. Meetings and imports
+              transcribed on this computer use it, and so does dictation when
+              it uses Whisper, so a bigger one is usually more accurate and
+              slower for all of them.
+            </p>
             <h3>Parakeet models</h3>
             <p className="muted">
               Nothing downloads until you press Install. Dictation uses one local

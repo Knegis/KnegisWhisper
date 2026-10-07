@@ -125,6 +125,7 @@ import { emptyLiveTranscript, foldTranscriptEvent, liveRows, type LiveRow } from
 import { providerMenu, selectProvider } from "../lib/meetingProvider";
 import {
   activeCall,
+  discardQuestion,
   elapsedLabel,
   interruptedTitle,
   liveElapsed,
@@ -534,8 +535,29 @@ export function Meetings({
       setOutcome(await stopMeeting());
     });
   };
+  // Asks first, with what is about to be lost (KNEG-394): Discard sits
+  // beside Stop and save and deleted the recording on one click. Saying no
+  // changes nothing; the meeting goes on recording.
   const discard = () => {
     void guard(async () => {
+      // When the meeting began, from Rust: `elapsedSeconds` counts from the
+      // start and does not stop at a stall, so the same meeting gives the
+      // same start on every read, and a meeting started later gives a later
+      // one.
+      const startOf = (status: { elapsedSeconds: number }) => Date.now() - status.elapsedSeconds * 1000;
+      const before = await getMeetingStatus();
+      const began = startOf(before);
+      if (!meetingIsLive(before.state)) return;
+      // The page's clock, which stops at a stall, when it has one; Rust's
+      // count before the page has read a start, so the length is never
+      // "under a minute" for a meeting it has not timed yet.
+      if (!window.confirm(discardQuestion(startedAt === null ? before.elapsedSeconds : elapsed))) return;
+      // The question holds the page, so the meeting may have changed while it
+      // was open: stopped from its own window, or stopped and another one
+      // started. Nothing is discarded unless the meeting asked about is still
+      // running -- otherwise the page shows what happened instead.
+      const after = await getMeetingStatus();
+      if (!meetingIsLive(after.state) || Math.abs(startOf(after) - began) > 2000) return;
       try { await flushMeetingPanelNotes(); }
       catch (cause) { setNotesFlushFailed(true); throw cause; }
       setNotesFlushFailed(false);

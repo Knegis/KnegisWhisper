@@ -112,6 +112,35 @@ Not covered: Meetings' language-required fix (the fixtures cannot make a
 provider require a language on a blank value without a conditional stub) and
 anything the Tauri window itself does.
 
+## Transcript search
+
+```powershell
+node tools/visual-check/transcript-search.mjs --url http://127.0.0.1:5191/
+```
+
+Same options as the shell rail. It measures KNEG-406: a search hit in a meeting
+transcript opens the note at the row where the words were said, and only
+selects it. Fixture note 101's transcript says "two more days" at 1:12 and
+"honest" at 1:28, and its notes say "Thursday". A count of `play()` calls is
+installed before the page loads, and every check also requires it to read 0
+and every `audio` element to be paused. Five checks:
+
+1. At 1000x720 a title-bar hit for "honest" reads "1:28 · …", and choosing it
+   opens the Transcript tab with that row selected and in view.
+2. In the note already open, a hit for "more days" moves the selection without
+   remounting the note, and choosing it again after the row was deselected
+   selects it again.
+3. Dictation, then Back: the note is open on that row again.
+4. At 1440x900 the row is selected in the side column, and the Notes tab stays.
+5. The library filter: "honest" reads "1:28 · …" and opens on its row;
+   "Thursday", a hit in the notes, reads no time.
+
+Measured in headless Edge against dev fixtures, not in the Tauri window, and a
+false check makes it exit 1. The fixtures' search is a substring match standing
+in for FTS5: which row Rust names is pinned by `crates/notes-core`'s tests, not
+here. The fixtures also have no recording that plays, so "nothing started" is
+shown, but "the recording kept playing" is not.
+
 ## Running application windows
 
 Launch the running development application with its WebView2 debugger exposed:

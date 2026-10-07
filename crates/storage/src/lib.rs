@@ -283,8 +283,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            applied, 8,
-            "initial, note recordings, automation, desktop origin, summary, note workspace, search tokenizer, and folder sharing migrations recorded exactly once"
+            applied, 9,
+            "initial, note recordings, automation, desktop origin, summary, note workspace, search tokenizer, transcript row, and folder sharing migrations recorded exactly once"
         );
         second.close().await;
     }
@@ -682,5 +682,127 @@ mod tests {
             .unwrap();
         assert_eq!(matches(&pool, "notes_fts", "så").await, 0);
         assert_eq!(matches(&pool, "transcriptions_fts", "sa").await, 0);
+    }
+
+    /// What `note_segments_fts` holds, as (rowid, text) in rowid order.
+    async fn segment_rows(pool: &SqlitePool) -> Vec<(i64, String)> {
+        sqlx::query_as("SELECT rowid, text FROM note_segments_fts ORDER BY rowid")
+            .fetch_all(pool)
+            .await
+            .unwrap()
+    }
+
+    /// 2^20: each note's transcript rows are the range id * SPAN .. + SPAN - 1.
+    const SPAN: i64 = 1 << 20;
+
+    #[tokio::test]
+    async fn transcript_row_migration_backfills_what_was_already_there() {
+        // KNEG-406. A profile that already has meetings must get their rows
+        // indexed by the migration, not only the meetings recorded after it.
+        // Only segments that are objects with text are indexed, each at its
+        // position in the stored array -- not its position among the indexed
+        // ones -- and a transcript that isn't an array, isn't JSON, or is
+        // missing adds nothing and fails nothing.
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        for migration in [
+            include_str!("../migrations/0001_initial.sql"),
+            include_str!("../migrations/0002_note_recordings.sql"),
+            include_str!("../migrations/0003_automation.sql"),
+            include_str!("../migrations/0004_desktop_import_origin.sql"),
+            include_str!("../migrations/0005_meeting_summaries.sql"),
+            include_str!("../migrations/0006_note_workspace.sql"),
+            include_str!("../migrations/0007_search_tokenizer.sql"),
+        ] {
+            sqlx::raw_sql(migration).execute(&pool).await.unwrap();
+        }
+        let meeting: i64 = sqlx::query_scalar(
+            "INSERT INTO notes (title, content, transcript) VALUES ('Meeting', '', ?) RETURNING id",
+        )
+        .bind(r#"[{"text":"first row","timestamp":0},7,{"text":"third row","timestamp":2},{"timestamp":3}]"#)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        for transcript in [
+            Some("plain text from an old import"),
+            Some(r#"{"text":"an object, not a list"}"#),
+            Some("[{\"text\":"),
+            None,
+        ] {
+            sqlx::query("INSERT INTO notes (title, content, transcript) VALUES ('Other', '', ?)")
+                .bind(transcript)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+
+        sqlx::raw_sql(include_str!("../migrations/0008_transcript_rows.sql"))
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            segment_rows(&pool).await,
+            [
+                (meeting * SPAN, "first row".to_owned()),
+                (meeting * SPAN + 2, "third row".to_owned()),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn segment_index_follows_transcript_rewrites_and_deletes() {
+        // The triggers keep each note's range and only its range: two notes
+        // with adjacent ids, so an off-by-one in the range reaches the
+        // neighbour's first row.
+        let db = db().await;
+        let pool = db.pool();
+        let insert = |transcript: &'static str| async move {
+            sqlx::query_scalar::<_, i64>(
+                "INSERT INTO notes (title, content, transcript) VALUES ('M', '', ?) RETURNING id",
+            )
+            .bind(transcript)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+        };
+        let first = insert(r#"[{"text":"alpha"},{"text":"beta"}]"#).await;
+        let second = insert(r#"[{"text":"gamma"}]"#).await;
+        assert_eq!(second, first + 1);
+        assert_eq!(
+            segment_rows(pool).await,
+            [
+                (first * SPAN, "alpha".to_owned()),
+                (first * SPAN + 1, "beta".to_owned()),
+                (second * SPAN, "gamma".to_owned()),
+            ]
+        );
+
+        sqlx::query("UPDATE notes SET transcript = ? WHERE id = ?")
+            .bind(r#"[{"text":"delta"}]"#)
+            .bind(first)
+            .execute(pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            segment_rows(pool).await,
+            [
+                (first * SPAN, "delta".to_owned()),
+                (second * SPAN, "gamma".to_owned()),
+            ]
+        );
+
+        sqlx::query("DELETE FROM notes WHERE id = ?")
+            .bind(first)
+            .execute(pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            segment_rows(pool).await,
+            [(second * SPAN, "gamma".to_owned())]
+        );
     }
 }

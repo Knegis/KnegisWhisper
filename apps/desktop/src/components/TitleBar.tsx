@@ -20,7 +20,7 @@ import { getCurrentWindow, type Window as AppWindow } from "@tauri-apps/api/wind
  * state it flips belongs to the whole window and outlives the page, so the
  * next page with a panel still opens the way it was left.
  */
-export function TitleBar({ panelCollapsed, hasListPanel, onTogglePanel, onOpenNote, canGoBack, canGoForward, onBack, onForward }: { panelCollapsed: boolean; hasListPanel: boolean; onTogglePanel: () => void; onOpenNote: (id: number) => void; canGoBack: boolean; canGoForward: boolean; onBack: () => void; onForward: () => void }) {
+export function TitleBar({ panelCollapsed, hasListPanel, onTogglePanel, onOpenNote, canGoBack, canGoForward, onBack, onForward }: { panelCollapsed: boolean; hasListPanel: boolean; onTogglePanel: () => void; onOpenNote: (id: number, transcriptRow?: number) => void; canGoBack: boolean; canGoForward: boolean; onBack: () => void; onForward: () => void }) {
   const [maximized, setMaximized] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const native = "__TAURI_INTERNALS__" in window;

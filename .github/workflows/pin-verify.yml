@@ -50,11 +50,13 @@ jobs:
       - name: Verify pinned sidecar targets
         run: node tools/sidecar-pin/pin.mjs --verify
 
-      # The same job for model files. About 8.4 GiB a week, as measured by the
-      # 2026-09-21 run: the eight whisper models (6.57 GiB, the six upstream
-      # ones plus KB-Whisper tiny and base), four sherpa ASR archives at about
-      # 450 MiB each, and the two diarization models (35 MiB). Before
-      # 2026-08-31 it was `tiny` and two Parakeet archives, about 1 GB.
+      # The same job for model files. About 10.1 GiB a week: 8.4 GiB as
+      # measured by the 2026-09-21 run -- the six upstream whisper models plus
+      # KB-Whisper tiny and base (6.57 GiB), four sherpa ASR archives at about
+      # 450 MiB each, and the two diarization models (35 MiB) -- plus KB-Whisper
+      # small, medium and large since 2026-10-07 (KNEG-407), 1.67 GiB by their
+      # pinned sizes rather than by a run. Before 2026-08-31 it was `tiny` and
+      # two Parakeet archives, about 1 GB.
       #
       # The price is worth paying here more than anywhere else in this
       # workflow, though less than it was. Since KNEG-103 the six whisper URLs

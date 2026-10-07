@@ -143,12 +143,18 @@ const playerSlotOf = (wide: boolean, tab: Tab): PlayerSlot => wide && tab !== "r
  */
 export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
   note: Note;
+  /**
+   * A transcript row to open at, from a search hit (KNEG-406): selected and in
+   * view, and the player left alone. Shown once per object, so a request
+   * repeated as a new object -- the same hit chosen again -- is shown again.
+   */
+  revealRow?: { index: number } | null;
   reload: () => Promise<void>;
   onExport: () => void;
   onMore: (anchor: HTMLButtonElement) => void;
   /** Whether the menu More opens is open, for its `aria-expanded`. */
   moreOpen: boolean;
-}>(function NoteWorkspace({ note, reload, onExport, onMore, moreOpen }, ref) {
+}>(function NoteWorkspace({ note, revealRow = null, reload, onExport, onMore, moreOpen }, ref) {
   const saved = useRef({ title: note.title, content: note.content });
   const draft = useRef({ title: note.title, content: note.content });
   const [title, setTitle] = useState(note.title);
@@ -399,17 +405,33 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
     setPlaybackStarted(true); playerRef.current?.playInterval(start, end);
   }, []);
   const onPlayingChange = useCallback((value: boolean) => { setPlaying(value); if (value) setPlaybackStarted(true); }, []);
-  const showSource = async (index: number) => {
+  // The Transcript at row `index`, selected and in view, and nothing else. False when the save
+  // failed or the note has gone.
+  const openRow = async (index: number): Promise<boolean> => {
     try {
       await flush();
-      if (!alive.current) return;
+      if (!alive.current) return false;
       // A wide window already shows the transcript, in its column; only a narrower one has a tab to
       // open. Read now, after the save, as `switchTab` reads it.
       setError(null); if (!renderedWide.current) setTab("transcript"); setSourceRequest({ index, nonce: Date.now() });
-      const row = transcript?.rows.find(item => item.index === index);
-      if (row?.startSeconds != null && transcript?.recording) playInterval(row.startSeconds, row.endSeconds);
-    } catch (cause) { setError(message(cause)); }
+      return true;
+    } catch (cause) { setError(message(cause)); return false; }
   };
+  // A summary's source link: the row, played.
+  const showSource = async (index: number) => {
+    if (!(await openRow(index))) return;
+    const row = transcript?.rows.find(item => item.index === index);
+    if (row?.startSeconds != null && transcript?.recording) playInterval(row.startSeconds, row.endSeconds);
+  };
+  // A search hit's row: only shown. Sound doesn't start because a search was answered -- the
+  // owner's ruling of 2026-10-07 (KNEG-406).
+  const revealed = useRef<object | null>(null);
+  useEffect(() => {
+    if (!revealRow || revealed.current === revealRow) return;
+    revealed.current = revealRow;
+    void openRow(revealRow.index);
+    // Only the request: `openRow` is redefined each render and reads refs and setters.
+  }, [revealRow]);
   const startFromTranscript = () => {
     if (!ready || draft.current.content.trim() || !transcript?.rows.length) return;
     const content = transcriptToMarkdown(transcript.rows);

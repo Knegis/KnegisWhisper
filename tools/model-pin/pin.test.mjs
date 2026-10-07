@@ -340,7 +340,7 @@ test("pinnedTargets survives a registry with no localAsr at all", () => {
   assert.deepEqual(pinnedTargets({}), []);
 });
 
-test("the committed registry still carries pins for all eight whisper models", () => {
+test("the committed registry still carries pins for all eleven whisper models", () => {
   // Not a unit test of anything — an assertion that the real file this tool
   // reads still has something in it, so `--verify` would have something to
   // measure. A pin dropped from WHISPER_PINS would otherwise make `--verify`
@@ -359,10 +359,22 @@ test("the committed registry still carries pins for all eight whisper models", (
   const sherpa = targets.filter((t) => t.kind === "sherpa");
   assert.deepEqual(
     whisper.map((t) => t.id).sort(),
-    ["base", "kb-whisper-base", "kb-whisper-tiny", "large", "medium", "small", "tiny", "turbo"],
+    [
+      "base",
+      "kb-whisper-base",
+      "kb-whisper-large",
+      "kb-whisper-medium",
+      "kb-whisper-small",
+      "kb-whisper-tiny",
+      "large",
+      "medium",
+      "small",
+      "tiny",
+      "turbo",
+    ],
     "every standard and KB Whisper model is pinned exactly once"
   );
-  for (const id of ["kb-whisper-base", "kb-whisper-tiny"]) {
+  for (const id of ["kb-whisper-base", "kb-whisper-large", "kb-whisper-medium", "kb-whisper-small", "kb-whisper-tiny"]) {
     const pin = whisper.find((t) => t.id === id);
     const source = parseHfUrl(pin.url);
     assert.equal(source.repo, `KBLab/${id}`);
@@ -565,17 +577,20 @@ test("hfRepos skips a whisper model hosted off Hugging Face rather than guessing
 });
 
 test("hfRepos reads every repository the committed registry downloads from", () => {
-  // 36 GGUF repositories plus ggerganov/whisper.cpp and two KB repositories.
+  // 36 GGUF repositories plus ggerganov/whisper.cpp and five KB repositories.
   // The count is asserted for
   // the reason the 39-object count is: a repository silently dropping out of
   // the registry would make --revisions read fewer and still report success.
   const repos = hfRepos();
-  assert.equal(repos.length, 39);
+  assert.equal(repos.length, 42);
   assert.ok(repos.some((r) => r.repo === "ggerganov/whisper.cpp"));
   assert.deepEqual(
     repos.filter((r) => r.repo.startsWith("KBLab/")),
     [
       { repo: "KBLab/kb-whisper-base", from: ["whisper/kb-whisper-base"] },
+      { repo: "KBLab/kb-whisper-large", from: ["whisper/kb-whisper-large"] },
+      { repo: "KBLab/kb-whisper-medium", from: ["whisper/kb-whisper-medium"] },
+      { repo: "KBLab/kb-whisper-small", from: ["whisper/kb-whisper-small"] },
       { repo: "KBLab/kb-whisper-tiny", from: ["whisper/kb-whisper-tiny"] },
     ]
   );
