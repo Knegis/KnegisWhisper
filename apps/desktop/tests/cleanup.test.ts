@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { cleanupConfigured, cleanupFields, cleanupRouteLine, effectiveCleanup, reasoningDispatchLine } from "../src/lib/cleanup.js";
+import { cleanupConfigured, cleanupFields, cleanupRouteLine, effectiveCleanup, reasoningDispatchLine, savedLine } from "../src/lib/cleanup.js";
 import type { CleanupSettings, ReasoningProviderSummary } from "../src/generated/ipc-types.js";
 
 const model = (id: string) => ({
@@ -168,6 +168,21 @@ test("a route that cannot be resolved is a problem, with the reason under Detail
     problem: true,
     more: "no model is chosen",
   });
+});
+
+test("what Turn on and Turn off report reads as a sentence in every state", () => {
+  // It read "Saved. Cleanup uses On, but it can't be used." when the saved
+  // route could not be resolved (branch review).
+  assert.equal(savedLine({ state: "off" }), "Saved. Cleanup is off.");
+  assert.equal(
+    savedLine({ state: "problem", reason: "no model is chosen" }),
+    "Saved, but cleanup can't be used yet. Dictations are typed as transcribed until this is fixed.",
+  );
+  assert.equal(savedLine(ready("openai", true)), "Saved. Cleanup uses OpenAI · m-1. Text is sent to OpenAI to tidy it up.");
+  assert.equal(
+    savedLine(ready("openai", true, "no key is stored for openai. …")),
+    "Saved, but cleanup can't run yet. No key is saved for OpenAI. Add one on the Providers page; until then dictations are typed as transcribed.",
+  );
 });
 
 test("why a provider can or cannot be used, with Rust's reason under Details", () => {

@@ -9,6 +9,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  downloadCheckPlain,
   freshnessLabel,
   ggufIntegrityLabel,
   llmProgressLabel,
@@ -77,6 +78,15 @@ test("how a download was checked, in words a person reads", () => {
   assert.equal(verifiedPlain("stated-digest"), "verified");
   assert.equal(verifiedPlain("size"), "only its size was checked");
   assert.equal(verifiedPlain("nothing"), "not verified");
+});
+
+test("before an install, how the download will be checked reads as a phrase", () => {
+  // It was " · will be " + verifiedPlain, which read "will be only its size
+  // was checked" (branch review).
+  assert.equal(downloadCheckPlain("digest"), "verified on download");
+  assert.equal(downloadCheckPlain("stated-digest"), "verified on download");
+  assert.equal(downloadCheckPlain("size"), "only its size is checked on download");
+  assert.equal(downloadCheckPlain("nothing"), "not checked on download");
 });
 
 test("a local model's language is a word, not a code", () => {

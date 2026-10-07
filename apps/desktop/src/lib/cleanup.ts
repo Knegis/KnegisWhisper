@@ -138,6 +138,25 @@ export function cleanupRouteLine(route: CleanupRoute, modelName: (id: string) =>
 }
 
 /**
+ * What Settings › Cleanup & summaries says after Turn on or Turn off, from the
+ * route Rust stored: one sentence in every state, including the two where
+ * cleanup is on and will not run.
+ */
+export function savedLine(route: CleanupRoute, modelName: (id: string) => string = (id) => id): string {
+  const line = cleanupRouteLine(route, modelName);
+  switch (route.state) {
+    case "off":
+      return "Saved. Cleanup is off.";
+    case "problem":
+      return `Saved, but cleanup can't be used yet. ${line.detail}`;
+    case "ready":
+      return line.problem
+        ? `Saved, but cleanup can't run yet. ${line.detail}`
+        : `Saved. Cleanup uses ${line.value}. ${line.detail}`;
+  }
+}
+
+/**
  * Whether a provider can be used for cleanup and summaries, in words, with
  * Rust's reason for Learn more (`reasoning.rs`, `dispatch_for`).
  */

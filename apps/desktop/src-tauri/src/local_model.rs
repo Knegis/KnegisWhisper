@@ -67,13 +67,16 @@ pub struct LocalTranscription {
 
 /// Whether the user is switching the local model right now (KNEG-388).
 ///
-/// Held for the whole of `local_server_start` and `local_server_refresh`, the
-/// two commands that stop a server and start one because somebody pressed a
-/// button. Dictation reads it to refuse a start in that window: the old server
-/// is already gone, and the route a recording would be transcribed by is
-/// whichever the switch has reached by the time it stops. Launch-time resume
-/// and revives do not hold it -- nobody chose those, and refusing a dictation
-/// while the remembered model loads at startup would be a regression.
+/// Held for the whole of `local_server_start`, which is reached only when
+/// somebody chooses a Whisper model for dictation (Settings › Transcription
+/// and the Dictation route menu). Dictation reads it to refuse a start in that
+/// window: the old server is already gone, and the route a recording would be
+/// transcribed by is whichever the switch has reached by the time it stops.
+/// Launch-time resume and revives do not hold it -- nobody chose those, and
+/// refusing a dictation while the remembered model loads at startup would be
+/// a regression. Nor does `local_server_refresh`: it brings back the model
+/// that was running, and holding it would refuse every route for the length
+/// of a download.
 ///
 /// A count rather than a flag, so a second switch queued behind the first
 /// keeps it held until both are done.
@@ -979,9 +982,10 @@ pub async fn local_server_refresh(
     app: AppHandle,
     local: State<'_, Arc<LocalTranscription>>,
 ) -> Result<RefreshOutcome, String> {
-    // A refresh stops the server and starts it again, so dictation refuses a
-    // start meanwhile, as for a switch (KNEG-388).
-    let _switching = local.switching.begin();
+    // No `switching` guard: a refresh restarts the model that was running, so
+    // a revive queued behind it brings back that same model, and refusing
+    // dictation here would refuse cloud and Parakeet routes too for the whole
+    // download, for a switch that is not happening (KNEG-388).
     let _operation = local.operation.lock().await;
     let (spec, asset) = local
         .catalog

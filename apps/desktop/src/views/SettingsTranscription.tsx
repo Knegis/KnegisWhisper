@@ -80,8 +80,10 @@ function dispatchLabel(d: Dispatch): Plain {
       return { text: "Can be used", more: null };
     case "needs-client":
       // Not always "unwritten". Tinfoil is refused on purpose, and the reason
-      // that arrives says which case it is.
-      return { text: "Not supported yet", more: d.reason };
+      // that arrives says which case it is -- so the line says neither "yet"
+      // nor "never", and the reason under Details tells them apart
+      // (`commands.rs` pins Tinfoil's as not reading like unfinished work).
+      return { text: "Can't be used for dictation", more: d.reason };
     case "unresolvable":
       // Usually a missing setting rather than a missing feature — Corti with no
       // environment or tenant is the case this exists for.
@@ -611,6 +613,12 @@ export function SettingsTranscription({
                       This engine can't be updated from here yet. To reinstall
                       it, close the app and delete its folder by hand.
                     </p>
+                    {/*
+                      The engine is in the sidecar folder, `local.installDir`
+                      (`local_asr.rs`, `cli_root`), not with the models. The
+                      branch review caught the fold naming the models folder,
+                      where deleting removes the models and keeps the engine.
+                    */}
                     <LearnMore summary="Why, and which folder">
                       <p>
                         One archive serves three things — dictation with a
@@ -620,7 +628,10 @@ export function SettingsTranscription({
                         as the app is open.
                       </p>
                       <p>
-                        Models are kept in <code>{sherpa.modelsDir}</code>.
+                        The engine is the <code>sherpa</code> folder inside{" "}
+                        <code>{local.installDir}</code>. The models are kept
+                        separately, in <code>{sherpa.modelsDir}</code>, and
+                        don't need deleting.
                       </p>
                     </LearnMore>
                   </>

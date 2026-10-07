@@ -42,6 +42,7 @@ import { FailureLine } from "../components/FailureLine";
 import { LearnMore } from "../components/LearnMore";
 import { Row } from "../components/Row";
 import {
+  downloadCheckPlain,
   freshnessLabel,
   ggufIntegrityLabel,
   llmProgressLabel,
@@ -49,7 +50,6 @@ import {
   refreshOutcomeLabel,
   size,
   verificationLabel,
-  verifiedPlain,
   type Plain,
 } from "../lib/labels";
 import {
@@ -161,7 +161,7 @@ export function SettingsIntelligenceLocal() {
           {m.recommended ? " · recommended" : ""}
           {/* Before the button, for the same reason the size is: a guarantee
               nobody was told about is a guarantee nobody can weigh. */}
-          {installed ? "" : ` · will be ${verifiedPlain(m.verifiedBy)}`}
+          {installed ? "" : ` · ${downloadCheckPlain(m.verifiedBy)}`}
         </em>
         {installed ? (
           <em className={asks ? "row-detail warn" : "row-detail"}>{state.text}</em>

@@ -31,11 +31,14 @@ dictation. **Read from code and pinned by tests; not reproduced in the running a
   `a_revive_that_waited_behind_a_switch_keeps_the_model_switched_to` fails against the old join;
   that was checked by putting the old join back.
 - **The refusal the issue asked for.** `RouteSwitch`, a count held for the whole of
-  `local_server_start` and `local_server_refresh`, the two commands a button press reaches. A start
+  `local_server_start`, which only a person choosing a Whisper model for dictation reaches. A start
   meanwhile is refused with "Dictation didn't start: the transcription model is still changing. Try
   again in a moment." It reaches the floating microphone and the Dictation page through the
   existing failed outcome. Launch-time resume and revives do not hold it: refusing dictation while
-  the remembered model loads at startup would have been a regression. Remaining window, accepted:
+  the remembered model loads at startup would have been a regression. `local_server_refresh` held
+  it too until the branch review: a refresh brings back the model that was running, so a revive
+  behind it starts that same model, and the guard only refused cloud and Parakeet routes for the
+  length of a download. Remaining window, accepted:
   the two IPC calls after `local_server_start` returns. The server is up by then, so a dictation
   started there goes to the old route or the new one, and both work.
 - **Push-to-talk's release started recordings.** The release called `toggle` whatever its press had

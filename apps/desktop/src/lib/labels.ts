@@ -439,6 +439,22 @@ export function verifiedPlain(verifiedBy: VerifiedBy): string {
 }
 
 /**
+ * How a model's download will be checked, said before Install (KNEG-343), in
+ * the same plain terms as [`verifiedPlain`] and the future tense it needs.
+ */
+export function downloadCheckPlain(verifiedBy: VerifiedBy): string {
+  switch (verifiedBy) {
+    case "digest":
+    case "stated-digest":
+      return "verified on download";
+    case "size":
+      return "only its size is checked on download";
+    case "nothing":
+      return "not checked on download";
+  }
+}
+
+/**
  * What is still known about an installed GGUF, without overstating it.
  *
  * Five states, and the reason there are five rather than two is the whole of

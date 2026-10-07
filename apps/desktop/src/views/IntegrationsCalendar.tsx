@@ -127,15 +127,18 @@ function ProviderSection({
   return (
     <section>
       <h2>{label}</h2>
+      {/* The kind of client is a step, not background: a web client will not
+          connect. So it is in view (branch review). */}
       <p className="caveat">
-        To connect, register your own app in {portal} and paste its client ID
-        below. Your sign-in goes only to {company}.
+        To connect, register your own app in {portal} as a desktop app (not a
+        web app) and paste its client ID below. Your sign-in goes only to{" "}
+        {company}.
       </p>
-      <LearnMore summary="How to register, and why">
+      <LearnMore summary="Why">
         <p>
-          Register a desktop (installed) app client, not a web client with a
-          secret. There is no {label} app built into KnegisWhisper: a client
-          secret shipped inside an open-source app would not stay secret. Your
+          There is no {label} app built into KnegisWhisper: a client secret
+          shipped inside an open-source app would not stay secret, so a desktop
+          (installed) app client, which needs none, is the kind that works. Your
           account's credentials go only to {company}'s own servers, under the
           access you grant.
         </p>

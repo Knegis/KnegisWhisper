@@ -35,7 +35,7 @@ import { useCallback, useState } from "react";
 import { FailureLine } from "../components/FailureLine";
 import { LearnMore } from "../components/LearnMore";
 import { Row } from "../components/Row";
-import { cleanupFields, cleanupRouteLine, effectiveCleanup, reasoningDispatchLine } from "../lib/cleanup";
+import { cleanupFields, cleanupRouteLine, effectiveCleanup, reasoningDispatchLine, savedLine } from "../lib/cleanup";
 import {
   clearEnterpriseConfig,
   getReasoningStatus,
@@ -189,7 +189,7 @@ export function SettingsIntelligence({
   const [draftProvider, setDraftProvider] = useState<string | null>(null);
   const [draftModel, setDraftModel] = useState<string | null>(null);
   const [draftUrl, setDraftUrl] = useState<string | null>(null);
-  const [said, setSaid] = useState<ReturnType<typeof cleanupRouteLine> | null>(null);
+  const [said, setSaid] = useState<string | null>(null);
 
   if (!data) {
     return (
@@ -218,7 +218,7 @@ export function SettingsIntelligence({
       // The same computation Dictation's Tidy up toggle sends (`lib/cleanup.ts`);
       // the write stays here, where the settings audit looks for it.
       const next = await setCleanup(effectiveCleanup(settings, providers, enabled, drafts));
-      setSaid(cleanupRouteLine(next, modelName));
+      setSaid(savedLine(next, modelName));
       // Drafts drop so the controls go back to mirroring what is stored.
       setDraftProvider(null);
       setDraftModel(null);
@@ -385,8 +385,8 @@ export function SettingsIntelligence({
           </button>
         </span>
         {said ? (
-          <p className={said.problem ? "muted warn" : "muted"} role="status">
-            Saved. {said.value === "Off" ? "Cleanup is off." : `Cleanup uses ${said.value}.`} {said.detail}
+          <p className="muted" role="status">
+            {said}
           </p>
         ) : null}
         {usable.length === 0 ? (
@@ -406,9 +406,15 @@ export function SettingsIntelligence({
           settings rather than one key, so they are set up here. They are saved
           on this computer, in its secure credential storage.
         </p>
+        {/*
+          About this project's testing, not your use: once one is set up and
+          chosen, transcripts are sent to it. The first wording read as a claim
+          about the app ("no request has been sent") -- caught in review.
+        */}
         <p className="caveat">
-          <strong>Not yet tried against a real account.</strong> No request has
-          been sent to any of the three.
+          <strong>Not yet tried against a real account.</strong> The requests
+          are built and tested, but the people who make this app have not been
+          able to run one against any of the three.
         </p>
         <LearnMore>
           <p>
