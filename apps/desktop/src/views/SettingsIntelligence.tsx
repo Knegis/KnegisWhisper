@@ -379,8 +379,8 @@ export function SettingsIntelligence({
           <p>
             Plain <code>http://</code> is only allowed to this computer or your
             own network, so a key is never sent over the internet unencrypted.
-            Requests to your server go without a key; a server that needs one
-            can't be used from here yet.
+            Requests to your server go without a key unless you save one under
+            Providers › Your own server. Summaries use the same key.
           </p>
         </LearnMore>
 

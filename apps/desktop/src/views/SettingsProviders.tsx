@@ -11,9 +11,10 @@
  *
  * 1. **The slot list comes from Rust.** `credential_slots` reads
  *    `config/provider-registry.json`, so no provider id or slot name is written
- *    here. Seventeen slots, twelve providers and five per-feature custom
- *    endpoints — up from fifteen and ten once AssemblyAI and Deepgram gained
- *    their own BYOK slots for meeting streaming. (Three further enterprise
+ *    here. Eighteen slots, twelve providers and six custom endpoints — up
+ *    from fifteen and ten once AssemblyAI and Deepgram gained their own BYOK
+ *    slots for meeting streaming, and your own server's key, which cleanup
+ *    and summaries share (KNEG-415). (Three further enterprise
  *    slots — Bedrock, Azure, Vertex — hold a whole connector configuration
  *    each and are listed under Company accounts below, not counted here.)
  * 2. **A stored key is never called "connected".** Storing a secret proves only
@@ -203,9 +204,11 @@ export function SettingsProviders({ onGoTo }: { onGoTo: (id: ViewId) => void }) 
       setOpen(null);
       say(
         slot.slot,
-        slot.kind === "custom-endpoint"
-          ? "Saved. It does nothing on its own yet: the feature that uses it needs its server's address too."
-          : "Saved. Press Test connections to check that it works.",
+        slot.kind !== "custom-endpoint"
+          ? "Saved. Press Test connections to check that it works."
+          : slot.usedFor.length > 0
+            ? "Saved. Cleanup and summaries send it to the server address you enter under Cleanup & summaries."
+            : "Saved. It does nothing on its own yet: the feature that uses it needs its server's address too.",
       );
       // Any earlier verdict is now about a different key, and "nothing to
       // test" may no longer be true.
@@ -560,7 +563,7 @@ export function SettingsProviders({ onGoTo }: { onGoTo: (id: ViewId) => void }) 
           "custom",
           "Custom endpoints",
           custom,
-          "For features that can use a server of your own. A key saved here does nothing on its own yet: the screens where you enter each server's address aren't built.",
+          "For servers of your own. Your own server's key goes with cleanup and summary requests to the address you enter under Cleanup & summaries. The others do nothing yet: the screens where you enter their servers' addresses aren't built.",
         )}
         {group(
           "company",

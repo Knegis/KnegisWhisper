@@ -304,7 +304,7 @@ const PROVIDERS: ProviderSummary[] = [
 ];
 
 /*
- * Twelve of the registry's twenty slots, in its order, with its slot ids,
+ * Thirteen of the registry's twenty-one slots, in its order, with its slot ids,
  * names, kinds, `usedFor` and `feature` (`config/provider-registry.json`,
  * `credentials`). The ids used to be `provider:openai` and the like, which no
  * registry slot is: `PROVIDERS[].credentialSlot` above and the probe's
@@ -331,6 +331,7 @@ const CREDENTIAL_SLOTS: CredentialSlotStatus[] = [
   { slot: "vertex", name: "GCP Vertex AI", kind: "enterprise", usedFor: [], feature: "vertex", stored: true },
   { slot: "assemblyai", name: "AssemblyAI", kind: "provider", usedFor: [], feature: null, stored: false },
   { slot: "deepgram", name: "Deepgram", kind: "provider", usedFor: [], feature: null, stored: true },
+  { slot: "custom", name: "Your own server", kind: "custom-endpoint", usedFor: ["reasoning"], feature: null, stored: false },
 ];
 
 /*

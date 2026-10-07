@@ -72,11 +72,12 @@ const UPLOAD_CAPS = {
  * `kind` is the distinction that matters to a UI:
  *
  * - `provider`        — a named service. A key on its own is enough to try it.
- * - `custom-endpoint` — a user-supplied OpenAI-compatible endpoint for one
- *                       feature. A key on its own configures nothing; the base
- *                       URL lives with that feature's own settings, so the
- *                       screen must say so rather than implying the key is all
- *                       that is needed.
+ * - `custom-endpoint` — a user-supplied OpenAI-compatible endpoint. A key on
+ *                       its own configures nothing; the base URL lives with
+ *                       the settings of what uses it, so the screen must say
+ *                       so rather than implying the key is all that is
+ *                       needed. One feature's each, except `custom`, the key
+ *                       for your own server that cleanup and summaries share.
  *
  * A slot in the baseline and absent here is a hard error, following
  * `UPLOAD_CAPS`: defaulting would let a new upstream key appear in the UI with
@@ -132,6 +133,10 @@ const CREDENTIAL_SLOTS = {
   // as any other `provider` credential.
   assemblyai: { name: "AssemblyAI", kind: "provider" },
   deepgram: { name: "Deepgram", kind: "provider" },
+  // The key for your own server: the slot cleanup's and summaries'
+  // self-hosted route reads (`resolve_chat`, crates/reasoning-core). Ours --
+  // see OWN_CREDENTIAL_SLOTS below.
+  custom: { name: "Your own server", kind: "custom-endpoint" },
 };
 
 /**
@@ -154,6 +159,13 @@ const CREDENTIAL_SLOTS = {
  *   `baseline.secretKeys` has no entry for either provider. A direct client
  *   needs its own key, and this is where it is stored.
  *
+ * - `custom` — the key for your own cleanup or summary server. The
+ *   self-hosted route always read this slot, and nothing declared it, so no
+ *   screen could save one and a server that needed a key was sent none
+ *   (KNEG-415). Upstream's custom-endpoint keys are one per feature, and
+ *   none of them is the one this route reads. The env name follows
+ *   `assemblyai`'s: upstream had none for it.
+ *
  * Listed separately from `CREDENTIAL_SLOTS` so the distinction stays visible:
  * everything above came from upstream, everything here is ours.
  */
@@ -163,7 +175,17 @@ const OWN_CREDENTIAL_SLOTS = [
   { base: "vertex", env: "GCP_VERTEX_CONFIG" },
   { base: "assemblyai", env: "ASSEMBLYAI_API_KEY" },
   { base: "deepgram", env: "DEEPGRAM_API_KEY" },
+  { base: "custom", env: "CUSTOM_API_KEY" },
 ];
+
+/**
+ * The slot the self-hosted reasoning route reads: `KeyRef::new("custom")` in
+ * `resolve_chat`. Its `usedFor` gets `reasoning` from this fact, the way a
+ * provider's slot gets it from the provider lists, rather than being written
+ * out by hand; `the_self_hosted_route_reads_a_slot_the_providers_screen_can_save`
+ * (crates/reasoning-core/src/route.rs) fails if the route and this disagree.
+ */
+const SELF_HOSTED_REASONING_SLOT = "custom";
 
 /** Which credential slot each provider authenticates with. */
 const AUTH_SCHEMES = {
@@ -1297,7 +1319,7 @@ const credentials = [...baseline.secretKeys, ...OWN_CREDENTIAL_SLOTS].map((k) =>
   if (transcription.some((p) => p.credentialSlot === k.base)) {
     usedFor.push("transcription");
   }
-  if (reasoning.some((p) => p.credentialSlot === k.base)) {
+  if (reasoning.some((p) => p.credentialSlot === k.base) || k.base === SELF_HOSTED_REASONING_SLOT) {
     usedFor.push("reasoning");
   }
 

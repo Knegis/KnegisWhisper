@@ -703,7 +703,8 @@ pub struct CredentialSlotStatus {
     pub kind: kw_provider_registry::CredentialKind,
     /// Which parts of the application use this key, from the registry.
     pub used_for: Vec<String>,
-    /// Which feature a custom endpoint belongs to; `None` for a provider.
+    /// Which feature a custom endpoint belongs to; `None` for a provider, and
+    /// for `custom`, your own server's key, which cleanup and summaries share.
     pub feature: Option<String>,
     /// A secret is present. This is NOT the same as the provider working.
     pub stored: bool,
@@ -712,7 +713,7 @@ pub struct CredentialSlotStatus {
 /// Every credential slot, in registry order, with whether each is filled.
 ///
 /// One call rather than one `provider_credential_present` per slot: there are
-/// twenty, the screen re-reads after every save, and the list itself has to
+/// twenty-one, the screen re-reads after every save, and the list itself has to
 /// come from the registry anyway so that no screen writes provider ids by hand.
 #[tauri::command]
 pub fn credential_slots(state: State<'_, AppState>) -> CmdResult<Vec<CredentialSlotStatus>> {

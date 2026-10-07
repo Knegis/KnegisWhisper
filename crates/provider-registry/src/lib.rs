@@ -312,7 +312,8 @@ pub struct LocalAsr {
 pub enum CredentialKind {
     /// A named service, e.g. OpenAI.
     Provider,
-    /// A user-supplied OpenAI-compatible endpoint for one feature.
+    /// A user-supplied OpenAI-compatible endpoint: one feature's, or `custom`,
+    /// your own server's key, which cleanup and summaries share.
     CustomEndpoint,
     /// An enterprise connector whose whole multi-field configuration is stored
     /// as one JSON document. Configured on its own screen, not on Providers.
@@ -335,7 +336,8 @@ pub struct CredentialSlot {
     pub env: String,
     /// Which parts of the application use this key: `transcription`,
     /// `reasoning`, or neither. Derived by the generator from the provider lists
-    /// rather than restated, so it cannot fall out of step with them.
+    /// rather than restated, so it cannot fall out of step with them -- and for
+    /// `custom` from the self-hosted route that reads it.
     pub used_for: Vec<String>,
     /// For a custom endpoint, which feature it belongs to.
     #[serde(default)]
@@ -681,21 +683,23 @@ mod tests {
         // fields, so there is nothing to inherit -- plus two more for
         // AssemblyAI and Deepgram meeting streaming, which upstream also never
         // needed: it minted a realtime token from a removed vendor service
-        // instead of asking the user for a key.
+        // instead of asking the user for a key -- plus `custom`, your own
+        // server's key, which the self-hosted route read and nothing declared
+        // (KNEG-415).
         let non_enterprise = r
             .credentials
             .iter()
             .filter(|c| c.kind != CredentialKind::Enterprise)
             .count();
         assert_eq!(
-            non_enterprise, 17,
-            "expected the fifteen slots in the integration manifest plus assemblyai and \
-             deepgram, got {slots:?}"
+            non_enterprise, 18,
+            "expected the fifteen slots in the integration manifest plus assemblyai, \
+             deepgram and custom, got {slots:?}"
         );
-        assert_eq!(slots.len(), 20, "{slots:?}");
+        assert_eq!(slots.len(), 21, "{slots:?}");
 
-        // The six that belong to no provider, and would therefore be invisible
-        // if the set were derived from the provider lists.
+        // The seven that belong to no provider, and would therefore be
+        // invisible if the set were derived from the provider lists.
         for orphan in [
             "openrouter",
             "note-formatting-custom",
@@ -703,6 +707,7 @@ mod tests {
             "dictation-agent-custom",
             "dictation-agent-vision-custom",
             "chat-agent-custom",
+            "custom",
         ] {
             assert!(slots.contains(orphan), "{orphan} is missing");
         }
@@ -772,6 +777,15 @@ mod tests {
             custom.used_for.is_empty(),
             "a custom endpoint belongs to no provider list"
         );
+
+        // Your own server's key is a custom endpoint shared by cleanup and
+        // summaries, not one feature's: no `feature`, and `reasoning` from the
+        // route that reads it (KNEG-415).
+        let own = r.credential_slot("custom").unwrap();
+        assert_eq!(own.kind, CredentialKind::CustomEndpoint);
+        assert_eq!(own.name, "Your own server");
+        assert!(own.feature.is_none());
+        assert_eq!(own.used_for, ["reasoning"]);
 
         // OpenRouter is the awkward case: a real provider with no pinned models,
         // so it needs a key and appears in no provider list.

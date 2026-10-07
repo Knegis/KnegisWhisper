@@ -340,7 +340,8 @@ export type CredentialSlotStatus = { slot: string, name: string, kind: Credentia
  */
 usedFor: Array<string>,
 /**
- * Which feature a custom endpoint belongs to; `None` for a provider.
+ * Which feature a custom endpoint belongs to; `None` for a provider, and
+ * for `custom`, your own server's key, which cleanup and summaries share.
  */
 feature: string | null,
 /**

@@ -42,7 +42,7 @@ export const DIARIZATION_MODEL_IDS = ["3dspeaker-campplus-en", "sherpa-onnx-pyan
 export type DiarizationModelId = (typeof DIARIZATION_MODEL_IDS)[number];
 
 /** OS credential-store slots, in registry order. Twenty: twelve providers, five per-feature custom endpoints and three enterprise connectors. */
-export const CREDENTIAL_SLOTS = ["openai", "anthropic", "gemini", "groq", "berget", "xai", "mistral", "openrouter", "tinfoil", "corti", "note-formatting-custom", "translation-custom", "dictation-agent-custom", "dictation-agent-vision-custom", "chat-agent-custom", "bedrock", "azure", "vertex", "assemblyai", "deepgram"] as const;
+export const CREDENTIAL_SLOTS = ["openai", "anthropic", "gemini", "groq", "berget", "xai", "mistral", "openrouter", "tinfoil", "corti", "note-formatting-custom", "translation-custom", "dictation-agent-custom", "dictation-agent-vision-custom", "chat-agent-custom", "bedrock", "azure", "vertex", "assemblyai", "deepgram", "custom"] as const;
 export type CredentialSlot = (typeof CREDENTIAL_SLOTS)[number];
 
 export type AuthScheme =
@@ -459,6 +459,15 @@ export const PROVIDER_REGISTRY = {
       "kind": "provider",
       "env": "DEEPGRAM_API_KEY",
       "usedFor": []
+    },
+    {
+      "slot": "custom",
+      "name": "Your own server",
+      "kind": "custom-endpoint",
+      "env": "CUSTOM_API_KEY",
+      "usedFor": [
+        "reasoning"
+      ]
     }
   ],
   "transcription": [

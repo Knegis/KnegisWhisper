@@ -10,8 +10,8 @@ import { LearnMore } from "./LearnMore";
  * choice; "this computer" and "your own server" replace "Local model" and
  * "Self-hosted endpoint"; the local model's token ceiling is under Learn more.
  * It said a self-hosted server "uses the configured custom-provider
- * credential", and no screen can configure one (KNEG-415), so it says what
- * happens instead.
+ * credential" when no screen could save one. Providers › Your own server
+ * saves it now (KNEG-415), and the line says where.
  */
 export function SummarySettingsPanel() {
   const [settings, setSettings] = useState<SummarySettings | null>(null);
@@ -51,7 +51,7 @@ export function SummarySettingsPanel() {
       const provider = e.target.value;
       change({ provider, model: "", selfHostedUrl: provider === "self-hosted" ? "" : null, enterprise: providers.find(p => p.id === provider)?.enterprise ?? false });
     }}><option value="">Choose a provider</option><option value="local">This computer</option><option value="self-hosted">Your own server</option>{providers.filter(p => p.id !== "local").map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></span></div>
-    {selfHosted && <div className="row"><label className="row-label" htmlFor="summary-endpoint">Server address</label><span className="row-value"><input id="summary-endpoint" type="url" value={settings.selfHostedUrl ?? ""} placeholder="http://localhost:8080/v1" onChange={e => change({ selfHostedUrl: e.target.value })} /><p className="muted">Requests go without a key; a server that needs one can't be used from here yet.</p></span></div>}
+    {selfHosted && <div className="row"><label className="row-label" htmlFor="summary-endpoint">Server address</label><span className="row-value"><input id="summary-endpoint" type="url" value={settings.selfHostedUrl ?? ""} placeholder="http://localhost:8080/v1" onChange={e => change({ selfHostedUrl: e.target.value })} /><p className="muted">Requests go without a key unless you save one under Providers › Your own server.</p></span></div>}
     <div className="row"><label className="row-label" htmlFor="summary-model">Model</label><span className="row-value"><input id="summary-model" list="summary-models" value={settings.model} placeholder={local ? "Choose an installed model" : "Model name, or deployment for Azure"} onChange={e => change({ model: e.target.value })} /><datalist id="summary-models">{models.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}</datalist>{local && <p className="muted">Install a model under Local text models first. A summary never downloads one by itself.</p>}</span></div>
     <div className="row"><label className="row-label" htmlFor="summary-language">Summary language</label><span className="row-value"><select id="summary-language" value={settings.language} onChange={e => change({ language: e.target.value })}><option value="match">Match meeting</option><option value="sv">Swedish</option><option value="en">English</option></select></span></div>
     <div className="row"><label className="row-label" htmlFor="summary-context">How much the model reads at once</label><span className="row-value"><input id="summary-context" type="number" min={4096} max={262144} step={1024} value={settings.contextBudget} onChange={e => change({ contextBudget: Number(e.target.value) })} /><p className="muted">Set this to what your model supports, in tokens. Longer transcripts are summarised in parts.</p><LearnMore><p>A model on this computer reads at most 8,192 tokens at once, whatever this says.</p></LearnMore></span></div>

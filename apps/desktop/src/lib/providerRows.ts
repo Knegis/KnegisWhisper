@@ -18,7 +18,9 @@
  *     on purpose (`crates/provider-registry/src/lib.rs`,
  *     `assemblyai_and_deepgram_are_provider_slots_upstream_never_needed`),
  *     and before KNEG-373 they had no description and no filter found them.
- *     Custom endpoint and enterprise slots still have no purposes.
+ *     Your own server's key is "Cleanup and summaries" from its `usedFor`
+ *     (KNEG-415); the other custom endpoints and the enterprise slots have no
+ *     purposes.
  *   - **`letter`**, the first character of `name`, for the tile.
  *   - **`unsupported`** from `getProviders().dispatch`, matched on
  *     `credentialSlot`: the slot's transcription provider is `needs-client`

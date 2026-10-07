@@ -407,6 +407,30 @@ mod tests {
         }
     }
 
+    /// A self-hosted cleanup or summary server reads its key from a slot the
+    /// registry declares, so Settings › Providers can save one, and the
+    /// registry says the slot is used for cleanup and summaries (KNEG-415).
+    /// The route read `custom`, which nothing declared, so a server that
+    /// needed a key was always sent none.
+    #[test]
+    fn the_self_hosted_route_reads_a_slot_the_providers_screen_can_save() {
+        let settings = ChatSettings {
+            self_hosted_url: Some("http://127.0.0.1:8080/v1".to_owned()),
+            ..ChatSettings::default()
+        };
+        let ChatRoute::SelfHosted {
+            key_ref: Some(key_ref),
+            ..
+        } = resolve_chat(registry(), &settings).unwrap()
+        else {
+            panic!("a typed URL resolves to the self-hosted route, with a slot");
+        };
+        let slot = registry()
+            .credential_slot(key_ref.slot())
+            .unwrap_or_else(|_| panic!("{:?} is not a declared slot", key_ref.slot()));
+        assert_eq!(slot.used_for, ["reasoning"]);
+    }
+
     #[test]
     fn every_resolved_slot_is_one_the_registry_declares() {
         let slots = registry().credential_slots();
