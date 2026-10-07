@@ -1382,6 +1382,13 @@ pub async fn local_llm_recheck_model(model_id: String) -> Result<RecheckOutcome,
     })
 }
 
+/// Why a start or an update is refused while a request runs. Every refusal
+/// starts "Not now: ", so Settings shows it in view rather than under Details
+/// (`src/lib/refusal.ts`, KNEG-414).
+const BUSY: &str = "Not now: a local text model is answering a request. Try again when it's done.";
+/// Why a stop is refused while a request runs.
+const BUSY_STOP: &str = "Not now: a local text model is answering a request. Cancel it first.";
+
 #[tauri::command]
 pub async fn local_llm_start(
     app: AppHandle,
@@ -1389,11 +1396,7 @@ pub async fn local_llm_start(
     llm: State<'_, Arc<LocalLlm>>,
     model_id: String,
 ) -> Result<u16, String> {
-    let _lease = llm
-        .endpoint
-        .requests
-        .try_lock()
-        .map_err(|_| "A local generation request is running. Try again after it finishes.")?;
+    let _lease = llm.endpoint.requests.try_lock().map_err(|_| BUSY)?;
     if llm.running_model().is_some_and(|model| model != model_id) {
         llm.stop().await;
     }
@@ -1436,11 +1439,7 @@ pub async fn local_llm_refresh_server(
     app: AppHandle,
     llm: State<'_, Arc<LocalLlm>>,
 ) -> Result<crate::local_model::RefreshOutcome, String> {
-    let _lease = llm
-        .endpoint
-        .requests
-        .try_lock()
-        .map_err(|_| "A local generation request is running. Try again after it finishes.")?;
+    let _lease = llm.endpoint.requests.try_lock().map_err(|_| BUSY)?;
     let (spec, asset) = llm.catalog.resolve(SIDECAR).map_err(|e| e.to_string())?;
     let sidecars = paths::sidecar_dir();
 
@@ -1498,11 +1497,7 @@ pub async fn local_llm_refresh_server(
 
 #[tauri::command]
 pub async fn local_llm_stop(llm: State<'_, Arc<LocalLlm>>) -> Result<(), String> {
-    let _lease = llm
-        .endpoint
-        .requests
-        .try_lock()
-        .map_err(|_| "A local generation request is running. Cancel it first.")?;
+    let _lease = llm.endpoint.requests.try_lock().map_err(|_| BUSY_STOP)?;
     llm.stop().await;
     Ok(())
 }
@@ -1516,6 +1511,19 @@ pub async fn local_llm_stop(llm: State<'_, Arc<LocalLlm>>) -> Result<(), String>
 )]
 mod tests {
     use super::*;
+
+    /// Settings shows a refusal in view only if it starts as every refusal
+    /// does (`src/lib/refusal.ts`). These were folded under "That didn't
+    /// work." and Details, which hid the one thing they say: what to do.
+    #[test]
+    fn its_busy_refusals_start_with_not_now() {
+        for refusal in [BUSY, BUSY_STOP] {
+            assert!(
+                refusal.starts_with(crate::local_model::NOT_NOW),
+                "{refusal}"
+            );
+        }
+    }
 
     /// A live generation check against the model started through the desktop
     /// Local models screen. It exercises the real dictation cleanup adapter;

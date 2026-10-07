@@ -61,6 +61,21 @@ reproduced in the running app. The wiring into the four users is not under test.
 Not changed: a revive inside a use can still restart the server, after a failed two-second health
 check. That is an old risk, not a new one.
 
+**Refusals are shown in view.** KNEG-343 put every Settings error under "That didn't work." with
+the error's own text under Details. That also buried `local_llm`'s existing "Try again after it
+finishes", whose whole content is what to do, and would have buried these.
+- Every refusal now starts "Not now: ", and `FailureLine` shows such a sentence as the visible line
+  (`src/lib/refusal.ts`). Tests on both sides pin the prefix.
+- Checked in headless Edge against dev fixtures, not the Tauri window:
+  - "Use for dictation" and "Update the speech engine" on Settings › Transcription show the
+    refusal in view;
+  - a raw error still reads "That didn't work." with its text under Details;
+  - the Dictation chip shows the refusal and isn't left at "Starting…".
+- Not exercised: the text-model refusals on Local text models, because the fixtures have no
+  installed text model to start.
+- Seen, not changed: Settings › Transcription shows every error at the top of the page, so a
+  refusal of a button far below it is above the fold.
+
 ---
 
 ## 2026-10-07 — KNEG-388: a model switch interrupted by a dictation undid itself, and push-to-talk's release could start a recording

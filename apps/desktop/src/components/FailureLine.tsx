@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { refusalText } from "../lib/refusal";
 import { LearnMore } from "./LearnMore";
 
 /**
@@ -10,6 +11,10 @@ import { LearnMore } from "./LearnMore";
  * the sentence. Before this, the settings screens printed `String(e)` as the
  * whole of the failure. `children` is for an action that belongs beside the
  * sentence, such as Retry.
+ *
+ * A refusal is the exception (KNEG-414): a sentence Rust wrote for the
+ * person, saying what to do, is shown as the line itself instead of behind
+ * "That didn't work." See `lib/refusal.ts`.
  */
 export function FailureLine({
   text,
@@ -20,6 +25,17 @@ export function FailureLine({
   detail?: string | null;
   children?: ReactNode;
 }) {
+  const refusal = refusalText(detail);
+  if (refusal !== null) {
+    return (
+      <div className="failure-line" role="alert">
+        <p className="error">
+          {refusal}
+          {children ? <> {children}</> : null}
+        </p>
+      </div>
+    );
+  }
   return (
     <div className="failure-line" role="alert">
       <p className="error">
