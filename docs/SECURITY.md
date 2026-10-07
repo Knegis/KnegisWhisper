@@ -350,6 +350,15 @@ unpinned model and removes a file that fails) hold that. Until 2026-09-29 the mi
 counted as a disagreement, which turned the weekly job red every week from 2026-09-07 for a reason
 that could not clear (KNEG-358).
 
+**"Within a week" assumes the weekly job reaches every target, and on 2026-10-05 it did not.** One
+connection GitHub closed ended `sidecar-pin --verify` at its 19th of 21 targets, and the two steps
+after it, `--verify` for the models and `--verify-stated`, were skipped (run 37301488812). Since
+KNEG-413 both tools retry a dropped connection twice, from byte 0, and only the transport: a
+download that arrives whole and disagrees with its pin is a disagreement, never retried into
+agreement. A target that still cannot be reached is reported and the run continues, and each step
+of `.github/workflows/pin-verify.yml` runs whether or not the one before it passed. A red run can
+therefore mean "unreachable" rather than "swapped"; the log says which.
+
 **A bound is only ever an exact figure.** Every bound above comes from a measurement:
 `tools/sidecar-pin/pin.mjs` and `tools/model-pin/pin.mjs` take the length from `stat` after a full
 download, never from `content-length`, because a truncated body agrees with its own header. A
