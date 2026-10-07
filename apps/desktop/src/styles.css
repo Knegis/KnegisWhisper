@@ -896,6 +896,12 @@ section {
   color: var(--error);
 }
 
+/* A failure and its folded Details (`components/FailureLine.tsx`, KNEG-343). */
+.failure-line { margin: 0.5rem 0; }
+.failure-line > .error { margin: 0; }
+.failure-line > .learn-more { margin-top: 0.25rem; }
+.failure-line .learn-more-body p { margin: 0.25rem 0 0; overflow-wrap: anywhere; }
+
 /*
  * A rule between rows, which is a different thing from a box around one: it
  * separates two pieces of data from each other rather than fencing the pair off
@@ -1130,6 +1136,13 @@ section > .muted {
 .list li .row-detail,
 .list li .muted {
   order: 1;
+  flex: 1 0 100%;
+  margin: 0;
+}
+
+/* A row's Details, under its detail lines rather than beside its name (KNEG-343). */
+.list li > .learn-more {
+  order: 2;
   flex: 1 0 100%;
   margin: 0;
 }

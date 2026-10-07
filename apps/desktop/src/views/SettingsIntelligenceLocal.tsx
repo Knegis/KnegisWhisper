@@ -15,7 +15,8 @@
  * the bytes will be checked.** Every row says so before the button, and *checksum
  * verified* and *checksum verified against the publisher's own* are different
  * sentences because they are different guarantees. See `LOCAL_LLM_PINS` in
- * `tools/integration-audit/generate-provider-registry.mjs`.
+ * `tools/integration-audit/generate-provider-registry.mjs`. Since KNEG-343 a
+ * row's Details says which, and its line says "verified" for both.
  *
  * And it covers the third thing, which is *when*. A row used to say "Installed"
  * and mean only that a path existed — so a model corrupted months after a clean
@@ -23,19 +24,33 @@
  * now says which of those it is, with a fourth answer for the models installed
  * before any of this existed: nothing is recorded about them, and that is
  * rendered as nothing rather than as either good news or bad. The **Check the
- * bytes** button is the only thing on this screen that actually hashes a file,
+ * file** button is the only thing on this screen that actually hashes a file,
  * and it says how long that will take before it starts. KNEG-107.
+ *
+ * # In plain words (KNEG-343)
+ *
+ * What a person needs is in view: the size, whether it is installed, a finding
+ * that asks them to do something, and that nothing leaves this computer. Model
+ * ids, the quantisation, the context length, checksums, the port and the
+ * folder are under each row's Details or the page's Technical details. The
+ * server is "the text engine".
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
+import { FailureLine } from "../components/FailureLine";
+import { LearnMore } from "../components/LearnMore";
 import { Row } from "../components/Row";
 import {
   freshnessLabel,
   ggufIntegrityLabel,
+  llmProgressLabel,
   recheckOutcomeLabel,
   refreshOutcomeLabel,
+  size,
   verificationLabel,
+  verifiedPlain,
+  type Plain,
 } from "../lib/labels";
 import {
   getLocalLlmStatus,
@@ -46,47 +61,8 @@ import {
   startLocalLlm,
   stopLocalLlm,
   type LocalLlmModelStatus,
-  type LocalLlmProgress,
 } from "../lib/ipc";
 import { message, useRefresh } from "../lib/useRefresh";
-
-/** Bytes, at a scale a person reads. */
-function size(bytes: number | null): string {
-  if (bytes === null) return "size unknown";
-  const gb = bytes / 1_000_000_000;
-  return gb >= 1 ? `${gb.toFixed(1)} GB` : `${(bytes / 1_000_000).toFixed(0)} MB`;
-}
-
-/** Progress as one line, with bytes rather than a spinner. */
-function progressLabel(p: LocalLlmProgress): string {
-  const of = (written: number, total: number | null) =>
-    total === null ? size(written) : `${size(written)} of ${size(total)}`;
-
-  switch (p.stage) {
-    case "server":
-      return `Downloading the server — ${of(p.written, p.total)}`;
-    case "model":
-      return `Downloading ${p.id} — ${of(p.written, p.total)}`;
-    case "draft":
-      // Named apart from the model so a second bar does not read as the first
-      // one restarting.
-      return `Downloading the drafter for ${p.id} — ${of(p.written, p.total)}`;
-    case "extracting":
-      return "Unpacking the server…";
-    case "verifying":
-      // Named because it is not instant: the check reads the whole file back,
-      // and the largest model here is 20 GB.
-      return `Checking ${p.id} against its checksum…`;
-    case "done":
-      // `null` means the files were already on disk, so this install checked
-      // nothing and must not borrow the previous one's claim.
-      return p.verifiedBy === null
-        ? `${p.id} was already installed.`
-        : `${p.id} is installed — ${verificationLabel(p.verifiedBy)}.`;
-    case "stopped-when-idle":
-      return "The server stopped itself after being idle. The next request will reload it.";
-  }
-}
 
 export function SettingsIntelligenceLocal() {
   const load = useCallback(() => getLocalLlmStatus(), []);
@@ -105,16 +81,23 @@ export function SettingsIntelligenceLocal() {
     text: string;
     detail: string;
     caveat?: string | undefined;
+    failed?: boolean;
   } | null>(null);
   /** Which model is being hashed, so its button can say so and not restart. */
   const [checking, setChecking] = useState<string | null>(null);
-  /** What the last press of the server-binary button did. */
-  const [refreshed, setRefreshed] = useState<string | null>(null);
+  /** What the last press of the text-engine button did. */
+  const [refreshed, setRefreshed] = useState<(Plain & { problem: boolean }) | null>(null);
+
+  // The progress event carries a model's id; the line names it, from the list
+  // as it was last read. A ref, so a reload does not resubscribe the listener.
+  const latest = useRef(data);
+  latest.current = data;
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
+    const nameOf = (id: string) => latest.current?.models.find((m) => m.id === id)?.name ?? id;
     void onLocalLlmProgress((p) => {
-      setProgress(progressLabel(p));
+      setProgress(llmProgressLabel(p, nameOf));
       if (p.stage === "done" || p.stage === "stopped-when-idle") void reload();
     }).then((fn) => {
       unlisten = fn;
@@ -125,12 +108,14 @@ export function SettingsIntelligenceLocal() {
   if (!data) {
     return (
       <div className="view">
-        {error ? <p className="error">{error}</p> : <p className="muted">Loading…</p>}
+        {error ? <FailureLine text="This page couldn't load." detail={error} /> : <p className="muted">Loading…</p>}
       </div>
     );
   }
 
   const running = data.port !== null;
+  const runningName = data.models.find((m) => m.id === data.runningModel)?.name ?? data.runningModel;
+  const freshness = freshnessLabel(data.serverFreshness);
 
   /**
    * Hash one model's files, on request.
@@ -145,15 +130,16 @@ export function SettingsIntelligenceLocal() {
     setChecked(null);
     try {
       const outcome = await recheckLocalLlmModel(id);
-      setChecked({ id, ...recheckOutcomeLabel(outcome) });
+      setChecked({ id, ...recheckOutcomeLabel(outcome), failed: outcome.outcome === "mismatched" });
       // The record beside the file has just been rewritten or removed, so the
       // row's own state is now stale.
       await reload();
     } catch (e) {
       setChecked({
         id,
-        text: "The check could not be made",
+        text: "Couldn't check the file.",
         detail: message(e),
+        failed: true,
       });
     } finally {
       setChecking(null);
@@ -164,38 +150,45 @@ export function SettingsIntelligenceLocal() {
     const installed = m.integrity.state !== "not-installed";
     const state = ggufIntegrityLabel(m.integrity);
     const draftState = m.draft ? ggufIntegrityLabel(m.draft.integrity) : null;
+    // The two states that ask the reader to do something are warnings.
+    const asks = m.integrity.state === "changed" || m.integrity.state === "failed-recheck";
 
     return (
       <li key={m.id}>
-        <code>{m.id}</code> {m.name}
+        {m.name}
         <em className="row-detail">
-          {m.provider} · {size(m.sizeBytes)}
-          {m.quantization ? ` · ${m.quantization}` : ""}
-          {m.contextLength ? ` · ${(m.contextLength / 1024).toFixed(0)}k context` : ""}
-          {m.supportsThinking ? " · thinking" : ""}
+          {size(m.sizeBytes)}
           {m.recommended ? " · recommended" : ""}
-        </em>
-        <em className="row-detail">
           {/* Before the button, for the same reason the size is: a guarantee
               nobody was told about is a guarantee nobody can weigh. */}
-          {verificationLabel(m.verifiedBy)}
+          {installed ? "" : ` · will be ${verifiedPlain(m.verifiedBy)}`}
         </em>
         {installed ? (
-          <em className="row-detail">
-            {state.text} — {state.detail}
-          </em>
+          <em className={asks ? "row-detail warn" : "row-detail"}>{state.text}</em>
         ) : null}
-        {m.draft ? (
-          <em className="row-detail">
-            has a speculative-decoding drafter, {size(m.draft.sizeBytes)}
-            {m.draft.integrity.state === "not-installed"
-              ? " — downloaded with the model"
-              : ` (${draftState?.text.toLowerCase() ?? ""})`}
-            {m.draft.verifiedBy === m.verifiedBy
-              ? ""
-              : ` — ${verificationLabel(m.draft.verifiedBy)}`}
-          </em>
-        ) : null}
+        <LearnMore summary="Details">
+          <p>
+            Model id <code>{m.id}</code>, from the {m.provider} family
+            {m.quantization ? `, quantised as ${m.quantization}` : ""}
+            {m.contextLength ? `, with a ${(m.contextLength / 1024).toFixed(0)}k context` : ""}
+            {m.supportsThinking ? ", and it can reason step by step before it answers" : ""}.
+          </p>
+          <p>How the download is checked: {verificationLabel(m.verifiedBy)}.</p>
+          {installed ? <p>{state.detail}.</p> : null}
+          {installed && state.caveat ? <p>{state.caveat}</p> : null}
+          {m.draft ? (
+            <p>
+              It comes with a smaller helper model that makes replies faster,{" "}
+              {size(m.draft.sizeBytes)}
+              {m.draft.integrity.state === "not-installed"
+                ? ", downloaded with the model"
+                : ` (${draftState?.text.toLowerCase() ?? ""})`}
+              {m.draft.verifiedBy === m.verifiedBy
+                ? "."
+                : `; ${verificationLabel(m.draft.verifiedBy)}.`}
+            </p>
+          ) : null}
+        </LearnMore>
         {installed ? (
           <>
             <button
@@ -218,7 +211,7 @@ export function SettingsIntelligenceLocal() {
                   takes a minute on a 20 GB model reads as a hang. */}
               {checking === m.id
                 ? "Reading the whole file…"
-                : `Check the bytes (reads ${size(m.sizeBytes)})`}
+                : `Check the file (reads ${size(m.sizeBytes)})`}
             </button>
           </>
         ) : (
@@ -235,14 +228,14 @@ export function SettingsIntelligenceLocal() {
         )}
         {checked?.id === m.id ? (
           <>
-            <em className="row-detail">
-              {checked.text} — {checked.detail}
+            <em className={checked.failed ? "row-detail warn" : "row-detail"} role="status">
+              {checked.text}
             </em>
-            {checked.caveat ? <p className="caveat">{checked.caveat}</p> : null}
+            <LearnMore summary="What the check found">
+              <p>{checked.detail}</p>
+              {checked.caveat ? <p>{checked.caveat}</p> : null}
+            </LearnMore>
           </>
-        ) : null}
-        {installed && state.caveat ? (
-          <p className="caveat">{state.caveat}</p>
         ) : null}
       </li>
     );
@@ -250,44 +243,46 @@ export function SettingsIntelligenceLocal() {
 
   return (
     <div className="view">
-      {error ? <p className="error">{error}</p> : null}
+      {error ? <FailureLine text="That didn't work." detail={error} /> : null}
 
       <section data-surface="settings.intelligence.local">
-        <h2>Local text generation</h2>
+        <h2>On this computer</h2>
 
         {data.availability.state === "not-published" ? (
           <>
             <Row
               label="Availability"
-              value="No server is published for this platform"
+              value="Not available on this computer yet"
             />
-            <p className="muted">{data.availability.reason}</p>
-            <p className="muted">{data.availability.tracking}</p>
+            <LearnMore summary="Why">
+              <p>{data.availability.reason}</p>
+              <p>{data.availability.tracking}</p>
+            </LearnMore>
           </>
         ) : (
           <>
             <p className="muted">
-              A model that runs on this machine. Nothing you type or dictate
-              leaves the device on this route, and no key is needed. The trade is
-              size: these are gigabytes, and the largest are slower than a cloud
-              provider on a laptop without a GPU.
+              A model that runs on this computer. Nothing you type or dictate
+              leaves this computer, and no key is needed. These models are large,
+              several gigabytes each, and on a computer without a graphics card
+              the largest are slower than a cloud service.
             </p>
 
             <Row
-              label="Server"
+              label="Text engine"
               value={
                 running
-                  ? `Running on 127.0.0.1:${data.port}`
+                  ? "Running"
                   : data.serverInstalled
                     ? "Installed, not running"
                     : "Not installed"
               }
               detail={
-                data.runningModel
-                  ? `loaded ${data.runningModel}`
+                runningName
+                  ? `using ${runningName}`
                   : running
                     ? undefined
-                    : "installing a model installs the server with it"
+                    : "installed with the first model"
               }
             />
             {/*
@@ -299,16 +294,17 @@ export function SettingsIntelligenceLocal() {
               apart — `unknown` is not a polite `stale` — and the button is
               offered for both, because pressing it is how either is settled.
             */}
-            {freshnessLabel(data.serverFreshness) ? (
-              <p
-                className={
-                  data.serverFreshness.state === "current"
-                    ? "muted"
-                    : "muted warn"
-                }
-              >
-                {freshnessLabel(data.serverFreshness)}
-              </p>
+            {freshness ? (
+              <>
+                <p className={data.serverFreshness.state === "current" ? "muted" : "muted warn"}>
+                  {freshness.text}
+                </p>
+                {freshness.more ? (
+                  <LearnMore summary="Which version">
+                    <p>{freshness.more}</p>
+                  </LearnMore>
+                ) : null}
+              </>
             ) : null}
             {data.serverFreshness.state !== "not-installed" ? (
               <>
@@ -318,7 +314,7 @@ export function SettingsIntelligenceLocal() {
                     void guard(async () => {
                       // Said before it starts: this stops the server, and a
                       // loaded model is several gigabytes to reload.
-                      setProgress("Replacing the server binary…");
+                      setProgress("Replacing the text engine…");
                       const outcome = await refreshLocalLlmServer();
                       setRefreshed(refreshOutcomeLabel(outcome));
                       setProgress(null);
@@ -326,14 +322,13 @@ export function SettingsIntelligenceLocal() {
                   }}
                 >
                   {data.serverFreshness.state === "current"
-                    ? "Reinstall the server binary"
-                    : "Update the server binary"}
+                    ? "Reinstall the text engine"
+                    : "Update the text engine"}
                 </button>
                 {running ? (
                   <p className="caveat">
-                    The server is running. It will be stopped for the
-                    replacement and started again with the same model, which
-                    means reloading it.
+                    The model in use stops while the engine is replaced, then
+                    loads again, which takes a while.
                   </p>
                 ) : null}
               </>
@@ -342,15 +337,37 @@ export function SettingsIntelligenceLocal() {
               Always rendered, so a press fills a slot rather than growing the
               section under the pointer.
             */}
-            <p className="status-slot row-detail" role="status">
-              {refreshed}
+            <p
+              className={refreshed?.problem ? "status-slot row-detail warn" : "status-slot row-detail"}
+              role="status"
+            >
+              {refreshed?.text}
             </p>
-            <Row label="Models are kept in" value={data.installDir} />
+            {refreshed?.more ? (
+              <LearnMore summary="What was replaced">
+                <p>{refreshed.more}</p>
+              </LearnMore>
+            ) : null}
             <Row
-              label="Idle shutdown"
-              value={`After ${data.idleStopMinutes} minutes`}
-              detail="a loaded model holds several gigabytes of memory, so it is released when nothing has used it; the next request reloads it"
+              label="When unused"
+              value={`Unloaded after ${data.idleStopMinutes} minutes`}
+              detail="to free the memory a model holds; the next request loads it again"
             />
+            <LearnMore summary="Technical details">
+              <p>
+                The text engine is llama.cpp's server
+                {running ? `, running on 127.0.0.1:${data.port}` : ""}. Models are
+                kept in <code>{data.installDir}</code>.
+              </p>
+              <p>
+                These are the builds that run on the processor. A build for a
+                graphics card (CUDA, Vulkan or ROCm) is fifteen to twenty-five
+                times the download, needs a matching driver, and fails at launch
+                in a way that reads as a broken install rather than a missing
+                runtime, so choosing one is left to whoever has the hardware to
+                test it.
+              </p>
+            </LearnMore>
 
             {progress ? <Row label="Progress" value={progress} /> : null}
 
@@ -364,17 +381,9 @@ export function SettingsIntelligenceLocal() {
                   void guard(stopLocalLlm);
                 }}
               >
-                Stop the server
+                Stop the model
               </button>
             ) : null}
-
-            <p className="caveat">
-              These are the CPU builds of llama.cpp. A CUDA, Vulkan or ROCm build
-              is fifteen to twenty-five times the download, needs a matching
-              driver, and fails at launch in a way that reads as a broken install
-              rather than a missing runtime — so choosing one is left to whoever
-              has the hardware to test it.
-            </p>
           </>
         )}
       </section>
