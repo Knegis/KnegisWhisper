@@ -226,6 +226,7 @@ fn dispatch_for(
     id: &str,
     enterprise: bool,
     local_running: Option<u16>,
+    credentials: &dyn kw_security::CredentialStore,
 ) -> ReasoningDispatch {
     let settings = ChatSettings {
         provider: Some(id.to_owned()),
@@ -234,11 +235,28 @@ fn dispatch_for(
     };
 
     match kw_reasoning_core::resolve_chat(registry, &settings) {
-        Ok(ChatRoute::Enterprise { id }) => ReasoningDispatch::NeedsConfig {
-            reason: format!(
-                "{id} needs its organisation credentials, set under Enterprise connectors below"
-            ),
-        },
+        // Ready once its configuration is stored: the same test `describe`
+        // makes for the stored route. This answered `NeedsConfig` for every
+        // company account, so the cleanup menu, which enables only `ready`,
+        // never let one be chosen however it was set up.
+        Ok(ChatRoute::Enterprise { id })
+            if kw_security::KeyRef::new(&id).is_some_and(|slot| credentials.contains(&slot)) =>
+        {
+            ReasoningDispatch::Ready
+        }
+        Ok(ChatRoute::Enterprise { id }) => {
+            let name = registry
+                .enterprise
+                .iter()
+                .find(|p| p.id == id)
+                .map_or(id.as_str(), |p| p.name.as_str());
+            ReasoningDispatch::NeedsConfig {
+                reason: format!(
+                    "{name} isn't set up yet. Enter your organisation's details under Company \
+                     accounts below."
+                ),
+            }
+        }
         Ok(ChatRoute::Local) => {
             if local_running.is_some() {
                 ReasoningDispatch::Ready
@@ -364,7 +382,7 @@ pub async fn reasoning_status(
             configured: kw_security::KeyRef::new(&p.credential_slot)
                 .is_some_and(|slot| state.credentials().contains(&slot)),
             enterprise: false,
-            dispatch: dispatch_for(registry, &p.id, false, local_running),
+            dispatch: dispatch_for(registry, &p.id, false, local_running, state.credentials()),
             models: p
                 .models
                 .iter()
@@ -379,9 +397,10 @@ pub async fn reasoning_status(
         })
         .collect();
 
-    // Enterprise connectors are listed alongside rather than hidden. They are
-    // real registry entries, and a screen that omits them says nothing about
-    // why — whereas listing them with `needs-shape` says exactly why.
+    // Company accounts (the enterprise connectors) are listed alongside rather
+    // than hidden. They are real registry entries, and a screen that omits them
+    // says nothing about why, whereas `needs-config` says what is missing until
+    // one is set up, and `ready` lets it be chosen after.
     providers.extend(registry.enterprise.iter().map(|p| {
         ReasoningProviderSummary {
             id: p.id.clone(),
@@ -389,9 +408,10 @@ pub async fn reasoning_status(
             // Multi-field credentials: region and profile, or endpoint and
             // deployment, or a service-account JSON. There is no single slot.
             credential_slot: None,
-            configured: false,
+            configured: kw_security::KeyRef::new(&p.id)
+                .is_some_and(|slot| state.credentials().contains(&slot)),
             enterprise: true,
-            dispatch: dispatch_for(registry, &p.id, true, local_running),
+            dispatch: dispatch_for(registry, &p.id, true, local_running, state.credentials()),
             models: p
                 .models
                 .iter()
@@ -414,36 +434,9 @@ pub async fn reasoning_status(
         .map(|p| enterprise_status(&p.id, &p.name, state.credentials()))
         .collect();
 
-    // The local route is a real destination and is not in either registry list,
-    // so it is added here. Without it the screen offers ten cloud providers and
-    // no way to point cleanup at a model on this machine -- which is the one
-    // route that needs no key and sends nothing anywhere.
     providers.insert(
         0,
-        ReasoningProviderSummary {
-            id: "local".to_owned(),
-            name: "On this machine (llama.cpp)".to_owned(),
-            credential_slot: None,
-            configured: local_running.is_some(),
-            enterprise: false,
-            dispatch: dispatch_for(registry, "local", false, local_running),
-            models: registry
-                .local_llm
-                .iter()
-                .flat_map(|p| {
-                    p.models.iter().map(|m| ReasoningModelSummary {
-                        id: m.id.clone(),
-                        name: m.name.clone(),
-                        // llama.cpp speaks the OpenAI shape and takes
-                        // `max_tokens`; there is no second spelling to worry
-                        // about on a server we run ourselves.
-                        token_param: "max_tokens".to_owned(),
-                        supports_thinking: m.supports_thinking,
-                        supports_vision: false,
-                    })
-                })
-                .collect(),
-        },
+        local_route_summary(registry, local_running, state.credentials()),
     );
 
     Ok(ReasoningStatus {
@@ -452,6 +445,43 @@ pub async fn reasoning_status(
         providers,
         enterprise,
     })
+}
+
+/// The local route, as the screen lists it. It is a real destination and is in
+/// neither registry list. Without it the screen offers ten cloud providers and
+/// no way to point cleanup at a model on this computer -- which is the one
+/// route that needs no key and sends nothing anywhere.
+fn local_route_summary(
+    registry: &Registry,
+    local_running: Option<u16>,
+    credentials: &dyn kw_security::CredentialStore,
+) -> ReasoningProviderSummary {
+    ReasoningProviderSummary {
+        id: "local".to_owned(),
+        // As every other screen names it (KNEG-343). It read "On this machine
+        // (llama.cpp)": the engine's name, in the one string kept in Rust.
+        name: "On this computer".to_owned(),
+        credential_slot: None,
+        configured: local_running.is_some(),
+        enterprise: false,
+        dispatch: dispatch_for(registry, "local", false, local_running, credentials),
+        models: registry
+            .local_llm
+            .iter()
+            .flat_map(|p| {
+                p.models.iter().map(|m| ReasoningModelSummary {
+                    id: m.id.clone(),
+                    name: m.name.clone(),
+                    // llama.cpp speaks the OpenAI shape and takes
+                    // `max_tokens`; there is no second spelling to worry
+                    // about on a server we run ourselves.
+                    token_param: "max_tokens".to_owned(),
+                    supports_thinking: m.supports_thinking,
+                    supports_vision: false,
+                })
+            })
+            .collect(),
+    }
 }
 
 /// Read one connector's stored configuration and report its shape.
@@ -684,16 +714,62 @@ mod tests {
     /// It used to be a *shape* gap, which was true until `enterprise.rs` wrote
     /// the three request shapes. Reporting a missing feature for what is now a
     /// missing setting would send someone looking in the wrong place.
+    ///
+    /// By name and by where the page puts them: "Company accounts", which is
+    /// what Settings › Cleanup & summaries calls the section since KNEG-343.
     #[test]
     fn enterprise_connectors_say_they_need_their_organisation_credentials() {
+        let store = kw_security::MemoryCredentialStore::default();
         for id in ["bedrock", "azure", "vertex"] {
-            match dispatch_for(reg(), id, true, None) {
+            let name = &reg()
+                .enterprise
+                .iter()
+                .find(|p| p.id == id)
+                .expect("in the registry")
+                .name;
+            match dispatch_for(reg(), id, true, None, &store) {
                 ReasoningDispatch::NeedsConfig { reason } => {
-                    assert!(reason.contains(id), "{id}: {reason}");
+                    assert!(reason.contains(name.as_str()), "{id}: {reason}");
+                    assert!(reason.contains("Company accounts"), "{id}: {reason}");
+                    assert!(!reason.contains("Enterprise"), "{id}: {reason}");
                 }
                 other => panic!("{id} should need a configuration, got {other:?}"),
             }
         }
+    }
+
+    /// A company account that is set up can be chosen.
+    ///
+    /// The cleanup provider menu enables only `ready` providers, and this used
+    /// to answer `NeedsConfig` for every company account without looking at
+    /// the store, so one that was fully set up stayed greyed out "not usable
+    /// yet". The same check `describe` makes for the stored route.
+    #[test]
+    fn a_configured_company_account_can_be_used() {
+        let store = kw_security::MemoryCredentialStore::default();
+        let slot = kw_security::KeyRef::new("bedrock").expect("slot");
+        store
+            .set(&slot, &kw_security::Secret::new("{}".to_owned()))
+            .expect("store");
+
+        assert!(matches!(
+            dispatch_for(reg(), "bedrock", true, None, &store),
+            ReasoningDispatch::Ready
+        ));
+        // Only the one that is set up.
+        assert!(matches!(
+            dispatch_for(reg(), "azure", true, None, &store),
+            ReasoningDispatch::NeedsConfig { .. }
+        ));
+    }
+
+    /// The local route is named as every other screen names it (KNEG-343).
+    #[test]
+    fn the_local_text_model_route_is_named_this_computer() {
+        let store = kw_security::MemoryCredentialStore::default();
+        let summary = local_route_summary(reg(), None, &store);
+        assert_eq!(summary.id, "local");
+        assert_eq!(summary.name, "On this computer");
     }
 
     /// A stored configuration is reported by shape, never by value.
@@ -766,12 +842,13 @@ mod tests {
     /// defect the three-state dispatch exists to prevent.
     #[test]
     fn the_local_route_is_ready_only_while_a_server_runs() {
+        let store = kw_security::MemoryCredentialStore::default();
         assert!(matches!(
-            dispatch_for(reg(), "local", false, None),
+            dispatch_for(reg(), "local", false, None, &store),
             ReasoningDispatch::NeedsSidecar { .. }
         ));
         assert!(matches!(
-            dispatch_for(reg(), "local", false, Some(8221)),
+            dispatch_for(reg(), "local", false, Some(8221), &store),
             ReasoningDispatch::Ready
         ));
     }
@@ -818,10 +895,11 @@ mod tests {
     /// which is the mismatch `cloud_chat_providers` exists to prevent.
     #[test]
     fn every_cloud_provider_the_registry_lists_is_routable() {
+        let store = kw_security::MemoryCredentialStore::default();
         for p in &reg().reasoning {
             assert!(
                 matches!(
-                    dispatch_for(reg(), &p.id, false, None),
+                    dispatch_for(reg(), &p.id, false, None, &store),
                     ReasoningDispatch::Ready
                 ),
                 "{} is in the registry and cannot be routed",

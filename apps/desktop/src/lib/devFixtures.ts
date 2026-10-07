@@ -448,7 +448,7 @@ const REASONING: ReasoningStatus = {
     },
     {
       id: "local",
-      name: "Local model",
+      name: "On this computer",
       credentialSlot: null,
       configured: true,
       enterprise: false,

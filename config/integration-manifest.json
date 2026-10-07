@@ -313,7 +313,7 @@
       "backend": "crates/reasoning-core",
       "ui": "Settings > Intelligence > Enterprise",
       "reachable": true,
-      "note": "Reachable: organisation credentials are entered on Settings > Intelligence > Enterprise and stored as one JSON document in the OS credential store. The request shape and signing are implemented and tested -- SigV4 against AWS's published vectors -- but no live call has been made to any of the three, which needs org credentials this project does not have. Recorded as unverified in docs/PLATFORM_SUPPORT.md."
+      "note": "Reachable: organisation credentials are entered on Settings > Cleanup & summaries > Company accounts and stored as one JSON document in the OS credential store. The request shape and signing are implemented and tested -- SigV4 against AWS's published vectors -- but no live call has been made to any of the three, which needs org credentials this project does not have. Recorded as unverified in docs/PLATFORM_SUPPORT.md."
     },
     "enterprise:azure": {
       "status": "rewired-to-direct-byok",
@@ -327,7 +327,7 @@
       "backend": "crates/reasoning-core",
       "ui": "Settings > Intelligence > Enterprise",
       "reachable": true,
-      "note": "Reachable: organisation credentials are entered on Settings > Intelligence > Enterprise and stored as one JSON document in the OS credential store. The request shape and signing are implemented and tested -- SigV4 against AWS's published vectors -- but no live call has been made to any of the three, which needs org credentials this project does not have. Recorded as unverified in docs/PLATFORM_SUPPORT.md."
+      "note": "Reachable: organisation credentials are entered on Settings > Cleanup & summaries > Company accounts and stored as one JSON document in the OS credential store. The request shape and signing are implemented and tested -- SigV4 against AWS's published vectors -- but no live call has been made to any of the three, which needs org credentials this project does not have. Recorded as unverified in docs/PLATFORM_SUPPORT.md."
     },
     "enterprise:vertex": {
       "status": "rewired-to-direct-byok",
@@ -344,7 +344,7 @@
       "backend": "crates/reasoning-core",
       "ui": "Settings > Intelligence > Enterprise",
       "reachable": true,
-      "note": "Reachable: organisation credentials are entered on Settings > Intelligence > Enterprise and stored as one JSON document in the OS credential store. The request shape and signing are implemented and tested -- SigV4 against AWS's published vectors -- but no live call has been made to any of the three, which needs org credentials this project does not have. Recorded as unverified in docs/PLATFORM_SUPPORT.md."
+      "note": "Reachable: organisation credentials are entered on Settings > Cleanup & summaries > Company accounts and stored as one JSON document in the OS credential store. The request shape and signing are implemented and tested -- SigV4 against AWS's published vectors -- but no live call has been made to any of the three, which needs org credentials this project does not have. Recorded as unverified in docs/PLATFORM_SUPPORT.md."
     },
     "local-llm:qwen": {
       "status": "ported-with-new-rust-implementation",
