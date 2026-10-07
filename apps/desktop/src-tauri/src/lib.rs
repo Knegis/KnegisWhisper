@@ -38,6 +38,7 @@ mod persistent_overlay;
 mod reasoning;
 mod recording_attach;
 mod recordings;
+mod sharing;
 mod sherpa_stream;
 mod shortcuts;
 mod state;
@@ -154,6 +155,8 @@ pub fn run() -> anyhow::Result<()> {
                 .context("could not read the configured hotkeys")?;
 
             let db = state.db().clone();
+            app.manage(tauri::async_runtime::block_on(sharing::SharingRuntime::recover(&state))
+                .map_err(|e| anyhow::anyhow!(e))?);
             let credentials = state.credentials_arc();
             // Cloned before it is moved into the dictation runtime below.
             let meeting_credentials = std::sync::Arc::clone(&credentials);
@@ -495,6 +498,14 @@ pub fn run() -> anyhow::Result<()> {
             commands::folder_delete,
             commands::note_export,
             commands::note_export_to_file,
+            sharing::folder_share_preview,
+            sharing::folder_share_export,
+            sharing::folder_share_pick_import,
+            sharing::folder_share_status,
+            sharing::folder_share_import,
+            sharing::folder_share_cancel,
+            sharing::folder_share_dismiss,
+            sharing::folder_share_show_export,
             dictation::dictation_state,
             dictation::dictation_route,
             dictation::dictation_use_local,
@@ -580,6 +591,11 @@ pub fn run() -> anyhow::Result<()> {
         ])
         .build(tauri::generate_context!())
         .context("the application could not be built")?
-        .run(automation::on_event);
+        .run(|app, event| {
+            if matches!(&event, tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit) {
+                app.state::<sharing::SharingRuntime>().close();
+            }
+            automation::on_event(app, event);
+        });
     Ok(())
 }

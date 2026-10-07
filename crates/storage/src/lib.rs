@@ -283,8 +283,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            applied, 7,
-            "initial, note recordings, automation, desktop origin, summary, note workspace, and search tokenizer migrations recorded exactly once"
+            applied, 8,
+            "initial, note recordings, automation, desktop origin, summary, note workspace, search tokenizer, and folder sharing migrations recorded exactly once"
         );
         second.close().await;
     }
@@ -318,6 +318,7 @@ mod tests {
             "speaker_mappings",
             "note_speaker_embeddings",
             "note_recordings",
+            "folder_share_operations",
             "settings",
         ] {
             assert!(

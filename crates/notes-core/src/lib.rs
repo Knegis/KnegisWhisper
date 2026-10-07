@@ -13,6 +13,7 @@
 pub mod document;
 pub mod notes;
 pub mod recordings;
+pub mod sharing;
 pub mod speakers;
 pub mod transcript;
 

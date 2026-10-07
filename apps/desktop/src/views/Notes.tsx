@@ -40,6 +40,7 @@ import {
 import { createPortal } from "react-dom";
 
 import { Icon } from "../components/Icon";
+import { FolderSharing } from "../components/FolderSharing";
 import { NoteWorkspace, type NoteWorkspaceHandle } from "../components/NoteWorkspace";
 import { PanelAction, PanelHeader, PanelItem, PanelSection } from "../components/Panel";
 import { formatClock } from "../components/RecordingPlayer";
@@ -92,6 +93,9 @@ type ContextMenu = { x: number; y: number; anchor: HTMLButtonElement; fromButton
 
 export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, onImport }: { initialNoteId?: number | null; openRequest?: { id: number } | null; onOpenNote?: (id: number) => void; onImport: () => void }) {
   const [context, setContext] = useState<ContextMenu | null>(null);
+  const [shareFolder, setShareFolder] = useState<Folder | null>(null);
+  const [shareImportRequest, setShareImportRequest] = useState(0);
+  const shareTrigger = useRef<HTMLElement | null>(null);
   const contextRef = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     if (!context || !contextRef.current) return;
@@ -320,6 +324,7 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
         <PanelSection label={null}>
           <PanelAction icon="newNote" label="New note" onClick={() => { void newNote(); }} />
           <PanelAction icon="import" label="Import audio or video" onClick={onImport} />
+          <PanelAction icon="import" label="Import shared folder…" onClick={() => { shareTrigger.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; setShareImportRequest(value => value + 1); }} />
         </PanelSection>
         <label className="panel-search">
           <Icon name="search" size={15} />
@@ -375,7 +380,7 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
                     const open = !collapsed.has(folder.id);
                     return (
                       <section key={folder.id} className="notes-folder" data-drop-target={dropTarget === folder.id || undefined} {...dropHandlers(folder.id)}>
-                        <button type="button" className="notes-folder-toggle" aria-expanded={open} aria-controls={`notes-folder-${folder.id}`} aria-haspopup="dialog"
+                        <div className="notes-folder-actions"><button type="button" className="notes-folder-toggle" aria-expanded={open} aria-controls={`notes-folder-${folder.id}`} aria-haspopup="dialog"
                           onClick={() => setCollapsed(prev => { const next = new Set(prev); if (next.has(folder.id)) next.delete(folder.id); else next.add(folder.id); return next; })}
                           onContextMenu={event => { event.preventDefault(); setContext({ kind: "folder", folder, x: event.clientX, y: event.clientY, anchor: event.currentTarget }); }}
                           onKeyDown={event => { if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) { event.preventDefault(); const rect = event.currentTarget.getBoundingClientRect(); setContext({ kind: "folder", folder, x: rect.left, y: rect.bottom, anchor: event.currentTarget }); } }}>
@@ -384,6 +389,7 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
                           <span className="notes-folder-name" title={folder.name}>{folder.name}</span>
                           <span className="notes-folder-count"><span className="sr-only">, </span>{filed.length}<span className="sr-only">{filed.length === 1 ? " note" : " notes"}</span></span>
                         </button>
+                        <button type="button" className="notes-folder-more" aria-label={`Actions for folder ${folder.name}`} aria-haspopup="dialog" onClick={event => { const rect = event.currentTarget.getBoundingClientRect(); setContext({ kind: "folder", folder, x: rect.left, y: rect.bottom, anchor: event.currentTarget }); }}>…</button></div>
                         <div id={`notes-folder-${folder.id}`} className="notes-folder-notes" hidden={!open}>
                           {filed.length ? filed.map(renderEntry) : <p className="notes-folder-empty">No notes in this folder.</p>}
                         </div>
@@ -498,15 +504,16 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
             </select>
           </span>
         </div>
-        </> : <button type="button" onClick={() => {
+        </> : <><button type="button" onClick={() => { shareTrigger.current = context.anchor; setShareFolder(context.folder); setContext(null); }}>Share folder…</button><button type="button" onClick={() => {
           const { folder } = context;
           setContext(null);
           // Deleting a folder never deletes a note: the database sets the
           // note's folder to null, so the confirmation says so.
           if (!window.confirm(`Delete folder “${folder.name}”? Its notes are kept and become unfiled.`)) return;
           void guard(async () => { await deleteFolder(folder.id); });
-        }}>Delete folder</button>}
+        }}>Delete folder</button></>}
       </div>, document.body)}
+      <FolderSharing folder={shareFolder} trigger={shareTrigger.current} importRequest={shareImportRequest} close={() => setShareFolder(null)} flush={async () => { await workspaceRef.current?.flush(); }} imported={async folderId => { await workspaceRef.current?.flush(); await reload(); reveal(folderId); setQuery(""); setHits(null); const notes = await getNotes({ folderId, limit: 1 }); if (notes[0]) await selectNote(notes[0].id); }} />
     </SplitView>
   );
 }

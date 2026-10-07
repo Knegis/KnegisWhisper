@@ -2889,6 +2889,7 @@ name = "kw-notes-core"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "hound",
  "kw-storage",
  "serde",
  "serde_json",
@@ -2900,6 +2901,8 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "ts-rs",
+ "uuid",
+ "zip",
 ]
 
 [[package]]
