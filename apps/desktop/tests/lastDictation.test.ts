@@ -26,7 +26,7 @@ const row = (over: Partial<Transcription>): Transcription => ({
 test("with history off, a Discard after an insert keeps the inserted text", () => {
   // A cancelled outcome carries no text and, with history off, writes no row.
   const last = lastDictation([], { text: "Book the room.", historyId: null, at: at(5) }, null);
-  assert.deepEqual(last, { text: "Book the room.", at: at(5), raw: null, typed: true });
+  assert.deepEqual(last, { text: "Book the room.", at: at(5), raw: null, typed: true, fromFailure: false });
 });
 
 test("with history off, a failure after an insert keeps the inserted text", () => {
@@ -56,7 +56,7 @@ test("a failure whose row kept the text shows that text, marked as not typed", (
     row({ id: 6, text: "Book the room.", createdAt: stored(5) }),
   ];
   const last = lastDictation(history, { text: "Book the room.", historyId: 6, at: at(5) }, { historyId: 7, at: at(8) });
-  assert.deepEqual(last, { text: "Pasted nowhere.", at: at(8), raw: null, typed: false });
+  assert.deepEqual(last, { text: "Pasted nowhere.", at: at(8), raw: null, typed: false, fromFailure: true });
 });
 
 test("a Discard after a failure that kept its text leaves that row showing", () => {
@@ -75,7 +75,7 @@ test("a failure with no text falls back to the session's insert", () => {
     row({ id: 6, text: "Book the room.", createdAt: stored(5) }),
   ];
   const last = lastDictation(history, { text: "Book the room.", historyId: 6, at: at(5) }, { historyId: 7, at: at(8) });
-  assert.deepEqual(last, { text: "Book the room.", at: at(5), raw: null, typed: true });
+  assert.deepEqual(last, { text: "Book the room.", at: at(5), raw: null, typed: true, fromFailure: false });
 });
 
 test("the insert's own row supplies the text before cleanup", () => {
@@ -94,7 +94,17 @@ test("with nothing from this session, the newest row that has text", () => {
     at: at(2),
     raw: "from yesterday",
     typed: true,
+    fromFailure: false,
   });
+});
+
+test("an older row that failed to paste is not the last outcome's failure", () => {
+  // KNEG-377. Its could-not-be-typed line and a new outcome's error are two
+  // events, so both stay; only the last outcome's own text is one with it.
+  const history = [row({ id: 8, text: "Pasted nowhere.", status: "failed", createdAt: stored(8) })];
+  const last = lastDictation(history, null, null);
+  assert.equal(last?.typed, false);
+  assert.equal(last?.fromFailure, false);
 });
 
 test("nothing dictated anywhere is null", () => {

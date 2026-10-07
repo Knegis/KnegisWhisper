@@ -32,6 +32,7 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type DragEvent as ReactDragEvent,
@@ -40,6 +41,7 @@ import {
 import { createPortal } from "react-dom";
 
 import { Icon } from "../components/Icon";
+import { FolderSharing } from "../components/FolderSharing";
 import { NoteWorkspace, type NoteWorkspaceHandle } from "../components/NoteWorkspace";
 import { PanelAction, PanelHeader, PanelItem, PanelSection } from "../components/Panel";
 import { formatClock } from "../components/RecordingPlayer";
@@ -66,6 +68,7 @@ import {
 import { parseStoredTime } from "../lib/dayGroups";
 import { recentMeta } from "../lib/meetingView";
 import { groupNotesByFolder } from "../lib/noteGroups";
+import { hitMeta } from "../lib/searchHit";
 import { carriesNote, draggedNoteId, folderChange, NOTE_DRAG_TYPE } from "../lib/noteDrag";
 import { useRefresh } from "../lib/useRefresh";
 
@@ -84,11 +87,17 @@ function noteDate(value: string | null) {
  */
 let lastOpenNoteId: number | null = null;
 
-/** The right-click menu's target: a note, or a folder heading. */
-type ContextMenu = { x: number; y: number; anchor: HTMLButtonElement } & ({ kind: "note"; note: Note } | { kind: "folder"; folder: Folder });
+/**
+ * The right-click menu's target: a note, or a folder heading. `fromButton` when the open note's
+ * More opened it, so a second press of More closes it rather than reopening it (KNEG-377).
+ */
+type ContextMenu = { x: number; y: number; anchor: HTMLButtonElement; fromButton?: boolean } & ({ kind: "note"; note: Note } | { kind: "folder"; folder: Folder });
 
-export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, onImport }: { initialNoteId?: number | null; openRequest?: { id: number } | null; onOpenNote?: (id: number) => void; onImport: () => void }) {
+export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, onImport }: { initialNoteId?: number | null; openRequest?: { id: number; transcriptRow: number | null } | null; onOpenNote?: (id: number, transcriptRow?: number) => void; onImport: () => void }) {
   const [context, setContext] = useState<ContextMenu | null>(null);
+  const [shareFolder, setShareFolder] = useState<Folder | null>(null);
+  const [shareImportRequest, setShareImportRequest] = useState(0);
+  const shareTrigger = useRef<HTMLElement | null>(null);
   const contextRef = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     if (!context || !contextRef.current) return;
@@ -97,7 +106,13 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
     menu.style.left = `${Math.max(8, Math.min(context.x, window.innerWidth - bounds.width - 8))}px`;
     menu.style.top = `${Math.max(8, Math.min(context.y, window.innerHeight - bounds.height - 8))}px`;
     menu.querySelector<HTMLButtonElement>("button")?.focus();
-    const outside = (event: PointerEvent) => { if (!menu.contains(event.target as Node)) setContext(null); };
+    // A press on the More button that opened it is left to that button's click, which closes it:
+    // closing here, on pointerdown, would have the click open it again.
+    const outside = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (menu.contains(target) || (context.fromButton && context.anchor.contains(target))) return;
+      setContext(null);
+    };
     const escape = (event: KeyboardEvent) => { if (event.key === "Escape") { event.preventDefault(); setContext(null); context.anchor.focus(); } };
     const close = () => setContext(null);
     document.addEventListener("pointerdown", outside);
@@ -196,13 +211,13 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
     return () => { cancelled = true; };
   }, [openRequest, fail, reveal]);
 
-  const selectNote = async (id: number) => {
+  const selectNote = async (id: number, transcriptRow?: number) => {
     await workspaceRef.current?.flush();
     const note = await getNote(id);
     if (!note) throw new Error("This note is no longer available.");
     setRequestedNote(note);
     setOpenNoteId(id);
-    onOpenNote?.(id);
+    onOpenNote?.(id, transcriptRow);
   };
   const newNote = () => guard(async () => {
     await workspaceRef.current?.flush();
@@ -230,6 +245,12 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
   const openNoteMenu = (note: Note, anchor: HTMLButtonElement, at?: { x: number; y: number }) => {
     const rect = anchor.getBoundingClientRect();
     setContext({ kind: "note", note, x: at?.x ?? rect.left, y: at?.y ?? rect.bottom, anchor });
+  };
+  // The open note's More: a toggle, as its `aria-expanded` says.
+  const toggleMoreMenu = (note: Note, anchor: HTMLButtonElement) => {
+    if (context?.fromButton && context.anchor === anchor) { setContext(null); return; }
+    const rect = anchor.getBoundingClientRect();
+    setContext({ kind: "note", note, x: rect.left, y: rect.bottom, anchor, fromButton: true });
   };
 
   // Filing by drag and drop, and by the right-click menu, through one move.
@@ -265,6 +286,14 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
       if (note && folderChange(note.folderId, target)) moveNote(note, target);
     },
   });
+
+  // The transcript row an open request asks for (KNEG-406), one object per
+  // request: the workspace shows each once, so a hit chosen again -- a new
+  // request -- shows its row again. Before the early return, as a hook.
+  const revealRow = useMemo(
+    () => (openRequest?.transcriptRow == null ? null : { noteId: openRequest.id, index: openRequest.transcriptRow }),
+    [openRequest],
+  );
 
   if (!data) {
     return (
@@ -305,6 +334,7 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
         <PanelSection label={null}>
           <PanelAction icon="newNote" label="New note" onClick={() => { void newNote(); }} />
           <PanelAction icon="import" label="Import audio or video" onClick={onImport} />
+          <PanelAction icon="import" label="Import shared folder…" onClick={() => { shareTrigger.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; setShareImportRequest(value => value + 1); }} />
         </PanelSection>
         <label className="panel-search">
           <Icon name="search" size={15} />
@@ -323,8 +353,8 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
         ) : (
           <PanelSection label={`${hits.length} match${hits.length === 1 ? "" : "es"}`}>
             {hits.map((hit) => (
-              <PanelItem key={hit.id} className="notes-hit" title={hit.title} meta={hit.snippet} tooltip={hit.title}
-                current={openNoteId === hit.id} onClick={() => { void selectNote(hit.id).catch(fail); }} />
+              <PanelItem key={hit.id} className="notes-hit" title={hit.title} meta={hitMeta(hit)} tooltip={hit.title}
+                current={openNoteId === hit.id} onClick={() => { void selectNote(hit.id, hit.transcriptRow?.index).catch(fail); }} />
             ))}
           </PanelSection>
         )}
@@ -360,7 +390,7 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
                     const open = !collapsed.has(folder.id);
                     return (
                       <section key={folder.id} className="notes-folder" data-drop-target={dropTarget === folder.id || undefined} {...dropHandlers(folder.id)}>
-                        <button type="button" className="notes-folder-toggle" aria-expanded={open} aria-controls={`notes-folder-${folder.id}`} aria-haspopup="dialog"
+                        <div className="notes-folder-actions"><button type="button" className="notes-folder-toggle" aria-expanded={open} aria-controls={`notes-folder-${folder.id}`} aria-haspopup="dialog"
                           onClick={() => setCollapsed(prev => { const next = new Set(prev); if (next.has(folder.id)) next.delete(folder.id); else next.add(folder.id); return next; })}
                           onContextMenu={event => { event.preventDefault(); setContext({ kind: "folder", folder, x: event.clientX, y: event.clientY, anchor: event.currentTarget }); }}
                           onKeyDown={event => { if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) { event.preventDefault(); const rect = event.currentTarget.getBoundingClientRect(); setContext({ kind: "folder", folder, x: rect.left, y: rect.bottom, anchor: event.currentTarget }); } }}>
@@ -369,6 +399,7 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
                           <span className="notes-folder-name" title={folder.name}>{folder.name}</span>
                           <span className="notes-folder-count"><span className="sr-only">, </span>{filed.length}<span className="sr-only">{filed.length === 1 ? " note" : " notes"}</span></span>
                         </button>
+                        <button type="button" className="notes-folder-more" aria-label={`Actions for folder ${folder.name}`} aria-haspopup="dialog" onClick={event => { const rect = event.currentTarget.getBoundingClientRect(); setContext({ kind: "folder", folder, x: rect.left, y: rect.bottom, anchor: event.currentTarget }); }}>…</button></div>
                         <div id={`notes-folder-${folder.id}`} className="notes-folder-notes" hidden={!open}>
                           {filed.length ? filed.map(renderEntry) : <p className="notes-folder-empty">No notes in this folder.</p>}
                         </div>
@@ -404,13 +435,15 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
             key={openNote.id}
             ref={workspaceRef}
             note={openNote}
+            revealRow={revealRow?.noteId === openNote.id ? revealRow : null}
             reload={reload}
             onExport={() => exportNote(openNote.id)}
-            onMore={anchor => openNoteMenu(openNote, anchor)}
+            onMore={anchor => toggleMoreMenu(openNote, anchor)}
+            moreOpen={context?.fromButton === true && context.kind === "note" && context.note.id === openNote.id}
           />
         ) : <div className="notes-empty"><h2>Your writing space</h2><p className="muted">Choose a note or meeting from the list, or start a new note.</p><button type="button" className="primary" onClick={() => { void newNote(); }}>New note</button> <button type="button" onClick={onImport}>Import audio or video</button></div>}
       </section>
-      {context && createPortal(<div ref={contextRef} className="notes-context-menu" role="dialog" aria-label={context.kind === "note" ? `Actions for ${context.note.title}` : `Actions for folder ${context.folder.name}`} style={{ left: context.x, top: context.y }} onContextMenu={event => event.preventDefault()} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) setContext(null); }}>
+      {context && createPortal(<div ref={contextRef} className="notes-context-menu" role="dialog" aria-label={context.kind === "note" ? `Actions for ${context.note.title}` : `Actions for folder ${context.folder.name}`} style={{ left: context.x, top: context.y }} onContextMenu={event => event.preventDefault()} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget) && !(context.fromButton && event.relatedTarget === context.anchor)) setContext(null); }}>
         {context.kind === "note" ? <>
                 <button
                   type="button"
@@ -482,15 +515,16 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
             </select>
           </span>
         </div>
-        </> : <button type="button" onClick={() => {
+        </> : <><button type="button" onClick={() => { shareTrigger.current = context.anchor; setShareFolder(context.folder); setContext(null); }}>Share folder…</button><button type="button" onClick={() => {
           const { folder } = context;
           setContext(null);
           // Deleting a folder never deletes a note: the database sets the
           // note's folder to null, so the confirmation says so.
           if (!window.confirm(`Delete folder “${folder.name}”? Its notes are kept and become unfiled.`)) return;
           void guard(async () => { await deleteFolder(folder.id); });
-        }}>Delete folder</button>}
+        }}>Delete folder</button></>}
       </div>, document.body)}
+      <FolderSharing folder={shareFolder} trigger={shareTrigger.current} importRequest={shareImportRequest} close={() => setShareFolder(null)} flush={async () => { await workspaceRef.current?.flush(); }} imported={async folderId => { await workspaceRef.current?.flush(); await reload(); reveal(folderId); setQuery(""); setHits(null); const notes = await getNotes({ folderId, limit: 1 }); if (notes[0]) await selectNote(notes[0].id); }} />
     </SplitView>
   );
 }

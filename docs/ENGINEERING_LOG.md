@@ -12,7 +12,280 @@ maintained in place rather than appended to, because its purpose is to be curren
 
 ---
 
-## 2026-09-26 (second, latest) — KNEG-326: speaker labels never attached on a whisper engine, and the note's own sentence pointed the wrong way
+## 2026-10-07 (latest) — six one-answer issues: KNEG-331, 367, 415, 394, 407, 406
+
+The owner answered six issues on 2026-10-07, each with the recommended option. What the answers
+left open was decided here.
+
+- **KNEG-406, a transcript hit opens at its row.** Each transcript segment is now indexed on its
+  own (`0008_transcript_rows.sql`), with the rowid packing the note id and the row's position:
+  `id * 2^20 + position`.
+  - **Judgement call: the packed rowid.** An UNINDEXED `note_id` column would make every note
+    delete scan every meeting's rows. External content means twice the objects, and a trigger
+    that drifts silently. Re-tokenising in Rust could not match unicode61, so it would guess. A
+    rowid range is read as a range by FTS5.
+  - **Which row:** the note-level query asked of each row alone, the best bm25 first. If no
+    single row holds every word, there is no row and the note opens as before. A hit in the
+    notes never gets a row.
+  - **The rows and times come from the same parse** (`transcript::parse_stored`, which replaces
+    two copies) and the same `rows()` as the Transcript tab, so the two cannot disagree.
+  - **Only the transcript's own update re-indexes** (`AFTER UPDATE OF id, transcript`): autosave
+    and summary writes update `notes` constantly.
+  - **Selecting never plays.** `showSource`, which summary links use, plays the row; the search
+    path is split out of it and only selects. The `transcript-search` visual check counts
+    `play()` calls from before the page loads.
+  - **The cost to old builds.** A build without 0008 refuses to open a profile that has it:
+    sqlx raises `VersionMissing(8)`, shown as "could not open the database". Nothing is damaged,
+    since the refusal comes before any write. But the kneg-404 and kneg-410 worktrees, built
+    before this, can no longer be run against the owner's real profile until they are rebased.
+    `set_ignore_missing` was not used: it only helps builds made after it, and it hides real
+    downgrades.
+- **KNEG-415, your own server's key.** The self-hosted route always read slot `custom`, and
+  nothing declared it.
+  - **Judgement call:** its `usedFor` comes from one named fact in the generator (the slot the
+    self-hosted route reads), not a hand-written list. A reasoning-core test resolves a typed
+    URL and requires that slot to be declared and used for reasoning. That keeps the registry's
+    rule that `usedFor` is derived rather than restated.
+  - Speech-to-text's custom endpoint reads the same slot, but no screen can choose it, so the
+    row says "Cleanup and summaries" only.
+- **KNEG-407, KB Whisper Small, Medium and Large.** Pinned from downloads at the revisions the
+  Hugging Face API gave, each agreeing with the stated LFS digest.
+  - **Judgement call:** "slower; best for imports and meetings" goes by size (500 MB or more),
+    not by id. The upstream Medium, Large and Turbo are bigger than KB Medium and Large, and a
+    list labelling only the KB ones would imply the others are not.
+- **KNEG-367:** the summary names its model, by the registry's name when it lists the id. Where
+  the transcript went is not shown, as the owner chose: the stored `provider` can't say it,
+  because a typed URL wins over it.
+- **KNEG-394:** Discard asks first. After a yes it asks Rust whether the meeting is still
+  running, because the question holds the page, and a meeting stopped from its own window
+  meanwhile would otherwise show "no meeting is being recorded" as a failure.
+- **KNEG-331:** Ready's mark is grey. Key caps keep the Kit's outlined key, not the filled one
+  the issue proposed. The owner declined switches, keeping the native checkbox for the reasons
+  `styles.css` gives.
+
+## 2026-10-07 — KNEG-414: a Whisper model change is refused while the server is in use
+
+KNEG-388 refused a dictation *start* during a model switch. This is the reverse: a switch, an
+engine update or a Stop while something is using `whisper-server`. Each of those stops the server,
+and nothing checked whether a request was in flight. **Read from code and pinned by tests; not
+reproduced in the running app. The wiring into the four users is not under test.**
+
+- **Who uses the server, and for how long.** Mapped before designing, and wider than the issue
+  said:
+  - a dictation's request, from just before its health check to the answer (the route is resolved
+    at Stop, so a recording holds nothing);
+  - a meeting on the `local` provider, for as long as its live windows go to the port captured at
+    Start;
+  - **every** meeting's whole-file pass, whatever the live provider, unless a Parakeet model is
+    selected;
+  - an import, from reading the port to the end of its transcription, ffmpeg conversion included.
+
+  The issue's claim about the Dictation page was wrong: its chip is held for the whole dictation
+  (`routeHeld` is non-null in every state but idle). It isn't held during a meeting or an import,
+  and Settings › Transcription holds nothing.
+- **Changes refuse; uses wait.** `ServerUsers` is one `tokio::sync::RwLock<()>`.
+  - **Uses** take the read side and **wait** while a change holds the write side. A dictation
+    stopped mid-switch therefore reads the new model's port. Before, it read the old model's
+    healthy port until `stop_inner` cleared it, and was killed mid-request.
+  - **Changes** take the write side with `try_write` and are refused while any use holds it.
+  - Nothing ever waits for the write side, so a use never queues behind a waiting writer, and a
+    use can wait on `operation` in a revive without deadlocking. The type's doc says never to add a
+    `write().await`.
+  - The precedent is `local_llm`, which refuses start, update and stop while a request runs.
+- **The refusals name the use.** "Not now: a dictation is being transcribed. Try again when it's
+  done." Then a meeting, an import, "already changing", and a fallback. Per-kind counts choose the
+  sentence. When `try_write` fails, a `try_read` probe comes first, so a dictation *waiting* behind
+  a running change doesn't turn "already changing" into "a dictation".
+- **Starting the model already running is not a change.** It stops nothing while the server
+  answers its health check, so it is allowed during a use, but holding a read, with the model
+  compared after the read is had. A server that fails the check is restarted, the old risk named
+  under "Not changed" below.
+  - A stress test of the design found the race this closes. A start of A read "A" as running while
+    a switch to B was under way, joined no lock, and then stopped B under the dictation waiting for
+    it.
+- **Where the meeting's use lives.** It is a field of `ProviderBuild`, moved into the pump's task
+  and dropped when the pump returns. In `Live` it would outlive a live transcription that ended on
+  its own (stalled, recording without a transcript). It would then refuse "Update the speech
+  engine" with a meeting that is no longer being transcribed, just when a dead server needs it.
+- **Side fix, same command.** A refresh restarted the server through `start_model_inner`,
+  bypassing `start`, so the state stayed at Loading and Settings kept saying so after an engine
+  update. Both now go through `record_start`.
+- **"Stop and use a provider instead" stops first.** It used to move dictation to a provider and
+  then stop the server. Once the stop could be refused, a refusal left the route moved beside a
+  "Not now" that said nothing had happened (found by the branch review). With the stop first, a
+  refusal changes nothing.
+
+Not changed: a revive inside a use can still restart the server, after a failed two-second health
+check. That is an old risk, not a new one.
+
+**Refusals are shown in view.** KNEG-343 put every Settings error under "That didn't work." with
+the error's own text under Details. That also buried `local_llm`'s existing "Try again after it
+finishes", whose whole content is what to do, and would have buried these.
+- Every refusal now starts "Not now: ", and `FailureLine` shows such a sentence as the visible line
+  (`src/lib/refusal.ts`). Tests on both sides pin the prefix.
+- Checked in headless Edge against dev fixtures, not the Tauri window:
+  - "Use for dictation" and "Update the speech engine" on Settings › Transcription show the
+    refusal in view;
+  - a raw error still reads "That didn't work." with its text under Details;
+  - the Dictation chip shows the refusal and isn't left at "Starting…".
+- Not exercised: the text-model refusals on Local text models, because the fixtures have no
+  installed text model to start.
+- Seen, not changed: Settings › Transcription shows every error at the top of the page, so a
+  refusal of a button far below it is above the fold.
+
+---
+
+## 2026-10-07 — KNEG-416 and KNEG-417: two leftovers from the KNEG-343 review, each hiding a defect
+
+- **KNEG-416, company accounts.** The leftover was a Rust reason naming "Enterprise connectors",
+  a section the page no longer has. Behind it, `dispatch_for` answered `NeedsConfig` for every
+  company account without reading the store, so the cleanup menu, which enables only `ready`,
+  never let a set-up Bedrock, Azure or Vertex account be chosen.
+  - **Judgement call:** a set-up account is now choosable for cleanup although none has made a
+    live call (KNEG-54). Summaries already allowed it, and the page says no request has been run
+    against a real account.
+  - "Set up" means what the account's own form reports: stored, readable and valid. Something in
+    the slot that no longer reads stays "isn't set up yet". This was tightened after the branch
+    review found "Can be used" beside "The saved settings can't be used".
+  - The local route is "This computer" there now, as on the Summaries menu and the "Currently"
+    line.
+- **KNEG-417, the tools' entry point.** Thirteen scripts compared `resolve(argv[1])` with
+  `import.meta.url`, which Node sets to the real path. Through a junction they did nothing and
+  exited 0, which a test reproduced on both pin tools.
+  - **Judgement call:** all thirteen were fixed rather than the one flagged, since for a CI gate a
+    vacuous pass is the same defect. They share `tools/ci/entry.mjs`.
+
+---
+
+## 2026-10-07 — KNEG-388: a model switch interrupted by a dictation undid itself, and push-to-talk's release could start a recording
+
+KNEG-388 was filed as "the hotkey can start a dictation while a route switch is in flight". Reading
+the code to fix it found that the damage is on **Stop**, not Start, and reaches further than
+dictation. **Read from code and pinned by tests; not reproduced in the running app.**
+
+- **A revive undid the switch.** Switching the local Whisper model from A to B stops A first, so
+  the port is empty while B loads. Anything needing the server in that window revives it: a
+  dictation stopped then (the route is resolved at Stop), a media import, a local meeting.
+  `ReviveRemembered` reads the remembered model, which is still A because `local_server_start`
+  stores B only once it is up. It waited on `operation` behind B, ignored B's result (the join
+  matched the same model only), then stopped B and started A: A running, B stored, the page saying
+  B. A recording started *before* the switch reaches it, so refusing starts alone could not fix it.
+- **The fix is a revive-only join** (`LocalTranscription::revive_model`): a revive that waited
+  behind a start which succeeded uses that server, whatever its model. `start_model`, the user's own
+  choice, is unchanged, so a switch to C queued behind B still starts C.
+  `a_revive_that_waited_behind_a_switch_keeps_the_model_switched_to` fails against the old join;
+  that was checked by putting the old join back.
+- **The refusal the issue asked for.** `RouteSwitch`, a count held for the whole of
+  `local_server_start`, which only a person choosing a Whisper model for dictation reaches. A start
+  meanwhile is refused with "Dictation didn't start: the transcription model is still changing. Try
+  again in a moment." It reaches the floating microphone and the Dictation page through the
+  existing failed outcome. Launch-time resume and revives do not hold it: refusing dictation while
+  the remembered model loads at startup would have been a regression. `local_server_refresh` held
+  it too until the branch review: a refresh brings back the model that was running, so a revive
+  behind it starts that same model, and the guard only refused cloud and Parakeet routes for the
+  length of a download. Remaining window, accepted:
+  the two IPC calls after `local_server_start` returns. The server is up by then, so a dictation
+  started there goes to the old route or the new one, and both work.
+- **Push-to-talk's release started recordings.** The release called `toggle` whatever its press had
+  done. A press that was refused, could not open the microphone, or finished a recording the
+  floating microphone had started left the session idle, so the release started one that nothing
+  would end. Now `press` says what it did (`Pressed::Started` or `Finished`), and the release
+  finishes only a recording its own press started (`release_finishes`). This existed before the
+  refusal did. The refusal would only have made it easier to reach.
+- **A start no longer reports `Cancelled`.** `toggle` answered a start with `Outcome::Cancelled`
+  because a start has no outcome, and the hotkey path emitted it. Settings › Shortcuts showed "Last
+  dictation result: Cancelled." for as long as the recording ran. The hotkey path now emits nothing
+  for a start; the state event already says it. The `dictation_toggle` command still answers
+  `Cancelled`, so its TypeScript type is unchanged.
+
+Not covered here, and filed as KNEG-414: a switch was not refused while a local dictation was being
+transcribed or a local meeting was running. Fixed the same day; see the entry above.
+
+---
+
+## 2026-10-07 — KNEG-410: the live `local` meeting view skips windows with no speech, and the invented text it was filed for does not happen
+
+KNEG-404 left the windowed `local` meeting provider sending every five-second window to
+`whisper-server`, silence included, on the belief that silent windows would come back as invented
+text, as 40 s of noise sent whole had.
+
+- **The belief was measured and is wrong for windows.** On 2026-10-07, with `ggml-base` and the
+  application's decoder thresholds, 59 silent five-second windows came back empty: 21 in the new
+  harness, 13 each from the pink- and white-noise meetings of KNEG-404, and 12 cut from the very
+  40 s of noise that, sent whole twice to the same server, came back as "4.0% de la baihaka." and
+  "[Answering]". Not tried: other models, or a real room.
+- **What the change buys is time.** Each source is silent for much of a meeting, and every silent
+  window cost a whisper request, about 1.3 s of `ggml-base`. On 102 s with 21 silent windows of
+  33, the live pass took 17.9 s instead of 44.3 s with the same twelve events. The finder took 51
+  ms median, 163 ms at worst, against a three-second hop. A slow model falls behind by the rate,
+  not the backlog, so a quiet stretch now pays its deficit down instead of dropping audio.
+- **Judgement calls, each with its reason in `crates/meeting-core/src/local.rs`:**
+  - The provider holds a `FindSpeech` of its own rather than using `WhisperServer::speech_first`.
+    That path detects the language with a request of its own when none is set, which would double
+    the requests for every window with speech.
+  - A window with speech goes whole, not cut to its speech; the event is placed by the window's
+    start either way.
+  - The edges: speech at a window's edge was found from 0.25 s of it, and 0.1 s was not. Nothing
+    is lost even then: the windows overlap by two seconds, so speech up to two seconds lies whole
+    inside some window, and longer speech has at least two seconds inside one.
+  - A failed search sends the window, as before, and is logged at warn once per run of failures,
+    not every three seconds.
+  - The search counts against the hop. A test pins that a finder slower than the meeting drops
+    audio and says so, as a slow model does.
+- **One claim in KNEG-410 was half true.** It said the saved note does not use the live windows.
+  It does when the whole-recording pass fails (`meeting/notes.rs`, `select_transcript`).
+- **Measured** with `crates/meeting-core/tests/live_windows.rs` (ignored; downloads about 160 MB),
+  and the KNEG-404 recordings through a scratch probe. Not checked: a real meeting in the running
+  app.
+
+## 2026-10-06 — KNEG-404: long recordings find their speech first, and the server's own VAD is not what does it
+
+Upstream's Silero rule was ported to `kw_audio_core::vad` and never called, so every import and
+every meeting's whole-recording pass went to `whisper-server` whole. Measured on 102 s of ten
+sentences under pink noise (`ggml-base`, `b4938`): rows started up to 7.0 s before their speech
+and ended up to 16.2 s after it, and 40 s of noise alone came back as invented text.
+
+- **Upstream's route was measured and refused.** Upstream passes the VAD flags to the server.
+  Its detector is accurate, but it joins the speech with 0.1 s of inserted silence and maps that
+  0.1 s across the whole original gap, so a boundary next to a gap lands anywhere in it: starts
+  up to 31 s early, ends up to 26 s late, on `b4938` and `b5130` alike. It also leaves the
+  mapping table behind for the next request that does not ask for VAD, and with VAD on, language
+  detection returned one language instead of three. An end correction was tried and abandoned:
+  when the start was on the wrong side of a gap it produced rows that did not contain their
+  speech at all. The numbers are in KNEG-404.
+- **What was built instead** is KBLab's easytranscriber and WhisperX design
+  (`kw_transcription_core::speech`): `whisper-vad-speech-segments`, which ships in the archive
+  the app already installs, lists the speech with the Silero model the app now bundles; the
+  speech is chunked; each chunk is its own request; and its rows are moved onto the recording's
+  clock by the chunk's start. There is no mapping step to get wrong.
+- **Judgement calls, each with its reason in the code:**
+  - Chunks split at any pause of 2 s or more, and hold at most 30 s. A prototype that merged
+    regardless of pauses let whisper stretch one row over a 12.6 s gap.
+  - The language is detected once, on the first 30 s of speech, and every chunk is sent with
+    it. Per-chunk detection on short chunks could flip between chunks, and whisper given the
+    wrong language translates. Detecting once is also what a whole-file request did.
+  - No speech found means no request at all: `Inference::Empty`, so silence can neither invent
+    text nor echo the vocabulary prompt.
+  - Anything that stops the search (no tool, no model, a WAV that is not 16 kHz mono 16-bit
+    PCM, a tool that fails) sends the recording whole, as before, with a warning in the log. A
+    worse transcript, never a lost one.
+  - The model is bundled (the owner's choice) and checked against its pin once at startup. A
+    model on a non-ASCII path is refused: the finder exited 127 with no output under `Åsa ö`.
+  - `ServerOptions` lost its `vad` field and `build_args` its VAD flags. A field that must
+    never be set is a trap, and `--vad` at start-up would apply to dictation too.
+- **Measured** with `crates/transcription-core/tests/speech_first.rs` against the real server,
+  tool and model, on 102 s of the fixture repeated under a noise floor: sent whole, 6 rows for 8
+  sentences, the first starting 20 s before its speech and one ending 15.5 s after it; speech
+  first, 8 rows, one per sentence, starts within 0.28 s and ends within 0.34 s of the speech;
+  noise alone `Empty`. Wall time 6.56 s against 4.65 s whole: each chunk is a full 30 s
+  decoder window, so the gain is in where rows sit, not in speed.
+- **Not done:** the windowed live `local` meeting provider was left sending every
+  five-second window, silent or not; it skips silent ones since KNEG-410 (2026-10-07), where the
+  invented text this entry expected from them was measured and did not happen. The Linux archive
+  was not checked for the finder; without it a recording is sent whole. Neither whisper.cpp bug is reported upstream; that is outward-facing and the owner's
+  call. A real meeting recording has not been through it yet.
+
+## 2026-09-26 (second) — KNEG-326: speaker labels never attached on a whisper engine, and the note's own sentence pointed the wrong way
 
 The owner asked why every meeting on the streaming model ended with "Speaker labels were asked
 for and not applied: the transcription pass returned no timings". It was not the streaming model.

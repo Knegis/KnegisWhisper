@@ -19,61 +19,33 @@ import { SummarySettingsPanel } from "../components/SummarySettingsPanel";
  *   quietly missing.
  * - **Say cleanup is on when it will do nothing.** A provider with no stored key
  *   resolves fine and then leaves the transcript alone, so the caveat says so.
+ *
+ * # In plain words (KNEG-343)
+ *
+ * Where text goes, what to do, and that no live call has been made to a
+ * company account stay in view; credential slots, field ids, Rust's reasons,
+ * the plaintext-HTTP rule and the documentation path go under Learn more or a
+ * row's Details (`cleanupRouteLine`, `reasoningDispatchLine` in
+ * `lib/cleanup.ts`). The enterprise connectors are "Company accounts", as on
+ * Settings › Providers.
  */
 
 import { useCallback, useState } from "react";
 
+import { FailureLine } from "../components/FailureLine";
+import { LearnMore } from "../components/LearnMore";
 import { Row } from "../components/Row";
-import { cleanupFields, effectiveCleanup } from "../lib/cleanup";
+import { cleanupFields, cleanupRouteLine, effectiveCleanup, reasoningDispatchLine, savedLine } from "../lib/cleanup";
 import {
   clearEnterpriseConfig,
   getReasoningStatus,
   setCleanup,
   setEnterpriseConfig,
-  type CleanupRoute,
   type EnterpriseConfig,
   type EnterpriseStatus,
-  type ReasoningDispatch,
   type ReasoningProviderSummary,
 } from "../lib/ipc";
 import { useRefresh } from "../lib/useRefresh";
-
-/** Why a provider can or cannot be used, said plainly. */
-function dispatchLabel(d: ReasoningDispatch): string {
-  switch (d.state) {
-    case "ready":
-      return "can be used";
-    case "needs-config":
-      return d.reason;
-    case "needs-sidecar":
-      return d.reason;
-    case "unresolvable":
-      return `cannot be routed: ${d.reason}`;
-  }
-}
-
-/** Where cleanup currently sends a transcript. */
-function routeLabel(r: CleanupRoute): { value: string; detail: string } {
-  switch (r.state) {
-    case "off":
-      return {
-        value: "Off",
-        detail: "dictations are inserted exactly as they were transcribed",
-      };
-    case "problem":
-      return { value: "On, and not usable", detail: r.reason };
-    case "ready":
-      return {
-        value: `${r.destination} · ${r.model}`,
-        detail:
-          r.caveat ??
-          (r.leavesDevice
-            ? "the transcript leaves this machine for cleanup"
-            : "the transcript stays on this machine"),
-      };
-  }
-}
-
 
 /**
  * The fields each connector needs, declared once.
@@ -145,6 +117,8 @@ function EnterpriseForm({
 }) {
   const [values, setValues] = useState<Record<string, string>>({});
   const fields = ENTERPRISE_FIELDS[status.provider] ?? [];
+  // A saved field by the label its box has, not the key Rust stores it under.
+  const label = (name: string) => fields.find((f) => f.key === name)?.label ?? name;
 
   const save = () => {
     // The tag Rust discriminates on. Built here rather than inferred, so an
@@ -157,13 +131,17 @@ function EnterpriseForm({
     <div className="row">
       <span className="row-label">{status.name}</span>
       <span className="row-value">
-        {status.configured ? "Configured" : "Not configured"}
+        {status.configured ? "Set up" : "Not set up"}
         {status.problem ? (
-          <em className="row-detail warn">{status.problem}</em>
+          <FailureLine
+            text="The saved settings can't be used. Enter them again."
+            detail={status.problem}
+          />
         ) : status.configured ? (
           <em className="row-detail">
+            Saved:{" "}
             {status.fields
-              .map((f) => `${f.name}${f.filled ? "" : " (empty)"}`)
+              .map((f) => `${label(f.name)}${f.filled ? "" : " (empty)"}`)
               .join(", ")}
           </em>
         ) : null}
@@ -216,7 +194,7 @@ export function SettingsIntelligence({
   if (!data) {
     return (
       <div className="view">
-        {error ? <p className="error">{error}</p> : <p className="muted">Loading…</p>}
+        {error ? <FailureLine text="This page couldn't load." detail={error} /> : <p className="muted">Loading…</p>}
       </div>
     );
   }
@@ -229,6 +207,10 @@ export function SettingsIntelligence({
   const { provider, url, selfHosted, chosen, model } = cleanupFields(settings, providers, drafts);
 
   const usable = providers.filter((p) => p.dispatch.state === "ready");
+  // The model as the model menu names it, not its id.
+  const modelName = (id: string) =>
+    providers.flatMap((p) => p.models).find((m) => m.id === id)?.name ?? id;
+  const current = cleanupRouteLine(route, modelName);
 
   const apply = (enabled: boolean) => {
     setSaid(null);
@@ -236,8 +218,7 @@ export function SettingsIntelligence({
       // The same computation Dictation's Tidy up toggle sends (`lib/cleanup.ts`);
       // the write stays here, where the settings audit looks for it.
       const next = await setCleanup(effectiveCleanup(settings, providers, enabled, drafts));
-      const label = routeLabel(next);
-      setSaid(`${label.value} — ${label.detail}`);
+      setSaid(savedLine(next, modelName));
       // Drafts drop so the controls go back to mirroring what is stored.
       setDraftProvider(null);
       setDraftModel(null);
@@ -245,50 +226,74 @@ export function SettingsIntelligence({
     });
   };
 
-  const providerRow = (p: ReasoningProviderSummary) => (
-    <div key={p.id} className="row">
-      <span className="row-label">{p.name}</span>
-      <span className="row-value">
-        {p.enterprise
-          ? "Enterprise connector"
-          : p.configured
-            ? "Key stored"
-            : "No key stored"}
-        <em className="row-detail">
-          {dispatchLabel(p.dispatch)} · {p.models.length} model
-          {p.models.length === 1 ? "" : "s"}
-          {p.credentialSlot ? (
-            <>
-              {" "}
-              · slot <code>{p.credentialSlot}</code>
-            </>
-          ) : (
-            " · multi-field credentials, so there is no single slot"
-          )}
-        </em>
-      </span>
-    </div>
-  );
+  const providerRow = (p: ReasoningProviderSummary) => {
+    const dispatch = reasoningDispatchLine(p.dispatch);
+    const local = p.id === "local";
+    return (
+      <div key={p.id} className="row">
+        <span className="row-label">{p.name}</span>
+        <span className="row-value">
+          {/* The local route has no key: `configured` is whether a model is
+              running. It read "Key saved" / "No key saved" (branch review). */}
+          {local
+            ? p.configured
+              ? "A model is running"
+              : "No model is running"
+            : p.enterprise
+              ? "Company account"
+              : p.configured
+                ? "Key saved"
+                : "No key saved"}
+          <em className="row-detail">
+            {dispatch.text} · {p.models.length} model
+            {p.models.length === 1 ? "" : "s"}
+          </em>
+          <LearnMore summary="Details">
+            {dispatch.more ? <p>{dispatch.more}</p> : null}
+            <p>
+              {local ? (
+                "It runs on this computer and needs no key. Start a model under Local text models."
+              ) : p.credentialSlot ? (
+                <>
+                  Its key is in the credential slot <code>{p.credentialSlot}</code>.
+                </>
+              ) : (
+                "It needs several settings rather than one key, so it is set up under Company accounts."
+              )}
+            </p>
+          </LearnMore>
+        </span>
+      </div>
+    );
+  };
 
   return (
     <div className="view">
-      {error ? <p className="error">{error}</p> : null}
+      {error ? <FailureLine text="That didn't work." detail={error} /> : null}
 
       <SummarySettingsPanel />
       <section data-surface="settings.intelligence">
         <h2>Dictation cleanup</h2>
         <p className="muted">
-          A reasoning model can tidy a transcript — punctuation, filler words,
-          proper nouns — before it is typed at the cursor. Off by default,
-          because it sends what you said to whichever provider you choose, and
-          because a raw transcript is already a correct answer.
+          An AI model can tidy a dictation — punctuation, filler words, names —
+          before it is typed. It is off by default: with a cloud provider, what
+          you said leaves this computer.
         </p>
+        <LearnMore>
+          <p>
+            A raw transcript is already a correct answer, which is the other
+            reason cleanup is off until you turn it on. Choose a model as well as
+            a provider: the app refuses a setting with no model rather than
+            guessing one, because providers differ in what their models accept.
+          </p>
+        </LearnMore>
 
-        <Row
-          label="Currently"
-          value={routeLabel(route).value}
-          detail={routeLabel(route).detail}
-        />
+        <Row label="Currently" value={current.value} detail={current.detail} />
+        {current.more ? (
+          <LearnMore summary="Details">
+            <p>{current.more}</p>
+          </LearnMore>
+        ) : null}
 
         <div className="row">
           <span className="row-label">Provider</span>
@@ -327,7 +332,7 @@ export function SettingsIntelligence({
               // required all the same: `params::shape_for` needs the real id.
               <input
                 aria-label="cleanup model"
-                placeholder="the model id your server serves"
+                placeholder="the model name your server uses"
                 value={model}
                 onChange={(e) => setDraftModel(e.target.value)}
               />
@@ -342,7 +347,7 @@ export function SettingsIntelligence({
                   chosen.models.map((m) => (
                     <option key={m.id} value={m.id}>
                       {m.name}
-                      {m.supportsThinking ? " · thinking" : ""}
+                      {m.supportsThinking ? " (reasons before answering)" : ""}
                     </option>
                   ))
                 ) : (
@@ -367,12 +372,17 @@ export function SettingsIntelligence({
         </div>
         <p className="caveat">
           {selfHosted
-            ? "This URL is in use, so the provider above is ignored — "
-            : "A URL here wins over the provider above — "}
-          it is a route you declared.
-          Plaintext HTTP is refused to anything but a loopback or private
-          address, so a key cannot be sent over the open internet in the clear.
+            ? "This address is in use, so the provider above is ignored."
+            : "An address here is used instead of the provider above."}
         </p>
+        <LearnMore summary="About your own server">
+          <p>
+            Plain <code>http://</code> is only allowed to this computer or your
+            own network, so a key is never sent over the internet unencrypted.
+            Requests to your server go without a key unless you save one under
+            Providers › Your own server. Summaries use the same key.
+          </p>
+        </LearnMore>
 
         <span className="controls">
           {/* Never disabled: a control that silently does nothing is the defect. */}
@@ -383,11 +393,14 @@ export function SettingsIntelligence({
             Turn it off
           </button>
         </span>
-        {said ? <p className="muted">{said}</p> : null}
+        {said ? (
+          <p className="muted" role="status">
+            {said}
+          </p>
+        ) : null}
         {usable.length === 0 ? (
           <p className="caveat">
-            No provider can be used yet. Store a key on the Providers screen
-            first.
+            No provider can be used yet. Add a key on the Providers page first.
           </p>
         ) : null}
         <button type="button" onClick={onGoToProviders}>
@@ -396,21 +409,32 @@ export function SettingsIntelligence({
       </section>
 
       <section data-surface="settings.intelligence.enterprise">
-        <h2>Enterprise connectors</h2>
+        <h2>Company accounts</h2>
         <p className="muted">
-          Bedrock, Azure OpenAI and Vertex AI use organisation credentials rather
-          than a single API key, so they are configured here rather than on the
-          Providers screen. The whole configuration goes into one entry in this
-          machine's credential store — nothing enterprise-shaped is written to
-          the database.
+          AWS Bedrock, Azure OpenAI and Vertex AI use your organisation's
+          settings rather than one key, so they are set up here. They are saved
+          on this computer, in its secure credential storage.
         </p>
+        {/*
+          About this project's testing, not your use: once one is set up and
+          chosen, transcripts are sent to it. The first wording read as a claim
+          about the app ("no request has been sent") -- caught in review.
+        */}
         <p className="caveat">
-          The request signing and body shapes are written and tested against
-          published vectors and recorded fixtures. <strong>No live call has been
-          made to any of the three</strong>, because that needs AWS, Azure or GCP
-          organisation credentials this project does not have. See
-          <code>docs/PLATFORM_SUPPORT.md</code>.
+          <strong>Not yet tried against a real account.</strong> The requests
+          are built and tested, but the people who make this app have not been
+          able to run one against any of the three.
         </p>
+        <LearnMore>
+          <p>
+            Each configuration is one entry in this computer's credential store;
+            nothing of it is written to the app's database. The request signing
+            and body shapes are written and tested against published examples and
+            recorded responses. A live call needs AWS, Azure or GCP organisation
+            credentials this project does not have. See{" "}
+            <code>docs/PLATFORM_SUPPORT.md</code>.
+          </p>
+        </LearnMore>
         {enterprise.map((e) => (
           <EnterpriseForm
             key={e.provider}
@@ -428,9 +452,8 @@ export function SettingsIntelligence({
       <section>
         <h2>All providers</h2>
         <p className="muted">
-          Every reasoning provider the registry declares, including the ones this
-          build cannot send to. Listing them with the reason beats leaving them
-          out and saying nothing.
+          Every provider for cleanup and summaries, including the ones this
+          version can't use yet, with the reason.
         </p>
         {providers.map(providerRow)}
       </section>

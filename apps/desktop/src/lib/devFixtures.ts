@@ -304,7 +304,7 @@ const PROVIDERS: ProviderSummary[] = [
 ];
 
 /*
- * Twelve of the registry's twenty slots, in its order, with its slot ids,
+ * Thirteen of the registry's twenty-one slots, in its order, with its slot ids,
  * names, kinds, `usedFor` and `feature` (`config/provider-registry.json`,
  * `credentials`). The ids used to be `provider:openai` and the like, which no
  * registry slot is: `PROVIDERS[].credentialSlot` above and the probe's
@@ -331,6 +331,7 @@ const CREDENTIAL_SLOTS: CredentialSlotStatus[] = [
   { slot: "vertex", name: "GCP Vertex AI", kind: "enterprise", usedFor: [], feature: "vertex", stored: true },
   { slot: "assemblyai", name: "AssemblyAI", kind: "provider", usedFor: [], feature: null, stored: false },
   { slot: "deepgram", name: "Deepgram", kind: "provider", usedFor: [], feature: null, stored: true },
+  { slot: "custom", name: "Your own server", kind: "custom-endpoint", usedFor: ["reasoning"], feature: null, stored: false },
 ];
 
 /*
@@ -448,13 +449,15 @@ const REASONING: ReasoningStatus = {
     },
     {
       id: "local",
-      name: "Local model",
+      name: "This computer",
       credentialSlot: null,
-      configured: true,
+      // As Rust reports it: `configured` is whether a model is running, the
+      // same fact `needs-sidecar` says is not true.
+      configured: false,
       enterprise: false,
       dispatch: {
         state: "needs-sidecar",
-        reason: "the llama.cpp sidecar is not installed",
+        reason: "no local model is running. Start one under Settings > Local text models.",
       },
       models: [
         {
@@ -535,6 +538,9 @@ const MEETING_PROVIDERS: MeetingProviderSummary[] = [
     reconnect: true,
     batchFallback: true,
     availability: { state: "available" },
+    // As `credential_slot(client(id))` gives it in Rust; the ids here are
+    // fixture ids, so the slot is written out rather than derived (KNEG-373).
+    credentialSlot: "deepgram",
     summary:
       "Streams audio to Deepgram. Speaker labels and live partials, no session limit.",
   },
@@ -552,6 +558,7 @@ const MEETING_PROVIDERS: MeetingProviderSummary[] = [
     reconnect: true,
     batchFallback: true,
     availability: { state: "available" },
+    credentialSlot: "openai",
     summary:
       "Streams audio to OpenAI. No speaker labels, and the session is capped at 30 minutes.",
   },
@@ -572,6 +579,7 @@ const MEETING_PROVIDERS: MeetingProviderSummary[] = [
     // client landed in chunk E. Now the fixture for the state added after the
     // 2026-08-27 bench run: a client exists and no key is stored.
     availability: { state: "needs-credential", slot: "assemblyai" },
+    credentialSlot: "assemblyai",
     summary: "Streams audio to AssemblyAI. Speaker labels and live partials.",
   },
   {
@@ -595,6 +603,7 @@ const MEETING_PROVIDERS: MeetingProviderSummary[] = [
       state: "no-client",
       reason: "No streaming client for this provider has been written yet.",
     },
+    credentialSlot: null,
     summary: "Audio never leaves this machine. No partials, no speaker labels.",
   },
 ];
@@ -702,7 +711,7 @@ function summaryOf(id: number): SummaryState {
   const legacy = note.enhancedContent !== null;
   return {
     noteId: id, content: note.enhancedContent, revision: 0, edited: legacy, outdated: false, legacy,
-    status: null, completed: 0, total: 0, error: null, language: null, generatedAt: null, references: [],
+    status: null, completed: 0, total: 0, error: null, language: null, generatedAt: null, model: null, references: [],
   };
 }
 
@@ -775,7 +784,7 @@ let localLanguages: string[] = ["sv"];
 /* ------------------------------------------------------------ local models */
 
 const LOCAL_MODELS: LocalStatus = {
-  runtimeMessage: "Local model base is ready on port 8178.",
+  runtimeMessage: "Local model whisper-small-q5 is ready on port 8178.",
   availability: { state: "installable" },
   serverInstalled: true,
   // `stale` rather than `current`, so the branch that only appears when the
@@ -813,6 +822,16 @@ const LOCAL_MODELS: LocalStatus = {
       installed: true,
       verifiedBy: "size",
     },
+    // The registry's, so the list shows a KB model with its "slower" label
+    // (KNEG-407).
+    {
+      id: "kb-whisper-large",
+      name: "KB Whisper Large (Swedish, Q5)",
+      sizeMb: 1081,
+      recommended: false,
+      installed: false,
+      verifiedBy: "digest",
+    },
     {
       id: "whisper-base-en",
       name: "Whisper Base (English)",
@@ -831,6 +850,9 @@ const LOCAL_MODELS: LocalStatus = {
   runningModel: "whisper-small-q5",
   installDir: "C:\\ProgramData\\KnegisWhisper\\whisper-server",
   installDirFellBack: true,
+  // Moved with `runtimeMessage` by `local_server_start` and `_stop`, as Rust
+  // derives the one from the other.
+  runtime: { state: "ready", model: "whisper-small-q5", port: 8178 },
 };
 
 const SHERPA: SherpaStatus = {
@@ -1265,7 +1287,12 @@ let notes: Note[] = [
     noteType: "note",
     recordingDetails: null, enhancedContent: null,
     folderId: null,
-    transcript: null,
+    // A transcript of its own, so `tools/visual-check/shell-rail.mjs` check 10 has a second note
+    // with a transcript column: one with no transcript has no column (KNEG-377). 102 and 103 are
+    // the notes without.
+    transcript: JSON.stringify([
+      { speaker: "Ravi", text: "This is the note with the long title, read aloud." },
+    ]),
     participants: null,
     audioDurationSeconds: null,
     createdAt: "2026-08-20T19:45:00Z",
@@ -1528,22 +1555,26 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
   notes_search: (a) => {
     const query = (arg<string>(a, "query") ?? "").trim().toLowerCase();
     if (query === "") return [] satisfies SearchHit[];
-    return notes
-      .filter(
-        (n) =>
-          n.title.toLowerCase().includes(query) ||
-          n.content.toLowerCase().includes(query),
-      )
-      .map((n): SearchHit => {
-        const at = n.content.toLowerCase().indexOf(query);
-        if (at === -1) {
-          return { id: n.id, title: n.title, snippet: n.content.slice(0, 90) };
-        }
-        const before = n.content.slice(Math.max(0, at - 35), at);
-        const hit = n.content.slice(at, at + query.length);
-        const after = n.content.slice(at + query.length, at + query.length + 35);
-        return { id: n.id, title: n.title, snippet: `${before}[${hit}]${after}` };
-      });
+    const marked = (text: string, at: number) =>
+      `${text.slice(Math.max(0, at - 35), at)}[${text.slice(at, at + query.length)}]${text.slice(at + query.length, at + query.length + 35)}`;
+    // As Rust answers it: the title or the notes first, with no row; otherwise
+    // the transcript row the words are in, with its time and its own snippet
+    // (KNEG-406). A plain substring here, where Rust asks FTS5 for every word.
+    return notes.flatMap((n): SearchHit[] => {
+      const at = n.content.toLowerCase().indexOf(query);
+      if (at !== -1) return [{ id: n.id, title: n.title, snippet: marked(n.content, at), transcriptRow: null }];
+      if (n.title.toLowerCase().includes(query)) {
+        return [{ id: n.id, title: n.title, snippet: n.content.slice(0, 90), transcriptRow: null }];
+      }
+      const row = (noteTranscriptRows.get(n.id) ?? []).find((r) => r.text.toLowerCase().includes(query));
+      if (!row) return [];
+      return [{
+        id: n.id,
+        title: n.title,
+        snippet: marked(row.text, row.text.toLowerCase().indexOf(query)),
+        transcriptRow: { index: row.index, startSeconds: row.startSeconds },
+      }];
+    });
   },
   notes_get: (a) => notes.find((n) => n.id === arg<number>(a, "id")) ?? null,
   notes_create: (a) => {
@@ -1837,10 +1868,12 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
     LOCAL_MODELS.port = null;
     LOCAL_MODELS.runningModel = null;
     LOCAL_MODELS.runtimeMessage = `Checking or starting local model ${model.id}...`;
+    LOCAL_MODELS.runtime = { state: "checking", model: model.id };
     await new Promise((resolve) => setTimeout(resolve, 1500));
     LOCAL_MODELS.port = 8178;
     LOCAL_MODELS.runningModel = model.id;
     LOCAL_MODELS.runtimeMessage = `Local model ${model.id} is ready on port 8178.`;
+    LOCAL_MODELS.runtime = { state: "ready", model: model.id, port: 8178 };
     SHERPA.selected = null;
     return 8178;
   },
@@ -1848,6 +1881,7 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
     LOCAL_MODELS.port = null;
     LOCAL_MODELS.runningModel = null;
     LOCAL_MODELS.runtimeMessage = "Local model server is stopped.";
+    LOCAL_MODELS.runtime = { state: "stopped" };
     return null;
   },
   local_server_refresh: () => ({
@@ -1991,6 +2025,8 @@ A fixture summary of "${note.title}", written without a model.
 - None.`,
       revision: current.revision + 1, edited: false, outdated: false, legacy: false,
       status: "succeeded", error: null, language: "en", generatedAt: nowIso(),
+      // What Rust stores at success: the id the settings named (KNEG-367).
+      model: summarySettings.model,
     };
     summaries.set(id, next);
     return next;

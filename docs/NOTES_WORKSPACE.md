@@ -8,6 +8,26 @@ validation remains open.
 
 ## Using Notes
 
+### Sharing a folder
+
+Use a folder's **…** actions button or context menu and choose **Share folder…**.
+Select the notes and whether to include personal notes, summaries, transcripts and
+recordings. Everything starts checked. Save the `.knegis` file and send it through
+your usual file-transfer channel. This is a snapshot; later edits are not shared
+automatically. Packages have no password protection.
+
+The recipient chooses **Import shared folder…**, checks the preview and folder name,
+then imports a separate, editable local copy. Existing notes stay intact. A duplicate
+folder name gets a numbered suffix; importing again creates another copy. Included
+recordings play against their transcripts, without retranscription or summary calls.
+When transcripts are excluded, summary source links are removed.
+
+Cancel stops unfinished work; **Keep working** allows navigation while processing.
+Return to Notes to see progress. See [folder sharing](FOLDER_SHARING_DESIGN.md) for
+format limits, recovery behavior and validation commands.
+
+### Editing notes
+
 The library — folders, notes and search — is the list panel on the left, beside the
 open note. Coming back to Notes from another page reopens the note that was open, until the
 app closes; the first visit, or one after that note was deleted, opens the most recently
@@ -18,8 +38,9 @@ editable AI summary below. An empty personal note offers **Start from transcript
 this copies literal speech and available speaker labels without changing the source.
 
 Transcript shows the original rows and playback actions. In windows 1280px or wider
-the transcript is a column to the right of the note instead, and the Transcript tab
-is hidden; crossing that width keeps playback and the reading position. **Hide
+a note's transcript is a column to the right of the note instead, and the Transcript tab
+is hidden; crossing that width keeps playback and the reading position. A note with no
+transcript has no column, and keeps the one-column layout at any width. **Hide
 transcript**, beside Export and More above the editor, puts the note back in the one-column
 layout with the Transcript tab, and **Show transcript** brings the column back; both keep
 playback and the reading position the same way, and the choice holds for every note until

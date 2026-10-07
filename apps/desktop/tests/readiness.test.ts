@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { selectProvider } from "../src/lib/meetingProvider.js";
-import { dictationReadiness, meetingReadiness } from "../src/lib/readiness.js";
+import { dictationReadiness, localProviderProblem, meetingReadiness } from "../src/lib/readiness.js";
 import type {
   HotkeyReport,
   MeetingProviderSummary,
@@ -168,6 +168,7 @@ const provider = (over: Partial<MeetingProviderSummary> = {}): MeetingProviderSu
   reconnect: false,
   batchFallback: false,
   availability: { state: "available" },
+  credentialSlot: null,
   summary: "runs on this machine",
   ...over,
 });
@@ -180,6 +181,7 @@ test("no usable provider is needs-setup, naming both ways out in the visible pro
     selected: null,
     savedUnusable: null,
     languageWarning: null,
+    localProblem: null,
     systemAudio: available,
   });
   assert.equal(r.state, "needs-setup");
@@ -227,6 +229,7 @@ test("a saved provider that can't be used is needs-setup, even with another usab
     selected,
     savedUnusable: { name: "Local model", reason: "The local model server isn't running." },
     languageWarning: null,
+    localProblem: null,
     systemAudio: available,
   });
   assert.equal(r.state, "needs-setup");
@@ -236,12 +239,31 @@ test("a saved provider that can't be used is needs-setup, even with another usab
   assert.deepEqual(r.fix, { view: "provider-menu", label: "Choose a provider" });
 });
 
+test("a saved provider this version doesn't offer is not named by its raw id", () => {
+  // KNEG-354, item 3: "local-streaming, the provider you chose, …". The id
+  // goes to the detail, behind Learn more.
+  const { usable, selected } = localChosenCloudFallback();
+  const r = meetingReadiness({
+    usable,
+    selected,
+    savedUnusable: { name: null, reason: "It was saved as “local-streaming”, which this version of the app doesn't offer." },
+    languageWarning: null,
+    localProblem: null,
+    systemAudio: available,
+  });
+  assert.equal(r.state, "needs-setup");
+  if (r.state !== "needs-setup") return;
+  assert.equal(r.problem, "The provider you chose can't be used right now.");
+  assert.match(r.detail ?? "", /local-streaming/);
+});
+
 test("no usable provider outranks a saved one that can't be used, and says which one it was", () => {
   const r = meetingReadiness({
     usable: [],
     selected: null,
     savedUnusable: { name: "Local model", reason: "The local model server isn't running." },
     languageWarning: null,
+    localProblem: null,
     systemAudio: available,
   });
   assert.equal(r.state, "needs-setup");
@@ -263,6 +285,7 @@ test("a saved provider that can't be used outranks a missing language", () => {
     selected,
     savedUnusable: { name: "Local model", reason: "r" },
     languageWarning: "This provider cannot detect the language on its own.",
+    localProblem: null,
     systemAudio: available,
   });
   assert.equal(r.state, "needs-setup");
@@ -276,6 +299,7 @@ test("nothing selected among usable providers is also needs-setup", () => {
     selected: null,
     savedUnusable: null,
     languageWarning: null,
+    localProblem: null,
     systemAudio: available,
   });
   assert.equal(r.state, "needs-setup");
@@ -287,6 +311,7 @@ test("a language warning is needs-setup, fixed by choosing a language, with the 
     selected: "local",
     savedUnusable: null,
     languageWarning: "This provider cannot detect the language on its own.",
+    localProblem: null,
     systemAudio: available,
   });
   assert.equal(r.state, "needs-setup");
@@ -302,6 +327,7 @@ test("system audio not being available is ready, with a caution", () => {
     selected: "local",
     savedUnusable: null,
     languageWarning: null,
+    localProblem: null,
     systemAudio: { state: "unsupported", reason: "no such mechanism on this platform" },
   });
   assert.equal(r.state, "ready");
@@ -316,7 +342,94 @@ test("everything fine is ready with no caution", () => {
     selected: "local",
     savedUnusable: null,
     languageWarning: null,
+    localProblem: null,
     systemAudio: available,
   });
   assert.deepEqual(r, { state: "ready", caution: null });
+});
+
+/* ------------------------------- a local provider that can't start (KNEG-387) */
+
+const whisper = (over: { port?: number | null; serverInstalled?: boolean; installed?: boolean[] } = {}) => ({
+  port: over.port ?? null,
+  serverInstalled: over.serverInstalled ?? true,
+  models: (over.installed ?? [false, true]).map((installed) => ({ installed })),
+});
+
+const sherpa = (over: { cliInstalled?: boolean; selectedStream?: string | null; installed?: boolean } = {}) => ({
+  cliInstalled: over.cliInstalled ?? true,
+  selectedStream: over.selectedStream === undefined ? "nemotron" : over.selectedStream,
+  models: [
+    { id: "parakeet", installed: true },
+    { id: "nemotron", installed: over.installed ?? true },
+  ],
+});
+
+test("the local provider can start when its server runs, or when a model is installed for Start to load", () => {
+  assert.equal(localProviderProblem("local", whisper({ port: 8178, installed: [false] }), null), null);
+  assert.equal(localProviderProblem("local", whisper(), null), null);
+});
+
+test("the local provider with no model installed, or no engine, says so before Start", () => {
+  for (const status of [whisper({ installed: [false, false] }), whisper({ serverInstalled: false })]) {
+    assert.deepEqual(localProviderProblem("local", status, null), {
+      problem: "Local transcription needs a model installed on this computer first.",
+      detail: "Install one under Settings > Transcription > Local. Start then loads it.",
+    });
+  }
+});
+
+test("local streaming needs a streaming model chosen, downloaded, and its runtime installed", () => {
+  assert.equal(localProviderProblem("local-streaming", null, sherpa()), null);
+  assert.deepEqual(localProviderProblem("local-streaming", null, sherpa({ selectedStream: null })), {
+    problem: "Choose a streaming model for live meetings first.",
+    detail: "It runs on this computer and is chosen under Settings > Transcription > Local.",
+  });
+  for (const status of [sherpa({ installed: false }), sherpa({ cliInstalled: false })]) {
+    assert.deepEqual(localProviderProblem("local-streaming", null, status), {
+      problem: "The streaming model for live meetings isn't downloaded yet.",
+      detail: "Download it under Settings > Transcription > Local.",
+    });
+  }
+});
+
+test("what can't be known yet, and cloud providers, never hold Start", () => {
+  // Before the statuses arrive, Start's own error is still there to say what went wrong.
+  assert.equal(localProviderProblem("local", null, null), null);
+  assert.equal(localProviderProblem("local-streaming", null, null), null);
+  assert.equal(
+    localProviderProblem("meeting:deepgram", whisper({ installed: [false] }), sherpa({ selectedStream: null })),
+    null,
+  );
+  assert.equal(localProviderProblem(null, whisper({ installed: [false] }), null), null);
+});
+
+test("a local provider that can't start is needs-setup, fixed in Transcription, after a saved choice and before the language", () => {
+  const localProblem = {
+    problem: "Local transcription needs a model installed on this computer first.",
+    detail: "Install one.",
+  };
+  const r = meetingReadiness({
+    usable: [provider()],
+    selected: "local",
+    savedUnusable: null,
+    languageWarning: "This provider cannot detect the language on its own.",
+    localProblem,
+    systemAudio: available,
+  });
+  assert.deepEqual(r, {
+    state: "needs-setup",
+    problem: localProblem.problem,
+    detail: localProblem.detail,
+    fix: { view: "transcription", label: "Set up local transcription" },
+  });
+  const saved = meetingReadiness({
+    usable: [provider()],
+    selected: "local",
+    savedUnusable: { name: "Deepgram", reason: "Needs a key." },
+    languageWarning: null,
+    localProblem,
+    systemAudio: available,
+  });
+  assert.equal(saved.state === "needs-setup" && saved.fix.view, "provider-menu");
 });

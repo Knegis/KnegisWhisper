@@ -19,6 +19,25 @@ import { parseStoredTime } from "./dayGroups.js";
  * not worth failing a header over -- and a name that is blank is dropped
  * rather than shown as an empty entry.
  */
+/**
+ * Whether a note's stored transcript (`Note.transcript`, a JSON array of
+ * segments) has a row.
+ *
+ * For the wide layout's transcript column, which a note without one used to
+ * get anyway, saying "This note has no transcript." (KNEG-377). Read from the
+ * note rather than from the rows `note_transcript_rows` loads, so the layout
+ * is right on the first frame instead of changing when they arrive.
+ */
+export function hasStoredTranscript(json: string | null): boolean {
+  if (json === null || json.trim() === "") return false;
+  try {
+    const parsed: unknown = JSON.parse(json);
+    return Array.isArray(parsed) && parsed.length > 0;
+  } catch {
+    return false;
+  }
+}
+
 export function parseParticipants(json: string | null): string[] {
   if (json === null) return [];
   let parsed: unknown;

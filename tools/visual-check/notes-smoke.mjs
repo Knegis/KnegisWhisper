@@ -71,8 +71,10 @@ try {
   await tab('notes');
   assert.equal(await cdp.evaluate(`document.querySelector('audio').paused`), false);
   assert.equal(await cdp.evaluate(`document.querySelector('.note-mini-player').hidden`), false);
-  await pause(500);
-  assert.ok(await cdp.evaluate(`document.querySelector('audio').currentTime > 0`));
+  // Waited for rather than read after a fixed 500 ms: playback of a freshly written WAV was
+  // measured starting 110-323 ms after Play, and the first cold run failed (KNEG-377). Eight
+  // seconds before `waitFor` gives up.
+  await waitFor(`document.querySelector('audio').currentTime > 0`);
   await click('.recording-player > button');
   results.push('one native audio instance plays across tabs with mini-player');
   db.exec(`CREATE TRIGGER notes_smoke_fail BEFORE UPDATE ON notes BEGIN SELECT RAISE(FAIL, 'Synthetic save failure'); END`);

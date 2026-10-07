@@ -20,7 +20,7 @@ Already React 19 / TypeScript, and platform-independent.
 | Hotkey list parsing | `hotkeyList.js` | Comma-separated accelerators with a comma-key escape rule. |
 | Smart spacing | `smartSpacing.js` | |
 | Note search query builder | `noteSearch.js` | |
-| Whisper VAD config | `whisperVadConfig.js` (41) + `constants/whisperVad.json` | |
+| Whisper VAD config | `whisperVadConfig.js` (41) + `constants/whisperVad.json` | Ported as `kw_audio_core::vad`, and unused until KNEG-404 (2026-10-06). Now applied by finding the speech first with whisper.cpp's `whisper-vad-speech-segments` and transcribing it in chunks (`kw_transcription_core::speech`), **not** by upstream's route of passing the flags to the server: the server's own VAD was measured putting row boundaries up to 30 s from their speech. The live `local` meeting view uses the same finder to skip windows with no speech in them (KNEG-410). |
 | Tests for all of the above | part of `test/**` (303 files, 51.2 kLOC) | |
 
 ### Why `transcriptionRoute.ts` is the model boundary

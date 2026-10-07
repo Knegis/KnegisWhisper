@@ -60,9 +60,12 @@
 //! path.
 
 use std::path::Path;
+use std::sync::Arc;
 
 use kw_network_policy::NetworkPolicy;
 use serde::Deserialize;
+
+use crate::speech::{self, FindSpeech};
 
 /// Decoder thresholds sent with every `/inference` request.
 ///
@@ -94,19 +97,13 @@ pub const INFERENCE_PATH: &str = "/inference";
 /// listening and speaking HTTP, which is the question being asked.
 pub const HEALTH_PATH: &str = "/";
 
-/// Voice-activity settings, when the caller wants the server to do the gating.
-#[derive(Debug, Clone, PartialEq)]
-pub struct VadSettings {
-    pub model_path: String,
-    pub threshold: f32,
-    pub min_speech_ms: u32,
-    pub min_silence_ms: u32,
-    pub max_speech_seconds: f32,
-    pub speech_pad_ms: u32,
-    pub samples_overlap: f32,
-}
-
 /// How to start `whisper-server`.
+///
+/// There is no VAD option. The server's own VAD (`--vad`, `--vad-model`) was
+/// measured on 2026-10-06 putting row boundaries up to 30 s from their speech,
+/// and started with `--vad` it would apply to every request, dictation's
+/// included. Long recordings skip silence by finding the speech first
+/// instead; see [`crate::speech`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct ServerOptions {
     /// The GGML model file.
@@ -121,7 +118,6 @@ pub struct ServerOptions {
     pub threads: Option<u32>,
     /// Index of the GPU device to pin to, where one was chosen.
     pub gpu_device: Option<u32>,
-    pub vad: Option<VadSettings>,
 }
 
 /// The command-line arguments for a `whisper-server` matching `options`.
@@ -168,24 +164,6 @@ pub fn build_args(options: &ServerOptions) -> Vec<String> {
     // length removes the wrap and keeps the timings.
     args.push("--max-len".to_owned());
     args.push(MAX_SEGMENT_CHARS.to_string());
-
-    if let Some(vad) = &options.vad {
-        args.push("--vad".to_owned());
-        args.push("--vad-model".to_owned());
-        args.push(vad.model_path.clone());
-        args.push("--vad-threshold".to_owned());
-        args.push(vad.threshold.to_string());
-        args.push("--vad-min-speech-duration-ms".to_owned());
-        args.push(vad.min_speech_ms.to_string());
-        args.push("--vad-min-silence-duration-ms".to_owned());
-        args.push(vad.min_silence_ms.to_string());
-        args.push("--vad-max-speech-duration-s".to_owned());
-        args.push(vad.max_speech_seconds.to_string());
-        args.push("--vad-speech-pad-ms".to_owned());
-        args.push(vad.speech_pad_ms.to_string());
-        args.push("--vad-samples-overlap".to_owned());
-        args.push(vad.samples_overlap.to_string());
-    }
 
     args
 }
@@ -395,6 +373,8 @@ pub struct WhisperServer {
     model: Option<String>,
     /// Whether to ask for per-utterance timings. See [`Self::timed`].
     timed: bool,
+    /// Where to look for the speech first. See [`Self::speech_first`].
+    speech: Option<Arc<dyn FindSpeech>>,
 }
 
 impl WhisperServer {
@@ -405,6 +385,7 @@ impl WhisperServer {
             port,
             model,
             timed: false,
+            speech: None,
         }
     }
 
@@ -448,11 +429,32 @@ impl WhisperServer {
     pub const fn port(&self) -> u16 {
         self.port
     }
-}
 
-#[async_trait::async_trait]
-impl LocalTranscriber for WhisperServer {
-    async fn transcribe(
+    /// Find the speech first, and transcribe only that, in chunks (KNEG-404).
+    ///
+    /// For long recordings: media import and the meeting's whole-recording
+    /// pass. A builder for the reason [`Self::timed`] is one -- it is a
+    /// property of what the caller is transcribing. Never for dictation, where
+    /// a pause-heavy sentence stripped to nothing leaves whisper the
+    /// vocabulary prompt to repeat back (`kw_audio_core::vad`). The design and
+    /// its measurements are in [`crate::speech`].
+    #[must_use]
+    pub fn speech_first(mut self, finder: Arc<dyn FindSpeech>) -> Self {
+        self.speech = Some(finder);
+        self
+    }
+
+    /// Whether long recordings will have their speech found first.
+    ///
+    /// Read-only, for a caller's test to pin what it built, as
+    /// [`Self::asks_for_timings`] is.
+    #[must_use]
+    pub const fn finds_speech_first(&self) -> bool {
+        self.speech.is_some()
+    }
+
+    /// One `/inference` request for `wav`, as every path sends it.
+    async fn request(
         &self,
         wav: Vec<u8>,
         language: Option<&str>,
@@ -495,21 +497,96 @@ impl LocalTranscriber for WhisperServer {
         Ok(interpret(status, &body))
     }
 
-    async fn transcribe_languages(
+    /// The whole recording in one request, as every recording went before
+    /// [`Self::speech_first`], and as one still goes when its speech cannot
+    /// be found first.
+    async fn whole(
         &self,
         wav: Vec<u8>,
-        languages: &[String],
+        choice: Choice<'_>,
         prompt: Option<&str>,
     ) -> Result<Inference, String> {
-        if languages.len() > 2 {
-            return Err("Choose at most two dictation languages".into());
+        match choice {
+            Choice::One(language) => self.request(wav, language, prompt).await,
+            Choice::Between(languages) => {
+                let body = self.language_probabilities(wav.clone()).await?;
+                let language = selected_language(&body, languages)?;
+                self.request(wav, Some(&language), prompt).await
+            }
         }
-        if languages.len() < 2 {
-            return self
-                .transcribe(wav, languages.first().map(String::as_str), prompt)
-                .await;
+    }
+
+    /// Find the speech, detect the language once, and send each chunk.
+    /// See [`crate::speech`].
+    async fn speech_chunks(
+        &self,
+        finder: &dyn FindSpeech,
+        wav: Vec<u8>,
+        choice: Choice<'_>,
+        prompt: Option<&str>,
+    ) -> Result<Inference, String> {
+        let Some(audio) = speech::Pcm::parse(&wav) else {
+            tracing::warn!("the recording is not 16 kHz mono PCM; transcribing it whole");
+            return self.whole(wav, choice, prompt).await;
+        };
+        let started = std::time::Instant::now();
+        let spans = match finder.find(&wav).await {
+            Ok(spans) => spans,
+            Err(detail) => {
+                tracing::warn!(%detail, "could not find the speech first; transcribing the recording whole");
+                return self.whole(wav, choice, prompt).await;
+            }
+        };
+        let chunks = speech::plan(&spans, audio.duration());
+        tracing::info!(
+            seconds = audio.duration(),
+            speech = spans.len(),
+            chunks = chunks.len(),
+            search_ms = started.elapsed().as_millis(),
+            "found the speech first"
+        );
+        if chunks.is_empty() {
+            return Ok(Inference::Empty);
         }
-        let part = reqwest::multipart::Part::bytes(wav.clone())
+
+        let sample = || audio.join(&speech::detection_sample(&chunks));
+        let language = match choice {
+            Choice::One(Some(language)) => Some(language.to_owned()),
+            Choice::One(None) => {
+                match self
+                    .language_probabilities(sample())
+                    .await
+                    .and_then(|body| top_language(&body))
+                {
+                    Ok(language) => Some(language),
+                    Err(detail) => {
+                        tracing::warn!(%detail, "could not detect the language once; each chunk will detect its own");
+                        None
+                    }
+                }
+            }
+            Choice::Between(languages) => {
+                let body = self.language_probabilities(sample()).await?;
+                Some(selected_language(&body, languages)?)
+            }
+        };
+
+        let mut parts = Vec::with_capacity(chunks.len());
+        for chunk in chunks {
+            let answer = self
+                .request(audio.slice(chunk), language.as_deref(), prompt)
+                .await?;
+            if matches!(answer, Inference::Rejected { .. }) {
+                return Ok(answer);
+            }
+            parts.push((chunk, answer));
+        }
+        Ok(speech::stitch(parts))
+    }
+
+    /// Ask the server only which language `wav` is in.
+    async fn language_probabilities(&self, wav: Vec<u8>) -> Result<serde_json::Value, String> {
+        let part = reqwest::multipart::Part::bytes(wav)
             .file_name("audio.wav")
             .mime_str("audio/wav")
             .map_err(|e| e.to_string())?;
@@ -528,14 +605,77 @@ impl LocalTranscriber for WhisperServer {
             .await
             .map_err(|e| describe_send_failure(self.port, &e))?;
         let response = response.error_for_status().map_err(|e| e.to_string())?;
-        let body: serde_json::Value = response.json().await.map_err(|e| e.to_string())?;
-        let language = selected_language(&body, languages)?;
-        self.transcribe(wav, Some(&language), prompt).await
+        response.json().await.map_err(|e| e.to_string())
+    }
+}
+
+/// Which language a recording is sent in.
+#[derive(Debug, Clone, Copy)]
+enum Choice<'a> {
+    /// This one, or `None` for whichever whisper hears.
+    One(Option<&'a str>),
+    /// Whichever of the two dictation languages it sounds more like.
+    Between(&'a [String]),
+}
+
+#[async_trait::async_trait]
+impl LocalTranscriber for WhisperServer {
+    async fn transcribe(
+        &self,
+        wav: Vec<u8>,
+        language: Option<&str>,
+        prompt: Option<&str>,
+    ) -> Result<Inference, String> {
+        match &self.speech {
+            Some(finder) => {
+                self.speech_chunks(finder.as_ref(), wav, Choice::One(language), prompt)
+                    .await
+            }
+            None => self.request(wav, language, prompt).await,
+        }
+    }
+
+    async fn transcribe_languages(
+        &self,
+        wav: Vec<u8>,
+        languages: &[String],
+        prompt: Option<&str>,
+    ) -> Result<Inference, String> {
+        if languages.len() > 2 {
+            return Err("Choose at most two dictation languages".into());
+        }
+        let choice = if languages.len() == 2 {
+            Choice::Between(languages)
+        } else {
+            Choice::One(languages.first().map(String::as_str))
+        };
+        match &self.speech {
+            Some(finder) => {
+                self.speech_chunks(finder.as_ref(), wav, choice, prompt)
+                    .await
+            }
+            None => self.whole(wav, choice, prompt).await,
+        }
     }
 
     fn model_name(&self) -> Option<String> {
         self.model.clone()
     }
+}
+
+/// The likeliest language of all, from a detection answer.
+fn top_language(body: &serde_json::Value) -> Result<String, String> {
+    body.get("language_probabilities")
+        .and_then(serde_json::Value::as_object)
+        .into_iter()
+        .flatten()
+        .filter_map(|(language, probability)| {
+            let probability = probability.as_f64()?;
+            (probability.is_finite() && probability > 0.0).then_some((language, probability))
+        })
+        .max_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(language, _)| language.clone())
+        .ok_or_else(|| "the server returned no language probabilities".to_owned())
 }
 
 fn selected_language(body: &serde_json::Value, languages: &[String]) -> Result<String, String> {
@@ -653,7 +793,6 @@ mod tests {
             language: None,
             threads: None,
             gpu_device: None,
-            vad: None,
         }
     }
 
@@ -834,39 +973,12 @@ mod tests {
     }
 
     #[test]
-    fn vad_is_off_unless_configured() {
-        assert!(!build_args(&options()).iter().any(|a| a == "--vad"));
-    }
-
-    #[test]
-    fn vad_settings_are_all_passed_when_configured() {
-        let mut options = options();
-        options.vad = Some(VadSettings {
-            model_path: "C:/kw/models/silero.onnx".to_owned(),
-            threshold: 0.5,
-            min_speech_ms: 250,
-            min_silence_ms: 100,
-            max_speech_seconds: 30.0,
-            speech_pad_ms: 30,
-            samples_overlap: 0.1,
-        });
-        let args = build_args(&options);
-
-        assert!(args.iter().any(|a| a == "--vad"));
-        assert_eq!(
-            find(&args, "--vad-model").as_deref(),
-            Some("C:/kw/models/silero.onnx")
-        );
-        for flag in [
-            "--vad-threshold",
-            "--vad-min-speech-duration-ms",
-            "--vad-min-silence-duration-ms",
-            "--vad-max-speech-duration-s",
-            "--vad-speech-pad-ms",
-            "--vad-samples-overlap",
-        ] {
-            assert!(find(&args, flag).is_some(), "{flag} should have a value");
-        }
+    fn the_server_never_skips_silence_itself() {
+        // Its own VAD puts row boundaries up to 30 s from their speech, and
+        // started with `--vad` it would apply to dictation too. Silence is
+        // skipped by finding the speech first instead (`crate::speech`).
+        let args = build_args(&options());
+        assert!(!args.iter().any(|a| a.starts_with("--vad")), "{args:?}");
     }
 
     #[test]
@@ -955,6 +1067,349 @@ mod tests {
         let path = dir.path().join("ggml-tiny.bin");
         std::fs::write(&path, b"not really a model").unwrap();
         assert!(model_is_present(&path.display().to_string()));
+    }
+
+    /* ------------------------------------------ finding the speech first */
+
+    use crate::speech::{FindSpeech, Span};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    /// A speech finder that answers the same thing every time, and counts.
+    #[derive(Debug)]
+    struct Found {
+        answer: Result<Vec<Span>, String>,
+        calls: AtomicUsize,
+    }
+
+    impl Found {
+        fn at(spans: &[(f64, f64)]) -> Arc<Self> {
+            Arc::new(Self {
+                answer: Ok(spans.iter().map(|(s, e)| Span::new(*s, *e)).collect()),
+                calls: AtomicUsize::new(0),
+            })
+        }
+
+        fn failing() -> Arc<Self> {
+            Arc::new(Self {
+                answer: Err("the speech finder exited with 2".to_owned()),
+                calls: AtomicUsize::new(0),
+            })
+        }
+
+        fn calls(&self) -> usize {
+            self.calls.load(Ordering::SeqCst)
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl FindSpeech for Found {
+        async fn find(&self, _wav: &[u8]) -> Result<Vec<Span>, String> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.answer.clone()
+        }
+    }
+
+    /// A loopback server answering `replies` in order, one per connection,
+    /// that hands back every request it read.
+    async fn answering(
+        replies: Vec<(u16, &'static str)>,
+    ) -> (u16, tokio::task::JoinHandle<Vec<Vec<u8>>>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let task = tokio::spawn(async move {
+            let mut seen = Vec::new();
+            for (status, reply) in replies {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut bytes = Vec::new();
+                loop {
+                    let mut chunk = [0; 16_384];
+                    let count = socket.read(&mut chunk).await.unwrap();
+                    assert!(count > 0);
+                    bytes.extend_from_slice(&chunk[..count]);
+                    if let Some(end) = bytes.windows(4).position(|p| p == b"\r\n\r\n") {
+                        let headers = String::from_utf8_lossy(&bytes[..end]).to_lowercase();
+                        let length: usize = headers
+                            .lines()
+                            .find_map(|l| l.strip_prefix("content-length:"))
+                            .unwrap()
+                            .trim()
+                            .parse()
+                            .unwrap();
+                        if bytes.len() >= end + 4 + length {
+                            break;
+                        }
+                    }
+                }
+                seen.push(bytes);
+                socket
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\n\
+                             Content-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+                            reply.len()
+                        )
+                        .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+            }
+            seen
+        });
+        (port, task)
+    }
+
+    /// What `answering` read, failing rather than hanging when it was asked
+    /// fewer times than it had replies for.
+    async fn served(task: tokio::task::JoinHandle<Vec<Vec<u8>>>) -> Vec<Vec<u8>> {
+        tokio::time::timeout(std::time::Duration::from_secs(10), task)
+            .await
+            .expect("the server was asked fewer times than it had replies for")
+            .unwrap()
+    }
+
+    /// A multipart text field of `request`.
+    fn field(request: &[u8], name: &str) -> Option<String> {
+        let text = String::from_utf8_lossy(request);
+        let marker = format!("name=\"{name}\"\r\n\r\n");
+        let (_, rest) = text.split_once(&marker)?;
+        Some(rest.split("\r\n").next()?.to_owned())
+    }
+
+    /// How long the WAV `request` carries is, from its header.
+    fn seconds_sent(request: &[u8]) -> f64 {
+        let at = request.windows(4).position(|w| w == b"RIFF").unwrap();
+        let size = u32::from_le_bytes(request[at + 40..at + 44].try_into().unwrap());
+        f64::from(size) / 32_000.0
+    }
+
+    fn close(a: f64, b: f64) -> bool {
+        (a - b).abs() < 1e-6
+    }
+
+    /// A minute of 16 kHz mono silence; the finder decides where the speech is.
+    fn minute() -> Vec<u8> {
+        kw_audio_core::wav::encode_wav(&vec![0.0; 60 * 16_000], 16_000)
+    }
+
+    fn policy() -> kw_network_policy::NetworkPolicy {
+        kw_network_policy::NetworkPolicy::new().unwrap()
+    }
+
+    const HEJ: &str = r#"{"text":" Hej.","segments":[{"text":" Hej.","start":0.5,"end":1.5}]}"#;
+    const DA: &str =
+        r#"{"text":" Hej då.","segments":[{"text":" Hej då.","start":0.2,"end":0.9}]}"#;
+
+    /// Speech at 2-5 s and 30-33 s: two chunks, 1.8-5.2 and 29.8-33.2.
+    const TWO_CHUNKS: [(f64, f64); 2] = [(2.0, 5.0), (30.0, 33.0)];
+
+    fn rows(inference: &Inference) -> Vec<(String, f64, f64)> {
+        match inference {
+            Inference::Timed { segments, .. } => segments
+                .iter()
+                .map(|s| (s.text.clone(), s.start, s.end))
+                .collect(),
+            other => panic!("expected timed rows, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn only_a_server_told_to_finds_the_speech_first() {
+        // Dictation builds its server bare: it must never be handed a finder,
+        // because a pause-heavy sentence stripped to nothing leaves whisper the
+        // vocabulary prompt to repeat (`kw_audio_core::vad`).
+        let bare = WhisperServer::new(policy(), 8178, None).timed();
+        assert!(!bare.finds_speech_first());
+        assert!(bare.speech_first(Found::at(&[])).finds_speech_first());
+    }
+
+    #[tokio::test]
+    async fn the_language_is_detected_once_on_the_speech_and_every_chunk_is_sent_with_it() {
+        let (port, server) = answering(vec![
+            (200, r#"{"language_probabilities":{"sv":0.9,"en":0.1}}"#),
+            (200, HEJ),
+            (200, DA),
+        ])
+        .await;
+        let found = Found::at(&TWO_CHUNKS);
+        let engine = WhisperServer::new(policy(), port, None)
+            .timed()
+            .speech_first(found.clone());
+
+        let result = engine
+            .transcribe(minute(), None, Some("Dyve"))
+            .await
+            .unwrap();
+        let requests = served(server).await;
+
+        assert_eq!(found.calls(), 1);
+        assert_eq!(requests.len(), 3);
+        // Detection hears the two chunks' audio and nothing else, and no
+        // vocabulary prompt.
+        assert_eq!(
+            field(&requests[0], "detect_language").as_deref(),
+            Some("true")
+        );
+        assert!(field(&requests[0], "prompt").is_none());
+        assert!(close(seconds_sent(&requests[0]), 6.8));
+        for request in &requests[1..] {
+            assert_eq!(field(request, "language").as_deref(), Some("sv"));
+            assert_eq!(field(request, "prompt").as_deref(), Some("Dyve"));
+            assert_eq!(
+                field(request, "response_format").as_deref(),
+                Some("verbose_json")
+            );
+            assert!(field(request, "detect_language").is_none());
+            assert!(
+                close(seconds_sent(request), 3.4),
+                "each chunk is its own audio"
+            );
+        }
+
+        let rows = rows(&result);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].0, "Hej.");
+        assert!(close(rows[0].1, 2.3) && close(rows[0].2, 3.3), "{rows:?}");
+        assert_eq!(rows[1].0, "Hej då.");
+        assert!(close(rows[1].1, 30.0) && close(rows[1].2, 30.7), "{rows:?}");
+        assert!(matches!(&result, Inference::Timed { text, .. } if text == "Hej. Hej då."));
+    }
+
+    #[tokio::test]
+    async fn a_chosen_language_is_not_detected_again() {
+        let (port, server) = answering(vec![(200, HEJ), (200, DA)]).await;
+        let engine = WhisperServer::new(policy(), port, None)
+            .timed()
+            .speech_first(Found::at(&TWO_CHUNKS));
+
+        engine.transcribe(minute(), Some("en"), None).await.unwrap();
+        let requests = served(server).await;
+
+        assert_eq!(requests.len(), 2);
+        for request in &requests {
+            assert_eq!(field(request, "language").as_deref(), Some("en"));
+            assert!(field(request, "detect_language").is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn two_languages_are_chosen_between_once() {
+        let (port, server) = answering(vec![
+            (
+                200,
+                r#"{"language_probabilities":{"de":0.7,"en":0.2,"sv":0.1}}"#,
+            ),
+            (200, HEJ),
+            (200, DA),
+        ])
+        .await;
+        let engine = WhisperServer::new(policy(), port, None)
+            .timed()
+            .speech_first(Found::at(&TWO_CHUNKS));
+
+        engine
+            .transcribe_languages(minute(), &["sv".into(), "en".into()], None)
+            .await
+            .unwrap();
+        let requests = served(server).await;
+
+        assert_eq!(requests.len(), 3);
+        assert_eq!(
+            field(&requests[0], "detect_language").as_deref(),
+            Some("true")
+        );
+        assert_eq!(field(&requests[1], "language").as_deref(), Some("en"));
+        assert_eq!(field(&requests[2], "language").as_deref(), Some("en"));
+    }
+
+    #[tokio::test]
+    async fn a_language_that_cannot_be_detected_leaves_each_chunk_to_detect_its_own() {
+        let (port, server) = answering(vec![(200, r#"{"text":""}"#), (200, HEJ), (200, DA)]).await;
+        let engine = WhisperServer::new(policy(), port, None)
+            .timed()
+            .speech_first(Found::at(&TWO_CHUNKS));
+
+        let result = engine.transcribe(minute(), None, None).await.unwrap();
+        let requests = served(server).await;
+
+        assert_eq!(field(&requests[1], "language").as_deref(), Some("auto"));
+        assert_eq!(field(&requests[2], "language").as_deref(), Some("auto"));
+        assert_eq!(rows(&result).len(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_recording_with_no_speech_asks_whisper_nothing() {
+        // Nothing is listening once `answering` has served its empty list, so
+        // any request would fail rather than come back empty.
+        let (port, server) = answering(Vec::new()).await;
+        served(server).await;
+        let engine = WhisperServer::new(policy(), port, None)
+            .timed()
+            .speech_first(Found::at(&[]));
+
+        assert_eq!(
+            engine
+                .transcribe(minute(), None, Some("Dyve"))
+                .await
+                .unwrap(),
+            Inference::Empty
+        );
+    }
+
+    #[tokio::test]
+    async fn when_the_speech_cannot_be_found_the_recording_goes_whole_as_before() {
+        let (port, server) = answering(vec![(200, HEJ)]).await;
+        let found = Found::failing();
+        let engine = WhisperServer::new(policy(), port, None)
+            .timed()
+            .speech_first(found.clone());
+
+        let result = engine
+            .transcribe(minute(), None, Some("Dyve"))
+            .await
+            .unwrap();
+        let requests = served(server).await;
+
+        assert_eq!(found.calls(), 1);
+        assert_eq!(requests.len(), 1);
+        assert!(close(seconds_sent(&requests[0]), 60.0));
+        assert_eq!(field(&requests[0], "language").as_deref(), Some("auto"));
+        assert_eq!(field(&requests[0], "prompt").as_deref(), Some("Dyve"));
+        assert_eq!(rows(&result), vec![("Hej.".to_owned(), 0.5, 1.5)]);
+    }
+
+    #[tokio::test]
+    async fn a_recording_that_is_not_16k_mono_pcm_goes_whole_without_looking() {
+        let (port, server) = answering(vec![(200, HEJ)]).await;
+        let found = Found::at(&TWO_CHUNKS);
+        let engine = WhisperServer::new(policy(), port, None)
+            .timed()
+            .speech_first(found.clone());
+        let stereo = kw_audio_core::wav::wrap_pcm(&[0; 64_000], 16_000, 2);
+
+        engine.transcribe(stereo, None, None).await.unwrap();
+
+        assert_eq!(found.calls(), 0);
+        assert_eq!(served(server).await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_refused_chunk_ends_the_transcription_with_the_refusal() {
+        // Nothing listens after the one reply, so a further chunk would fail
+        // the call instead of returning the refusal.
+        let (port, server) = answering(vec![(500, "failed to process audio")]).await;
+        let engine = WhisperServer::new(policy(), port, None)
+            .timed()
+            .speech_first(Found::at(&TWO_CHUNKS));
+
+        let result = engine.transcribe(minute(), Some("sv"), None).await.unwrap();
+
+        assert_eq!(served(server).await.len(), 1);
+        assert!(
+            matches!(result, Inference::Rejected { status: 500, .. }),
+            "{result:?}"
+        );
     }
 
     #[test]

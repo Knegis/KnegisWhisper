@@ -48,8 +48,8 @@ jobs:
         with:
           node-version: "22"
 
-      - name: CI selection tests
-        run: node --test tools/ci/changes.test.mjs
+      - name: CI selection and entry-point tests
+        run: node --test tools/ci/changes.test.mjs tools/ci/entry.test.mjs
 
       - name: Integration parity
         run: node tools/integration-audit/verify-parity.mjs
@@ -113,9 +113,11 @@ jobs:
 
       # Six of these cover the pin reader refusing to parse a table whose shape
       # has changed. That is the case worth guarding: a verifier that silently
-      # checks nothing does not fail, it reports success.
+      # checks nothing does not fail, it reports success. The retry tests and
+      # both tools' download tests run real `fetch` against a server on
+      # 127.0.0.1 that drops its connections, so they need no network (KNEG-413).
       - name: Model pin self-tests
-        run: node --test tools/model-pin/pin.test.mjs
+        run: node --test tools/model-pin/pin.test.mjs tools/model-pin/retry.test.mjs tools/sidecar-pin/pin.test.mjs
 
 
       - name: Feature audit self-tests

@@ -72,8 +72,9 @@ in the application could store an API key**. `setProviderCredential` was exporte
 reachable through it, and collapsing the two fields would have had to lie about one or the other.
 
 `Settings > Providers` closed that, and the same screen immediately produced the next instance of
-the split: a key can now be stored for all seventeen slots (grew from fifteen once
-`credential:assemblyai` and `credential:deepgram` were added for meeting streaming), and one of the
+the split: a key can now be stored for all eighteen slots (grew from fifteen once
+`credential:assemblyai` and `credential:deepgram` were added for meeting streaming, and `custom`,
+your own server's key for cleanup and summaries, on 2026-10-07 for KNEG-415), and one of the
 seven transcription providers is still unreachable — Tinfoil, declined rather than unfinished; the
 other six all resolve to a real client now. Built, configurable, and — for the six — honestly
 usable; Tinfoil is built, configurable-through-the-screen-as-a-refusal, and deliberately not

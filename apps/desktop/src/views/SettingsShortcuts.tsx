@@ -25,6 +25,7 @@
 
 import { Fragment, useCallback, useEffect, useState } from "react";
 
+import { Keycaps } from "../components/Keycaps";
 import { LearnMore } from "../components/LearnMore";
 import { Row } from "../components/Row";
 import { ShortcutRecorder } from "../components/ShortcutRecorder";
@@ -47,6 +48,7 @@ import {
   changeLabel,
   hotkeyModeLabel,
   outcomeLabel,
+  registrationFor,
 } from "../lib/labels";
 import { useRefresh } from "../lib/useRefresh";
 
@@ -228,7 +230,10 @@ export function SettingsShortcuts({
                 <em className="row-detail">none configured</em>
               ) : (
                 b.accelerators.map((a, i) => {
-                  const label = acceleratorLabel(a, hook);
+                  // The registration as well as the platform's hook: a hook
+                  // that failed to start leaves the platform "available" and
+                  // the chord dead (KNEG-353).
+                  const label = acceleratorLabel(a, hook, registrationFor(hotkeys.registrations, b.action, a));
                   // No "works" note for an action nothing handles: its
                   // accelerators are not offered to the platform at all --
                   // not registered and not hooked (`register_all`,
@@ -241,9 +246,12 @@ export function SettingsShortcuts({
                   // instead of running together ("Control+SuperUses only…").
                   // Red only for a failure; a binding that works and is worth
                   // a word says so plainly, with the mechanism folded.
+                  // Keycaps for an accelerator that parsed, as Dictation
+                  // draws it; one that didn't is what was typed, so it stays
+                  // text beside the reason (KNEG-331).
                   return (
                     <Fragment key={`${b.action}-${i}`}>
-                      <code>{label.text}</code>
+                      {a.kind === "invalid" ? <code>{label.text}</code> : <span><Keycaps accelerators={[label.text]} /></span>}
                       {label.problem ? (
                         <em className="row-detail warn">{label.problem}</em>
                       ) : null}
@@ -351,11 +359,11 @@ export function SettingsShortcuts({
         {hook.state === "available" || modifierOnly.length === 0 ? null : (
           <p className="caveat">
             {modifierOnly.map((accelerator, index) => (
-              <Fragment key={`${index}-${accelerator}`}>{index > 0 ? ", " : null}<code>{accelerator}</code></Fragment>
+              <Fragment key={`${index}-${accelerator}`}>{index > 0 ? ", " : null}<Keycaps accelerators={[accelerator]} /></Fragment>
             ))}{" "}
             {modifierOnly.length === 1 ? "does" : "do"} nothing on this computer
             and {modifierOnly.length === 1 ? "has" : "have"} to be changed to a
-            shortcut with a key in it, such as <code>Control+Shift+D</code>.
+            shortcut with a key in it, such as <Keycaps accelerators={["Control+Shift+D"]} />.
           </p>
         )}
         {/*
@@ -386,7 +394,7 @@ export function SettingsShortcuts({
           ) : null}
           <p>
             A shortcut takes effect as soon as you set it. The dictation default,{" "}
-            <code>Control+Super</code>, is two modifiers and no key, which no
+            <Keycaps accelerators={["Control+Super"]} />, is two modifiers and no key, which no
             cross-platform shortcut API can register.
             {hook.state === "available"
               ? ` It works here anyway, through ${hook.mechanism} — and unlike a registered shortcut it does not take the keys away from anything else, so Windows still does whatever it does with them.`

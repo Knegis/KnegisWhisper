@@ -13,16 +13,15 @@
  */
 import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { parseShellArgs, shellUsage } from "./args.mjs";
 import { launchEdge, killBrowser } from "./browser.mjs";
 import { connectCdp } from "./cdp.mjs";
 import { createReport, addCheck, failedChecks, renderMarkdown } from "./report.mjs";
 import * as snippets from "./snippets.mjs";
+import { isEntryPoint } from "../ci/entry.mjs";
 
 const delay = (ms) => new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
-const isMain = process.argv[1]
-  && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+const isMain = isEntryPoint(import.meta.url);
 
 const RAIL_ITEM = "nav.rail .rail-item";
 /** What a held chip says, as `routeHeld` in the app words it. */

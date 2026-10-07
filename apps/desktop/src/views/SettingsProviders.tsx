@@ -11,9 +11,10 @@
  *
  * 1. **The slot list comes from Rust.** `credential_slots` reads
  *    `config/provider-registry.json`, so no provider id or slot name is written
- *    here. Seventeen slots, twelve providers and five per-feature custom
- *    endpoints — up from fifteen and ten once AssemblyAI and Deepgram gained
- *    their own BYOK slots for meeting streaming. (Three further enterprise
+ *    here. Eighteen slots, twelve providers and six custom endpoints — up
+ *    from fifteen and ten once AssemblyAI and Deepgram gained their own BYOK
+ *    slots for meeting streaming, and your own server's key, which cleanup
+ *    and summaries share (KNEG-415). (Three further enterprise
  *    slots — Bedrock, Azure, Vertex — hold a whole connector configuration
  *    each and are listed under Company accounts below, not counted here.)
  * 2. **A stored key is never called "connected".** Storing a secret proves only
@@ -30,8 +31,9 @@
  * Available, Custom endpoints and Company accounts, after a first row for this
  * computer, which needs no key and has no form. What a row says about itself
  * comes from the slot and nothing else -- its tile is the first letter of its
- * name, its line is its `usedFor` in words, and "Not supported yet" is
- * `getProviders().dispatch`. The filter tabs and the search field narrow the
+ * name, its line is its `usedFor` in words plus "Live meetings" when a meeting
+ * client reads the slot (`getMeetingProviders().credentialSlot`, KNEG-373), and
+ * "Not supported yet" is `getProviders().dispatch`. The filter tabs and the search field narrow the
  * same rows; neither hides a slot the registry declares from All with the
  * field empty, so every one of them can still be reached here.
  *
@@ -46,11 +48,13 @@
 
 import { useCallback, useEffect, useState, type KeyboardEvent, type ReactNode } from "react";
 
+import { FailureLine } from "../components/FailureLine";
 import { Icon } from "../components/Icon";
 import { LearnMore } from "../components/LearnMore";
 import { PageHeader } from "../components/PageHeader";
 import {
   getCredentialSlots,
+  getMeetingProviders,
   getProviders,
   isProviderConnected,
   probeProviders,
@@ -61,10 +65,10 @@ import {
 } from "../lib/ipc";
 import type { ViewId } from "../lib/navigation";
 import { PAGES } from "../lib/pages";
-import { filterRows, providerRows, SPEECH, TEXT, type ProviderFilter, type ProviderRow } from "../lib/providerRows";
-import { useRefresh } from "../lib/useRefresh";
+import { filterRows, keyRowShown, providerRows, SPEECH, TEXT, type ProviderFilter, type ProviderRow } from "../lib/providerRows";
+import { message, useRefresh } from "../lib/useRefresh";
 
-type KeyState = { label: string; tone: "saved" | "connected" | "failed"; title?: string; detail?: string };
+type KeyState = { label: string; tone: "saved" | "connected" | "failed"; title?: string; detail?: string; more?: string };
 
 /**
  * What can be said about a stored key.
@@ -88,8 +92,12 @@ function keyState(slot: CredentialSlotStatus, probe: ProbeReport | null): KeySta
   // provider id and the slot name are the same string.
   const mine = probe.results.filter((r) => r.provider === slot.slot);
   if (!mine.some((r) => r.outcome.outcome !== "skipped")) {
+    // The probe's own reason for skipping is the mechanism, so it goes under
+    // the row's Why (KNEG-343).
     const why = mine.map((r) => ("detail" in r.outcome ? r.outcome.detail : "")).find(Boolean);
-    return { label: "Key saved", tone: "saved", detail: why ? `Not tested: ${why}.` : "Not tested: Test connections does not cover this key." };
+    return why
+      ? { label: "Key saved", tone: "saved", detail: "Not tested.", more: why }
+      : { label: "Key saved", tone: "saved", detail: "Not tested: Test connections doesn't cover this key." };
   }
   return isProviderConnected(probe, slot.slot)
     ? { label: "Connected", tone: "connected", title: "A real request with this key succeeded." }
@@ -118,8 +126,14 @@ const focusToggle = (formId: string) => document.querySelector<HTMLElement>(`[da
 
 export function SettingsProviders({ onGoTo }: { onGoTo: (id: ViewId) => void }) {
   const load = useCallback(async () => {
-    const [slots, transcription] = await Promise.all([getCredentialSlots(), getProviders()]);
-    return { slots, transcription };
+    // The meeting providers only add "Live meetings" to the rows whose keys
+    // they read. A failed read loses that word, not the page.
+    const [slots, transcription, meetings] = await Promise.all([
+      getCredentialSlots(),
+      getProviders(),
+      getMeetingProviders().catch(() => []),
+    ]);
+    return { slots, transcription, meetings };
   }, []);
   const { data, error, guard, fail } = useRefresh(load);
 
@@ -128,6 +142,12 @@ export function SettingsProviders({ onGoTo }: { onGoTo: (id: ViewId) => void }) 
   const [draft, setDraft] = useState("");
   /** Per-slot outcome of the last press, so no control is ever silent. */
   const [results, setResults] = useState<Record<string, string>>({});
+  /**
+   * Per-slot failure of the last Save or Clear, drawn at its row as an alert.
+   * It was the page's error line at the top, out of sight of the row and not
+   * announced (KNEG-377).
+   */
+  const [rowErrors, setRowErrors] = useState<Record<string, { text: string; detail: string }>>({});
   const [probe, setProbe] = useState<ProbeReport | null>(null);
   const [probing, setProbing] = useState(false);
   const [testNote, setTestNote] = useState<string | null>(null);
@@ -147,6 +167,14 @@ export function SettingsProviders({ onGoTo }: { onGoTo: (id: ViewId) => void }) 
 
   const say = (slot: string, what: string) =>
     setResults((prev) => ({ ...prev, [slot]: what }));
+  /** A row's failure: the sentence, and the error itself for its Details (KNEG-343). */
+  const rowError = (slot: string, what: { text: string; detail: string } | null) =>
+    setRowErrors((prev) => {
+      const next = { ...prev };
+      if (what === null) delete next[slot];
+      else next[slot] = what;
+      return next;
+    });
 
   /** Open this row's form, closing any other -- and dropping whatever was typed there. */
   const toggle = (slot: string) => {
@@ -161,8 +189,14 @@ export function SettingsProviders({ onGoTo }: { onGoTo: (id: ViewId) => void }) 
       return;
     }
     let done = false;
+    rowError(slot.slot, null);
     void guard(async () => {
-      await setProviderCredential(slot.slot, typed);
+      try {
+        await setProviderCredential(slot.slot, typed);
+      } catch (cause) {
+        rowError(slot.slot, { text: "Couldn't save the key.", detail: message(cause) });
+        return;
+      }
       // Cleared immediately, and this is the only copy that ever existed in the
       // renderer. A field that keeps the key on screen after saving is a field
       // that leaks it to the next person at the machine.
@@ -170,9 +204,11 @@ export function SettingsProviders({ onGoTo }: { onGoTo: (id: ViewId) => void }) 
       setOpen(null);
       say(
         slot.slot,
-        slot.kind === "custom-endpoint"
-          ? "Stored. This does not test anything — a custom endpoint needs its base URL too."
-          : "Stored. Press Test connections to find out whether it works.",
+        slot.kind !== "custom-endpoint"
+          ? "Saved. Press Test connections to check that it works."
+          : slot.usedFor.length > 0
+            ? "Saved. Cleanup and summaries send it to the server address you enter under Cleanup & summaries."
+            : "Saved. It does nothing on its own yet: the feature that uses it needs its server's address too.",
       );
       // Any earlier verdict is now about a different key, and "nothing to
       // test" may no longer be true.
@@ -184,13 +220,19 @@ export function SettingsProviders({ onGoTo }: { onGoTo: (id: ViewId) => void }) 
 
   const clear = (slot: CredentialSlotStatus) => {
     let done = false;
+    rowError(slot.slot, null);
     void guard(async () => {
       // An empty value is how `provider_credential_set` deletes. Explicit here
       // so the intent is not hidden in a falsy check.
-      await setProviderCredential(slot.slot, "");
+      try {
+        await setProviderCredential(slot.slot, "");
+      } catch (cause) {
+        rowError(slot.slot, { text: "Couldn't remove the key.", detail: message(cause) });
+        return;
+      }
       setDraft("");
       setOpen(null);
-      say(slot.slot, "Removed from the credential store.");
+      say(slot.slot, "Removed from this computer.");
       setProbe(null);
       setTestNote(null);
       done = true;
@@ -204,14 +246,14 @@ export function SettingsProviders({ onGoTo }: { onGoTo: (id: ViewId) => void }) 
     return (
       <div className="view">
         {header()}
-        {error ? <p className="error">{error}</p> : <p className="muted">Loading…</p>}
+        {error ? <FailureLine text="This page couldn't load." detail={error} /> : <p className="muted">Loading…</p>}
       </div>
     );
   }
 
-  const { slots, transcription } = data;
+  const { slots, transcription, meetings } = data;
   const bySlot = new Map(slots.map((s) => [s.slot, s]));
-  const lists = providerRows(slots, transcription);
+  const lists = providerRows(slots, transcription, meetings);
   // What `probe_configured` will test: a transcription provider with a key.
   const testable = slots.filter((s) => s.stored && transcription.some((p) => p.credentialSlot === s.slot));
 
@@ -231,6 +273,18 @@ export function SettingsProviders({ onGoTo }: { onGoTo: (id: ViewId) => void }) 
     }
   };
 
+  // A filter or a search that hides the open row closes its form and drops
+  // what was typed, as closing it does: a key must not wait, unseen, in a row
+  // that is out of view (KNEG-377).
+  const narrow = (nextFilter: ProviderFilter, nextQuery: string) => {
+    setFilter(nextFilter);
+    setQuery(nextQuery);
+    if (open !== null && !keyRowShown(lists, open, nextFilter, nextQuery)) {
+      setOpen(null);
+      setDraft("");
+    }
+  };
+
   const onTabKey = (event: KeyboardEvent<HTMLDivElement>) => {
     const at = TABS.findIndex((t) => t.id === filter);
     const to = event.key === "ArrowRight" ? (at + 1) % TABS.length
@@ -241,7 +295,7 @@ export function SettingsProviders({ onGoTo }: { onGoTo: (id: ViewId) => void }) 
     const next = TABS[to];
     if (!next) return;
     event.preventDefault();
-    setFilter(next.id);
+    narrow(next.id, query);
     document.getElementById(`providers-tab-${next.id}`)?.focus();
   };
 
@@ -281,7 +335,14 @@ export function SettingsProviders({ onGoTo }: { onGoTo: (id: ViewId) => void }) 
         {tile(row)}
         <span className="provider-text">
           <span className="provider-name">{row.name}</span>
-          {row.purposes.length > 0 ? <span className="provider-purposes">{row.purposes.join(" · ")}</span> : null}
+          {row.purposes.length > 0 ? (
+            <span className="provider-purposes">
+              {/* One span per purpose, so a narrow row wraps between them, not inside "Live meetings". */}
+              {row.purposes.map((purpose, i) => (
+                <span key={purpose} className="provider-purpose">{i > 0 ? ` · ${purpose}` : purpose}</span>
+              ))}
+            </span>
+          ) : null}
         </span>
         <span className="provider-actions">
           {state ? (
@@ -306,7 +367,19 @@ export function SettingsProviders({ onGoTo }: { onGoTo: (id: ViewId) => void }) 
           )}
         </span>
         {state?.detail ? <em className="row-detail provider-detail">{state.detail}</em> : null}
+        {state?.more ? (
+          <div className="provider-detail">
+            <LearnMore summary="Why">
+              <p>{state.more}</p>
+            </LearnMore>
+          </div>
+        ) : null}
         {results[row.slot] ? <em className="row-detail provider-detail" role="status">{results[row.slot]}</em> : null}
+        {rowErrors[row.slot] ? (
+          <div className="provider-detail">
+            <FailureLine text={rowErrors[row.slot]!.text} detail={rowErrors[row.slot]!.detail} />
+          </div>
+        ) : null}
         {isOpen ? (
           <span className="controls provider-form" id={formId}>
             <input
@@ -398,7 +471,7 @@ export function SettingsProviders({ onGoTo }: { onGoTo: (id: ViewId) => void }) 
               aria-label="Search providers"
               placeholder="Search providers"
               value={query}
-              onChange={(e) => setQuery(e.target.value)}
+              onChange={(e) => narrow(filter, e.target.value)}
             />
           </label>
           <button type="button" className="secondary providers-test" onClick={() => void runProbe()} disabled={probing}>
@@ -407,7 +480,7 @@ export function SettingsProviders({ onGoTo }: { onGoTo: (id: ViewId) => void }) 
         </>,
       )}
 
-      {error ? <p className="error">{error}</p> : null}
+      {error ? <FailureLine text="That didn't work." detail={error} /> : null}
 
       <div className="providers-tabs" role="tablist" aria-label="Filter providers" onKeyDown={onTabKey}>
         {TABS.map((t) => (
@@ -419,7 +492,7 @@ export function SettingsProviders({ onGoTo }: { onGoTo: (id: ViewId) => void }) 
             aria-selected={filter === t.id}
             aria-controls="providers-lists"
             tabIndex={filter === t.id ? 0 : -1}
-            onClick={() => setFilter(t.id)}
+            onClick={() => narrow(t.id, query)}
           >
             {t.label}
           </button>
@@ -445,9 +518,9 @@ export function SettingsProviders({ onGoTo }: { onGoTo: (id: ViewId) => void }) 
         <div className="providers-tests" role="status">
           {probe.audio === "tone" ? (
             <p className="caveat">
-              The voice test used a generated tone, not speech. A pass proves
-              the endpoint, credential and model id were accepted; it cannot
-              prove words are recognised.
+              The test sent a tone, not speech. A pass shows the provider
+              accepted the key and the model; it can't show that words are
+              recognised.
             </p>
           ) : null}
           {probe.results.every((r) => r.outcome.outcome === "skipped") ? (
@@ -456,8 +529,9 @@ export function SettingsProviders({ onGoTo }: { onGoTo: (id: ViewId) => void }) 
             </p>
           ) : null}
           {failures.map((r, i) => (
+            // What the provider answered is under Test details below (KNEG-343).
             <p key={`${r.provider}-${r.kind}-${i}`} className="error providers-failure">
-              {nameOf(r.provider)} failed its {KIND[r.kind]} test: {r.detail}
+              {nameOf(r.provider)} failed its {KIND[r.kind]} test. See Test details.
             </p>
           ))}
           {ran.length > 0 ? (
@@ -489,13 +563,13 @@ export function SettingsProviders({ onGoTo }: { onGoTo: (id: ViewId) => void }) 
           "custom",
           "Custom endpoints",
           custom,
-          "These features can be pointed at an OpenAI-compatible endpoint of your own. The key can be saved here; the endpoint's address belongs with the feature that uses it, and those screens are not written yet — so a key saved here does nothing on its own.",
+          "For servers of your own. Your own server's key goes with cleanup and summary requests to the address you enter under Cleanup & summaries. The others do nothing yet: the screens where you enter their servers' addresses aren't built.",
         )}
         {group(
           "company",
           "Company accounts",
           company,
-          "These use your organisation's credentials — a region and a key pair, or an endpoint and a deployment — rather than a single key, so they are set up under Cleanup & summaries, where those fields are.",
+          "These use your organisation's settings rather than one key, so they are set up under Cleanup & summaries.",
         )}
         {nothing ? <p className="muted providers-empty">Nothing here matches “{query.trim()}”.</p> : null}
       </div>

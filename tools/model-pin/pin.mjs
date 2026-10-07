@@ -57,6 +57,10 @@
  * escape hatch — if the bytes are already on the machine, measure those and
  * skip the network entirely.
  *
+ * A dropped connection is retried instead, twice, from byte 0 (KNEG-413,
+ * `retry.mjs`). Only the transport is retried: bytes that arrive whole and
+ * disagree with a pin are a disagreement, never a reason to ask again.
+ *
  * ## Usage
  *
  *   node tools/model-pin/pin.mjs --url <url> [--id <model-id>] [--keep <path>]
@@ -136,7 +140,7 @@
  * ## What `--revisions` measures
  *
  * Which commit each Hugging Face repository's `main` points at right now, for
- * all 37 the registry names -- one request each, no bodies. It prints a
+ * every one the registry names -- one request each, no bodies. It prints a
  * pasteable `HF_REVISIONS` table, and it exists for the same reason every
  * other mode here does: **a revision that was typed rather than read is not a
  * pin.**
@@ -159,12 +163,15 @@
  */
 
 import { createHash } from "node:crypto";
-import { createWriteStream, readFileSync, createReadStream, rmSync, statSync } from "node:fs";
+import { createWriteStream, readFileSync, createReadStream, renameSync, rmSync, statSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { pipeline } from "node:stream/promises";
+
+import { HttpError, describe, discard, removePartial, retryLine, retrying } from "./retry.mjs";
+import { isEntryPoint } from "../ci/entry.mjs";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const REGISTRY = join(REPO_ROOT, "config/provider-registry.json");
@@ -298,66 +305,95 @@ export async function measureFile(path, label = "file") {
  * Note what a `resolve/main` URL is: a pointer at a branch, not at content.
  * The bytes behind it can change without the URL changing, which is precisely
  * the case `--verify` exists to notice.
+ *
+ * **A dropped connection is retried, twice** (KNEG-413, `retry.mjs`), each
+ * time from byte 0 and from `url` rather than the signed URL it redirected to.
+ * Anything else throws, and nothing is left behind: a failed attempt's partial
+ * file is removed, and `keepAt` is written as `<keepAt>.partial` and renamed
+ * only once whole, so a path that exists after this returns holds every byte
+ * that was hashed. `options` replaces the retry's delays and sleep, for tests.
  */
-export async function download(url, label, keepAt = null) {
-  const target = keepAt ?? join(tmpdir(), `model-pin-${process.pid}-${label.replace(/[^\w.-]/g, "_")}`);
-  if (keepAt) await mkdir(dirname(target), { recursive: true });
+export async function download(url, label, keepAt = null, options = {}) {
+  const target = keepAt
+    ? `${keepAt}.partial`
+    : join(tmpdir(), `model-pin-${process.pid}-${label.replace(/[^\w.-]/g, "_")}`);
+  if (keepAt) await mkdir(dirname(keepAt), { recursive: true });
+
+  const measured = await retrying(() => downloadOnce(url, label, target), {
+    ...options,
+    onRetry: (retry) => console.error(`  ${retryLine(url, retry, { fromZero: true })}`),
+  });
+  if (!keepAt) return measured;
+  renameSync(target, keepAt);
+  return { ...measured, path: keepAt };
+}
+
+/** One attempt at `download`. Throws on any failure, having removed what it wrote. */
+async function downloadOnce(url, label, target) {
   let current = url;
+  let out = null;
 
-  for (let hop = 0; hop < 6; hop += 1) {
-    const response = await fetch(current, { redirect: "manual" });
+  try {
+    for (let hop = 0; hop < 6; hop += 1) {
+      const response = await fetch(current, { redirect: "manual" });
 
-    if (response.status >= 300 && response.status < 400) {
-      const next = response.headers.get("location");
-      if (!next) die(`${current} redirected with no Location header`);
-      current = new URL(next, current).toString();
-      continue;
-    }
+      if (response.status >= 300 && response.status < 400) {
+        const next = response.headers.get("location");
+        await discard(response);
+        if (!next) throw new Error(`${current} redirected with no Location header`);
+        current = new URL(next, current).toString();
+        continue;
+      }
 
-    if (!response.ok) {
-      die(`${current} returned HTTP ${response.status}`);
-    }
+      if (!response.ok) {
+        await discard(response);
+        throw new HttpError(response.status, current);
+      }
 
-    // Read only to size the progress bar. It is never reported as the pin.
-    const declared = Number(response.headers.get("content-length")) || null;
+      // Read only to size the progress bar. It is never reported as the pin.
+      const declared = Number(response.headers.get("content-length")) || null;
 
-    const hash = createHash("sha256");
-    const reporter = progress(label, declared);
-    const out = createWriteStream(target);
-    await pipeline(
-      response.body,
-      async function* (chunks) {
-        for await (const chunk of chunks) {
-          hash.update(chunk);
-          reporter.tick(chunk.length);
-          yield chunk;
-        }
-      },
-      out
-    );
-    reporter.done();
-
-    const sizeBytes = statSync(target).size;
-    // The size on disk, not `content-length`: a truncated body would agree
-    // with the header and disagree with itself. When the two differ, say so —
-    // the pin is still the measured number, but a mismatch is worth a line in
-    // the log rather than a silent shrug.
-    if (declared !== null && declared !== sizeBytes) {
-      console.error(
-        `  warning: content-length said ${declared} and ${sizeBytes} bytes arrived. ` +
-          "The pin below is the measured size."
+      const hash = createHash("sha256");
+      const reporter = progress(label, declared);
+      out = createWriteStream(target);
+      await pipeline(
+        response.body,
+        async function* (chunks) {
+          for await (const chunk of chunks) {
+            hash.update(chunk);
+            reporter.tick(chunk.length);
+            yield chunk;
+          }
+        },
+        out
       );
+      reporter.done();
+
+      const sizeBytes = statSync(target).size;
+      // The size on disk, not `content-length`: a truncated body would agree
+      // with the header and disagree with itself. When the two differ, say so —
+      // the pin is still the measured number, but a mismatch is worth a line in
+      // the log rather than a silent shrug.
+      if (declared !== null && declared !== sizeBytes) {
+        console.error(
+          `  warning: content-length said ${declared} and ${sizeBytes} bytes arrived. ` +
+            "The pin below is the measured size."
+        );
+      }
+
+      return {
+        path: target,
+        sha256: hash.digest("hex"),
+        sizeBytes,
+        resolvedFrom: current === url ? null : current,
+      };
     }
 
-    return {
-      path: target,
-      sha256: hash.digest("hex"),
-      sizeBytes,
-      resolvedFrom: current === url ? null : current,
-    };
+    throw new Error(`${url} redirected more than five times`);
+  } catch (error) {
+    await removePartial(out, target);
+    throw error;
   }
-
-  return die(`${url} redirected more than five times`);
 }
 
 /* ---------------------------------------------------------- pin discovery */
@@ -432,6 +468,11 @@ export function pinnedTargets(reg = registry()) {
  * stakes differ from a binary — wrong weights make bad transcripts, not a
  * compromised machine — but the failure this catches is the same one: bytes
  * that changed at a URL that did not.
+ *
+ * A model that cannot be downloaded, after the retries `download` makes, is
+ * reported and the run goes on to the rest; the exit is still non-zero. One
+ * unreachable host used to end the run where it stood, and every model after
+ * it went unchecked that week (KNEG-413).
  */
 export async function verify(only) {
   const targets = pinnedTargets().filter((t) => !only || t.id === only);
@@ -446,9 +487,16 @@ export async function verify(only) {
   }
 
   const wrong = [];
+  const unreachable = [];
   for (const target of targets) {
     console.error(`${target.kind} / ${target.id}`);
-    const measured = await download(target.url, `${target.kind}-${target.id}`);
+    let measured;
+    try {
+      measured = await download(target.url, `${target.kind}-${target.id}`);
+    } catch (error) {
+      unreachable.push(`${target.kind}/${target.id}: ${describe(error)}`);
+      continue;
+    }
     try {
       if (measured.sha256 !== target.sha256) {
         wrong.push(
@@ -469,8 +517,15 @@ export async function verify(only) {
   if (wrong.length > 0) {
     console.error(`\nmodel-pin --verify: ${wrong.length} of ${targets.length} model(s) disagree`);
     for (const line of wrong) console.error(`  ${line}`);
-    process.exit(1);
   }
+  if (unreachable.length > 0) {
+    console.error(
+      `\nmodel-pin --verify: ${unreachable.length} of ${targets.length} model(s) could not be ` +
+        "downloaded, so they were not checked"
+    );
+    for (const line of unreachable) console.error(`  ${line}`);
+  }
+  if (wrong.length > 0 || unreachable.length > 0) process.exit(1);
   console.log(`model-pin --verify: ${targets.length} model(s) match the committed pins.`);
 }
 
@@ -535,21 +590,34 @@ export function statedTargets(reg = registry()) {
   return targets;
 }
 
-/** One Hugging Face API document, as JSON. Bounded redirects, same as `download`. */
+/**
+ * One Hugging Face API document, as JSON. Bounded redirects and the same retry
+ * as `download`; throws rather than exiting, so a caller decides what a failed
+ * read means.
+ */
 async function apiJson(url) {
-  let current = url;
-  for (let hop = 0; hop < 6; hop += 1) {
-    const response = await fetch(current, { redirect: "manual" });
-    if (response.status >= 300 && response.status < 400) {
-      const next = response.headers.get("location");
-      if (!next) die(`${current} redirected with no Location header`);
-      current = new URL(next, current).toString();
-      continue;
-    }
-    if (!response.ok) die(`${current} returned HTTP ${response.status}`);
-    return response.json();
-  }
-  return die(`${url} redirected more than five times`);
+  return retrying(
+    async () => {
+      let current = url;
+      for (let hop = 0; hop < 6; hop += 1) {
+        const response = await fetch(current, { redirect: "manual" });
+        if (response.status >= 300 && response.status < 400) {
+          const next = response.headers.get("location");
+          await discard(response);
+          if (!next) throw new Error(`${current} redirected with no Location header`);
+          current = new URL(next, current).toString();
+          continue;
+        }
+        if (!response.ok) {
+          await discard(response);
+          throw new HttpError(response.status, current);
+        }
+        return await response.json();
+      }
+      throw new Error(`${url} redirected more than five times`);
+    },
+    { onRetry: (retry) => console.error(`  ${retryLine(url, retry)}`) }
+  );
 }
 
 /**
@@ -658,21 +726,40 @@ export function compareAsset(target, found) {
   return { wrong, note };
 }
 
-/** One GitHub release, by tag, as JSON. */
+/**
+ * One GitHub release, by tag, as JSON.
+ *
+ * Sends `GITHUB_TOKEN` when the environment has one. The rate-limit message
+ * below has always told the reader to set it, and until KNEG-413 nothing read
+ * it. A 429 is retried with everything else transient; a 403 is not, because
+ * waiting twenty seconds does not outlast an hourly limit.
+ */
 async function release(repo, tag) {
   const url = `https://api.github.com/repos/${repo}/releases/tags/${tag}`;
-  const response = await fetch(url, {
-    headers: { accept: "application/vnd.github+json", "user-agent": "knegiswhisper-model-pin" },
-  });
-  if (response.status === 403 || response.status === 429) {
-    die(
-      `${url} returned HTTP ${response.status}. GitHub rate-limits unauthenticated API calls to ` +
-        "60 an hour per address; this mode needs one. Wait, or set GITHUB_TOKEN in the environment " +
-        "if a run needs more."
-    );
-  }
-  if (!response.ok) die(`${url} returned HTTP ${response.status}`);
-  return response.json();
+  const headers = { accept: "application/vnd.github+json", "user-agent": "knegiswhisper-model-pin" };
+  if (process.env.GITHUB_TOKEN) headers.authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
+
+  return retrying(
+    async () => {
+      const response = await fetch(url, { headers });
+      if (response.status === 403 || response.status === 429) {
+        await discard(response);
+        throw new HttpError(
+          response.status,
+          url,
+          `${url} returned HTTP ${response.status}. GitHub rate-limits unauthenticated API calls to ` +
+            "60 an hour per address; this mode needs one. Wait, or set GITHUB_TOKEN in the " +
+            "environment if a run needs more."
+        );
+      }
+      if (!response.ok) {
+        await discard(response);
+        throw new HttpError(response.status, url);
+      }
+      return await response.json();
+    },
+    { onRetry: (retry) => console.error(`  ${retryLine(url, retry)}`) }
+  );
 }
 
 /**
@@ -777,12 +864,21 @@ export async function verifyStated(only) {
   }
 
   // Everything below this line is reporting, not checking. `wrong` is already
-  // empty or the process has already exited.
+  // empty or the process has already exited. So a repository whose `main`
+  // cannot be read is a line in the report, not a failure: the check it would
+  // have informed has already passed (KNEG-413).
   const moved = [];
+  const unread = [];
   const repos = [...new Set(targets.map((t) => t.repo))];
   for (const repo of repos) {
     const pinned = targets.find((t) => t.repo === repo).revision;
-    const info = await modelInfo(repo);
+    let info;
+    try {
+      info = await modelInfo(repo);
+    } catch (error) {
+      unread.push(`  ${repo}: ${describe(error)}`);
+      continue;
+    }
     if (typeof info.sha === "string" && info.sha !== pinned) {
       moved.push(
         `  ${repo}: pinned ${pinned.slice(0, 12)}, main is now ${info.sha.slice(0, 12)}` +
@@ -855,8 +951,15 @@ export async function verifyStated(only) {
         `what to re-read with --revisions when these pins are next revisited:`
     );
     for (const line of moved) console.log(line);
-  } else {
+  } else if (unread.length === 0) {
     console.log(`No repository has moved past its pinned commit.`);
+  }
+  if (unread.length > 0) {
+    console.log(
+      `\n${unread.length} of ${repos.length} repositories' main could not be read, so whether ` +
+        "they have moved is unknown this run. Not a failure -- this half only reports:"
+    );
+    for (const line of unread) console.log(line);
   }
 }
 
@@ -1082,8 +1185,14 @@ async function main(argv) {
   }
 }
 
-const isMain =
-  process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url));
+const isMain = isEntryPoint(import.meta.url);
 if (isMain) {
-  await main(process.argv.slice(2));
+  // The network paths throw rather than exit, so one place turns a failure
+  // into the tool's own one-line message and a non-zero exit, as `die` always
+  // did, instead of a stack trace.
+  try {
+    await main(process.argv.slice(2));
+  } catch (error) {
+    die(describe(error));
+  }
 }

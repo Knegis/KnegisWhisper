@@ -12,12 +12,26 @@ import { LocalLanguagePicker } from "../components/LocalLanguagePicker";
  * every provider, said whether a key was stored, and offered no way to store
  * one, which is how the parity gate came to need a `reachable` field separate
  * from `built`.
+ *
+ * # In plain words (KNEG-343)
+ *
+ * The copy rule the task pages follow, applied here too: failures, where
+ * audio goes, and anything to do now stay in view; model ids, credential
+ * slots, ports, paths, engine names and the mechanism go under Learn more or a
+ * row's Details. Nothing true was dropped, only moved. The engines are "the
+ * speech engine" (whisper.cpp's server) and "the Parakeet engine"
+ * (sherpa-onnx), named under Details. Provider model ids stay as the options of
+ * their menus: they are the names the providers sell them by, and there are no
+ * others.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
+import { FailureLine } from "../components/FailureLine";
+import { LearnMore } from "../components/LearnMore";
 import { MicrophoneSettings } from "../components/MicrophoneSettings";
 import { Row } from "../components/Row";
+import { destinationName, privacyLines } from "../lib/controlBar";
 import {
   getDictationRoute,
   getLocalStatus,
@@ -38,11 +52,14 @@ import {
 } from "../lib/ipc";
 import {
   freshnessLabel,
+  modelLanguage,
   progressLabel,
   refreshOutcomeLabel,
   useForDetail,
   useForLabel,
   verificationLabel,
+  whisperModelHint,
+  type Plain,
 } from "../lib/labels";
 import { chooseParakeetRoute, chooseWhisperRoute } from "../lib/routeChoice";
 import { useRefresh } from "../lib/useRefresh";
@@ -54,21 +71,39 @@ import { useRefresh } from "../lib/useRefresh";
  * four of the seven providers use an API shape this build has no client for, and
  * the route refuses rather than sending the audio somewhere else. That refusal
  * is the correct behaviour, so the screen names it rather than hiding it behind
- * a greyed-out control with no explanation.
+ * a greyed-out control with no explanation. The reason Rust gives -- "an
+ * unattested request would present as Tinfoil", "a model id is required" -- is
+ * the mechanism, so it goes under Details (KNEG-343).
  */
-function dispatchLabel(d: Dispatch): string {
+function dispatchLabel(d: Dispatch): Plain {
   switch (d.state) {
     case "ready":
-      return "can be used";
+      return { text: "Can be used", more: null };
     case "needs-client":
       // Not always "unwritten". Tinfoil is refused on purpose, and the reason
-      // that arrives says which case it is.
-      return d.reason;
+      // that arrives says which case it is -- so the line says neither "yet"
+      // nor "never", and the reason under Details tells them apart
+      // (`commands.rs` pins Tinfoil's as not reading like unfinished work).
+      return { text: "Can't be used for dictation", more: d.reason };
     case "unresolvable":
       // Usually a missing setting rather than a missing feature — Corti with no
       // environment or tenant is the case this exists for.
-      return d.reason;
+      return { text: "Needs setting up", more: d.reason };
   }
+}
+
+/** A freshness line and its builds, the same way for both engines. */
+function Freshness({ line, current }: { line: Plain; current: boolean }) {
+  return (
+    <>
+      <p className={current ? "muted" : "muted warn"}>{line.text}</p>
+      {line.more ? (
+        <LearnMore summary="Which version">
+          <p>{line.more}</p>
+        </LearnMore>
+      ) : null}
+    </>
+  );
 }
 
 /**
@@ -111,8 +146,8 @@ export function SettingsTranscription({
    * to put the line on the row whose button was pressed.
    */
   const [installingId, setInstallingId] = useState<string | null>(null);
-  /** What the last press of the server-binary button did. */
-  const [refreshed, setRefreshed] = useState<string | null>(null);
+  /** What the last press of the speech-engine button did. */
+  const [refreshed, setRefreshed] = useState<(Plain & { problem: boolean }) | null>(null);
   /** Per-provider model choice, before it is committed. */
   const [selected, setSelected] = useState<Record<string, string>>({});
   /**
@@ -141,7 +176,7 @@ export function SettingsTranscription({
   const choose = (p: ProviderSummary) => {
     const model = selected[p.id] ?? p.models[0];
     if (!model) {
-      setChosen("The registry lists no model for this provider.");
+      setChosen(`${p.name} has no model to choose.`);
       return;
     }
 
@@ -170,10 +205,12 @@ export function SettingsTranscription({
             }
           : undefined,
       );
+      // Where the audio goes is said with the choice, not left to the row
+      // above to be noticed (KNEG-343).
       setChosen(
         p.configured
-          ? `Dictation now goes to ${p.name} / ${model}.`
-          : `Set to ${p.name} / ${model}. It will not work until a key is stored on the Providers screen.`,
+          ? `Dictation now goes to ${p.name} (${model}). Audio is sent to ${p.name}.`
+          : `Set to ${p.name} (${model}). It won't work until you add a key on the Providers page.`,
       );
     });
   };
@@ -201,10 +238,20 @@ export function SettingsTranscription({
     });
   };
 
+  // The progress event carries a model's id; the line names it, from the model
+  // lists as they were last read. A ref, so a reload does not resubscribe the
+  // listener and drop an event in between.
+  const latest = useRef(data);
+  latest.current = data;
+
   useEffect(() => {
     let unlisten: (() => void) | undefined;
+    const nameOf = (id: string) =>
+      latest.current?.local.models.find((m) => m.id === id)?.name ??
+      latest.current?.sherpa.models.find((m) => m.id === id)?.name ??
+      id;
     void onInstallProgress((progress) => {
-      setInstalling(progressLabel(progress));
+      setInstalling(progressLabel(progress, nameOf));
       if (progress.stage === "done") {
         setInstallingId(null);
         void reload();
@@ -218,39 +265,46 @@ export function SettingsTranscription({
   if (!data) {
     return (
       <div className="view">
-        {error ? <p className="error">{error}</p> : <p className="muted">Loading…</p>}
+        {error ? <FailureLine text="This page couldn't load." detail={error} /> : <p className="muted">Loading…</p>}
       </div>
     );
   }
 
   const { providers, local, sherpa, route } = data;
   const withKeys = providers.filter((p) => p.configured);
+  const serverFreshness = freshnessLabel(local.serverFreshness);
+  const sherpaFreshness = freshnessLabel(sherpa.cliFreshness);
 
   return (
     <div className="view">
-      {error ? <p className="error">{error}</p> : null}
+      {error ? <FailureLine text="That didn't work." detail={error} /> : null}
 
       <MicrophoneSettings />
       <section data-surface="settings.transcription">
         <button type="button" onClick={onGoToVocabulary}>Manage vocabulary</button>
         <h2>Cloud providers</h2>
         <p className="muted">
-          A stored key is not a working provider. Store keys and run a real
-          connection test on the Providers screen.
+          Add keys and test them on the Providers page.
         </p>
         <Row
           label="Dictation goes to"
-          value={route.problem ? "Nowhere usable" : route.destination}
-          detail={
+          value={
             route.problem
-              ? route.problem
-              : route.leavesDevice
-                ? "audio leaves this machine"
-                : "audio stays on this machine"
+              ? "Nowhere yet"
+              : route.isLocal
+                ? "This computer"
+                : destinationName(route.destination)
           }
+          detail={route.problem ? undefined : privacyLines(route, null)[0]}
         />
+        {route.problem ? (
+          <FailureLine
+            text="Dictation can't be used until this is set up. Nothing is sent anywhere meanwhile."
+            detail={route.problem}
+          />
+        ) : null}
         <Row
-          label="Keys stored"
+          label="Keys saved"
           value={
             withKeys.length === 0
               ? "None"
@@ -258,19 +312,27 @@ export function SettingsTranscription({
           }
           detail={
             withKeys.length === 0
-              ? "no cloud provider can be used until one is stored"
+              ? "add one on the Providers page to use a cloud provider"
               : undefined
           }
         />
-        {providers.map((p) => (
+        {providers.map((p) => {
+          const dispatch = dispatchLabel(p.dispatch);
+          return (
           <div key={p.id} className="row">
             <span className="row-label">{p.name}</span>
             <span className="row-value">
-              {p.configured ? "Key stored" : "No key stored"}
+              {p.configured ? "Key saved" : "No key saved"}
               <em className="row-detail">
-                {dispatchLabel(p.dispatch)} · {p.modelCount} model
-                {p.modelCount === 1 ? "" : "s"} · slot <code>{p.credentialSlot}</code>
+                {dispatch.text} · {p.modelCount} model
+                {p.modelCount === 1 ? "" : "s"}
               </em>
+              <LearnMore summary="Details">
+                {dispatch.more ? <p>{dispatch.more}</p> : null}
+                <p>
+                  Its key is in the credential slot <code>{p.credentialSlot}</code>.
+                </p>
+              </LearnMore>
               {p.dispatch.state !== "needs-client" ? (
                 <span className="controls">
                   <select
@@ -314,7 +376,8 @@ export function SettingsTranscription({
               ) : null}
             </span>
           </div>
-        ))}
+          );
+        })}
         {/*
           Always rendered, never conditional, and below every control it reports
           on. The slot holds its height empty, so a press fills it instead of
@@ -333,24 +396,24 @@ export function SettingsTranscription({
       <section data-surface="settings.transcription.local">
         <h2>Local transcription</h2>
         <LocalLanguagePicker disabled={sherpa.selected !== null} />
-        <p className="muted">Applies to local Whisper dictation, including KB Whisper. Other local engines use their model's supported languages.</p>
+        <p className="muted">These languages apply to Whisper models. Parakeet models below use the languages they were made for.</p>
         {local.availability.state === "not-published" ? (
           <>
             <Row
               label="Availability"
-              value="No server is published for this platform"
+              value="Not available on this computer yet"
             />
-            <p className="muted">{local.availability.reason}</p>
-            <p className="muted">{local.availability.tracking}</p>
+            <LearnMore summary="Why">
+              <p>{local.availability.reason}</p>
+              <p>{local.availability.tracking}</p>
+            </LearnMore>
           </>
         ) : (
           <>
             <Row
-              label="Server"
+              label="Speech engine"
               value={local.serverInstalled ? "Installed" : "Not installed"}
-              detail={
-                local.port ? `running on 127.0.0.1:${local.port}` : undefined
-              }
+              detail={local.port ? "running" : undefined}
             />
             {/*
               Which build is installed, said out loud. "Installed" was the only
@@ -361,14 +424,8 @@ export function SettingsTranscription({
               is not a polite `stale`, and the button below is offered for both
               because pressing it is how either one is settled.
             */}
-            {freshnessLabel(local.serverFreshness) ? (
-              <p
-                className={
-                  local.serverFreshness.state === "current" ? "muted" : "muted warn"
-                }
-              >
-                {freshnessLabel(local.serverFreshness)}
-              </p>
+            {serverFreshness ? (
+              <Freshness line={serverFreshness} current={local.serverFreshness.state === "current"} />
             ) : null}
             {local.serverFreshness.state !== "not-installed" ? (
               <button
@@ -381,8 +438,8 @@ export function SettingsTranscription({
                 }}
               >
                 {local.serverFreshness.state === "current"
-                  ? "Reinstall the server binary"
-                  : "Update the server binary"}
+                  ? "Reinstall the speech engine"
+                  : "Update the speech engine"}
               </button>
             ) : null}
             {/*
@@ -390,18 +447,31 @@ export function SettingsTranscription({
               section under the pointer -- the same reason the providers block
               above holds its status line open.
             */}
-            <p className="status-slot row-detail" role="status">
-              {refreshed}
+            <p
+              className={refreshed?.problem ? "status-slot row-detail warn" : "status-slot row-detail"}
+              role="status"
+            >
+              {refreshed?.text}
             </p>
-            <Row
-              label="Installed to"
-              value={local.installDir}
-              detail={
-                local.installDirFellBack
-                  ? "the per-user location contained a space or a non-ASCII character, which the native binaries cannot load from, so a machine-wide location is used instead"
-                  : undefined
-              }
-            />
+            {refreshed?.more ? (
+              <LearnMore summary="What was replaced">
+                <p>{refreshed.more}</p>
+              </LearnMore>
+            ) : null}
+            <LearnMore summary="Technical details">
+              <p>
+                The speech engine is whisper.cpp's server
+                {local.port ? `, running on 127.0.0.1:${local.port}` : ""}. It
+                is installed in <code>{local.installDir}</code>.
+              </p>
+              {local.installDirFellBack ? (
+                <p>
+                  The per-user location contained a space or a non-ASCII
+                  character, which the native binaries cannot load from, so a
+                  machine-wide location is used instead.
+                </p>
+              ) : null}
+            </LearnMore>
             {installing ? <Row label="Progress" value={installing} /> : null}
             {/* `list`, not `purposes`: these rows carry a button each, and
                 `purposes` is a wrapping row of pills that cannot hold one. */}
@@ -422,25 +492,34 @@ export function SettingsTranscription({
                 // claim to be in use while one is selected, even though its
                 // server is up and the route is local.
                 const inUse = loaded && route.isLocal && sherpa.selected === null;
+                const parakeet = sherpa.models.find((s) => s.id === sherpa.selected)?.name ?? sherpa.selected;
                 return (
                 <li key={m.id}>
-                  <code>{m.id}</code> {m.name}
+                  {m.name}
                   {m.sizeMb ? ` · ${m.sizeMb} MB` : ""}
                   {m.recommended ? " · recommended" : ""}
+                  {whisperModelHint(m.sizeMb) ? ` · ${whisperModelHint(m.sizeMb)}` : ""}
                   <em className="row-detail">
-                    {m.installed
-                      ? `installed, ${verificationLabel(m.verifiedBy)}`
-                      : `not installed — will be ${verificationLabel(m.verifiedBy)}`}
+                    {m.installed ? "Installed" : "Not installed"}
                   </em>
                   {loaded && !inUse ? (
                     <em className="row-detail warn">
-                      the server is running with this model, but dictation goes
-                      to{" "}
+                      Loaded, but dictation goes to{" "}
                       {sherpa.selected !== null && route.isLocal
-                        ? `the local model ${sherpa.selected}`
-                        : route.destination}
+                        ? parakeet
+                        : route.problem
+                          ? "nowhere yet"
+                          : destinationName(route.destination)}
                     </em>
                   ) : null}
+                  <LearnMore summary="Details">
+                    <p>
+                      Model id <code>{m.id}</code>.{" "}
+                      {m.installed
+                        ? `When it was downloaded: ${verificationLabel(m.verifiedBy)}.`
+                        : `When it is downloaded: ${verificationLabel(m.verifiedBy)}.`}
+                    </p>
+                  </LearnMore>
                   {m.installed ? (
                     <button
                       type="button"
@@ -475,31 +554,50 @@ export function SettingsTranscription({
                 );
               })}
             </ul>
-            <h3>Parakeet, on the sherpa-onnx runtime</h3>
+            {/* The catch in a big model, said once (KNEG-407): one Whisper
+                model at a time serves dictation as well as meetings and
+                imports, so choosing a slow one for long recordings slows
+                dictation too. "Usually": believed from how Whisper sizes
+                behave, not measured here. */}
             <p className="muted">
-              A second local engine. Nothing here reaches the network until you
-              press Install, and dictation uses exactly one local engine at a
-              time — choosing a Parakeet model releases the whisper server, and
-              choosing a whisper model above releases this one.
+              Only one Whisper model runs at a time. Meetings and imports
+              transcribed on this computer use it, and so does dictation when
+              it uses Whisper, so a bigger one is usually more accurate and
+              slower for all of them.
             </p>
+            <h3>Parakeet models</h3>
+            <p className="muted">
+              Nothing downloads until you press Install. Dictation uses one local
+              model at a time, so choosing a Parakeet model stops dictation using
+              the Whisper model above, and the other way round.
+            </p>
+            <LearnMore summary="About Parakeet">
+              <p>
+                Parakeet models run on a second engine, sherpa-onnx, beside the
+                Whisper models' whisper.cpp. Choosing a model on one releases the
+                other.
+              </p>
+            </LearnMore>
             {sherpa.availability.state === "not-published" ? (
               <>
                 <Row
                   label="Availability"
-                  value="No sherpa-onnx runtime is published for this platform"
+                  value="Not available on this computer yet"
                 />
-                <p className="muted">{sherpa.availability.reason}</p>
-                <p className="muted">{sherpa.availability.tracking}</p>
+                <LearnMore summary="Why">
+                  <p>{sherpa.availability.reason}</p>
+                  <p>{sherpa.availability.tracking}</p>
+                </LearnMore>
               </>
             ) : (
               <>
                 <Row
-                  label="Runtime"
+                  label="Parakeet engine"
                   value={sherpa.cliInstalled ? "Installed" : "Not installed"}
                   detail={
                     sherpa.cliInstalled
                       ? undefined
-                      : "installed automatically with the first model"
+                      : "installed with the first model"
                   }
                 />
                 {/*
@@ -518,30 +616,45 @@ export function SettingsTranscription({
                   screen that never mentions meetings. Reporting the staleness
                   honestly beats a button that is wrong at the worst moment.
                 */}
-                {freshnessLabel(sherpa.cliFreshness) ? (
-                  <p
-                    className={
-                      sherpa.cliFreshness.state === "current"
-                        ? "muted"
-                        : "muted warn"
-                    }
-                  >
-                    {freshnessLabel(sherpa.cliFreshness)}
-                  </p>
+                {sherpaFreshness ? (
+                  <Freshness line={sherpaFreshness} current={sherpa.cliFreshness.state === "current"} />
                 ) : null}
                 {sherpa.cliFreshness.state !== "not-installed" &&
                 sherpa.cliFreshness.state !== "current" ? (
-                  <p className="caveat">
-                    This runtime cannot be replaced from here yet. One archive
-                    serves three things — dictation with a Parakeet model, the
-                    live transcript in meetings, and speaker separation — so
-                    replacing it affects all three, and the meeting server runs
-                    out of this directory for as long as the application is
-                    open. Reinstalling means closing the application and
-                    deleting the directory above by hand.
-                  </p>
-                ) : null}
-                <Row label="Models kept in" value={sherpa.modelsDir} />
+                  <>
+                    <p className="caveat">
+                      This engine can't be updated from here yet. To reinstall
+                      it, close the app and delete its folder by hand.
+                    </p>
+                    {/*
+                      The engine is in the sidecar folder, `local.installDir`
+                      (`local_asr.rs`, `cli_root`), not with the models. The
+                      branch review caught the fold naming the models folder,
+                      where deleting removes the models and keeps the engine.
+                    */}
+                    <LearnMore summary="Why, and which folder">
+                      <p>
+                        One archive serves three things — dictation with a
+                        Parakeet model, the live transcript in meetings, and
+                        speaker separation — so replacing it affects all three,
+                        and the meeting server runs out of its folder for as long
+                        as the app is open.
+                      </p>
+                      <p>
+                        The engine is the <code>sherpa</code> folder inside{" "}
+                        <code>{local.installDir}</code>. The models are kept
+                        separately, in <code>{sherpa.modelsDir}</code>, and
+                        don't need deleting.
+                      </p>
+                    </LearnMore>
+                  </>
+                ) : (
+                  <LearnMore summary="Technical details">
+                    <p>
+                      Models are kept in <code>{sherpa.modelsDir}</code>.
+                    </p>
+                  </LearnMore>
+                )}
                 <ul className="list">
                   {sherpa.models.map((m) => {
                     // Which selection this row's button reads is decided by the
@@ -555,13 +668,18 @@ export function SettingsTranscription({
                         : sherpa.selected === m.id && route.isLocal;
                     return (
                       <li key={m.id}>
-                        <code>{m.id}</code> {m.name}
+                        {m.name}
                         {m.sizeMb ? ` · ${m.sizeMb} MB` : ""}
-                        {m.language ? ` · ${m.language}` : ""}
+                        {m.language ? ` · ${modelLanguage(m.language)}` : ""}
                         <em className="row-detail">
                           {useForDetail(m.usedFor)} ·{" "}
                           {m.installed ? "installed" : "not installed"}
                         </em>
+                        <LearnMore summary="Details">
+                          <p>
+                            Model id <code>{m.id}</code>.
+                          </p>
+                        </LearnMore>
                         {m.installed ? (
                           <button
                             type="button"
@@ -611,8 +729,12 @@ export function SettingsTranscription({
                 type="button"
                 onClick={() => {
                   void guard(async () => {
-                    await useLocalModel(false);
+                    // The stop first: it is refused while something is
+                    // using the server (KNEG-414), and a refusal must mean
+                    // nothing changed. In the other order the route had
+                    // already moved to a provider beside a "Not now".
                     await stopLocalServer();
+                    await useLocalModel(false);
                   });
                 }}
               >

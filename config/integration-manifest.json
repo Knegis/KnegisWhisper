@@ -313,7 +313,7 @@
       "backend": "crates/reasoning-core",
       "ui": "Settings > Intelligence > Enterprise",
       "reachable": true,
-      "note": "Reachable: organisation credentials are entered on Settings > Intelligence > Enterprise and stored as one JSON document in the OS credential store. The request shape and signing are implemented and tested -- SigV4 against AWS's published vectors -- but no live call has been made to any of the three, which needs org credentials this project does not have. Recorded as unverified in docs/PLATFORM_SUPPORT.md."
+      "note": "Reachable: organisation credentials are entered on Settings > Cleanup & summaries > Company accounts and stored as one JSON document in the OS credential store. The request shape and signing are implemented and tested -- SigV4 against AWS's published vectors -- but no live call has been made to any of the three, which needs org credentials this project does not have. Recorded as unverified in docs/PLATFORM_SUPPORT.md."
     },
     "enterprise:azure": {
       "status": "rewired-to-direct-byok",
@@ -327,7 +327,7 @@
       "backend": "crates/reasoning-core",
       "ui": "Settings > Intelligence > Enterprise",
       "reachable": true,
-      "note": "Reachable: organisation credentials are entered on Settings > Intelligence > Enterprise and stored as one JSON document in the OS credential store. The request shape and signing are implemented and tested -- SigV4 against AWS's published vectors -- but no live call has been made to any of the three, which needs org credentials this project does not have. Recorded as unverified in docs/PLATFORM_SUPPORT.md."
+      "note": "Reachable: organisation credentials are entered on Settings > Cleanup & summaries > Company accounts and stored as one JSON document in the OS credential store. The request shape and signing are implemented and tested -- SigV4 against AWS's published vectors -- but no live call has been made to any of the three, which needs org credentials this project does not have. Recorded as unverified in docs/PLATFORM_SUPPORT.md."
     },
     "enterprise:vertex": {
       "status": "rewired-to-direct-byok",
@@ -344,7 +344,7 @@
       "backend": "crates/reasoning-core",
       "ui": "Settings > Intelligence > Enterprise",
       "reachable": true,
-      "note": "Reachable: organisation credentials are entered on Settings > Intelligence > Enterprise and stored as one JSON document in the OS credential store. The request shape and signing are implemented and tested -- SigV4 against AWS's published vectors -- but no live call has been made to any of the three, which needs org credentials this project does not have. Recorded as unverified in docs/PLATFORM_SUPPORT.md."
+      "note": "Reachable: organisation credentials are entered on Settings > Cleanup & summaries > Company accounts and stored as one JSON document in the OS credential store. The request shape and signing are implemented and tested -- SigV4 against AWS's published vectors -- but no live call has been made to any of the three, which needs org credentials this project does not have. Recorded as unverified in docs/PLATFORM_SUPPORT.md."
     },
     "local-llm:qwen": {
       "status": "ported-with-new-rust-implementation",
@@ -930,7 +930,7 @@
       "backend": "crates/security",
       "ui": "Settings > Providers",
       "reachable": true,
-      "note": "New relative to upstream: baseline.secretKeys has no entry for AssemblyAI. meeting-stream:assemblyai-realtime minted its realtime token from api.openwhispr.com, a removed vendor service (vendor:openwhispr-realtime-token-broker), rather than asking the user for a key. This slot exists so a direct client can authenticate itself instead. Reachable: Settings > Providers lists every provider-kind slot the registry declares, including this one, with no frontend change needed. No AssemblyAI meeting client exists yet -- see meeting-stream:assemblyai-realtime -- so nothing consumes the stored key today."
+      "note": "New relative to upstream: baseline.secretKeys has no entry for AssemblyAI. meeting-stream:assemblyai-realtime minted its realtime token from api.openwhispr.com, a removed vendor service (vendor:openwhispr-realtime-token-broker), rather than asking the user for a key. This slot exists so a direct client can authenticate itself instead. Reachable: Settings > Providers lists every provider-kind slot the registry declares, including this one, and labels it Live meetings because the AssemblyAI meeting client reads it (crates/meeting-core/src/assemblyai.rs; the label comes from MeetingProviderSummary.credentialSlot, KNEG-373)."
     },
     "credential:deepgram": {
       "status": "rewired-to-direct-byok",
@@ -939,7 +939,7 @@
       "backend": "crates/security",
       "ui": "Settings > Providers",
       "reachable": true,
-      "note": "New relative to upstream: baseline.secretKeys has no entry for Deepgram. meeting-stream:deepgram-realtime minted its realtime token from api.openwhispr.com, a removed vendor service (vendor:openwhispr-realtime-token-broker), rather than asking the user for a key. This slot exists so a direct client can authenticate itself instead. Reachable: Settings > Providers lists every provider-kind slot the registry declares, including this one, with no frontend change needed. No Deepgram meeting client exists yet -- see meeting-stream:deepgram-realtime -- so nothing consumes the stored key today."
+      "note": "New relative to upstream: baseline.secretKeys has no entry for Deepgram. meeting-stream:deepgram-realtime minted its realtime token from api.openwhispr.com, a removed vendor service (vendor:openwhispr-realtime-token-broker), rather than asking the user for a key. This slot exists so a direct client can authenticate itself instead. Reachable: Settings > Providers lists every provider-kind slot the registry declares, including this one, and labels it Live meetings because the Deepgram meeting client reads it (crates/meeting-core/src/deepgram.rs; the label comes from MeetingProviderSummary.credentialSlot, KNEG-373)."
     },
     "diarization-model:3dspeaker-campplus-en": {
       "status": "ported-with-new-rust-implementation",

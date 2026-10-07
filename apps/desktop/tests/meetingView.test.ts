@@ -2,14 +2,19 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   activeCall,
+  discardQuestion,
   elapsedLabel,
   interruptedTitle,
   liveElapsed,
   meetingLanguageMenu,
+  meetingIntro,
+  meetingMicrophone,
+  privacyProvider,
   reviewIsFor,
   recentMeta,
   recordedSources,
   recordingStartedAt,
+  summaryModelName,
   summaryPrivacyLine,
 } from "../src/lib/meetingView.js";
 import { timeOfDay } from "../src/lib/dayGroups.js";
@@ -187,4 +192,79 @@ test("meetingLanguageMenu lists a saved value it does not know as itself, so the
   const menu = meetingLanguageMenu("sv-SE", DETECTS);
   assert.deepEqual(menu.filter((o) => o.current).map((o) => [o.id, o.label]), [["sv-SE", "sv-SE"]]);
   assert.equal(menu.length, 10);
+});
+
+/* ------------------------------- the microphone a meeting records (KNEG-341) */
+
+const MICROPHONES = [
+  { name: "Microphone Array (Realtek(R) Audio)", isDefault: true },
+  { name: "Headset (Jabra Evolve2 65)", isDefault: false },
+];
+
+test("meetingMicrophone: nothing chosen is the system default", () => {
+  assert.deepEqual(meetingMicrophone(MICROPHONES, null), {
+    label: "Default microphone",
+    title: "Meetings record the system default microphone. Dictation and meetings use the same microphone, chosen on Dictation.",
+  });
+});
+
+test("meetingMicrophone: a chosen microphone that is connected is named", () => {
+  assert.deepEqual(meetingMicrophone(MICROPHONES, "Headset (Jabra Evolve2 65)"), {
+    label: "Headset (Jabra Evolve2 65)",
+    title: "Meetings record Headset (Jabra Evolve2 65). Dictation and meetings use the same microphone, chosen on Dictation.",
+  });
+});
+
+test("meetingMicrophone: a chosen microphone that is unplugged says the default is recorded instead", () => {
+  assert.deepEqual(meetingMicrophone(MICROPHONES, "USB Mic"), {
+    label: "USB Mic (not connected)",
+    title: "USB Mic isn't connected, so meetings record the system default microphone until it is.",
+  });
+});
+
+test("meetingMicrophone: before the device list arrives, a choice is named rather than called unplugged", () => {
+  assert.equal(meetingMicrophone(null, "USB Mic").label, "USB Mic");
+  assert.equal(meetingMicrophone(null, null).label, "Default microphone");
+});
+
+test("the hero promises a summary only while automatic summaries are on", () => {
+  // KNEG-377: R19's rule had no committed test. With them off, a summary is
+  // something to ask for in Notes, not something you get.
+  assert.equal(meetingIntro(true), "You get a transcript and a summary, saved to Notes.");
+  assert.equal(meetingIntro(false), "You get a transcript, saved to Notes.");
+});
+
+test("while Start waits on a saved provider that can't be used, the privacy line names no provider", () => {
+  // KNEG-354, item 1. The hero said the chosen provider can't be used while
+  // the privacy line said audio is sent to the fallback: two answers. Nothing
+  // is sent until somebody chooses.
+  assert.equal(privacyProvider(null, "fallback", true), null);
+  assert.equal(privacyProvider(null, "fallback", false), "fallback");
+  assert.equal(privacyProvider(null, null, false), null);
+  // A meeting that is running says what it is running with, whatever is saved.
+  assert.equal(privacyProvider("running", "fallback", true), "running");
+});
+
+// KNEG-367: a summary names the model that wrote it. What is stored is the id
+// the settings chose; a model the registry lists is named as the menus name
+// it, and anything else -- a deployment name, a typed id -- is shown as stored.
+test("a summary's model is named as the registry names it, or shown as stored", () => {
+  assert.equal(summaryModelName("qwen3.5-9b-q4_k_m"), "Qwen3.5 9B");
+  assert.equal(summaryModelName("claude-sonnet-5"), "Claude Sonnet 5");
+  assert.equal(summaryModelName("my-azure-deployment"), "my-azure-deployment");
+  assert.equal(summaryModelName(null), null);
+});
+
+// KNEG-394: Discard asks first, with what is about to be lost. The length is
+// rounded as the saved outcome rounds it ("Saved as a note (38 min)."), and
+// the notes sentence holds whatever was typed: Rust keeps notes as a note
+// when there are any and has nothing to keep when there are none.
+test("Discard's question names the recording's length and what happens to typed notes", () => {
+  assert.equal(
+    discardQuestion(38 * 60 + 10),
+    "Discard this meeting? The recording so far (38 min) will be deleted and can't be recovered. Any notes you typed are kept as a separate note.",
+  );
+  assert.match(discardQuestion(90), /\(2 min\)/);
+  assert.match(discardQuestion(42), /\(under a minute\)/);
+  assert.match(discardQuestion(0), /\(under a minute\)/);
 });

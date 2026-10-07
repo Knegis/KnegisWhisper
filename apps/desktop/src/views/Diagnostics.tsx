@@ -12,6 +12,7 @@
 
 import { useEffect, useState } from "react";
 
+import { LearnMore } from "../components/LearnMore";
 import { LocalServerHealth } from "../components/LocalServerHealth";
 import { Row } from "../components/Row";
 import {
@@ -82,12 +83,18 @@ export function DiagnosticsView({ diagnostics }: { diagnostics: Diagnostics }) {
           value={
             diagnostics.credentialStore.state === "available"
               ? diagnostics.credentialStore.backend
-              : "unavailable"
+              : "Unavailable"
           }
           {...(diagnostics.credentialStore.state === "unavailable"
-            ? { detail: diagnostics.credentialStore.reason }
+            ? { detail: "keys can't be saved or read until it works" }
             : {})}
         />
+        {/* The failure in view, the system's reason under Details (KNEG-343). */}
+        {diagnostics.credentialStore.state === "unavailable" ? (
+          <LearnMore summary="Details">
+            <p>{diagnostics.credentialStore.reason}</p>
+          </LearnMore>
+        ) : null}
         <Row
           label="Model cache"
           value={diagnostics.modelCache.path}
@@ -207,11 +214,23 @@ export function DiagnosticsView({ diagnostics }: { diagnostics: Diagnostics }) {
 
       <section>
         <h2>Network boundary</h2>
+        {/*
+          It said "no screen reaches the network any other way" than a
+          connection test and an update check, under a list naming calendar,
+          transcription, model downloads and media import. And "nothing is
+          sent at startup" missed one case: a summary still queued when the
+          app closed is claimed by the worker as it starts again
+          (`summaries::start`, which marks only in-flight jobs interrupted).
+          Read from code (KNEG-343).
+        */}
         <p className="muted">
-          Outbound requests are permitted only for these purposes. Nothing is
-          sent at startup — a connection test on the Providers screen and an
-          update check on this screen are both explicitly invoked, and no
-          screen reaches the network any other way.
+          Outbound requests are permitted only for these purposes, and each one
+          follows something you set up or pressed: dictation, a meeting, cleanup
+          or a summary sent to a service you chose; a model or tool you chose to
+          install; a calendar you connected; a connection test on the Providers
+          page; an update check here. Nothing is sent just because the app
+          started, except a summary that was still waiting when the app last
+          closed.
         </p>
         <ul className="purposes">
           {diagnostics.allowedEgressPurposes.map((p) => (

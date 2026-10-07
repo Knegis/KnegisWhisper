@@ -5,7 +5,8 @@
  * agrees with the documented command lines, that hashing a file on disk
  * produces the digest and the size the rest of the world would produce for the
  * same bytes, and that `pinnedTargets` finds every committed pin and no
- * phantoms.
+ * phantoms. A fourth uses a network of one machine: `download` against a local
+ * server that drops its connections, for the retry KNEG-413 added.
  *
  * The last is the one that earns its keep, and the reason has not changed even
  * though the reader has: the failure mode of a loose discovery step is not a
@@ -26,13 +27,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
   args,
   compareAsset,
+  download,
   githubAssetTargets,
   hfRepos,
   measureFile,
@@ -42,6 +44,15 @@ import {
   registry,
   statedTargets,
 } from "./pin.mjs";
+import {
+  body,
+  bytesOf,
+  dropBeforeHeaders,
+  dropMidBody,
+  redirect,
+  scriptedServer,
+  status,
+} from "./test-server.mjs";
 
 /* -------------------------------------------------------------------- args */
 
@@ -137,6 +148,134 @@ test("measureFile streams a file larger than one chunk without changing the answ
   }
 });
 
+/* ---------------------------------------- downloading, against a local server */
+
+// KNEG-413. Real `fetch` against `test-server.mjs`, with the retry's sleep
+// replaced so a test does not wait twenty seconds. The bytes are bigger than one
+// chunk so a mid-body drop has a middle to drop in.
+const BYTES = bytesOf(256 * 1024);
+const DIGEST = createHash("sha256").update(BYTES).digest("hex");
+const quick = { sleep: async () => {} };
+const tempFor = (label) => join(tmpdir(), `model-pin-${process.pid}-${label}`);
+
+async function withServer(routes, run) {
+  const server = await scriptedServer(routes);
+  try {
+    await run(server);
+  } finally {
+    await server.close();
+  }
+}
+
+test("download retries a connection closed before the headers, the 2026-10-05 failure", async () => {
+  await withServer({ "/m.bin": [dropBeforeHeaders(), body(BYTES)] }, async (server) => {
+    const measured = await download(server.url("/m.bin"), "pre-headers", null, quick);
+    try {
+      assert.equal(measured.sha256, DIGEST);
+      assert.equal(measured.sizeBytes, BYTES.length);
+      assert.equal(server.requests("/m.bin"), 2);
+    } finally {
+      rmSync(measured.path, { force: true });
+    }
+  });
+});
+
+test("download retries a body cut off halfway, and hashes only the whole one", async () => {
+  await withServer({ "/m.bin": [dropMidBody(BYTES), body(BYTES)] }, async (server) => {
+    const measured = await download(server.url("/m.bin"), "mid-body", null, quick);
+    try {
+      // Restarted from byte 0: a hash over the first half plus a whole second
+      // copy would be the wrong digest, not a slower right one.
+      assert.equal(measured.sha256, DIGEST);
+      assert.equal(measured.sizeBytes, BYTES.length);
+    } finally {
+      rmSync(measured.path, { force: true });
+    }
+  });
+});
+
+test("download gives up after three attempts and leaves no partial file", async () => {
+  await withServer({ "/m.bin": [dropMidBody(BYTES)] }, async (server) => {
+    const error = await download(server.url("/m.bin"), "always-drops", null, quick).then(
+      () => assert.fail("every attempt was cut off"),
+      (e) => e
+    );
+    assert.equal(server.requests("/m.bin"), 3);
+    assert.match(String(error.cause?.code ?? error.cause?.cause?.code), /UND_ERR_SOCKET/);
+    assert.equal(existsSync(tempFor("always-drops")), false);
+  });
+});
+
+test("download does not retry a 404, and throws rather than exiting", async () => {
+  await withServer({ "/m.bin": [status(404)] }, async (server) => {
+    const error = await download(server.url("/m.bin"), "missing", null, quick).then(
+      () => assert.fail("a 404 is not a download"),
+      (e) => e
+    );
+    assert.equal(server.requests("/m.bin"), 1);
+    assert.equal(error.status, 404);
+    assert.match(error.message, /returned HTTP 404/);
+    assert.equal(existsSync(tempFor("missing")), false);
+  });
+});
+
+test("download retries a 503", async () => {
+  await withServer({ "/m.bin": [status(503), body(BYTES)] }, async (server) => {
+    const measured = await download(server.url("/m.bin"), "unavailable", null, quick);
+    try {
+      assert.equal(measured.sha256, DIGEST);
+      assert.equal(server.requests("/m.bin"), 2);
+    } finally {
+      rmSync(measured.path, { force: true });
+    }
+  });
+});
+
+test("download starts a retry from the URL it was given, not from where a redirect led", async () => {
+  // Hugging Face and GitHub both redirect to signed CDN URLs that expire. A
+  // retry that resumed at the signed URL would work until the signature lapsed.
+  await withServer(
+    { "/resolve/m.bin": [redirect("/cdn/m.bin")], "/cdn/m.bin": [dropBeforeHeaders(), body(BYTES)] },
+    async (server) => {
+      const measured = await download(server.url("/resolve/m.bin"), "redirected", null, quick);
+      try {
+        assert.equal(measured.sha256, DIGEST);
+        assert.equal(server.requests("/resolve/m.bin"), 2);
+        assert.equal(server.requests("/cdn/m.bin"), 2);
+        assert.equal(measured.resolvedFrom, server.url("/cdn/m.bin"));
+      } finally {
+        rmSync(measured.path, { force: true });
+      }
+    }
+  );
+});
+
+test("--keep only ever leaves a whole file at the path it was asked for", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "model-pin-test-"));
+  try {
+    const keepAt = join(dir, "kept", "m.bin");
+
+    await withServer({ "/m.bin": [dropMidBody(BYTES)] }, async (server) => {
+      await download(server.url("/m.bin"), "keep-fails", keepAt, quick).then(
+        () => assert.fail("every attempt was cut off"),
+        () => {}
+      );
+    });
+    assert.equal(existsSync(keepAt), false, "a failed download left a file that looks kept");
+    assert.equal(existsSync(`${keepAt}.partial`), false);
+
+    await withServer({ "/m.bin": [dropMidBody(BYTES), body(BYTES)] }, async (server) => {
+      const measured = await download(server.url("/m.bin"), "keep-works", keepAt, quick);
+      assert.equal(measured.path, keepAt);
+      assert.equal(measured.sha256, DIGEST);
+    });
+    assert.deepEqual(readFileSync(keepAt), BYTES);
+    assert.equal(existsSync(`${keepAt}.partial`), false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 /* --------------------------------------------------------- pinned targets */
 
 /** A registry shaped like the real one, with both families and both states. */
@@ -201,7 +340,7 @@ test("pinnedTargets survives a registry with no localAsr at all", () => {
   assert.deepEqual(pinnedTargets({}), []);
 });
 
-test("the committed registry still carries pins for all eight whisper models", () => {
+test("the committed registry still carries pins for all eleven whisper models", () => {
   // Not a unit test of anything — an assertion that the real file this tool
   // reads still has something in it, so `--verify` would have something to
   // measure. A pin dropped from WHISPER_PINS would otherwise make `--verify`
@@ -220,10 +359,22 @@ test("the committed registry still carries pins for all eight whisper models", (
   const sherpa = targets.filter((t) => t.kind === "sherpa");
   assert.deepEqual(
     whisper.map((t) => t.id).sort(),
-    ["base", "kb-whisper-base", "kb-whisper-tiny", "large", "medium", "small", "tiny", "turbo"],
+    [
+      "base",
+      "kb-whisper-base",
+      "kb-whisper-large",
+      "kb-whisper-medium",
+      "kb-whisper-small",
+      "kb-whisper-tiny",
+      "large",
+      "medium",
+      "small",
+      "tiny",
+      "turbo",
+    ],
     "every standard and KB Whisper model is pinned exactly once"
   );
-  for (const id of ["kb-whisper-base", "kb-whisper-tiny"]) {
+  for (const id of ["kb-whisper-base", "kb-whisper-large", "kb-whisper-medium", "kb-whisper-small", "kb-whisper-tiny"]) {
     const pin = whisper.find((t) => t.id === id);
     const source = parseHfUrl(pin.url);
     assert.equal(source.repo, `KBLab/${id}`);
@@ -426,17 +577,20 @@ test("hfRepos skips a whisper model hosted off Hugging Face rather than guessing
 });
 
 test("hfRepos reads every repository the committed registry downloads from", () => {
-  // 36 GGUF repositories plus ggerganov/whisper.cpp and two KB repositories.
+  // 36 GGUF repositories plus ggerganov/whisper.cpp and five KB repositories.
   // The count is asserted for
   // the reason the 39-object count is: a repository silently dropping out of
   // the registry would make --revisions read fewer and still report success.
   const repos = hfRepos();
-  assert.equal(repos.length, 39);
+  assert.equal(repos.length, 42);
   assert.ok(repos.some((r) => r.repo === "ggerganov/whisper.cpp"));
   assert.deepEqual(
     repos.filter((r) => r.repo.startsWith("KBLab/")),
     [
       { repo: "KBLab/kb-whisper-base", from: ["whisper/kb-whisper-base"] },
+      { repo: "KBLab/kb-whisper-large", from: ["whisper/kb-whisper-large"] },
+      { repo: "KBLab/kb-whisper-medium", from: ["whisper/kb-whisper-medium"] },
+      { repo: "KBLab/kb-whisper-small", from: ["whisper/kb-whisper-small"] },
       { repo: "KBLab/kb-whisper-tiny", from: ["whisper/kb-whisper-tiny"] },
     ]
   );

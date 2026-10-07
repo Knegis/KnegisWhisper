@@ -404,6 +404,18 @@ fn identified_speaker(
         .filter(|name| !name.trim().is_empty())
 }
 
+/// Read a note's stored transcript: a JSON array of segments, or nothing yet.
+///
+/// The one parse export, the Transcript tab's rows and search all use, so a
+/// search hit's row and the row the tab shows are the same row (KNEG-406). A
+/// note with no transcript is legitimate -- a typed note -- and has none.
+pub fn parse_stored(raw: Option<&str>) -> Result<Vec<Segment>, serde_json::Error> {
+    match raw {
+        Some(raw) if !raw.trim().is_empty() => serde_json::from_str(raw),
+        _ => Ok(Vec::new()),
+    }
+}
+
 /// Shape stored transcript segments into independently playable rows.
 ///
 /// Unlike [`export`], this does not call [`merge`]: the index and timing must

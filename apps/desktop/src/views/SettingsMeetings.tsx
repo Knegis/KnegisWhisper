@@ -284,12 +284,26 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
             because it can be the opposite privacy choice from the saved one. */}
         {savedUnusable ? (
           <>
+            {/* Until KNEG-354 this said the fallback "is selected instead.
+                That choice is kept until you pick another." -- above a
+                button that has to be pressed before Meetings will record.
+                A provider this version does not offer is not named by its
+                raw id; the id is folded. */}
             <p className="caveat">
-              {savedProvider?.name ?? savedUnusable} was chosen last time but cannot be used right
-              now{savedProvider ? ` (${availabilityLabel(savedProvider.availability)})` : ""}
-              {selectedProvider ? `, so ${selectedProvider.name} is selected instead` : ""}. That
-              choice is kept until you pick another.
+              {savedProvider
+                ? `${savedProvider.name} was chosen last time but can't be used right now (${availabilityLabel(savedProvider.availability)}).`
+                : "The provider chosen last time isn't offered by this version of the app."}{" "}
+              {`Meetings won't record until you choose a provider${
+                selectedProvider && !recording
+                  ? `: use ${selectedProvider.name} below, or pick another above.`
+                  : " above."
+              }`}
             </p>
+            {savedProvider ? null : (
+              <LearnMore>
+                <p>{`It was saved as “${savedUnusable}”.`}</p>
+              </LearnMore>
+            )}
             {selectedProvider && !recording ? (
               <button
                 type="button"
@@ -308,7 +322,9 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
         {selectedProvider ? (
           <>
             <p className="caveat">
-              {selectedProvider.summary}.{" "}
+              {/* Some summaries end in a full stop already: Deepgram's read
+                  "no session limit.." */}
+              {/[.!?]$/.test(selectedProvider.summary) ? selectedProvider.summary : `${selectedProvider.summary}.`}{" "}
               {selectedProvider.audioLeavesDevice
                 ? "Audio is sent to this provider."
                 : "Audio stays on this computer."}

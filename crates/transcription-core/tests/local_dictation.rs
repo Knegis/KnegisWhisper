@@ -87,7 +87,6 @@ async fn speech_goes_in_and_the_right_words_come_out() {
         language: None,
         threads: None,
         gpu_device: None,
-        vad: None,
     };
     let store = PidStore::new(root.path());
     let health = HttpHealth::new(policy.clone(), HEALTH_PATH);

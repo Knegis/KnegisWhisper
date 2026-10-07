@@ -42,13 +42,14 @@
  * under a header is the hero's own line under the shortcut.
  */
 
-import { Fragment, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { Chip } from "../components/Chip";
 import { ChipMenu } from "../components/ChipMenu";
 import { ControlBar } from "../components/ControlBar";
 import { DictationHistoryPanel } from "../components/DictationHistoryPanel";
 import { Icon, IconFilled } from "../components/Icon";
+import { Keycaps } from "../components/Keycaps";
 import { LearnMore } from "../components/LearnMore";
 import { LocalLanguagePicker } from "../components/LocalLanguagePicker";
 import { LocalServerHealth } from "../components/LocalServerHealth";
@@ -84,7 +85,7 @@ import {
   type DictationOutcome,
   type SessionState,
 } from "../lib/ipc";
-import { acceleratorText, outcomeLabel, sessionStateLabel } from "../lib/labels";
+import { acceleratorLabel, acceleratorText, outcomeLabel, pressableAccelerators, sessionStateLabel } from "../lib/labels";
 import { lastDictation, type InsertedDictation } from "../lib/lastDictation";
 import { microphoneState } from "../lib/microphone";
 import type { ViewId } from "../lib/navigation";
@@ -105,24 +106,6 @@ const COPIED_MS = 2000;
 function clock(seconds: number): string {
   const s = Math.max(0, Math.floor(seconds));
   return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
-}
-
-/**
- * A shortcut as keycaps: `Control+Shift+D` is three, and a second
- * accelerator on the same action is joined with "or". Built from
- * `acceleratorText`, the same string Settings > Shortcuts and the panel show.
- */
-function keycaps(shortcut: string): ReactNode {
-  return shortcut.split(", ").map((accelerator, i) => (
-    <Fragment key={accelerator}>
-      {i > 0 ? " or " : null}
-      <span className="keycaps">
-        {accelerator.split("+").map((key) => (
-          <kbd key={key}>{key}</kbd>
-        ))}
-      </span>
-    </Fragment>
-  ));
 }
 
 /**
@@ -326,13 +309,11 @@ export function DictationView({
   const dictationBinding = hotkeys.bindings.find((b) => b.action === "dictation");
   const shortcut = dictationBinding ? acceleratorText(dictationBinding) : "";
   // Keycaps name only what can be pressed. An accelerator Rust could not
-  // parse is Settings > Shortcuts' to report, not the hero's to invite.
+  // parse, or could not register, is Settings > Shortcuts' to report, not the
+  // hero's to invite (`pressableAccelerators`).
   const pressable = dictationBinding
-    ? acceleratorText({
-        ...dictationBinding,
-        accelerators: dictationBinding.accelerators.filter((a) => a.kind !== "invalid"),
-      })
-    : "";
+    ? pressableAccelerators(dictationBinding, hotkeys.registrations).map((a) => acceleratorLabel(a).text)
+    : [];
   // The microphone chip and its menu, including one chosen earlier and
   // unplugged since (`microphoneMenu` says why it is listed as itself).
   const microphone = microphoneMenu(devices, device);
@@ -456,7 +437,7 @@ export function DictationView({
     <TaskHero
       icon="dictation"
       status={{ tone: "ready", label: "Ready" }}
-      heading={<>Press {keycaps(pressable)} to dictate</>}
+      heading={<>Press <Keycaps accelerators={pressable} /> to dictate</>}
       sub={
         <>
           <p>{INTRO}</p>
@@ -580,12 +561,20 @@ export function DictationView({
                   </div>
                   <p className="control-result-text">{last.text}</p>
                   {/* A failure, so on screen: the words exist, and the one
-                      place they are is here and in the history. */}
+                      place they are is here and in the history. When it is
+                      the last outcome's own failure, the outcome's sentence
+                      is the same event, so it is folded here rather than
+                      drawn as a second red line below (KNEG-377). */}
                   {last.typed ? null : (
                     <p className="error control-note">
                       This could not be typed where your cursor was. Copy it from here.
                     </p>
                   )}
+                  {last.fromFailure && lastOutcome?.failed ? (
+                    <LearnMore>
+                      <p>{lastOutcome.label}</p>
+                    </LearnMore>
+                  ) : null}
                   {/* Only ever present when cleanup changed the text and the
                       user asked to keep it -- see `raw_for_history`. So its
                       presence is the finding, and it is labelled rather than
@@ -598,7 +587,7 @@ export function DictationView({
               {/* The last event's own sentence -- "Inserted 42 characters",
                   or why it failed -- under the text, because a failure is
                   never folded. */}
-              {lastOutcome && !recording ? (
+              {lastOutcome && !recording && !(last?.fromFailure && lastOutcome.failed) ? (
                 <p className={lastOutcome.failed ? "error control-note" : "control-note"}>
                   {lastOutcome.label}
                 </p>
@@ -667,10 +656,12 @@ export function DictationView({
             </div>
           </ControlBar>
           {/* The whisper server's health, so on its route alone: under a
-              Parakeet model it describes a server dictation is not using. */}
+              Parakeet model it describes a server dictation is not using.
+              Plain: nothing while it works, and no model id or port
+              (KNEG-357). Diagnostics shows the whole sentence. */}
           {engine === "whisper" ? (
             <div className="task-health">
-              <LocalServerHealth />
+              <LocalServerHealth plain />
             </div>
           ) : null}
         </div>

@@ -5,9 +5,9 @@
  * same local HTTP API `Developer > Local API` starts and `Developer > CLI`
  * talks to — one tool per route, using the CLI's own client and
  * discovery-file reader rather than a second implementation of either. So it
- * can only do anything while this application is running, and the screen
- * says that plainly rather than leaving it to be discovered as a stream of
- * tool-call failures in whatever client it is configured into.
+ * can only do anything while the Local API is on, and the screen says that
+ * plainly rather than leaving it to be discovered as a stream of tool-call
+ * failures in whatever client it is configured into.
  *
  * Deliberately no tool count anywhere on this screen: a specific number
  * ("thirteen tools") is a claim nothing here verifies, and it silently rots
@@ -19,14 +19,22 @@
  * application and then on `PATH` — reported as not found rather than assumed
  * present, the same discipline `Developer > CLI` applies to
  * `knegiswhisper` itself.
+ *
+ * In plain words (KNEG-343): the binary and the configuration stay in view.
+ * Its Local API row said tool calls fail "until this application is running";
+ * they fail until the Local API is on, which is the condition that matters.
+ * And it says that what a tool reads goes to the AI assistant, which may send
+ * it off this computer.
  */
 
 import { useCallback } from "react";
 
 import { DiscoveryFileRows } from "../components/DiscoveryFileRows";
+import { FailureLine } from "../components/FailureLine";
+import { LearnMore } from "../components/LearnMore";
 import { Row } from "../components/Row";
 import { getMcpStatus } from "../lib/ipc";
-import { binaryLocationLabel } from "../lib/labels";
+import { binaryLocationLabel, blockedLine } from "../lib/labels";
 import { useRefresh } from "../lib/useRefresh";
 
 export function IntegrationsMcp() {
@@ -36,7 +44,7 @@ export function IntegrationsMcp() {
   if (!status) {
     return (
       <div className="view">
-        {error ? <p className="error">{error}</p> : <p className="muted">Loading…</p>}
+        {error ? <FailureLine text="This page couldn't load." detail={error} /> : <p className="muted">Loading…</p>}
       </div>
     );
   }
@@ -50,27 +58,39 @@ export function IntegrationsMcp() {
 
   return (
     <div className="view">
-      {error ? <p className="error">{error}</p> : null}
+      {error ? <FailureLine text="That didn't work." detail={error} /> : null}
 
-      {status.blockedReason ? <p className="error" role="alert">{status.blockedReason}</p> : null}
+      {status.blockedReason ? <FailureLine text={blockedLine(status.blockedReason)} detail={status.blockedReason} /> : null}
 
       <section data-surface="integrations.mcp">
         <p className="muted">
-          <code>{status.binaryName}</code> is a stdio MCP server exposing this
-          application's notes, transcripts and dictionary — one tool per local
-          API route, with no backend of its own. It must be run by an MCP
-          client, and it does nothing at all unless this application is
-          running: every tool call is a request to the same local API that{" "}
-          <code>Developer &gt; Local API</code> starts.
+          <code>{status.binaryName}</code> lets an AI assistant that speaks MCP
+          work with your notes, transcripts and dictionary. Your assistant runs
+          it, and it works only while this app is running with the Local API
+          turned on.
         </p>
+        <LearnMore summary="How it works">
+          <p>
+            It is a stdio MCP server with one tool per local API route and no
+            backend of its own: every tool call is a request to the same local
+            API that Developer › Local API starts.
+          </p>
+        </LearnMore>
 
         <Row label="Binary" value={location.text} detail={location.detail} />
         <p className="muted">
-          Tools can create and export notes, upload media for transcription, inspect or cancel jobs,
-          discover models and control meeting recording. Uploads read files accessible to the MCP
-          server process and use the application's configured transcription provider.
-          Recording tools control the visible meeting recorder, including meetings started here.
+          Tools can create and export notes, transcribe files, check or cancel
+          jobs, list models and control meeting recording. What a tool reads goes
+          to your AI assistant, which may send it off this computer. File
+          transcription uses your Transcription setting.
         </p>
+        <LearnMore summary="What the tools can reach">
+          <p>
+            Uploads read any file the MCP server process can read. Recording
+            tools control the visible meeting recorder, including meetings
+            started here.
+          </p>
+        </LearnMore>
         <DiscoveryFileRows
           discoveryPath={status.discoveryPath}
           permissions={status.discoveryPermissions}
@@ -81,14 +101,13 @@ export function IntegrationsMcp() {
           detail={
             status.localApiRunning
               ? undefined
-              : "every tool call will fail until this application is running — see Developer > Local API"
+              : "every tool call fails until it is on — turn it on under Developer › Local API"
           }
         />
 
         <p className="muted">
-          Configure the client with this command and no arguments; it finds the
-          running application's discovery file on its own, the same way the
-          CLI does.
+          Add this to your assistant's MCP settings. It needs no arguments: it
+          finds this app by itself, the way the CLI does.
         </p>
         <pre className="preview">{config}</pre>
       </section>

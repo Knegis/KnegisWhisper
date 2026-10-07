@@ -23,6 +23,10 @@
  *      neutral fill (`--control` on a button, `--selected` in the rail,
  *      `--panel-hover` on a panel row), and the current row in a list panel
  *      is `--selected`, so pointing at a row never makes it look current.
+ *      One exception: in the title-bar search popup a hovered result takes
+ *      `--band` as the active one does (`.titlebar-search-popup
+ *      button:hover`), so with the pointer on one result and the arrow keys
+ *      on another, both look marked.
  *   3. Two typefaces with a job each. Switzer sets prose. ProFontWindows sets
  *      anything the machine is saying about itself -- headings, navigation,
  *      identifiers, file bytes -- at the site's exact spec: 13px/16px, 0.5px
@@ -102,7 +106,13 @@
   --band-ink: #fdfdfd;
   /* Blue for text, which `--band` is not: #3d55ff is 3.3:1 on this `--bg`, #8c9aff is 6.9:1 (R20). */
   --band-text: #8c9aff;
-  --accent: #fde800;
+  /*
+   * Focus rings, a caveat's edge and inline code. The Kit's blue, at the
+   * lightness `--band-text` already uses for text in this theme: 6.9:1 on
+   * `--bg`, where #0015ff is 1.96:1. It was the site's yellow until
+   * KNEG-375; the Kit has no yellow.
+   */
+  --accent: #8c9aff;
   /*
    * There is no `--warn`. It was `#9a5b00` in light, which is the brown that
    * had to go: an amber dark enough to be read on white *is* brown, so there is
@@ -232,11 +242,10 @@
 /*
  * The light theme: knegis.com's `:root` set, which is its light one.
  *
- * The accents are the site's two, assigned to the theme each is legible in
- * rather than to the one it appears in there. The site's nav sits over inverted
- * artwork, so its light-mode yellow has a dark backdrop; here there is no such
- * backdrop, and `#fde800` on paper is 1.2:1. So blue marks light and yellow
- * marks dark, at 8.27:1 and 14.14:1.
+ * The accent is the Kit's blue in both themes (KNEG-375): `#0015ff` here, at
+ * 8.09:1 on paper, and lightened in dark, above. It used to be the site's two
+ * accents, blue here and yellow there, but the Kit the redesign follows has
+ * no yellow.
  */
 @media (prefers-color-scheme: light) {
   :root {
@@ -257,7 +266,7 @@
     --band-ink: #fdfdfd;
     /* The same blue as `--band` here: #0015ff on paper already reads at 8:1 as text. */
     --band-text: #0015ff;
-    --accent: #1803ff;
+    --accent: #0015ff;
     --error: #c02626;
 
     --wash: rgb(31 32 35 / 5%);
@@ -479,13 +488,18 @@ h2,
  * 16/24 sentence. The status mark is the shape of the state -- a filled
  * square for ready, a round dot for recording, a hollow square for needs
  * setup -- so the state never rests on colour alone.
+ *
+ * Ready's square is `--muted`, not a colour: the owner's ruling of
+ * 2026-10-07 (KNEG-331). The palette has no "OK" colour on purpose, and
+ * `--band` already means marked, so a blue Ready read as selected. Colour is
+ * kept for the state that needs you: recording's `--rec` dot.
  */
 .hero { display: flex; flex-direction: column; align-items: center; max-width: 720px; }
 .hero-icon { display: flex; color: var(--text); }
 .hero-icon .icon { stroke-width: 1; }
 .hero-status { display: flex; align-items: center; gap: 8px; margin: 28px 0 0; font: 12px/16px var(--font-mono); letter-spacing: .5px; text-transform: uppercase; color: var(--text); }
 .hero-mark { width: 7px; height: 7px; flex-shrink: 0; }
-.hero-status-ready .hero-mark { background: var(--band); }
+.hero-status-ready .hero-mark { background: var(--muted); }
 .hero-status-recording { color: var(--rec); }
 .hero-status-recording .hero-mark { width: 8px; height: 8px; border-radius: 50%; background: var(--rec); }
 .hero-status-setup .hero-mark { border: 1px solid var(--text); }
@@ -514,6 +528,8 @@ h2,
  * control, and the Kit's corner scale has no 3px step.
  */
 kbd { display: inline-block; white-space: nowrap; border: 1px solid var(--rule); border-bottom-width: 3px; border-radius: 2px; background: var(--bg); color: var(--text); font-family: var(--font-mono); font-size: 0.85em; line-height: 1.4; padding: 0 0.4em; }
+/* Caps in a row stood edge to edge on Settings > Shortcuts (KNEG-331). 3px, the hero's own spacing, which this matches there. */
+.keycaps > kbd + kbd { margin-left: 3px; }
 .hero-heading kbd { margin: 0 3px; padding: 3px 12px 1px; font-size: 22px; line-height: 30px; vertical-align: 6px; }
 
 /*
@@ -887,6 +903,12 @@ section {
   color: var(--error);
 }
 
+/* A failure and its folded Details (`components/FailureLine.tsx`, KNEG-343). */
+.failure-line { margin: 0.5rem 0; }
+.failure-line > .error { margin: 0; }
+.failure-line > .learn-more { margin-top: 0.25rem; }
+.failure-line .learn-more-body p { margin: 0.25rem 0 0; overflow-wrap: anywhere; }
+
 /*
  * A rule between rows, which is a different thing from a box around one: it
  * separates two pieces of data from each other rather than fencing the pair off
@@ -1121,6 +1143,13 @@ section > .muted {
 .list li .row-detail,
 .list li .muted {
   order: 1;
+  flex: 1 0 100%;
+  margin: 0;
+}
+
+/* A row's Details, under its detail lines rather than beside its name (KNEG-343). */
+.list li > .learn-more {
+  order: 2;
   flex: 1 0 100%;
   margin: 0;
 }
@@ -2646,6 +2675,7 @@ button.note-action-button { flex: none; display: flex; align-items: center; just
 .provider-text { display: flex; flex-direction: column; align-items: flex-start; min-width: 0; }
 .provider-name { font-size: 15px; line-height: 22px; overflow-wrap: anywhere; }
 .provider-purposes { font-size: 13px; line-height: 19px; color: var(--muted); }
+.provider-purpose { white-space: nowrap; }
 .provider-row-unsupported .provider-name, .provider-row-unsupported .provider-tile { color: var(--muted); }
 .provider-actions { display: flex; align-items: center; gap: 10px; justify-self: end; }
 .provider-state { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; line-height: 19px; color: var(--text); white-space: nowrap; }

@@ -24,6 +24,7 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative, resolve, sep, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isEntryPoint } from "../ci/entry.mjs";
 
 const DEFAULT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -204,7 +205,7 @@ export function scan({ root = DEFAULT_ROOT, config } = {}) {
 }
 
 // --- CLI --------------------------------------------------------------------
-const isMain = process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url));
+const isMain = isEntryPoint(import.meta.url);
 if (isMain) {
   const args = process.argv.slice(2);
   const rootIdx = args.indexOf("--root");

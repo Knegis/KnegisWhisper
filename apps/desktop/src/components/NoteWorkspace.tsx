@@ -1,11 +1,11 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { attachNoteRecording, getNoteRecording, getNoteSpeakerSuggestions, getNoteTranscriptRows, renameNoteSpeaker, updateNote, type Note, type NoteUpdate } from "../lib/ipc";
-import { useAutosave } from "../lib/useAutosave";
-import { saveStatusText } from "../lib/saveStatus";
+import { useAutosave, type AutosaveStatus } from "../lib/useAutosave";
+import { workspaceSaveText } from "../lib/saveStatus";
 import { transcriptToMarkdown } from "../lib/noteBody";
 import { timeOfDay } from "../lib/dayGroups";
-import { noteMeta } from "../lib/noteMeta";
+import { hasStoredTranscript, noteMeta } from "../lib/noteMeta";
 import { message } from "../lib/useRefresh";
 import { Icon } from "./Icon";
 import { NoteEditor } from "./NoteEditor";
@@ -143,10 +143,18 @@ const playerSlotOf = (wide: boolean, tab: Tab): PlayerSlot => wide && tab !== "r
  */
 export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
   note: Note;
+  /**
+   * A transcript row to open at, from a search hit (KNEG-406): selected and in
+   * view, and the player left alone. Shown once per object, so a request
+   * repeated as a new object -- the same hit chosen again -- is shown again.
+   */
+  revealRow?: { index: number } | null;
   reload: () => Promise<void>;
   onExport: () => void;
   onMore: (anchor: HTMLButtonElement) => void;
-}>(function NoteWorkspace({ note, reload, onExport, onMore }, ref) {
+  /** Whether the menu More opens is open, for its `aria-expanded`. */
+  moreOpen: boolean;
+}>(function NoteWorkspace({ note, revealRow = null, reload, onExport, onMore, moreOpen }, ref) {
   const saved = useRef({ title: note.title, content: note.content });
   const draft = useRef({ title: note.title, content: note.content });
   const [title, setTitle] = useState(note.title);
@@ -154,8 +162,13 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
   const [ready, setReady] = useState(false);
   const [seed, setSeed] = useState({ content: note.content, generation: 0 });
   const summaryRef = useRef<SummaryPaneHandle>(null);
+  // The summary pane saves on its own; the toolbar's line covers both (KNEG-398).
+  const [summarySave, setSummarySave] = useState<AutosaveStatus>("idle");
   const playerRef = useRef<RecordingPlayerHandle>(null);
   const [tab, setTab] = useState<Tab>("notes");
+  // The tab on screen, for `switchTab`, which reads it after waiting on a save.
+  const tabNow = useRef(tab);
+  useLayoutEffect(() => { tabNow.current = tab; }, [tab]);
   const [sourceRequest, setSourceRequest] = useState<{ index: number; nonce: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [currentTime, setCurrentTime] = useState(0);
@@ -179,9 +192,15 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
   const [columnHidden, setColumnHidden] = useState(columnHiddenChoice);
   // Read by the media listener, which is subscribed once per note, and set as the button is pressed.
   const columnHiddenNow = useRef(columnHidden);
+  // A note with no transcript has no column to show: a wide window gave a plain note a 340px one
+  // saying "This note has no transcript." (KNEG-377). Read from the note, so it is right on the
+  // first frame, and kept in a ref for the media listener.
+  const hasTranscript = hasStoredTranscript(note.transcript);
+  const hasTranscriptNow = useRef(hasTranscript);
+  useLayoutEffect(() => { hasTranscriptNow.current = hasTranscript; }, [hasTranscript]);
   // The layout, rather than the width: a window at the width with the column hidden lays the note
-  // out as a narrower one does, Transcript tab and all.
-  const wide = windowWide && !columnHidden;
+  // out as a narrower one does, Transcript tab and all, and so does a note with no transcript.
+  const wide = windowWide && !columnHidden && hasTranscript;
   // The layout on screen, which the media listener reads: by the time it runs, `query.matches`
   // already describes the width being moved to.
   const renderedWide = useRef(wide);
@@ -237,7 +256,7 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
   useEffect(() => {
     const query = window.matchMedia(WIDE);
     const change = () => {
-      const next = query.matches && !columnHiddenNow.current;
+      const next = query.matches && !columnHiddenNow.current && hasTranscriptNow.current;
       // Taken on every change that moves the layout and cleared on one that does not, never kept
       // from an earlier one: two changes before a render leave the layout where it was, and the next
       // real switch must not carry a stale snapshot. With the column hidden, crossing the width
@@ -371,8 +390,12 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
     try {
       await flush();
       if (!alive.current) return;
-      // Taken now, while the player that is going is still mounted: see the playback effect.
-      if (playerSlotOf(wide, next) !== playerSlotOf(wide, tab)) handoff.current = playerRef.current?.position() ?? null;
+      // Taken now, while the player that is going is still mounted: see the playback effect. The
+      // layout and the tab are read now too, not from the render that started the switch: the
+      // window can cross the width while the save is pending, and the slots would then be compared
+      // for a layout no longer on screen (KNEG-377).
+      const shownWide = renderedWide.current;
+      if (playerSlotOf(shownWide, next) !== playerSlotOf(shownWide, tabNow.current)) handoff.current = playerRef.current?.position() ?? null;
       setError(null); setTab(next);
       if (focus) document.getElementById(`note-${note.id}-tab-${next}`)?.focus();
     } catch (cause) { setError(message(cause)); }
@@ -382,16 +405,33 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
     setPlaybackStarted(true); playerRef.current?.playInterval(start, end);
   }, []);
   const onPlayingChange = useCallback((value: boolean) => { setPlaying(value); if (value) setPlaybackStarted(true); }, []);
-  const showSource = async (index: number) => {
+  // The Transcript at row `index`, selected and in view, and nothing else. False when the save
+  // failed or the note has gone.
+  const openRow = async (index: number): Promise<boolean> => {
     try {
       await flush();
-      if (!alive.current) return;
-      // A wide window already shows the transcript, in its column; only a narrower one has a tab to open.
-      setError(null); if (!wide) setTab("transcript"); setSourceRequest({ index, nonce: Date.now() });
-      const row = transcript?.rows.find(item => item.index === index);
-      if (row?.startSeconds != null && transcript?.recording) playInterval(row.startSeconds, row.endSeconds);
-    } catch (cause) { setError(message(cause)); }
+      if (!alive.current) return false;
+      // A wide window already shows the transcript, in its column; only a narrower one has a tab to
+      // open. Read now, after the save, as `switchTab` reads it.
+      setError(null); if (!renderedWide.current) setTab("transcript"); setSourceRequest({ index, nonce: Date.now() });
+      return true;
+    } catch (cause) { setError(message(cause)); return false; }
   };
+  // A summary's source link: the row, played.
+  const showSource = async (index: number) => {
+    if (!(await openRow(index))) return;
+    const row = transcript?.rows.find(item => item.index === index);
+    if (row?.startSeconds != null && transcript?.recording) playInterval(row.startSeconds, row.endSeconds);
+  };
+  // A search hit's row: only shown. Sound doesn't start because a search was answered -- the
+  // owner's ruling of 2026-10-07 (KNEG-406).
+  const revealed = useRef<object | null>(null);
+  useEffect(() => {
+    if (!revealRow || revealed.current === revealRow) return;
+    revealed.current = revealRow;
+    void openRow(revealRow.index);
+    // Only the request: `openRow` is redefined each render and reads refs and setters.
+  }, [revealRow]);
   const startFromTranscript = () => {
     if (!ready || draft.current.content.trim() || !transcript?.rows.length) return;
     const content = transcriptToMarkdown(transcript.rows);
@@ -448,11 +488,11 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
           </div>
           <div className="note-actions">
             {/* Keep the live region mounted so save changes are announced reliably. */}
-            <p className="save-status" role="status" aria-live="polite">{saveStatusText(autosave.status)}</p>
+            <p className="save-status" role="status" aria-live="polite">{workspaceSaveText(autosave.status, summarySave)}</p>
             <button type="button" className="note-action-button" aria-label="Export…" title="Export…" onClick={onExport}><Icon name="export" /></button>
-            <button type="button" className="note-action-button" aria-label="More" title="More" aria-haspopup="dialog" onClick={event => onMore(event.currentTarget)}><Icon name="more" /></button>
+            <button type="button" className="note-action-button" aria-label="More" title="More" aria-haspopup="dialog" aria-expanded={moreOpen} onClick={event => onMore(event.currentTarget)}><Icon name="more" /></button>
             {/* Only where there is a column to hide. `aria-controls` only while it is on screen, so it never names nothing. */}
-            {windowWide ? <button type="button" className="note-action-button" aria-label={columnHidden ? "Show transcript" : "Hide transcript"}
+            {windowWide && hasTranscript ? <button type="button" className="note-action-button" aria-label={columnHidden ? "Show transcript" : "Hide transcript"}
               title={columnHidden ? "Show transcript" : "Hide transcript"} aria-expanded={!columnHidden}
               aria-controls={wide ? `note-${note.id}-side` : undefined} onClick={toggleColumn}><Icon name="panelRight" /></button> : null}
           </div>
@@ -469,7 +509,7 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
                 onChange={content => { draft.current.content = content; setEmpty(!content.trim()); autosave.schedule({ content }); }} />
             </div>
             <h2 className="note-section-heading">AI summary</h2>
-            <SummaryPane ref={summaryRef} noteId={note.id} visible={tab === "notes"} onSource={index => { void showSource(index); }} />
+            <SummaryPane ref={summaryRef} noteId={note.id} visible={tab === "notes"} onSource={index => { void showSource(index); }} onSaveStatus={setSummarySave} />
           </section>
           {player && playerSlot === "note" ? <div className={tab === "replay" ? "note-full-player" : "note-mini-player"} hidden={tab !== "replay" && !playbackStarted}>
             {player}

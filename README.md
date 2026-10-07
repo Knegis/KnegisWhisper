@@ -199,6 +199,8 @@ node --test tools/domain-scanner/scan.test.mjs
 node --test tools/integration-audit/verify-parity.test.mjs
 node --test tools/settings-audit/scan.test.mjs
 node --test tools/model-pin/pin.test.mjs
+node --test tools/model-pin/retry.test.mjs
+node --test tools/sidecar-pin/pin.test.mjs
 node --test tools/feature-audit/scan.test.mjs
 node --test tools/capability-audit/scan.test.mjs
 node --test tools/command-audit/scan.test.mjs

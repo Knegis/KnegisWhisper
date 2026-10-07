@@ -1,7 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { appendFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { resolve } from "node:path";
+import { isEntryPoint } from "./entry.mjs";
 
 export function classifyChanges(paths) {
   const shared = paths.some(p => /^(?:config|tools|scripts|vendor|\.github|\.cargo)\//.test(p)
@@ -11,7 +10,7 @@ export function classifyChanges(paths) {
   return { frontend, windows };
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isEntryPoint(import.meta.url)) {
   const { KW_BASE_SHA: base, KW_HEAD_SHA: head, GITHUB_OUTPUT: output } = process.env;
   if (!base || !head || !output) throw new Error("Base, head and output are required");
   if (![base, head].every(sha => /^[a-f0-9]{40}$/.test(sha))) throw new Error("Expected commit SHAs");

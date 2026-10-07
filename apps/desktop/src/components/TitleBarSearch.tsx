@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { searchNotes, type SearchHit } from "../lib/ipc";
+import { hitMeta } from "../lib/searchHit";
 import { Icon } from "./Icon";
 
 /**
@@ -20,7 +21,7 @@ import { Icon } from "./Icon";
  * rendered inside the popup, and an id that points at nothing is an error
  * to anything reading it.
  */
-export function TitleBarSearch({ onOpenNote }: { onOpenNote: (id: number) => void }) {
+export function TitleBarSearch({ onOpenNote }: { onOpenNote: (id: number, transcriptRow?: number) => void }) {
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
   const [hits, setHits] = useState<SearchHit[]>([]);
@@ -54,7 +55,8 @@ export function TitleBarSearch({ onOpenNote }: { onOpenNote: (id: number) => voi
     }, 180);
     return () => { cancelled = true; window.clearTimeout(timer); };
   }, [query, open]);
-  const choose = (hit: SearchHit) => { onOpenNote(hit.id); setOpen(false); input.current?.blur(); };
+  // A hit in a meeting transcript opens the note at its row (KNEG-406).
+  const choose = (hit: SearchHit) => { onOpenNote(hit.id, hit.transcriptRow?.index); setOpen(false); input.current?.blur(); };
   // No `title` on the field: the trailing hint already says Ctrl+K, and the
   // window's tooltip would open under the field exactly where the results do.
   return <div className="titlebar-search" ref={root} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false); }}>
@@ -82,7 +84,7 @@ export function TitleBarSearch({ onOpenNote }: { onOpenNote: (id: number) => voi
       <div id="titlebar-search-results" role="listbox" aria-label="Matching notes">
         {hits.map((hit, index) => <button type="button" role="option" aria-selected={index === active} id={`titlebar-hit-${hit.id}`} key={hit.id}
           onMouseDown={event => event.preventDefault()} onMouseEnter={() => setActive(index)} onClick={() => choose(hit)}>
-          <strong>{hit.title || "Untitled note"}</strong><span>{hit.snippet}</span>
+          <strong>{hit.title || "Untitled note"}</strong><span>{hitMeta(hit)}</span>
         </button>)}
       </div>
     </div>}

@@ -90,9 +90,13 @@ import {
   getMeetingLanguage,
   getMeetingProvider,
   getMeetingProviders,
+  getInputDevice,
+  getInputDevices,
+  getLocalStatus,
   getMeetingStatus,
   getNotes,
   getRecoverableRecordings,
+  getSherpaStatus,
   getSummarySettings,
   setMeetingLanguage,
   setMeetingProvider,
@@ -121,44 +125,23 @@ import { emptyLiveTranscript, foldTranscriptEvent, liveRows, type LiveRow } from
 import { providerMenu, selectProvider } from "../lib/meetingProvider";
 import {
   activeCall,
+  discardQuestion,
   elapsedLabel,
   interruptedTitle,
   liveElapsed,
   meetingLanguageMenu,
+  meetingIntro,
+  meetingMicrophone,
+  privacyProvider,
   recentMeta,
   recordedSources,
   summaryPrivacyLine,
 } from "../lib/meetingView";
 import type { ViewId } from "../lib/navigation";
-import { meetingReadiness } from "../lib/readiness";
+import { localProviderProblem, meetingReadiness } from "../lib/readiness";
 import { summaryConfigured } from "../lib/summaryConfigured";
 import { useMeetingReviewFor } from "../lib/useMeetingReview";
 import { message, useRefresh } from "../lib/useRefresh";
-
-/**
- * The sentence that was this page's `PageHeader` intro (`lib/pages.ts`), now
- * the hero's line under "Record a meeting" -- and it promises a summary only
- * when one will come. A saved meeting is summarised by itself only while
- * automatic summaries are on (`enqueue_automatic`,
- * `crates/notes-core/src/summary.rs:96-106`), and they are off by default
- * (`SummarySettings::default`, `:21-33`); with them off a summary is
- * something to ask for in Notes, not something you get (R19).
- */
-function intro(summariesOn: boolean): string {
-  return summariesOn
-    ? "You get a transcript and a summary, saved to Notes."
-    : "You get a transcript, saved to Notes.";
-}
-
-/**
- * The microphone chip's `title`, and its visually hidden text. The chip is
- * not focusable, so the `title` is only ever a hover away; the hidden text
- * puts the same sentence where a screen reader reads the chip. (A sighted
- * keyboard user still has only the hover.) Static because the recorder
- * always opens the default input device and nothing on any screen chooses
- * another for meetings (KNEG-364).
- */
-const MICROPHONE_TITLE = "Meetings record the Windows default microphone";
 
 /** How often detection is read again while no meeting is running. */
 const DETECTION_POLL_MS = 5000;
@@ -215,6 +198,23 @@ export function Meetings({
   // the read succeeds.
   const loadRecent = useCallback(() => getNotes({ noteType: "meeting", limit: 20 }), []);
   const recentRead = useRefresh(loadRecent);
+  // What the two local providers need on this computer (KNEG-387), read on
+  // their own for the same reason: a failure leaves both unknown, which holds
+  // nothing back, and Start still says what went wrong.
+  const loadEngines = useCallback(async () => {
+    const [whisper, sherpa] = await Promise.all([getLocalStatus(), getSherpaStatus()]);
+    return { whisper, sherpa };
+  }, []);
+  const engines = useRefresh(loadEngines).data ?? null;
+  // The microphone chosen on Dictation, which meetings record too (KNEG-341).
+  // A failed read leaves the chip saying the default, which is what a meeting
+  // falls back to anyway.
+  const loadMicrophone = useCallback(async () => {
+    const [devices, chosen] = await Promise.all([getInputDevices(), getInputDevice()]);
+    return { devices, chosen };
+  }, []);
+  const microphoneRead = useRefresh(loadMicrophone).data ?? null;
+  const microphone = meetingMicrophone(microphoneRead?.devices ?? null, microphoneRead?.chosen ?? null);
   const recentGuard = recentRead.guard;
   const reloadRecent = useCallback(() => recentGuard(async () => {}), [recentGuard]);
   // Every read that follows a meeting ending or a recording being recovered
@@ -439,15 +439,18 @@ export function Meetings({
     selected,
     // Named and with its reason, so the hero can say which choice can't be
     // used and why, rather than the page quietly using another.
+    // A provider this version does not offer has only its id for a name, so
+    // it goes unnamed in view and the id goes to the detail (KNEG-354).
     savedUnusable: savedUnusable
       ? {
-          name: savedProvider?.name ?? savedUnusable,
+          name: savedProvider?.name ?? null,
           reason: savedProvider
             ? asSentence(availabilityLabel(savedProvider.availability))
-            : "This version of the app doesn't offer it.",
+            : `It was saved as “${savedUnusable}”, which this version of the app doesn't offer.`,
         }
       : null,
     languageWarning,
+    localProblem: localProviderProblem(selected, engines?.whisper ?? null, engines?.sherpa ?? null),
     systemAudio: status.systemAudio,
   });
   // Where readiness holds Start back, the hero's fix is the one thing to do
@@ -475,13 +478,16 @@ export function Meetings({
   // somewhere, where (`summaryPrivacyLine`). With no provider nothing can
   // start, so nothing is sent.
   const summaryLine = summaryPrivacyLine(summaries);
+  // Not the fallback while Start waits on an unusable saved provider: nothing
+  // is sent until somebody chooses (`privacyProvider`).
+  const sentTo = privacyProvider(liveProvider, selectedProvider, savedUnusable !== null);
   const privacy = [
     ...privacyLines(
-      transcriber
+      sentTo
         ? {
-            isLocal: !transcriber.audioLeavesDevice,
-            leavesDevice: transcriber.audioLeavesDevice,
-            destination: transcriber.name,
+            isLocal: !sentTo.audioLeavesDevice,
+            leavesDevice: sentTo.audioLeavesDevice,
+            destination: sentTo.name,
           }
         : { isLocal: false, leavesDevice: false, destination: "", problem: "not set up" },
       null,
@@ -529,8 +535,29 @@ export function Meetings({
       setOutcome(await stopMeeting());
     });
   };
+  // Asks first, with what is about to be lost (KNEG-394): Discard sits
+  // beside Stop and save and deleted the recording on one click. Saying no
+  // changes nothing; the meeting goes on recording.
   const discard = () => {
     void guard(async () => {
+      // When the meeting began, from Rust: `elapsedSeconds` counts from the
+      // start and does not stop at a stall, so the same meeting gives the
+      // same start on every read, and a meeting started later gives a later
+      // one.
+      const startOf = (status: { elapsedSeconds: number }) => Date.now() - status.elapsedSeconds * 1000;
+      const before = await getMeetingStatus();
+      const began = startOf(before);
+      if (!meetingIsLive(before.state)) return;
+      // The page's clock, which stops at a stall, when it has one; Rust's
+      // count before the page has read a start, so the length is never
+      // "under a minute" for a meeting it has not timed yet.
+      if (!window.confirm(discardQuestion(startedAt === null ? before.elapsedSeconds : elapsed))) return;
+      // The question holds the page, so the meeting may have changed while it
+      // was open: stopped from its own window, or stopped and another one
+      // started. Nothing is discarded unless the meeting asked about is still
+      // running -- otherwise the page shows what happened instead.
+      const after = await getMeetingStatus();
+      if (!meetingIsLive(after.state) || Math.abs(startOf(after) - began) > 2000) return;
       try { await flushMeetingPanelNotes(); }
       catch (cause) { setNotesFlushFailed(true); throw cause; }
       setNotesFlushFailed(false);
@@ -595,7 +622,7 @@ export function Meetings({
         </p>
       ) : null}
       {recording && notesFlushFailed && <p className="caveat">The meeting panel could not confirm its latest note save. Stopping anyway keeps the recording and any notes already received by the app; the most recent edit may be missing.</p>}
-      {outcome ? <p className="caveat">{meetingOutcomeLabel(outcome)}</p> : null}
+      {outcome ? <OutcomeCaveat outcome={outcome} /> : null}
     </>
   );
 
@@ -728,7 +755,7 @@ export function Meetings({
               rather than controls. */}
           <div className="live-bar">
             <div className="live-chips" role="group" aria-label="In effect for this meeting">
-              <Chip icon="microphone" label="Default microphone" title={MICROPHONE_TITLE} srText={MICROPHONE_TITLE} />
+              <Chip icon="microphone" label={microphone.label} title={microphone.title} srText={microphone.title} />
               {liveSources?.systemAudio ? <Chip icon="others" label="Other participants" /> : null}
               <Chip icon="computer" label={transcriber ? transcriber.name : "Not set up"} />
               <Chip icon="language" label={language} />
@@ -779,7 +806,7 @@ export function Meetings({
         heading="Record a meeting"
         sub={
           <>
-            <p>{intro(summaries.enabled)}</p>
+            <p>{meetingIntro(summaries.enabled)}</p>
             {readiness.caution ? <p className="hero-note">{readiness.caution}</p> : null}
           </>
         }
@@ -791,7 +818,7 @@ export function Meetings({
         heading="Record a meeting"
         sub={
           <>
-            <p>{intro(summaries.enabled)}</p>
+            <p>{meetingIntro(summaries.enabled)}</p>
             <p className="hero-note">{readiness.problem}</p>
           </>
         }
@@ -846,11 +873,20 @@ export function Meetings({
           )}
         </div>
 
+        {/* The lines heard during the meeting, kept until it is saved: they
+            went at Stop, while the meeting was still being finished, and the
+            outcome event clears them (KNEG-377). */}
+        {current === "finishing" && rows.length > 0 ? <LiveTranscript rows={rows} ended finishing /> : null}
+
         <div className="task-bar">
           <ControlBar
             strip={
               <>
-                <Chip icon="microphone" label="Default microphone" title={MICROPHONE_TITLE} srText={MICROPHONE_TITLE} />
+                {/* Static: the microphone is chosen on Dictation, and both
+                    tasks share it (KNEG-341). The `title` is a hover away,
+                    so the same sentence is also the chip's hidden text for a
+                    screen reader. */}
+                <Chip icon="microphone" label={microphone.label} title={microphone.title} srText={microphone.title} />
                 {/* Unpressed, not just disabled, where system audio cannot be
                     captured: a pressed "Other participants" beside a caution
                     saying they cannot be recorded would be two answers on one
@@ -864,7 +900,7 @@ export function Meetings({
                   title={
                     status.systemAudio.state === "available"
                       ? "Record what the other participants say"
-                      : `Can't be recorded on this computer: ${status.systemAudio.reason}`
+                      : "Can't be recorded on this computer"
                   }
                   onClick={() => setWantSystem((want) => !want)}
                 />
@@ -930,12 +966,12 @@ export function Meetings({
             {/* Why the chip is off, said beside it in every state -- the
                 hero's caution is only there while the page is Ready, and a
                 switched-off control with no reason on screen is the button
-                that silently does nothing. Only the mechanism, and the device
-                it would capture, are folded. */}
+                that silently does nothing. The failure is in view; why, which
+                names the platform's mechanism (about 70 words on macOS, and
+                PulseAudio, PipeWire and ALSA on Linux), is folded with the
+                device it would capture (KNEG-354). */}
             {status.systemAudio.state === "available" ? null : (
-              <p className="control-note">
-                {`Other participants can't be recorded on this computer: ${status.systemAudio.reason}`}
-              </p>
+              <p className="control-note">Other participants can't be recorded on this computer.</p>
             )}
             {/* Believed, not tested, said in view rather than only in the fold
                 below: the one place a colleague would learn it (KNEG-351). */}
@@ -944,16 +980,23 @@ export function Meetings({
                 Recording the other participants is available on this operating system but has never been tested here.
               </p>
             ) : null}
-            {status.systemAudio.state === "unsupported" ? null : (
-              <LearnMore summary="How the other participants are recorded">
-                <p>
-                  System audio: {systemAudioValue(status.systemAudio)} —{" "}
-                  {status.systemAudio.state === "available"
-                    ? `${status.systemAudio.mechanism} — ${status.systemAudio.device}`
-                    : status.systemAudio.mechanism}
-                </p>
-              </LearnMore>
-            )}
+            <LearnMore
+              summary={
+                status.systemAudio.state === "available"
+                  ? "How the other participants are recorded"
+                  : "Why they can't be recorded"
+              }
+            >
+              <p>
+                {status.systemAudio.state === "unsupported"
+                  ? status.systemAudio.reason
+                  : `System audio: ${systemAudioValue(status.systemAudio)} — ${
+                      status.systemAudio.state === "available"
+                        ? `${status.systemAudio.mechanism} — ${status.systemAudio.device}`
+                        : `${status.systemAudio.mechanism}. ${asSentence(status.systemAudio.reason)}`
+                    }`}
+              </p>
+            </LearnMore>
             {caveats}
 
             {/* The Interrupted rows are in the list panel; what recovering
@@ -983,7 +1026,7 @@ export function Meetings({
                 Recovering the {lowerFirst(interruptedTitle(recoveringKey, now))}…
               </p>
             ) : null}
-            {recoveryOutcome && <p className="caveat">{meetingOutcomeLabel(recoveryOutcome)}</p>}
+            {recoveryOutcome && <OutcomeCaveat outcome={recoveryOutcome} />}
             {recoveryError && <p className="error" role="alert">{recoveryError}</p>}
 
             <div className="control-row">
@@ -1020,6 +1063,28 @@ const LIVE_NOTE =
 const ENDED_NOTE =
   "These are the last lines the provider sent before the live transcription stopped. Nothing further will appear here, and the transcript that gets saved comes from one pass over the whole recording when the meeting ends.";
 
+/** The same, after Stop and before the meeting is saved. */
+const FINISHING_NOTE =
+  "What was heard while the meeting ran. These lines stay until the meeting is saved to Notes.";
+
+/**
+ * How a meeting ended, with the note's id and the recording's path behind
+ * Learn more (KNEG-354).
+ */
+function OutcomeCaveat({ outcome }: { outcome: MeetingOutcome }) {
+  const { text, more } = meetingOutcomeLabel(outcome);
+  return (
+    <>
+      <p className="caveat">{text}</p>
+      {more ? (
+        <LearnMore>
+          <p>{more}</p>
+        </LearnMore>
+      ) : null}
+    </>
+  );
+}
+
 /**
  * The live lines, as `foldTranscriptEvent` built them: time, speaker, text.
  * A line still open is muted and ends in the `--band` caret.
@@ -1028,7 +1093,7 @@ const ENDED_NOTE =
  * following once scrolled up, so a line being read is not pulled away -- the
  * rule the meeting window's transcript tab keeps (`MeetingPanel.tsx`).
  */
-function LiveTranscript({ rows, ended }: { rows: readonly LiveRow[]; ended: boolean }) {
+function LiveTranscript({ rows, ended, finishing = false }: { rows: readonly LiveRow[]; ended: boolean; finishing?: boolean }) {
   const list = useRef<HTMLOListElement>(null);
   const following = useRef(true);
   useLayoutEffect(() => {
@@ -1038,7 +1103,7 @@ function LiveTranscript({ rows, ended }: { rows: readonly LiveRow[]; ended: bool
   return (
     <div className="live-transcript" role="region" aria-label="Live transcript">
       <h3 className="live-label">Live transcript</h3>
-      <p className="live-note">{ended ? ENDED_NOTE : LIVE_NOTE}</p>
+      <p className="live-note">{finishing ? FINISHING_NOTE : ended ? ENDED_NOTE : LIVE_NOTE}</p>
       <ol
         className="live-rows"
         ref={list}

@@ -204,6 +204,10 @@ pub struct RouteTranscriber {
     /// server silently stays lost, which is the defect this field exists to fix.
     /// Making it required means forgetting is a compile error instead.
     revive: Arc<dyn crate::local_model::Revive>,
+    /// What a dictation holds while its request is with the whisper server, so
+    /// a model change is refused rather than stopping the server under it
+    /// (KNEG-414). See `local_model::ServerUsers`.
+    users: crate::local_model::ServerUsers,
 }
 
 impl std::fmt::Debug for RouteTranscriber {
@@ -221,6 +225,7 @@ impl RouteTranscriber {
         local_model: Arc<RwLock<Option<String>>>,
         local_sherpa: crate::local_asr::Selection,
         revive: Arc<dyn crate::local_model::Revive>,
+        users: crate::local_model::ServerUsers,
     ) -> Self {
         Self {
             policy,
@@ -229,6 +234,7 @@ impl RouteTranscriber {
             local_model,
             local_sherpa,
             revive,
+            users,
             db: None,
         }
     }
@@ -244,13 +250,24 @@ impl RouteTranscriber {
     /// Called only for [`Transport::Local`]. The health check is a loopback
     /// round trip and the recovery starts a process, and someone dictating to a
     /// cloud provider should pay for neither.
-    async fn whisper_server(&self) -> Result<Option<WhisperServer>, String> {
+    ///
+    /// With the dictation's use of the server, which the caller holds until the
+    /// answer is back (KNEG-414). Taken before the port is read: a model change
+    /// that is running is waited for, so the port is the new model's, and none
+    /// can begin until this dictation is done.
+    async fn whisper_server(
+        &self,
+    ) -> Result<(WhisperServer, crate::local_model::ServerUse), String> {
+        let using = self
+            .users
+            .begin(crate::local_model::ServerUser::Dictation)
+            .await;
         let recorded = self.local_port.read().ok().and_then(|held| *held);
         let port = crate::local_model::ensure_whisper(&self.policy, recorded, self.revive.as_ref())
             .await?;
 
         let model = self.local_model.read().ok().and_then(|held| held.clone());
-        Ok(Some(WhisperServer::new(self.policy.clone(), port, model)))
+        Ok((WhisperServer::new(self.policy.clone(), port, model), using))
     }
 }
 
@@ -300,18 +317,29 @@ impl Transcriber for RouteTranscriber {
         // Attached only when an engine is actually available. Without that the
         // executor answers `LocalNotAvailable`, which is the honest state — a
         // local route with no server is not something to paper over.
-        let local = match transport {
+        //
+        // `_using` is the dictation's use of the whisper server. It is bound
+        // here, in the function's own scope, because the request is sent
+        // below: bound inside the arm it would end before the request did, and
+        // a model change could stop the server under it (KNEG-414).
+        let (local, _using) = match transport {
             Transport::Local { .. } => {
-                let whisper = if crate::local_asr::resolve(&self.local_sherpa).is_some() {
-                    None
+                let (whisper, using) = if crate::local_asr::resolve(&self.local_sherpa).is_some() {
+                    (None, None)
                 } else {
-                    self.whisper_server()
+                    let (server, using) = self
+                        .whisper_server()
                         .await
-                        .map_err(DictationError::Transcription)?
+                        .map_err(DictationError::Transcription)?;
+                    (Some(server), Some(using))
                 };
-                local_engine(&self.local_sherpa, whisper).map_err(DictationError::Transcription)?
+                (
+                    local_engine(&self.local_sherpa, whisper)
+                        .map_err(DictationError::Transcription)?,
+                    using,
+                )
             }
-            _ => None,
+            _ => (None, None),
         };
         let executor = match &local {
             Some(engine) => executor.with_local(engine.as_ref()),
@@ -648,8 +676,48 @@ pub struct LocalTargets {
     /// How to start the whisper server again if it has gone. See
     /// `local_model::Revive`.
     pub transcription_revive: Arc<dyn crate::local_model::Revive>,
+    /// Whether the user is switching the whisper model, during which a start
+    /// is refused. See `local_model::RouteSwitch`.
+    pub transcription_switching: crate::local_model::RouteSwitch,
+    /// What a dictation holds while the whisper server has its request, during
+    /// which a model change is refused. See `local_model::ServerUsers`.
+    pub transcription_users: crate::local_model::ServerUsers,
     /// Where the llama server is listening, if it is.
     pub generation: crate::local_llm::LocalEndpoint,
+}
+
+/// What a press of the dictation key did (KNEG-388).
+///
+/// `toggle` answers with an [`Outcome`](kw_app_core::dictation::Outcome), and a
+/// start has none, so it answered `Cancelled`. That made "this press opened the
+/// microphone" and "this press finished a recording that came to nothing" the
+/// same answer, and push-to-talk's release could not tell which it was undoing.
+#[derive(Debug)]
+pub enum Pressed {
+    /// It opened the microphone.
+    Started,
+    /// It finished the recording that was running.
+    Finished(kw_app_core::dictation::Outcome),
+}
+
+/// What a start refused for a model switch says, or `None` when nothing is
+/// switching. The old server is already stopped by then and the new one is
+/// loading, so a recording would be transcribed by whichever the switch has
+/// reached when it stops -- and the switch's own page holds its Start for the
+/// same reason (KNEG-388).
+fn start_refusal(switching: bool) -> Option<String> {
+    switching.then(|| {
+        "Dictation didn't start: the transcription model is still changing. Try again in a moment."
+            .to_owned()
+    })
+}
+
+/// Whether push-to-talk's release finishes what its press did: only a
+/// recording that press started. Anything else -- a refusal, a microphone that
+/// would not open, a press that finished a recording -- left the session idle,
+/// and a release that toggled would have started a recording nothing ends.
+fn release_finishes(press: &Result<Pressed, String>) -> bool {
+    matches!(press, Ok(Pressed::Started))
 }
 
 /// The dictation session, assembled.
@@ -657,6 +725,8 @@ pub struct DictationRuntime {
     session: Arc<kw_app_core::dictation::Dictation>,
     recorder: Arc<MicRecorder>,
     db: Db,
+    /// See [`start_refusal`].
+    switching: crate::local_model::RouteSwitch,
     /// The live cleanup destination, shared with the `ModelCleanup` inside
     /// `session`. Held here so `reasoning::reasoning_set_cleanup` can change it
     /// without a restart — a setting that only takes effect after a relaunch is
@@ -691,6 +761,8 @@ impl DictationRuntime {
             transcription_model: local_model,
             transcription_sherpa: local_sherpa,
             transcription_revive: local_revive,
+            transcription_switching: switching,
+            transcription_users: local_users,
             generation: local_llm,
         } = local;
 
@@ -707,6 +779,7 @@ impl DictationRuntime {
                     local_model,
                     local_sherpa,
                     local_revive,
+                    local_users,
                 )
                 .with_db(db.clone()),
             ),
@@ -725,6 +798,7 @@ impl DictationRuntime {
             session: Arc::new(session),
             recorder,
             db,
+            switching,
             cleanup,
         }
     }
@@ -744,6 +818,11 @@ impl DictationRuntime {
     /// Choose the input device for the next recording.
     pub fn set_device(&self, device: Option<String>) {
         self.recorder.set_device(device);
+    }
+
+    /// Bring back the saved microphone (KNEG-341). Called once at startup.
+    pub async fn restore_device(&self) {
+        self.set_device(load_device(&self.db).await);
     }
 
     /// The input device the next recording will use.
@@ -769,35 +848,19 @@ impl DictationRuntime {
     /// One entry point because that is what a single hotkey means. A press while
     /// transcribing is ignored rather than queued: the user pressed it again
     /// because nothing had happened yet, and starting a second recording on top
-    /// of an in-flight one is never what they wanted.
-    pub async fn toggle(&self) -> Result<kw_app_core::dictation::Outcome, String> {
+    /// of an in-flight one is never what they wanted. A start while the user is
+    /// switching the local model is refused; see [`start_refusal`].
+    pub async fn press(&self) -> Result<Pressed, String> {
         match self.state() {
             SessionState::Idle => {
+                if let Some(refusal) = start_refusal(self.switching.in_progress()) {
+                    return Err(refusal);
+                }
                 self.session.start().await.map_err(|err| err.to_string())?;
-                Ok(kw_app_core::dictation::Outcome::Cancelled)
+                Ok(Pressed::Started)
             }
 
-            SessionState::Recording => {
-                let registry = kw_provider_registry::registry().map_err(|err| err.to_string())?;
-                let settings = self.route_settings().await;
-
-                let route = match kw_transcription_core::route::resolve(
-                    registry,
-                    &settings,
-                    &kw_transcription_core::RouteRequest::default(),
-                ) {
-                    Ok(route) => route,
-                    Err(err) => {
-                        // The recording has to be dealt with either way: leaving
-                        // the microphone open because the route was
-                        // misconfigured would be the worst of both.
-                        self.session.cancel().await;
-                        return Err(err.to_string());
-                    }
-                };
-
-                Ok(self.session.finish(&route).await)
-            }
+            SessionState::Recording => self.finish().await.map(Pressed::Finished),
 
             busy => Err(format!(
                 "a dictation is already {}",
@@ -807,6 +870,51 @@ impl DictationRuntime {
                 }
             )),
         }
+    }
+
+    /// [`press`](Self::press), answered as an outcome, for the command the page
+    /// and the floating microphone call. A start has no outcome of its own and
+    /// still answers `Cancelled`, as it always has, so the command's answer and
+    /// its TypeScript type are unchanged.
+    pub async fn toggle(&self) -> Result<kw_app_core::dictation::Outcome, String> {
+        Ok(match self.press().await? {
+            Pressed::Started => kw_app_core::dictation::Outcome::Cancelled,
+            Pressed::Finished(outcome) => outcome,
+        })
+    }
+
+    /// Finish the recording if one is running, and say nothing otherwise: the
+    /// release half of push-to-talk, which must never start one (KNEG-388).
+    pub async fn finish_if_recording(
+        &self,
+    ) -> Option<Result<kw_app_core::dictation::Outcome, String>> {
+        match self.state() {
+            SessionState::Recording => Some(self.finish().await),
+            _ => None,
+        }
+    }
+
+    /// Transcribe and insert the running recording, by the route stored now.
+    async fn finish(&self) -> Result<kw_app_core::dictation::Outcome, String> {
+        let registry = kw_provider_registry::registry().map_err(|err| err.to_string())?;
+        let settings = self.route_settings().await;
+
+        let route = match kw_transcription_core::route::resolve(
+            registry,
+            &settings,
+            &kw_transcription_core::RouteRequest::default(),
+        ) {
+            Ok(route) => route,
+            Err(err) => {
+                // The recording has to be dealt with either way: leaving
+                // the microphone open because the route was
+                // misconfigured would be the worst of both.
+                self.session.cancel().await;
+                return Err(err.to_string());
+            }
+        };
+
+        Ok(self.session.finish(&route).await)
     }
 
     /// Throw away the recording.
@@ -1048,12 +1156,52 @@ pub fn input_devices() -> Result<Vec<kw_audio_core::InputDevice>, String> {
 
 /// Choose the microphone for the next recording.
 #[tauri::command]
-pub fn dictation_set_device(
+pub async fn dictation_set_device(
     runtime: tauri::State<'_, Arc<DictationRuntime>>,
     device: Option<String>,
 ) -> Result<(), String> {
+    // Saved before it is applied, so a choice the screen shows as made is one
+    // the next launch will also have (KNEG-341). Written here rather than in a
+    // helper so `tools/settings-audit` can see this command writes the key.
+    let device = chosen_device(device);
+    let pool = runtime.db.pool();
+    match &device {
+        Some(name) => kw_storage::settings::set(pool, INPUT_DEVICE_KEY, name).await,
+        None => kw_storage::settings::remove(pool, INPUT_DEVICE_KEY).await,
+    }
+    .map_err(|err| format!("the microphone choice could not be saved: {err}"))?;
     runtime.set_device(device);
     Ok(())
+}
+
+/// A chosen microphone's name, or `None` for the system default; a blank name
+/// is the default too.
+fn chosen_device(device: Option<String>) -> Option<String> {
+    device
+        .map(|name| name.trim().to_owned())
+        .filter(|name| !name.is_empty())
+}
+
+/// The microphone dictation and meetings record from, by its device name;
+/// absent for the system default (KNEG-341).
+///
+/// Until this the choice lived only in memory, so a headset chosen once was
+/// silently back to the system default after every restart. One key for both
+/// tasks: a meeting reads it at Start ([`load_device`]). A device that is not
+/// connected when recording starts falls back to the system default
+/// (`kw_audio_core::Capture::start`), and the screens say so beforehand.
+pub const INPUT_DEVICE_KEY: &str = "audio.inputDevice";
+
+/// The saved microphone, or `None` for the system default. An unreadable
+/// value is the default too: recording from the default is better than not
+/// recording.
+pub async fn load_device(db: &kw_storage::Db) -> Option<String> {
+    kw_storage::settings::get::<String>(db.pool(), INPUT_DEVICE_KEY)
+        .await
+        .ok()
+        .flatten()
+        .map(|name| name.trim().to_owned())
+        .filter(|name| !name.is_empty())
 }
 
 /// The microphone the next recording will use, or `None` for the system default.
@@ -1088,7 +1236,9 @@ pub fn insertion_supported() -> bool {
 /// So the hold is **one task**, which starts, waits here for the key to come up,
 /// and finishes. There is no ordering left to get wrong, because there is only
 /// one order. A fresh channel per press rather than a long-lived flag, so a
-/// release belonging to an earlier hold cannot end a later one.
+/// release belonging to an earlier hold cannot end a later one. And the task
+/// waits only when its press started a recording: the release finishes, it
+/// never starts (KNEG-388, [`release_finishes`]).
 ///
 /// **Reasoned, not measured.** Nothing here has driven two spawned tasks into
 /// that window on purpose; the argument is that the window exists and the design
@@ -1135,21 +1285,45 @@ pub fn on_hotkey(app: &AppHandle, what: crate::shortcuts::Act) {
 
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        report(&app, runtime.toggle().await);
+        let press = runtime.press().await;
+        let finishes = release_finishes(&press);
+        report_press(&app, press);
 
         // Push-to-talk's second half, in the same task as its first. By the time
         // this is reached the microphone is either open or it failed, so the
-        // state `toggle` reads below is settled -- which is the whole point of
-        // not spawning the release separately.
-        if let Some(mut held) = held {
+        // state read below is settled -- which is the whole point of not
+        // spawning the release separately.
+        //
+        // Only a recording this press started is finished. The release used to
+        // call `toggle` whatever the press had done, so a press that was
+        // refused, could not open the microphone, or finished a recording left
+        // the session idle and the release *started* one that nothing would
+        // end (KNEG-388).
+        if let (Some(mut held), true) = (held, finishes) {
             // `Err` means the sender was dropped, which happens when a later
             // press replaced it. Treated as a release: a hold whose gate has
             // gone is a hold nothing will ever end, and leaving the microphone
             // open is the worse of the two mistakes.
             let _ = held.wait_for(|released| *released).await;
-            report(&app, runtime.toggle().await);
+            // `None` when something else, the floating microphone, already
+            // ended it during the hold: then there is nothing left to finish.
+            if let Some(outcome) = runtime.finish_if_recording().await {
+                report(&app, outcome);
+            }
         }
     });
+}
+
+/// Emit what a press did. A start emits nothing: the session's state event
+/// already says the microphone is open, and the `Cancelled` a start used to
+/// report read "Last dictation result: Cancelled." on Settings › Shortcuts for
+/// as long as the recording ran.
+fn report_press(app: &AppHandle, press: Result<Pressed, String>) {
+    match press {
+        Ok(Pressed::Started) => {}
+        Ok(Pressed::Finished(outcome)) => report(app, Ok(outcome)),
+        Err(message) => report(app, Err(message)),
+    }
 }
 
 /// Emit whatever a toggle came back with, success or failure.
@@ -1226,6 +1400,73 @@ mod tests {
         assert!(super::validated_local_languages(vec!["invalid".into()]).is_err());
     }
     use super::*;
+
+    /* ------------------------------- a press during a model switch (KNEG-388) */
+
+    #[test]
+    fn a_start_is_refused_in_plain_words_while_the_model_is_switching() {
+        assert_eq!(start_refusal(false), None);
+        let refusal = start_refusal(true).expect("a switch in progress refuses the start");
+        assert_eq!(
+            refusal,
+            "Dictation didn't start: the transcription model is still changing. Try again in a moment."
+        );
+    }
+
+    #[test]
+    fn a_push_to_talk_release_finishes_only_what_its_press_started() {
+        // Before KNEG-388 the release toggled whatever state it found: a press
+        // that was refused, failed to open the microphone, or finished a
+        // recording left the session idle, and the release started a new one
+        // that nothing would end.
+        assert!(release_finishes(&Ok(Pressed::Started)));
+        assert!(!release_finishes(&Ok(Pressed::Finished(
+            kw_app_core::dictation::Outcome::Cancelled
+        ))));
+        assert!(!release_finishes(&Err(
+            start_refusal(true).unwrap_or_default()
+        )));
+        assert!(!release_finishes(&Err(
+            "could not open the microphone".to_owned()
+        )));
+    }
+
+    /* ------------------------------- the microphone, kept across restarts (KNEG-341) */
+
+    #[tokio::test]
+    async fn a_chosen_microphone_is_read_back_as_the_command_writes_it() {
+        // `dictation_set_device` writes the trimmed name, or removes the key.
+        let db = kw_storage::Db::open_in_memory().await.unwrap();
+        let pool = db.pool();
+        assert_eq!(
+            load_device(&db).await,
+            None,
+            "never chosen is the system default"
+        );
+
+        kw_storage::settings::set(pool, INPUT_DEVICE_KEY, &"Headset (Jabra Evolve2 65)")
+            .await
+            .unwrap();
+        assert_eq!(
+            load_device(&db).await.as_deref(),
+            Some("Headset (Jabra Evolve2 65)")
+        );
+
+        kw_storage::settings::remove(pool, INPUT_DEVICE_KEY)
+            .await
+            .unwrap();
+        assert_eq!(load_device(&db).await, None, "back to the system default");
+    }
+
+    #[test]
+    fn a_blank_microphone_name_is_the_system_default() {
+        assert_eq!(chosen_device(Some("   ".to_owned())), None);
+        assert_eq!(chosen_device(None), None);
+        assert_eq!(
+            chosen_device(Some(" USB Mic ".to_owned())).as_deref(),
+            Some("USB Mic")
+        );
+    }
 
     /* --------------------------------------------- which local engine */
 

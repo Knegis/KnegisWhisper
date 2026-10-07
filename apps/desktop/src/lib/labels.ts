@@ -28,10 +28,12 @@ import type {
   DictationOutcome,
   DiscoveryPermissions,
   GgufIntegrity,
+  HotkeyAction,
   HotkeyChange,
   HotkeyMode,
   ImportReport,
   InstallProgress,
+  LocalLlmProgress,
   KeytermSupport,
   LocalAvailability,
   MediaImportProgress,
@@ -43,6 +45,7 @@ import type {
   Offer,
   RecheckOutcome,
   RefreshOutcome,
+  Registration,
   RelocatedCredential,
   SessionState,
   ShortcutHookStatus,
@@ -56,6 +59,7 @@ import type {
 } from "./ipc.js";
 
 import type { DiarizationRole } from "../generated/providers.js";
+import { LANGUAGES } from "./controlBar.js";
 import { meetingRecordingWarning } from "./meetingRecordingWarning.js";
 
 /**
@@ -67,6 +71,15 @@ import { meetingRecordingWarning } from "./meetingRecordingWarning.js";
  * this file's callers never set it.
  */
 export type Stated = { text: string; detail: string; caveat?: string };
+
+/**
+ * A line in plain words, and what is behind it for Learn more (KNEG-343).
+ *
+ * The copy rule the settings screens follow: what a person must know or do is
+ * `text`; ids, digests, ports, paths and the mechanism are `more`, which a
+ * screen folds under a disclosure. Nothing true is dropped, only moved.
+ */
+export type Plain = { text: string; more: string | null };
 
 /**
  * Render a capture-exclusion state without overclaiming.
@@ -130,15 +143,27 @@ export function nonActivatingLabel(n: NonActivating): Stated {
  * `undefined` means the answer is not known yet — diagnostics has not loaded —
  * and the note says that rather than guessing either way. Not knowing is not
  * a failure, so it is never a `problem`.
+ *
+ * `registration` is what became of this accelerator when it was registered
+ * (`registrationFor`), and a failure there outranks everything above
+ * (KNEG-353). The platform can have a hook that failed to start, and then
+ * `hook` says "available" while the chord does nothing: this screen said
+ * "Works on this computer." while Dictation, which reads the registration,
+ * said the shortcut didn't work. An action nothing handles is the exception:
+ * the screen says so once, above its accelerators.
  */
 export function acceleratorLabel(
   a: Accelerator,
   hook?: ShortcutHookStatus,
+  registration?: Registration,
 ): {
   text: string;
   problem: string | null;
   note: { text: string; more: string } | null;
 } {
+  if (registration?.state === "rejected" || registration?.state === "not-registrable") {
+    return { text: a.kind === "invalid" ? a.input : a.accelerator, problem: registration.reason, note: null };
+  }
   switch (a.kind) {
     case "standard":
       return { text: a.accelerator, problem: null, note: null };
@@ -201,6 +226,42 @@ export function acceleratorLabel(
     case "invalid":
       return { text: a.input, problem: a.reason, note: null };
   }
+}
+
+/**
+ * What became of accelerator `a` of `action` when the shortcuts were last
+ * registered, or `undefined` when no report names it.
+ *
+ * Matched by text, which is what Rust reports each result under: the
+ * canonical accelerator, or for an invalid one what was typed.
+ */
+export function registrationFor(
+  reports: readonly { action: HotkeyAction; results: readonly Registration[] }[],
+  action: HotkeyAction,
+  a: Accelerator,
+): Registration | undefined {
+  const text = a.kind === "invalid" ? a.input : a.accelerator;
+  return reports.find((report) => report.action === action)?.results.find((result) => result.accelerator === text);
+}
+
+/**
+ * The accelerators of `binding` worth drawing as keycaps: what can actually
+ * be pressed.
+ *
+ * Not an invalid one, which Settings › Shortcuts reports, and not one whose
+ * registration failed: Dictation's hero drew keycaps for a chord the hook had
+ * not taken whenever another accelerator was live (KNEG-377). One with no
+ * report yet is not known to fail, so it stays.
+ */
+export function pressableAccelerators(
+  binding: Binding,
+  reports: readonly { action: HotkeyAction; results: readonly Registration[] }[],
+): Accelerator[] {
+  return binding.accelerators.filter((a) => {
+    if (a.kind === "invalid") return false;
+    const registration = registrationFor(reports, binding.action, a);
+    return registration === undefined || registration.state === "registered" || registration.state === "hooked" || registration.state === "portal";
+  });
 }
 
 /**
@@ -333,6 +394,23 @@ export function sessionStateLabel(state: SessionState): string {
 }
 
 /**
+ * What a local Whisper model of `sizeMb` is worth knowing before choosing it:
+ * a big one is slower, for imports and meetings rather than dictation
+ * (KNEG-407). One model serves all of this computer's Whisper transcription,
+ * which the list says once, below it.
+ *
+ * By size, not by id. KB Whisper Medium and Large were the reason, but the
+ * upstream Medium, Large and Turbo are bigger still, and a list that called
+ * only the KB ones slower would imply the others are not. 500 MB: the smallest
+ * of them is KB Medium at 539, the largest left unlabelled the upstream Small
+ * at 466. Believed from how Whisper sizes behave, not timed here; the timings
+ * are the owner's by-hand item.
+ */
+export function whisperModelHint(sizeMb: number | null): string | null {
+  return sizeMb !== null && sizeMb >= 500 ? "slower; best for imports and meetings" : null;
+}
+
+/**
  * How a model's bytes were checked, said plainly rather than implied.
  *
  * The two digest cases are deliberately not the same phrase. Both mean the file
@@ -354,6 +432,42 @@ export function verificationLabel(verifiedBy: VerifiedBy): string {
       return "size checked only";
     case "nothing":
       return "not verified";
+  }
+}
+
+/**
+ * [`verificationLabel`] in the words the screen leads with (KNEG-343).
+ *
+ * The two digest cases read the same here, "verified": both mean the file
+ * hashed to the digest it was held to, and where that digest came from is the
+ * mechanism, which [`verificationLabel`] keeps saying under Details. The weaker
+ * answers stay as weak as they are.
+ */
+export function verifiedPlain(verifiedBy: VerifiedBy): string {
+  switch (verifiedBy) {
+    case "digest":
+    case "stated-digest":
+      return "verified";
+    case "size":
+      return "only its size was checked";
+    case "nothing":
+      return "not verified";
+  }
+}
+
+/**
+ * How a model's download will be checked, said before Install (KNEG-343), in
+ * the same plain terms as [`verifiedPlain`] and the future tense it needs.
+ */
+export function downloadCheckPlain(verifiedBy: VerifiedBy): string {
+  switch (verifiedBy) {
+    case "digest":
+    case "stated-digest":
+      return "verified on download";
+    case "size":
+      return "only its size is checked on download";
+    case "nothing":
+      return "not checked on download";
   }
 }
 
@@ -385,6 +499,12 @@ export function verificationLabel(verifiedBy: VerifiedBy): string {
  * records existed. It is written down now and it survives a restart, which is
  * why this arm can say "and nothing has written to it since": once the file
  * moves, the state falls back to `changed` and the verdict is discarded.
+ *
+ * **What the screen leads with (KNEG-343).** `text` is the plain answer, and
+ * `detail` and `caveat` go under Details. So the two neutral states both read
+ * "Installed" -- what tells them apart is the mechanism -- and the two that ask
+ * something of the reader say what: check the file, or reinstall it. Byte
+ * counts, timestamps and checksums are only ever in `detail`.
  */
 export function ggufIntegrityLabel(integrity: GgufIntegrity): Stated {
   switch (integrity.state) {
@@ -392,7 +512,7 @@ export function ggufIntegrityLabel(integrity: GgufIntegrity): Stated {
       return { text: "Not installed", detail: "there is nothing on disk yet" };
     case "unchanged-since-install":
       return {
-        text: "Unchanged since it was installed",
+        text: "Installed",
         detail: `${verificationLabel(
           integrity.verifiedBy,
         )} when it was downloaded, and its length and timestamp still match what was recorded then`,
@@ -401,7 +521,7 @@ export function ggufIntegrityLabel(integrity: GgufIntegrity): Stated {
       };
     case "unrecorded":
       return {
-        text: "Installed, never recorded",
+        text: "Installed",
         detail:
           "the file is here, and nothing beside it says what was checked when it arrived — every model installed before this application began keeping a record reads this way",
         caveat:
@@ -409,7 +529,7 @@ export function ggufIntegrityLabel(integrity: GgufIntegrity): Stated {
       };
     case "changed":
       return {
-        text: "Changed since it was installed",
+        text: "Changed since it was installed. Check the file to be sure it is intact.",
         detail:
           integrity.recordedBytes === integrity.bytes
             ? `still ${integrity.bytes.toLocaleString()} bytes, but its timestamp has moved — something wrote to it, or it was restored from a copy`
@@ -418,8 +538,10 @@ export function ggufIntegrityLabel(integrity: GgufIntegrity): Stated {
           "The bytes may still be the right ones; a restore moves a timestamp without changing a file. Re-checking hashes it and says which.",
       };
     case "failed-recheck":
+      // Not "damaged": the checksum this build pins may be the stale half, as
+      // the caveat says. Both are fixed the same way.
       return {
-        text: "This file did not match its checksum",
+        text: "This file doesn't match what this app expects. Reinstall the model.",
         detail: `it was hashed in full and compared against the checksum it is pinned to — pinned ${integrity.expected}, found ${integrity.actual}`,
         caveat:
           "This is the one finding here that was not guessed from a file's size and timestamp: the whole file was read. It was left where it is, and nothing has written to it since that check. Either it has been damaged or replaced since it was installed, or the checksum this build carries for it has gone stale — reinstalling the model is what settles that, and deleting gigabytes on a guess is not something this screen will do for you.",
@@ -438,19 +560,20 @@ export function recheckOutcomeLabel(outcome: RecheckOutcome): Stated {
   switch (outcome.outcome) {
     case "matched":
       return {
-        text: "The bytes on disk are the bytes that were downloaded",
+        text: "Checked: the file is as it was downloaded.",
         detail: `hashed just now — ${verificationLabel(outcome.verifiedBy)}`,
       };
     case "mismatched":
+      // The file name and both checksums go to `detail` (KNEG-343).
       return {
-        text: `${outcome.fileName} does not match the checksum it is pinned to`,
-        detail: `pinned ${outcome.expected}, found ${outcome.actual}`,
+        text: "This file doesn't match what this app expects. Reinstall the model.",
+        detail: `${outcome.fileName}: pinned ${outcome.expected}, found ${outcome.actual}`,
         caveat:
           "The file was left where it is. Either it has been damaged or replaced since it was installed, or the checksum this build carries for it has gone stale — reinstalling the model is what settles that, and deleting gigabytes on a guess is not something this screen will do for you.",
       };
     case "nothing-pinned":
       return {
-        text: "Nothing to check against",
+        text: "There is nothing to check it against.",
         detail:
           "no checksum is pinned for this model, so hashing it would prove nothing",
       };
@@ -490,20 +613,29 @@ export function recheckOutcomeLabel(outcome: RecheckOutcome): Stated {
  * would have multiplied the silent-failure surface by three and then asked
  * somebody to notice.
  */
-export function freshnessLabel(freshness: SidecarFreshness): string | undefined {
+export function freshnessLabel(freshness: SidecarFreshness): Plain | undefined {
+  // In plain words (KNEG-343): `text` is the answer, and `more` the builds for
+  // Learn more. "Not the version this app expects" is what a person needs; two
+  // digests are what a bug report needs.
   switch (freshness.state) {
     case "not-installed":
       // The row already says "Not installed". A second sentence saying the same
       // thing is noise.
       return undefined;
     case "current":
-      return "the build this version of the application pins";
+      return { text: "Up to date.", more: "This is the build this version of the app pins." };
     case "stale":
-      return `a different build from the one this version pins — installed ${short(
-        freshness.installed,
-      )}, pinned ${short(freshness.expected)}`;
+      return {
+        text: "Not the version this app expects.",
+        more: `A different build from the one this version pins: installed ${short(
+          freshness.installed,
+        )}, pinned ${short(freshness.expected)}.`,
+      };
     case "unknown":
-      return `it is not known whether this is the build this version pins: ${freshness.why}`;
+      return {
+        text: "It isn't known whether this is the version this app expects.",
+        more: freshness.why,
+      };
     default: {
       const unhandled: never = freshness;
       return unhandled;
@@ -531,15 +663,25 @@ function short(digest: string): string {
  * function in the first of those, and copying it into the second would have been
  * two sentences about one mechanism, drifting apart.
  */
-export function refreshOutcomeLabel(outcome: RefreshOutcome): string {
-  const replaced = `The server binary was replaced (${outcome.files} files).`;
+export function refreshOutcomeLabel(outcome: RefreshOutcome): Plain & { problem: boolean } {
+  // In plain words (KNEG-343): the file count, the model's id and the error go
+  // to `more`. A model that did not come back is a `problem`, said in view.
+  const replaced = `${outcome.files} files were replaced.`;
   if (outcome.restartError) {
-    return `${replaced} The model that was running could not be started again: ${outcome.restartError}`;
+    return {
+      text: "Updated, but the model that was running could not start again. Choose it again to retry.",
+      problem: true,
+      more: `${replaced} Starting the model again failed: ${outcome.restartError}`,
+    };
   }
   if (outcome.restarted) {
-    return `${replaced} ${outcome.restarted} is running again.`;
+    return {
+      text: "Updated. The model that was running has started again.",
+      problem: false,
+      more: `${replaced} ${outcome.restarted} was started again.`,
+    };
   }
-  return replaced;
+  return { text: "Updated.", problem: false, more: replaced };
 }
 
 export function bytes(written: number, total: number | null): string {
@@ -547,19 +689,73 @@ export function bytes(written: number, total: number | null): string {
   return total ? `${mb(written)} of ${mb(total)}` : mb(written);
 }
 
-/** Progress as one short line. */
-export function progressLabel(progress: InstallProgress): string {
+/**
+ * Progress as one short line. A model is named by `nameOf`, which a screen
+ * answers from its own model list: the event carries only the id (KNEG-343).
+ */
+export function progressLabel(progress: InstallProgress, nameOf: (id: string) => string = (id) => id): string {
   switch (progress.stage) {
     case "server":
-      return `Downloading the server — ${bytes(progress.written, progress.total)}`;
+      return `Downloading the speech engine — ${bytes(progress.written, progress.total)}`;
     case "model":
-      return `Downloading ${progress.id} — ${bytes(progress.written, progress.total)}`;
+      return `Downloading ${nameOf(progress.id)} — ${bytes(progress.written, progress.total)}`;
     case "verifying":
-      return "Verifying…";
+      return "Checking the download…";
     case "extracting":
       return "Unpacking…";
+    case "done": {
+      const checked = verifiedPlain(progress.verifiedBy);
+      return checked === "verified" ? "Installed and verified." : `Installed. ${sentence(checked)}.`;
+    }
+  }
+}
+
+/** A clause as a sentence: its first letter capitalised. */
+function sentence(clause: string): string {
+  return clause.charAt(0).toUpperCase() + clause.slice(1);
+}
+
+/** Bytes at a scale a person reads, for the text models' gigabytes. */
+export function size(bytesCount: number | null): string {
+  if (bytesCount === null) return "size unknown";
+  const gb = bytesCount / 1_000_000_000;
+  return gb >= 1 ? `${gb.toFixed(1)} GB` : `${(bytesCount / 1_000_000).toFixed(0)} MB`;
+}
+
+/**
+ * A local text model's install progress as one line, with bytes rather than a
+ * spinner, and the model named by `nameOf` (KNEG-343). Moved here from
+ * `views/SettingsIntelligenceLocal.tsx` so it can be tested.
+ */
+export function llmProgressLabel(p: LocalLlmProgress, nameOf: (id: string) => string = (id) => id): string {
+  const of = (written: number, total: number | null) =>
+    total === null ? size(written) : `${size(written)} of ${size(total)}`;
+
+  switch (p.stage) {
+    case "server":
+      return `Downloading the text engine — ${of(p.written, p.total)}`;
+    case "model":
+      return `Downloading ${nameOf(p.id)} — ${of(p.written, p.total)}`;
+    case "draft":
+      // Named apart from the model so a second bar does not read as the first
+      // one restarting.
+      return `Downloading ${nameOf(p.id)}'s helper model — ${of(p.written, p.total)}`;
+    case "extracting":
+      return "Unpacking the text engine…";
+    case "verifying":
+      // Named because it is not instant: the check reads the whole file back,
+      // and the largest model here is 20 GB.
+      return `Checking ${nameOf(p.id)}…`;
     case "done":
-      return `Installed (${verificationLabel(progress.verifiedBy)})`;
+      // `null` means the files were already on disk, so this install checked
+      // nothing and must not borrow the previous one's claim.
+      return p.verifiedBy === null
+        ? `${nameOf(p.id)} was already installed.`
+        : verifiedPlain(p.verifiedBy) === "verified"
+          ? `${nameOf(p.id)} is installed and verified.`
+          : `${nameOf(p.id)} is installed; ${verifiedPlain(p.verifiedBy)}.`;
+    case "stopped-when-idle":
+      return "The model was unloaded after a while unused. The next request loads it again.";
   }
 }
 
@@ -778,12 +974,19 @@ export function languageRequiredWarning(review: ConfigReview): string | null {
     : null;
 }
 
-/** How a meeting ended, in one line. */
-export function meetingOutcomeLabel(outcome: MeetingOutcome): string {
+/**
+ * How a meeting ended: `text` in view, `more` for Learn more.
+ *
+ * What happened, and anything missing from the transcript, is `text`. The
+ * note's id and the recording's path are `more`: until KNEG-354 they were in
+ * view, "Saved as note 42 (5 min). … The recording is at C:\Users\…", and
+ * the copy rules put ids and paths behind Learn more.
+ */
+export function meetingOutcomeLabel(outcome: MeetingOutcome): { text: string; more: string | null } {
   switch (outcome.outcome) {
     case "saved": {
       const minutes = Math.round(outcome.durationSeconds / 60);
-      const parts = [`Saved as note ${outcome.noteId} (${minutes} min).`];
+      const parts = [`Saved as a note (${minutes} min).`];
       const recordingWarning = meetingRecordingWarning(outcome.recordingAttached);
       if (recordingWarning) parts.push(recordingWarning);
       if (outcome.transcriptIsPartials) {
@@ -809,8 +1012,10 @@ export function meetingOutcomeLabel(outcome: MeetingOutcome): string {
       if (outcome.reconnects > 0) {
         parts.push(reconnectLabel(outcome.reconnects));
       }
-      parts.push(`The recording is at ${outcome.recordingPath}.`);
-      return parts.join(" ");
+      return {
+        text: parts.join(" "),
+        more: `Note ${outcome.noteId}. The recording is at ${outcome.recordingPath}.`,
+      };
     }
     case "nothing-transcribed":
       // Still not a failure, and still not one named cause. What changed with
@@ -825,15 +1030,20 @@ export function meetingOutcomeLabel(outcome: MeetingOutcome): string {
       // `send_audio` and `finish` turn that into an `Err`, so a rejected
       // session-config frame ends the meeting as `failed` carrying what the
       // provider said.
-      return [
-        `Nothing was transcribed. ${deliveryLabel(outcome.mic, outcome.system)}`,
-        ...(outcome.reconnects > 0 ? [reconnectLabel(outcome.reconnects)] : []),
-        `The recording is at ${outcome.recordingPath}.`,
-      ].join(" ");
+      return {
+        text: [
+          `Nothing was transcribed. ${deliveryLabel(outcome.mic, outcome.system)}`,
+          ...(outcome.reconnects > 0 ? [reconnectLabel(outcome.reconnects)] : []),
+        ].join(" "),
+        more: `The recording is at ${outcome.recordingPath}.`,
+      };
     case "cancelled":
-      return "Discarded. The recording was deleted." + (outcome.noteId !== null ? " Your notes were kept as a note." : "");
+      return {
+        text: "Discarded. The recording was deleted." + (outcome.noteId !== null ? " Your notes were kept as a note." : ""),
+        more: null,
+      };
     case "failed":
-      return outcome.message;
+      return { text: outcome.message, more: null };
   }
 }
 
@@ -932,14 +1142,25 @@ export function useForLabel(used: UsedFor, inUse: boolean): string {
 }
 
 /**
- * The one-line note under a local model, saying which engine it runs on.
+ * A local model's language as a word: the registry stores a code, or
+ * `multilingual` (KNEG-343). A code with no name here is shown as itself.
+ */
+export function modelLanguage(code: string): string {
+  if (code === "multilingual") return "Many languages";
+  return LANGUAGES.find(([known]) => known === code)?.[1] ?? code;
+}
+
+/**
+ * The one-line note under a local model, saying what it is for. It said
+ * "offline model" and "streaming model", which is how it runs rather than what
+ * it is for (KNEG-343).
  */
 export function useForDetail(used: UsedFor): string {
   switch (used) {
     case "dictation":
-      return "offline model — dictation";
+      return "For dictation";
     case "meetings":
-      return "streaming model — meetings, word by word";
+      return "For meetings, word by word";
   }
 }
 
@@ -1176,33 +1397,41 @@ export function updateCheckLabel(result: UpdateCheckResult): Stated {
  * already tried to refresh this exact token and recorded that it failed
  * (`calendar.rs::combine_token_status`), so this reads as not connected
  * rather than as an automatic retry that is quietly pending.
+ *
+ * In plain words (KNEG-343): `detail` is what to do, when there is anything,
+ * and the token mechanics and the provider's error are `more`.
  */
-export function tokenStatusLabel(status: TokenStatus): Stated {
+export function tokenStatusLabel(status: TokenStatus): { text: string; detail: string; more: string | null } {
   switch (status.state) {
     case "active":
-      return { text: "Connected", detail: "the cached access token is still valid" };
+      return { text: "Connected", detail: "", more: "The cached access token is still valid." };
     case "needs-refresh":
       return {
         text: "Connected",
-        detail: "the access token has expired; the next sync refreshes it automatically",
+        detail: "",
+        more: "The access token has expired; the next sync renews it automatically.",
       };
     case "missing":
-      return { text: "Not connected", detail: "" };
+      return { text: "Not connected", detail: "", more: null };
     case "refresh-failed":
       return {
         text: "Not connected",
-        detail: `the last attempt to refresh the access token failed (${status.message}); reconnect the account`,
+        detail: "Reconnect the account.",
+        more: `The last attempt to renew the access token failed: ${status.message}`,
       };
   }
 }
 
-/** What clicking "Connect" produced. */
-export function connectOutcomeLabel(outcome: ConnectOutcome): string {
+/** What clicking "Connect" produced. The provider's reason for a refusal is `more` (KNEG-343). */
+export function connectOutcomeLabel(outcome: ConnectOutcome): Plain {
   switch (outcome.state) {
     case "connected":
-      return `Connected as ${outcome.accountEmail} (${outcome.calendars} calendar${outcome.calendars === 1 ? "" : "s"}).`;
+      return {
+        text: `Connected as ${outcome.accountEmail} (${outcome.calendars} calendar${outcome.calendars === 1 ? "" : "s"}).`,
+        more: null,
+      };
     case "denied":
-      return `Not connected: access was declined (${outcome.reason}).`;
+      return { text: "Not connected: access was declined.", more: outcome.reason };
   }
 }
 
@@ -1211,34 +1440,36 @@ export function connectOutcomeLabel(outcome: ConnectOutcome): string {
  * "could not check". An empty count on `completed` is a real fact — nothing
  * changed since the last sync — never used to paper over `token-unavailable`
  * or `failed`, which get their own sentences naming what went wrong.
+ *
+ * In plain words (KNEG-343): the provider's errors are `more`, and what to do
+ * stays in `text`.
  */
-export function syncOutcomeLabel(outcome: SyncOutcome): string {
+export function syncOutcomeLabel(outcome: SyncOutcome): Plain {
   switch (outcome.state) {
     case "completed": {
-      const parts = [
-        `Synced: ${outcome.eventsUpserted} event${outcome.eventsUpserted === 1 ? "" : "s"} updated, ${outcome.eventsRemoved} removed.`,
-      ];
-      if (outcome.calendarErrors.length > 0) {
-        parts.push(
-          `${outcome.calendarErrors.length} calendar(s) could not be synced: ${outcome.calendarErrors.join("; ")}`,
-        );
-      }
-      return parts.join(" ");
+      const synced = `Synced: ${outcome.eventsUpserted} event${outcome.eventsUpserted === 1 ? "" : "s"} updated, ${outcome.eventsRemoved} removed.`;
+      const failed = outcome.calendarErrors.length;
+      if (failed === 0) return { text: synced, more: null };
+      return {
+        text: `${synced} ${failed} calendar${failed === 1 ? "" : "s"} couldn't be synced.`,
+        more: outcome.calendarErrors.join("; "),
+      };
     }
     case "token-unavailable":
-      return `Could not sync: the token could not be refreshed (${outcome.message}). Reconnect the account.`;
+      return { text: "Couldn't sync. Reconnect the account.", more: outcome.message };
     case "failed":
-      return `Sync failed: ${outcome.message}`;
+      return { text: "Couldn't sync.", more: outcome.message };
   }
 }
 
 /**
  * What this build can do about Apple Calendar. Always the reason EventKit is
  * unimplemented — see `kw_calendar_core::apple`'s module doc — never an
- * empty calendar list that would read as "you have none".
+ * empty calendar list that would read as "you have none". The reason names
+ * EventKit and macOS, so the screen shows it under a Why (KNEG-343).
  */
 export function appleCalendarSupportLabel(support: AppleCalendarSupport): Stated {
-  return { text: "Not supported in this build", detail: support.reason };
+  return { text: "Not supported yet", detail: support.reason };
 }
 
 /* ------------------------------------------------------------ developer tools */
@@ -1285,7 +1516,7 @@ export function discoveryPermissionsLabel(p: DiscoveryPermissions): Stated {
         detail:
           "verified by reading the file's access list back: your account, NT AUTHORITY\\SYSTEM and BUILTIN\\Administrators, nobody else, and nothing inherited from the folder above",
         caveat:
-          "An administrator on this machine can still read the token. That is deliberate: an administrator can take ownership of any file and grant themselves access anyway, so leaving them out would look stricter without being stricter.",
+          "An administrator on this computer can still read the token. That is deliberate: an administrator can take ownership of any file and grant themselves access anyway, so leaving them out would look stricter without being stricter.",
       };
     case "inherited-from-profile":
       return {
@@ -1305,7 +1536,7 @@ export function discoveryPermissionsLabel(p: DiscoveryPermissions): Stated {
         text: "Readable by accounts you did not choose",
         detail: `the access list grants ${p.count} account${p.count === 1 ? "" : "s"} or group${p.count === 1 ? "" : "s"} beyond your own, the system and administrators — each of them can read the token and drive the local API`,
         caveat:
-          "Which accounts is in the application log rather than on this screen, so a screenshot of this page does not carry your machine's account and group names.",
+          "Which accounts is in the application log rather than on this screen, so a screenshot of this page does not carry your computer's account and group names.",
       };
     case "still-inheriting":
       return {
@@ -1315,9 +1546,9 @@ export function discoveryPermissionsLabel(p: DiscoveryPermissions): Stated {
       };
     case "grants-everyone":
       return {
-        text: "Readable by every account on this machine",
+        text: "Readable by every account on this computer",
         detail:
-          "the access list grants an everyone-style group, or there is no access list at all — which permits everything rather than nothing. Any process on this machine can use the local API",
+          "the access list grants an everyone-style group, or there is no access list at all — which permits everything rather than nothing. Any process on this computer can use the local API",
       };
     case "incomplete":
       return {
@@ -1337,6 +1568,18 @@ export function discoveryPermissionsLabel(p: DiscoveryPermissions): Stated {
         detail: `${p.reason} — treat the local API as reachable by anything running as you`,
       };
   }
+}
+
+/**
+ * Why the local API is not serving, as the sentence Developer › Local API, CLI
+ * and MCP lead with; Rust's reason goes under Details (KNEG-343). A revoked
+ * token (`local_api.rs`, `blocked_reason`) has something to do; any other
+ * reason is a start that failed.
+ */
+export function blockedLine(reason: string): string {
+  return reason.startsWith("Local API access was revoked")
+    ? "Local API access was revoked. Start it again once the discovery file's permissions are secured."
+    : "The local API couldn't start.";
 }
 
 /**

@@ -38,14 +38,25 @@ jobs:
       # No npm ci: pin.mjs deliberately depends on nothing but Node's
       # standard library (see the header of the file), so this workflow never
       # needs an install step to run it.
+      #
+      # Each step retries a dropped connection twice and checks every target
+      # it can reach before failing (KNEG-413), and the two steps after this
+      # one run even when it fails. On 2026-10-05 one socket GitHub closed
+      # ended this step at its 19th of 21 targets, and the default `success()`
+      # condition then skipped both later steps, so a week's check of the
+      # model files and the stated digests was lost to one connection. The
+      # three steps check different things; one failing says nothing about
+      # the others.
       - name: Verify pinned sidecar targets
         run: node tools/sidecar-pin/pin.mjs --verify
 
-      # The same job for model files. About 8.4 GiB a week, as measured by the
-      # 2026-09-21 run: the eight whisper models (6.57 GiB, the six upstream
-      # ones plus KB-Whisper tiny and base), four sherpa ASR archives at about
-      # 450 MiB each, and the two diarization models (35 MiB). Before
-      # 2026-08-31 it was `tiny` and two Parakeet archives, about 1 GB.
+      # The same job for model files. About 10.1 GiB a week: 8.4 GiB as
+      # measured by the 2026-09-21 run -- the six upstream whisper models plus
+      # KB-Whisper tiny and base (6.57 GiB), four sherpa ASR archives at about
+      # 450 MiB each, and the two diarization models (35 MiB) -- plus KB-Whisper
+      # small, medium and large since 2026-10-07 (KNEG-407), 1.67 GiB by their
+      # pinned sizes rather than by a run. Before 2026-08-31 it was `tiny` and
+      # two Parakeet archives, about 1 GB.
       #
       # The price is worth paying here more than anywhere else in this
       # workflow, though less than it was. Since KNEG-103 the six whisper URLs
@@ -60,6 +71,7 @@ jobs:
       # If the runtime becomes a problem, `--only <id>` narrows it; rotating
       # subsets would be the cheap fix, at the cost of the seven-day bound.
       - name: Verify pinned model files
+        if: ${{ !cancelled() }}
         run: node tools/model-pin/pin.mjs --verify
 
       # The 39 local-LLM GGUFs, which are pinned to a digest but cannot be
@@ -96,4 +108,5 @@ jobs:
       # failure: failing on it kept this job red every week from 2026-09-07
       # for a reason that could not clear (KNEG-358).
       - name: Re-read the stated digests, at Hugging Face and at GitHub
+        if: ${{ !cancelled() }}
         run: node tools/model-pin/pin.mjs --verify-stated

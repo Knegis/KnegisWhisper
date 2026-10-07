@@ -42,6 +42,12 @@ export type LastDictation = {
   raw: string | null;
   /** Whether it was typed where the cursor was; `false` when the paste failed. */
   typed: boolean;
+  /**
+   * Whether this is the last outcome's own text, from a failure. Its
+   * could-not-be-typed line and the outcome's error are then one event, and
+   * the control bar says it once (KNEG-377).
+   */
+  fromFailure: boolean;
 };
 
 type Row = Pick<Transcription, "id" | "text" | "rawText" | "status" | "createdAt">;
@@ -70,7 +76,7 @@ export function lastDictation(
   const byId = (id: number | null) => (id === null ? null : (history.find((h) => h.id === id) ?? null));
   const failedRow = failed === null ? null : byId(failed.historyId);
   if (failed !== null && failedRow !== null && failedRow.text !== "") {
-    return { text: failedRow.text, at: failed.at, raw: failedRow.rawText, typed: false };
+    return { text: failedRow.text, at: failed.at, raw: failedRow.rawText, typed: false, fromFailure: true };
   }
   const newest = history.find((h) => h.text !== "") ?? null;
   const fromRow = (h: Row): LastDictation => ({
@@ -78,6 +84,7 @@ export function lastDictation(
     at: parseStoredTime(h.createdAt),
     raw: h.rawText,
     typed: h.status !== "failed",
+    fromFailure: false,
   });
   if (inserted === null) return newest === null ? null : fromRow(newest);
   const fromInsert: LastDictation = {
@@ -85,6 +92,7 @@ export function lastDictation(
     at: inserted.at,
     raw: byId(inserted.historyId)?.rawText ?? null,
     typed: true,
+    fromFailure: false,
   };
   if (newest === null || newest.id === inserted.historyId) return fromInsert;
   const rowIsNewer =

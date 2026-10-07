@@ -20,6 +20,9 @@ sqlx.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 chrono.workspace = true
+zip.workspace = true
+uuid.workspace = true
+hound.workspace = true
 tokio.workspace = true
 
 kw-storage.workspace = true

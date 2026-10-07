@@ -434,6 +434,9 @@ pub struct MeetingRuntime {
     credentials: Arc<dyn kw_security::CredentialStore>,
     /// Where the local model server is listening, and what it loaded.
     local: crate::local_model::SharedLocal,
+    /// How Start brings the local model server up for the `local` provider when
+    /// it is not running (KNEG-387). See `local_model::meeting_revive_handle`.
+    local_revive: Arc<dyn crate::local_model::Revive>,
     /// Which sherpa model is selected for dictation, if any.
     ///
     /// Read by the whole-recording pass so it uses the same engine dictation
@@ -606,6 +609,13 @@ struct Live {
 struct ProviderBuild {
     provider: Box<dyn MeetingTranscriptionProvider>,
     stream_lease: Option<crate::sherpa_stream::StreamLease>,
+    /// Present only for the `local` provider: its use of the whisper server,
+    /// whose port its live windows were given at Start (KNEG-414). Moved into
+    /// the pump's task and dropped when the pump returns -- not kept in
+    /// `Live`, which outlives a live transcription that ended on its own and
+    /// would go on refusing a model change with a meeting that is no longer
+    /// being transcribed.
+    server_use: Option<crate::local_model::ServerUse>,
 }
 
 impl ProviderBuild {
@@ -613,7 +623,23 @@ impl ProviderBuild {
         Self {
             provider,
             stream_lease: None,
+            server_use: None,
         }
+    }
+}
+
+/// The live `local` provider, which searches each window for speech before
+/// sending it when the tools are here (KNEG-410), as the whole-recording pass
+/// does (`whisper_for_note`). `None` sends every window, as before.
+fn local_window_provider(
+    server: kw_transcription_core::local::WhisperServer,
+    events: mpsc::UnboundedSender<TranscriptEvent>,
+    speech: Option<Arc<dyn kw_transcription_core::speech::FindSpeech>>,
+) -> LocalWindowProvider {
+    let provider = LocalWindowProvider::new(Arc::new(server)).with_live_events(events);
+    match speech {
+        Some(finder) => provider.with_speech_finder(finder),
+        None => provider,
     }
 }
 
@@ -632,6 +658,7 @@ impl MeetingRuntime {
         policy: NetworkPolicy,
         credentials: Arc<dyn kw_security::CredentialStore>,
         local: crate::local_model::SharedLocal,
+        local_revive: Arc<dyn crate::local_model::Revive>,
         sherpa: crate::local_asr::Selection,
         stream: Arc<crate::sherpa_stream::SherpaStream>,
         notes: Arc<draft::NotesDraft>,
@@ -644,6 +671,7 @@ impl MeetingRuntime {
             live: Arc::new(Mutex::new(None)),
             lifecycle: Mutex::new(SessionLifecycle::default()),
             local,
+            local_revive,
             sherpa,
             stream,
             watch: Mutex::new(WatchState::default()),
@@ -773,15 +801,30 @@ impl MeetingRuntime {
     ) -> Result<ProviderBuild, String> {
         match client {
             Client::LocalWindow => {
-                let port =
+                // Before the port is read: a model change that is running is
+                // waited for, so the windows go to the new model's server, and
+                // none can begin while they go to it (KNEG-414).
+                let using = self
+                    .local
+                    .users
+                    .begin(crate::local_model::ServerUser::Meeting)
+                    .await;
+                let recorded =
                     *self.local.port.read().map_err(|_| {
                         "the local model server's state could not be read".to_owned()
                     })?;
-                let port = port.ok_or_else(|| {
-                    "the local model server is not running. Start a model under Settings > \
-                     Transcription > Local first."
-                        .to_owned()
-                })?;
+                // Started here when it is not running, as dictation and media
+                // import already do (KNEG-387). Until this, Start failed with
+                // "the local model server is not running" while the page said
+                // Ready, because the provider needs no key and so was listed as
+                // available.
+                let port = crate::local_model::ensure_whisper(
+                    &self.policy,
+                    recorded,
+                    self.local_revive.as_ref(),
+                )
+                .await
+                .map_err(|err| format!("the local model server could not be started: {err}"))?;
                 let model = self
                     .local
                     .model
@@ -794,9 +837,16 @@ impl MeetingRuntime {
                     port,
                     model,
                 );
-                Ok(ProviderBuild::without_stream_lease(Box::new(
-                    LocalWindowProvider::new(Arc::new(server)).with_live_events(events),
-                )))
+                Ok(ProviderBuild {
+                    server_use: Some(using),
+                    ..ProviderBuild::without_stream_lease(Box::new(local_window_provider(
+                        server,
+                        events,
+                        self.local
+                            .speech
+                            .finder(kw_audio_core::vad::Context::Meeting),
+                    )))
+                })
             }
             Client::LocalStreaming => {
                 // Started here rather than at launch: the model is 630 MB in
@@ -827,6 +877,7 @@ impl MeetingRuntime {
                         .with_live_events(events),
                     ),
                     stream_lease: Some(stream_lease),
+                    server_use: None,
                 })
             }
             Client::OpenAiRealtime => Ok(ProviderBuild::without_stream_lease(Box::new(
@@ -1045,6 +1096,7 @@ impl MeetingRuntime {
         let ProviderBuild {
             mut provider,
             stream_lease,
+            server_use,
         } = self.provider(client, events_tx).await?;
 
         let caps = provider.capabilities();
@@ -1104,8 +1156,11 @@ impl MeetingRuntime {
             chrono::Utc::now().format("%Y%m%d-%H%M%S"),
             uuid::Uuid::new_v4()
         ));
+        // The microphone chosen on the Dictation page: one choice for both
+        // tasks (KNEG-341). Until this a meeting always opened the default.
+        let microphone = crate::dictation::load_device(&self.db).await;
         let (audio, commands, sources, recorder_end) =
-            match spawn_recorder(path.clone(), system_audio) {
+            match spawn_recorder(path.clone(), system_audio, microphone) {
                 Ok(parts) => parts,
                 Err(err) => {
                     cancel_provider(provider.as_mut()).await;
@@ -1140,6 +1195,9 @@ impl MeetingRuntime {
                     cancellation,
                 )
                 .await;
+                // No more live windows go to the server: a model change may
+                // go ahead, whether this ended at Stop or on its own.
+                drop(server_use);
                 // On normal completion the audio channel has closed and the
                 // recorder guard has run. Explicit cancellation can end sooner;
                 // that path already took Live, so no failure is announced.
@@ -1755,6 +1813,23 @@ impl MeetingRuntime {
     async fn transcribe_whole(&self, path: &std::path::Path) -> Result<Option<WholePass>, String> {
         use kw_transcription_core::local::Inference;
 
+        // This pass's use of the whisper server, held until its one request is
+        // answered, so a model change can't stop the server under it
+        // (KNEG-414). Taken before the port is read, so a change that is
+        // running is waited for. Not when a Parakeet model is selected: that
+        // wins below and uses no server, and holding one would refuse a change
+        // for nothing.
+        let _using = if crate::local_asr::resolve(&self.sherpa).is_none() {
+            Some(
+                self.local
+                    .users
+                    .begin(crate::local_model::ServerUser::Meeting)
+                    .await,
+            )
+        } else {
+            None
+        };
+
         // The same engine dictation would use, through the same function, and
         // that is the whole of the 2026-09-01 fix. This used to build a
         // `WhisperServer` directly and fail with "the local model server is not
@@ -1775,7 +1850,16 @@ impl MeetingRuntime {
                 .read()
                 .map_err(|_| "the local model could not be read".to_owned())?
                 .clone();
-            port.map(|port| whisper_for_note(self.policy.clone(), port, model))
+            port.map(|port| {
+                whisper_for_note(
+                    self.policy.clone(),
+                    port,
+                    model,
+                    self.local
+                        .speech
+                        .finder(kw_audio_core::vad::Context::Meeting),
+                )
+            })
         };
 
         let engine = crate::dictation::local_engine(&self.sherpa, whisper)?.ok_or_else(|| {
@@ -2393,6 +2477,30 @@ pub async fn meeting_review_config(
 )]
 mod tests {
     use super::*;
+
+    /* ------------------------------------------------- the live local view */
+
+    #[test]
+    fn the_live_local_view_searches_each_window_for_speech_when_it_can() {
+        // KNEG-410. Without it, every silent window of a meeting is a whisper
+        // request for nothing.
+        let policy = NetworkPolicy::new().unwrap();
+        let (events, _receiver) = mpsc::unbounded_channel();
+        let server =
+            || kw_transcription_core::local::WhisperServer::new(policy.clone(), 8178, None);
+        let finder: Arc<dyn kw_transcription_core::speech::FindSpeech> =
+            Arc::new(kw_transcription_core::speech::SpeechFinder::new(
+                "vad.exe".into(),
+                "silero.bin".into(),
+                kw_audio_core::vad::VadConfig::default(),
+                "scratch".into(),
+            ));
+        assert!(
+            local_window_provider(server(), events.clone(), Some(finder)).searches_for_speech()
+        );
+        // Without the tools, every window is sent, as before.
+        assert!(!local_window_provider(server(), events, None).searches_for_speech());
+    }
 
     /* ----------------------------------------------- session interleavings */
 

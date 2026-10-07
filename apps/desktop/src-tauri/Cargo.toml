@@ -63,6 +63,7 @@ workspace = true
 tauri-build.workspace = true
 
 [dependencies]
+tempfile.workspace = true
 # `macos-private-api` is what makes `WebviewWindowBuilder::transparent` exist on
 # macOS at all -- it is `#[cfg(any(not(target_os = "macos"), feature =
 # "macos-private-api"))]` in tauri 2.11.5. Without it the three transparent
@@ -123,7 +124,6 @@ kw-storage.workspace = true
 
 [dev-dependencies]
 sqlx.workspace = true
-tempfile.workspace = true
 # Only for the `#[ignore]`d HEAD-request test that re-measures the local-LLM
 # sizes against Hugging Face. The application itself never names `reqwest` --
 # `kw-network-policy` is the one crate that does -- but that crate hands back a

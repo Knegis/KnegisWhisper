@@ -38,6 +38,7 @@ mod persistent_overlay;
 mod reasoning;
 mod recording_attach;
 mod recordings;
+mod sharing;
 mod sherpa_stream;
 mod shortcuts;
 mod state;
@@ -154,6 +155,8 @@ pub fn run() -> anyhow::Result<()> {
                 .context("could not read the configured hotkeys")?;
 
             let db = state.db().clone();
+            app.manage(tauri::async_runtime::block_on(sharing::SharingRuntime::recover(&state))
+                .map_err(|e| anyhow::anyhow!(e))?);
             let credentials = state.credentials_arc();
             // Cloned before it is moved into the dictation runtime below.
             let meeting_credentials = std::sync::Arc::clone(&credentials);
@@ -171,7 +174,12 @@ pub fn run() -> anyhow::Result<()> {
             // config/sidecars.json is a startup message rather than a surprise
             // on the first dictation.
             let local = std::sync::Arc::new(
-                local_model::LocalTranscription::new(policy.clone())
+                local_model::LocalTranscription::new(
+                    policy.clone(),
+                    // So long recordings can find their speech first
+                    // (KNEG-404). Checked against its pin once, here.
+                    local_model::bundled_vad_model(app.path().resource_dir().ok().as_deref()),
+                )
                     .map_err(|e| anyhow::anyhow!(e))
                     .context("could not load config/sidecars.json")?,
             );
@@ -222,6 +230,8 @@ pub fn run() -> anyhow::Result<()> {
                     std::sync::Arc::clone(&shared.model),
                     asr.selection(),
                     std::sync::Arc::clone(&revive),
+                    shared.speech.clone(),
+                    shared.users.clone(),
                     db.clone(),
                 )
                 .map_err(|e| anyhow::anyhow!(e))
@@ -259,6 +269,8 @@ pub fn run() -> anyhow::Result<()> {
                     transcription_model: shared.model,
                     transcription_sherpa: sherpa_selection,
                     transcription_revive: revive,
+                    transcription_switching: shared.switching,
+                    transcription_users: shared.users,
                     generation: llm_endpoint,
                 },
                 // Off until `reasoning::apply_at_startup` fills it, and off
@@ -271,6 +283,9 @@ pub fn run() -> anyhow::Result<()> {
             // The route survives a restart. Bring it back, in the background:
             // the window should not wait on a settings read.
             reasoning::apply_at_startup(&session, &db);
+            // So does the microphone (KNEG-341). Read before the first
+            // dictation can start: it is one settings row.
+            tauri::async_runtime::block_on(session.restore_device());
 
             app.manage(session);
 
@@ -332,6 +347,9 @@ pub fn run() -> anyhow::Result<()> {
                 meeting_policy,
                 meeting_credentials,
                 local.shared(),
+                // So Start can bring the server up for the `local` provider,
+                // whatever dictation is routed to (KNEG-387).
+                local_model::meeting_revive_handle(&local, &db),
                 // So the whole-recording pass uses the engine dictation uses.
                 asr.selection(),
                 std::sync::Arc::clone(&stream),
@@ -480,6 +498,14 @@ pub fn run() -> anyhow::Result<()> {
             commands::folder_delete,
             commands::note_export,
             commands::note_export_to_file,
+            sharing::folder_share_preview,
+            sharing::folder_share_export,
+            sharing::folder_share_pick_import,
+            sharing::folder_share_status,
+            sharing::folder_share_import,
+            sharing::folder_share_cancel,
+            sharing::folder_share_dismiss,
+            sharing::folder_share_show_export,
             dictation::dictation_state,
             dictation::dictation_route,
             dictation::dictation_use_local,
@@ -565,6 +591,11 @@ pub fn run() -> anyhow::Result<()> {
         ])
         .build(tauri::generate_context!())
         .context("the application could not be built")?
-        .run(automation::on_event);
+        .run(|app, event| {
+            if matches!(&event, tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit) {
+                app.state::<sharing::SharingRuntime>().close();
+            }
+            automation::on_event(app, event);
+        });
     Ok(())
 }

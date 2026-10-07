@@ -1,10 +1,16 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { NoteEditor } from "./NoteEditor";
 import { getNoteSummary, generateNoteSummary, cancelNoteSummary, updateNoteSummary, exportNoteSummary, onNoteSummaryChanged, type SummaryState } from "../lib/ipc";
-import { useAutosave } from "../lib/useAutosave";
+import { summaryModelName } from "../lib/meetingView";
+import { useAutosave, type AutosaveStatus } from "../lib/useAutosave";
 
 export type SummaryPaneHandle = { flush: () => Promise<void> };
-export const SummaryPane = forwardRef<SummaryPaneHandle, { noteId: number; visible: boolean; onSource: (row: number) => void }>(function SummaryPane({ noteId, visible, onSource }, ref) {
+/**
+ * `onSaveStatus` hears this pane's autosave status as it changes, so the note
+ * toolbar's "Saved" can cover the summary too (KNEG-398). Pass a stable
+ * function, such as a state setter.
+ */
+export const SummaryPane = forwardRef<SummaryPaneHandle, { noteId: number; visible: boolean; onSource: (row: number) => void; onSaveStatus?: (status: AutosaveStatus) => void }>(function SummaryPane({ noteId, visible, onSource, onSaveStatus }, ref) {
   const [state, setState] = useState<SummaryState | null>(null);
   const current = useRef<SummaryState | null>(null);
   const dirty = useRef(false);
@@ -23,6 +29,7 @@ export const SummaryPane = forwardRef<SummaryPaneHandle, { noteId: number; visib
     } catch (cause) { saveFailure.current = String(cause); throw cause; }
   }, [noteId]);
   const autosave = useAutosave<{ content: string }>({ save });
+  useEffect(() => { onSaveStatus?.(autosave.status); }, [autosave.status, onSaveStatus]);
   const flush = useCallback(async () => { await autosave.flush(); if (saveFailure.current) throw new Error(saveFailure.current); }, [autosave.flush]);
   useImperativeHandle(ref, () => ({ flush }), [flush]);
   useEffect(() => {
@@ -71,11 +78,11 @@ export const SummaryPane = forwardRef<SummaryPaneHandle, { noteId: number; visib
         <button type="button" disabled={pending} onClick={() => { void run(async () => { const path = await exportNoteSummary(noteId, "txt"); if (path) setNotice(`Exported to ${path}`); }); }}>Export text</button>
       </>}
     </div>
-    <p role="status" className="muted">{!state ? "Loading summary…" : busy ? state.status === "queued" ? "Summary queued" : `Generating summary · ${state.completed} steps completed` : state.edited ? "Edited summary · source links are navigation aids" : state.legacy ? "Imported summary · source references unavailable" : state.content ? `AI summary · ${state.language ?? "language unknown"}` : "Summaries use your saved transcript. Configure the model in Settings > Cleanup & summaries."}</p>
+    <p role="status" className="muted">{!state ? "Loading summary…" : busy ? state.status === "queued" ? "Summary queued" : `Generating summary · ${state.completed} steps completed` : state.edited ? "Edited summary · source links are navigation aids" : state.legacy ? "Imported summary · source references unavailable" : state.content ? `AI summary · ${state.language ?? "language unknown"}${state.model ? ` · by ${summaryModelName(state.model)}` : ""}` : "Summaries use your saved transcript. Configure the model in Settings > Cleanup & summaries."}</p>
     {state?.outdated && <p className="warn">The transcript changed. Regenerate this summary to refresh its source links.</p>}
     {(error || state?.error) && <p className="error" role="alert">{error ?? state?.error}</p>}
     {notice && <p role="status">{notice}</p>}
-    {autosave.status === "failed" && <p className="error">Couldn’t save summary: {autosave.error} <button type="button" onClick={() => { void autosave.retry().catch(() => undefined); }}>Retry save</button></p>}
+    {autosave.status === "failed" && <p className="error" role="alert">Couldn’t save summary: {autosave.error} <button type="button" onClick={() => { void autosave.retry().catch(() => undefined); }}>Retry save</button></p>}
     {state?.content != null && <NoteEditor key={editorKey} noteId={noteId} summary initialContent={state.content} onChange={content => {
       if (content === current.current?.content) return;
       editVersion.current += 1; dirty.current = true; autosave.schedule({ content });

@@ -25,7 +25,8 @@
  * transcript is sent: a privacy line that errs errs towards saying so.
  */
 
-import type { Detected, Sources, SummarySettings } from "../generated/ipc-types.js";
+import type { Detected, InputDevice, Sources, SummarySettings } from "../generated/ipc-types.js";
+import { PROVIDER_REGISTRY, type ProviderRegistry } from "../generated/providers.js";
 import type { MenuOption } from "./chipMenu.js";
 import { destinationName, LANGUAGES, languageLabel } from "./controlBar.js";
 import { parseStoredTime, timeOfDay } from "./dayGroups.js";
@@ -63,6 +64,21 @@ export function recordingStartedAt(storageKey: string): Date | null {
     date.getUTCMinutes() === minute &&
     date.getUTCSeconds() === second;
   return same ? date : null;
+}
+
+/**
+ * What Discard asks before it deletes a running meeting's recording
+ * (KNEG-394). It sat beside Stop and save and deleted the recording on one
+ * click.
+ *
+ * The length is the page's clock, rounded as the saved outcome rounds it
+ * ("Saved as a note (38 min)."). The notes sentence is true whatever was
+ * typed: `MeetingRuntime::cancel` keeps typed notes as a note when there are
+ * any, and when there are none there is nothing to lose.
+ */
+export function discardQuestion(elapsedSeconds: number): string {
+  const length = elapsedSeconds < 60 ? "under a minute" : `${Math.round(elapsedSeconds / 60)} min`;
+  return `Discard this meeting? The recording so far (${length}) will be deleted and can't be recovered. Any notes you typed are kept as a separate note.`;
 }
 
 /** A meeting's running time as `hh:mm:ss`, the canvas' recording clock. */
@@ -121,6 +137,26 @@ export function summaryPrivacyLine(settings: SummarySettings | null): string | n
   const provider = settings.provider.trim() || "openai";
   if (!settings.enterprise && (provider === "local" || provider === "lan")) return null;
   return `The transcript is sent to ${destinationName(provider)} for a summary`;
+}
+
+/**
+ * The name of the model that wrote a summary, from the id stored when it
+ * succeeded (`SummaryState.model`): as the menus name it when the registry
+ * lists it -- `qwen3.5-9b-q4_k_m` is "Qwen3.5 9B" -- and as stored when it
+ * doesn't, since an Azure deployment or a typed id has no other name.
+ *
+ * Only the model. Where the transcript went isn't stored with the summary,
+ * and `provider` can't stand in for it (a typed URL wins over it), so the
+ * summary doesn't claim one (KNEG-367).
+ */
+export function summaryModelName(model: string | null): string | null {
+  if (model === null) return null;
+  const registry: ProviderRegistry = PROVIDER_REGISTRY;
+  const models: readonly { readonly id: string; readonly name: string }[] = [
+    ...registry.localLlm.flatMap((provider) => provider.models),
+    ...registry.reasoning.flatMap((provider) => provider.models),
+  ];
+  return models.find((m) => m.id === model)?.name ?? model;
 }
 
 /**
@@ -224,4 +260,60 @@ export function meetingLanguageMenu(
     ...LANGUAGES.map(([id, label]) => row(id, label)),
     ...(unknown ? [row(code, code)] : []),
   ];
+}
+
+/**
+ * The Meetings hero's line under "Record a meeting", which was the page's
+ * `PageHeader` intro (`lib/pages.ts`) -- and it promises a summary only when
+ * one will come. A saved meeting is summarised by itself only while automatic
+ * summaries are on (`enqueue_automatic`, `crates/notes-core/src/summary.rs`),
+ * and they are off by default (`SummarySettings::default`); with them off a
+ * summary is something to ask for in Notes, not something you get (R19).
+ */
+export function meetingIntro(summariesOn: boolean): string {
+  return summariesOn
+    ? "You get a transcript and a summary, saved to Notes."
+    : "You get a transcript, saved to Notes.";
+}
+
+/**
+ * Which provider the Meetings privacy line describes.
+ *
+ * A running meeting's own, whatever is saved. Otherwise the one Start will
+ * use -- except while Start waits on a saved provider that cannot be used.
+ * Then nothing is sent anywhere until somebody chooses, and naming the
+ * fallback the provider menu offers gave the page two answers: the hero said
+ * the chosen provider can't be used, and the privacy line said audio is sent
+ * to another (KNEG-354).
+ */
+export function privacyProvider<T>(live: T | null, selected: T | null, savedUnusable: boolean): T | null {
+  return live ?? (savedUnusable ? null : selected);
+}
+
+/**
+ * The Meetings microphone chip: what a meeting will record from, and the
+ * sentence its hover and screen-reader text carry (KNEG-341).
+ *
+ * Meetings record the microphone chosen on Dictation -- one choice for both,
+ * saved across restarts (`dictation.rs` `INPUT_DEVICE_KEY`). A chosen device
+ * that is not connected is recorded as the system default instead
+ * (`kw_audio_core::Capture::start`), so the chip says that before Start rather
+ * than naming a microphone that will not be used. `devices` is `null` until the
+ * list arrives, and then a choice is named rather than called unplugged.
+ */
+export function meetingMicrophone(
+  devices: readonly InputDevice[] | null,
+  chosen: string | null,
+): { label: string; title: string } {
+  const shared = "Dictation and meetings use the same microphone, chosen on Dictation.";
+  if (chosen === null) {
+    return { label: "Default microphone", title: `Meetings record the system default microphone. ${shared}` };
+  }
+  if (devices !== null && !devices.some((device) => device.name === chosen)) {
+    return {
+      label: `${chosen} (not connected)`,
+      title: `${chosen} isn't connected, so meetings record the system default microphone until it is.`,
+    };
+  }
+  return { label: chosen, title: `Meetings record ${chosen}. ${shared}` };
 }

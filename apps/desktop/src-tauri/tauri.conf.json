@@ -73,6 +73,9 @@
     "copyright": "Copyright (c) 2026 Axel Karlsson",
     "category": "Productivity",
     "licenseFile": "../../../LICENSE",
+    "resources": [
+      "resources/ggml-silero-v5.1.2.bin"
+    ],
     "windows": {
       "nsis": {
         "installMode": "perMachine"

@@ -21,6 +21,16 @@
  */
 
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import type { ShareOptions, SharePreview, ShareStatus } from "../generated/sharing-types.js";
+export type { ShareOptions, SharePreview, ShareStatus } from "../generated/sharing-types.js";
+export const folderSharePreview = (folderId: number) => invoke<SharePreview>("folder_share_preview", { folderId });
+export const folderShareExport = (folderId: number, noteIds: number[], options: ShareOptions) => invoke<string>("folder_share_export", { folderId, noteIds, options });
+export const folderSharePickImport = () => invoke<string>("folder_share_pick_import");
+export const folderShareStatus = () => invoke<ShareStatus | null>("folder_share_status");
+export const folderShareImport = (operationId: string, folderName: string) => invoke<void>("folder_share_import", { operationId, folderName });
+export const folderShareCancel = (operationId: string) => invoke<void>("folder_share_cancel", { operationId });
+export const folderShareDismiss = (operationId: string) => invoke<void>("folder_share_dismiss", { operationId });
+export const folderShareShowExport = (operationId: string) => invoke<void>("folder_share_show_export", { operationId });
 import { emitTo, listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 import type {
@@ -76,6 +86,7 @@ import type {
   LocalLlmModelStatus,
   LocalLlmProgress,
   LocalLlmStatus,
+  LocalRuntime,
   LocalStatus,
   McpStatus,
   MediaImportProgress,
@@ -193,6 +204,7 @@ export type {
   LocalLlmModelStatus,
   LocalLlmProgress,
   LocalLlmStatus,
+  LocalRuntime,
   LocalStatus,
   McpStatus,
   MediaImportProgress,

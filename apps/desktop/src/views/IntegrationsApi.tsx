@@ -14,13 +14,20 @@
  * `InheritedFromProfile` now gets the same honest sentence and caveat here
  * that it gets on `Developer > CLI`. See docs/BENCH_CHECK.md, 2026-08-26
  * finding 2.
+ *
+ * In plain words (KNEG-343): the address and the discovery file's path stay in
+ * view, because on this screen they are what a developer needs. A failure is a
+ * sentence with the reason under Details, and what the API exposes is said
+ * without "binds" and "loopback".
  */
 
 import { useCallback } from "react";
 
+import { DiscoveryPermissionRows } from "../components/DiscoveryFileRows";
+import { FailureLine } from "../components/FailureLine";
 import { Row } from "../components/Row";
 import { getLocalApiStatus, startLocalApi, stopLocalApi } from "../lib/ipc";
-import { discoveryPermissionsLabel } from "../lib/labels";
+import { blockedLine } from "../lib/labels";
 import { useRefresh } from "../lib/useRefresh";
 
 export function IntegrationsApi() {
@@ -30,20 +37,16 @@ export function IntegrationsApi() {
   if (!api) {
     return (
       <div className="view">
-        {error ? <p className="error">{error}</p> : <p className="muted">Loading…</p>}
+        {error ? <FailureLine text="This page couldn't load." detail={error} /> : <p className="muted">Loading…</p>}
       </div>
     );
   }
 
-  const permissions = api.discoveryPermissions
-    ? discoveryPermissionsLabel(api.discoveryPermissions)
-    : null;
-
   return (
     <div className="view">
-      {error ? <p className="error">{error}</p> : null}
+      {error ? <FailureLine text="That didn't work." detail={error} /> : null}
 
-      {api.blockedReason ? <p className="error" role="alert">{api.blockedReason}</p> : null}
+      {api.blockedReason ? <FailureLine text={blockedLine(api.blockedReason)} detail={api.blockedReason} /> : null}
 
       <section data-surface="integrations.api">
         <Row
@@ -58,23 +61,14 @@ export function IntegrationsApi() {
           }
         />
         <p className="muted">
-          Off by default. It exposes every note and transcript to anything
-          running as you, so it only listens when you ask it to. It never binds
-          anything but loopback.
+          Off by default. While it is on, any program you run can read every
+          note and transcript through it, so it listens only when you turn it on,
+          and only to this computer.
         </p>
         {api.discoveryPath ? (
           <Row label="Discovery file" value={api.discoveryPath} />
         ) : null}
-        {permissions ? (
-          <Row
-            label="Discovery file permissions"
-            value={permissions.text}
-            detail={permissions.detail}
-          />
-        ) : null}
-        {permissions?.caveat ? (
-          <p className="caveat">{permissions.caveat}</p>
-        ) : null}
+        {api.discoveryPermissions ? <DiscoveryPermissionRows permissions={api.discoveryPermissions} /> : null}
         <button
           type="button"
           onClick={() => {

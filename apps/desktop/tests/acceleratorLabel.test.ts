@@ -11,7 +11,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { acceleratorLabel } from "../src/lib/labels.js";
+import { acceleratorLabel, pressableAccelerators, registrationFor } from "../src/lib/labels.js";
 
 const hooked = { state: "available", mechanism: "WH_KEYBOARD_LL low-level hook" } as const;
 const noHook = { state: "unsupported", reason: "No keyboard hook exists on this platform." } as const;
@@ -90,4 +90,113 @@ test("with the hook not known yet, nothing is called a failure", () => {
   assert.equal(label.problem, null);
   assert.ok(label.note);
   assert.match(label.note.text, /still being checked/);
+});
+
+/* ------------------------------------------------------------------ KNEG-353
+ * The platform having a hook is not the same as this accelerator being on it.
+ * When the hook fails to start, Rust reports the chord `not-registrable` and
+ * Dictation's readiness says the shortcut doesn't work -- and Settings, keyed
+ * on the platform alone, said "Works on this computer." The accelerator's own
+ * registration outranks the platform's answer.
+ */
+
+const chord = { kind: "modifier-only" as const, accelerator: "Control+Super", modifiers: ["Control", "Super"] };
+const failedHook =
+  "Control+Super needs the keyboard hook, which could not be started, so this shortcut does nothing right now. Restarting the app may fix it.";
+
+test("a chord whose hook failed to start is a failure, though the platform has a hook", () => {
+  const label = acceleratorLabel(chord, hooked, { state: "not-registrable", accelerator: "Control+Super", reason: failedHook });
+  assert.equal(label.note, null);
+  assert.equal(label.problem, failedHook);
+});
+
+test("a mouse button whose hook failed to start is a failure too", () => {
+  const reason =
+    "Mouse4 needs the mouse hook, which could not be started, so this button does nothing right now. Restarting the app may fix it.";
+  const label = acceleratorLabel({ kind: "mouse-button", accelerator: "Mouse4", alsoDoes: "Back" }, hooked, {
+    state: "not-registrable",
+    accelerator: "Mouse4",
+    reason,
+  });
+  assert.equal(label.note, null);
+  assert.equal(label.problem, reason);
+});
+
+test("a chord on the hook keeps its works note", () => {
+  const label = acceleratorLabel(chord, hooked, { state: "hooked", accelerator: "Control+Super" });
+  assert.equal(label.problem, null);
+  assert.equal(label.note?.text, "Works on this computer.");
+});
+
+test("a standard accelerator the platform refused is a failure carrying its reason", () => {
+  const reason = "another application already uses it";
+  assert.deepEqual(
+    acceleratorLabel({ kind: "standard", accelerator: "Control+Shift+D" }, hooked, {
+      state: "rejected",
+      accelerator: "Control+Shift+D",
+      reason,
+    }),
+    { text: "Control+Shift+D", problem: reason, note: null },
+  );
+});
+
+test("an action nothing handles is left to the screen's own line", () => {
+  // Settings already says why above the accelerators, in red; repeating it
+  // under each one would say it twice.
+  const label = acceleratorLabel({ kind: "standard", accelerator: "Control+Shift+Space" }, hooked, {
+    state: "unhandled",
+    accelerator: "Control+Shift+Space",
+    reason: "The chat agent is not built yet.",
+  });
+  assert.equal(label.problem, null);
+});
+
+test("the keycaps name only what can be pressed: not an invalid accelerator, nor one that failed to register", () => {
+  // KNEG-377. Dictation's hero drew keycaps for Control+Super, which the hook
+  // had not taken, beside a working Control+Shift+D.
+  const binding = {
+    action: "dictation" as const,
+    mode: "toggle" as const,
+    accelerators: [
+      { kind: "standard" as const, accelerator: "Control+Shift+D" },
+      chord,
+      { kind: "invalid" as const, input: "Control+Nope", reason: "Nope is not a key." },
+    ],
+  };
+  const text = (list: ReturnType<typeof pressableAccelerators>) =>
+    list.map((a) => (a.kind === "invalid" ? a.input : a.accelerator));
+  const reports = [
+    {
+      action: "dictation" as const,
+      results: [
+        { state: "registered" as const, accelerator: "Control+Shift+D" },
+        { state: "not-registrable" as const, accelerator: "Control+Super", reason: failedHook },
+      ],
+    },
+  ];
+  assert.deepEqual(text(pressableAccelerators(binding, reports)), ["Control+Shift+D"]);
+  // Not reported yet is not known to fail, so it is kept.
+  assert.deepEqual(text(pressableAccelerators(binding, [])), ["Control+Shift+D", "Control+Super"]);
+});
+
+test("registrationFor finds this accelerator's result in this action's report", () => {
+  const registered = { state: "registered", accelerator: "Control+Shift+D" } as const;
+  const failed = { state: "not-registrable", accelerator: "Control+Super", reason: failedHook } as const;
+  const reports = [
+    { action: "chat-agent", results: [{ state: "hooked", accelerator: "Control+Super" }] },
+    { action: "dictation", results: [registered, failed] },
+  ] as const;
+  assert.deepEqual(registrationFor([...reports], "dictation", chord), failed);
+  assert.deepEqual(registrationFor([...reports], "dictation", { kind: "standard", accelerator: "Control+Shift+D" }), registered);
+  assert.equal(registrationFor([...reports], "translation", chord), undefined);
+  assert.equal(registrationFor([], "dictation", chord), undefined);
+  const invalid = { state: "not-registrable", accelerator: "Control+Nope", reason: "Nope is not a key." } as const;
+  assert.deepEqual(
+    registrationFor([{ action: "dictation", results: [invalid] }], "dictation", {
+      kind: "invalid",
+      input: "Control+Nope",
+      reason: "Nope is not a key.",
+    }),
+    invalid,
+  );
 });

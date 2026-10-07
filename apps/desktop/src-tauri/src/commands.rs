@@ -703,7 +703,8 @@ pub struct CredentialSlotStatus {
     pub kind: kw_provider_registry::CredentialKind,
     /// Which parts of the application use this key, from the registry.
     pub used_for: Vec<String>,
-    /// Which feature a custom endpoint belongs to; `None` for a provider.
+    /// Which feature a custom endpoint belongs to; `None` for a provider, and
+    /// for `custom`, your own server's key, which cleanup and summaries share.
     pub feature: Option<String>,
     /// A secret is present. This is NOT the same as the provider working.
     pub stored: bool,
@@ -712,7 +713,7 @@ pub struct CredentialSlotStatus {
 /// Every credential slot, in registry order, with whether each is filled.
 ///
 /// One call rather than one `provider_credential_present` per slot: there are
-/// twenty, the screen re-reads after every save, and the list itself has to
+/// twenty-one, the screen re-reads after every save, and the list itself has to
 /// come from the registry anyway so that no screen writes provider ids by hand.
 #[tauri::command]
 pub fn credential_slots(state: State<'_, AppState>) -> CmdResult<Vec<CredentialSlotStatus>> {
@@ -1427,12 +1428,10 @@ fn export_filename(title: &str, format: transcript::Format) -> String {
 /// playback rows.
 fn transcript_segments(note: &notes::Note) -> CmdResult<Vec<transcript::Segment>> {
     // A note with no transcript is legitimate: typed notes export and render as
-    // an empty transcript rather than failing.
-    match note.transcript.as_deref() {
-        Some(raw) if !raw.trim().is_empty() => serde_json::from_str(raw)
-            .map_err(|e| fail("the note's transcript is not a list of segments", e)),
-        _ => Ok(Vec::new()),
-    }
+    // an empty transcript rather than failing. Search reads it the same way, so
+    // a hit's row is this row (`transcript::parse_stored`, KNEG-406).
+    transcript::parse_stored(note.transcript.as_deref())
+        .map_err(|e| fail("the note's transcript is not a list of segments", e))
 }
 
 fn transcript_meta(note: &notes::Note) -> transcript::NoteMeta {
@@ -2019,6 +2018,7 @@ mod tests {
             id: 1,
             title: "Standup".to_owned(),
             snippet: "a [match] here".to_owned(),
+            transcript_row: None,
         })
         .unwrap();
         let mut hit_keys: Vec<&str> = hit
@@ -2028,7 +2028,7 @@ mod tests {
             .map(String::as_str)
             .collect();
         hit_keys.sort_unstable();
-        assert_eq!(hit_keys, ["id", "snippet", "title"]);
+        assert_eq!(hit_keys, ["id", "snippet", "title", "transcriptRow"]);
     }
 
     #[test]

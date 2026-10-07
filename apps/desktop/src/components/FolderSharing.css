@@ -1,0 +1,19 @@
+.folder-sharing { box-sizing: border-box; width: min(620px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow: hidden; padding: 24px; border: 1px solid var(--rule); background: var(--bg); color: var(--text); }
+.folder-sharing[open] { display: flex; flex-direction: column; }
+.folder-sharing-body { min-height: 0; overflow: auto; }
+.folder-sharing::backdrop { background: rgb(0 0 0 / 35%); }
+.folder-sharing h2 { margin-top: 0; flex: 0 0 auto; }
+.folder-sharing fieldset { display: flex; flex-wrap: wrap; gap: 12px; margin-block: 16px; }
+.folder-sharing label { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.folder-sharing input[type="checkbox"] { flex: 0 0 auto; }
+.folder-sharing-selection, .folder-sharing-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-block: 16px; }
+.folder-sharing-actions { flex: 0 0 auto; padding-top: 12px; margin-bottom: 0; background: var(--bg); border-top: 1px solid var(--rule); }
+.folder-sharing-notes { max-height: 240px; overflow: auto; border-block: 1px solid var(--rule); }
+.folder-sharing-notes > label, .folder-sharing-notes > p { margin: 0; padding: 8px 0; overflow-wrap: anywhere; }
+.folder-sharing-notes > label > span:first-of-type { flex: 1; }
+.folder-sharing-notes small { display: block; }
+.folder-sharing-name { flex-direction: column; align-items: stretch !important; }
+.folder-sharing-path { overflow-wrap: anywhere; }
+.notes-folder-actions { display: flex; align-items: center; }
+.notes-folder-actions > .notes-folder-toggle { flex: 1; min-width: 0; }
+.notes-folder-more { flex: 0 0 auto; padding: 3px 7px; }

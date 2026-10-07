@@ -21,6 +21,8 @@ document.documentElement.dataset.window = currentSurface();
 if (import.meta.env.DEV && !("__TAURI_INTERNALS__" in window)) {
   const { installDevFixtures } = await import("./lib/devFixtures");
   installDevFixtures();
+  const { installSharingFixtures } = await import("./lib/sharingFixtures");
+  installSharingFixtures();
 }
 
 installFileDropGuard(window);

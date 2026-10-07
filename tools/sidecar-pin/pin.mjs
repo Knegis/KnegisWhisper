@@ -74,6 +74,16 @@ import { fileURLToPath } from "node:url";
 import { pipeline } from "node:stream/promises";
 import { gunzipSync, inflateRawSync } from "node:zlib";
 
+import {
+  HttpError,
+  describe,
+  discard,
+  removePartial,
+  retryLine,
+  retrying,
+} from "../model-pin/retry.mjs";
+import { isEntryPoint } from "../ci/entry.mjs";
+
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const MANIFEST = join(REPO_ROOT, "config/sidecars.json");
 
@@ -109,45 +119,67 @@ function args(argv) {
  * endpoint always redirects to object storage, so refusing redirects outright
  * would make this tool unable to do its job — but a redirect chain that does not
  * terminate is how a download ends up somewhere unintended, so it is bounded.
+ *
+ * A dropped connection is retried twice, from byte 0 and from `url` rather
+ * than the URL a redirect led to (KNEG-413, `tools/model-pin/retry.mjs`). On
+ * 2026-10-05 one socket GitHub closed ended the weekly check at its 19th of 21
+ * targets. Anything else throws, having removed the partial file. `options`
+ * replaces the retry's delays and sleep, for tests.
  */
-async function download(url, label) {
+export async function download(url, label, options = {}) {
   const target = join(tmpdir(), `sidecar-pin-${process.pid}-${label}`);
+  return retrying(() => downloadOnce(url, target), {
+    ...options,
+    onRetry: (retry) => console.error(`  ${retryLine(url, retry, { fromZero: true })}`),
+  });
+}
+
+/** One attempt at `download`. Throws on any failure, having removed what it wrote. */
+async function downloadOnce(url, target) {
   let current = url;
+  let out = null;
 
-  for (let hop = 0; hop < 6; hop += 1) {
-    const response = await fetch(current, { redirect: "manual" });
+  try {
+    for (let hop = 0; hop < 6; hop += 1) {
+      const response = await fetch(current, { redirect: "manual" });
 
-    if (response.status >= 300 && response.status < 400) {
-      const next = response.headers.get("location");
-      if (!next) die(`${current} redirected with no Location header`);
-      current = new URL(next, current).toString();
-      continue;
-    }
-
-    if (!response.ok) {
-      die(`${current} returned HTTP ${response.status}`);
-    }
-
-    const hash = createHash("sha256");
-    const out = createWriteStream(target);
-    await pipeline(response.body, async function* (chunks) {
-      for await (const chunk of chunks) {
-        hash.update(chunk);
-        yield chunk;
+      if (response.status >= 300 && response.status < 400) {
+        const next = response.headers.get("location");
+        await discard(response);
+        if (!next) throw new Error(`${current} redirected with no Location header`);
+        current = new URL(next, current).toString();
+        continue;
       }
-    }, out);
 
-    return {
-      path: target,
-      sha256: hash.digest("hex"),
-      // The size on disk, not `content-length`: a truncated body would agree
-      // with the header and disagree with itself.
-      sizeBytes: statSync(target).size,
-      resolvedFrom: current === url ? null : current,
-    };
+      if (!response.ok) {
+        await discard(response);
+        throw new HttpError(response.status, current);
+      }
+
+      const hash = createHash("sha256");
+      out = createWriteStream(target);
+      await pipeline(response.body, async function* (chunks) {
+        for await (const chunk of chunks) {
+          hash.update(chunk);
+          yield chunk;
+        }
+      }, out);
+
+      return {
+        path: target,
+        sha256: hash.digest("hex"),
+        // The size on disk, not `content-length`: a truncated body would agree
+        // with the header and disagree with itself.
+        sizeBytes: statSync(target).size,
+        resolvedFrom: current === url ? null : current,
+      };
+    }
+
+    throw new Error(`${url} redirected more than five times`);
+  } catch (error) {
+    await removePartial(out, target);
+    throw error;
   }
-
-  die(`${url} redirected more than five times`);
 }
 
 /* ------------------------------------------------------------ archive index */
@@ -633,11 +665,15 @@ async function measure({ repo, release, asset, executable, bare }) {
  *
  * This is what makes a pin more than a comment: a release retagged in place
  * changes the bytes and nothing else, and only re-hashing notices.
+ *
+ * A target that cannot be downloaded, after `download`'s retries, is reported
+ * and the run goes on to the rest; the exit is still non-zero (KNEG-413).
  */
 async function verify(only) {
   const manifest = JSON.parse(readFileSync(MANIFEST, "utf8"));
   let checked = 0;
   const wrong = [];
+  const unreachable = [];
 
   for (const sidecar of manifest.sidecars) {
     if (only && sidecar.name !== only) continue;
@@ -645,7 +681,13 @@ async function verify(only) {
       if (spec.availability !== "published") continue;
       console.error(`${sidecar.name} / ${target}`);
 
-      const measured = await download(spec.url, `${sidecar.name}-${target}`);
+      let measured;
+      try {
+        measured = await download(spec.url, `${sidecar.name}-${target}`);
+      } catch (error) {
+        unreachable.push(`${sidecar.name}/${target}: ${describe(error)}`);
+        continue;
+      }
       checked += 1;
       try {
         if (measured.sha256 !== spec.sha256) {
@@ -697,23 +739,35 @@ async function verify(only) {
   if (wrong.length > 0) {
     console.error(`\nsidecar-pin --verify: ${wrong.length} of ${checked} targets disagree`);
     for (const line of wrong) console.error(`  ${line}`);
-    process.exit(1);
   }
+  if (unreachable.length > 0) {
+    console.error(
+      `\nsidecar-pin --verify: ${unreachable.length} target(s) could not be downloaded, so they ` +
+        "were not checked"
+    );
+    for (const line of unreachable) console.error(`  ${line}`);
+  }
+  if (wrong.length > 0 || unreachable.length > 0) process.exit(1);
   console.log(`sidecar-pin --verify: ${checked} target(s) match the committed pins.`);
 }
 
 /* --------------------------------------------------------------------- main */
 
-const options = args(process.argv.slice(2));
+async function main(argv) {
+  const options = args(argv);
 
-if (options.verify) {
-  await verify(typeof options.sidecar === "string" ? options.sidecar : null);
-} else if (options.extracted) {
-  await extracted(
-    typeof options.sidecar === "string" ? options.sidecar : null,
-    Boolean(options.write)
-  );
-} else {
+  if (options.verify) {
+    await verify(typeof options.sidecar === "string" ? options.sidecar : null);
+    return;
+  }
+  if (options.extracted) {
+    await extracted(
+      typeof options.sidecar === "string" ? options.sidecar : null,
+      Boolean(options.write)
+    );
+    return;
+  }
+
   for (const required of ["repo", "release", "asset", "target"]) {
     if (typeof options[required] !== "string") {
       die(`--${required} is required. See the header of this file for an example.`);
@@ -743,5 +797,17 @@ if (options.verify) {
     sidecar.targets[options.target] = spec;
     writeFileSync(MANIFEST, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
     console.error(`wrote ${options.sidecar}/${options.target} to config/sidecars.json`);
+  }
+}
+
+// Only as the entry point, so the tests can import `download` without starting
+// a measurement (KNEG-413). The network paths throw rather than exit; this is
+// the one place a failure becomes the tool's one-line message and exit 1.
+const isMain = isEntryPoint(import.meta.url);
+if (isMain) {
+  try {
+    await main(process.argv.slice(2));
+  } catch (error) {
+    die(describe(error));
   }
 }

@@ -48,4 +48,6 @@ kw-transcription-core.workspace = true
 kw-provider-registry.workspace = true
 
 [dev-dependencies]
+# For `tests/live_windows.rs`, which installs the real server into one.
+tempfile.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }

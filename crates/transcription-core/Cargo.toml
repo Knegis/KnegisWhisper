@@ -29,12 +29,14 @@ kw-network-policy.workspace = true
 kw-provider-registry.workspace = true
 kw-security.workspace = true
 kw-sidecar.workspace = true
+# `speech`: the VAD settings and their clamping, and the WAV container the
+# chunks are sent in. No cycle: it does not depend on this crate.
+kw-audio-core.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
-# Both for `tests/subtitle_export.rs` only, which proves a real recording's
+# For `tests/subtitle_export.rs` only, which proves a real recording's
 # timings survive all the way out to a subtitle file. Dev-only and no cycle:
-# neither crate depends on this one.
-kw-audio-core.workspace = true
+# it does not depend on this crate.
 kw-notes-core.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "fs", "process"] }

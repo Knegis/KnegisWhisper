@@ -8,6 +8,7 @@ import {
   type CSSProperties,
 } from "react";
 
+import { formatClock } from "../lib/clock";
 import { recordingSrc } from "../lib/ipc";
 
 /**
@@ -36,15 +37,9 @@ type RecordingPlayerProps = {
   compact?: boolean;
 };
 
-export function formatClock(seconds: number): string {
-  const total = Math.max(0, Math.floor(seconds));
-  const hours = Math.floor(total / 3600);
-  const minutes = Math.floor((total % 3600) / 60);
-  const remaining = total % 60;
-  return hours > 0
-    ? `${hours}:${String(minutes).padStart(2, "0")}:${String(remaining).padStart(2, "0")}`
-    : `${minutes}:${String(remaining).padStart(2, "0")}`;
-}
+// Moved to `lib/clock.ts`, where a search hit's time reads it too (KNEG-406),
+// and re-exported for the pages that already import it from here.
+export { formatClock };
 
 function mediaErrorMessage(error: MediaError | null): string {
   switch (error?.code) {

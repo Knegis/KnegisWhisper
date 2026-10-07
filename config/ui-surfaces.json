@@ -6,7 +6,7 @@
       "surfaceId": "settings.providers",
       "component": "apps/desktop/src/views/SettingsProviders.tsx",
       "built": true,
-      "note": "Stores a key for every one of the seventeen provider and custom-endpoint credential slots the registry declares -- the three enterprise slots are multi-field and configured on Settings > Intelligence > Enterprise instead -- and runs the real connection test. Write-only: no command returns a credential value, so the field replaces or removes and never displays. A stored key is reported as stored, never as connected."
+      "note": "Stores a key for every one of the eighteen provider and custom-endpoint credential slots the registry declares -- the three enterprise slots are multi-field and configured on Settings > Cleanup & summaries > Company accounts instead -- and runs the real connection test. Write-only: no command returns a credential value, so the field replaces or removes and never displays. A stored key is reported as stored, never as connected."
     },
     "Settings > Transcription": {
       "surfaceId": "settings.transcription",
@@ -24,7 +24,7 @@
       "surfaceId": "settings.intelligence",
       "component": "apps/desktop/src/views/SettingsIntelligence.tsx",
       "built": true,
-      "note": "Configures the reasoning provider and model that tidy a dictation, and switches cleanup on. The three enterprise connectors and the local route are listed with the reason they cannot be used, rather than being left out -- so this surface is built while Settings > Intelligence > Enterprise and > Local are not."
+      "note": "Configures the reasoning provider and model that tidy a dictation, and switches cleanup on. A provider that cannot be used yet is listed with the reason rather than being left out: an enterprise connector (Company accounts on screen) until its configuration is stored, and the local route until a model is running. Until the 2026-10-07 fix a stored enterprise configuration did not count, so none could ever be chosen for cleanup."
     },
     "Settings > Intelligence > Local": {
       "surfaceId": "settings.intelligence.local",
@@ -48,7 +48,7 @@
       "surfaceId": "meetings.record",
       "component": "apps/desktop/src/views/Meetings.tsx",
       "built": true,
-      "note": "The recording task: whether a meeting can be recorded (lib/readiness.ts), Start/Stop/Discard, whether the other participants are captured, the live transcript and interrupted recordings. The provider and language are chosen here, in the control bar chips, and also set on Settings > Meetings, which owns them along with detection."
+      "note": "The recording task: whether a meeting can be recorded (lib/readiness.ts), Start/Stop/Discard, whether the other participants are captured, the live transcript and interrupted recordings. The provider and language are chosen here, in the control bar chips, and also set on Settings > Meetings, which owns them along with detection. The microphone chip names the one chosen on Dictation (audio.inputDevice, shared by both tasks), or says it is not connected and the default will be recorded; it is shown here, not chosen. A local provider that cannot start (no model installed, no streaming model chosen or downloaded) holds Start with a fix to Settings > Transcription; Start itself brings the local Whisper server up when it is not running."
     },
     "Settings > Shortcuts": {
       "surfaceId": "settings.shortcuts",
