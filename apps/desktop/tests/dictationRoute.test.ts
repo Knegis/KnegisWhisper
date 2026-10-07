@@ -34,6 +34,7 @@ function local(runningModel: string | null, models: ModelStatus[] = WHISPER): Lo
     runningModel,
     installDir: "",
     installDirFellBack: false,
+    runtime: runningModel === null ? { state: "stopped" } : { state: "ready", model: runningModel, port: 8178 },
   };
 }
 

@@ -225,6 +225,7 @@ fn render() -> String {
             crate::local_model::VerifiedBy,
             crate::local_model::SidecarFreshness,
             crate::local_model::ModelStatus,
+            crate::local_model::LocalRuntime,
             crate::local_model::LocalStatus,
             crate::local_model::RefreshOutcome,
             crate::local_model::InstallProgress,

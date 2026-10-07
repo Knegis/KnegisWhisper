@@ -775,7 +775,7 @@ let localLanguages: string[] = ["sv"];
 /* ------------------------------------------------------------ local models */
 
 const LOCAL_MODELS: LocalStatus = {
-  runtimeMessage: "Local model base is ready on port 8178.",
+  runtimeMessage: "Local model whisper-small-q5 is ready on port 8178.",
   availability: { state: "installable" },
   serverInstalled: true,
   // `stale` rather than `current`, so the branch that only appears when the
@@ -831,6 +831,9 @@ const LOCAL_MODELS: LocalStatus = {
   runningModel: "whisper-small-q5",
   installDir: "C:\\ProgramData\\KnegisWhisper\\whisper-server",
   installDirFellBack: true,
+  // Moved with `runtimeMessage` by `local_server_start` and `_stop`, as Rust
+  // derives the one from the other.
+  runtime: { state: "ready", model: "whisper-small-q5", port: 8178 },
 };
 
 const SHERPA: SherpaStatus = {
@@ -1837,10 +1840,12 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
     LOCAL_MODELS.port = null;
     LOCAL_MODELS.runningModel = null;
     LOCAL_MODELS.runtimeMessage = `Checking or starting local model ${model.id}...`;
+    LOCAL_MODELS.runtime = { state: "checking", model: model.id };
     await new Promise((resolve) => setTimeout(resolve, 1500));
     LOCAL_MODELS.port = 8178;
     LOCAL_MODELS.runningModel = model.id;
     LOCAL_MODELS.runtimeMessage = `Local model ${model.id} is ready on port 8178.`;
+    LOCAL_MODELS.runtime = { state: "ready", model: model.id, port: 8178 };
     SHERPA.selected = null;
     return 8178;
   },
@@ -1848,6 +1853,7 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
     LOCAL_MODELS.port = null;
     LOCAL_MODELS.runningModel = null;
     LOCAL_MODELS.runtimeMessage = "Local model server is stopped.";
+    LOCAL_MODELS.runtime = { state: "stopped" };
     return null;
   },
   local_server_refresh: () => ({

@@ -130,6 +130,7 @@ import {
   liveElapsed,
   meetingLanguageMenu,
   meetingMicrophone,
+  privacyProvider,
   recentMeta,
   recordedSources,
   summaryPrivacyLine,
@@ -451,12 +452,14 @@ export function Meetings({
     selected,
     // Named and with its reason, so the hero can say which choice can't be
     // used and why, rather than the page quietly using another.
+    // A provider this version does not offer has only its id for a name, so
+    // it goes unnamed in view and the id goes to the detail (KNEG-354).
     savedUnusable: savedUnusable
       ? {
-          name: savedProvider?.name ?? savedUnusable,
+          name: savedProvider?.name ?? null,
           reason: savedProvider
             ? asSentence(availabilityLabel(savedProvider.availability))
-            : "This version of the app doesn't offer it.",
+            : `It was saved as “${savedUnusable}”, which this version of the app doesn't offer.`,
         }
       : null,
     languageWarning,
@@ -488,13 +491,16 @@ export function Meetings({
   // somewhere, where (`summaryPrivacyLine`). With no provider nothing can
   // start, so nothing is sent.
   const summaryLine = summaryPrivacyLine(summaries);
+  // Not the fallback while Start waits on an unusable saved provider: nothing
+  // is sent until somebody chooses (`privacyProvider`).
+  const sentTo = privacyProvider(liveProvider, selectedProvider, savedUnusable !== null);
   const privacy = [
     ...privacyLines(
-      transcriber
+      sentTo
         ? {
-            isLocal: !transcriber.audioLeavesDevice,
-            leavesDevice: transcriber.audioLeavesDevice,
-            destination: transcriber.name,
+            isLocal: !sentTo.audioLeavesDevice,
+            leavesDevice: sentTo.audioLeavesDevice,
+            destination: sentTo.name,
           }
         : { isLocal: false, leavesDevice: false, destination: "", problem: "not set up" },
       null,
@@ -608,7 +614,7 @@ export function Meetings({
         </p>
       ) : null}
       {recording && notesFlushFailed && <p className="caveat">The meeting panel could not confirm its latest note save. Stopping anyway keeps the recording and any notes already received by the app; the most recent edit may be missing.</p>}
-      {outcome ? <p className="caveat">{meetingOutcomeLabel(outcome)}</p> : null}
+      {outcome ? <OutcomeCaveat outcome={outcome} /> : null}
     </>
   );
 
@@ -881,7 +887,7 @@ export function Meetings({
                   title={
                     status.systemAudio.state === "available"
                       ? "Record what the other participants say"
-                      : `Can't be recorded on this computer: ${status.systemAudio.reason}`
+                      : "Can't be recorded on this computer"
                   }
                   onClick={() => setWantSystem((want) => !want)}
                 />
@@ -947,12 +953,12 @@ export function Meetings({
             {/* Why the chip is off, said beside it in every state -- the
                 hero's caution is only there while the page is Ready, and a
                 switched-off control with no reason on screen is the button
-                that silently does nothing. Only the mechanism, and the device
-                it would capture, are folded. */}
+                that silently does nothing. The failure is in view; why, which
+                names the platform's mechanism (about 70 words on macOS, and
+                PulseAudio, PipeWire and ALSA on Linux), is folded with the
+                device it would capture (KNEG-354). */}
             {status.systemAudio.state === "available" ? null : (
-              <p className="control-note">
-                {`Other participants can't be recorded on this computer: ${status.systemAudio.reason}`}
-              </p>
+              <p className="control-note">Other participants can't be recorded on this computer.</p>
             )}
             {/* Believed, not tested, said in view rather than only in the fold
                 below: the one place a colleague would learn it (KNEG-351). */}
@@ -961,16 +967,23 @@ export function Meetings({
                 Recording the other participants is available on this operating system but has never been tested here.
               </p>
             ) : null}
-            {status.systemAudio.state === "unsupported" ? null : (
-              <LearnMore summary="How the other participants are recorded">
-                <p>
-                  System audio: {systemAudioValue(status.systemAudio)} —{" "}
-                  {status.systemAudio.state === "available"
-                    ? `${status.systemAudio.mechanism} — ${status.systemAudio.device}`
-                    : status.systemAudio.mechanism}
-                </p>
-              </LearnMore>
-            )}
+            <LearnMore
+              summary={
+                status.systemAudio.state === "available"
+                  ? "How the other participants are recorded"
+                  : "Why they can't be recorded"
+              }
+            >
+              <p>
+                {status.systemAudio.state === "unsupported"
+                  ? status.systemAudio.reason
+                  : `System audio: ${systemAudioValue(status.systemAudio)} — ${
+                      status.systemAudio.state === "available"
+                        ? `${status.systemAudio.mechanism} — ${status.systemAudio.device}`
+                        : `${status.systemAudio.mechanism}. ${asSentence(status.systemAudio.reason)}`
+                    }`}
+              </p>
+            </LearnMore>
             {caveats}
 
             {/* The Interrupted rows are in the list panel; what recovering
@@ -1000,7 +1013,7 @@ export function Meetings({
                 Recovering the {lowerFirst(interruptedTitle(recoveringKey, now))}…
               </p>
             ) : null}
-            {recoveryOutcome && <p className="caveat">{meetingOutcomeLabel(recoveryOutcome)}</p>}
+            {recoveryOutcome && <OutcomeCaveat outcome={recoveryOutcome} />}
             {recoveryError && <p className="error" role="alert">{recoveryError}</p>}
 
             <div className="control-row">
@@ -1036,6 +1049,24 @@ const LIVE_NOTE =
 /** The same, once nothing more will arrive. */
 const ENDED_NOTE =
   "These are the last lines the provider sent before the live transcription stopped. Nothing further will appear here, and the transcript that gets saved comes from one pass over the whole recording when the meeting ends.";
+
+/**
+ * How a meeting ended, with the note's id and the recording's path behind
+ * Learn more (KNEG-354).
+ */
+function OutcomeCaveat({ outcome }: { outcome: MeetingOutcome }) {
+  const { text, more } = meetingOutcomeLabel(outcome);
+  return (
+    <>
+      <p className="caveat">{text}</p>
+      {more ? (
+        <LearnMore>
+          <p>{more}</p>
+        </LearnMore>
+      ) : null}
+    </>
+  );
+}
 
 /**
  * The live lines, as `foldTranscriptEvent` built them: time, speaker, text.

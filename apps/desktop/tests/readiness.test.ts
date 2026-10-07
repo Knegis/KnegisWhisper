@@ -238,6 +238,24 @@ test("a saved provider that can't be used is needs-setup, even with another usab
   assert.deepEqual(r.fix, { view: "provider-menu", label: "Choose a provider" });
 });
 
+test("a saved provider this version doesn't offer is not named by its raw id", () => {
+  // KNEG-354, item 3: "local-streaming, the provider you chose, …". The id
+  // goes to the detail, behind Learn more.
+  const { usable, selected } = localChosenCloudFallback();
+  const r = meetingReadiness({
+    usable,
+    selected,
+    savedUnusable: { name: null, reason: "It was saved as “local-streaming”, which this version of the app doesn't offer." },
+    languageWarning: null,
+    localProblem: null,
+    systemAudio: available,
+  });
+  assert.equal(r.state, "needs-setup");
+  if (r.state !== "needs-setup") return;
+  assert.equal(r.problem, "The provider you chose can't be used right now.");
+  assert.match(r.detail ?? "", /local-streaming/);
+});
+
 test("no usable provider outranks a saved one that can't be used, and says which one it was", () => {
   const r = meetingReadiness({
     usable: [],

@@ -49,7 +49,7 @@ type StartOutcome = (std::time::Instant, String, Result<u16, String>);
 pub struct LocalTranscription {
     operation: tokio::sync::Mutex<()>,
     last_start: std::sync::Mutex<Option<StartOutcome>>,
-    runtime_message: RwLock<String>,
+    runtime: RwLock<LocalRuntime>,
     catalog: Catalog,
     pids: PidStore,
     policy: kw_network_policy::NetworkPolicy,
@@ -83,7 +83,7 @@ impl LocalTranscription {
         Ok(Self {
             operation: tokio::sync::Mutex::new(()),
             last_start: std::sync::Mutex::new(None),
-            runtime_message: RwLock::new("Local model server is stopped.".to_owned()),
+            runtime: RwLock::new(LocalRuntime::Stopped),
             catalog,
             pids: PidStore::new(&paths::data_dir()),
             policy,
@@ -143,7 +143,7 @@ impl LocalTranscription {
             .last_start
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
-        self.set_runtime_message("Local model server is stopped.".to_owned());
+        self.set_runtime(LocalRuntime::Stopped);
         let mut held = self.running.lock().await;
         if let Some(running) = held.take() {
             running.stop(&self.pids).await.unwrap_or_else(|err| {
@@ -296,6 +296,67 @@ pub struct LocalStatus {
     /// abandoned because the native binaries cannot cope with the path.
     pub install_dir: String,
     pub install_dir_fell_back: bool,
+    /// What the server is doing, as data. `runtime_message` is this as one
+    /// sentence, for Diagnostics.
+    pub runtime: LocalRuntime,
+}
+
+/// What the local model server is doing (KNEG-357).
+///
+/// Dictation words this plainly for colleagues who are not technical: nothing
+/// while it is ready, and failures in plain view with the mechanism folded.
+/// [`Self::message`] is the sentence Diagnostics shows whole, model id and
+/// port included. Both come from here, so they cannot drift apart; until
+/// KNEG-357 the sentence was all there was, and Dictation showed it as is:
+/// "Local model base is ready on port 8178."
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(
+    tag = "state",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
+pub enum LocalRuntime {
+    Stopped,
+    /// Looking for a server already up for this model, or starting one.
+    Checking {
+        model: String,
+    },
+    /// The process is starting and loading the model.
+    Loading {
+        model: String,
+    },
+    Ready {
+        model: String,
+        port: u16,
+    },
+    Failed {
+        error: String,
+    },
+    /// Went away on its own. The next dictation or import starts it again.
+    Exited {
+        report: String,
+    },
+}
+
+impl LocalRuntime {
+    /// The state as one sentence, for Diagnostics.
+    #[must_use]
+    pub fn message(&self) -> String {
+        match self {
+            Self::Stopped => "Local model server is stopped.".to_owned(),
+            Self::Checking { model } => format!("Checking or starting local model {model}..."),
+            Self::Loading { model } => format!("Loading local model {model}..."),
+            Self::Ready { model, port } => format!("Local model {model} is ready on port {port}."),
+            Self::Failed { error } => format!(
+                "Local model could not start: {error}. Retry dictation or choose a model in \
+                 Settings › Transcription."
+            ),
+            Self::Exited { report } => format!(
+                "Local model server exited. The next dictation or import will attempt \
+                 recovery. {report}"
+            ),
+        }
+    }
 }
 
 /// Whether the local server can be installed here.
@@ -564,8 +625,8 @@ pub async fn local_model_status(
         })
         .collect();
 
-    let mut runtime_message = local
-        .runtime_message
+    let mut runtime = local
+        .runtime
         .read()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .clone();
@@ -573,15 +634,16 @@ pub async fn local_model_status(
     if let Some(running) = local.running.lock().await.as_mut() {
         alive = running.is_running().await;
         if !alive {
-            runtime_message =
-                format!(
-                "Local model server exited. The next dictation or import will attempt recovery. {}",
-                running.exit_report().unwrap_or_else(|| running.stderr_tail())
-            );
+            runtime = LocalRuntime::Exited {
+                report: running
+                    .exit_report()
+                    .unwrap_or_else(|| running.stderr_tail()),
+            };
         }
     }
     Ok(LocalStatus {
-        runtime_message,
+        runtime_message: runtime.message(),
+        runtime,
         availability,
         server_installed,
         server_freshness: SidecarFreshness::of(&freshness),
@@ -1160,14 +1222,14 @@ async fn model_to_resume(db: &kw_storage::Db) -> Resume {
 }
 
 impl LocalTranscription {
-    /// Start the server for one model, or return the port if it is already up.
-    fn set_runtime_message(&self, message: String) {
+    fn set_runtime(&self, runtime: LocalRuntime) {
         *self
-            .runtime_message
+            .runtime
             .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = message;
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = runtime;
     }
 
+    /// Start the server for one model, or return the port if it is already up.
     pub async fn start_model(&self, model_id: &str) -> Result<u16, String> {
         let requested = std::time::Instant::now();
         let _operation = self.operation.lock().await;
@@ -1181,11 +1243,18 @@ impl LocalTranscription {
                 return result;
             }
         }
-        self.set_runtime_message(format!("Checking or starting local model {model_id}..."));
+        self.set_runtime(LocalRuntime::Checking {
+            model: model_id.to_owned(),
+        });
         let result = self.start_model_inner(model_id).await;
-        self.set_runtime_message(match &result {
-            Ok(port) => format!("Local model {model_id} is ready on port {port}."),
-            Err(error) => format!("Local model could not start: {error}. Retry dictation or choose a model in Settings."),
+        self.set_runtime(match &result {
+            Ok(port) => LocalRuntime::Ready {
+                model: model_id.to_owned(),
+                port: *port,
+            },
+            Err(error) => LocalRuntime::Failed {
+                error: error.clone(),
+            },
         });
         tracing::info!(
             model = model_id,
@@ -1296,7 +1365,9 @@ impl LocalTranscription {
             port: chosen,
         };
 
-        local.set_runtime_message(format!("Loading local model {model_id}..."));
+        local.set_runtime(LocalRuntime::Loading {
+            model: model_id.to_owned(),
+        });
         tracing::info!(model = model_id, executable = %launch.executable.display(), freshness = ?sidecar_freshness(&local.catalog, SIDECAR, &sidecars.path), "starting local model");
         let health = HttpHealth::new(local.policy.clone(), local::HEALTH_PATH);
         let running = process::start(spec, &launch, &local.pids, &health, StartTimings::default())
@@ -1357,6 +1428,78 @@ pub(crate) async fn ensure_whisper(
 )]
 mod tests {
     use super::*;
+
+    /* ------------------------------- the server's state, as data (KNEG-357) */
+
+    #[test]
+    fn diagnostics_reads_the_sentences_it_always_read() {
+        // Diagnostics shows the message whole, so it is pinned here. One
+        // change: the failure names the screen.
+        assert_eq!(
+            LocalRuntime::Stopped.message(),
+            "Local model server is stopped."
+        );
+        assert_eq!(
+            LocalRuntime::Checking {
+                model: "base".into()
+            }
+            .message(),
+            "Checking or starting local model base..."
+        );
+        assert_eq!(
+            LocalRuntime::Loading {
+                model: "base".into()
+            }
+            .message(),
+            "Loading local model base..."
+        );
+        assert_eq!(
+            LocalRuntime::Ready {
+                model: "base".into(),
+                port: 8178
+            }
+            .message(),
+            "Local model base is ready on port 8178."
+        );
+        assert_eq!(
+            LocalRuntime::Failed {
+                error: "the model file is missing".into()
+            }
+            .message(),
+            "Local model could not start: the model file is missing. Retry dictation or choose a \
+             model in Settings › Transcription."
+        );
+        assert_eq!(
+            LocalRuntime::Exited {
+                report: "exit code 3".into()
+            }
+            .message(),
+            "Local model server exited. The next dictation or import will attempt recovery. exit \
+             code 3"
+        );
+    }
+
+    #[test]
+    fn the_state_reaches_the_screen_as_data() {
+        // Dictation words it plainly from this, not from the sentence above,
+        // which carries the model id and port the page is not for.
+        assert_eq!(
+            serde_json::to_value(LocalRuntime::Ready {
+                model: "base".into(),
+                port: 8178
+            })
+            .unwrap(),
+            serde_json::json!({ "state": "ready", "model": "base", "port": 8178 })
+        );
+        assert_eq!(
+            serde_json::to_value(LocalRuntime::Failed { error: "x".into() }).unwrap(),
+            serde_json::json!({ "state": "failed", "error": "x" })
+        );
+        assert_eq!(
+            serde_json::to_value(LocalRuntime::Stopped).unwrap(),
+            serde_json::json!({ "state": "stopped" })
+        );
+    }
 
     /// A runtime whose PID records live in a directory of the test process's
     /// own, never the application's.

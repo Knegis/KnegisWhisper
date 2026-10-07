@@ -7,6 +7,7 @@ import {
   liveElapsed,
   meetingLanguageMenu,
   meetingMicrophone,
+  privacyProvider,
   reviewIsFor,
   recentMeta,
   recordedSources,
@@ -221,4 +222,15 @@ test("meetingMicrophone: a chosen microphone that is unplugged says the default 
 test("meetingMicrophone: before the device list arrives, a choice is named rather than called unplugged", () => {
   assert.equal(meetingMicrophone(null, "USB Mic").label, "USB Mic");
   assert.equal(meetingMicrophone(null, null).label, "Default microphone");
+});
+
+test("while Start waits on a saved provider that can't be used, the privacy line names no provider", () => {
+  // KNEG-354, item 1. The hero said the chosen provider can't be used while
+  // the privacy line said audio is sent to the fallback: two answers. Nothing
+  // is sent until somebody chooses.
+  assert.equal(privacyProvider(null, "fallback", true), null);
+  assert.equal(privacyProvider(null, "fallback", false), "fallback");
+  assert.equal(privacyProvider(null, null, false), null);
+  // A meeting that is running says what it is running with, whatever is saved.
+  assert.equal(privacyProvider("running", "fallback", true), "running");
 });

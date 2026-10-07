@@ -227,6 +227,20 @@ export function meetingLanguageMenu(
 }
 
 /**
+ * Which provider the Meetings privacy line describes.
+ *
+ * A running meeting's own, whatever is saved. Otherwise the one Start will
+ * use -- except while Start waits on a saved provider that cannot be used.
+ * Then nothing is sent anywhere until somebody chooses, and naming the
+ * fallback the provider menu offers gave the page two answers: the hero said
+ * the chosen provider can't be used, and the privacy line said audio is sent
+ * to another (KNEG-354).
+ */
+export function privacyProvider<T>(live: T | null, selected: T | null, savedUnusable: boolean): T | null {
+  return live ?? (savedUnusable ? null : selected);
+}
+
+/**
  * The Meetings microphone chip: what a meeting will record from, and the
  * sentence its hover and screen-reader text carry (KNEG-341).
  *

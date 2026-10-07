@@ -198,9 +198,17 @@ export function localProviderProblem(
   return null;
 }
 
-/** The one sentence for a saved meeting provider that cannot be used now. */
-function chosenCannotBeUsed(name: string): string {
-  return `${name}, the provider you chose, can't be used right now.`;
+/**
+ * The one sentence for a saved meeting provider that cannot be used now.
+ *
+ * `name` is `null` for a provider this version of the app does not offer,
+ * whose only name is its id: "local-streaming, the provider you chose" was
+ * the raw id in plain view (KNEG-354). The caller puts the id in the detail.
+ */
+function chosenCannotBeUsed(name: string | null): string {
+  return name === null
+    ? "The provider you chose can't be used right now."
+    : `${name}, the provider you chose, can't be used right now.`;
 }
 
 /**
@@ -227,7 +235,7 @@ function chosenCannotBeUsed(name: string): string {
 export function meetingReadiness(i: {
   usable: readonly MeetingProviderSummary[];
   selected: string | null;
-  savedUnusable: { name: string; reason: string } | null;
+  savedUnusable: { name: string | null; reason: string } | null;
   languageWarning: string | null;
   /** From [`localProviderProblem`]: the chosen local provider cannot start. */
   localProblem: LocalProblem | null;

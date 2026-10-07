@@ -1237,6 +1237,18 @@ export type ModelStatus = { id: string, name: string, sizeMb: number | null, rec
 verifiedBy: VerifiedBy, };
 
 /**
+ * What the local model server is doing (KNEG-357).
+ *
+ * Dictation words this plainly for colleagues who are not technical: nothing
+ * while it is ready, and failures in plain view with the mechanism folded.
+ * [`Self::message`] is the sentence Diagnostics shows whole, model id and
+ * port included. Both come from here, so they cannot drift apart; until
+ * KNEG-357 the sentence was all there was, and Dictation showed it as is:
+ * "Local model base is ready on port 8178."
+ */
+export type LocalRuntime = { "state": "stopped" } | { "state": "checking", model: string, } | { "state": "loading", model: string, } | { "state": "ready", model: string, port: number, } | { "state": "failed", error: string, } | { "state": "exited", report: string, };
+
+/**
  * What can be said about the local model server without touching the network.
  */
 export type LocalStatus = { runtimeMessage: string,
@@ -1279,7 +1291,12 @@ runningModel: string | null,
  * Where installs are kept, and whether the per-user location had to be
  * abandoned because the native binaries cannot cope with the path.
  */
-installDir: string, installDirFellBack: boolean, };
+installDir: string, installDirFellBack: boolean,
+/**
+ * What the server is doing, as data. `runtime_message` is this as one
+ * sentence, for Diagnostics.
+ */
+runtime: LocalRuntime, };
 
 /**
  * What a refresh of a local server binary did.

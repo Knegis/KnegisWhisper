@@ -808,12 +808,19 @@ export function languageRequiredWarning(review: ConfigReview): string | null {
     : null;
 }
 
-/** How a meeting ended, in one line. */
-export function meetingOutcomeLabel(outcome: MeetingOutcome): string {
+/**
+ * How a meeting ended: `text` in view, `more` for Learn more.
+ *
+ * What happened, and anything missing from the transcript, is `text`. The
+ * note's id and the recording's path are `more`: until KNEG-354 they were in
+ * view, "Saved as note 42 (5 min). … The recording is at C:\Users\…", and
+ * the copy rules put ids and paths behind Learn more.
+ */
+export function meetingOutcomeLabel(outcome: MeetingOutcome): { text: string; more: string | null } {
   switch (outcome.outcome) {
     case "saved": {
       const minutes = Math.round(outcome.durationSeconds / 60);
-      const parts = [`Saved as note ${outcome.noteId} (${minutes} min).`];
+      const parts = [`Saved as a note (${minutes} min).`];
       const recordingWarning = meetingRecordingWarning(outcome.recordingAttached);
       if (recordingWarning) parts.push(recordingWarning);
       if (outcome.transcriptIsPartials) {
@@ -839,8 +846,10 @@ export function meetingOutcomeLabel(outcome: MeetingOutcome): string {
       if (outcome.reconnects > 0) {
         parts.push(reconnectLabel(outcome.reconnects));
       }
-      parts.push(`The recording is at ${outcome.recordingPath}.`);
-      return parts.join(" ");
+      return {
+        text: parts.join(" "),
+        more: `Note ${outcome.noteId}. The recording is at ${outcome.recordingPath}.`,
+      };
     }
     case "nothing-transcribed":
       // Still not a failure, and still not one named cause. What changed with
@@ -855,15 +864,20 @@ export function meetingOutcomeLabel(outcome: MeetingOutcome): string {
       // `send_audio` and `finish` turn that into an `Err`, so a rejected
       // session-config frame ends the meeting as `failed` carrying what the
       // provider said.
-      return [
-        `Nothing was transcribed. ${deliveryLabel(outcome.mic, outcome.system)}`,
-        ...(outcome.reconnects > 0 ? [reconnectLabel(outcome.reconnects)] : []),
-        `The recording is at ${outcome.recordingPath}.`,
-      ].join(" ");
+      return {
+        text: [
+          `Nothing was transcribed. ${deliveryLabel(outcome.mic, outcome.system)}`,
+          ...(outcome.reconnects > 0 ? [reconnectLabel(outcome.reconnects)] : []),
+        ].join(" "),
+        more: `The recording is at ${outcome.recordingPath}.`,
+      };
     case "cancelled":
-      return "Discarded. The recording was deleted." + (outcome.noteId !== null ? " Your notes were kept as a note." : "");
+      return {
+        text: "Discarded. The recording was deleted." + (outcome.noteId !== null ? " Your notes were kept as a note." : ""),
+        more: null,
+      };
     case "failed":
-      return outcome.message;
+      return { text: outcome.message, more: null };
   }
 }
 

@@ -667,10 +667,12 @@ export function DictationView({
             </div>
           </ControlBar>
           {/* The whisper server's health, so on its route alone: under a
-              Parakeet model it describes a server dictation is not using. */}
+              Parakeet model it describes a server dictation is not using.
+              Plain: nothing while it works, and no model id or port
+              (KNEG-357). Diagnostics shows the whole sentence. */}
           {engine === "whisper" ? (
             <div className="task-health">
-              <LocalServerHealth />
+              <LocalServerHealth plain />
             </div>
           ) : null}
         </div>
