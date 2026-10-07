@@ -80,9 +80,26 @@ the Meetings page (KNEG-365). Rust keeps both with the session and in a
 `.meeting.json` beside the WAV, so the saved note, a discarded meeting's
 notes-only note and a recovered note all take them, however the meeting ends. A
 meeting with no name is named for when it started. A folder deleted before the
-note is saved is left out, and the outcome says the note isn't in a folder. The
+note is saved is left out; after Stop or Recover the outcome says the note isn't
+in a folder, while a discarded meeting's notes-only note, and the notes saved
+when a recording can't be closed, are left out of it without a word. The
 notification window's Record and the local API start an unnamed meeting in no
 folder.
+
+Settings › Meetings can delete each recording once its transcript is saved
+(KNEG-409), off by default. A meeting reads the switch when it starts and keeps
+that choice in the session and the `.meeting.json`, so changing it mid-meeting
+affects the next meeting. The recording is deleted only when its note was saved
+with a whole transcript: a note of typed notes alone, or of the running
+transcript saved because the whole-recording pass failed, keeps its recording,
+and the outcome says why. The WAV is attached exactly as with the switch off,
+then the attachment and the file are removed in one transaction
+(`recordings::delete_attached`), which also adds "The recording was deleted
+after transcribing (Settings › Meetings)." to the note's recording details; a
+file that can't be removed stays attached, and the outcome says so. The note
+keeps its transcript and typed notes, and Replay has no player. While the switch
+is on the Meetings page says so beside Start, at the foot of its list and in the
+live view of a meeting started that way. Discard always deletes the recording.
 
 ## Data compatibility
 

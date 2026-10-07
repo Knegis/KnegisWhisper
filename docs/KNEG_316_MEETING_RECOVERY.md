@@ -3,7 +3,8 @@
 An interrupted meeting can leave a WAV in the application's `meetings` directory
 without a `note_recordings` row. Personal notes may also be in the matching
 `.notes.md` sidecar, and the name and folder chosen before Start are in the
-matching `.meeting.json` (KNEG-365), written as the meeting starts. The
+matching `.meeting.json` (KNEG-365), written as the meeting starts, with
+whether the recording is deleted once its transcript is saved (KNEG-409). The
 **Interrupted** section of the Meetings page's list panel lists these files
 while no meeting is running, by that name when it has one, and offers recovery
 one recording at a time. Nothing is transcribed or saved until the user presses
@@ -25,14 +26,22 @@ saved in the chosen folder; a folder deleted since is left out, and the outcome
 says so. An unreadable `.meeting.json` is ignored, with a warning in the log.
 The note and WAV attachment commit in one transaction, so a failed save leaves
 neither a duplicate note nor an attachment claim. Both sidecars are removed
-only after that commit. If there are neither typed notes nor transcribed
-segments, recovery leaves the WAV available for a later attempt. Recovered
-notes say that audio may end abruptly and that the original capture-source
-measurements are unavailable.
+only after that commit. Then, if the `.meeting.json` says to delete the
+recording -- or, with no `.meeting.json`, the setting says so now -- and
+segments were transcribed, the attachment and the WAV are removed together
+(`recordings::delete_attached`); a recovery of typed notes alone keeps the WAV.
+A `.meeting.json` written before KNEG-409 has no delete choice and keeps it. If
+there are neither typed notes nor transcribed segments, recovery leaves the WAV
+available for a later attempt. Recovered notes say that audio may end abruptly
+and that the original capture-source measurements are unavailable.
 
 A meeting that ends without a note owning its WAV -- the recording could not
-be closed, or nothing was transcribed and nothing typed -- keeps its
-`.meeting.json`, so the note recovered from that WAV is still named and filed.
+be closed, nothing was transcribed and nothing typed, or the note was saved but
+the WAV could not be attached to it -- keeps its `.meeting.json`, so the note
+recovered from that WAV is still named, filed and kept or deleted as the
+meeting chose. A discarded meeting's WAV is deleted by the recorder, so its
+`.meeting.json` goes too, even when the typed notes beside it could not be
+saved and stay on disk.
 
 New recording names include a UUID, and `WavWriter::create` refuses an existing
 path, so starting another meeting cannot overwrite an orphan from a prior run.

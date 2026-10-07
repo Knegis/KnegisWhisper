@@ -17,6 +17,9 @@
  *     goes, which is never hidden, the caveats, the meeting's name, and Start.
  *     The name and the folder go to Rust with Start and stay with the meeting
  *     (KNEG-365); the page keeps neither for a meeting already running.
+ *     While Settings > Meetings deletes each recording once its transcript
+ *     is saved, a note beside Start and the list's foot say so, and the live
+ *     view says it of a meeting started that way (KNEG-409).
  *   - **Live**, while a meeting is running: its state and a timer, which
  *     captures opened and where the audio goes, the live transcript, and a
  *     bar with what is in effect, Discard, and Stop.
@@ -89,6 +92,7 @@ import {
   cancelMeeting,
   flushMeetingPanelNotes,
   getFolders,
+  getMeetingDeleteRecordings,
   getMeetingKeyterms,
   getMeetingLanguage,
   getMeetingProvider,
@@ -180,8 +184,11 @@ export function Meetings({
   // the summary settings are here, so while they load or fail the line has
   // nothing to go on and the page shows no control bar at all rather than a
   // line that might leave a summary out.
+  // Whether recordings are deleted once transcribed is read with them too:
+  // the page says so whenever it is on (KNEG-409), and a failure to read it
+  // must not leave the page saying nothing.
   const load = useCallback(async () => {
-    const [providers, status, provider, recoverable, language, keyterms, summaries] =
+    const [providers, status, provider, recoverable, language, keyterms, summaries, deleteRecordings] =
       await Promise.all([
         getMeetingProviders(),
         getMeetingStatus(),
@@ -190,8 +197,9 @@ export function Meetings({
         getMeetingLanguage(),
         getMeetingKeyterms(),
         getSummarySettings(),
+        getMeetingDeleteRecordings(),
       ]);
-    return { providers, status, provider, recoverable, language, keyterms, summaries };
+    return { providers, status, provider, recoverable, language, keyterms, summaries, deleteRecordings };
   }, []);
 
   const { data, error, reload, guard } = useRefresh(load);
@@ -530,10 +538,9 @@ export function Meetings({
   // is not what is saved, so choosing it is the write that replaces it.
   const providerOptions = providerMenu(providers, data.provider, selected);
   const languageOptions = meetingLanguageMenu(data.language, selectedProvider);
+  // Its `folderId` is the folder Start sends: the one the chip names, so a
+  // folder deleted in Notes since it was chosen here is no folder.
   const folderChoice = folderMenu(folders, folderId);
-  // Only a folder the chip can name: one deleted in Notes since it was chosen
-  // here is no folder, as the chip already says (`folderMenu`).
-  const folderForStart = folders.some((folder) => folder.id === folderId) ? folderId : null;
   const choose = (write: () => Promise<void>) => {
     // One write at a time, as Dictation's switch does: a second choice made
     // while the first is in flight is ignored, so `writing` clears only when
@@ -552,7 +559,7 @@ export function Meetings({
       setTranscript(emptyLiveTranscript());
       // Rust tidies the name (`note_title`); a blank one is no name.
       const title = meetingName.trim() === "" ? null : meetingName;
-      setSources(await startMeeting(selected, withSystem, { title, folderId: folderForStart }));
+      setSources(await startMeeting(selected, withSystem, { title, folderId: folderChoice.folderId }));
       // That meeting has the name now; the next one starts unnamed. The
       // folder stays chosen, as the chips do.
       setMeetingName("");
@@ -759,7 +766,7 @@ export function Meetings({
       )}
       <div className="panel-foot">
         <Icon name="lock" size={14} />
-        <span>Recordings are saved on this computer.</span>
+        <span>{data.deleteRecordings ? "Recordings are deleted after transcribing." : "Recordings are saved on this computer."}</span>
       </div>
     </>
   );
@@ -773,6 +780,9 @@ export function Meetings({
         : transcriber.audioLeavesDevice
           ? `Sent to ${transcriber.name}`
           : "Transcribed on this computer",
+      // This meeting's own choice, taken at its Start (KNEG-409): the
+      // setting may have changed since, and applies to the next one.
+      status.plan?.deleteRecording ? "Recording deleted after saving" : null,
     ].filter((part): part is string => part !== null);
     return (
       <SplitView label="Meetings list" heading="Meetings" panel={panel}>
@@ -1062,6 +1072,12 @@ export function Meetings({
                     }`}
               </p>
             </LearnMore>
+            {/* Said in view while it is on (KNEG-409): the switch is on
+                Settings > Meetings, and a note with no recording would
+                otherwise be the first anyone heard of it. */}
+            {data.deleteRecordings ? (
+              <p className="control-note">Recordings are deleted once each meeting is transcribed.</p>
+            ) : null}
             {caveats}
 
             {/* The Interrupted rows are in the list panel; what recovering

@@ -23,6 +23,8 @@ const saved = {
   reconnects: 0,
   transcriptIsPartials: false,
   folderMissing: false,
+  recordingRemoval: null,
+  recordingRemovalError: null,
 } as const;
 
 test("a saved meeting says so plainly, with the note id and path behind Learn more", () => {
@@ -50,6 +52,37 @@ test("a saved meeting whose folder was deleted says the note isn't in a folder",
   );
   assert.equal(label.more, `Note 42. The recording is at ${PATH}.`);
   assert.doesNotMatch(meetingOutcomeLabel(saved).text, /folder/);
+});
+
+// KNEG-409: with Settings › Meetings' "Delete each recording once its
+// transcript is saved" on, the outcome says what became of the recording.
+test("a recording deleted after transcribing says so, and no path is given", () => {
+  const label = meetingOutcomeLabel({ ...saved, recordingRemoval: "deleted" });
+  assert.equal(label.text, "Saved as a note (5 min). The recording was deleted; the transcript is in the note.");
+  assert.equal(label.more, "Note 42.");
+  assert.doesNotMatch(`${label.text} ${label.more}`, /AppData|\.wav/);
+});
+
+test("a recording kept because the transcript may be incomplete says why", () => {
+  const label = meetingOutcomeLabel({ ...saved, transcriptIsPartials: true, recordingRemoval: "kept-incomplete" });
+  assert.match(label.text, /^Saved as a note \(5 min\)\. The whole-recording pass did not complete/);
+  assert.match(label.text, / The recording was kept because the transcript may be incomplete\.$/);
+  assert.equal(label.more, `Note 42. The recording is at ${PATH}.`);
+});
+
+test("a recording that couldn't be deleted says it is still attached, with why behind Learn more", () => {
+  const error = `could not delete ${PATH}: Access is denied. (os error 5)`;
+  const label = meetingOutcomeLabel({ ...saved, recordingRemoval: "delete-failed", recordingRemovalError: error });
+  assert.equal(
+    label.text,
+    "Saved as a note (5 min). The recording couldn't be deleted, so it's still attached to the note.",
+  );
+  assert.equal(label.more, `Note 42. The recording is at ${PATH}. Deleting it failed: ${error}`);
+  assert.doesNotMatch(label.text, /Access is denied/);
+});
+
+test("a recording nobody asked to delete is not mentioned", () => {
+  assert.doesNotMatch(meetingOutcomeLabel(saved).text, /recording/i);
 });
 
 test("nothing transcribed keeps why in view and folds the path", () => {

@@ -570,6 +570,8 @@ pub fn run() -> anyhow::Result<()> {
             meeting::meeting_set_language,
             meeting::meeting_provider,
             meeting::meeting_set_provider,
+            meeting::meeting_delete_recordings,
+            meeting::meeting_set_delete_recordings,
             vocabulary::vocabulary_list,
             vocabulary::vocabulary_update,
             vocabulary::vocabulary_edit,

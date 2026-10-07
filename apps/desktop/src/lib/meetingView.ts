@@ -301,13 +301,14 @@ export function meetingLanguageMenu(
  *
  * A chosen folder that is not in `folders` -- deleted in Notes since it was
  * chosen -- reads as no folder, so the chip never names a folder the note
- * cannot go to. Rust makes the same call at Stop for a folder deleted while
- * the meeting ran, and the outcome says so.
+ * cannot go to, and `folderId`, what Start sends, is the folder the chip
+ * names. Rust makes the same call at Stop for a folder deleted while the
+ * meeting ran, and the outcome says so.
  */
 export function folderMenu(
   folders: readonly Folder[],
   chosen: number | null,
-): { label: string; options: MenuOption[] } {
+): { label: string; folderId: number | null; options: MenuOption[] } {
   const folder = folders.find((f) => f.id === chosen) ?? null;
   const row = (id: string, label: string, current: boolean): MenuOption => ({
     id,
@@ -319,6 +320,7 @@ export function folderMenu(
   });
   return {
     label: folder === null ? "Save to Notes" : `Save to ${folder.name}`,
+    folderId: folder?.id ?? null,
     options: [
       row("", "No folder", folder === null),
       ...folders.map((f) => row(String(f.id), f.name, f.id === folder?.id)),

@@ -236,6 +236,14 @@
       "ui": "Settings > Meetings",
       "reachable": true
     },
+    "meetings.deleteRecordings": {
+      "what": "Whether each meeting's recording is deleted once its note is saved with a whole transcript (KNEG-409). Off by default. Read once, by MeetingRuntime::start, into the meeting's plan, which the session holds and which is written beside the recording, so Stop, Discard and a later recovery act on the choice the meeting started with; a recovered recording with no plan beside it follows the setting as it is then. A note saved from typed notes alone, or from the running transcript because the whole-recording pass failed, keeps its recording, and the outcome says so.",
+      "writtenBy": [
+        "meeting_set_delete_recordings"
+      ],
+      "ui": "Settings > Meetings",
+      "reachable": true
+    },
     "calendar.google.clientId": {
       "what": "The OAuth client ID the user registers themselves. There is no embedded client; the screen says why.",
       "writtenBy": [

@@ -3,7 +3,7 @@
 //! An interrupted meeting's `.notes.md` sidecar can be recovered from the
 //! Meetings page with its orphan WAV. It is session data, not a settings key.
 //! So is the `.meeting.json` beside it, the name and folder chosen before
-//! Start (KNEG-365).
+//! Start (KNEG-365) and whether the recording is deleted once saved (KNEG-409).
 
 use std::{
     path::{Path, PathBuf},
@@ -97,7 +97,8 @@ pub fn sidecar_path(recording: &Path) -> PathBuf {
 }
 
 /// `x.wav` becomes `x.meeting.json`: the meeting's plan, its name and folder
-/// (KNEG-365), beside the recording for the same reason the notes are.
+/// (KNEG-365) and its delete choice (KNEG-409), beside the recording for the
+/// same reason the notes are.
 pub fn plan_path(recording: &Path) -> PathBuf {
     recording.with_extension("meeting.json")
 }
@@ -152,10 +153,16 @@ pub fn remove_sidecar(recording: &Path) {
 /// Remove both sidecars, the notes and the plan, once the recording no longer
 /// needs them: it belongs to a saved note, or it was deleted. Where the
 /// recording is left with no note -- offered for recovery -- only
-/// [`remove_sidecar`] runs, so the recovered note still gets its name and
-/// folder.
+/// [`remove_sidecar`] runs, so the recovered note still gets its name, folder
+/// and delete choice.
 pub fn remove_sidecars(recording: &Path) {
     remove_sidecar(recording);
+    remove_plan(recording);
+}
+
+/// Remove the plan alone: the recording it describes is gone, but the typed
+/// notes beside it could not be saved and stay on disk.
+pub fn remove_plan(recording: &Path) {
     remove_quietly(&plan_path(recording), "meeting plan");
 }
 
@@ -252,6 +259,7 @@ mod tests {
         let plan = MeetingPlan {
             title: Some("Board review".into()),
             folder_id: Some(3),
+            delete_recording: true,
         };
         write_plan(&wav, &plan).unwrap();
         assert_eq!(read_plan(&wav), Some(plan));
@@ -278,15 +286,17 @@ mod tests {
 
     #[test]
     fn a_plan_missing_fields_reads_with_their_defaults() {
-        // A plan written before a field existed still reads: KNEG-409 adds one.
+        // A plan written before a field existed still reads. One from before
+        // KNEG-409 has no delete choice, and reads as keeping the recording.
         let dir = tempfile::tempdir().unwrap();
         let wav = dir.path().join("x.wav");
-        std::fs::write(plan_path(&wav), br#"{"title":"Standup"}"#).unwrap();
+        std::fs::write(plan_path(&wav), br#"{"title":"Standup","folderId":4}"#).unwrap();
         assert_eq!(
             read_plan(&wav),
             Some(MeetingPlan {
                 title: Some("Standup".into()),
-                folder_id: None,
+                folder_id: Some(4),
+                delete_recording: false,
             })
         );
         std::fs::write(plan_path(&wav), b"{}").unwrap();
@@ -307,6 +317,21 @@ mod tests {
         assert!(wav.exists(), "the recording is not a sidecar");
         // Nothing to remove is not a failure.
         remove_sidecars(&wav);
+    }
+
+    #[test]
+    fn removing_the_plan_leaves_the_typed_notes() {
+        // Discard's notes that could not be saved stay on disk; the plan
+        // beside them describes a recording that is gone.
+        let dir = tempfile::tempdir().unwrap();
+        let wav = dir.path().join("x.wav");
+        std::fs::write(sidecar_path(&wav), b"typed").unwrap();
+        write_plan(&wav, &MeetingPlan::default()).unwrap();
+
+        remove_plan(&wav);
+        assert!(sidecar_path(&wav).exists());
+        assert!(!plan_path(&wav).exists());
+        remove_plan(&wav);
     }
 }
 

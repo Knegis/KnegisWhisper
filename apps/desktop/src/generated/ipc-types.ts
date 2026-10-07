@@ -739,7 +739,21 @@ title: string | null,
  * deleted before the note is saved is left out, and the outcome says so
  * (`MeetingOutcome::Saved::folder_missing`).
  */
-folderId: number | null, };
+folderId: number | null,
+/**
+ * Whether the recording is deleted once its transcript is saved
+ * (KNEG-409): Settings > Meetings' choice, read at Start
+ * ([`plan_at_start`]), never a caller's. A plan written before this
+ * existed reads `false`, and keeps its recording.
+ */
+deleteRecording: boolean, };
+
+/**
+ * What became of a saved meeting's recording, when it was to be deleted.
+ *
+ * `None` in the outcome where it was not asked to be.
+ */
+export type RecordingRemoval = "deleted" | "kept-incomplete" | "delete-failed";
 
 /**
  * What can be said about the meeting session.
@@ -851,7 +865,17 @@ transcriptIsPartials: boolean,
  * True when the folder chosen before Start was deleted before the
  * note was saved, so the note is in no folder (KNEG-365).
  */
-folderMissing: boolean, } | { "outcome": "nothing-transcribed", recordingPath: string, mic: Delivered, system: Delivered,
+folderMissing: boolean,
+/**
+ * What became of the recording when the meeting was to delete it
+ * once saved (KNEG-409); `None` when it was not, or when it could
+ * not be attached (`recording_attached` says that).
+ */
+recordingRemoval: RecordingRemoval | null,
+/**
+ * Why deleting it failed, with `RecordingRemoval::DeleteFailed`.
+ */
+recordingRemovalError: string | null, } | { "outcome": "nothing-transcribed", recordingPath: string, mic: Delivered, system: Delivered,
 /**
  * Scheduled live-session reconnects still happened even when no words
  * were produced. Keeping the count makes this successful provider work

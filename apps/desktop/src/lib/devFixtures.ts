@@ -655,6 +655,8 @@ let meetingStatus: MeetingStatus = {
 
 let meetingLanguage = "en";
 let meetingProvider: string | null = null;
+/** Settings › Meetings' "Delete each recording once its transcript is saved", off as in Rust (KNEG-409). */
+let meetingDeleteRecordings = false;
 /** When the fixture meeting started, which names its note when it has no name. */
 let meetingStartedAt: Date | null = null;
 
@@ -672,15 +674,21 @@ function fixtureNoteTitle(given: string | null, started: Date): string {
   return given ?? `Meeting — ${when}`;
 }
 
+/** What Rust's `delete_attached` adds to a note's recording details (`meeting/removal.rs`). */
+const RECORDING_DELETED_DETAILS = "The recording was deleted after transcribing (Settings › Meetings).";
+
 /**
  * The fixture meeting stopping: idle again, and what Rust's `keep` would
  * have made of it -- a new meeting note under the plan's name or when it
  * started, in the plan's folder, or in none with `folderMissing` when that
- * folder was deleted while it ran (KNEG-365).
+ * folder was deleted while it ran (KNEG-365). It has two transcript rows and
+ * the recording attached, as a whole-recording pass leaves it, unless the
+ * plan says to delete the recording once saved: then it has no recording,
+ * its details say why, and the outcome says `deleted` (KNEG-409).
  */
 function fixtureStop(): MeetingOutcome {
   const provider = meetingStatus.provider;
-  const plan = meetingStatus.plan ?? { title: null, folderId: null };
+  const plan = meetingStatus.plan ?? { title: null, folderId: null, deleteRecording: false };
   const startedAt = meetingStartedAt ?? new Date();
   meetingStartedAt = null;
   meetingStatus = {
@@ -707,15 +715,20 @@ function fixtureStop(): MeetingOutcome {
   }
   const folderId = folders.some((f) => f.id === plan.folderId) ? plan.folderId : null;
   const noteId = nextNoteId++;
+  const segments = [
+    { text: "Let's start with the release.", timestamp: 4, endTimestamp: 9 },
+    { text: "The installer is signed now.", timestamp: 10, endTimestamp: 15 },
+  ];
   notes = [
     {
       id: noteId,
       title: fixtureNoteTitle(plan.title, startedAt),
       content: "",
       noteType: "meeting",
-      recordingDetails: null, enhancedContent: null,
+      recordingDetails: plan.deleteRecording ? RECORDING_DELETED_DETAILS : null,
+      enhancedContent: null,
       folderId,
-      transcript: null,
+      transcript: JSON.stringify(segments),
       participants: null,
       audioDurationSeconds: 1847,
       createdAt: nowIso(),
@@ -723,6 +736,12 @@ function fixtureStop(): MeetingOutcome {
     },
     ...notes,
   ];
+  noteTranscriptRows.set(noteId, segments.map((segment, index) => ({
+    index, text: segment.text, speaker: null, speakerId: null, startSeconds: segment.timestamp, endSeconds: segment.endTimestamp,
+  })));
+  if (!plan.deleteRecording) {
+    noteRecordings.set(noteId, { noteId, storageKey: `fixture-meeting-${noteId}.wav`, durationSeconds: FIXTURE_RECORDING_SECONDS, originalFilename: null, createdAt: nowIso() });
+  }
   return {
     outcome: "saved",
     noteId,
@@ -734,6 +753,8 @@ function fixtureStop(): MeetingOutcome {
     transcriptIsPartials: false,
     recordingAttached: true,
     folderMissing: plan.folderId !== null && folderId === null,
+    recordingRemoval: plan.deleteRecording ? "deleted" : null,
+    recordingRemovalError: null,
   };
 }
 
@@ -2025,10 +2046,13 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
       transcriptIsPartials: false,
       recordingAttached: true,
       folderMissing: false,
+      recordingRemoval: null,
+      recordingRemovalError: null,
     } satisfies MeetingOutcome;
   },
   // The plan comes back on `meeting_status` while the meeting runs, tidied,
-  // as Rust keeps it with the session (KNEG-365).
+  // as Rust keeps it with the session (KNEG-365), with the delete choice
+  // read from the setting at Start (KNEG-409).
   meeting_start: (a) => {
     const wantsSystemAudio = arg<boolean>(a, "systemAudio") ?? false;
     const sources: Sources = {
@@ -2046,6 +2070,7 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
       plan: {
         title: fixtureMeetingTitle(arg<string | null>(a, "title")),
         folderId: arg<number | null>(a, "folderId") ?? null,
+        deleteRecording: meetingDeleteRecordings,
       },
       elapsedSeconds: 0,
       sources,
@@ -2091,6 +2116,11 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
       ...meetingStatus,
       promptOnDetect: arg<boolean>(a, "enabled") ?? false,
     };
+    return null;
+  },
+  meeting_delete_recordings: () => meetingDeleteRecordings,
+  meeting_set_delete_recordings: (a) => {
+    meetingDeleteRecordings = arg<boolean>(a, "enabled") ?? false;
     return null;
   },
   summary_settings_get: () => summarySettings,

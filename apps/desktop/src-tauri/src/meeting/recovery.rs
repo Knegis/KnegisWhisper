@@ -124,7 +124,7 @@ mod tests {
             &named,
             &crate::meeting::MeetingPlan {
                 title: Some("  Board review\n".into()),
-                folder_id: None,
+                ..crate::meeting::MeetingPlan::default()
             },
         )
         .unwrap();

@@ -188,6 +188,7 @@ fn render() -> String {
             crate::meeting::Sources,
             crate::meeting::Delivered,
             crate::meeting::MeetingPlan,
+            crate::meeting::RecordingRemoval,
             crate::meeting::MeetingStatus,
             crate::meeting::MeetingOutcome,
             crate::meeting::recovery::RecoverableRecording,

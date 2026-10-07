@@ -368,7 +368,9 @@ export async function resetMeetingNotificationPlacement(): Promise<void> { retur
 /**
  * Start recording a meeting, saved under `plan`'s name in its folder
  * (KNEG-365). Rust keeps the plan with the meeting, so it applies however the
- * meeting ends; without one, the meeting is unnamed and in no folder.
+ * meeting ends; without one, the meeting is unnamed and in no folder. Whether
+ * its recording is deleted once saved is not sent: Rust reads Settings ›
+ * Meetings' choice at Start (KNEG-409).
  *
  * Returns which captures actually started: a meeting works microphone-only, and
  * the user should be told which one they got rather than left to assume.
@@ -376,7 +378,7 @@ export async function resetMeetingNotificationPlacement(): Promise<void> { retur
 export async function startMeeting(
   provider: string,
   systemAudio: boolean,
-  plan: MeetingPlan = { title: null, folderId: null },
+  plan: Omit<MeetingPlan, "deleteRecording"> = { title: null, folderId: null },
 ): Promise<Sources> {
   return invoke<Sources>("meeting_start", { provider, systemAudio, title: plan.title, folderId: plan.folderId });
 }
@@ -460,6 +462,19 @@ export async function dismissMeetingOffer(): Promise<void> {
 
 export async function setMeetingPrompt(enabled: boolean): Promise<void> {
   return invoke("meeting_set_prompt", { enabled });
+}
+
+/**
+ * Whether each meeting's recording is deleted once its transcript is saved
+ * (KNEG-409). Off until it is turned on. A meeting reads it when it starts,
+ * so a running meeting's own choice is `MeetingStatus.plan.deleteRecording`.
+ */
+export async function getMeetingDeleteRecordings(): Promise<boolean> {
+  return invoke<boolean>("meeting_delete_recordings");
+}
+
+export async function setMeetingDeleteRecordings(enabled: boolean): Promise<void> {
+  return invoke("meeting_set_delete_recordings", { enabled });
 }
 
 /** The two diarization models, and whether speaker labels can run. */

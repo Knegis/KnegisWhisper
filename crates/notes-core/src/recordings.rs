@@ -93,6 +93,66 @@ pub async fn delete_with_recording(
     Ok(removed)
 }
 
+/// Delete a note's recording and keep the note (KNEG-409): the attachment row
+/// and the file go together, and `details` is added to the note's recording
+/// details with them, so the note says its recording was deleted exactly when
+/// it was.
+///
+/// One transaction. The row is deleted and the details written first, which
+/// takes SQLite's write lock, then the file is removed, and only then does the
+/// transaction commit. A file that cannot be removed rolls all of it back: the
+/// note keeps its recording and says nothing about deleting it, and the error
+/// says why. A file already gone from disk counts as removed. `Ok(false)` when
+/// the note has no recording attached, and nothing changes.
+pub async fn delete_attached(
+    pool: &SqlitePool,
+    note_id: i64,
+    directory: &Path,
+    details: &str,
+) -> Result<bool, String> {
+    let failed =
+        |error: sqlx::Error| format!("could not delete the recording's attachment: {error}");
+    let mut tx = pool.begin().await.map_err(failed)?;
+    let key: Option<String> =
+        sqlx::query_scalar("DELETE FROM note_recordings WHERE note_id = ? RETURNING storage_key")
+            .bind(note_id)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(failed)?;
+    let Some(key) = key else {
+        tx.rollback().await.map_err(failed)?;
+        return Ok(false);
+    };
+    let Some(path) = resolve(directory, &key) else {
+        tx.rollback().await.map_err(failed)?;
+        return Err(format!(
+            "refused to delete a recording with an invalid name: {key}"
+        ));
+    };
+    sqlx::query(
+        "UPDATE notes SET recording_details = CASE
+             WHEN recording_details IS NULL OR trim(recording_details) = '' THEN ?1
+             ELSE recording_details || char(10) || char(10) || ?1
+         END
+         WHERE id = ?2",
+    )
+    .bind(details)
+    .bind(note_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(failed)?;
+    match tokio::fs::remove_file(&path).await {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            tx.rollback().await.map_err(failed)?;
+            return Err(format!("could not delete {}: {error}", path.display()));
+        }
+    }
+    tx.commit().await.map_err(failed)?;
+    Ok(true)
+}
+
 /// A recording attached to a note, as stored.
 #[derive(Debug, Clone, FromRow, Serialize, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
@@ -428,6 +488,156 @@ mod tests {
         assert!(String::from_utf8(bytes.lock().unwrap().clone())
             .unwrap()
             .contains("could not remove a deleted note's recording"));
+    }
+
+    /* -------------------------------- deleting a note's recording (KNEG-409) */
+
+    const SAYS: &str = "The recording was deleted.";
+
+    async fn recorded_note(pool: &SqlitePool, details: Option<&str>) -> i64 {
+        notes::create(
+            pool,
+            &NewNote {
+                title: "Board review".into(),
+                content: "typed".into(),
+                transcript: Some(r#"[{"text":"hello","timestamp":0.0}]"#.into()),
+                recording_details: details.map(str::to_owned),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn deleting_an_attached_recording_removes_its_row_and_its_file_and_keeps_the_note() {
+        let db = db().await;
+        let dir = tempfile::tempdir().unwrap();
+        let id = recorded_note(db.pool(), Some("Recording sources: microphone.")).await;
+        std::fs::write(dir.path().join("owned.wav"), b"audio").unwrap();
+        std::fs::write(dir.path().join("unrelated.wav"), b"keep").unwrap();
+        attach(db.pool(), id, "owned.wav", Some(12.0), None)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            delete_attached(db.pool(), id, dir.path(), SAYS).await,
+            Ok(true)
+        );
+
+        assert!(get(db.pool(), id).await.unwrap().is_none());
+        assert!(!dir.path().join("owned.wav").exists());
+        assert!(dir.path().join("unrelated.wav").exists());
+        let note = notes::get(db.pool(), id).await.unwrap().unwrap();
+        assert_eq!(note.content, "typed");
+        assert!(note.transcript.is_some(), "the transcript stays");
+        assert_eq!(
+            note.recording_details.as_deref(),
+            Some("Recording sources: microphone.\n\nThe recording was deleted.")
+        );
+        // Nothing left owns a file, and no file is left to own: the
+        // recordings directory holds only what was never this note's.
+        assert!(storage_keys(db.pool()).await.unwrap().is_empty());
+        let left: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(left, ["unrelated.wav"]);
+    }
+
+    #[tokio::test]
+    async fn a_note_with_no_details_says_only_that_its_recording_was_deleted() {
+        let db = db().await;
+        let dir = tempfile::tempdir().unwrap();
+        let id = recorded_note(db.pool(), None).await;
+        std::fs::write(dir.path().join("owned.wav"), b"audio").unwrap();
+        attach(db.pool(), id, "owned.wav", None, None)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            delete_attached(db.pool(), id, dir.path(), SAYS).await,
+            Ok(true)
+        );
+        let note = notes::get(db.pool(), id).await.unwrap().unwrap();
+        assert_eq!(note.recording_details.as_deref(), Some(SAYS));
+    }
+
+    #[tokio::test]
+    async fn a_recording_that_cannot_be_removed_stays_attached_and_says_why() {
+        let db = db().await;
+        let dir = tempfile::tempdir().unwrap();
+        // A directory is a deterministic remove_file failure on Windows and Unix.
+        std::fs::create_dir(dir.path().join("locked.wav")).unwrap();
+        let id = recorded_note(db.pool(), Some("Recording sources: microphone.")).await;
+        attach(db.pool(), id, "locked.wav", Some(12.0), None)
+            .await
+            .unwrap();
+
+        let error = delete_attached(db.pool(), id, dir.path(), SAYS)
+            .await
+            .unwrap_err();
+        assert!(error.contains("locked.wav"), "{error}");
+
+        let kept = get(db.pool(), id).await.unwrap().unwrap();
+        assert_eq!(kept.storage_key, "locked.wav");
+        assert!(dir.path().join("locked.wav").exists());
+        let note = notes::get(db.pool(), id).await.unwrap().unwrap();
+        assert_eq!(
+            note.recording_details.as_deref(),
+            Some("Recording sources: microphone."),
+            "the note does not say a recording it still has was deleted"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_note_with_no_recording_has_nothing_to_delete() {
+        let db = db().await;
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("unrelated.wav"), b"keep").unwrap();
+        let id = recorded_note(db.pool(), None).await;
+
+        assert_eq!(
+            delete_attached(db.pool(), id, dir.path(), SAYS).await,
+            Ok(false)
+        );
+        let note = notes::get(db.pool(), id).await.unwrap().unwrap();
+        assert_eq!(note.recording_details, None);
+        assert!(dir.path().join("unrelated.wav").exists());
+    }
+
+    #[tokio::test]
+    async fn a_recording_already_gone_from_disk_is_deleted() {
+        let db = db().await;
+        let dir = tempfile::tempdir().unwrap();
+        let id = recorded_note(db.pool(), None).await;
+        attach(db.pool(), id, "missing.wav", None, None)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            delete_attached(db.pool(), id, dir.path(), SAYS).await,
+            Ok(true)
+        );
+        assert!(get(db.pool(), id).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn an_invalid_recording_name_is_refused_and_left_attached() {
+        let db = db().await;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("recordings");
+        std::fs::create_dir(&root).unwrap();
+        let outside = dir.path().join("outside.wav");
+        std::fs::write(&outside, b"keep").unwrap();
+        let id = recorded_note(db.pool(), None).await;
+        attach(db.pool(), id, "../outside.wav", None, None)
+            .await
+            .unwrap();
+
+        assert!(delete_attached(db.pool(), id, &root, SAYS).await.is_err());
+        assert!(outside.exists());
+        assert!(get(db.pool(), id).await.unwrap().is_some());
     }
 
     #[tokio::test]

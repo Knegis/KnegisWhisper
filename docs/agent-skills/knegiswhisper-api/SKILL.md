@@ -84,6 +84,10 @@ back as `{"data": …}`, a collection as a list under the same key.
 | `DELETE` | `/v1/transcriptions/{id}` | Delete a dictation and its transcript |
 | `DELETE` | `/v1/transcriptions/{id}/audio` | Delete only the kept recording, leaving the transcript |
 
+While a meeting is recording, `/v1/status`'s `meeting.plan` says what it will be
+saved as: `title` and `folderId` (null for none) and `deleteRecording`, whether
+its recording is deleted once its transcript is saved. It is `null` otherwise.
+
 ### Bodies
 
 `PATCH /v1/notes/{id}` takes any subset of three fields, in camelCase:

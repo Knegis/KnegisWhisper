@@ -323,6 +323,8 @@ const FOLDERS: Folder[] = [
 test("folderMenu offers no folder, then every folder, ticking the one chosen", () => {
   const menu = folderMenu(FOLDERS, 3);
   assert.equal(menu.label, "Save to Internal");
+  // The folder Start sends: the one the chip names.
+  assert.equal(menu.folderId, 3);
   assert.deepEqual(
     menu.options.map((option) => [option.id, option.label, option.current]),
     [["", "No folder", false], ["1", "Inbox", false], ["2", "Customer calls", false], ["3", "Internal", true]],
@@ -333,10 +335,12 @@ test("folderMenu offers no folder, then every folder, ticking the one chosen", (
 test("folderMenu with no folder chosen saves to Notes", () => {
   const menu = folderMenu(FOLDERS, null);
   assert.equal(menu.label, "Save to Notes");
+  assert.equal(menu.folderId, null);
   assert.deepEqual(menu.options.filter((option) => option.current).map((option) => option.id), [""]);
   // With no folders at all, the one row is still there to say where it goes.
   assert.deepEqual(folderMenu([], null), {
     label: "Save to Notes",
+    folderId: null,
     options: [{ id: "", label: "No folder", group: null, current: true, disabled: false, reason: null }],
   });
 });
@@ -345,5 +349,7 @@ test("folderMenu treats a chosen folder that is gone as no folder", () => {
   // Deleted in Notes while it was chosen here: the chip must not name it.
   const menu = folderMenu(FOLDERS.filter((folder) => folder.id !== 3), 3);
   assert.equal(menu.label, "Save to Notes");
+  // And Start sends no folder, as the chip says, rather than the stale id.
+  assert.equal(menu.folderId, null);
   assert.deepEqual(menu.options.filter((option) => option.current).map((option) => option.id), [""]);
 });

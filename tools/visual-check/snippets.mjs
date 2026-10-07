@@ -608,6 +608,70 @@ export function meetingPlanState() {
   `);
 }
 
+/* ------------------------------------------------------- meeting recordings */
+
+/**
+ * Settings > Meetings' Recordings section (KNEG-409): its heading, the
+ * checkbox labelled `label` (whether it is there and ticked), and the
+ * caveats and Learn more text in the section around it.
+ */
+export function recordingsSetting(label) {
+  return source(`
+    const wanted = ${JSON.stringify(label)};
+    const box = [...document.querySelectorAll('label')]
+      .find((item) => item.textContent.trim() === wanted)?.querySelector('input[type="checkbox"]') ?? null;
+    const section = box?.closest('section') ?? null;
+    const text = (item) => item.textContent.trim();
+    return {
+      found: Boolean(box),
+      checked: box?.checked ?? null,
+      disabled: box?.disabled ?? null,
+      heading: section?.querySelector('h2')?.textContent.trim() ?? null,
+      caveats: section ? [...section.querySelectorAll(':scope > .caveat')].map(text) : [],
+      learnMore: section ? [...section.querySelectorAll('.learn-more .learn-more-body')].map(text) : [],
+    };
+  `);
+}
+
+/**
+ * What the Meetings page says about its recordings: the control bar's notes,
+ * the list panel's foot, the live view's sub-line, and the Learn more under
+ * the outcome caveat.
+ */
+export function meetingRecordingNotes() {
+  return source(`
+    const text = (item) => item.textContent.trim();
+    return {
+      controlNotes: [...document.querySelectorAll('.control-body p.control-note')].map(text),
+      panelFoot: [...document.querySelectorAll('.list-panel .panel-foot')].map(text),
+      liveSub: document.querySelector('.meeting-live .live-sub')?.textContent.trim() ?? null,
+      learnMore: [...document.querySelectorAll('.control-body > .learn-more .learn-more-body, .live-caveats > .learn-more .learn-more-body')].map(text),
+    };
+  `);
+}
+
+/**
+ * The open note's recording, as Notes shows it: how many players and row
+ * Play buttons there are, its transcript rows, its recording details, the
+ * "no recording attached" block, and which tab is selected.
+ */
+export function noteRecordingState() {
+  return source(`
+    const note = document.querySelector('.note-detail');
+    const text = (item) => item.textContent.trim();
+    return {
+      title: note?.querySelector('input[aria-label="Title"]')?.value ?? null,
+      tab: note?.querySelector('[role="tab"][aria-selected="true"]')?.textContent.trim() ?? null,
+      audios: note ? note.querySelectorAll('audio').length : null,
+      players: note ? note.querySelectorAll('.recording-player').length : null,
+      rowPlays: note ? note.querySelectorAll('.transcript-play').length : null,
+      rows: note ? [...note.querySelectorAll('.transcript-rows .transcript-text')].map(text) : [],
+      details: note ? [...note.querySelectorAll('.recording-details p')].filter((item) => !item.closest('[hidden]')).map(text) : [],
+      noRecording: note ? [...note.querySelectorAll('.recording-empty')].filter((item) => !item.closest('[hidden]')).map((item) => text(item.querySelector('p'))) : [],
+    };
+  `);
+}
+
 /**
  * The Notes library's folders, each with the titles of the notes filed in
  * it, and the notes in none ("Not in a folder").

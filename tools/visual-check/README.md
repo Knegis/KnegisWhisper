@@ -268,6 +268,52 @@ recording, recovery's name and folder, and a folder deleted between Rust's
 lookup and its insert -- is covered by `cargo test`, not here. Not measured:
 the notification window's Record, which starts an unnamed meeting.
 
+## Meeting recordings
+
+```
+node tools/visual-check/meeting-recordings.mjs --url http://127.0.0.1:5191/
+```
+
+Same options as the chip menus (the banner is always removed). It measures
+KNEG-409: deleting each meeting recording once its transcript is saved. The
+checkbox and the buttons are pressed with real CDP pointer presses, and the
+page's `invoke` is wrapped (`installInvokeStub`) to log what reached the
+setting's writer. The setting is turned on, where a check needs it, through
+the fixtures' `meeting_set_delete_recordings` before the page reads it. The
+fixtures read it into the plan at `meeting_start`, as Rust does, and their
+`meeting_stop` saves a note with two transcript rows: with a recording attached
+when the plan keeps it, and with none, its details saying why, when the plan
+deletes it. Each check starts from a fresh load, at 1440x900 unless it says
+otherwise. Five checks:
+
+1. Settings > Meetings has a Recordings section with "Delete each recording
+   once its transcript is saved", unticked, its caveat and its Learn more.
+   One press calls `meeting_set_delete_recordings` once, with `enabled: true`,
+   and ticks it.
+2. With it off, the Meetings page has no note about it and its list's foot
+   says recordings are saved on this computer. With it on: "Recordings are
+   deleted once each meeting is transcribed." beside Start and "Recordings are
+   deleted after transcribing." at the foot. At 720x520, with the note shown,
+   nothing scrolls sideways, measured as chip-menus check 8 measures it.
+3. A meeting started with it on has "Recording deleted after saving" in its
+   live sub-line, and `meeting_start` is sent no delete choice. Turned off
+   while the meeting records, and the page remounted, the sub-line still
+   says it. A meeting started with it off does not.
+4. Stop and save: "Saved as a note (31 min). The recording was deleted; the
+   transcript is in the note." Its Learn more is "Note N." and no path.
+5. The saved note, opened from Recent, on Replay: no `audio`, no
+   `.recording-player`, no `.transcript-play`, its two transcript rows, and
+   the recording details "The recording was deleted after transcribing
+   (Settings › Meetings)." The same steps with it off find a player and two
+   row Play buttons, so the probe sees them where they are.
+
+Measured in headless Edge against dev fixtures, not in the Tauri window; a
+false check makes it exit 1. Rust's side -- the attachment and the file
+removed in one transaction, what is kept when the transcript may be
+incomplete or the file can't be removed, and recovery following the plan --
+is covered by `cargo test`, not here. Not measured: a real meeting with it on,
+whose transcript is complete and whose file is gone.
+
 ## Running application windows
 
 Launch the running development application with its WebView2 debugger exposed:
