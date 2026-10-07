@@ -17,14 +17,21 @@
  * The binary's location is a real filesystem check too, next to this running
  * application and then on `PATH` — never assumed present because the CLI is
  * "supposed to be there".
+ *
+ * In plain words (KNEG-343): the binary, its path and the commands stay in
+ * view, because they are what a developer types. It said the CLI works "while
+ * the application is running"; it needs the Local API on as well, which only
+ * the row at the foot said, so the first sentence says it now.
  */
 
 import { useCallback } from "react";
 
 import { DiscoveryFileRows } from "../components/DiscoveryFileRows";
+import { FailureLine } from "../components/FailureLine";
+import { LearnMore } from "../components/LearnMore";
 import { Row } from "../components/Row";
 import { getCliStatus } from "../lib/ipc";
-import { binaryLocationLabel } from "../lib/labels";
+import { binaryLocationLabel, blockedLine } from "../lib/labels";
 import { useRefresh } from "../lib/useRefresh";
 
 export function IntegrationsCli() {
@@ -34,7 +41,7 @@ export function IntegrationsCli() {
   if (!status) {
     return (
       <div className="view">
-        {error ? <p className="error">{error}</p> : <p className="muted">Loading…</p>}
+        {error ? <FailureLine text="This page couldn't load." detail={error} /> : <p className="muted">Loading…</p>}
       </div>
     );
   }
@@ -42,24 +49,30 @@ export function IntegrationsCli() {
   const location = binaryLocationLabel(status.binaryLocation);
   return (
     <div className="view">
-      {error ? <p className="error">{error}</p> : null}
+      {error ? <FailureLine text="That didn't work." detail={error} /> : null}
 
-      {status.blockedReason ? <p className="error" role="alert">{status.blockedReason}</p> : null}
+      {status.blockedReason ? <FailureLine text={blockedLine(status.blockedReason)} detail={status.blockedReason} /> : null}
 
       <section data-surface="integrations.cli">
         <p className="muted">
-          <code>{status.binaryName}</code> is a compiled command-line client over
-          the same local API as this settings window — notes, transcripts, the
-          dictionary, file transcription jobs, exports and meeting recording. It talks to this running application over the discovery
-          file below, so it can only do anything while the application is
-          running.
+          <code>{status.binaryName}</code> is a command-line client for your
+          notes, transcripts, dictionary, file transcription, exports and meeting
+          recording. It works only while this app is running with the Local API
+          turned on.
         </p>
+        <LearnMore summary="How it connects">
+          <p>
+            It talks to the same local API as this window, and finds it through
+            the discovery file below.
+          </p>
+        </LearnMore>
 
         <Row label="Binary" value={location.text} detail={location.detail} />
         <p className="muted">
           Start with <code>knegiswhisper status</code> or <code>knegiswhisper models list</code>.
           Use <code>transcribe file PATH</code> to upload media, then <code>jobs status ID</code> to retrieve the result.
-          File transcription uses your configured provider. <code>recording start --provider ID</code> starts a visible microphone meeting recording.
+          File transcription uses your Transcription setting: with a cloud provider, the audio leaves this computer.{" "}
+          <code>recording start --provider ID</code> starts a visible microphone meeting recording.
         </p>
         <DiscoveryFileRows
           discoveryPath={status.discoveryPath}
@@ -71,7 +84,7 @@ export function IntegrationsCli() {
           detail={
             status.localApiRunning
               ? undefined
-              : "the discovery file above does not exist while this is off — see Developer > Local API"
+              : "turn it on under Developer › Local API; the discovery file above exists only while it runs"
           }
         />
       </section>

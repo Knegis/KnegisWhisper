@@ -47,6 +47,7 @@
 
 import { useCallback, useEffect, useState, type KeyboardEvent, type ReactNode } from "react";
 
+import { FailureLine } from "../components/FailureLine";
 import { Icon } from "../components/Icon";
 import { LearnMore } from "../components/LearnMore";
 import { PageHeader } from "../components/PageHeader";
@@ -66,7 +67,7 @@ import { PAGES } from "../lib/pages";
 import { filterRows, keyRowShown, providerRows, SPEECH, TEXT, type ProviderFilter, type ProviderRow } from "../lib/providerRows";
 import { message, useRefresh } from "../lib/useRefresh";
 
-type KeyState = { label: string; tone: "saved" | "connected" | "failed"; title?: string; detail?: string };
+type KeyState = { label: string; tone: "saved" | "connected" | "failed"; title?: string; detail?: string; more?: string };
 
 /**
  * What can be said about a stored key.
@@ -90,8 +91,12 @@ function keyState(slot: CredentialSlotStatus, probe: ProbeReport | null): KeySta
   // provider id and the slot name are the same string.
   const mine = probe.results.filter((r) => r.provider === slot.slot);
   if (!mine.some((r) => r.outcome.outcome !== "skipped")) {
+    // The probe's own reason for skipping is the mechanism, so it goes under
+    // the row's Why (KNEG-343).
     const why = mine.map((r) => ("detail" in r.outcome ? r.outcome.detail : "")).find(Boolean);
-    return { label: "Key saved", tone: "saved", detail: why ? `Not tested: ${why}.` : "Not tested: Test connections does not cover this key." };
+    return why
+      ? { label: "Key saved", tone: "saved", detail: "Not tested.", more: why }
+      : { label: "Key saved", tone: "saved", detail: "Not tested: Test connections doesn't cover this key." };
   }
   return isProviderConnected(probe, slot.slot)
     ? { label: "Connected", tone: "connected", title: "A real request with this key succeeded." }
@@ -141,7 +146,7 @@ export function SettingsProviders({ onGoTo }: { onGoTo: (id: ViewId) => void }) 
    * It was the page's error line at the top, out of sight of the row and not
    * announced (KNEG-377).
    */
-  const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
+  const [rowErrors, setRowErrors] = useState<Record<string, { text: string; detail: string }>>({});
   const [probe, setProbe] = useState<ProbeReport | null>(null);
   const [probing, setProbing] = useState(false);
   const [testNote, setTestNote] = useState<string | null>(null);
@@ -161,7 +166,8 @@ export function SettingsProviders({ onGoTo }: { onGoTo: (id: ViewId) => void }) 
 
   const say = (slot: string, what: string) =>
     setResults((prev) => ({ ...prev, [slot]: what }));
-  const rowError = (slot: string, what: string | null) =>
+  /** A row's failure: the sentence, and the error itself for its Details (KNEG-343). */
+  const rowError = (slot: string, what: { text: string; detail: string } | null) =>
     setRowErrors((prev) => {
       const next = { ...prev };
       if (what === null) delete next[slot];
@@ -187,7 +193,7 @@ export function SettingsProviders({ onGoTo }: { onGoTo: (id: ViewId) => void }) 
       try {
         await setProviderCredential(slot.slot, typed);
       } catch (cause) {
-        rowError(slot.slot, `Couldn't save the key: ${message(cause)}`);
+        rowError(slot.slot, { text: "Couldn't save the key.", detail: message(cause) });
         return;
       }
       // Cleared immediately, and this is the only copy that ever existed in the
@@ -198,8 +204,8 @@ export function SettingsProviders({ onGoTo }: { onGoTo: (id: ViewId) => void }) 
       say(
         slot.slot,
         slot.kind === "custom-endpoint"
-          ? "Stored. This does not test anything — a custom endpoint needs its base URL too."
-          : "Stored. Press Test connections to find out whether it works.",
+          ? "Saved. It does nothing on its own yet: the feature that uses it needs its server's address too."
+          : "Saved. Press Test connections to check that it works.",
       );
       // Any earlier verdict is now about a different key, and "nothing to
       // test" may no longer be true.
@@ -218,12 +224,12 @@ export function SettingsProviders({ onGoTo }: { onGoTo: (id: ViewId) => void }) 
       try {
         await setProviderCredential(slot.slot, "");
       } catch (cause) {
-        rowError(slot.slot, `Couldn't remove the key: ${message(cause)}`);
+        rowError(slot.slot, { text: "Couldn't remove the key.", detail: message(cause) });
         return;
       }
       setDraft("");
       setOpen(null);
-      say(slot.slot, "Removed from the credential store.");
+      say(slot.slot, "Removed from this computer.");
       setProbe(null);
       setTestNote(null);
       done = true;
@@ -237,7 +243,7 @@ export function SettingsProviders({ onGoTo }: { onGoTo: (id: ViewId) => void }) 
     return (
       <div className="view">
         {header()}
-        {error ? <p className="error">{error}</p> : <p className="muted">Loading…</p>}
+        {error ? <FailureLine text="This page couldn't load." detail={error} /> : <p className="muted">Loading…</p>}
       </div>
     );
   }
@@ -358,8 +364,19 @@ export function SettingsProviders({ onGoTo }: { onGoTo: (id: ViewId) => void }) 
           )}
         </span>
         {state?.detail ? <em className="row-detail provider-detail">{state.detail}</em> : null}
+        {state?.more ? (
+          <div className="provider-detail">
+            <LearnMore summary="Why">
+              <p>{state.more}</p>
+            </LearnMore>
+          </div>
+        ) : null}
         {results[row.slot] ? <em className="row-detail provider-detail" role="status">{results[row.slot]}</em> : null}
-        {rowErrors[row.slot] ? <p className="error provider-detail" role="alert">{rowErrors[row.slot]}</p> : null}
+        {rowErrors[row.slot] ? (
+          <div className="provider-detail">
+            <FailureLine text={rowErrors[row.slot]!.text} detail={rowErrors[row.slot]!.detail} />
+          </div>
+        ) : null}
         {isOpen ? (
           <span className="controls provider-form" id={formId}>
             <input
@@ -460,7 +477,7 @@ export function SettingsProviders({ onGoTo }: { onGoTo: (id: ViewId) => void }) 
         </>,
       )}
 
-      {error ? <p className="error">{error}</p> : null}
+      {error ? <FailureLine text="That didn't work." detail={error} /> : null}
 
       <div className="providers-tabs" role="tablist" aria-label="Filter providers" onKeyDown={onTabKey}>
         {TABS.map((t) => (
@@ -498,9 +515,9 @@ export function SettingsProviders({ onGoTo }: { onGoTo: (id: ViewId) => void }) 
         <div className="providers-tests" role="status">
           {probe.audio === "tone" ? (
             <p className="caveat">
-              The voice test used a generated tone, not speech. A pass proves
-              the endpoint, credential and model id were accepted; it cannot
-              prove words are recognised.
+              The test sent a tone, not speech. A pass shows the provider
+              accepted the key and the model; it can't show that words are
+              recognised.
             </p>
           ) : null}
           {probe.results.every((r) => r.outcome.outcome === "skipped") ? (
@@ -509,8 +526,9 @@ export function SettingsProviders({ onGoTo }: { onGoTo: (id: ViewId) => void }) 
             </p>
           ) : null}
           {failures.map((r, i) => (
+            // What the provider answered is under Test details below (KNEG-343).
             <p key={`${r.provider}-${r.kind}-${i}`} className="error providers-failure">
-              {nameOf(r.provider)} failed its {KIND[r.kind]} test: {r.detail}
+              {nameOf(r.provider)} failed its {KIND[r.kind]} test. See Test details.
             </p>
           ))}
           {ran.length > 0 ? (
@@ -542,13 +560,13 @@ export function SettingsProviders({ onGoTo }: { onGoTo: (id: ViewId) => void }) 
           "custom",
           "Custom endpoints",
           custom,
-          "These features can be pointed at an OpenAI-compatible endpoint of your own. The key can be saved here; the endpoint's address belongs with the feature that uses it, and those screens are not written yet — so a key saved here does nothing on its own.",
+          "For features that can use a server of your own. A key saved here does nothing on its own yet: the screens where you enter each server's address aren't built.",
         )}
         {group(
           "company",
           "Company accounts",
           company,
-          "These use your organisation's credentials — a region and a key pair, or an endpoint and a deployment — rather than a single key, so they are set up under Cleanup & summaries, where those fields are.",
+          "These use your organisation's settings rather than one key, so they are set up under Cleanup & summaries.",
         )}
         {nothing ? <p className="muted providers-empty">Nothing here matches “{query.trim()}”.</p> : null}
       </div>

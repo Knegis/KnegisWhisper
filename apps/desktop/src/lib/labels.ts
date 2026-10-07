@@ -1364,33 +1364,41 @@ export function updateCheckLabel(result: UpdateCheckResult): Stated {
  * already tried to refresh this exact token and recorded that it failed
  * (`calendar.rs::combine_token_status`), so this reads as not connected
  * rather than as an automatic retry that is quietly pending.
+ *
+ * In plain words (KNEG-343): `detail` is what to do, when there is anything,
+ * and the token mechanics and the provider's error are `more`.
  */
-export function tokenStatusLabel(status: TokenStatus): Stated {
+export function tokenStatusLabel(status: TokenStatus): { text: string; detail: string; more: string | null } {
   switch (status.state) {
     case "active":
-      return { text: "Connected", detail: "the cached access token is still valid" };
+      return { text: "Connected", detail: "", more: "The cached access token is still valid." };
     case "needs-refresh":
       return {
         text: "Connected",
-        detail: "the access token has expired; the next sync refreshes it automatically",
+        detail: "",
+        more: "The access token has expired; the next sync renews it automatically.",
       };
     case "missing":
-      return { text: "Not connected", detail: "" };
+      return { text: "Not connected", detail: "", more: null };
     case "refresh-failed":
       return {
         text: "Not connected",
-        detail: `the last attempt to refresh the access token failed (${status.message}); reconnect the account`,
+        detail: "Reconnect the account.",
+        more: `The last attempt to renew the access token failed: ${status.message}`,
       };
   }
 }
 
-/** What clicking "Connect" produced. */
-export function connectOutcomeLabel(outcome: ConnectOutcome): string {
+/** What clicking "Connect" produced. The provider's reason for a refusal is `more` (KNEG-343). */
+export function connectOutcomeLabel(outcome: ConnectOutcome): Plain {
   switch (outcome.state) {
     case "connected":
-      return `Connected as ${outcome.accountEmail} (${outcome.calendars} calendar${outcome.calendars === 1 ? "" : "s"}).`;
+      return {
+        text: `Connected as ${outcome.accountEmail} (${outcome.calendars} calendar${outcome.calendars === 1 ? "" : "s"}).`,
+        more: null,
+      };
     case "denied":
-      return `Not connected: access was declined (${outcome.reason}).`;
+      return { text: "Not connected: access was declined.", more: outcome.reason };
   }
 }
 
@@ -1399,34 +1407,36 @@ export function connectOutcomeLabel(outcome: ConnectOutcome): string {
  * "could not check". An empty count on `completed` is a real fact — nothing
  * changed since the last sync — never used to paper over `token-unavailable`
  * or `failed`, which get their own sentences naming what went wrong.
+ *
+ * In plain words (KNEG-343): the provider's errors are `more`, and what to do
+ * stays in `text`.
  */
-export function syncOutcomeLabel(outcome: SyncOutcome): string {
+export function syncOutcomeLabel(outcome: SyncOutcome): Plain {
   switch (outcome.state) {
     case "completed": {
-      const parts = [
-        `Synced: ${outcome.eventsUpserted} event${outcome.eventsUpserted === 1 ? "" : "s"} updated, ${outcome.eventsRemoved} removed.`,
-      ];
-      if (outcome.calendarErrors.length > 0) {
-        parts.push(
-          `${outcome.calendarErrors.length} calendar(s) could not be synced: ${outcome.calendarErrors.join("; ")}`,
-        );
-      }
-      return parts.join(" ");
+      const synced = `Synced: ${outcome.eventsUpserted} event${outcome.eventsUpserted === 1 ? "" : "s"} updated, ${outcome.eventsRemoved} removed.`;
+      const failed = outcome.calendarErrors.length;
+      if (failed === 0) return { text: synced, more: null };
+      return {
+        text: `${synced} ${failed} calendar${failed === 1 ? "" : "s"} couldn't be synced.`,
+        more: outcome.calendarErrors.join("; "),
+      };
     }
     case "token-unavailable":
-      return `Could not sync: the token could not be refreshed (${outcome.message}). Reconnect the account.`;
+      return { text: "Couldn't sync. Reconnect the account.", more: outcome.message };
     case "failed":
-      return `Sync failed: ${outcome.message}`;
+      return { text: "Couldn't sync.", more: outcome.message };
   }
 }
 
 /**
  * What this build can do about Apple Calendar. Always the reason EventKit is
  * unimplemented — see `kw_calendar_core::apple`'s module doc — never an
- * empty calendar list that would read as "you have none".
+ * empty calendar list that would read as "you have none". The reason names
+ * EventKit and macOS, so the screen shows it under a Why (KNEG-343).
  */
 export function appleCalendarSupportLabel(support: AppleCalendarSupport): Stated {
-  return { text: "Not supported in this build", detail: support.reason };
+  return { text: "Not supported yet", detail: support.reason };
 }
 
 /* ------------------------------------------------------------ developer tools */
@@ -1473,7 +1483,7 @@ export function discoveryPermissionsLabel(p: DiscoveryPermissions): Stated {
         detail:
           "verified by reading the file's access list back: your account, NT AUTHORITY\\SYSTEM and BUILTIN\\Administrators, nobody else, and nothing inherited from the folder above",
         caveat:
-          "An administrator on this machine can still read the token. That is deliberate: an administrator can take ownership of any file and grant themselves access anyway, so leaving them out would look stricter without being stricter.",
+          "An administrator on this computer can still read the token. That is deliberate: an administrator can take ownership of any file and grant themselves access anyway, so leaving them out would look stricter without being stricter.",
       };
     case "inherited-from-profile":
       return {
@@ -1493,7 +1503,7 @@ export function discoveryPermissionsLabel(p: DiscoveryPermissions): Stated {
         text: "Readable by accounts you did not choose",
         detail: `the access list grants ${p.count} account${p.count === 1 ? "" : "s"} or group${p.count === 1 ? "" : "s"} beyond your own, the system and administrators — each of them can read the token and drive the local API`,
         caveat:
-          "Which accounts is in the application log rather than on this screen, so a screenshot of this page does not carry your machine's account and group names.",
+          "Which accounts is in the application log rather than on this screen, so a screenshot of this page does not carry your computer's account and group names.",
       };
     case "still-inheriting":
       return {
@@ -1503,9 +1513,9 @@ export function discoveryPermissionsLabel(p: DiscoveryPermissions): Stated {
       };
     case "grants-everyone":
       return {
-        text: "Readable by every account on this machine",
+        text: "Readable by every account on this computer",
         detail:
-          "the access list grants an everyone-style group, or there is no access list at all — which permits everything rather than nothing. Any process on this machine can use the local API",
+          "the access list grants an everyone-style group, or there is no access list at all — which permits everything rather than nothing. Any process on this computer can use the local API",
       };
     case "incomplete":
       return {
@@ -1525,6 +1535,18 @@ export function discoveryPermissionsLabel(p: DiscoveryPermissions): Stated {
         detail: `${p.reason} — treat the local API as reachable by anything running as you`,
       };
   }
+}
+
+/**
+ * Why the local API is not serving, as the sentence Developer › Local API, CLI
+ * and MCP lead with; Rust's reason goes under Details (KNEG-343). A revoked
+ * token (`local_api.rs`, `blocked_reason`) has something to do; any other
+ * reason is a start that failed.
+ */
+export function blockedLine(reason: string): string {
+  return reason.startsWith("Local API access was revoked")
+    ? "Local API access was revoked. Start it again once the discovery file's permissions are secured."
+    : "The local API couldn't start.";
 }
 
 /**

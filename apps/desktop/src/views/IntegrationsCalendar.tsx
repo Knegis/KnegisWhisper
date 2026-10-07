@@ -21,10 +21,16 @@
  *   as silence about a `failed` one.
  * - Apple's row shows the reason EventKit is unimplemented, not an empty
  *   calendar list and not nothing.
+ *
+ * In plain words (KNEG-343): what to do and where your sign-in goes stay in
+ * view; OAuth, tokens, the providers' own errors and why Apple is missing are
+ * under Learn more. Times are shown in your locale, not as stored.
  */
 
 import { useCallback, useState } from "react";
 
+import { FailureLine } from "../components/FailureLine";
+import { LearnMore } from "../components/LearnMore";
 import { Row } from "../components/Row";
 import {
   connectCalendar,
@@ -41,6 +47,7 @@ import {
   connectOutcomeLabel,
   syncOutcomeLabel,
   tokenStatusLabel,
+  type Plain,
 } from "../lib/labels";
 import { useRefresh } from "../lib/useRefresh";
 
@@ -48,6 +55,28 @@ const PROVIDERS: { id: CalendarProvider; label: string }[] = [
   { id: "google", label: "Google Calendar" },
   { id: "microsoft", label: "Microsoft Calendar" },
 ];
+
+/** A stored time as this computer's locale shows it, or as stored if it is not one. */
+function when(stored: string): string {
+  const date = new Date(stored);
+  return Number.isNaN(date.getTime())
+    ? stored
+    : date.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+}
+
+/** A line and, under it, what is behind it. */
+function Said({ line, className = "muted" }: { line: Plain; className?: string }) {
+  return (
+    <>
+      <p className={className}>{line.text}</p>
+      {line.more ? (
+        <LearnMore summary="Details">
+          <p>{line.more}</p>
+        </LearnMore>
+      ) : null}
+    </>
+  );
+}
 
 function ProviderSection({
   provider,
@@ -66,9 +95,11 @@ function ProviderSection({
   const [draft, setDraft] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [note, setNote] = useState<string | null>(null);
+  const [note, setNote] = useState<Plain | null>(null);
 
   const clientId = draft ?? status.clientId ?? "";
+  const company = provider === "google" ? "Google" : "Microsoft";
+  const portal = provider === "google" ? "Google Cloud Console" : "the Azure portal";
 
   const saveClientId = useCallback(async () => {
     await setCalendarClientId(provider, clientId.trim());
@@ -90,19 +121,25 @@ function ProviderSection({
   );
 
   const account = status.account;
+  const token = account ? tokenStatusLabel(account.token) : null;
+  const lastSync = account?.lastSync ? syncOutcomeLabel(account.lastSync.outcome) : null;
 
   return (
     <section>
       <h2>{label}</h2>
       <p className="caveat">
-        There is no {label} client built into this application. Register your
-        own OAuth client in{" "}
-        {provider === "google" ? "Google Cloud Console" : "the Azure portal"}{" "}
-        (a desktop / installed-app client, not a web client with a secret) and
-        paste its client ID in below. Nothing about your account credentials
-        ever leaves this machine except to {provider === "google" ? "Google" : "Microsoft"}
-        's own servers, under your own OAuth grant.
+        To connect, register your own app in {portal} and paste its client ID
+        below. Your sign-in goes only to {company}.
       </p>
+      <LearnMore summary="How to register, and why">
+        <p>
+          Register a desktop (installed) app client, not a web client with a
+          secret. There is no {label} app built into KnegisWhisper: a client
+          secret shipped inside an open-source app would not stay secret. Your
+          account's credentials go only to {company}'s own servers, under the
+          access you grant.
+        </p>
+      </LearnMore>
 
       <div className="row">
         <span className="row-label">Client ID</span>
@@ -110,7 +147,7 @@ function ProviderSection({
           <input
             type="text"
             aria-label={`${label} client ID`}
-            placeholder="paste your own OAuth client ID here"
+            placeholder="paste your own client ID here"
             value={clientId}
             onChange={(e) => setDraft(e.target.value)}
             onBlur={() => {
@@ -122,23 +159,29 @@ function ProviderSection({
 
       {!status.clientIdConfigured ? (
         <p className="caveat">
-          No client ID is set, so {label} cannot be connected yet.
+          No client ID yet, so {label} can't be connected.
         </p>
       ) : null}
 
-      {account ? (
+      {account && token ? (
         <>
           <Row label="Account" value={account.email} />
-          <Row
-            label="Token"
-            value={tokenStatusLabel(account.token).text}
-            detail={tokenStatusLabel(account.token).detail || undefined}
-          />
+          <Row label="Connection" value={token.text} detail={token.detail || undefined} />
+          {token.more ? (
+            <LearnMore summary="Details">
+              <p>{token.more}</p>
+            </LearnMore>
+          ) : null}
           <Row
             label="Last sync"
-            value={account.lastSync ? syncOutcomeLabel(account.lastSync.outcome) : "Never synced"}
-            detail={account.lastSync ? `at ${account.lastSync.at}` : undefined}
+            value={lastSync ? lastSync.text : "Never synced"}
+            detail={account.lastSync ? when(account.lastSync.at) : undefined}
           />
+          {lastSync?.more ? (
+            <LearnMore summary="Details">
+              <p>{lastSync.more}</p>
+            </LearnMore>
+          ) : null}
 
           {account.calendars.length === 0 ? (
             <p className="muted">No calendars have been read yet.</p>
@@ -229,8 +272,8 @@ function ProviderSection({
           in and approve access.
         </p>
       ) : null}
-      {error ? <p className="error">{error}</p> : null}
-      {note ? <p className="caveat">{note}</p> : null}
+      {error ? <FailureLine text="That didn't work." detail={error} /> : null}
+      {note ? <Said line={note} className="caveat" /> : null}
     </section>
   );
 }
@@ -242,14 +285,16 @@ export function IntegrationsCalendar() {
   if (!status) {
     return (
       <div className="view" data-surface="integrations.calendar">
-        {error ? <p className="error">{error}</p> : <p className="muted">Loading…</p>}
+        {error ? <FailureLine text="This page couldn't load." detail={error} /> : <p className="muted">Loading…</p>}
       </div>
     );
   }
 
+  const apple = appleCalendarSupportLabel(status.apple);
+
   return (
     <div className="view" data-surface="integrations.calendar">
-      {error ? <p className="error">{error}</p> : null}
+      {error ? <FailureLine text="That didn't work." detail={error} /> : null}
 
       {PROVIDERS.map(({ id, label }) => (
         <ProviderSection
@@ -263,11 +308,10 @@ export function IntegrationsCalendar() {
 
       <section>
         <h2>Apple Calendar</h2>
-        <Row
-          label="State"
-          value={appleCalendarSupportLabel(status.apple).text}
-          detail={appleCalendarSupportLabel(status.apple).detail}
-        />
+        <Row label="State" value={apple.text} />
+        <LearnMore summary="Why">
+          <p>{apple.detail}</p>
+        </LearnMore>
       </section>
     </div>
   );
