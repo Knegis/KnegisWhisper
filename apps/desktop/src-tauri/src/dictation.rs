@@ -204,6 +204,10 @@ pub struct RouteTranscriber {
     /// server silently stays lost, which is the defect this field exists to fix.
     /// Making it required means forgetting is a compile error instead.
     revive: Arc<dyn crate::local_model::Revive>,
+    /// What a dictation holds while its request is with the whisper server, so
+    /// a model change is refused rather than stopping the server under it
+    /// (KNEG-414). See `local_model::ServerUsers`.
+    users: crate::local_model::ServerUsers,
 }
 
 impl std::fmt::Debug for RouteTranscriber {
@@ -221,6 +225,7 @@ impl RouteTranscriber {
         local_model: Arc<RwLock<Option<String>>>,
         local_sherpa: crate::local_asr::Selection,
         revive: Arc<dyn crate::local_model::Revive>,
+        users: crate::local_model::ServerUsers,
     ) -> Self {
         Self {
             policy,
@@ -229,6 +234,7 @@ impl RouteTranscriber {
             local_model,
             local_sherpa,
             revive,
+            users,
             db: None,
         }
     }
@@ -244,13 +250,24 @@ impl RouteTranscriber {
     /// Called only for [`Transport::Local`]. The health check is a loopback
     /// round trip and the recovery starts a process, and someone dictating to a
     /// cloud provider should pay for neither.
-    async fn whisper_server(&self) -> Result<Option<WhisperServer>, String> {
+    ///
+    /// With the dictation's use of the server, which the caller holds until the
+    /// answer is back (KNEG-414). Taken before the port is read: a model change
+    /// that is running is waited for, so the port is the new model's, and none
+    /// can begin until this dictation is done.
+    async fn whisper_server(
+        &self,
+    ) -> Result<(WhisperServer, crate::local_model::ServerUse), String> {
+        let using = self
+            .users
+            .begin(crate::local_model::ServerUser::Dictation)
+            .await;
         let recorded = self.local_port.read().ok().and_then(|held| *held);
         let port = crate::local_model::ensure_whisper(&self.policy, recorded, self.revive.as_ref())
             .await?;
 
         let model = self.local_model.read().ok().and_then(|held| held.clone());
-        Ok(Some(WhisperServer::new(self.policy.clone(), port, model)))
+        Ok((WhisperServer::new(self.policy.clone(), port, model), using))
     }
 }
 
@@ -300,18 +317,29 @@ impl Transcriber for RouteTranscriber {
         // Attached only when an engine is actually available. Without that the
         // executor answers `LocalNotAvailable`, which is the honest state — a
         // local route with no server is not something to paper over.
-        let local = match transport {
+        //
+        // `_using` is the dictation's use of the whisper server. It is bound
+        // here, in the function's own scope, because the request is sent
+        // below: bound inside the arm it would end before the request did, and
+        // a model change could stop the server under it (KNEG-414).
+        let (local, _using) = match transport {
             Transport::Local { .. } => {
-                let whisper = if crate::local_asr::resolve(&self.local_sherpa).is_some() {
-                    None
+                let (whisper, using) = if crate::local_asr::resolve(&self.local_sherpa).is_some() {
+                    (None, None)
                 } else {
-                    self.whisper_server()
+                    let (server, using) = self
+                        .whisper_server()
                         .await
-                        .map_err(DictationError::Transcription)?
+                        .map_err(DictationError::Transcription)?;
+                    (Some(server), Some(using))
                 };
-                local_engine(&self.local_sherpa, whisper).map_err(DictationError::Transcription)?
+                (
+                    local_engine(&self.local_sherpa, whisper)
+                        .map_err(DictationError::Transcription)?,
+                    using,
+                )
             }
-            _ => None,
+            _ => (None, None),
         };
         let executor = match &local {
             Some(engine) => executor.with_local(engine.as_ref()),
@@ -651,6 +679,9 @@ pub struct LocalTargets {
     /// Whether the user is switching the whisper model, during which a start
     /// is refused. See `local_model::RouteSwitch`.
     pub transcription_switching: crate::local_model::RouteSwitch,
+    /// What a dictation holds while the whisper server has its request, during
+    /// which a model change is refused. See `local_model::ServerUsers`.
+    pub transcription_users: crate::local_model::ServerUsers,
     /// Where the llama server is listening, if it is.
     pub generation: crate::local_llm::LocalEndpoint,
 }
@@ -731,6 +762,7 @@ impl DictationRuntime {
             transcription_sherpa: local_sherpa,
             transcription_revive: local_revive,
             transcription_switching: switching,
+            transcription_users: local_users,
             generation: local_llm,
         } = local;
 
@@ -747,6 +779,7 @@ impl DictationRuntime {
                     local_model,
                     local_sherpa,
                     local_revive,
+                    local_users,
                 )
                 .with_db(db.clone()),
             ),

@@ -159,8 +159,9 @@ export function routeBusyLabel(choice: RouteChoice | null): string | null {
  * src-tauri/src/dictation.rs): a change would apply to audio already captured
  * under the privacy line the page showed when it started. While the words are
  * transcribed, because choosing another whisper model stops the server
- * running the one in use (`start_model`, src-tauri/src/local_model.rs) --
- * believed from that code to fail the transcription in flight, not tried.
+ * running the one in use (`start_model`, src-tauri/src/local_model.rs); Rust
+ * refuses that change too now, while a transcription is in flight
+ * (`ServerUsers`, KNEG-414), and the chip says why before anyone tries.
  * And while they are typed, so the chips are held for one span, from Start
  * until the dictation is over, rather than flickering back for a moment.
  */

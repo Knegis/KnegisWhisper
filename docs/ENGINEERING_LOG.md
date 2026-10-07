@@ -12,7 +12,58 @@ maintained in place rather than appended to, because its purpose is to be curren
 
 ---
 
-## 2026-10-07 (latest) — KNEG-388: a model switch interrupted by a dictation undid itself, and push-to-talk's release could start a recording
+## 2026-10-07 (latest) — KNEG-414: a Whisper model change is refused while the server is in use
+
+KNEG-388 refused a dictation *start* during a model switch. This is the reverse: a switch, an
+engine update or a Stop while something is using `whisper-server`. Each of those stops the server,
+and nothing checked whether a request was in flight. **Read from code and pinned by tests; not
+reproduced in the running app. The wiring into the four users is not under test.**
+
+- **Who uses the server, and for how long.** Mapped before designing, and wider than the issue
+  said:
+  - a dictation's request, from just before its health check to the answer (the route is resolved
+    at Stop, so a recording holds nothing);
+  - a meeting on the `local` provider, for as long as its live windows go to the port captured at
+    Start;
+  - **every** meeting's whole-file pass, whatever the live provider, unless a Parakeet model is
+    selected;
+  - an import, from reading the port to the end of its transcription, ffmpeg conversion included.
+
+  The issue's claim about the Dictation page was wrong: its chip is held for the whole dictation
+  (`routeHeld` is non-null in every state but idle). It isn't held during a meeting or an import,
+  and Settings › Transcription holds nothing.
+- **Changes refuse; uses wait.** `ServerUsers` is one `tokio::sync::RwLock<()>`.
+  - **Uses** take the read side and **wait** while a change holds the write side. A dictation
+    stopped mid-switch therefore reads the new model's port. Before, it read the old model's
+    healthy port until `stop_inner` cleared it, and was killed mid-request.
+  - **Changes** take the write side with `try_write` and are refused while any use holds it.
+  - Nothing ever waits for the write side, so readers cannot starve, a use can take a second read
+    (a meeting's whole-file pass inside its session), and a use can wait on `operation` in a
+    revive without deadlocking. The type's doc says never to add a `write().await`.
+  - The precedent is `local_llm`, which refuses start, update and stop while a request runs.
+- **The refusals name the use.** "Not now: a dictation is being transcribed. Try again when it's
+  done." Then a meeting, an import, "already changing", and a fallback. Per-kind counts choose the
+  sentence. When `try_write` fails, a `try_read` probe comes first, so a dictation *waiting* behind
+  a running change doesn't turn "already changing" into "a dictation".
+- **Starting the model already running is not a change.** It stops nothing, so it is allowed
+  during a use, but holding a read, with the model compared after the read is had.
+  - A stress test of the design found the race this closes. A start of A read "A" as running while
+    a switch to B was under way, joined no lock, and then stopped B under the dictation waiting for
+    it.
+- **Where the meeting's use lives.** It is a field of `ProviderBuild`, moved into the pump's task
+  and dropped when the pump returns. In `Live` it would outlive a live transcription that ended on
+  its own (stalled, recording without a transcript). It would then refuse "Update the speech
+  engine" with a meeting that is no longer being transcribed, just when a dead server needs it.
+- **Side fix, same command.** A refresh restarted the server through `start_model_inner`,
+  bypassing `start`, so the state stayed at Loading and Settings kept saying so after an engine
+  update. Both now go through `record_start`.
+
+Not changed: a revive inside a use can still restart the server, after a failed two-second health
+check. That is an old risk, not a new one.
+
+---
+
+## 2026-10-07 — KNEG-388: a model switch interrupted by a dictation undid itself, and push-to-talk's release could start a recording
 
 KNEG-388 was filed as "the hotkey can start a dictation while a route switch is in flight". Reading
 the code to fix it found that the damage is on **Stop**, not Start, and reaches further than
@@ -53,8 +104,8 @@ dictation. **Read from code and pinned by tests; not reproduced in the running a
   for a start; the state event already says it. The `dictation_toggle` command still answers
   `Cancelled`, so its TypeScript type is unchanged.
 
-Not covered, and filed as KNEG-414: a switch is not refused while a local dictation is being
-transcribed or a local meeting is running, so the request in flight can still fail mid-switch.
+Not covered here, and filed as KNEG-414: a switch was not refused while a local dictation was being
+transcribed or a local meeting was running. Fixed the same day; see the entry above.
 
 ---
 

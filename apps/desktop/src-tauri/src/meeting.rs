@@ -609,6 +609,13 @@ struct Live {
 struct ProviderBuild {
     provider: Box<dyn MeetingTranscriptionProvider>,
     stream_lease: Option<crate::sherpa_stream::StreamLease>,
+    /// Present only for the `local` provider: its use of the whisper server,
+    /// whose port its live windows were given at Start (KNEG-414). Moved into
+    /// the pump's task and dropped when the pump returns -- not kept in
+    /// `Live`, which outlives a live transcription that ended on its own and
+    /// would go on refusing a model change with a meeting that is no longer
+    /// being transcribed.
+    server_use: Option<crate::local_model::ServerUse>,
 }
 
 impl ProviderBuild {
@@ -616,6 +623,7 @@ impl ProviderBuild {
         Self {
             provider,
             stream_lease: None,
+            server_use: None,
         }
     }
 }
@@ -793,6 +801,14 @@ impl MeetingRuntime {
     ) -> Result<ProviderBuild, String> {
         match client {
             Client::LocalWindow => {
+                // Before the port is read: a model change that is running is
+                // waited for, so the windows go to the new model's server, and
+                // none can begin while they go to it (KNEG-414).
+                let using = self
+                    .local
+                    .users
+                    .begin(crate::local_model::ServerUser::Meeting)
+                    .await;
                 let recorded =
                     *self.local.port.read().map_err(|_| {
                         "the local model server's state could not be read".to_owned()
@@ -821,15 +837,16 @@ impl MeetingRuntime {
                     port,
                     model,
                 );
-                Ok(ProviderBuild::without_stream_lease(Box::new(
-                    local_window_provider(
+                Ok(ProviderBuild {
+                    server_use: Some(using),
+                    ..ProviderBuild::without_stream_lease(Box::new(local_window_provider(
                         server,
                         events,
                         self.local
                             .speech
                             .finder(kw_audio_core::vad::Context::Meeting),
-                    ),
-                )))
+                    )))
+                })
             }
             Client::LocalStreaming => {
                 // Started here rather than at launch: the model is 630 MB in
@@ -860,6 +877,7 @@ impl MeetingRuntime {
                         .with_live_events(events),
                     ),
                     stream_lease: Some(stream_lease),
+                    server_use: None,
                 })
             }
             Client::OpenAiRealtime => Ok(ProviderBuild::without_stream_lease(Box::new(
@@ -1078,6 +1096,7 @@ impl MeetingRuntime {
         let ProviderBuild {
             mut provider,
             stream_lease,
+            server_use,
         } = self.provider(client, events_tx).await?;
 
         let caps = provider.capabilities();
@@ -1176,6 +1195,9 @@ impl MeetingRuntime {
                     cancellation,
                 )
                 .await;
+                // No more live windows go to the server: a model change may
+                // go ahead, whether this ended at Stop or on its own.
+                drop(server_use);
                 // On normal completion the audio channel has closed and the
                 // recorder guard has run. Explicit cancellation can end sooner;
                 // that path already took Live, so no failure is announced.
@@ -1790,6 +1812,23 @@ impl MeetingRuntime {
     /// Transcribe the finished recording in one request.
     async fn transcribe_whole(&self, path: &std::path::Path) -> Result<Option<WholePass>, String> {
         use kw_transcription_core::local::Inference;
+
+        // This pass's use of the whisper server, held until its one request is
+        // answered, so a model change can't stop the server under it
+        // (KNEG-414). Taken before the port is read, so a change that is
+        // running is waited for. Not when a Parakeet model is selected: that
+        // wins below and uses no server, and holding one would refuse a change
+        // for nothing.
+        let _using = if crate::local_asr::resolve(&self.sherpa).is_none() {
+            Some(
+                self.local
+                    .users
+                    .begin(crate::local_model::ServerUser::Meeting)
+                    .await,
+            )
+        } else {
+            None
+        };
 
         // The same engine dictation would use, through the same function, and
         // that is the whole of the 2026-09-01 fix. This used to build a

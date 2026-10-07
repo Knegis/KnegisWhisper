@@ -228,6 +228,7 @@ pub fn run() -> anyhow::Result<()> {
                     asr.selection(),
                     std::sync::Arc::clone(&revive),
                     shared.speech.clone(),
+                    shared.users.clone(),
                     db.clone(),
                 )
                 .map_err(|e| anyhow::anyhow!(e))
@@ -266,6 +267,7 @@ pub fn run() -> anyhow::Result<()> {
                     transcription_sherpa: sherpa_selection,
                     transcription_revive: revive,
                     transcription_switching: shared.switching,
+                    transcription_users: shared.users,
                     generation: llm_endpoint,
                 },
                 // Off until `reasoning::apply_at_startup` fills it, and off
