@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { filterRows, providerRows, type ProviderRow } from "../src/lib/providerRows.js";
+import { filterRows, keyRowShown, providerRows, type ProviderRow } from "../src/lib/providerRows.js";
 import type { CredentialSlotStatus, Dispatch, ProviderSummary } from "../src/generated/ipc-types.js";
 
 /*
@@ -124,4 +124,16 @@ test("all keeps every row, and the query matches the name whatever its case", ()
   assert.deepEqual(filterRows(all, "all", "oPeNaI").map((r) => r.slot), ["openai"]);
   assert.deepEqual(filterRows(all, "all", "  gram ").map((r) => r.slot), ["deepgram"]);
   assert.deepEqual(filterRows(all, "speech", "anthropic"), []);
+});
+
+test("a key row is shown under a filter and a search only while one of its lists keeps it", () => {
+  // KNEG-377: a typed key stayed in the hidden row's form and came back with
+  // it. The page closes the form when this says the row went out of view.
+  const lists = providerRows(slots, transcription);
+  assert.equal(keyRowShown(lists, "anthropic", "all", ""), true);
+  assert.equal(keyRowShown(lists, "anthropic", "speech", ""), false);
+  assert.equal(keyRowShown(lists, "anthropic", "all", "deep"), false);
+  assert.equal(keyRowShown(lists, "translation-custom", "all", "trans"), true);
+  // Enterprise rows have no key form, so they are never "shown" as one.
+  assert.equal(keyRowShown(lists, "azure", "all", ""), false);
 });

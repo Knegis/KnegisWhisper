@@ -129,6 +129,7 @@ import {
   interruptedTitle,
   liveElapsed,
   meetingLanguageMenu,
+  meetingIntro,
   meetingMicrophone,
   privacyProvider,
   recentMeta,
@@ -140,21 +141,6 @@ import { localProviderProblem, meetingReadiness } from "../lib/readiness";
 import { summaryConfigured } from "../lib/summaryConfigured";
 import { useMeetingReviewFor } from "../lib/useMeetingReview";
 import { message, useRefresh } from "../lib/useRefresh";
-
-/**
- * The sentence that was this page's `PageHeader` intro (`lib/pages.ts`), now
- * the hero's line under "Record a meeting" -- and it promises a summary only
- * when one will come. A saved meeting is summarised by itself only while
- * automatic summaries are on (`enqueue_automatic`,
- * `crates/notes-core/src/summary.rs:96-106`), and they are off by default
- * (`SummarySettings::default`, `:21-33`); with them off a summary is
- * something to ask for in Notes, not something you get (R19).
- */
-function intro(summariesOn: boolean): string {
-  return summariesOn
-    ? "You get a transcript and a summary, saved to Notes."
-    : "You get a transcript, saved to Notes.";
-}
 
 /** How often detection is read again while no meeting is running. */
 const DETECTION_POLL_MS = 5000;
@@ -798,7 +784,7 @@ export function Meetings({
         heading="Record a meeting"
         sub={
           <>
-            <p>{intro(summaries.enabled)}</p>
+            <p>{meetingIntro(summaries.enabled)}</p>
             {readiness.caution ? <p className="hero-note">{readiness.caution}</p> : null}
           </>
         }
@@ -810,7 +796,7 @@ export function Meetings({
         heading="Record a meeting"
         sub={
           <>
-            <p>{intro(summaries.enabled)}</p>
+            <p>{meetingIntro(summaries.enabled)}</p>
             <p className="hero-note">{readiness.problem}</p>
           </>
         }
@@ -864,6 +850,11 @@ export function Meetings({
             </div>
           )}
         </div>
+
+        {/* The lines heard during the meeting, kept until it is saved: they
+            went at Stop, while the meeting was still being finished, and the
+            outcome event clears them (KNEG-377). */}
+        {current === "finishing" && rows.length > 0 ? <LiveTranscript rows={rows} ended finishing /> : null}
 
         <div className="task-bar">
           <ControlBar
@@ -1050,6 +1041,10 @@ const LIVE_NOTE =
 const ENDED_NOTE =
   "These are the last lines the provider sent before the live transcription stopped. Nothing further will appear here, and the transcript that gets saved comes from one pass over the whole recording when the meeting ends.";
 
+/** The same, after Stop and before the meeting is saved. */
+const FINISHING_NOTE =
+  "What was heard while the meeting ran. These lines stay until the meeting is saved to Notes.";
+
 /**
  * How a meeting ended, with the note's id and the recording's path behind
  * Learn more (KNEG-354).
@@ -1076,7 +1071,7 @@ function OutcomeCaveat({ outcome }: { outcome: MeetingOutcome }) {
  * following once scrolled up, so a line being read is not pulled away -- the
  * rule the meeting window's transcript tab keeps (`MeetingPanel.tsx`).
  */
-function LiveTranscript({ rows, ended }: { rows: readonly LiveRow[]; ended: boolean }) {
+function LiveTranscript({ rows, ended, finishing = false }: { rows: readonly LiveRow[]; ended: boolean; finishing?: boolean }) {
   const list = useRef<HTMLOListElement>(null);
   const following = useRef(true);
   useLayoutEffect(() => {
@@ -1086,7 +1081,7 @@ function LiveTranscript({ rows, ended }: { rows: readonly LiveRow[]; ended: bool
   return (
     <div className="live-transcript" role="region" aria-label="Live transcript">
       <h3 className="live-label">Live transcript</h3>
-      <p className="live-note">{ended ? ENDED_NOTE : LIVE_NOTE}</p>
+      <p className="live-note">{finishing ? FINISHING_NOTE : ended ? ENDED_NOTE : LIVE_NOTE}</p>
       <ol
         className="live-rows"
         ref={list}

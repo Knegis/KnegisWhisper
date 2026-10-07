@@ -66,6 +66,23 @@ export function providerRows(
   return lists;
 }
 
+/**
+ * Whether `slot`'s key row is on screen under `filter` and `query`: in one of
+ * the three lists that have a key form, and kept by them.
+ *
+ * The page closes a row's form, dropping what was typed, when this turns
+ * false. A typed key stayed in the form of a row a filter or a search had
+ * hidden, and came back with it (KNEG-377).
+ */
+export function keyRowShown(
+  lists: ReturnType<typeof providerRows>,
+  slot: string,
+  filter: ProviderFilter,
+  query: string,
+): boolean {
+  return filterRows([...lists.inUse, ...lists.available, ...lists.custom], filter, query).some((row) => row.slot === slot);
+}
+
 /** The rows a filter tab and the search field leave: by purpose, then by name, ignoring case. */
 export function filterRows(rows: readonly ProviderRow[], filter: ProviderFilter, query: string): ProviderRow[] {
   const wanted = filter === "speech" ? SPEECH : filter === "text" ? TEXT : null;

@@ -84,7 +84,7 @@ import {
   type DictationOutcome,
   type SessionState,
 } from "../lib/ipc";
-import { acceleratorText, outcomeLabel, sessionStateLabel } from "../lib/labels";
+import { acceleratorText, outcomeLabel, pressableAccelerators, sessionStateLabel } from "../lib/labels";
 import { lastDictation, type InsertedDictation } from "../lib/lastDictation";
 import { microphoneState } from "../lib/microphone";
 import type { ViewId } from "../lib/navigation";
@@ -326,11 +326,12 @@ export function DictationView({
   const dictationBinding = hotkeys.bindings.find((b) => b.action === "dictation");
   const shortcut = dictationBinding ? acceleratorText(dictationBinding) : "";
   // Keycaps name only what can be pressed. An accelerator Rust could not
-  // parse is Settings > Shortcuts' to report, not the hero's to invite.
+  // parse, or could not register, is Settings > Shortcuts' to report, not the
+  // hero's to invite (`pressableAccelerators`).
   const pressable = dictationBinding
     ? acceleratorText({
         ...dictationBinding,
-        accelerators: dictationBinding.accelerators.filter((a) => a.kind !== "invalid"),
+        accelerators: pressableAccelerators(dictationBinding, hotkeys.registrations),
       })
     : "";
   // The microphone chip and its menu, including one chosen earlier and
@@ -580,12 +581,20 @@ export function DictationView({
                   </div>
                   <p className="control-result-text">{last.text}</p>
                   {/* A failure, so on screen: the words exist, and the one
-                      place they are is here and in the history. */}
+                      place they are is here and in the history. When it is
+                      the last outcome's own failure, the outcome's sentence
+                      is the same event, so it is folded here rather than
+                      drawn as a second red line below (KNEG-377). */}
                   {last.typed ? null : (
                     <p className="error control-note">
                       This could not be typed where your cursor was. Copy it from here.
                     </p>
                   )}
+                  {last.fromFailure && lastOutcome?.failed ? (
+                    <LearnMore>
+                      <p>{lastOutcome.label}</p>
+                    </LearnMore>
+                  ) : null}
                   {/* Only ever present when cleanup changed the text and the
                       user asked to keep it -- see `raw_for_history`. So its
                       presence is the finding, and it is labelled rather than
@@ -598,7 +607,7 @@ export function DictationView({
               {/* The last event's own sentence -- "Inserted 42 characters",
                   or why it failed -- under the text, because a failure is
                   never folded. */}
-              {lastOutcome && !recording ? (
+              {lastOutcome && !recording && !(last?.fromFailure && lastOutcome.failed) ? (
                 <p className={lastOutcome.failed ? "error control-note" : "control-note"}>
                   {lastOutcome.label}
                 </p>

@@ -61,8 +61,8 @@ import {
 } from "../lib/ipc";
 import type { ViewId } from "../lib/navigation";
 import { PAGES } from "../lib/pages";
-import { filterRows, providerRows, SPEECH, TEXT, type ProviderFilter, type ProviderRow } from "../lib/providerRows";
-import { useRefresh } from "../lib/useRefresh";
+import { filterRows, keyRowShown, providerRows, SPEECH, TEXT, type ProviderFilter, type ProviderRow } from "../lib/providerRows";
+import { message, useRefresh } from "../lib/useRefresh";
 
 type KeyState = { label: string; tone: "saved" | "connected" | "failed"; title?: string; detail?: string };
 
@@ -128,6 +128,12 @@ export function SettingsProviders({ onGoTo }: { onGoTo: (id: ViewId) => void }) 
   const [draft, setDraft] = useState("");
   /** Per-slot outcome of the last press, so no control is ever silent. */
   const [results, setResults] = useState<Record<string, string>>({});
+  /**
+   * Per-slot failure of the last Save or Clear, drawn at its row as an alert.
+   * It was the page's error line at the top, out of sight of the row and not
+   * announced (KNEG-377).
+   */
+  const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
   const [probe, setProbe] = useState<ProbeReport | null>(null);
   const [probing, setProbing] = useState(false);
   const [testNote, setTestNote] = useState<string | null>(null);
@@ -147,6 +153,13 @@ export function SettingsProviders({ onGoTo }: { onGoTo: (id: ViewId) => void }) 
 
   const say = (slot: string, what: string) =>
     setResults((prev) => ({ ...prev, [slot]: what }));
+  const rowError = (slot: string, what: string | null) =>
+    setRowErrors((prev) => {
+      const next = { ...prev };
+      if (what === null) delete next[slot];
+      else next[slot] = what;
+      return next;
+    });
 
   /** Open this row's form, closing any other -- and dropping whatever was typed there. */
   const toggle = (slot: string) => {
@@ -161,8 +174,14 @@ export function SettingsProviders({ onGoTo }: { onGoTo: (id: ViewId) => void }) 
       return;
     }
     let done = false;
+    rowError(slot.slot, null);
     void guard(async () => {
-      await setProviderCredential(slot.slot, typed);
+      try {
+        await setProviderCredential(slot.slot, typed);
+      } catch (cause) {
+        rowError(slot.slot, `Couldn't save the key: ${message(cause)}`);
+        return;
+      }
       // Cleared immediately, and this is the only copy that ever existed in the
       // renderer. A field that keeps the key on screen after saving is a field
       // that leaks it to the next person at the machine.
@@ -184,10 +203,16 @@ export function SettingsProviders({ onGoTo }: { onGoTo: (id: ViewId) => void }) 
 
   const clear = (slot: CredentialSlotStatus) => {
     let done = false;
+    rowError(slot.slot, null);
     void guard(async () => {
       // An empty value is how `provider_credential_set` deletes. Explicit here
       // so the intent is not hidden in a falsy check.
-      await setProviderCredential(slot.slot, "");
+      try {
+        await setProviderCredential(slot.slot, "");
+      } catch (cause) {
+        rowError(slot.slot, `Couldn't remove the key: ${message(cause)}`);
+        return;
+      }
       setDraft("");
       setOpen(null);
       say(slot.slot, "Removed from the credential store.");
@@ -231,6 +256,18 @@ export function SettingsProviders({ onGoTo }: { onGoTo: (id: ViewId) => void }) 
     }
   };
 
+  // A filter or a search that hides the open row closes its form and drops
+  // what was typed, as closing it does: a key must not wait, unseen, in a row
+  // that is out of view (KNEG-377).
+  const narrow = (nextFilter: ProviderFilter, nextQuery: string) => {
+    setFilter(nextFilter);
+    setQuery(nextQuery);
+    if (open !== null && !keyRowShown(lists, open, nextFilter, nextQuery)) {
+      setOpen(null);
+      setDraft("");
+    }
+  };
+
   const onTabKey = (event: KeyboardEvent<HTMLDivElement>) => {
     const at = TABS.findIndex((t) => t.id === filter);
     const to = event.key === "ArrowRight" ? (at + 1) % TABS.length
@@ -241,7 +278,7 @@ export function SettingsProviders({ onGoTo }: { onGoTo: (id: ViewId) => void }) 
     const next = TABS[to];
     if (!next) return;
     event.preventDefault();
-    setFilter(next.id);
+    narrow(next.id, query);
     document.getElementById(`providers-tab-${next.id}`)?.focus();
   };
 
@@ -307,6 +344,7 @@ export function SettingsProviders({ onGoTo }: { onGoTo: (id: ViewId) => void }) 
         </span>
         {state?.detail ? <em className="row-detail provider-detail">{state.detail}</em> : null}
         {results[row.slot] ? <em className="row-detail provider-detail" role="status">{results[row.slot]}</em> : null}
+        {rowErrors[row.slot] ? <p className="error provider-detail" role="alert">{rowErrors[row.slot]}</p> : null}
         {isOpen ? (
           <span className="controls provider-form" id={formId}>
             <input
@@ -398,7 +436,7 @@ export function SettingsProviders({ onGoTo }: { onGoTo: (id: ViewId) => void }) 
               aria-label="Search providers"
               placeholder="Search providers"
               value={query}
-              onChange={(e) => setQuery(e.target.value)}
+              onChange={(e) => narrow(filter, e.target.value)}
             />
           </label>
           <button type="button" className="secondary providers-test" onClick={() => void runProbe()} disabled={probing}>
@@ -419,7 +457,7 @@ export function SettingsProviders({ onGoTo }: { onGoTo: (id: ViewId) => void }) 
             aria-selected={filter === t.id}
             aria-controls="providers-lists"
             tabIndex={filter === t.id ? 0 : -1}
-            onClick={() => setFilter(t.id)}
+            onClick={() => narrow(t.id, query)}
           >
             {t.label}
           </button>

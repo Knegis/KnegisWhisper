@@ -84,8 +84,11 @@ function noteDate(value: string | null) {
  */
 let lastOpenNoteId: number | null = null;
 
-/** The right-click menu's target: a note, or a folder heading. */
-type ContextMenu = { x: number; y: number; anchor: HTMLButtonElement } & ({ kind: "note"; note: Note } | { kind: "folder"; folder: Folder });
+/**
+ * The right-click menu's target: a note, or a folder heading. `fromButton` when the open note's
+ * More opened it, so a second press of More closes it rather than reopening it (KNEG-377).
+ */
+type ContextMenu = { x: number; y: number; anchor: HTMLButtonElement; fromButton?: boolean } & ({ kind: "note"; note: Note } | { kind: "folder"; folder: Folder });
 
 export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, onImport }: { initialNoteId?: number | null; openRequest?: { id: number } | null; onOpenNote?: (id: number) => void; onImport: () => void }) {
   const [context, setContext] = useState<ContextMenu | null>(null);
@@ -97,7 +100,13 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
     menu.style.left = `${Math.max(8, Math.min(context.x, window.innerWidth - bounds.width - 8))}px`;
     menu.style.top = `${Math.max(8, Math.min(context.y, window.innerHeight - bounds.height - 8))}px`;
     menu.querySelector<HTMLButtonElement>("button")?.focus();
-    const outside = (event: PointerEvent) => { if (!menu.contains(event.target as Node)) setContext(null); };
+    // A press on the More button that opened it is left to that button's click, which closes it:
+    // closing here, on pointerdown, would have the click open it again.
+    const outside = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (menu.contains(target) || (context.fromButton && context.anchor.contains(target))) return;
+      setContext(null);
+    };
     const escape = (event: KeyboardEvent) => { if (event.key === "Escape") { event.preventDefault(); setContext(null); context.anchor.focus(); } };
     const close = () => setContext(null);
     document.addEventListener("pointerdown", outside);
@@ -230,6 +239,12 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
   const openNoteMenu = (note: Note, anchor: HTMLButtonElement, at?: { x: number; y: number }) => {
     const rect = anchor.getBoundingClientRect();
     setContext({ kind: "note", note, x: at?.x ?? rect.left, y: at?.y ?? rect.bottom, anchor });
+  };
+  // The open note's More: a toggle, as its `aria-expanded` says.
+  const toggleMoreMenu = (note: Note, anchor: HTMLButtonElement) => {
+    if (context?.fromButton && context.anchor === anchor) { setContext(null); return; }
+    const rect = anchor.getBoundingClientRect();
+    setContext({ kind: "note", note, x: rect.left, y: rect.bottom, anchor, fromButton: true });
   };
 
   // Filing by drag and drop, and by the right-click menu, through one move.
@@ -406,11 +421,12 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
             note={openNote}
             reload={reload}
             onExport={() => exportNote(openNote.id)}
-            onMore={anchor => openNoteMenu(openNote, anchor)}
+            onMore={anchor => toggleMoreMenu(openNote, anchor)}
+            moreOpen={context?.fromButton === true && context.kind === "note" && context.note.id === openNote.id}
           />
         ) : <div className="notes-empty"><h2>Your writing space</h2><p className="muted">Choose a note or meeting from the list, or start a new note.</p><button type="button" className="primary" onClick={() => { void newNote(); }}>New note</button> <button type="button" onClick={onImport}>Import audio or video</button></div>}
       </section>
-      {context && createPortal(<div ref={contextRef} className="notes-context-menu" role="dialog" aria-label={context.kind === "note" ? `Actions for ${context.note.title}` : `Actions for folder ${context.folder.name}`} style={{ left: context.x, top: context.y }} onContextMenu={event => event.preventDefault()} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) setContext(null); }}>
+      {context && createPortal(<div ref={contextRef} className="notes-context-menu" role="dialog" aria-label={context.kind === "note" ? `Actions for ${context.note.title}` : `Actions for folder ${context.folder.name}`} style={{ left: context.x, top: context.y }} onContextMenu={event => event.preventDefault()} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget) && !(context.fromButton && event.relatedTarget === context.anchor)) setContext(null); }}>
         {context.kind === "note" ? <>
                 <button
                   type="button"

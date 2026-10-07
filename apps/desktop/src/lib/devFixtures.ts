@@ -1268,7 +1268,12 @@ let notes: Note[] = [
     noteType: "note",
     recordingDetails: null, enhancedContent: null,
     folderId: null,
-    transcript: null,
+    // A transcript of its own, so `tools/visual-check/shell-rail.mjs` check 10 has a second note
+    // with a transcript column: one with no transcript has no column (KNEG-377). 102 and 103 are
+    // the notes without.
+    transcript: JSON.stringify([
+      { speaker: "Ravi", text: "This is the note with the long title, read aloud." },
+    ]),
     participants: null,
     audioDurationSeconds: null,
     createdAt: "2026-08-20T19:45:00Z",

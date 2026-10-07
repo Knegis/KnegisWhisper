@@ -11,7 +11,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { acceleratorLabel, registrationFor } from "../src/lib/labels.js";
+import { acceleratorLabel, pressableAccelerators, registrationFor } from "../src/lib/labels.js";
 
 const hooked = { state: "available", mechanism: "WH_KEYBOARD_LL low-level hook" } as const;
 const noHook = { state: "unsupported", reason: "No keyboard hook exists on this platform." } as const;
@@ -149,6 +149,34 @@ test("an action nothing handles is left to the screen's own line", () => {
     reason: "The chat agent is not built yet.",
   });
   assert.equal(label.problem, null);
+});
+
+test("the keycaps name only what can be pressed: not an invalid accelerator, nor one that failed to register", () => {
+  // KNEG-377. Dictation's hero drew keycaps for Control+Super, which the hook
+  // had not taken, beside a working Control+Shift+D.
+  const binding = {
+    action: "dictation" as const,
+    mode: "toggle" as const,
+    accelerators: [
+      { kind: "standard" as const, accelerator: "Control+Shift+D" },
+      chord,
+      { kind: "invalid" as const, input: "Control+Nope", reason: "Nope is not a key." },
+    ],
+  };
+  const text = (list: ReturnType<typeof pressableAccelerators>) =>
+    list.map((a) => (a.kind === "invalid" ? a.input : a.accelerator));
+  const reports = [
+    {
+      action: "dictation" as const,
+      results: [
+        { state: "registered" as const, accelerator: "Control+Shift+D" },
+        { state: "not-registrable" as const, accelerator: "Control+Super", reason: failedHook },
+      ],
+    },
+  ];
+  assert.deepEqual(text(pressableAccelerators(binding, reports)), ["Control+Shift+D"]);
+  // Not reported yet is not known to fail, so it is kept.
+  assert.deepEqual(text(pressableAccelerators(binding, [])), ["Control+Shift+D", "Control+Super"]);
 });
 
 test("registrationFor finds this accelerator's result in this action's report", () => {

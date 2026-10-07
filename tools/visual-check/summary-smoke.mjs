@@ -4,7 +4,7 @@
 // node tools/visual-check/summary-smoke.mjs --isolated-profile
 // Assumes the default 1000x720 window: at 1280px and wider the Transcript tab is hidden by design, and a summary source link (`showSource`, components/NoteWorkspace.tsx) shows the row in the transcript side column instead, so the final Transcript-tab assertions fail there.
 if (!process.argv.includes('--isolated-profile')) throw Error('Use --isolated-profile only after starting the disposable test instance.');
-﻿import {createServer} from 'node:http';
+import {createServer} from 'node:http';
 import assert from 'node:assert/strict';
 import {writeFile} from 'node:fs/promises';
 import {connectCdp} from './cdp.mjs';

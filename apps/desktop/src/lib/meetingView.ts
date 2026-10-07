@@ -227,6 +227,20 @@ export function meetingLanguageMenu(
 }
 
 /**
+ * The Meetings hero's line under "Record a meeting", which was the page's
+ * `PageHeader` intro (`lib/pages.ts`) -- and it promises a summary only when
+ * one will come. A saved meeting is summarised by itself only while automatic
+ * summaries are on (`enqueue_automatic`, `crates/notes-core/src/summary.rs`),
+ * and they are off by default (`SummarySettings::default`); with them off a
+ * summary is something to ask for in Notes, not something you get (R19).
+ */
+export function meetingIntro(summariesOn: boolean): string {
+  return summariesOn
+    ? "You get a transcript and a summary, saved to Notes."
+    : "You get a transcript, saved to Notes.";
+}
+
+/**
  * Which provider the Meetings privacy line describes.
  *
  * A running meeting's own, whatever is saved. Otherwise the one Start will

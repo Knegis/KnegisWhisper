@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { noteMeta, parseParticipants } from "../src/lib/noteMeta.js";
+import { hasStoredTranscript, noteMeta, parseParticipants } from "../src/lib/noteMeta.js";
 import { parseStoredTime } from "../src/lib/dayGroups.js";
 import type { Folder, Note } from "../src/generated/ipc-types.js";
 
@@ -56,4 +56,16 @@ test("the date is the stored creation time, read as parseStoredTime reads it", (
 test("participants come through noteMeta too", () => {
   assert.deepEqual(noteMeta(note(), folders).participants, ["Anna Lindqvist", "Ravi Menon"]);
   assert.deepEqual(noteMeta(note({ participants: null }), folders).participants, []);
+});
+
+test("a note has a transcript when its stored array has a row, and not otherwise", () => {
+  // KNEG-377: a wide window gave a plain note a 340px column saying "This
+  // note has no transcript." Read from the note, so the layout is right
+  // before the rows load rather than jumping after.
+  assert.equal(hasStoredTranscript(null), false);
+  assert.equal(hasStoredTranscript(""), false);
+  assert.equal(hasStoredTranscript("[]"), false);
+  assert.equal(hasStoredTranscript("not json"), false);
+  assert.equal(hasStoredTranscript('{"text":"not an array"}'), false);
+  assert.equal(hasStoredTranscript(JSON.stringify([{ speaker: "Anna", text: "Two more days." }])), true);
 });

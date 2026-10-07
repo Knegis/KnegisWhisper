@@ -6,6 +6,7 @@ import {
   interruptedTitle,
   liveElapsed,
   meetingLanguageMenu,
+  meetingIntro,
   meetingMicrophone,
   privacyProvider,
   reviewIsFor,
@@ -222,6 +223,13 @@ test("meetingMicrophone: a chosen microphone that is unplugged says the default 
 test("meetingMicrophone: before the device list arrives, a choice is named rather than called unplugged", () => {
   assert.equal(meetingMicrophone(null, "USB Mic").label, "USB Mic");
   assert.equal(meetingMicrophone(null, null).label, "Default microphone");
+});
+
+test("the hero promises a summary only while automatic summaries are on", () => {
+  // KNEG-377: R19's rule had no committed test. With them off, a summary is
+  // something to ask for in Notes, not something you get.
+  assert.equal(meetingIntro(true), "You get a transcript and a summary, saved to Notes.");
+  assert.equal(meetingIntro(false), "You get a transcript, saved to Notes.");
 });
 
 test("while Start waits on a saved provider that can't be used, the privacy line names no provider", () => {

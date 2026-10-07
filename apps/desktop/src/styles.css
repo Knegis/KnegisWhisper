@@ -23,6 +23,10 @@
  *      neutral fill (`--control` on a button, `--selected` in the rail,
  *      `--panel-hover` on a panel row), and the current row in a list panel
  *      is `--selected`, so pointing at a row never makes it look current.
+ *      One exception: in the title-bar search popup a hovered result takes
+ *      `--band` as the active one does (`.titlebar-search-popup
+ *      button:hover`), so with the pointer on one result and the arrow keys
+ *      on another, both look marked.
  *   3. Two typefaces with a job each. Switzer sets prose. ProFontWindows sets
  *      anything the machine is saying about itself -- headings, navigation,
  *      identifiers, file bytes -- at the site's exact spec: 13px/16px, 0.5px

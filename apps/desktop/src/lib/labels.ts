@@ -234,6 +234,26 @@ export function registrationFor(
 }
 
 /**
+ * The accelerators of `binding` worth drawing as keycaps: what can actually
+ * be pressed.
+ *
+ * Not an invalid one, which Settings › Shortcuts reports, and not one whose
+ * registration failed: Dictation's hero drew keycaps for a chord the hook had
+ * not taken whenever another accelerator was live (KNEG-377). One with no
+ * report yet is not known to fail, so it stays.
+ */
+export function pressableAccelerators(
+  binding: Binding,
+  reports: readonly { action: HotkeyAction; results: readonly Registration[] }[],
+): Accelerator[] {
+  return binding.accelerators.filter((a) => {
+    if (a.kind === "invalid") return false;
+    const registration = registrationFor(reports, binding.action, a);
+    return registration === undefined || registration.state === "registered" || registration.state === "hooked" || registration.state === "portal";
+  });
+}
+
+/**
  * Whether an action toggles or is held, in the words a control needs.
  *
  * The `detail` is the cost, not a restatement of the name. Push-to-talk turns
