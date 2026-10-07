@@ -178,8 +178,8 @@ function renderView(
   view: ViewId,
   diagnostics: Diagnostics,
   select: (id: ViewId) => void,
-  searchNoteRequest: { id: number } | null,
-  openNote: (id: number) => void,
+  searchNoteRequest: { id: number; transcriptRow: number | null } | null,
+  openNote: (id: number, transcriptRow?: number) => void,
 ): ReactNode {
   switch (view) {
     case "dictation":
@@ -238,8 +238,9 @@ function Shell({ panelCollapsed, onTogglePanel }: { panelCollapsed: boolean; onT
   // A local variable, because TypeScript does not narrow a repeated
   // `PAGES[view]`.
   const page = PAGES[view];
-  const searchNoteRequest = useMemo(() => destination.noteId === undefined ? null : { id: destination.noteId }, [destination]);
-  const openNote = useCallback((id: number) => navigate({ type: "visit", destination: { view: "notes", noteId: id } }), []);
+  // A new request for each destination, so a row chosen again is shown again (KNEG-406).
+  const searchNoteRequest = useMemo(() => destination.noteId === undefined ? null : { id: destination.noteId, transcriptRow: destination.transcriptRow ?? null }, [destination]);
+  const openNote = useCallback((id: number, transcriptRow?: number) => navigate({ type: "visit", destination: { view: "notes", noteId: id, ...(transcriptRow === undefined ? {} : { transcriptRow }) } }), []);
 
   /*
    * Go to a screen.

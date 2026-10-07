@@ -975,9 +975,31 @@ export type Folder = { id: number, name: string, isDefault: boolean, sortOrder: 
  */
 export type SearchHit = { id: number, title: string,
 /**
- * A snippet with the match marked by `[` and `]`.
+ * A snippet with the match marked by `[` and `]`. The row's own when
+ * `transcript_row` names one, so the time and the words agree.
  */
-snippet: string, };
+snippet: string,
+/**
+ * Where in the transcript the words were said, when the hit is in a
+ * meeting transcript and one row holds every word (KNEG-406). `None` for
+ * a hit in the title or the notes, and when no single row can be named:
+ * the note then opens as it always has, rather than at a guess.
+ */
+transcriptRow: SearchHitRow | null, };
+
+/**
+ * The transcript row a search hit's words are in.
+ */
+export type SearchHitRow = {
+/**
+ * Its position in the stored transcript: `TranscriptRow::index`.
+ */
+index: number,
+/**
+ * Seconds from the start of the recording, as the Transcript tab shows
+ * it. `None` when the row has no time; it is still the row.
+ */
+startSeconds: number | null, };
 
 /**
  * A new note, as the renderer sends it.

@@ -38,10 +38,7 @@ pub fn render(
             segment_count: 0,
         });
     }
-    let segments: Vec<transcript::Segment> = match note.transcript.as_deref() {
-        Some(raw) if !raw.trim().is_empty() => serde_json::from_str(raw)?,
-        _ => Vec::new(),
-    };
+    let segments = transcript::parse_stored(note.transcript.as_deref())?;
     Ok(Document {
         filename: filename(&note.title, format.extension()),
         content: transcript::export(

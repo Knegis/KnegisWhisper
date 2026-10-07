@@ -1555,22 +1555,26 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
   notes_search: (a) => {
     const query = (arg<string>(a, "query") ?? "").trim().toLowerCase();
     if (query === "") return [] satisfies SearchHit[];
-    return notes
-      .filter(
-        (n) =>
-          n.title.toLowerCase().includes(query) ||
-          n.content.toLowerCase().includes(query),
-      )
-      .map((n): SearchHit => {
-        const at = n.content.toLowerCase().indexOf(query);
-        if (at === -1) {
-          return { id: n.id, title: n.title, snippet: n.content.slice(0, 90) };
-        }
-        const before = n.content.slice(Math.max(0, at - 35), at);
-        const hit = n.content.slice(at, at + query.length);
-        const after = n.content.slice(at + query.length, at + query.length + 35);
-        return { id: n.id, title: n.title, snippet: `${before}[${hit}]${after}` };
-      });
+    const marked = (text: string, at: number) =>
+      `${text.slice(Math.max(0, at - 35), at)}[${text.slice(at, at + query.length)}]${text.slice(at + query.length, at + query.length + 35)}`;
+    // As Rust answers it: the title or the notes first, with no row; otherwise
+    // the transcript row the words are in, with its time and its own snippet
+    // (KNEG-406). A plain substring here, where Rust asks FTS5 for every word.
+    return notes.flatMap((n): SearchHit[] => {
+      const at = n.content.toLowerCase().indexOf(query);
+      if (at !== -1) return [{ id: n.id, title: n.title, snippet: marked(n.content, at), transcriptRow: null }];
+      if (n.title.toLowerCase().includes(query)) {
+        return [{ id: n.id, title: n.title, snippet: n.content.slice(0, 90), transcriptRow: null }];
+      }
+      const row = (noteTranscriptRows.get(n.id) ?? []).find((r) => r.text.toLowerCase().includes(query));
+      if (!row) return [];
+      return [{
+        id: n.id,
+        title: n.title,
+        snippet: marked(row.text, row.text.toLowerCase().indexOf(query)),
+        transcriptRow: { index: row.index, startSeconds: row.startSeconds },
+      }];
+    });
   },
   notes_get: (a) => notes.find((n) => n.id === arg<number>(a, "id")) ?? null,
   notes_create: (a) => {
