@@ -135,6 +135,7 @@ import {
   privacyProvider,
   recentMeta,
   recordedSources,
+  sameMeetingStart,
   summaryPrivacyLine,
 } from "../lib/meetingView";
 import type { ViewId } from "../lib/navigation";
@@ -526,7 +527,8 @@ export function Meetings({
   };
   // Stop and Discard first ask the meeting window to save what was typed in
   // it, so the note Stop saves has the last edit; a flush that fails says so
-  // and offers "Stop recording anyway" rather than losing the recording.
+  // and offers "Stop recording anyway" and "Discard anyway" rather than
+  // leaving the meeting recording with no way to end it (KNEG-418).
   const stop = () => {
     void guard(async () => {
       try { await flushMeetingPanelNotes(); }
@@ -535,29 +537,28 @@ export function Meetings({
       setOutcome(await stopMeeting());
     });
   };
-  // Asks first, with what is about to be lost (KNEG-394): Discard sits
-  // beside Stop and save and deleted the recording on one click. Saying no
-  // changes nothing; the meeting goes on recording.
+  // Discard asks first, with what is about to be lost (KNEG-394): it sat
+  // beside Stop and save and deleted the recording on one click. True only
+  // for a yes about the meeting still running; saying no changes nothing, and
+  // the meeting goes on recording.
+  const confirmDiscard = async (question: (elapsedSeconds: number) => string): Promise<boolean> => {
+    const before = await getMeetingStatus();
+    if (!meetingIsLive(before.state)) return false;
+    const began = Date.now() - before.elapsedSeconds * 1000;
+    // The page's clock, which stops at a stall, when it has one; Rust's
+    // count before the page has read a start, so the length is never
+    // "under a minute" for a meeting it has not timed yet.
+    if (!window.confirm(question(startedAt === null ? before.elapsedSeconds : elapsed))) return false;
+    // The question holds the page, so the meeting may have changed while it
+    // was open: stopped from its own window, or stopped and another one
+    // started. Nothing is discarded unless the meeting asked about is still
+    // running -- otherwise the page shows what happened instead.
+    const after = await getMeetingStatus();
+    return meetingIsLive(after.state) && sameMeetingStart(began, after, Date.now());
+  };
   const discard = () => {
     void guard(async () => {
-      // When the meeting began, from Rust: `elapsedSeconds` counts from the
-      // start and does not stop at a stall, so the same meeting gives the
-      // same start on every read, and a meeting started later gives a later
-      // one.
-      const startOf = (status: { elapsedSeconds: number }) => Date.now() - status.elapsedSeconds * 1000;
-      const before = await getMeetingStatus();
-      const began = startOf(before);
-      if (!meetingIsLive(before.state)) return;
-      // The page's clock, which stops at a stall, when it has one; Rust's
-      // count before the page has read a start, so the length is never
-      // "under a minute" for a meeting it has not timed yet.
-      if (!window.confirm(discardQuestion(startedAt === null ? before.elapsedSeconds : elapsed))) return;
-      // The question holds the page, so the meeting may have changed while it
-      // was open: stopped from its own window, or stopped and another one
-      // started. Nothing is discarded unless the meeting asked about is still
-      // running -- otherwise the page shows what happened instead.
-      const after = await getMeetingStatus();
-      if (!meetingIsLive(after.state) || Math.abs(startOf(after) - began) > 2000) return;
+      if (!(await confirmDiscard((seconds) => discardQuestion(seconds)))) return;
       try { await flushMeetingPanelNotes(); }
       catch (cause) { setNotesFlushFailed(true); throw cause; }
       setNotesFlushFailed(false);
@@ -566,6 +567,17 @@ export function Meetings({
   };
   const stopAnyway = () => {
     void guard(async () => { setOutcome(await stopMeeting()); setNotesFlushFailed(false); });
+  };
+  // Discard without asking the meeting window again: it already didn't
+  // answer. `cancel` still keeps the notes Rust holds (`notes.take()`,
+  // `meeting.rs`), so what is lost is an edit the window hadn't sent -- the
+  // question says so (KNEG-418).
+  const discardAnyway = () => {
+    void guard(async () => {
+      if (!(await confirmDiscard((seconds) => discardQuestion(seconds, true)))) return;
+      await cancelMeeting();
+      setNotesFlushFailed(false);
+    });
   };
   const recover = (candidate: RecoverableRecording) => {
     setRecoveringKey(candidate.storageKey);
@@ -621,7 +633,7 @@ export function Meetings({
           lines below.
         </p>
       ) : null}
-      {recording && notesFlushFailed && <p className="caveat">The meeting panel could not confirm its latest note save. Stopping anyway keeps the recording and any notes already received by the app; the most recent edit may be missing.</p>}
+      {recording && notesFlushFailed && <p className="caveat">The meeting window didn't confirm it saved your latest notes. Stop recording anyway saves the meeting; Discard anyway deletes the recording. Either way, notes the app already has are kept, and your most recent edit may be missing.</p>}
       {outcome ? <OutcomeCaveat outcome={outcome} /> : null}
     </>
   );
@@ -772,7 +784,12 @@ export function Meetings({
             {/* Never held back by readiness: a meeting that is running has to
                 be stoppable whatever the settings now say. */}
             <div className="live-actions">
-              {notesFlushFailed && <button type="button" onClick={stopAnyway}>Stop recording anyway</button>}
+              {notesFlushFailed ? (
+                <>
+                  <button type="button" onClick={stopAnyway}>Stop recording anyway</button>
+                  <button type="button" onClick={discardAnyway}>Discard anyway</button>
+                </>
+              ) : null}
               <button type="button" className="secondary" onClick={discard}>
                 <Icon name="discard" size={16} />
                 Discard

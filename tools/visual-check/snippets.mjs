@@ -504,6 +504,85 @@ export function emitDictationState(state) {
   `);
 }
 
+/* --------------------------------------------------------- meeting discard */
+
+/** The names of the logged calls among `commands`, oldest first, so a check can read their order. */
+export function stubSequence(commands) {
+  return source(`
+    const wanted = ${JSON.stringify(commands)};
+    return (window.__chipStub?.log ?? [])
+      .filter((entry) => wanted.includes(entry.cmd))
+      .map((entry) => entry.cmd);
+  `);
+}
+
+/**
+ * The dev console's `kw.meetingWindowSilent`: whether the fixtures stop
+ * answering for the meeting window when Stop or Discard asks it to save its
+ * notes, so the page's 5 s wait runs out as it would for a window that hung.
+ */
+export function meetingWindowSilent(silent) {
+  return source(`
+    if (!globalThis.kw?.meetingWindowSilent) throw new Error('The fixture dev console has no meetingWindowSilent');
+    globalThis.kw.meetingWindowSilent(${JSON.stringify(silent)});
+    return true;
+  `);
+}
+
+/**
+ * Replaces `window.confirm` with a scripted answer, keeping every question
+ * asked in `window.__confirmQuestions` and, where the invoke stub is
+ * installed, logging it there as `window.confirm`, so its place among the
+ * calls can be read. `mergeWhileOpen` is laid over the stub's `merge` while
+ * the question is "open" -- after it is asked and before it is answered --
+ * for what changes behind a modal dialog; it needs `installInvokeStub` first.
+ */
+export function scriptConfirm(answer, mergeWhileOpen = null) {
+  return source(`
+    const merge = ${JSON.stringify(mergeWhileOpen)};
+    window.__confirmQuestions = [];
+    window.confirm = (question) => {
+      window.__confirmQuestions.push(String(question));
+      window.__chipStub?.log.push({ cmd: 'window.confirm', args: { question: String(question) } });
+      if (merge !== null) {
+        const stub = window.__chipStub;
+        if (!stub) throw new Error('The invoke stub is not installed');
+        for (const [cmd, value] of Object.entries(merge)) stub.merge[cmd] = value;
+      }
+      return ${JSON.stringify(answer)};
+    };
+    return true;
+  `);
+}
+
+/** The questions the scripted `window.confirm` was asked, oldest first. */
+export function confirmQuestions() {
+  return source(`
+    return window.__confirmQuestions ?? [];
+  `);
+}
+
+/**
+ * The Meetings page, live or idle: whether the live view is up, its state
+ * label and its action buttons, the caveats and errors in view (the live
+ * view's or the control bar's), and Start.
+ */
+export function meetingPageState() {
+  return source(`
+    const text = (item) => item.textContent.trim();
+    const live = document.querySelector('.meeting-live');
+    const start = document.querySelector('.control-start');
+    return {
+      live: Boolean(live),
+      status: live?.querySelector('.live-status [role="status"]')?.textContent.trim() ?? null,
+      actions: live ? [...live.querySelectorAll('.live-actions button')].map(text) : [],
+      caveats: [...document.querySelectorAll('.live-caveats > .caveat, .control-body > .caveat')].map(text),
+      errors: [...document.querySelectorAll('.live-caveats > .error, .control-body > .error')].map(text),
+      start: start ? { text: text(start), disabled: start.disabled } : null,
+    };
+  `);
+}
+
 /**
  * The first chip whose name -- its aria-label, or its text where it has none --
  * starts with `prefix`, as a DOM expression for the other snippets to build on.

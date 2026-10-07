@@ -678,6 +678,15 @@ let overlayPreferences: OverlayPreferences = {
 let meetingNotes = "";
 
 /*
+ * Whether the meeting window answers when Stop or Discard asks it to save its
+ * notes (`flushMeetingPanelNotes`). There is no meeting window behind this tab
+ * -- `/#meeting` is a page load of its own -- so the `plugin:event|emit_to`
+ * handler answers for it, unless `kw.meetingWindowSilent()` has made it
+ * silent (KNEG-418).
+ */
+let meetingWindowSilent = false;
+
+/*
  * The Meetings page reads this in its first load, for the control bar's line
  * about where an automatic summary sends the transcript, and Cleanup &
  * summaries reads and writes it. Rust's `SummarySettings::default()`
@@ -1997,6 +2006,13 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
       sources: null,
       offer: null,
     };
+    // How Rust's `cancel` says a meeting was discarded (`meeting.rs`), so the
+    // page can say "Discarded." here too. Rust keeps typed notes as a note and
+    // names it; this tab has no meeting window to have typed them in, so
+    // there is none. Not the `idle` state event Rust sends first: no other
+    // meeting command here announces a state, and an `idle` heard once would
+    // outrank every later status read, so the next Start would never show.
+    void emit("meeting-outcome", { outcome: "cancelled", noteId: null } satisfies MeetingOutcome);
     return null;
   },
   meeting_dismiss: () => {
@@ -2190,6 +2206,27 @@ A fixture summary of "${note.title}", written without a model.
   // load and covered the page in the "no stub" toast before anyone got to
   // look at anything else.
   "plugin:window|is_maximized": () => false,
+
+  /* events sent to one window */
+  /*
+   * Stop and Discard ask the meeting window to save what was typed in it
+   * (`flushMeetingPanelNotes`, `lib/ipc.ts`): `meeting-notes-flush` sent to
+   * the `meeting` window, then up to 5 s for `meeting-notes-flushed` with the
+   * same request id. This answers for that window, as `MeetingPanel` does once
+   * its autosave has flushed, so both can finish here (KNEG-418) -- before
+   * this, every Stop and Discard in the fixtures ran out the 5 s and stopped
+   * there. Silent after `kw.meetingWindowSilent()`, so that wait can be seen
+   * running out. Any other event is sent nowhere: there is no other window
+   * here. `mockIPC` never calls this itself -- see `routeEmitTo`.
+   */
+  "plugin:event|emit_to": (a) => {
+    const target = arg<{ kind: string; label?: string }>(a, "target");
+    const payload = arg<{ requestId?: string }>(a, "payload");
+    if (target?.label === "meeting" && arg<string>(a, "event") === "meeting-notes-flush" && !meetingWindowSilent) {
+      void emit("meeting-notes-flushed", { requestId: payload?.requestId ?? "", error: null });
+    }
+    return null;
+  },
 };
 
 /* ------------------------------------------------------------ dev console */
@@ -2290,6 +2327,15 @@ const devConsole = {
   clearOffer() {
     meetingStatus = { ...meetingStatus, offer: null };
     void emit("meeting-offer", null);
+  },
+  /**
+   * The meeting window stops answering when Stop or Discard asks it to save
+   * its notes, as a window that hung would: the page waits its 5 s, then
+   * offers "Stop recording anyway" and "Discard anyway" (KNEG-418). Start a
+   * meeting first; `kw.meetingWindowSilent(false)` answers again.
+   */
+  meetingWindowSilent(silent = true) {
+    meetingWindowSilent = silent;
   },
   modelProgress(written: number, total: number | null = 574_000_000) {
     void emit("local-model-progress", {
@@ -2400,6 +2446,28 @@ function servePlayableRecordings(): void {
       : mocked(filePath, protocol);
 }
 
+/**
+ * Sends `plugin:event|emit_to` to its handler. With `shouldMockEvents`,
+ * `mockIPC` answers every `plugin:event|` command itself, before the handler
+ * table is asked, and has no case for `emit_to`: it resolves to nothing and
+ * nothing hears the event. So this wraps the invoke `mockIPC` installed and
+ * takes that one command out from under it; every other command still goes
+ * to the mock. Measured: with the handler in the table and no wrapper, Stop
+ * still ran out its 5 s (`tools/visual-check/meeting-discard.mjs`, KNEG-418).
+ */
+function routeEmitTo(): void {
+  const internals = (window as unknown as {
+    __TAURI_INTERNALS__: { invoke: (cmd: string, args?: unknown, options?: unknown) => Promise<unknown> };
+  }).__TAURI_INTERNALS__;
+  const mocked = internals.invoke;
+  const handler = HANDLERS["plugin:event|emit_to"];
+  if (handler === undefined) throw new Error("dev fixtures: no stub for \"plugin:event|emit_to\"");
+  internals.invoke = (cmd, args, options) =>
+    cmd === "plugin:event|emit_to"
+      ? Promise.resolve().then(() => handler((args ?? {}) as Record<string, unknown>))
+      : mocked(cmd, args, options);
+}
+
 export function installDevFixtures(): void {
   markThePageAsInvented();
   mockWindows("main");
@@ -2420,6 +2488,7 @@ export function installDevFixtures(): void {
     },
     { shouldMockEvents: true },
   );
+  routeEmitTo();
 
   globalThis.kw = devConsole;
   console.info(
@@ -2432,6 +2501,7 @@ export function installDevFixtures(): void {
       "Try:      kw.dictationState('recording')",
       "          kw.offer()",
       "          kw.meetingState('recording')",
+      "          kw.meetingWindowSilent()",
       "          kw.overlayFloating()",
       "          kw.dictationFailed()",
     ].join("\n  "),

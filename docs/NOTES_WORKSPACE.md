@@ -66,8 +66,11 @@ the live **Transcript**. The editor autosaves to memory and a `.notes.md` sideca
 beside the WAV. The panel's Stop action flushes its draft before ending the meeting.
 Stop and Discard in Meetings ask the meeting window to flush and acknowledge the
 draft first; a reported save failure keeps the recording open and shows an error.
-If the panel cannot respond, Meetings offers **Stop recording anyway** so a broken
-window cannot leave capture running. It warns that the newest edit may be missing.
+If the panel cannot respond, Meetings offers **Stop recording anyway** and
+**Discard anyway** so a broken window cannot leave capture running or force a save
+of a meeting meant to be thrown away (KNEG-418). Neither asks the window again.
+Both keep the notes the app already has and warn that the newest edit may be
+missing; Discard anyway asks first, as Discard does.
 Typed notes become the saved note body even if transcription fails. Discarding a
 recording keeps nonempty typed notes as a notes-only meeting note. An interrupted
 WAV and its notes sidecar can be recovered from Meetings (KNEG-316).

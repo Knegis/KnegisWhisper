@@ -14,6 +14,7 @@ import {
   recentMeta,
   recordedSources,
   recordingStartedAt,
+  sameMeetingStart,
   summaryModelName,
   summaryPrivacyLine,
 } from "../src/lib/meetingView.js";
@@ -267,4 +268,44 @@ test("Discard's question names the recording's length and what happens to typed 
   assert.match(discardQuestion(90), /\(2 min\)/);
   assert.match(discardQuestion(42), /\(under a minute\)/);
   assert.match(discardQuestion(0), /\(under a minute\)/);
+});
+
+// KNEG-418: "Discard anyway" asks after the meeting window didn't confirm it
+// saved the notes. Rust still keeps what it already holds (`cancel` takes
+// `notes`), so the question says so, and says the newest edit may not be
+// among it -- the one sentence that changes from Discard's.
+test("Discard anyway's question says the latest edit may be missing", () => {
+  assert.equal(
+    discardQuestion(38 * 60 + 10, true),
+    "Discard this meeting? The recording so far (38 min) will be deleted and can't be recovered. Notes the app already has are kept as a separate note; your latest edit may be missing.",
+  );
+  assert.match(discardQuestion(42, true), /\(under a minute\)/);
+  // The default is Discard's own question, unchanged.
+  assert.equal(discardQuestion(90, false), discardQuestion(90));
+});
+
+// KNEG-394's guard, out of `Meetings.tsx`: the meeting asked about is the one
+// still running only when the start Rust reports after the question is within
+// 2 s of the start it reported before. `elapsedSeconds` counts from the start,
+// so the same meeting gives the same start on every read.
+test("sameMeetingStart holds within 2 s either way, and not a millisecond past", () => {
+  const began = 1_000_000;
+  const tenMinutesIn = { elapsedSeconds: 600 };
+  assert.equal(sameMeetingStart(began, tenMinutesIn, 1_600_000), true);
+  // Read 2 s later than the count says: a start 2 s after the one asked about.
+  assert.equal(sameMeetingStart(began, tenMinutesIn, 1_602_000), true);
+  assert.equal(sameMeetingStart(began, tenMinutesIn, 1_602_001), false);
+  // And 2 s earlier.
+  assert.equal(sameMeetingStart(began, tenMinutesIn, 1_598_000), true);
+  assert.equal(sameMeetingStart(began, tenMinutesIn, 1_597_999), false);
+});
+
+test("sameMeetingStart: a meeting started while the question was open is another meeting", () => {
+  // Ten minutes in before the question, one second in after it.
+  assert.equal(sameMeetingStart(1_000_000, { elapsedSeconds: 1 }, 1_600_000), false);
+});
+
+test("sameMeetingStart takes another tolerance", () => {
+  assert.equal(sameMeetingStart(1_000_000, { elapsedSeconds: 600 }, 1_600_500, 500), true);
+  assert.equal(sameMeetingStart(1_000_000, { elapsedSeconds: 600 }, 1_600_501, 500), false);
 });

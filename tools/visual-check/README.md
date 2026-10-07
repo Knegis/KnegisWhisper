@@ -186,6 +186,49 @@ recordings Rust streams with range requests; a false check makes it exit 1.
 Not measured: the reading position across a move, and a summary source's
 interval playback (`playInterval`) across one.
 
+## Meeting discard
+
+```powershell
+node tools/visual-check/meeting-discard.mjs --url http://127.0.0.1:5191/
+```
+
+Same options as the chip menus (the banner is always removed). It measures
+KNEG-418: what Meetings does when the meeting window doesn't answer Stop's or
+Discard's request to save its notes. Both send `meeting-notes-flush` to the
+`meeting` window (`flushMeetingPanelNotes` in `lib/ipc.ts`) and wait up to 5s
+for its answer. The fixtures now answer for that window: their
+`plugin:event|emit_to` handler replies `meeting-notes-flushed` with the same
+request id, unless `kw.meetingWindowSilent(true)` was called (the
+`meetingWindowSilent` snippet). Before this, every Stop and Discard in the
+fixtures ran out the 5s and stopped there. `window.confirm` is replaced with a
+scripted answer that is logged in order with the page's calls
+(`scriptConfirm`, `installInvokeStub`). Each check starts from a fresh load at
+1000x720 with a meeting started from Start. Six checks:
+
+1. Meeting window silent: after Stop and save has waited at least 5s, the
+   caveat is in view with Stop recording anyway and Discard anyway beside
+   Discard and Stop and save. One `emit_to` was sent, and nothing was stopped.
+2. Discard anyway, answered no: the question ends "your latest edit may be
+   missing". The status is read and the question asked; nothing is cancelled
+   or sent to the meeting window, and the meeting is still recording.
+3. Answered yes: the same three steps, then exactly one `meeting_cancel`, with
+   no new `emit_to`. The page goes idle with "Discarded. The recording was
+   deleted." A meeting started next shows only Discard and Stop and save.
+4. As 3, with `meeting_status` stubbed to 600s in and switched to 1s in while
+   the question is open: another meeting, so nothing is cancelled.
+5. Meeting window answering: Stop and save sends one `emit_to`, then
+   `meeting_stop`, and the page goes idle saying it saved, well inside the 5s.
+6. Meeting window answering: Discard asks its own question, reads the status
+   again, sends one `emit_to`, then cancels.
+
+Measured in headless Edge against dev fixtures, not in the Tauri window; a
+false check makes it exit 1. The fixtures' `meeting_cancel` sends the cancelled
+outcome Rust's `cancel` sends, with no note kept, since this tab has no meeting
+window to type in. It doesn't send the `idle` state event: no other fixture
+meeting command sends a state, and an `idle` heard once would outrank every
+later status read. Not measured: a real meeting window hanging, and which notes
+Rust keeps on cancel (`meeting.rs`'s `cancel`, `notes.take()`).
+
 ## Running application windows
 
 Launch the running development application with its WebView2 debugger exposed:

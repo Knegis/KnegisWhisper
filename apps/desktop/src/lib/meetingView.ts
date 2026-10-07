@@ -75,10 +75,42 @@ export function recordingStartedAt(storageKey: string): Date | null {
  * ("Saved as a note (38 min)."). The notes sentence is true whatever was
  * typed: `MeetingRuntime::cancel` keeps typed notes as a note when there are
  * any, and when there are none there is nothing to lose.
+ *
+ * `unconfirmed` is "Discard anyway"'s question (KNEG-418), asked after the
+ * meeting window did not confirm it saved the notes. `cancel` still keeps the
+ * notes Rust already holds (`notes.take()`), so only an edit the window had
+ * not sent yet is lost -- the autosave's last 800 ms, or everything since a
+ * save that failed -- and the last sentence says that instead.
  */
-export function discardQuestion(elapsedSeconds: number): string {
+export function discardQuestion(elapsedSeconds: number, unconfirmed = false): string {
   const length = elapsedSeconds < 60 ? "under a minute" : `${Math.round(elapsedSeconds / 60)} min`;
-  return `Discard this meeting? The recording so far (${length}) will be deleted and can't be recovered. Any notes you typed are kept as a separate note.`;
+  const notes = unconfirmed
+    ? "Notes the app already has are kept as a separate note; your latest edit may be missing."
+    : "Any notes you typed are kept as a separate note.";
+  return `Discard this meeting? The recording so far (${length}) will be deleted and can't be recovered. ${notes}`;
+}
+
+/**
+ * Whether the meeting running after Discard's question is the one it asked
+ * about (KNEG-394). The question holds the page, so in the meantime the
+ * meeting may have been stopped from its own window, or stopped and another
+ * started.
+ *
+ * Compared by when each began, from Rust: `elapsedSeconds` counts from the
+ * start and does not stop at a stall, so the same meeting gives the same start
+ * on every read, and a meeting started later gives a later one. `beganMs` is
+ * the start read before the question; `after` is the status read once it was
+ * answered, at `nowMs`. Two reads of one meeting still differ by the time
+ * each took to come back from Rust before the page read its clock, hence the
+ * tolerance.
+ */
+export function sameMeetingStart(
+  beganMs: number,
+  after: { elapsedSeconds: number },
+  nowMs: number,
+  toleranceMs = 2000,
+): boolean {
+  return Math.abs(nowMs - after.elapsedSeconds * 1000 - beganMs) <= toleranceMs;
 }
 
 /** A meeting's running time as `hh:mm:ss`, the canvas' recording clock. */
