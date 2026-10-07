@@ -49,6 +49,7 @@ use std::process::Stdio;
 use serde::Deserialize;
 
 use crate::local::{Inference, LocalTranscriber, TimedSegment};
+use crate::scratch::{unique_wav_path, ScratchWav};
 
 /// The four files sherpa-onnx-offline's transducer model type needs, resolved
 /// to real paths inside one extracted model directory.
@@ -427,19 +428,6 @@ fn truncate(s: &str) -> String {
     out
 }
 
-/// A unique path for one request's input WAV, inside `dir`.
-///
-/// `sherpa-onnx-offline` takes a file path, not stdin, so every request needs
-/// one. Named uniquely rather than reused so two overlapping calls (a retry
-/// racing a cancellation, say) cannot clobber each other's input.
-fn unique_wav_path(dir: &Path) -> PathBuf {
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    dir.join(format!("sherpa-input-{}-{nanos}.wav", std::process::id()))
-}
-
 /// A Parakeet transducer model driven through `sherpa-onnx-offline`.
 ///
 /// Unlike [`crate::local::WhisperServer`], there is no running server to hold
@@ -497,7 +485,8 @@ impl LocalTranscriber for SherpaOffline {
         tokio::fs::create_dir_all(&self.temp_dir)
             .await
             .map_err(|err| err.to_string())?;
-        let wav_path = unique_wav_path(&self.temp_dir);
+        // `sherpa-onnx-offline` takes a file path, not stdin.
+        let wav_path = unique_wav_path(&self.temp_dir, "sherpa-input");
         let _scratch = ScratchWav(wav_path.clone());
         tokio::fs::write(&wav_path, &wav)
             .await
@@ -522,34 +511,6 @@ impl LocalTranscriber for SherpaOffline {
 
     fn model_name(&self) -> Option<String> {
         self.model_name.clone()
-    }
-}
-
-struct ScratchWav(PathBuf);
-impl Drop for ScratchWav {
-    fn drop(&mut self) {
-        let path = self.0.clone();
-        match std::fs::remove_file(&path) {
-            Ok(()) => return,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
-            Err(_) => {}
-        }
-        // A cancelled Windows child may still be releasing its file handle.
-        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
-            runtime.spawn(async move {
-                for _ in 0..5 {
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                    match tokio::fs::remove_file(&path).await {
-                        Ok(()) => return,
-                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
-                        Err(_) => {}
-                    }
-                }
-                tracing::warn!("could not remove Parakeet scratch audio after process cleanup");
-            });
-        } else {
-            tracing::warn!("could not remove Parakeet scratch audio without an active runtime");
-        }
     }
 }
 

@@ -654,6 +654,33 @@ fn describe_unavailable(sidecar: MediaSidecar, err: kw_sidecar::SidecarError) ->
 /// Where a whisper server's shared handles live -- see `dictation::LocalPort`.
 type LocalPort = Arc<RwLock<Option<u16>>>;
 
+/// The whisper server an import is sent to.
+///
+/// `.timed()`: an import becomes a note that can be exported as SRT or
+/// WebVTT, and without timings that export is one cue spanning the whole
+/// recording. Dictation does not ask, because it wants a line of text and the
+/// timings cost about 45% more wall clock -- measured, see
+/// `kw_transcription_core::local`'s module doc.
+///
+/// `.speech_first()` whenever the tools are here (KNEG-404): sent whole, the
+/// silences in a recording came back as rows stamped tens of seconds from
+/// their speech, and noise as invented text. See
+/// `kw_transcription_core::speech`.
+///
+/// A function rather than inline so a test can pin what an import asks for.
+fn whisper_for_import(
+    policy: NetworkPolicy,
+    port: u16,
+    model: Option<String>,
+    speech: Option<Arc<dyn kw_transcription_core::speech::FindSpeech>>,
+) -> WhisperServer {
+    let server = WhisperServer::new(policy, port, model).timed();
+    match speech {
+        Some(finder) => server.speech_first(finder),
+        None => server,
+    }
+}
+
 /// Everything media import needs: the sidecar catalogue, the network policy,
 /// and exactly what the existing transcription route needs to run --
 /// deliberately the same four things `dictation::RouteTranscriber` holds, so
@@ -676,6 +703,9 @@ pub struct MediaImportRuntime {
     /// in dictation: a dictation whose server has died can be spoken again, and
     /// an imported recording generally cannot.
     local_revive: Arc<dyn crate::local_model::Revive>,
+    /// What an import needs to find its speech before whisper hears it
+    /// (KNEG-404).
+    local_speech: crate::local_model::SpeechTools,
     /// Where downloaded sidecars live. Held rather than read from
     /// `kw_storage::paths` at each use, so a test can point it at an empty
     /// directory -- see [`MediaImportRuntime::rooted`].
@@ -844,6 +874,7 @@ impl MediaImportRuntime {
     }
     /// Load the catalogue and hold the handles a transcription needs, without
     /// touching the network.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         policy: NetworkPolicy,
         credentials: Arc<dyn CredentialStore>,
@@ -851,6 +882,7 @@ impl MediaImportRuntime {
         local_model: Arc<RwLock<Option<String>>>,
         local_sherpa: crate::local_asr::Selection,
         local_revive: Arc<dyn crate::local_model::Revive>,
+        local_speech: crate::local_model::SpeechTools,
         db: Db,
     ) -> Result<Self, String> {
         Self::rooted(
@@ -860,6 +892,7 @@ impl MediaImportRuntime {
             local_model,
             local_sherpa,
             local_revive,
+            local_speech,
             db,
             kw_storage::paths::sidecar_dir().path,
         )
@@ -883,6 +916,7 @@ impl MediaImportRuntime {
         local_model: Arc<RwLock<Option<String>>>,
         local_sherpa: crate::local_asr::Selection,
         local_revive: Arc<dyn crate::local_model::Revive>,
+        local_speech: crate::local_model::SpeechTools,
         db: Db,
         sidecar_root: PathBuf,
     ) -> Result<Self, String> {
@@ -895,6 +929,7 @@ impl MediaImportRuntime {
             local_model,
             local_sherpa,
             local_revive,
+            local_speech,
             db,
             sidecar_root,
             recording_directory: kw_notes_core::recordings::recording_dir(),
@@ -1002,14 +1037,13 @@ impl MediaImportRuntime {
                 .map_err(|detail| MediaImportError::Transcription { detail })?;
 
         let model = self.local_model.read().ok().and_then(|held| held.clone());
-        // `.timed()`: an import becomes a note that can be exported as SRT or
-        // WebVTT, and without timings that export is one cue spanning the whole
-        // recording. Dictation does not ask, because it wants a line of text and
-        // the timings cost about 45% more wall clock -- measured, see
-        // `kw_transcription_core::local`'s module doc.
-        Ok(Some(
-            WhisperServer::new(self.policy.clone(), port, model).timed(),
-        ))
+        Ok(Some(whisper_for_import(
+            self.policy.clone(),
+            port,
+            model,
+            self.local_speech
+                .finder(kw_audio_core::vad::Context::NoteRecording),
+        )))
     }
 
     /// The local engine for an import: the same one dictation would use.
@@ -1578,11 +1612,30 @@ mod tests {
             // Nor about reviving one. No port is recorded above, so nothing
             // here should ever ask.
             Arc::new(crate::local_model::RefusesToRevive),
+            crate::local_model::SpeechTools::new(None, root.path(), root.path().join("scratch")),
             Db::open_in_memory().await.unwrap(),
             root.path().to_path_buf(),
         )
         .unwrap();
         (rt, root)
+    }
+
+    #[test]
+    fn an_import_asks_for_timings_and_finds_its_speech_first_when_it_can() {
+        let finder: Arc<dyn kw_transcription_core::speech::FindSpeech> =
+            Arc::new(kw_transcription_core::speech::SpeechFinder::new(
+                "vad.exe".into(),
+                "silero.bin".into(),
+                kw_audio_core::vad::VadConfig::default(),
+                "scratch".into(),
+            ));
+        let server = whisper_for_import(NetworkPolicy::new().unwrap(), 8178, None, Some(finder));
+        assert!(server.asks_for_timings());
+        assert!(server.finds_speech_first());
+        // Without the tools, whole, as before -- never a failed import.
+        let whole = whisper_for_import(NetworkPolicy::new().unwrap(), 8178, None, None);
+        assert!(whole.asks_for_timings());
+        assert!(!whole.finds_speech_first());
     }
 
     #[cfg(feature = "tauri-test")]
@@ -2188,6 +2241,11 @@ mod retained_import_tests {
                 Arc::new(RwLock::new(Some("base".to_owned()))),
                 Arc::new(RwLock::new(None)),
                 Arc::new(crate::local_model::RefusesToRevive),
+                crate::local_model::SpeechTools::new(
+                    None,
+                    &sidecar_root,
+                    sidecar_root.join("scratch"),
+                ),
                 db.clone(),
                 sidecar_root,
             )

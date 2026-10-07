@@ -59,6 +59,8 @@ pub struct LocalTranscription {
     port: Arc<RwLock<Option<u16>>>,
     /// Which model the running server loaded, for the history row.
     model: Arc<RwLock<Option<String>>>,
+    /// Shared with media import and meetings. See [`SpeechTools`].
+    speech: SpeechTools,
 }
 
 impl std::fmt::Debug for LocalTranscription {
@@ -71,7 +73,12 @@ impl std::fmt::Debug for LocalTranscription {
 
 impl LocalTranscription {
     /// Load the catalogue and prepare, without touching the network.
-    pub fn new(policy: kw_network_policy::NetworkPolicy) -> Result<Self, String> {
+    ///
+    /// `vad_model` is what [`bundled_vad_model`] found.
+    pub fn new(
+        policy: kw_network_policy::NetworkPolicy,
+        vad_model: Option<std::path::PathBuf>,
+    ) -> Result<Self, String> {
         let catalog = Catalog::shipped().map_err(|err| err.to_string())?;
         Ok(Self {
             operation: tokio::sync::Mutex::new(()),
@@ -83,6 +90,11 @@ impl LocalTranscription {
             running: tokio::sync::Mutex::new(None),
             port: Arc::new(RwLock::new(None)),
             model: Arc::new(RwLock::new(None)),
+            speech: SpeechTools::new(
+                vad_model,
+                &paths::sidecar_dir().path,
+                paths::audio_temp_dir(),
+            ),
         })
     }
 
@@ -92,6 +104,7 @@ impl LocalTranscription {
         SharedLocal {
             port: Arc::clone(&self.port),
             model: Arc::clone(&self.model),
+            speech: self.speech.clone(),
         }
     }
 
@@ -156,6 +169,99 @@ pub struct SharedLocal {
     pub port: Arc<RwLock<Option<u16>>>,
     /// Which model it loaded.
     pub model: Arc<RwLock<Option<String>>>,
+    /// What long recordings need to find their speech first.
+    pub speech: SpeechTools,
+}
+
+/// The Silero VAD model `tauri.conf.json` bundles under `resources/`
+/// (KNEG-404). From `ggml-org/whisper-vad` on Hugging Face; the digest is the
+/// file's LFS SHA-256 there, and the bytes here were checked against it.
+pub const VAD_MODEL_FILE: &str = "ggml-silero-v5.1.2.bin";
+const VAD_MODEL_BYTES: u64 = 885_098;
+const VAD_MODEL_SHA256: &str = "29940d98d42b91fbd05ce489f3ecf7c72f0a42f027e4875919a28fb4c04ea2cf";
+
+/// The speech finder, from the same whisper.cpp archive as the server and
+/// extracted beside it.
+const VAD_TOOL: &str = "whisper-vad-speech-segments";
+
+/// The bundled VAD model under `resource_dir`, if it is there, is the pinned
+/// file, and sits on a path the finder can open.
+///
+/// Checked once, at startup. A wrong file fails the finder, which costs every
+/// long recording its search for speech -- not its transcript, because a
+/// failed search sends the recording whole, but quietly. A path outside ASCII
+/// fails it the same way: measured on 2026-10-06, the finder exited 127 with no
+/// output for a model under `Åsa ö`, which is the ANSI code page problem
+/// `kw_storage::paths` describes for the model cache.
+pub fn bundled_vad_model(resource_dir: Option<&std::path::Path>) -> Option<std::path::PathBuf> {
+    let path = resource_dir?.join("resources").join(VAD_MODEL_FILE);
+    let pinned = kw_sidecar::Sha256Digest::parse(VAD_MODEL_SHA256).ok()?;
+    if let Err(err) = kw_sidecar::integrity::verify(&path, VAD_MODEL_BYTES, &pinned) {
+        tracing::warn!(error = %err, "the bundled VAD model is not usable; long recordings will be sent whole");
+        return None;
+    }
+    if !path.to_str().is_some_and(str::is_ascii) {
+        tracing::warn!("the bundled VAD model is on a path the speech finder cannot open; long recordings will be sent whole");
+        return None;
+    }
+    Some(path)
+}
+
+/// What a long recording needs to find its speech before whisper hears it
+/// (KNEG-404): the bundled model, verified at startup, and the finder, which
+/// arrives with the whisper sidecar and so may be installed or removed while
+/// the application runs.
+#[derive(Debug, Clone)]
+pub struct SpeechTools {
+    model: Option<std::path::PathBuf>,
+    tool: std::path::PathBuf,
+    scratch: std::path::PathBuf,
+}
+
+impl SpeechTools {
+    /// For the whisper sidecar installed under `sidecars`, staging recordings
+    /// in `scratch`.
+    #[must_use]
+    pub fn new(
+        model: Option<std::path::PathBuf>,
+        sidecars: &std::path::Path,
+        scratch: std::path::PathBuf,
+    ) -> Self {
+        Self {
+            model,
+            tool: sidecars
+                .join(SIDECAR)
+                .join(format!("{VAD_TOOL}{}", std::env::consts::EXE_SUFFIX)),
+            scratch,
+        }
+    }
+
+    /// The finder for a recording made for `context`, when everything it
+    /// needs is here.
+    ///
+    /// `kw_audio_core::vad`'s rule decides, with no preferences stored, so
+    /// meetings and recordings find their speech first and dictation never
+    /// does. `None` is not a failure: the recording is sent whole, as before.
+    #[must_use]
+    pub fn finder(
+        &self,
+        context: kw_audio_core::vad::Context,
+    ) -> Option<Arc<dyn kw_transcription_core::speech::FindSpeech>> {
+        use kw_audio_core::vad::{silero_enabled_for, SileroPreferences, VadConfig};
+        if !silero_enabled_for(context, SileroPreferences::default()) {
+            return None;
+        }
+        let model = self.model.clone()?;
+        if !self.tool.is_file() {
+            return None;
+        }
+        Some(Arc::new(kw_transcription_core::speech::SpeechFinder::new(
+            self.tool.clone(),
+            model,
+            VadConfig::default(),
+            self.scratch.clone(),
+        )))
+    }
 }
 
 /// What can be said about the local model server without touching the network.
@@ -1182,7 +1288,6 @@ impl LocalTranscription {
             language: None,
             threads: None,
             gpu_device: None,
-            vad: None,
         };
 
         let launch = Launch {
@@ -1267,13 +1372,114 @@ mod tests {
         static RECORDS: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
         let records = RECORDS.get_or_init(|| tempfile::tempdir().unwrap());
         let mut local =
-            LocalTranscription::new(kw_network_policy::NetworkPolicy::new().unwrap()).unwrap();
+            LocalTranscription::new(kw_network_policy::NetworkPolicy::new().unwrap(), None)
+                .unwrap();
         local.pids = PidStore::new(records.path());
         local
     }
 
     async fn db() -> kw_storage::Db {
         kw_storage::Db::open_in_memory().await.unwrap()
+    }
+
+    /* ------------------------------ finding the speech first (KNEG-404) */
+
+    /// The model as `tauri dev` and the tests see it: beside the manifest.
+    fn manifest_dir() -> &'static std::path::Path {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+    }
+
+    /// Speech tools under a temporary sidecar directory, with or without the
+    /// finder installed there.
+    fn tools(
+        model: Option<std::path::PathBuf>,
+        finder_installed: bool,
+    ) -> (tempfile::TempDir, SpeechTools) {
+        let dir = tempfile::tempdir().unwrap();
+        let sidecars = dir.path().join("sidecars");
+        if finder_installed {
+            let whisper = sidecars.join(SIDECAR);
+            std::fs::create_dir_all(&whisper).unwrap();
+            std::fs::write(
+                whisper.join(format!("{VAD_TOOL}{}", std::env::consts::EXE_SUFFIX)),
+                b"",
+            )
+            .unwrap();
+        }
+        let tools = SpeechTools::new(model, &sidecars, dir.path().join("scratch"));
+        (dir, tools)
+    }
+
+    #[test]
+    fn the_bundled_vad_model_is_the_pinned_file() {
+        // The file in `resources/` is what `tauri.conf.json` bundles, and in
+        // a `tauri dev` build the resource directory is beside it.
+        assert_eq!(
+            bundled_vad_model(Some(manifest_dir())),
+            Some(manifest_dir().join("resources").join(VAD_MODEL_FILE))
+        );
+    }
+
+    #[test]
+    fn a_vad_model_that_is_missing_or_not_the_pinned_one_is_not_used() {
+        assert_eq!(bundled_vad_model(None), None);
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(bundled_vad_model(Some(dir.path())), None);
+        std::fs::create_dir(dir.path().join("resources")).unwrap();
+        std::fs::write(
+            dir.path().join("resources").join(VAD_MODEL_FILE),
+            b"not silero",
+        )
+        .unwrap();
+        assert_eq!(bundled_vad_model(Some(dir.path())), None);
+    }
+
+    #[test]
+    fn a_vad_model_on_a_path_the_finder_cannot_open_is_not_used() {
+        // The right bytes, under a directory the finder exits 127 on.
+        let dir = tempfile::tempdir().unwrap();
+        let resources = dir.path().join("\u{c5}sa \u{f6}").join("resources");
+        std::fs::create_dir_all(&resources).unwrap();
+        std::fs::copy(
+            manifest_dir().join("resources").join(VAD_MODEL_FILE),
+            resources.join(VAD_MODEL_FILE),
+        )
+        .unwrap();
+        assert_eq!(bundled_vad_model(resources.parent()), None);
+    }
+
+    #[test]
+    fn long_recordings_find_their_speech_first_and_dictation_never_does() {
+        use kw_audio_core::vad::Context;
+        let (_dir, tools) = tools(Some("silero.bin".into()), true);
+        assert!(tools.finder(Context::Meeting).is_some());
+        assert!(tools.finder(Context::NoteRecording).is_some());
+        assert!(
+            tools.finder(Context::Dictation).is_none(),
+            "a pause-heavy dictation stripped to nothing returns the vocabulary prompt"
+        );
+    }
+
+    #[test]
+    fn without_the_model_or_the_finder_a_recording_is_sent_whole() {
+        use kw_audio_core::vad::Context;
+        let (_dir, no_model) = tools(None, true);
+        assert!(no_model.finder(Context::Meeting).is_none());
+        let (_dir, no_finder) = tools(Some("silero.bin".into()), false);
+        assert!(no_finder.finder(Context::Meeting).is_none());
+    }
+
+    #[test]
+    fn the_finder_is_looked_for_beside_the_installed_server() {
+        // `kw_sidecar::locate` finds the server at <sidecars>/whisper/, and the
+        // finder is extracted from the same archive into the same directory.
+        let tools = SpeechTools::new(None, std::path::Path::new("C:/sidecars"), "s".into());
+        assert_eq!(
+            tools.tool,
+            std::path::Path::new("C:/sidecars")
+                .join("whisper")
+                .join(format!("{VAD_TOOL}{}", std::env::consts::EXE_SUFFIX))
+        );
     }
 
     /* --------------------------------- the model a meeting starts (KNEG-387) */
@@ -1859,7 +2065,7 @@ mod tests {
         // If these were separate Arcs, a dictation started after the server came
         // up would still route as though nothing were running.
         let local = local();
-        let SharedLocal { port, model } = local.shared();
+        let SharedLocal { port, model, .. } = local.shared();
 
         if let Ok(mut held) = port.write() {
             *held = Some(8178);

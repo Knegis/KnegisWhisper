@@ -1790,7 +1790,16 @@ impl MeetingRuntime {
                 .read()
                 .map_err(|_| "the local model could not be read".to_owned())?
                 .clone();
-            port.map(|port| whisper_for_note(self.policy.clone(), port, model))
+            port.map(|port| {
+                whisper_for_note(
+                    self.policy.clone(),
+                    port,
+                    model,
+                    self.local
+                        .speech
+                        .finder(kw_audio_core::vad::Context::Meeting),
+                )
+            })
         };
 
         let engine = crate::dictation::local_engine(&self.sherpa, whisper)?.ok_or_else(|| {

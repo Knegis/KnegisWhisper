@@ -130,7 +130,6 @@ async fn a_long_recording_exports_as_many_cues_not_one() {
         language: None,
         threads: None,
         gpu_device: None,
-        vad: None,
     };
 
     // The shipped arguments, not a hand-written list. That is the whole point:

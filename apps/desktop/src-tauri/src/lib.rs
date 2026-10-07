@@ -171,7 +171,12 @@ pub fn run() -> anyhow::Result<()> {
             // config/sidecars.json is a startup message rather than a surprise
             // on the first dictation.
             let local = std::sync::Arc::new(
-                local_model::LocalTranscription::new(policy.clone())
+                local_model::LocalTranscription::new(
+                    policy.clone(),
+                    // So long recordings can find their speech first
+                    // (KNEG-404). Checked against its pin once, here.
+                    local_model::bundled_vad_model(app.path().resource_dir().ok().as_deref()),
+                )
                     .map_err(|e| anyhow::anyhow!(e))
                     .context("could not load config/sidecars.json")?,
             );
@@ -222,6 +227,7 @@ pub fn run() -> anyhow::Result<()> {
                     std::sync::Arc::clone(&shared.model),
                     asr.selection(),
                     std::sync::Arc::clone(&revive),
+                    shared.speech.clone(),
                     db.clone(),
                 )
                 .map_err(|e| anyhow::anyhow!(e))

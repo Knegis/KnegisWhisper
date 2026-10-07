@@ -12,7 +12,54 @@ maintained in place rather than appended to, because its purpose is to be curren
 
 ---
 
-## 2026-09-26 (second, latest) — KNEG-326: speaker labels never attached on a whisper engine, and the note's own sentence pointed the wrong way
+## 2026-10-06 (latest) — KNEG-404: long recordings find their speech first, and the server's own VAD is not what does it
+
+Upstream's Silero rule was ported to `kw_audio_core::vad` and never called, so every import and
+every meeting's whole-recording pass went to `whisper-server` whole. Measured on 102 s of ten
+sentences under pink noise (`ggml-base`, `b4938`): rows started up to 7.0 s before their speech
+and ended up to 16.2 s after it, and 40 s of noise alone came back as invented text.
+
+- **Upstream's route was measured and refused.** Upstream passes the VAD flags to the server.
+  Its detector is accurate, but it joins the speech with 0.1 s of inserted silence and maps that
+  0.1 s across the whole original gap, so a boundary next to a gap lands anywhere in it: starts
+  up to 31 s early, ends up to 26 s late, on `b4938` and `b5130` alike. It also leaves the
+  mapping table behind for the next request that does not ask for VAD, and with VAD on, language
+  detection returned one language instead of three. An end correction was tried and abandoned:
+  when the start was on the wrong side of a gap it produced rows that did not contain their
+  speech at all. The numbers are in KNEG-404.
+- **What was built instead** is KBLab's easytranscriber and WhisperX design
+  (`kw_transcription_core::speech`): `whisper-vad-speech-segments`, which ships in the archive
+  the app already installs, lists the speech with the Silero model the app now bundles; the
+  speech is chunked; each chunk is its own request; and its rows are moved onto the recording's
+  clock by the chunk's start. There is no mapping step to get wrong.
+- **Judgement calls, each with its reason in the code:**
+  - Chunks split at any pause of 2 s or more, and hold at most 30 s. A prototype that merged
+    regardless of pauses let whisper stretch one row over a 12.6 s gap.
+  - The language is detected once, on the first 30 s of speech, and every chunk is sent with
+    it. Per-chunk detection on short chunks could flip between chunks, and whisper given the
+    wrong language translates. Detecting once is also what a whole-file request did.
+  - No speech found means no request at all: `Inference::Empty`, so silence can neither invent
+    text nor echo the vocabulary prompt.
+  - Anything that stops the search (no tool, no model, a WAV that is not 16 kHz mono 16-bit
+    PCM, a tool that fails) sends the recording whole, as before, with a warning in the log. A
+    worse transcript, never a lost one.
+  - The model is bundled (the owner's choice) and checked against its pin once at startup. A
+    model on a non-ASCII path is refused: the finder exited 127 with no output under `Åsa ö`.
+  - `ServerOptions` lost its `vad` field and `build_args` its VAD flags. A field that must
+    never be set is a trap, and `--vad` at start-up would apply to dictation too.
+- **Measured** with `crates/transcription-core/tests/speech_first.rs` against the real server,
+  tool and model, on 102 s of the fixture repeated under a noise floor: sent whole, 6 rows for 8
+  sentences, the first starting 20 s before its speech and one ending 15.5 s after it; speech
+  first, 8 rows, one per sentence, starts within 0.28 s and ends within 0.34 s of the speech;
+  noise alone `Empty`. Wall time 6.56 s against 4.65 s whole: each chunk is a full 30 s
+  decoder window, so the gain is in where rows sit, not in speed.
+- **Not done:** the windowed live `local` meeting provider still sends every five-second
+  window, silent or not. Its text is partials the saved note does not use, so it is filed
+  separately as KNEG-410; the finder costs 30-55 ms on a five-second window, so it would fit. The Linux archive was not checked for the finder; without it a recording is sent
+  whole. Neither whisper.cpp bug is reported upstream; that is outward-facing and the owner's
+  call. A real meeting recording has not been through it yet.
+
+## 2026-09-26 (second) — KNEG-326: speaker labels never attached on a whisper engine, and the note's own sentence pointed the wrong way
 
 The owner asked why every meeting on the streaming model ended with "Speaker labels were asked
 for and not applied: the transcription pass returned no timings". It was not the streaming model.

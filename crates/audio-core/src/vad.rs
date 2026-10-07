@@ -22,6 +22,18 @@
 //! This is exactly the kind of decision that gets lost in a port, so it is
 //! encoded in [`silero_enabled_for`] with the reasoning attached rather than
 //! left as a default someone later "tidies up".
+//!
+//! ## Where it is used
+//!
+//! Nowhere, from the port until KNEG-404 (2026-10-06): the rule had no caller
+//! and every long recording went to whisper whole. Since then
+//! [`silero_enabled_for`] decides which recordings find their speech first, and
+//! [`VadConfig`] is what whisper.cpp's `whisper-vad-speech-segments` is given
+//! (`kw_transcription_core::speech`, through the desktop's
+//! `local_model::SpeechTools`). Not the server's own VAD, which was measured
+//! putting row boundaries up to 30 s from their speech. No preferences are
+//! stored yet, so every context gets its default: meetings and imports on,
+//! dictation off.
 
 use serde::{Deserialize, Serialize};
 

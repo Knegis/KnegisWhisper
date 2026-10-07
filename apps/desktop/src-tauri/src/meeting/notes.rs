@@ -181,6 +181,11 @@ pub(super) struct WholePass {
 /// the meeting pass never asked. About 45% more wall clock on the pass,
 /// measured in `local.rs`'s module doc.
 ///
+/// `.speech_first()` when `speech` is given (KNEG-404): sent whole, a
+/// meeting's silences came back as rows stamped tens of seconds from their
+/// speech, and noise as invented text. Without the tools the recording is
+/// sent whole, as before. See `kw_transcription_core::speech`.
+///
 /// Here rather than inline in `meeting.rs` so a test can pin it: nothing in a
 /// running application can be asked what it sent, which is how the bare server
 /// went unnoticed for 25 days.
@@ -188,8 +193,13 @@ pub(super) fn whisper_for_note(
     policy: NetworkPolicy,
     port: u16,
     model: Option<String>,
+    speech: Option<std::sync::Arc<dyn kw_transcription_core::speech::FindSpeech>>,
 ) -> WhisperServer {
-    WhisperServer::new(policy, port, model).timed()
+    let server = WhisperServer::new(policy, port, model).timed();
+    match speech {
+        Some(finder) => server.speech_first(finder),
+        None => server,
+    }
 }
 
 /// Turn one pass into note segments, with speaker labels where they were asked
@@ -473,7 +483,26 @@ mod tests {
         // with speaker labels on. The default is the cheap one for dictation's
         // sake, so the meeting pass has to say otherwise, here.
         let policy = kw_network_policy::NetworkPolicy::new().unwrap();
-        assert!(whisper_for_note(policy, 8178, None).asks_for_timings());
+        assert!(whisper_for_note(policy, 8178, None, None).asks_for_timings());
+    }
+
+    #[test]
+    fn the_whole_recording_pass_finds_the_speech_first_when_it_can() {
+        // KNEG-404. Sent whole, a meeting's silences came back as rows stamped
+        // tens of seconds from their speech, and noise as invented text.
+        let policy = kw_network_policy::NetworkPolicy::new().unwrap();
+        let finder: std::sync::Arc<dyn kw_transcription_core::speech::FindSpeech> =
+            std::sync::Arc::new(kw_transcription_core::speech::SpeechFinder::new(
+                "vad.exe".into(),
+                "silero.bin".into(),
+                kw_audio_core::vad::VadConfig::default(),
+                "scratch".into(),
+            ));
+        let server = whisper_for_note(policy.clone(), 8178, None, Some(finder));
+        assert!(server.finds_speech_first());
+        assert!(server.asks_for_timings());
+        // Without the tools, whole, as before -- never a failed note.
+        assert!(!whisper_for_note(policy, 8178, None, None).finds_speech_first());
     }
 
     #[test]

@@ -17,14 +17,16 @@ pub mod executor;
 pub mod local;
 pub mod models;
 pub mod route;
+mod scratch;
 pub mod sherpa;
 pub mod sherpa_models;
+pub mod speech;
 pub mod url;
 
 pub use executor::{Executor, Transcript, TranscriptionError};
 pub use local::{
-    build_args, interpret, Inference, LocalTranscriber, ServerOptions, VadSettings, WhisperServer,
-    HEALTH_PATH, INFERENCE_PATH,
+    build_args, interpret, Inference, LocalTranscriber, ServerOptions, WhisperServer, HEALTH_PATH,
+    INFERENCE_PATH,
 };
 pub use route::{
     resolve, Auth, AuthScheme, CortiConfig, ProviderClientKind, RouteError, RouteRequest,
