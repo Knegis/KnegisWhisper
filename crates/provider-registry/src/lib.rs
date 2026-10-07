@@ -499,8 +499,8 @@ mod tests {
         assert_eq!(r.local_llm.len(), 6, "local llm providers");
         assert_eq!(
             r.local_asr.whisper.len(),
-            8,
-            "six upstream plus two KB Whisper models"
+            11,
+            "six upstream plus five KB Whisper models"
         );
         assert_eq!(r.local_asr.sherpa.len(), 4, "sherpa models");
 
@@ -525,6 +525,9 @@ mod tests {
         for (id, size) in [
             ("kb-whisper-tiny", 29_875_738),
             ("kb-whisper-base", 55_295_450),
+            ("kb-whisper-small", 175_209_680),
+            ("kb-whisper-medium", 539_212_484),
+            ("kb-whisper-large", 1_081_140_203),
         ] {
             let model = r
                 .local_asr

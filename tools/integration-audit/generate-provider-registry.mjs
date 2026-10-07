@@ -304,7 +304,7 @@ const enterprise = R.enterpriseProviders.map((p) => ({
  * ## Reading and re-reading
  *
  * Never hand-write a revision. `node tools/model-pin/pin.mjs --revisions` reads
- * `/api/models/{repo}` for all thirty-seven and prints this table.
+ * `/api/models/{repo}` for every repository here and prints this table.
  * `--verify-stated` reads each repository's tree **at the pinned commit** and
  * exits non-zero if an object's digest or length disagrees; it reports
  * separately, and without failing, where `main` has since moved on. That second
@@ -321,6 +321,17 @@ const HF_REVISIONS = {
   },
   "KBLab/kb-whisper-base": {
     revision: "1499d2d2f0c7ed545bd6f2eec85287cf8d8c8b38",
+  },
+  // Read from the Hugging Face API on 2026-10-06 and downloaded at these
+  // commits on 2026-10-07 (KNEG-407).
+  "KBLab/kb-whisper-small": {
+    revision: "3564d61a42fc210ceaa55a22a96dd64478959c78",
+  },
+  "KBLab/kb-whisper-medium": {
+    revision: "0abe10b9d7f75d0902656e5c06c5c4d549604dc5",
+  },
+  "KBLab/kb-whisper-large": {
+    revision: "d5d5984b4d8f7c4847a8ea203f1976285fb28300",
   },
   "LiquidAI/LFM2-2.6B-GGUF": {
     revision: "a759abdc5955d4ca97763e5cb7ff3940589ba898",
@@ -936,8 +947,11 @@ for (const [id, pin] of Object.entries(LOCAL_LLM_PINS)) {
  * `node tools/model-pin/pin.mjs --url <downloadUrl> --id <id>`.
  */
 // App-owned additions stay separate from the frozen upstream baseline.
-// Official KBLab Stage 2 Q5 GGML weights, downloaded and hashed on 2026-09-10.
-// Unique cache filenames avoid colliding with OpenAI or each other.
+// Official KBLab Stage 2 Q5 GGML weights: Tiny and Base downloaded and hashed
+// on 2026-09-10, Small, Medium and Large on 2026-10-07 (KNEG-407). Unique cache
+// filenames avoid colliding with OpenAI or each other. None is `recommended`:
+// the bigger three are for imports and meetings, and the screen says they are
+// slower (`whisperModelHint`).
 const OWN_WHISPER_MODELS = {
   "kb-whisper-tiny": {
     name: "KB Whisper Tiny (Swedish, Q5)",
@@ -950,6 +964,24 @@ const OWN_WHISPER_MODELS = {
     fileName: "ggml-kb-whisper-base-q5_0.bin",
     downloadUrl: "https://huggingface.co/KBLab/kb-whisper-base/resolve/main/ggml-model-q5_0.bin",
     sizeMb: 55,
+  },
+  "kb-whisper-small": {
+    name: "KB Whisper Small (Swedish, Q5)",
+    fileName: "ggml-kb-whisper-small-q5_0.bin",
+    downloadUrl: "https://huggingface.co/KBLab/kb-whisper-small/resolve/main/ggml-model-q5_0.bin",
+    sizeMb: 175,
+  },
+  "kb-whisper-medium": {
+    name: "KB Whisper Medium (Swedish, Q5)",
+    fileName: "ggml-kb-whisper-medium-q5_0.bin",
+    downloadUrl: "https://huggingface.co/KBLab/kb-whisper-medium/resolve/main/ggml-model-q5_0.bin",
+    sizeMb: 539,
+  },
+  "kb-whisper-large": {
+    name: "KB Whisper Large (Swedish, Q5)",
+    fileName: "ggml-kb-whisper-large-q5_0.bin",
+    downloadUrl: "https://huggingface.co/KBLab/kb-whisper-large/resolve/main/ggml-model-q5_0.bin",
+    sizeMb: 1081,
   },
 };
 for (const id of Object.keys(OWN_WHISPER_MODELS)) {
@@ -964,6 +996,20 @@ const WHISPER_PINS = {
   "kb-whisper-base": {
     sha256: "aead29b356bca8840e72a8dc2286e2d69e6702639751a1e60cb3c8eacefec546",
     expectedSizeBytes: 55_295_450,
+  },
+  // `pin.mjs --url` at the pinned commits, 2026-10-07. Each agrees with the LFS
+  // digest and size the Hugging Face API stated on 2026-10-06.
+  "kb-whisper-small": {
+    sha256: "6768836a51abc902e420c613153e6d418c90ea2774e913274d02ab23170225b7",
+    expectedSizeBytes: 175_209_680,
+  },
+  "kb-whisper-medium": {
+    sha256: "7f8762e0ade9e0073674c0d5acae942a0b1ea98add9baa008ee89c94eaba43d0",
+    expectedSizeBytes: 539_212_484,
+  },
+  "kb-whisper-large": {
+    sha256: "6d2863812d7410322bb7d8647a5c7260761300fa946714c9ed66d22bb30bcb19",
+    expectedSizeBytes: 1_081_140_203,
   },
   tiny: {
     sha256: "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21",

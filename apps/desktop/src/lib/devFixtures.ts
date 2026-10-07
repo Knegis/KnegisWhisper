@@ -822,6 +822,16 @@ const LOCAL_MODELS: LocalStatus = {
       installed: true,
       verifiedBy: "size",
     },
+    // The registry's, so the list shows a KB model with its "slower" label
+    // (KNEG-407).
+    {
+      id: "kb-whisper-large",
+      name: "KB Whisper Large (Swedish, Q5)",
+      sizeMb: 1081,
+      recommended: false,
+      installed: false,
+      verifiedBy: "digest",
+    },
     {
       id: "whisper-base-en",
       name: "Whisper Base (English)",

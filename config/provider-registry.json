@@ -1499,6 +1499,36 @@
         "sha256": "aead29b356bca8840e72a8dc2286e2d69e6702639751a1e60cb3c8eacefec546",
         "expectedSizeBytes": 55295450,
         "recommended": false
+      },
+      {
+        "id": "kb-whisper-small",
+        "name": "KB Whisper Small (Swedish, Q5)",
+        "fileName": "ggml-kb-whisper-small-q5_0.bin",
+        "downloadUrl": "https://huggingface.co/KBLab/kb-whisper-small/resolve/3564d61a42fc210ceaa55a22a96dd64478959c78/ggml-model-q5_0.bin",
+        "sizeMb": 175,
+        "sha256": "6768836a51abc902e420c613153e6d418c90ea2774e913274d02ab23170225b7",
+        "expectedSizeBytes": 175209680,
+        "recommended": false
+      },
+      {
+        "id": "kb-whisper-medium",
+        "name": "KB Whisper Medium (Swedish, Q5)",
+        "fileName": "ggml-kb-whisper-medium-q5_0.bin",
+        "downloadUrl": "https://huggingface.co/KBLab/kb-whisper-medium/resolve/0abe10b9d7f75d0902656e5c06c5c4d549604dc5/ggml-model-q5_0.bin",
+        "sizeMb": 539,
+        "sha256": "7f8762e0ade9e0073674c0d5acae942a0b1ea98add9baa008ee89c94eaba43d0",
+        "expectedSizeBytes": 539212484,
+        "recommended": false
+      },
+      {
+        "id": "kb-whisper-large",
+        "name": "KB Whisper Large (Swedish, Q5)",
+        "fileName": "ggml-kb-whisper-large-q5_0.bin",
+        "downloadUrl": "https://huggingface.co/KBLab/kb-whisper-large/resolve/d5d5984b4d8f7c4847a8ea203f1976285fb28300/ggml-model-q5_0.bin",
+        "sizeMb": 1081,
+        "sha256": "6d2863812d7410322bb7d8647a5c7260761300fa946714c9ed66d22bb30bcb19",
+        "expectedSizeBytes": 1081140203,
+        "recommended": false
       }
     ],
     "sherpa": [

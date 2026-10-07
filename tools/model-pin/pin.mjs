@@ -140,7 +140,7 @@
  * ## What `--revisions` measures
  *
  * Which commit each Hugging Face repository's `main` points at right now, for
- * all 37 the registry names -- one request each, no bodies. It prints a
+ * every one the registry names -- one request each, no bodies. It prints a
  * pasteable `HF_REVISIONS` table, and it exists for the same reason every
  * other mode here does: **a revision that was typed rather than read is not a
  * pin.**
