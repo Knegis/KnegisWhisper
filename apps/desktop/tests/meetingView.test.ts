@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   activeCall,
+  discardQuestion,
   elapsedLabel,
   interruptedTitle,
   liveElapsed,
@@ -252,4 +253,18 @@ test("a summary's model is named as the registry names it, or shown as stored", 
   assert.equal(summaryModelName("claude-sonnet-5"), "Claude Sonnet 5");
   assert.equal(summaryModelName("my-azure-deployment"), "my-azure-deployment");
   assert.equal(summaryModelName(null), null);
+});
+
+// KNEG-394: Discard asks first, with what is about to be lost. The length is
+// rounded as the saved outcome rounds it ("Saved as a note (38 min)."), and
+// the notes sentence holds whatever was typed: Rust keeps notes as a note
+// when there are any and has nothing to keep when there are none.
+test("Discard's question names the recording's length and what happens to typed notes", () => {
+  assert.equal(
+    discardQuestion(38 * 60 + 10),
+    "Discard this meeting? The recording so far (38 min) will be deleted and can't be recovered. Any notes you typed are kept as a separate note.",
+  );
+  assert.match(discardQuestion(90), /\(2 min\)/);
+  assert.match(discardQuestion(42), /\(under a minute\)/);
+  assert.match(discardQuestion(0), /\(under a minute\)/);
 });

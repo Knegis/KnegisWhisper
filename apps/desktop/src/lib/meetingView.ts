@@ -66,6 +66,21 @@ export function recordingStartedAt(storageKey: string): Date | null {
   return same ? date : null;
 }
 
+/**
+ * What Discard asks before it deletes a running meeting's recording
+ * (KNEG-394). It sat beside Stop and save and deleted the recording on one
+ * click.
+ *
+ * The length is the page's clock, rounded as the saved outcome rounds it
+ * ("Saved as a note (38 min)."). The notes sentence is true whatever was
+ * typed: `MeetingRuntime::cancel` keeps typed notes as a note when there are
+ * any, and when there are none there is nothing to lose.
+ */
+export function discardQuestion(elapsedSeconds: number): string {
+  const length = elapsedSeconds < 60 ? "under a minute" : `${Math.round(elapsedSeconds / 60)} min`;
+  return `Discard this meeting? The recording so far (${length}) will be deleted and can't be recovered. Any notes you typed are kept as a separate note.`;
+}
+
 /** A meeting's running time as `hh:mm:ss`, the canvas' recording clock. */
 export function elapsedLabel(seconds: number): string {
   const s = Math.max(0, Math.floor(seconds));

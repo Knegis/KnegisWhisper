@@ -125,6 +125,7 @@ import { emptyLiveTranscript, foldTranscriptEvent, liveRows, type LiveRow } from
 import { providerMenu, selectProvider } from "../lib/meetingProvider";
 import {
   activeCall,
+  discardQuestion,
   elapsedLabel,
   interruptedTitle,
   liveElapsed,
@@ -534,8 +535,17 @@ export function Meetings({
       setOutcome(await stopMeeting());
     });
   };
+  // Asks first, with what is about to be lost (KNEG-394): Discard sits
+  // beside Stop and save and deleted the recording on one click. Saying no
+  // changes nothing; the meeting goes on recording.
   const discard = () => {
+    if (!window.confirm(discardQuestion(elapsed))) return;
     void guard(async () => {
+      // The question holds the page, so what this page last heard may be
+      // stale: the meeting can have been stopped from its own window while
+      // it was open. Asked again, and nothing is discarded unless it is
+      // still running -- the stop's own outcome is what shows then.
+      if (!meetingIsLive((await getMeetingStatus()).state)) return;
       try { await flushMeetingPanelNotes(); }
       catch (cause) { setNotesFlushFailed(true); throw cause; }
       setNotesFlushFailed(false);
