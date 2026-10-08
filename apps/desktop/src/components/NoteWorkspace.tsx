@@ -1,4 +1,4 @@
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { attachNoteRecording, getNoteRecording, getNoteSpeakerSuggestions, getNoteTranscriptRows, renameNoteSpeaker, updateNote, type Note, type NoteUpdate } from "../lib/ipc";
 import { useAutosave, type AutosaveStatus } from "../lib/useAutosave";
@@ -195,8 +195,10 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
   const columnHiddenNow = useRef(columnHidden);
   // A note with no transcript has no column to show: a wide window gave a plain note a 340px one
   // saying "This note has no transcript." (KNEG-377). Read from the note, so it is right on the
-  // first frame, and kept in a ref for the media listener.
-  const hasTranscript = hasStoredTranscript(note.transcript);
+  // first frame, and kept in a ref for the media listener. Parsed once per transcript, not on every
+  // render: playback renders about four times a second, and an hour's transcript with its word
+  // timings is over half a megabyte (KNEG-408).
+  const hasTranscript = useMemo(() => hasStoredTranscript(note.transcript), [note.transcript]);
   const hasTranscriptNow = useRef(hasTranscript);
   useLayoutEffect(() => { hasTranscriptNow.current = hasTranscript; }, [hasTranscript]);
   // The layout, rather than the width: a window at the width with the column hidden lays the note

@@ -267,18 +267,12 @@ pub async fn delete_attached(
             "refused to delete a recording with an invalid name: {key}"
         ));
     };
-    sqlx::query(
-        "UPDATE notes SET recording_details = CASE
-             WHEN recording_details IS NULL OR trim(recording_details) = '' THEN ?1
-             ELSE recording_details || char(10) || char(10) || ?1
-         END
-         WHERE id = ?2",
-    )
-    .bind(details)
-    .bind(note_id)
-    .execute(&mut *tx)
-    .await
-    .map_err(failed)?;
+    sqlx::query(ADD_DETAILS)
+        .bind(details)
+        .bind(note_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(failed)?;
     match tokio::fs::remove_file(&path).await {
         Ok(()) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -296,6 +290,29 @@ pub async fn delete_attached(
         )
     })?;
     Ok(true)
+}
+
+/// `details` (`?1`) added to note `?2`'s recording details, after a blank line
+/// when it already has some.
+const ADD_DETAILS: &str = "UPDATE notes SET recording_details = CASE
+         WHEN recording_details IS NULL OR trim(recording_details) = '' THEN ?1
+         ELSE recording_details || char(10) || char(10) || ?1
+     END
+     WHERE id = ?2";
+
+/// Add `details` to note `id`'s recording details, after what they already
+/// say, as [`delete_attached`] adds its own: for a meeting whose recording
+/// was to be deleted and wasn't (KNEG-409), so the note says so after the
+/// outcome that said it has gone from the screen. `Ok(false)` when there is
+/// no such note.
+pub async fn add_details(pool: &SqlitePool, id: i64, details: &str) -> Result<bool, StorageError> {
+    Ok(sqlx::query(ADD_DETAILS)
+        .bind(details)
+        .bind(id)
+        .execute(pool)
+        .await?
+        .rows_affected()
+        > 0)
 }
 
 /// Whether `PRAGMA wal_checkpoint(FULL)`'s answer -- `busy`, the frames in
@@ -623,6 +640,34 @@ mod tests {
             Some("Recording sources: microphone."),
             "the note does not say a recording it still has was deleted"
         );
+    }
+
+    #[tokio::test]
+    async fn details_are_added_after_what_a_note_already_says() {
+        let db = db().await;
+        let said = recorded_note(db.pool(), Some("Recording sources: microphone.")).await;
+        let silent = recorded_note(db.pool(), None).await;
+
+        assert!(add_details(db.pool(), said, SAYS).await.unwrap());
+        assert!(add_details(db.pool(), silent, SAYS).await.unwrap());
+        assert!(
+            !add_details(db.pool(), 404, SAYS).await.unwrap(),
+            "no such note"
+        );
+
+        let pool = db.pool();
+        let details = |id| async move {
+            notes::get(pool, id)
+                .await
+                .unwrap()
+                .unwrap()
+                .recording_details
+        };
+        assert_eq!(
+            details(said).await.as_deref(),
+            Some("Recording sources: microphone.\n\nThe recording was deleted.")
+        );
+        assert_eq!(details(silent).await.as_deref(), Some(SAYS));
     }
 
     #[tokio::test]

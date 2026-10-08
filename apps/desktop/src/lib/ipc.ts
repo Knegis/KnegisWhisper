@@ -419,7 +419,9 @@ export async function flushMeetingPanelNotes(): Promise<void> {
   const unlisten = await listen<MeetingNotesFlush>("meeting-notes-flushed", event => {
     if (event.payload.requestId === requestId) receive(event.payload);
   });
-  const timeout = window.setTimeout(() => receive({ requestId, error: "The meeting panel did not confirm that your notes were saved. Try again." }), 5000);
+  // Said beside Meetings' caveat, which names the two ways on from here: so the same noun, and no
+  // "Try again" to contradict them.
+  const timeout = window.setTimeout(() => receive({ requestId, error: "The meeting window didn't answer when asked to save your notes." }), 5000);
   try {
     await emitTo("meeting", "meeting-notes-flush", { requestId });
     const result = await reply;

@@ -12,7 +12,9 @@
 //! typed notes alone, and not the running transcript saved because the
 //! whole-recording pass failed. The recording is the only way to a better
 //! transcript, so then it is kept, and the outcome says why
-//! ([`recording_removal`]).
+//! ([`recording_removal`]). So does the note, from when it is saved
+//! ([`kept_details`]): the outcome is seen only on the Meetings page, and
+//! only while it is open. A deletion that fails is said in both too.
 //!
 //! **How.** The recording is attached to the note exactly as it is when the
 //! switch is off, and only then deleted with
@@ -30,6 +32,22 @@ use ts_rs::TS;
 
 /// What the note's recording details say once its recording is deleted.
 const DELETED_DETAILS: &str = "The recording was deleted after transcribing (Settings › Meetings).";
+
+/// What they say, from the start, of a recording kept because the transcript
+/// saved is the running one ([`RecordingRemoval::KeptIncomplete`]).
+const KEPT_INCOMPLETE_DETAILS: &str = "The recording was kept because the transcript may be \
+                                       incomplete (Settings › Meetings asks for recordings to \
+                                       be deleted after transcribing).";
+
+/// What they say of one kept because nothing was transcribed from it.
+const KEPT_UNTRANSCRIBED_DETAILS: &str = "The recording was kept because nothing was \
+                                          transcribed from it (Settings › Meetings asks for \
+                                          recordings to be deleted after transcribing).";
+
+/// What they say once deleting it failed and the file is still there
+/// ([`RecordingRemoval::DeleteFailed`]).
+const DELETE_FAILED_DETAILS: &str = "The recording couldn't be deleted after transcribing, so \
+                                     it's still attached (Settings › Meetings).";
 
 /// What became of a saved meeting's recording, when it was to be deleted.
 ///
@@ -66,9 +84,33 @@ pub(super) const fn recording_removal(
     }
 }
 
+/// The line a note's recording details end with when it is saved, for a
+/// recording that was asked to be deleted and is kept (`removal`, from
+/// [`recording_removal`]): `transcribed` is whether the note has a transcript
+/// at all. `None` for anything else -- a recording not asked to be deleted
+/// says nothing, and a deleted one is said by `delete_attached` as it goes.
+///
+/// In the note because the outcome that says the same goes with the Meetings
+/// page: a meeting stopped from its own window, or recovered, while another
+/// page is open would otherwise keep a recording the person asked to have
+/// deleted without a word anywhere they could read later.
+pub(super) const fn kept_details(
+    removal: Option<RecordingRemoval>,
+    transcribed: bool,
+) -> Option<&'static str> {
+    match removal {
+        Some(RecordingRemoval::KeptIncomplete) if transcribed => Some(KEPT_INCOMPLETE_DETAILS),
+        Some(RecordingRemoval::KeptIncomplete) => Some(KEPT_UNTRANSCRIBED_DETAILS),
+        _ => None,
+    }
+}
+
 /// Carry out `removal` for the recording at `recording`, attached to
 /// `note_id`: delete it when it says `Deleted`, and say what happened, with
-/// the error when deletion failed.
+/// the error when deletion failed. A failure is said in the note too, after
+/// its recording details, by what is true of the file: still attached while
+/// it is there, and deleted once it is gone -- a deletion whose commit failed
+/// after the file went (`delete_attached`).
 pub(super) async fn remove_recording(
     db: &Db,
     note_id: i64,
@@ -101,6 +143,18 @@ pub(super) async fn remove_recording(
         }
         Err(error) => {
             tracing::error!(note_id, %error, "could not delete the meeting recording");
+            // A file that can't be looked at counts as still there.
+            let gone = !tokio::fs::try_exists(recording).await.unwrap_or(true);
+            let said = if gone {
+                DELETED_DETAILS
+            } else {
+                DELETE_FAILED_DETAILS
+            };
+            if let Err(note_error) =
+                kw_notes_core::recordings::add_details(db.pool(), note_id, said).await
+            {
+                tracing::warn!(note_id, error = %note_error, "could not say in the note what became of its recording");
+            }
             (Some(RecordingRemoval::DeleteFailed), Some(error))
         }
     }
@@ -133,6 +187,25 @@ mod tests {
                 expected,
                 "delete {delete}, transcribed {transcribed}, from partials {from_partials}"
             );
+        }
+    }
+
+    #[test]
+    fn only_a_kept_recording_is_said_in_the_note_when_it_is_saved() {
+        use RecordingRemoval::{DeleteFailed, Deleted, KeptIncomplete};
+        assert_eq!(
+            kept_details(Some(KeptIncomplete), true),
+            Some(KEPT_INCOMPLETE_DETAILS)
+        );
+        assert_eq!(
+            kept_details(Some(KeptIncomplete), false),
+            Some(KEPT_UNTRANSCRIBED_DETAILS)
+        );
+        // Deleted is said as it happens, and a failure once it has.
+        for removal in [None, Some(Deleted), Some(DeleteFailed)] {
+            for transcribed in [true, false] {
+                assert_eq!(kept_details(removal, transcribed), None, "{removal:?}");
+            }
         }
     }
 }

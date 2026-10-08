@@ -237,7 +237,7 @@
       "reachable": true
     },
     "meetings.deleteRecordings": {
-      "what": "Whether each meeting's recording is deleted once its note is saved with a whole transcript (KNEG-409). Off by default. Read once, by MeetingRuntime::start, into the meeting's plan, which the session holds and which is written beside the recording, so Stop and a later recovery act on the choice the meeting started with; a recovered recording with no plan beside it follows the setting as it is then. Discard ignores it: Discard always deletes the recording. A note saved from typed notes alone, or from the running transcript because the whole-recording pass failed, keeps its recording, and the outcome says so.",
+      "what": "Whether each meeting's recording is deleted once its note is saved with a whole transcript (KNEG-409). Off by default. Read once, by MeetingRuntime::start, into the meeting's plan, which the session holds and which is written beside the recording, so Stop and a later recovery act on the choice the meeting started with; a recovered recording with no plan beside it follows the setting as it is then. Discard ignores it: Discard always deletes the recording. A note saved from typed notes alone, or from the running transcript because the whole-recording pass failed, keeps its recording, and both the outcome and the note's recording details say so; so does a deletion that fails.",
       "writtenBy": [
         "meeting_set_delete_recordings"
       ],

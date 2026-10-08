@@ -6,8 +6,9 @@
  * long its recording runs, and saying what the recordings take, with Empty
  * trash; a note in Trash opening read-only; Restore bringing it back; Delete
  * forever and Empty trash asking first, in words with no file name in them;
- * Back to a note moved to Trash showing it in Trash; and the read-only note at
- * 720x520.
+ * Back to a note moved to Trash showing it in Trash; the read-only note at
+ * 720x520; and focus moved while Undo or Restore is still finishing staying
+ * where it was put, rather than being taken back for the title.
  *
  * Buttons are pressed with real pointer presses, the Trash row after scrolling
  * the panel to it, since it sits under People below the panel's fold at
@@ -20,7 +21,7 @@
  * recovery and empties Trash durably is pinned by `cargo test`, not here.
  *
  * Checks 1 to 6 are one sequence from one fresh load, as a person would go
- * through them; 7 and 8 each start from a fresh load.
+ * through them; 7, 8 and 9 each start from a fresh load.
  */
 import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -112,7 +113,12 @@ const FOCUS_ON = {
   title: (title) => `(document.activeElement?.matches('.note-detail input[aria-label="Title"]') ?? false) && document.activeElement.value === ${JSON.stringify(title)}`,
   spaceLine: "document.activeElement?.matches('.trash-space-line') ?? false",
   choose: "document.activeElement?.matches('.trash-choose') ?? false",
+  search: "document.activeElement?.matches('.panel-search input') ?? false",
 };
+/** How long check 9 holds back `notes_restore`, so the search field is pressed while Undo or Restore is still finishing. */
+const RESTORE_HELD_MS = 1500;
+/** How long check 9 waits once the title is ready: the page tries to focus it every 50 ms. */
+const SETTLE_MS = 1000;
 
 /** Waits up to `timeout` ms for `expression`, and says whether it came true, without failing the check itself. */
 async function settles(cdp, expression, timeout = 4000) {
@@ -166,7 +172,7 @@ async function openTrashed(cdp, title) {
   await waitFor(cdp, `document.querySelector('.trashed-note .trashed-note-title')?.textContent === ${JSON.stringify(title)}`, `"${title}" to open in Trash`);
 }
 
-const SETUP_NOTE = "1000x720 unless stated. Checks 1-6 run in sequence from one fresh load; 7 and 8 each start from a fresh load. Buttons are pressed with real CDP pointer presses, the Trash row after scrolling it into view; a library row's menu is opened with a contextmenu event; window.confirm is scripted and keeps each question (in check 6 it also sends notes_trash for 103 while open, as another client would); invoke is wrapped to log notes_trash, notes_restore, notes_delete_forever, notes_empty_trash and notes_update. Focus is read from document.activeElement, waited for up to 4 s.";
+const SETUP_NOTE = "1000x720 unless stated. Checks 1-6 run in sequence from one fresh load; 7, 8 and 9 each start from a fresh load. Buttons are pressed with real CDP pointer presses, the Trash row after scrolling it into view; a library row's menu is opened with a contextmenu event; window.confirm is scripted and keeps each question (in check 6 it also sends notes_trash for 103 while open, as another client would); invoke is wrapped to log notes_trash, notes_restore, notes_delete_forever, notes_empty_trash and notes_update, and in check 9 to hold notes_restore back 1.5 s. Focus is read from document.activeElement, waited for up to 4 s.";
 
 export async function runTrash(options) {
   const out = resolve(options.out);
@@ -459,6 +465,43 @@ export async function runTrash(options) {
           && boxes.every((box) => box.left >= 0 && box.right <= after.innerWidth)
           && after.scrollWidth <= after.innerWidth,
         screenshots: [shot],
+      };
+    });
+
+    await check({
+      id: "9",
+      claim: "Focus moved elsewhere while Undo or Restore is still finishing stays where it was put: neither takes it back for the title once the note opens.",
+      expectation: [
+        `fresh load; notes_restore held back ${RESTORE_HELD_MS} ms; delete "${SCRATCH}", press Undo, then press the library's search field before the restore answers:`,
+        `"${SCRATCH}" opens again with its title ready, and ${SETTLE_MS} ms later focus is still on the search field;`,
+        `delete it again, open it from Trash, press Restore, then the search field the same way: the same`,
+      ].join(" "),
+    }, async () => {
+      await freshNotes(cdp);
+      await openNote(cdp, SCRATCH);
+      await deleteRow(cdp, SCRATCH);
+      await settles(cdp, FOCUS_ON.undo);
+      await cdp.evaluate(snippets.stubInvoke({ delay: { notes_restore: RESTORE_HELD_MS } }));
+      // Each: the action pressed, the search field pressed while it is still finishing, the note
+      // open with its title ready, and where focus is once the title has had time to take it.
+      const afterMovingFocus = async (press) => {
+        await press();
+        await pressText(cdp, ".panel-search input", null);
+        const moved = await cdp.evaluate(FOCUS_ON.search);
+        await waitFor(cdp, noteOpen(SCRATCH), `"${SCRATCH}" to open again`);
+        await delay(SETTLE_MS);
+        return { moved, stayed: await cdp.evaluate(FOCUS_ON.search), focus: (await state(cdp)).focus };
+      };
+      const undo = await afterMovingFocus(() => pressText(cdp, ".notes-moved button", "Undo"));
+      await deleteRow(cdp, SCRATCH);
+      await pressTrash(cdp);
+      await waitFor(cdp, "document.querySelectorAll('.list-panel .notes-trashed').length > 0", "the Trash list");
+      await openTrashed(cdp, SCRATCH);
+      const restore = await afterMovingFocus(() => pressText(cdp, ".trashed-note-banner button", "Restore"));
+      await cdp.evaluate(snippets.stubInvoke({ delay: { notes_restore: null } }));
+      return {
+        measured: { undo, restore },
+        matches: undo.moved && undo.stayed && restore.moved && restore.stayed,
       };
     });
 

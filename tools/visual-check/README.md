@@ -332,8 +332,8 @@ sits under People, below the panel's fold at 1000x720 -- a library row's menu
 is opened with a `contextmenu` event, `window.confirm` is scripted
 (`scriptConfirm`) and keeps each question, and `invoke` is wrapped to log what
 reached the commands. Focus is read from `document.activeElement`, waited for
-up to 4 s. Checks 1-6 are one sequence from one fresh load; 7 and 8 each start
-from their own. Eight checks:
+up to 4 s. Checks 1-6 are one sequence from one fresh load; 7, 8 and 9 each
+start from their own. Nine checks:
 
 1. "Scratch" open, Delete in its menu: no question; `notes_trash` gets its id;
    "Moved “Scratch” to Trash." with Undo, in the always-drawn `role="status"`
@@ -371,6 +371,11 @@ from their own. Eight checks:
 8. Fresh load: "Scratch" deleted and opened from Trash at 720x520: the banner's
    buttons, the title and Empty trash inside the window, nothing scrolling
    sideways.
+9. Fresh load, `notes_restore` held back 1.5 s: "Scratch" deleted, Undo pressed
+   and then the library's search field, before the restore answers. Scratch
+   opens again with its title ready, and a second later focus is still on the
+   search field. The same with Restore, from Trash. The title is where focus
+   goes only while nothing else has taken it since the button was pressed.
 
 Measured in headless Edge against dev fixtures, not in the Tauri window; a
 false check makes it exit 1. That Rust leaves a note in Trash out of every

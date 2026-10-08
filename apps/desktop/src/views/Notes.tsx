@@ -118,6 +118,9 @@ let lastOpenNoteId: number | null = null;
 /** The most notes "Notes with" a person lists: as many as the library's own list, `notes_list`'s default. */
 const PERSON_NOTES = 100;
 
+/** Where focus goes once a Trash action has finished: see `focusAfter` in `Notes`. */
+type FocusTarget = "undo" | "title" | "trash";
+
 /**
  * The right-click menu's target: a note, or a folder heading. `fromButton` when the open note's
  * More opened it, so a second press of More closes it rather than reopening it (KNEG-377).
@@ -220,8 +223,10 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
   // the Undo beside "Moved to Trash"; "title": the open note's title, once its editor is ready and
   // the field enabled; "trash": Trash's page -- its "Choose a note" line, or, with nothing left to
   // choose, the line saying what Trash holds. A request per action, so the same target twice moves
-  // focus twice.
-  const [focusAfter, setFocusAfter] = useState<{ target: "undo" | "title" | "trash"; at: number } | null>(null);
+  // focus twice. `from` is what had focus when the action was pressed: focus moves only while nothing
+  // else has taken it since, so a person who put it somewhere while the action finished, or while the
+  // title waited for its editor, keeps it there.
+  const [focusAfter, setFocusAfter] = useState<{ target: FocusTarget; from: Element | null; at: number } | null>(null);
 
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<SearchHit[] | null>(null);
@@ -253,6 +258,8 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
   const mainRef = useRef<HTMLElement>(null);
   // Tried every 50 ms for up to 3 s: the title stays disabled until the editor beneath it is ready,
   // which the page is never told, and a note opened by navigation arrives a moment after the reload.
+  // Given up as soon as focus is somewhere the action didn't leave it -- not on what was pressed, and
+  // not fallen to the page's body when that went -- since then the person has put it there.
   useEffect(() => {
     if (focusAfter === null) return;
     const find = (): HTMLElement | null => {
@@ -262,8 +269,13 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
       if (focusAfter.target === "title") return main.querySelector<HTMLElement>('.note-detail input[aria-label="Title"]:not(:disabled)');
       return main.querySelector<HTMLElement>(".trash-choose") ?? main.querySelector<HTMLElement>(".trash-space-line");
     };
+    const untouched = () => {
+      const active = document.activeElement;
+      return active === null || active === document.body || active === focusAfter.from || !active.isConnected;
+    };
     let tries = 0;
     const timer = setInterval(() => {
+      if (!untouched()) { clearInterval(timer); return; }
       const element = find();
       if (element || ++tries > 60) {
         clearInterval(timer);
@@ -272,7 +284,7 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
     }, 50);
     return () => clearInterval(timer);
   }, [focusAfter]);
-  const focusLater = (target: "undo" | "title" | "trash") => setFocusAfter({ target, at: Date.now() });
+  const focusLater = (target: FocusTarget, from: Element | null) => setFocusAfter({ target, from, at: Date.now() });
   // A note opens at its top. The pane outlives the note inside it, so on its own it keeps the
   // previous note's offset, clamped against the new note's first layout before the editor has its
   // content: measured on 2026-09-26 at 122px in a 480px window. An open request used to call
@@ -342,6 +354,7 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
   // focus goes to it. The open note is saved first, as a move is, and the newest note opens in its
   // place.
   const moveToTrash = (note: Note) => {
+    const from = document.activeElement;
     void finished(async () => {
       const wasOpen = note.id === openNoteId;
       if (wasOpen) await workspaceRef.current?.flush();
@@ -349,18 +362,20 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
       const shownWith = wasOpen ? await openNewest(false) : openNoteId;
       setMoved({ id: note.id, title: note.title, reopen: wasOpen, shownWith });
       return true;
-    }).then(done => { if (done) focusLater("undo"); });
+    }).then(done => { if (done) focusLater("undo", from); });
   };
   const undoTrash = () => {
     if (moved === null) return;
+    const from = document.activeElement;
     const { id, reopen } = moved;
     setMoved(null);
     void finished(async () => { if ((await restoreNote(id)) && reopen) await selectNote(id); return true; })
-      .then(done => { if (done) focusLater("title"); });
+      .then(done => { if (done) focusLater("title", from); });
   };
   // Restore, from a note in Trash: it comes back to the library, open, in its folder -- or in none,
   // when its folder was deleted meanwhile -- with focus on its title.
   const restoreTrashed = (note: Note) => {
+    const from = document.activeElement;
     void finished(async () => {
       if (!(await restoreNote(note.id))) return false;
       setMoved(current => (current?.id === note.id ? null : current));
@@ -368,13 +383,14 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
       const back = await getNote(note.id);
       if (back) { setRequestedNote(back); reveal(back.folderId); }
       return true;
-    }).then(done => { if (done) focusLater("title"); });
+    }).then(done => { if (done) focusLater("title", from); });
   };
   // Delete forever and Empty trash ask first, from what Trash holds now, so the question names the
   // recordings that would go. Inside Trash, focus goes to its page; reached by Back, to the note that
   // opens in its place.
   const deleteForever = (id: number) => {
     const inTrash = trashOpen;
+    const from = document.activeElement;
     void finished(async () => {
       const entry = (await getTrash()).notes.find(item => item.id === id);
       if (!entry || !window.confirm(deleteForeverQuestion(entry))) return false;
@@ -382,11 +398,12 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
       setMoved(current => (current?.id === id ? null : current));
       if (id === openNoteId) await openNewest(inTrash);
       return true;
-    }).then(done => { if (done) focusLater(inTrash ? "trash" : "title"); });
+    }).then(done => { if (done) focusLater(inTrash ? "trash" : "title", from); });
   };
   // Only the notes the question counted: one moved to Trash while it was open -- through the local
   // API, say -- isn't among them, and Rust leaves it in Trash.
   const emptyAll = () => {
+    const from = document.activeElement;
     void finished(async () => {
       const held = await getTrash();
       if (held.notes.length === 0 || !window.confirm(emptyTrashQuestion(held))) return false;
@@ -395,7 +412,7 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
       setMoved(current => (current !== null && gone(current.id) ? null : current));
       if (gone(openNoteId)) await openNewest(true);
       return true;
-    }).then(done => { if (done) focusLater("trash"); });
+    }).then(done => { if (done) focusLater("trash", from); });
   };
   const newNote = () => guard(async () => {
     await workspaceRef.current?.flush();

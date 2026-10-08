@@ -73,7 +73,10 @@ people and where its transcript was made (KNEG-368): "Transcribed on this
 computer", or "Transcribed by" the provider or server that made it. A meeting
 whose saved transcript is the whole-recording pass was transcribed on this
 computer; when its live captions came from a provider off this computer, the line
-adds "· live captions by" that provider. A meeting saved from its live captions --
+adds "· live captions by" that provider. A recovered meeting doesn't: it says only
+"Transcribed on this computer", wherever its live captions came from, because the
+`.meeting.json` kept beside the recording for recovery doesn't record the live
+provider. A meeting saved from its live captions --
 a finished local stream, or the captions kept because the whole-recording pass
 failed -- names the live provider. Typed notes alone, notes saved before this was
 recorded, and OpenWhispr and shared-folder imports say nothing.
@@ -119,9 +122,12 @@ imported file; no file name is shown. Empty trash deletes only the notes its que
 counted: one moved to Trash while it was asking, through the local API say, stays. A
 recording that can't be deleted -- an app holding the file open -- stops the whole
 deletion with a line saying so, the notes still in Trash, and pressing again finishes.
-After Delete, focus goes to Undo; after Undo or Restore, to the note's title; after Delete
-forever or Empty trash, to Trash's page. The line above the note that says these things is
-a live region, always there, so what comes into it is announced. Leaving Trash opens a note,
+After Delete, focus goes to Undo; after Undo or Restore, to the note's title; after Empty
+trash, or Delete forever inside Trash, to Trash's page; after Delete forever on a note
+reached by Back, to the title of the note that opens in its place. Focus moves only while
+nothing else has taken it since the button was pressed: put somewhere else while the action
+finishes, or while the title waits for its editor, it stays there. The line above the note
+that says these things is a live region, always there, so what comes into it is announced. Leaving Trash opens a note,
 the newest when the one open was deleted forever. Discarding a meeting is unchanged: its recording is
 deleted at once, not moved to Trash. The local API's `DELETE /v1/notes/{id}`, the CLI's
 `notes delete` and the MCP `notes_delete` move a note to Trash too, and from then on treat
@@ -162,15 +168,25 @@ that choice in the session and the `.meeting.json`, so changing it mid-meeting
 affects the next meeting. The recording is deleted only when its note was saved
 with a whole transcript: a note of typed notes alone, or of the running
 transcript saved because the whole-recording pass failed, keeps its recording,
-and the outcome says why. The WAV is attached exactly as with the switch off,
-then the attachment and the file are removed in one transaction
-(`recordings::delete_attached`), which also adds "The recording was deleted
-after transcribing (Settings › Meetings)." to the note's recording details; a
-file that can't be removed stays attached, and the outcome says so. Nothing is
-removed until the note is on disk: commits are not synced (WAL,
+and the outcome says why. A finished local stream counts as a whole transcript:
+for that route it is the final transcript, not a fallback. The WAV is attached
+exactly as with the switch off, then the attachment and the file are removed in
+one transaction (`recordings::delete_attached`), which also adds "The recording
+was deleted after transcribing (Settings › Meetings)." to the note's recording
+details; a file that can't be removed stays attached, and the outcome says so.
+Nothing is removed until the note is on disk: commits are not synced (WAL,
 `synchronous = NORMAL`), so a full WAL checkpoint first writes them into the
 database file and syncs it, and if it can't finish -- a reader holding it back
-past the busy timeout -- the recording stays attached and the outcome says so. The note
+past the busy timeout -- the recording stays attached and the outcome says so.
+The outcome is seen only on the Meetings page while it is open, so the note's
+recording details say the same: a kept recording ends them with "The recording
+was kept because the transcript may be incomplete" -- or "because nothing was
+transcribed from it" -- "(Settings › Meetings asks for recordings to be deleted
+after transcribing).", written as the note is saved; a failed deletion adds
+"The recording couldn't be deleted after transcribing, so it's still attached
+(Settings › Meetings).", or, when the file went and only the note's update
+failed, the line a deleted one gets, though the note still lists the recording.
+A recording whose deletion failed is never tried again. The note
 keeps its transcript and typed notes, and Replay has no player. While the switch
 is on the Meetings page says so beside Start, at the foot of its list and in the
 live view of a meeting started that way. Discard always deletes the recording.
@@ -240,8 +256,9 @@ live view of a meeting started that way. Discard always deletes the recording.
   their files removed, a file already gone counting as removed and any other failure rolling
   the deletion back with a plain-words error; then the commit. A file is never removed after
   the commit, where a crash would leave a WAV no note owns for recovery to offer back; the
-  worst left is notes still in Trash without their recordings, after an error the person saw,
-  and pressing again finishes. The OpenWhispr
+  worst left is notes still in Trash without their recordings -- after an error the person
+  saw (a later file that wouldn't go, a failed commit), or after a power loss before the
+  commit reached the disk, with no error at all -- and pressing again finishes. The OpenWhispr
   importer still needs an empty `notes` table, and notes in Trash count; its refusal says
   how many are there.
 - `notes.participants` keeps its shape, a JSON array of `{displayName, email}` read
