@@ -755,7 +755,12 @@ folderId: number | null,
  * ([`plan_at_start`]), never a caller's. A plan written before this
  * existed reads `false`, and keeps its recording.
  */
-deleteRecording: boolean, };
+deleteRecording: boolean,
+/**
+ * The actual live provider selected at Start, never a caller's claim.
+ * Older sidecars have no provider to disclose.
+ */
+liveProviderId: string | null, };
 
 /**
  * What became of a saved meeting's recording, when it was to be deleted.

@@ -181,13 +181,10 @@ pub(super) fn transcribed_by(
     provider_id: &str,
     saved: &SavedTranscript,
 ) -> Option<kw_notes_core::TranscribedBy> {
-    let mut by = crate::transcribed_by::route(saved_provider(provider_id, saved)?)?;
-    if by.on_this_computer {
-        by.live_name = crate::transcribed_by::route(provider_id)
-            .filter(|live| !live.on_this_computer)
-            .map(|live| live.name);
-    }
-    Some(by)
+    crate::transcribed_by::with_live_provider(
+        saved_provider(provider_id, saved)?,
+        Some(provider_id),
+    )
 }
 
 /// What one pass over the finished recording produced.

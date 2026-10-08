@@ -396,7 +396,7 @@ export async function resetMeetingNotificationPlacement(): Promise<void> { retur
 export async function startMeeting(
   provider: string,
   systemAudio: boolean,
-  plan: Omit<MeetingPlan, "deleteRecording"> = { title: null, folderId: null },
+  plan: Omit<MeetingPlan, "deleteRecording" | "liveProviderId"> = { title: null, folderId: null },
 ): Promise<Sources> {
   return invoke<Sources>("meeting_start", { provider, systemAudio, title: plan.title, folderId: plan.folderId });
 }

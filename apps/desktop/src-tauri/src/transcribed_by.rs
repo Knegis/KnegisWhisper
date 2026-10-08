@@ -38,6 +38,22 @@ pub(crate) fn route(provider: &str) -> Option<TranscribedBy> {
     })
 }
 
+/// Saved transcript provenance with the separately selected live provider.
+/// Unknown providers are not guessed; local captions need no cloud disclosure.
+pub(crate) fn with_live_provider(
+    provider: &str,
+    live_provider: Option<&str>,
+) -> Option<TranscribedBy> {
+    let mut by = route(provider)?;
+    if by.on_this_computer {
+        by.live_name = live_provider
+            .and_then(route)
+            .filter(|live| !live.on_this_computer)
+            .map(|live| live.name);
+    }
+    Some(by)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -73,10 +73,9 @@ people and where its transcript was made (KNEG-368): "Transcribed on this
 computer", or "Transcribed by" the provider or server that made it. A meeting
 whose saved transcript is the whole-recording pass was transcribed on this
 computer; when its live captions came from a provider off this computer, the line
-adds "· live captions by" that provider. A recovered meeting doesn't: it says only
-"Transcribed on this computer", wherever its live captions came from, because the
-`.meeting.json` kept beside the recording for recovery doesn't record the live
-provider. A meeting saved from its live captions --
+adds "· live captions by" that provider. A recovered meeting uses the same disclosure: its `.meeting.json` sidecar
+keeps the actual live provider selected at Start. Older sidecars without that
+field retain the local transcription attribution without guessing the live provider. A meeting saved from its live captions --
 a finished local stream, or the captions kept because the whole-recording pass
 failed -- names the live provider. Typed notes alone, notes saved before this was
 recorded, and OpenWhispr and shared-folder imports say nothing.

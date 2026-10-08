@@ -323,6 +323,9 @@ pub struct MeetingPlan {
     /// ([`plan_at_start`]), never a caller's. A plan written before this
     /// existed reads `false`, and keeps its recording.
     pub delete_recording: bool,
+    /// The actual live provider selected at Start, never a caller's claim.
+    /// Older sidecars have no provider to disclose.
+    pub live_provider_id: Option<String>,
 }
 
 /// What can be said about the meeting session.
@@ -1006,7 +1009,7 @@ impl MeetingRuntime {
         let mut lifecycle = self.lifecycle.lock().await;
         let generation = lifecycle.begin_start().map_err(str::to_owned)?;
 
-        let plan = plan_at_start(&self.db, plan).await;
+        let plan = plan_at_start(&self.db, plan, provider_id).await;
         match self.start_live(provider_id, system_audio, plan).await {
             Ok(sources) => {
                 if !lifecycle.started(generation) {
@@ -2036,11 +2039,12 @@ fn recording_start(
 /// name. Whether the recording is deleted once saved is read from the setting
 /// now (KNEG-409), never taken from the caller, and a change to the setting
 /// after this is the next meeting's.
-async fn plan_at_start(db: &Db, plan: MeetingPlan) -> MeetingPlan {
+async fn plan_at_start(db: &Db, plan: MeetingPlan, provider_id: &str) -> MeetingPlan {
     MeetingPlan {
         title: plan.title.as_deref().and_then(clean_title),
         folder_id: plan.folder_id,
         delete_recording: delete_recordings(db).await,
+        live_provider_id: Some(provider_id.to_owned()),
     }
 }
 
@@ -2338,7 +2342,8 @@ async fn save_recovered(
         segments,
         &details,
         duration,
-        crate::transcribed_by::route("local").as_ref(),
+        crate::transcribed_by::with_live_provider("local", plan.live_provider_id.as_deref())
+            .as_ref(),
     )
     .ok_or("The recovered meeting had no content")?;
     let (note_id, folder_missing) =
@@ -3157,9 +3162,10 @@ mod tests {
                 title: Some("Board review".into()),
                 folder_id: Some(3),
                 delete_recording: true,
+                live_provider_id: Some("openai-realtime".into()),
             })
             .unwrap(),
-            serde_json::json!({"title": "Board review", "folderId": 3, "deleteRecording": true})
+            serde_json::json!({"title": "Board review", "folderId": 3, "deleteRecording": true, "liveProviderId": "openai-realtime"})
         );
         let cancelled =
             serde_json::to_value(MeetingOutcome::Cancelled { note_id: Some(9) }).unwrap();
@@ -3604,18 +3610,20 @@ mod tests {
             title: Some("  Board review \n".into()),
             folder_id: Some(3),
             delete_recording: true,
+            live_provider_id: Some("fake-provider".into()),
         };
         assert_eq!(
-            plan_at_start(&db, asked).await,
+            plan_at_start(&db, asked, "openai-realtime").await,
             MeetingPlan {
                 title: Some("Board review".into()),
                 folder_id: Some(3),
                 delete_recording: false,
+                live_provider_id: Some("openai-realtime".into()),
             }
         );
 
         deleting(&db, true).await;
-        let plan = plan_at_start(&db, MeetingPlan::default()).await;
+        let plan = plan_at_start(&db, MeetingPlan::default(), "local-streaming").await;
         assert!(plan.delete_recording);
         // Turned off while the meeting runs: the session's plan and the one
         // beside its recording are what Stop and recovery read, not the
@@ -3628,7 +3636,7 @@ mod tests {
             Some(true)
         );
         assert!(
-            !plan_at_start(&db, MeetingPlan::default())
+            !plan_at_start(&db, MeetingPlan::default(), "local-streaming")
                 .await
                 .delete_recording
         );
@@ -4039,6 +4047,56 @@ mod tests {
             );
         }
         assert_eq!(said, [Some(ON_THIS_COMPUTER.to_owned()), None]);
+    }
+
+    #[tokio::test]
+    async fn recovery_preserves_cloud_caption_disclosure_without_guessing_old_sidecars() {
+        for provider in [
+            Some("openai-realtime"),
+            Some("local-streaming"),
+            Some("unknown-provider"),
+            None,
+        ] {
+            for has_transcript in [true, false] {
+                let db = kw_storage::Db::open_in_memory().await.unwrap();
+                let dir = tempfile::tempdir().unwrap();
+                let (wav, key) = interrupted(dir.path());
+                draft::write_plan(
+                    &wav,
+                    &MeetingPlan {
+                        live_provider_id: provider.map(str::to_owned),
+                        ..MeetingPlan::default()
+                    },
+                )
+                .unwrap();
+                let segments = if has_transcript {
+                    vec![segment("hello", 0.0, None)]
+                } else {
+                    Vec::new()
+                };
+                let outcome =
+                    save_recovered(&db, &wav, key, "typed", &segments, "Recovered.", 12.0)
+                        .await
+                        .unwrap();
+                let MeetingOutcome::Saved { note_id, .. } = outcome else {
+                    panic!("not saved");
+                };
+                let note = kw_notes_core::notes::get(db.pool(), note_id)
+                    .await
+                    .unwrap()
+                    .unwrap();
+                let expected = has_transcript.then(|| {
+                    crate::transcribed_by::with_live_provider("local", provider)
+                        .unwrap()
+                        .to_json()
+                        .unwrap()
+                });
+                assert_eq!(note.transcribed_by, expected);
+                if provider == Some("openai-realtime") && has_transcript {
+                    assert!(note.transcribed_by.unwrap().contains("OpenAI Realtime"));
+                }
+            }
+        }
     }
 
     #[tokio::test]

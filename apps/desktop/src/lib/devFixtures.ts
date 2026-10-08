@@ -699,7 +699,7 @@ const RECORDING_DELETED_DETAILS = "The recording was deleted after transcribing 
  */
 function fixtureStop(): MeetingOutcome {
   const provider = meetingStatus.provider;
-  const plan = meetingStatus.plan ?? { title: null, folderId: null, deleteRecording: false };
+  const plan = meetingStatus.plan ?? { title: null, folderId: null, deleteRecording: false, liveProviderId: null };
   const startedAt = meetingStartedAt ?? new Date();
   meetingStartedAt = null;
   meetingStatus = {
@@ -2488,6 +2488,7 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
         title: fixtureMeetingTitle(arg<string | null>(a, "title")),
         folderId: arg<number | null>(a, "folderId") ?? null,
         deleteRecording: meetingDeleteRecordings,
+        liveProviderId: arg<string>(a, "provider") ?? "meeting:deepgram",
       },
       elapsedSeconds: 0,
       sources,
